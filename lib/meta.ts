@@ -60,7 +60,7 @@ function env(name: string) {
   return value ? value : null;
 }
 
-export function metaGraphVersion() {
+function metaGraphVersion() {
   const value = env("META_GRAPH_VERSION");
   return value && /^v\d{1,3}\.\d{1,2}$/.test(value) ? value : META_GRAPH_VERSION;
 }
@@ -70,7 +70,7 @@ function graphOrigin() {
   if (!value) return GRAPH_ORIGIN;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname)) ? url.origin : GRAPH_ORIGIN;
+    return ["127.0.0.1", "localhost"].includes(url.hostname) && ["http:", "https:"].includes(url.protocol) ? url.origin : GRAPH_ORIGIN;
   } catch {
     return GRAPH_ORIGIN;
   }
@@ -190,18 +190,34 @@ export async function fetchMetaPage(pageId: string, options: MetaOptions = {}) {
 
 type Paged<T> = { data?: T[]; paging?: { next?: unknown; cursors?: { after?: unknown } } };
 
-async function* pages<T>(first: URL, options: MetaOptions) {
+function nextUrl(next: string) {
+  try {
+    const parsed = new URL(next);
+    if (parsed.origin !== graphOrigin()) return null;
+    parsed.searchParams.delete("access_token");
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function readAll<T>(first: URL, options: MetaOptions) {
+  const items: T[] = [];
   let url: URL | null = first;
-  for (let page = 0; url && page < MAX_PAGES; page += 1) {
+  let truncated = false;
+  for (let page = 0; url; page += 1) {
+    if (page >= MAX_PAGES) {
+      truncated = true;
+      break;
+    }
     const body: Paged<T> = await graphGet<Paged<T>>(url, options);
     const data = Array.isArray(body.data) ? body.data : [];
-    yield data;
+    items.push(...data);
     const next = typeof body.paging?.next === "string" ? body.paging.next : null;
     const after = typeof body.paging?.cursors?.after === "string" ? body.paging.cursors.after : null;
     if (next) {
-      const parsed = new URL(next);
-      url = parsed.origin === graphOrigin() ? parsed : null;
-      url?.searchParams.delete("access_token");
+      url = nextUrl(next);
+      if (!url) truncated = true;
     } else if (after && data.length >= PAGE_SIZE) {
       url = new URL(first);
       url.searchParams.set("after", after);
@@ -209,35 +225,34 @@ async function* pages<T>(first: URL, options: MetaOptions) {
       url = null;
     }
   }
+  return { items, truncated };
 }
 
 export async function listMetaForms(pageId: string, options: MetaOptions = {}) {
-  const forms: MetaForm[] = [];
-  for await (const batch of pages<{ id?: unknown; name?: unknown }>(
+  const { items } = await readAll<{ id?: unknown; name?: unknown }>(
     graphUrl(`${encodeURIComponent(pageId)}/leadgen_forms`, { fields: "id,name", limit: String(PAGE_SIZE) }),
     options,
-  )) {
-    for (const form of batch) {
-      const id = metaId(form.id);
-      if (id) forms.push({ id, name: typeof form.name === "string" ? form.name : null });
-    }
+  );
+  const forms: MetaForm[] = [];
+  for (const form of items) {
+    const id = metaId(form.id);
+    if (id) forms.push({ id, name: typeof form.name === "string" ? form.name : null });
   }
   return forms;
 }
 
 export async function listMetaLeads(formId: string, since: Date, options: MetaOptions = {}) {
-  const leads: MetaLead[] = [];
   const filtering = JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: Math.floor(since.getTime() / 1000) }]);
-  for await (const batch of pages<MetaLead>(
+  const { items, truncated } = await readAll<MetaLead>(
     graphUrl(`${encodeURIComponent(formId)}/leads`, { fields: `id,${LEAD_FIELDS}`, filtering, limit: String(PAGE_SIZE) }),
     options,
-  )) {
-    for (const lead of batch) {
-      const id = metaId(lead.id);
-      if (id) leads.push({ ...lead, id });
-    }
+  );
+  const leads: MetaLead[] = [];
+  for (const lead of items) {
+    const id = metaId(lead.id);
+    if (id) leads.push({ ...lead, id });
   }
-  return leads;
+  return { leads, truncated };
 }
 
 export function metaId(value: unknown) {

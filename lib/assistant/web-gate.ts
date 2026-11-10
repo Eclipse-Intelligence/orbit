@@ -32,10 +32,15 @@ export const OUTSIDE_TOOLS: ReadonlySet<string> = new Set([
 
 const PAGE_TOOLS: ReadonlySet<string> = new Set(["read_web_page", "map_website"]);
 
-const OUTSIDE_RECORD = /\\?"source\\?"\s*:\s*\\?"meta_lead_ad\\?"/;
+const OUTSIDE_RECORD = /\\?"source\\?"\s*:\s*\\?"(?:meta_lead_ad|meta lead ad)\\?"/i;
+const OUTSIDE_SOURCE = /^(?:meta_lead_ad|meta lead ad)$/i;
 
 export function hasOutsideRecord(content: string) {
   return OUTSIDE_RECORD.test(content);
+}
+
+export function readsOutside(name: string, content: string) {
+  return OUTSIDE_TOOLS.has(name) || hasOutsideRecord(content);
 }
 
 export const WEB_APPROVAL_MARK = "web";
@@ -123,7 +128,9 @@ function firstPartyHosts(content: string) {
       for (const item of value) walk(item, depth + 1);
       return;
     }
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const record = value as Record<string, unknown>;
+    if (typeof record.source === "string" && OUTSIDE_SOURCE.test(record.source.trim())) return;
+    for (const [key, item] of Object.entries(record)) {
       if (typeof item === "string" && FIRST_PARTY_FIELD.test(key)) {
         const host = hostOf(item);
         if (host) hosts.add(host);
@@ -143,7 +150,7 @@ export function pageGate(pageContext: string | null | undefined) {
 export function readTargets(name: string, content: string) {
   if (PAGE_TOOLS.has(name)) return [];
   const exact = [...seenTargets(content)];
-  const hosts = OUTSIDE_TOOLS.has(name) || hasOutsideRecord(content) ? [] : [...firstPartyHosts(content)].map((host) => `${HOST_PREFIX}${host}`);
+  const hosts = readsOutside(name, content) ? [] : [...firstPartyHosts(content)].map((host) => `${HOST_PREFIX}${host}`);
   return [...exact, ...hosts];
 }
 
@@ -171,7 +178,7 @@ export function webGateState(rows: GateRow[], extra: { outside?: boolean; seen?:
     } else if (row.role === "assistant") {
       if (Array.isArray(row.sources) && row.sources.length > 0) outside = true;
     } else if (row.role === "tool" && row.tool_name) {
-      if (OUTSIDE_TOOLS.has(row.tool_name) || hasOutsideRecord(content)) outside = true;
+      if (readsOutside(row.tool_name, content)) outside = true;
       for (const item of readTargets(row.tool_name, content)) {
         if (item.startsWith(HOST_PREFIX)) hosts.add(item.slice(HOST_PREFIX.length));
         else if (seen.size < SEEN_MAX) seen.add(item);

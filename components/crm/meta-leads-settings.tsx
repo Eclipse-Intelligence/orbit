@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import CopyButton from "@/components/_ui/copy-button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { linkMetaPageAction, unlinkMetaPageAction, type MetaLeadActionState } from "@/app/(crm)/settings/actions";
+import { addHeldLeadsAction, linkMetaPageAction, unlinkMetaPageAction, type MetaLeadActionState } from "@/app/(crm)/settings/actions";
 import { formatWhen } from "@/lib/companies";
 import type { MetaLeadSettingsView } from "@/lib/crm/meta-leads";
 import { cn, GENERIC_ERROR } from "@/lib/utils";
@@ -30,6 +30,7 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
   const [pageId, setPageId] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<MetaLeadActionState>({});
+  const input = useRef<HTMLInputElement>(null);
 
   async function run(kind: string, action: () => Promise<MetaLeadActionState>) {
     setPending(kind);
@@ -38,7 +39,10 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
     setPending(null);
     setOutcome(result);
     if (!result.error) {
-      if (kind === "add") setPageId("");
+      if (kind === "add") {
+        setPageId("");
+        input.current?.focus();
+      }
       router.refresh();
     }
   }
@@ -81,7 +85,7 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
                 <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="ui-style text-foreground wrap-anywhere">{page.pageName ?? `Page ${page.pageId}`}</span>
                   <span className="caption-style text-subtle wrap-anywhere">
-                    {[page.pageName ? page.pageId : null, leadCount(page.leads), page.lastRunAt ? `Checked ${formatWhen(page.lastRunAt)}` : "Not checked yet"]
+                    {[page.pageName ? page.pageId : null, page.leads === null ? null : leadCount(page.leads), page.lastRunAt ? `Checked ${formatWhen(page.lastRunAt)}` : "Not checked yet"]
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
@@ -100,6 +104,7 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
             ))}
           </ul>
         )}
+        {canAdmin && view.pages.length > 0 && <p className="caption-style text-subtle">Leads from a removed Page wait until it&apos;s linked again.</p>}
       </div>
 
       {canAdmin ? (
@@ -107,6 +112,7 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
           <label className="flex min-w-0 flex-1 flex-col gap-1.5" htmlFor="meta-page-id">
             <span className="caption-style text-subtle">Facebook Page ID</span>
             <Input
+              ref={input}
               id="meta-page-id"
               inputMode="numeric"
               autoComplete="off"
@@ -135,25 +141,47 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
         </p>
       )}
 
-      {view.unlinked.length > 0 && (
+      {view.held.length > 0 && (
         <div className="flex flex-col gap-2">
-          <h4 className="text-foreground leading-5">Pages that aren&apos;t linked</h4>
+          <h4 className="text-foreground leading-5">Held leads</h4>
           <ul className="flex flex-col gap-2">
-            {view.unlinked.map((page) => (
+            {view.held.map((page) => (
               <li key={page.pageId} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <span className="caption-style text-soft wrap-anywhere">
-                  {[`Page ${page.pageId}`, leadCount(page.leads), page.lastAt ? `Last ${formatWhen(page.lastAt)}` : null].filter(Boolean).join(" · ")}
+                  {[
+                    `Page ${page.pageId}`,
+                    leadCount(page.leads),
+                    page.lastAt ? `Last ${formatWhen(page.lastAt)}` : null,
+                    page.linkedTo ? `Linked to ${page.linkedTo}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </span>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  className="self-start sm:self-auto"
-                  disabled={pending !== null}
-                  onClick={() => void run(`link:${page.pageId}`, () => linkMetaPageAction(page.pageId))}
-                >
-                  Link<span className="sr-only"> Page {page.pageId}</span>
-                </Button>
+                {page.linkedHere ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    className="self-start sm:self-auto"
+                    disabled={pending !== null}
+                    onClick={() => void run(`held:${page.pageId}`, () => addHeldLeadsAction(page.pageId))}
+                  >
+                    Add here<span className="sr-only"> leads from Page {page.pageId}</span>
+                  </Button>
+                ) : (
+                  !page.linkedTo && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      className="self-start sm:self-auto"
+                      disabled={pending !== null}
+                      onClick={() => void run(`link:${page.pageId}`, () => linkMetaPageAction(page.pageId))}
+                    >
+                      Link<span className="sr-only"> Page {page.pageId}</span>
+                    </Button>
+                  )
+                )}
               </li>
             ))}
           </ul>

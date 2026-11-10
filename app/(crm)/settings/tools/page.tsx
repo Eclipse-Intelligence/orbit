@@ -27,7 +27,10 @@ export default async function ToolsSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
   const linearHere = await linearConnection(user);
-  const [clickup, enrichment, unenriched, agentMailbox, linear, endpoints, deliveries, headerStore] = await Promise.all([
+  const headerStore = await headers();
+  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
+  const origin = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
+  const [clickup, enrichment, unenriched, agentMailbox, linear, endpoints, deliveries, metaLeads] = await Promise.all([
     getClickUpSettings(user),
     getEnrichmentSettings(user),
     unenrichedCompanyCount(user),
@@ -35,12 +38,9 @@ export default async function ToolsSettingsPage() {
     linearHere.here ? linearStatus() : Promise.resolve({ configured: false, team: null, error: null }),
     listWebhooks(user),
     listWebhookDeliveries(user, 20),
-    headers(),
+    getMetaLeadSettings(user, siteOrigin() ?? origin),
   ]);
-  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
-  const origin = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
   const canAdmin = user.role === "owner" || user.role === "admin";
-  const metaLeads = await getMetaLeadSettings(user, siteOrigin() ?? origin);
   return (
     <SettingsPage title="Tools">
       <ClickUpSettings view={clickup} canAdmin={canAdmin} isOwner={user.role === "owner"} />

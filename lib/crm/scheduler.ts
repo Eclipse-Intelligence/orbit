@@ -20,10 +20,17 @@ import { runWebSignals, webChecksConfigured } from "@/lib/enrichment/web-checks"
 import { runAiFields } from "@/lib/ai-fields/runner";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 import { syncReaderToKnowledge } from "@/lib/readwise/sync";
+import { metaAccessToken } from "@/lib/meta";
+import { redactedError } from "@/lib/upstream";
 
 const CRON_BUDGET_MS = 50_000;
 const STEP_MIN_MS = 3_000;
 const META_BACKUP_MS = 10_000;
+const META_BACKUP_MIN_MS = 5_000;
+
+function syncBudgetMs() {
+  return metaAccessToken() ? CRON_BUDGET_MS - META_BACKUP_MS : CRON_BUDGET_MS;
+}
 
 type CronAuth = "ok" | "unauthorized" | "unconfigured";
 
@@ -302,8 +309,9 @@ export async function runScheduledSync(
 
 export async function handleCronRequest(
   request: Request,
-  run: () => Promise<CronReport> = () => runScheduledSync(),
+  run: () => Promise<CronReport> = () => runScheduledSync({ budgetMs: syncBudgetMs() }),
 ) {
+  const received = Date.now();
   const auth = cronAuthorization(request.headers.get("authorization"));
   if (auth === "unconfigured") {
     return Response.json({ error: "Set CRON_SECRET to turn on scheduled sync." }, { status: 503 });
@@ -313,10 +321,13 @@ export async function handleCronRequest(
   }
   const report = await run();
   try {
-    const { runMetaLeadBackup } = await import("@/lib/crm/meta-leads");
-    await runMetaLeadBackup({ deadline: Date.now() + META_BACKUP_MS });
+    const deadline = Math.min(Date.now() + META_BACKUP_MS, received + CRON_BUDGET_MS);
+    if (metaAccessToken() && deadline - Date.now() >= META_BACKUP_MIN_MS) {
+      const { runMetaLeadBackup } = await import("@/lib/crm/meta-leads");
+      await runMetaLeadBackup({ deadline });
+    }
   } catch (error) {
-    console.error("Meta lead backup failed", error);
+    console.error("Meta lead backup failed", redactedError(error));
   }
   try {
     const { deliverDueWebhooks } = await import("@/lib/crm/webhooks");
