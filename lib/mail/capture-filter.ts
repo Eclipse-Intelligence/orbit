@@ -1,7 +1,6 @@
 import { after } from "next/server";
 import { cache } from "react";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { unknownMail, unknownMailOnce, type UnknownEmail } from "@/lib/mail/filing";
@@ -17,6 +16,7 @@ import {
   pendingIsFresh,
   signatureOf,
   storeThreadDecision,
+  verdictFor,
   workspaceContext,
   type Decision,
   type History,
@@ -24,6 +24,7 @@ import {
   type RelevanceEngine,
   type SenderRule,
   type SkippedCategory,
+  type StoredCategory,
   type WorkspaceContext,
 } from "@/lib/mail/relevance";
 import { refs } from "@/lib/mail/routing";
@@ -40,7 +41,7 @@ const PARALLEL = 4;
 const STOP_MARGIN_MS = 1_500;
 const CLAIM_SECONDS = 120;
 
-export type SkippedEmail = UnknownEmail & { category: SkippedCategory; engine: RelevanceEngine; reason: string | null };
+export type SkippedEmail = UnknownEmail & { category: SkippedCategory; engine: RelevanceEngine; reason: string | null; stored: StoredCategory | null };
 
 export type RelevantMail = { shown: UnknownEmail[]; skipped: SkippedEmail[]; pending: UnknownEmail[] };
 
@@ -61,33 +62,32 @@ function sortOut(judged: Judged<UnknownEmail>[], now = Date.now()): RelevantMail
   const shown: UnknownEmail[] = [];
   const skipped: SkippedEmail[] = [];
   const pending: UnknownEmail[] = [];
-  for (const { item, verdict } of judged) {
+  for (const { item, verdict, stored } of judged) {
     if (verdict.state === "shown") shown.push(item);
-    else if (verdict.state === "skipped") skipped.push({ ...item, category: verdict.category, engine: verdict.engine, reason: verdict.reason });
+    else if (verdict.state === "skipped") skipped.push({ ...item, category: verdict.category, engine: verdict.engine, reason: verdict.reason, stored });
     else if (pendingIsFresh(item.at, now)) pending.push(item);
     else shown.push(item);
   }
   return { shown, skipped, pending };
 }
 
-function graphHeaders(actor: UserActor, fetchImpl?: typeof fetch) {
+function graphHeaders(actor: UserActor, items: UnknownEmail[], fetchImpl?: typeof fetch) {
   const tokens = new Map<string, Promise<string>>();
   let providers: Promise<Map<string, string>> | null = null;
-  return (items: UnknownEmail[]) => {
-    providers ??= withActor(actor, async (db) => {
+  const lookup = () =>
+    (providers ??= withActor(actor, async (db) => {
       const result = await db.query<{ id: string; provider_message_id: string }>(
         "select id, provider_message_id from crm.mail_messages where id = any($1::uuid[]) and user_id = $2",
         [items.map((item) => item.messageId), actor.userId],
       );
       return new Map(result.rows.map((row) => [row.id, row.provider_message_id]));
-    });
-    return async (item: UnknownEmail) => {
-      const provider = (await providers!).get(item.messageId);
-      if (!provider) return null;
-      const sourceId = item.key.slice(0, item.key.indexOf("|"));
-      if (!tokens.has(sourceId)) tokens.set(sourceId, mailSourceToken(actor, sourceId, fetchImpl));
-      return fetchMicrosoftHeaders(await tokens.get(sourceId)!, provider, fetchImpl);
-    };
+    }));
+  return async (item: UnknownEmail) => {
+    const provider = (await lookup()).get(item.messageId);
+    if (!provider) return null;
+    const sourceId = item.key.slice(0, item.key.indexOf("|"));
+    if (!tokens.has(sourceId)) tokens.set(sourceId, mailSourceToken(actor, sourceId, fetchImpl));
+    return fetchMicrosoftHeaders(await tokens.get(sourceId)!, provider, fetchImpl);
   };
 }
 
@@ -121,7 +121,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
   if (mine.length === 0) return 0;
   for (const { item } of mine) inFlight.add(item.key);
   const contexts = new Map<string, Promise<WorkspaceContext>>();
-  const reader = options.readHeaders ?? (options.headers ? graphHeaders(actor, options.fetchImpl)(mine.map(({ item }) => item)) : null);
+  const reader = options.readHeaders ?? (options.headers ? graphHeaders(actor, mine.map(({ item }) => item), options.fetchImpl) : null);
   const byWorkspace = new Map<string, Work[]>();
   for (const entry of mine) byWorkspace.set(entry.item.workspaceId, [...(byWorkspace.get(entry.item.workspaceId) ?? []), entry]);
   let decided = 0;
@@ -175,11 +175,18 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
           }
           if (!decision) {
             const key = `${item.workspaceId}|${item.email}`;
-            if (!shared.has(key)) shared.set(key, decideRelevance(state, { deadline: options.deadline, fetchImpl: options.fetchImpl }));
-            decision = await shared.get(key)!;
+            const earlier = shared.get(key);
+            const reused = earlier ? await earlier : null;
+            if (reused && verdictFor(reused, reused.engine).state === "shown" && reused.engine !== "failed") {
+              decision = reused;
+            } else {
+              const own = decideRelevance(state, { deadline: options.deadline, fetchImpl: options.fetchImpl });
+              if (!earlier) shared.set(key, own);
+              decision = await own;
+            }
           }
           await store(actor, item, decision);
-          decided += 1;
+          if (decision.engine !== "failed") decided += 1;
         } catch (error) {
           console.error("Sorting a Capture email failed", error instanceof Error ? error.message : error);
           await storeFailed(actor, item);
@@ -236,19 +243,21 @@ export function relevantMailOnce(actor: UserActor, actors: UserActor[], now = Da
 
 async function claimRun(actor: UserActor, gapSeconds: number) {
   return withActor(actor, async (db) => {
-    const result = await db.query(
+    const result = await db.query<{ started_at: string }>(
       `insert into crm.mail_relevance_runs (user_id, started_at, running_until) values ($1, now(), now() + make_interval(secs => $2))
        on conflict (user_id) do update set started_at = now(), running_until = excluded.running_until
        where crm.mail_relevance_runs.running_until <= now() and crm.mail_relevance_runs.started_at <= now() - make_interval(secs => $3)
-       returning user_id`,
+       returning started_at::text`,
       [actor.userId, CLAIM_SECONDS, gapSeconds],
     );
-    return (result.rowCount ?? 0) > 0;
+    return result.rows[0]?.started_at ?? null;
   });
 }
 
-async function releaseRun(actor: UserActor) {
-  await withActor(actor, (db) => db.query("update crm.mail_relevance_runs set running_until = now() where user_id = $1", [actor.userId])).catch(() => undefined);
+async function releaseRun(actor: UserActor, startedAt: string) {
+  await withActor(actor, (db) =>
+    db.query("update crm.mail_relevance_runs set running_until = now() where user_id = $1 and started_at = $2::timestamptz", [actor.userId, startedAt]),
+  ).catch(() => undefined);
 }
 
 export async function classifyCapture(
@@ -263,7 +272,8 @@ export async function classifyCapture(
   },
 ) {
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  if (!(await claimRun(actor, options.gapSeconds ?? 0))) return { decided: 0, waiting: 0, skipped: true };
+  const claimed = await claimRun(actor, options.gapSeconds ?? 0);
+  if (!claimed) return { decided: 0, waiting: 0, skipped: true };
   try {
     const actors = await workspaceActors(actor);
     const raw = await unknownMail(actor, actors);
@@ -292,7 +302,7 @@ export async function classifyCapture(
     );
     return { decided, waiting: todo.length - decided, skipped: false };
   } finally {
-    await releaseRun(actor);
+    await releaseRun(actor, claimed);
   }
 }
 
@@ -301,8 +311,7 @@ export async function listSenderRules(actor: UserActor): Promise<SenderRule[]> {
 }
 
 export async function removeSenderRule(actor: UserActor, sender: string) {
-  const removed = await withActor(actor, (db) => removeSenderRuleInDb(db, actor, sender));
-  if (!removed) throw new CrmError("not_found", "That rule has gone.", 404);
+  await withActor(actor, (db) => removeSenderRuleInDb(db, actor, sender));
   return { sender };
 }
 

@@ -4,6 +4,7 @@ import { runTool } from "@/lib/assistant/tools";
 import { saveBrandProfile } from "@/lib/crm/brand";
 import { listPeopleMet } from "@/lib/crm/calendar";
 import { captureContext, captureStatus } from "@/lib/crm/capture";
+import { withActor } from "@/lib/crm/context";
 import { readCaptureAction, runCaptureAction } from "@/lib/crm/capture-actions";
 import { saveAboutYou } from "@/lib/crm/personal-context";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -15,7 +16,7 @@ import { learnNow } from "@/lib/learning/nightly";
 import { completeJson } from "@/lib/llm";
 import { classifyCapture, listSenderRules, listUnknownMail } from "@/lib/mail/capture-filter";
 import { createAndFileUnknown } from "@/lib/mail/filing";
-import { verdictFor } from "@/lib/mail/relevance";
+import { recordFiledInDb, verdictFor } from "@/lib/mail/relevance";
 import { setAddressHome } from "@/lib/mail/routing";
 import { bulkHeaderCategory, isMeetingNoise, listedSender } from "@/lib/mail/senders";
 import { z } from "zod";
@@ -224,13 +225,19 @@ describe("Capture relevance", () => {
     await getAdminPool().end();
   });
 
-  it("hides only role and sending addresses at listed domains, the whole collections list, and nothing that looks alike", () => {
+  it("hides only automated addresses and sending subdomains at listed domains, the whole collections list, and nothing that looks alike", () => {
     assert.deepEqual(listedSender("alerts@accounts.google.com"), { category: "service", hide: true });
     assert.deepEqual(listedSender("partners@google.com"), { category: "service", hide: false });
     assert.deepEqual(listedSender("priya.shah@google.com"), { category: "service", hide: false });
-    assert.deepEqual(listedSender("accounts@stripe.com"), { category: "supplier", hide: true });
+    assert.deepEqual(listedSender("accounts@stripe.com"), { category: "supplier", hide: false });
+    assert.deepEqual(listedSender("statements@stripe.com"), { category: "supplier", hide: true });
     assert.deepEqual(listedSender("sarah@stripe.com"), { category: "supplier", hide: false });
-    assert.deepEqual(listedSender("notices@hmrc.gov.uk"), { category: "personal", hide: true });
+    assert.deepEqual(listedSender("notices@hmrc.gov.uk"), { category: "personal", hide: false });
+    assert.deepEqual(listedSender("no-reply+tax@hmrc.gov.uk"), { category: "personal", hide: true });
+    assert.deepEqual(listedSender("noreply@nhs.net"), { category: "personal", hide: true });
+    for (const reachable of ["accounts.payable@trust.nhs.uk", "enquiries@council.gov.uk", "support.partnerships@barclays.com", "mail.smith@nhs.net", "jane@secure.nhs.net", "info@trust.nhs.uk", "notifications.team@gov.uk"]) {
+      assert.deepEqual(listedSender(reachable)?.hide, false, reachable);
+    }
     assert.deepEqual(listedSender("jane.doe@hmrc.gov.uk"), { category: "personal", hide: false });
     assert.deepEqual(listedSender("clinic@gp.nhs.uk"), { category: "personal", hide: false });
     assert.deepEqual(listedSender("statements@email.barclays.co.uk"), { category: "personal", hide: true });
@@ -268,10 +275,12 @@ describe("Capture relevance", () => {
     await assert.rejects(completeJson({ system: "x", user: "y", schema: z.object({}) }), /isn't called for real in tests/);
   });
 
-  it("hides role addresses at listed domains without the AI, asks about people there with a hint, and skips the list for domains Mark knows", async () => {
+  it("hides automated addresses at listed domains without the AI, asks about role mailboxes and people there with a hint, and skips the list for domains Mark knows", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: bySubject });
-    await addMessage(primary, { id: "paypal", from: "accounts@paypal.com", to: ["mark@geteclipse.co"], subject: "Your receipt" });
+    await addMessage(primary, { id: "paypal", from: "statements@paypal.com", to: ["mark@geteclipse.co"], subject: "Your statement" });
+    await addMessage(primary, { id: "paypal-accounts", from: "accounts@paypal.com", to: ["mark@geteclipse.co"], subject: "Invoice question" });
+    await addMessage(primary, { id: "trust", from: "accounts.payable@trust.nhs.uk", to: ["mark@geteclipse.co"], subject: "Partnership on patient visibility" });
     await addMessage(primary, { id: "nhs", from: "clinic@gp.nhs.uk", to: ["mark@geteclipse.co"], subject: "Appointment reminder" });
     await addMessage(primary, { id: "lowell", from: "agent@lowell.co.uk", to: ["mark@geteclipse.co"], subject: "Account" });
     await addMessage(primary, { id: "quiet", from: "otto@quiet.test", to: ["mark@geteclipse.co"], subject: "Hello", focused: false });
@@ -282,19 +291,14 @@ describe("Capture relevance", () => {
     await addMessage(primary, { id: "tom", from: "tom@ebay-partners.test", to: ["mark@geteclipse.co"], subject: "Spring sale for partners" });
     await classify(fake.fetchImpl);
     const asked = fake.haiku.map((call) => call.state.email.fromAddress).sort();
-    assert.deepEqual(asked, ["clinic@gp.nhs.uk", "kate@arrowglobal.net", "priya.shah@google.com"]);
+    assert.deepEqual(asked, ["accounts.payable@trust.nhs.uk", "accounts@paypal.com", "clinic@gp.nhs.uk", "kate@arrowglobal.net", "priya.shah@google.com"]);
+    assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "accounts.payable@trust.nhs.uk")!.state.email.senderDomainIs ?? "", /public sector/);
     assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "clinic@gp.nhs.uk")!.state.email.senderDomainIs ?? "", /public sector/);
     assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "priya.shah@google.com")!.state.email.senderDomainIs ?? "", /platform/);
     assert.equal(fake.haiku.find((call) => call.state.email.fromAddress === "kate@arrowglobal.net")!.state.email.senderDomainIs, undefined);
     const left = await skipped(eclipse);
-    assert.equal(left["accounts@paypal.com"], "supplier");
-    assert.equal(left["agent@lowell.co.uk"], "collections");
-    assert.equal(left["clinic@gp.nhs.uk"], "personal");
-    const visible = await shown(eclipse);
-    assert.ok(visible.includes("priya.shah@google.com"));
-    assert.ok(visible.includes("kate@arrowglobal.net"));
-    assert.ok(visible.includes("tom@ebay-partners.test"));
-    assert.ok(!visible.includes("otto@quiet.test"));
+    assert.deepEqual(left, { "statements@paypal.com": "supplier", "accounts@paypal.com": "supplier", "agent@lowell.co.uk": "collections", "clinic@gp.nhs.uk": "personal" });
+    assert.deepEqual(await shown(eclipse), ["accounts.payable@trust.nhs.uk", "kate@arrowglobal.net", "priya.shah@google.com", "tom@ebay-partners.test"]);
     assert.equal((await threadRow(`${primary.sourceId}|paypal`))?.engine, "listed");
     assert.equal((await threadRow(`${primary.sourceId}|nhs`))?.engine, "haiku");
     assert.equal((await threadRow(`${primary.sourceId}|tom`))?.engine, "history");
@@ -326,9 +330,10 @@ describe("Capture relevance", () => {
     assert.equal(first.state.business.whatItSells, "AI visibility software for brands.");
     assert.equal(first.state.business.idealCustomer, "Marketing leads at consumer brands.");
     assert.deepEqual(first.state.person, { name: "Mark Ridgeon", role: "Founder", aboutYou: "I run Eclipse." });
+    assert.match(first.system, /supplier/);
     assert.match(first.state.email.signature ?? "", /Head of Things/);
     assert.doesNotMatch(first.state.email.signature ?? "", /Quoted Signature Line/);
-    assert.ok((await shown(eclipse)).includes("ana@northwind.test"));
+    assert.deepEqual((await shown(eclipse)).filter((email) => senders.includes(email)), ["ana@northwind.test"]);
     const left = await skipped(eclipse);
     assert.equal(left["bills@vendorco.test"], "supplier");
     assert.equal(left["guard@platform.test"], "service");
@@ -339,21 +344,51 @@ describe("Capture relevance", () => {
     assert.equal((await capture(eclipse)).sorting, 0);
   });
 
-  it("asks once per sender in a run, reuses the decision after, and asks again once it is 60 days old", async () => {
+  it("shares and caches only a show decision for a sender, and judges each other email on its own", async () => {
     process.env.LLM_API_KEY = "test-key";
-    const fake = gateway({ haiku: () => ({ category: "newsletter" }) });
-    for (const index of [1, 2, 3]) await addMessage(primary, { id: `burst-${index}`, from: "blast@burst.test", to: ["mark@geteclipse.co"], subject: `Offer ${index}` });
+    const fake = gateway({ haiku: (state) => ({ category: state.email.subject?.startsWith("Spring sale") ? "newsletter" : "business" }) });
+    for (const index of [1, 2, 3]) await addMessage(primary, { id: `burst-${index}`, from: "anya@burst.test", to: ["mark@geteclipse.co"], subject: `Proposal ${index}` });
     await classify(fake.fetchImpl);
-    assert.equal(fake.haiku.filter((call) => call.state.email.fromAddress === "blast@burst.test").length, 1);
-    await addMessage(primary, { id: "burst-4", from: "blast@burst.test", to: ["mark@geteclipse.co"], subject: "Offer 4" });
-    assert.equal((await skipped(eclipse))["blast@burst.test"], "newsletter");
+    assert.equal(fake.haiku.filter((call) => call.state.email.fromAddress === "anya@burst.test").length, 1);
+    await addMessage(primary, { id: "burst-4", from: "anya@burst.test", to: ["mark@geteclipse.co"], subject: "Proposal 4" });
     await classify(fake.fetchImpl);
     assert.equal(fake.haiku.length, 1);
     assert.equal((await threadRow(`${primary.sourceId}|burst-4`))?.engine, "cached");
-    await getAdminPool().query("update crm.mail_sender_relevance set decided_at = now() - interval '61 days' where sender = 'blast@burst.test'");
-    await addMessage(primary, { id: "burst-5", from: "blast@burst.test", to: ["mark@geteclipse.co"], subject: "Offer 5" });
+    await getAdminPool().query("update crm.mail_sender_relevance set decided_at = now() - interval '61 days' where sender = 'anya@burst.test'");
+    await addMessage(primary, { id: "burst-5", from: "anya@burst.test", to: ["mark@geteclipse.co"], subject: "Proposal 5" });
     await classify(fake.fetchImpl);
     assert.equal(fake.haiku.length, 2);
+
+    await addMessage(primary, { id: "mixed-1", from: "pat@mixed.test", to: ["mark@geteclipse.co"], subject: "Spring sale today", at: minutesAgo(1) });
+    await addMessage(primary, { id: "mixed-2", from: "pat@mixed.test", to: ["mark@geteclipse.co"], subject: "Partnership proposal", at: minutesAgo(2) });
+    await classify(fake.fetchImpl);
+    assert.equal(fake.haiku.filter((call) => call.state.email.fromAddress === "pat@mixed.test").length, 2);
+    assert.equal((await threadRow(`${primary.sourceId}|mixed-1`))?.category, "newsletter");
+    assert.equal((await threadRow(`${primary.sourceId}|mixed-2`))?.category, "business");
+    assert.ok((await capture(eclipse)).emails.some((email) => email.key === `${primary.sourceId}|mixed-2`));
+    const cached = await getAdminPool().query("select 1 from crm.mail_sender_relevance where sender = 'pat@mixed.test' and category <> 'business'");
+    assert.equal(cached.rowCount, 0);
+    await addMessage(primary, { id: "news-1", from: "nell@newsonly.test", to: ["mark@geteclipse.co"], subject: "Spring sale" });
+    await classify(fake.fetchImpl);
+    await addMessage(primary, { id: "news-2", from: "nell@newsonly.test", to: ["mark@geteclipse.co"], subject: "Spring sale again" });
+    await classify(fake.fetchImpl);
+    assert.equal(fake.haiku.filter((call) => call.state.email.fromAddress === "nell@newsonly.test").length, 2, "a hide is never reused for the next email");
+  });
+
+  it("sorts at most six inline and leaves the rest for the background", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    const fake = gateway({ haiku: () => ({ category: "business" }) });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fake.fetchImpl;
+    try {
+      for (let index = 0; index < 8; index += 1) await addMessage(primary, { id: `six-${index}`, from: `six${index}@sixco${index}.test`, to: ["mark@geteclipse.co"], subject: "Hello" });
+      const context = await captureContext(eclipse, Date.now(), { inline: true });
+      assert.equal(fake.haiku.length, 6);
+      assert.equal(context.held.length, 2);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    await classify(fake.fetchImpl);
   });
 
   it("sorts the pending few inline when Capture opens", async () => {
@@ -464,12 +499,10 @@ describe("Capture relevance", () => {
     const cached = await getAdminPool().query<{ workspace_id: string; category: string }>(
       "select workspace_id, category from crm.mail_sender_relevance where sender = 'lena@brightpath.test' order by category",
     );
-    assert.deepEqual(cached.rows, [
-      { workspace_id: ridgeon.workspaceId, category: "business" },
-      { workspace_id: eclipse.workspaceId, category: "newsletter" },
-    ]);
+    assert.deepEqual(cached.rows, [{ workspace_id: ridgeon.workspaceId, category: "business" }]);
 
     const both = gateway({ haiku: () => ({ category: "business" }) });
+    await runCaptureAction(ridgeon, readCaptureAction({ kind: "rule-remove", sender: "lena@brightpath.test" }));
     const inEclipse = await addMessage(primary, { id: "max-e", from: "max@dualco.test", to: ["mark@geteclipse.co"], subject: "Hello" });
     await addMessage(extra, { id: "max-r", from: "max@dualco.test", to: ["mark@markridgeon.com"], subject: "Hello" });
     await classify(both.fetchImpl);
@@ -562,8 +595,16 @@ describe("Capture relevance", () => {
     assert.ok(!list.emails.some((email) => email.email.endsWith("@vendorly.test")));
     assert.equal(list.notShown.find((email) => email.email === "boss@vendorly.test")?.category, "muted");
 
+    assert.ok(!list.notShown.some((email) => email.key === first.key), "the dismissed thread itself is gone");
+
     await runCaptureAction(eclipse, readCaptureAction({ kind: "email-show", key: promo.key }));
     assert.ok((await shown(eclipse)).includes("maria@promo.test"));
+    await addMessage(primary, { id: "promo-2", from: "maria@promo.test", to: ["mark@geteclipse.co"], subject: "Spring sale" });
+    await classify(fake.fetchImpl);
+    assert.deepEqual(
+      (await capture(eclipse)).emails.filter((email) => email.email === "maria@promo.test").map((email) => email.key).sort(),
+      [promo.key, `${primary.sourceId}|promo-2`].sort(),
+    );
     assert.deepEqual(
       (await listSenderRules(eclipse)).filter((rule) => ["@vendorly.test", "maria@promo.test"].includes(rule.sender)),
       [
@@ -572,8 +613,12 @@ describe("Capture relevance", () => {
       ],
     );
     assert.equal(readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" }).kind, "rule-remove");
+    await runCaptureAction(ridgeon, readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" }));
+    const sam = await createUser("sam.rules@elsewhere.test", "Sam Rules");
+    await runCaptureAction(sam, readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" }));
+    assert.ok((await listSenderRules(eclipse)).some((rule) => rule.sender === "@vendorly.test"), "another workspace or person can't remove it");
     await runCaptureAction(eclipse, readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" }));
-    await assert.rejects(runCaptureAction(eclipse, readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" })), /That rule has gone/);
+    await runCaptureAction(eclipse, readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" }));
     assert.ok(!(await listSenderRules(eclipse)).some((rule) => rule.sender === "@vendorly.test"));
     await classify(fake.fetchImpl);
     assert.ok((await shown(eclipse)).includes("boss@vendorly.test"));
@@ -590,6 +635,44 @@ describe("Capture relevance", () => {
       { sender: "@fileco.test", category: "business", engine: "filed", rule: true },
       { sender: "rosa@fileco.test", category: "business", engine: "filed", rule: true },
     ]);
+  });
+
+  it("keeps sorting when one email can't be stored, and stores each copied decision on its own", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    const fake = gateway({ haiku: () => ({ category: "business" }) });
+    const long = `${"a".repeat(330)}@gmail.com`;
+    const longCollections = `${"b".repeat(330)}@lowell.co.uk`;
+    await addMessage(primary, { id: "long", from: long, to: ["mark@geteclipse.co"], subject: "Hello" });
+    await addMessage(primary, { id: "long-collections", from: longCollections, to: ["mark@geteclipse.co"], subject: "Account" });
+    await addMessage(primary, { id: "after-long", from: "fine@okay.test", to: ["mark@geteclipse.co"], subject: "Hello" });
+    await addMessage(primary, { id: "after-long-collections", from: "agent2@lowell.co.uk", to: ["mark@geteclipse.co"], subject: "Account" });
+    const run = await classify(fake.fetchImpl);
+    assert.equal(run.skipped, false);
+    assert.equal((await threadRow(`${primary.sourceId}|after-long`))?.engine, "haiku");
+    assert.equal((await threadRow(`${primary.sourceId}|after-long-collections`))?.engine, "listed");
+    assert.equal(await threadRow(`${primary.sourceId}|long`), null);
+    assert.ok((await captureContext(eclipse)).held.some((item) => item.key === `${primary.sourceId}|long`));
+    await getAdminPool().query("update crm.mail_messages set from_email = 'fixed@okay.test' where provider_message_id = 'long'");
+    await getAdminPool().query("update crm.mail_messages set from_email = 'agent3@lowell.co.uk' where provider_message_id = 'long-collections'");
+  });
+
+  it("takes over a stale claim, releases its claim when a run throws, and only releases its own claim", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    const fake = gateway({ haiku: () => ({ category: "business" }) });
+    const admin = getAdminPool();
+    await admin.query("update crm.mail_relevance_runs set started_at = now() - interval '10 minutes', running_until = now() + interval '1 minute' where user_id = $1", [eclipse.userId]);
+    assert.equal((await classify(fake.fetchImpl)).skipped, true);
+    await admin.query("update crm.mail_relevance_runs set started_at = now() - interval '10 minutes', running_until = now() - interval '1 second' where user_id = $1", [eclipse.userId]);
+    assert.equal((await classify(fake.fetchImpl)).skipped, false);
+    const exploding = {
+      deadline: Date.now() + 60_000,
+      fetchImpl: fake.fetchImpl,
+      get limit(): number {
+        throw new Error("boom");
+      },
+    };
+    await assert.rejects(classifyCapture(eclipse, exploding), /boom/);
+    assert.equal((await classify(fake.fetchImpl)).skipped, false);
   });
 
   it("classifies at most 25 a run, stops at the deadline, and runs one sort per person at a time", async () => {
@@ -633,25 +716,31 @@ describe("Capture relevance", () => {
         [eclipse.workspaceId, eclipse.userId, primary.sourceId, id, message.id, `${body} draft`, `${body} as sent`],
       );
     };
+    const decide = (thread: string, sender: string, category: string, confidence: number, workspaceId = eclipse.workspaceId) =>
+      admin.query(
+        `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine, confidence)
+         values ($1, $2, $3, $4, $5, $6, 'haiku', $7)`,
+        [workspaceId, eclipse.userId, primary.sourceId, thread, sender, category, confidence],
+      );
     await prepare("learn-business", "dana@clientco.test", "BUSINESS-REPLY");
     await prepare("learn-health", "doc@healthyplace.test", "HEALTH-REPLY");
-    await prepare("learn-bank", "advisor@barclays.co.uk", "BANK-REPLY");
+    await prepare("learn-bank", "advisor@barclays.co.uk", "BANKER-REPLY");
+    await prepare("learn-statements", "statements@barclays.co.uk", "STATEMENT-REPLY");
     await prepare("learn-debt", "chaser@chasers.test", "DEBT-REPLY");
-    await admin.query(
-      `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine)
-       values ($1, $2, $3, 'learn-health', 'doc@healthyplace.test', 'personal', 'haiku')`,
-      [eclipse.workspaceId, eclipse.userId, primary.sourceId],
-    );
-    await admin.query(
-      `insert into crm.mail_sender_relevance (workspace_id, user_id, sender, category, engine, confidence)
-       values ($1, $2, 'chaser@chasers.test', 'collections', 'haiku', 0.95)`,
-      [ridgeon.workspaceId, eclipse.userId],
-    );
+    await prepare("learn-unsure", "maybe@unsure-health.test", "UNSURE-REPLY");
+    await prepare("learn-elsewhere", "other@elsewhere-health.test", "ELSEWHERE-REPLY");
+    await prepare("learn-filed", "jane@acme-health.test", "FILED-REPLY");
+    await decide("learn-health", "doc@healthyplace.test", "personal", 0.95);
+    await decide("learn-debt-other-thread", "chaser@chasers.test", "collections", 0.9);
+    await decide("learn-unsure", "maybe@unsure-health.test", "personal", 0.6);
+    await decide("learn-elsewhere", "other@elsewhere-health.test", "personal", 0.95, ridgeon.workspaceId);
+    await decide("learn-filed", "jane@acme-health.test", "personal", 0.95);
+    await withActor(eclipse, (db) => recordFiledInDb(db, eclipse, eclipse.workspaceId, "jane@acme-health.test"));
     const fake = gateway({});
     await learnNow(eclipse, { deadline: Date.now() + 60_000, fetchImpl: fake.fetchImpl, kinds: ["personal"] });
     assert.equal(fake.learning.length, 1);
-    assert.match(fake.learning[0], /BUSINESS-REPLY/);
-    assert.doesNotMatch(fake.learning[0], /HEALTH-REPLY|BANK-REPLY|DEBT-REPLY/);
+    for (const kept of ["BUSINESS-REPLY", "BANKER-REPLY", "UNSURE-REPLY", "ELSEWHERE-REPLY", "FILED-REPLY"]) assert.match(fake.learning[0], new RegExp(kept));
+    assert.doesNotMatch(fake.learning[0], /HEALTH-REPLY|STATEMENT-REPLY|DEBT-REPLY/);
   });
 
   it("keeps another member's Personal email out of shared business learning", async () => {
@@ -667,8 +756,14 @@ describe("Capture relevance", () => {
     const theirs = await source({ ...priya, workspaceId: eclipse.workspaceId }, "connection_id", theirConnection.rows[0].id, "priya@geteclipse.co");
     const message = await addMessage(theirs, { id: "priya-gp", from: "gp@surgery.test", to: ["priya@geteclipse.co"], subject: "Results" }, { ...priya, workspaceId: eclipse.workspaceId });
     await admin.query(
-      `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine)
-       values ($1, $2, $3, 'priya-gp', 'gp@surgery.test', 'personal', 'haiku')`,
+      `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine, confidence)
+       values ($1, $2, $3, 'priya-gp', 'gp@surgery.test', 'personal', 'haiku', 0.95)`,
+      [eclipse.workspaceId, priya.userId, theirs.sourceId],
+    );
+    const unsure = await addMessage(theirs, { id: "priya-unsure", from: "buyer@council.test", to: ["priya@geteclipse.co"], subject: "Tender" }, { ...priya, workspaceId: eclipse.workspaceId });
+    await admin.query(
+      `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine, confidence)
+       values ($1, $2, $3, 'priya-unsure', 'buyer@council.test', 'personal', 'haiku', 0.6)`,
       [eclipse.workspaceId, priya.userId, theirs.sourceId],
     );
     const company = (await admin.query<{ id: string }>("insert into crm.companies (workspace_id, name, normalized_name) values ($1, 'Toneco', 'toneco') returning id", [eclipse.workspaceId])).rows[0].id;
@@ -681,9 +776,11 @@ describe("Capture relevance", () => {
       ).rows[0].id;
     const hidden = await activity("PRIYA-HEALTH", { mailMessageId: message.id });
     const kept = await activity("CLIENT-TONE", { mailMessageId: "not-a-uuid-------------------------" });
+    const buyer = await activity("BUYER-TONE", { mailMessageId: unsure.id });
     for (const [id, tone] of [
       [hidden, "negative"],
       [kept, "positive"],
+      [buyer, "positive"],
     ]) {
       await admin.query("insert into crm.activity_tones (activity_id, workspace_id, tone, reason) values ($1, $2, $3, 'Test.')", [id, eclipse.workspaceId, tone]);
     }
@@ -691,6 +788,7 @@ describe("Capture relevance", () => {
     await learnNow(eclipse, { deadline: Date.now() + 60_000, fetchImpl: fake.fetchImpl, kinds: ["business"] });
     assert.equal(fake.business.length, 1);
     assert.match(fake.business[0], /CLIENT-TONE/);
+    assert.match(fake.business[0], /BUYER-TONE/);
     assert.doesNotMatch(fake.business[0], /PRIYA-HEALTH/);
   });
 
@@ -730,6 +828,10 @@ describe("Capture relevance", () => {
     assert.equal(threads[0].total, 0);
     const runs = await queryAsUser<{ total: number }>(other.userId, "select count(*)::int as total from crm.mail_relevance_runs");
     assert.equal(runs[0].total, 0);
+    const known = await queryAsUser<{ total: number }>(other.userId, "select count(*)::int as total from crm.mail_known_addresses");
+    assert.equal(known[0].total, 0);
+    assert.ok((await queryAsUser<{ total: number }>(eclipse.userId, "select count(*)::int as total from crm.mail_known_addresses"))[0].total > 0);
+    await assert.rejects(queryAsUser(eclipse.userId, "insert into crm.mail_known_addresses (user_id, address, domain) values ($1, 'x@y.test', 'y.test')", [eclipse.userId]), /permission denied/);
     const mine = await queryAsUser<{ total: number }>(eclipse.userId, "select count(*)::int as total from crm.mail_sender_relevance");
     assert.ok(mine[0].total > 0);
     await assert.rejects(
@@ -748,10 +850,10 @@ describe("Capture relevance", () => {
     );
     assert.equal((await queryAsUser<{ id: string }>(other.userId, "update crm.mail_thread_relevance set category = 'business' returning id")).length, 0);
     assert.equal((await queryAsUser<{ id: string }>(other.userId, "delete from crm.mail_sender_relevance returning id")).length, 0);
-    assert.equal((await queryAsUser<{ id: string }>(other.userId, "delete from crm.mail_thread_relevance returning id")).length, 0);
+    await assert.rejects(queryAsUser(other.userId, "delete from crm.mail_thread_relevance returning id"), /permission denied/);
     const client = await getAdminPool().connect();
     try {
-      for (const table of ["mail_sender_relevance", "mail_thread_relevance", "mail_relevance_runs"]) {
+      for (const table of ["mail_sender_relevance", "mail_thread_relevance", "mail_relevance_runs", "mail_known_addresses"]) {
         await client.query("begin");
         await client.query("set local role crm_agent");
         await assert.rejects(client.query(`select count(*) from crm.${table}`), /permission denied/);

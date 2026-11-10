@@ -78,7 +78,6 @@ type Pending = {
   action: CaptureAction;
   timer: number;
   toast: number;
-  done?: string;
 };
 
 type Filter = "all" | CaptureSectionId;
@@ -344,7 +343,6 @@ export default function CaptureScreen({
       .then((outcome) => {
         if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
-        if (item.done && mounted.current) showToast({ message: item.done });
         router.refresh();
       })
       .catch((error: Error) => {
@@ -378,6 +376,7 @@ export default function CaptureScreen({
   }
 
   const flushRef = useRef(flush);
+  const queueRef = useRef<(id: string, verb: string, action: CaptureAction) => void>(() => undefined);
   useEffect(() => {
     flushRef.current = flush;
   });
@@ -421,6 +420,10 @@ export default function CaptureScreen({
     moveFocusFrom(id);
     if (swiped) hide(id);
     else leave(id);
+    queue(id, verb, action, instead);
+  }
+
+  function queue(id: string, verb: string, action: CaptureAction, instead?: ClearInstead) {
     const item: Pending = {
       id,
       action,
@@ -433,11 +436,12 @@ export default function CaptureScreen({
           ? {
               extra: {
                 label: instead.label,
+                short: instead.short,
                 run: () => {
                   if (pending.current !== item) return;
-                  item.action = instead.action;
-                  item.done = instead.done;
-                  flush();
+                  window.clearTimeout(item.timer);
+                  pending.current = null;
+                  queueRef.current(id, instead.done, instead.action);
                 },
               },
             }
@@ -451,6 +455,10 @@ export default function CaptureScreen({
     }, UNDO_MS);
     pending.current = item;
   }
+
+  useEffect(() => {
+    queueRef.current = queue;
+  });
 
   const showing = sections.filter((id) => view === "all" || view === id);
   const othersShown = data.others.length > 0 && (view === "all" || view === "approvals");

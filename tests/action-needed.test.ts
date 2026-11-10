@@ -777,7 +777,7 @@ describe("Capture after review", () => {
       ["approvals", "followUps", "replies", "tasks", "toFile", "unreadSections"],
     );
     assert.deepEqual(Object.keys(result.followUps).sort(), ["calls", "emails", "noReplyYet"]);
-    assert.deepEqual(Object.keys(result.toFile).sort(), ["conversations", "emails", "notShown", "peopleMet"]);
+    assert.deepEqual(Object.keys(result.toFile).sort(), ["conversations", "emails", "notShown", "peopleMet", "personalOrCollectionsEmails"]);
     assert.deepEqual(result.unreadSections, []);
     assert.ok(Array.isArray(result.replies));
     const noReply = result.followUps.noReplyYet as { subject: string; kind: string }[];

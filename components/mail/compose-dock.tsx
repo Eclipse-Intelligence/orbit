@@ -28,7 +28,7 @@ type Toast = {
   message: string;
   tone?: "status" | "alert";
   action?: { label: string; run: () => void };
-  extra?: { label: string; run: () => void };
+  extra?: { label: string; short?: string; run: () => void };
   duration?: number;
 };
 
@@ -609,21 +609,23 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               role={toast.tone === "alert" ? "alert" : "status"}
               className="bg-popover border-line-strong shadow-overlay animate-rise-in pointer-events-auto flex max-w-[min(36rem,100%)] items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]"
             >
-              <span className={cn(toast.extra ? "shrink-0 whitespace-nowrap" : "min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
               {toast.extra && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="min-w-0 shrink"
-                  title={toast.extra.label}
+                  className="-ml-2.5 min-w-0 shrink"
+                  aria-label={toast.extra.label}
                   onClick={() => {
                     toast.extra!.run();
                     dismiss(toast.id);
                   }}
                 >
-                  <span className="truncate">{toast.extra.label}</span>
+                  <span className={cn("truncate", toast.extra.short && "max-sm:hidden")}>{toast.extra.label}</span>
+                  {toast.extra.short && <span className="sm:hidden">{toast.extra.short}</span>}
                 </Button>
               )}
+              <span className={cn(toast.extra ? "shrink-0 whitespace-nowrap" : "min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
+              {toast.extra && <span aria-hidden className="w-6 shrink-0" />}
               {toast.action ? (
                 <Button
                   variant="ghost"

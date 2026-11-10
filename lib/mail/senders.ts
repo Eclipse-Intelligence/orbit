@@ -167,10 +167,10 @@ export const SENDING_DOMAINS = new Map<string, ListedCategory>([
   ["docusign.net", "service"],
 ]);
 
-export const ROLE_SENDER =
-  "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team|accounts?|account-?security|security|support|help|helpdesk|service|services|customer-?service|customerservice|customer-?care|care|statements?|orders?|order-?update|shipping|delivery|deliveries|payments?|payment-?notification|verify|verification|confirm|confirmation|reminders?|appointments?|bookings?|reservations?|enquiries|enquiry|contact|admin|system|postmaster|feedback|messages?|mail|email|notices?|online|digital|banking|secure)([._+-][^@]*)?@";
+export const AUTOMATED_LOCAL =
+  "^(no-?reply|noreply-?[a-z]+|do-?not-?reply|donotreply|mailer-?daemon|postmaster|bounces?|notifications?|notify|alerts?|automated|auto-?reply|auto-?confirm|statements?|e-?statements?)(\\+[^@]*)?@";
 
-const SENDING_LABEL = /^(e|em|email|emails|mail|mailer|mailing|mg|news|newsletter|marketing|notifications?|notify|alerts?|updates?|bounce|post|accounts?|account|info|service|services|secure|comms|communications|messages?|no-?reply|txn|transactional|engage|reply|go|links?|t|m)$/;
+const SENDING_LABEL = /^(e|em|email|emails|mail|mailer|mailing|mg|news|newsletter|newsletters|marketing|notifications?|notify|alerts?|updates?|bounces?|txn|transactional|comms)$/;
 
 export type ListedSender = { category: ListedCategory; hide: boolean };
 
@@ -202,8 +202,8 @@ export function listedSender(email: string): ListedSender | null {
   if (found.category === "collections" || SENDING_DOMAINS.has(found.parent)) return { category: found.category, hide: true };
   const sub = domain === found.parent ? "" : domain.slice(0, domain.length - found.parent.length - 1);
   const sendingSub = sub !== "" && SENDING_LABEL.test(sub.split(".")[0]);
-  const role = new RegExp(ROLE_SENDER, "i").test(address);
-  return { category: found.category, hide: role || sendingSub };
+  const automated = new RegExp(AUTOMATED_LOCAL, "i").test(address);
+  return { category: found.category, hide: automated || sendingSub };
 }
 
 export function listedCategory(email: string): ListedCategory | null {

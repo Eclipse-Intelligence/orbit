@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { brandOrEmpty } from "@/lib/crm/brand";
-import { FREE_MAIL_DOMAINS, isFreeMailDomain } from "@/lib/crm/communications";
+import { isFreeMailDomain } from "@/lib/crm/communications";
 import { getPersonalContext } from "@/lib/crm/personal-context";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -46,7 +46,7 @@ export type Verdict =
   | { state: "skipped"; category: SkippedCategory; engine: RelevanceEngine; reason: string | null }
   | { state: "pending" };
 
-export type Judged<T extends Candidate> = { item: T; verdict: Verdict; retry: boolean; copy: Decision | null; hint: ListedCategory | null };
+export type Judged<T extends Candidate> = { item: T; verdict: Verdict; retry: boolean; copy: Decision | null; hint: ListedCategory | null; stored: StoredCategory | null };
 
 export type Decision = { category: StoredCategory | null; engine: RelevanceEngine; confidence: number | null; reason: string | null };
 
@@ -98,48 +98,28 @@ async function contactFacts(db: Db, actor: UserActor, items: Candidate[]): Promi
   const senders = [...new Set(items.map((item) => item.email.toLowerCase()))];
   const facts: Facts = { wroteSender: new Set(), wroteDomain: new Set(), met: new Set(), crm: new Set() };
   if (senders.length === 0) return facts;
-  const result = await db.query<{ kind: "sent" | "met" | "crm"; workspace_id: string | null; value: string }>(
-    `with wanted as (
-       select distinct lower(x) as sender, split_part(lower(x), '@', 2) as host from unnest($2::text[]) as x
-     ),
-     sent as (
-       select distinct lower(r->>'address') as address
-       from crm.mail_messages m
-       join crm.mail_folders f on f.id = m.folder_id
-       cross join lateral jsonb_array_elements(
-         coalesce(m.to_recipients, '[]'::jsonb) || coalesce(m.cc_recipients, '[]'::jsonb) || coalesce(m.bcc_recipients, '[]'::jsonb)
-       ) r
-       where m.user_id = $1 and f.role = 'sent' and not m.is_draft and jsonb_typeof(r) = 'object'
-         and split_part(lower(r->>'address'), '@', 2) in (select host from wanted)
-     ),
-     met as (
-       select distinct lower(p->>'email') as address
-       from crm.calendar_events e
-       cross join lateral jsonb_array_elements(
-         (case when jsonb_typeof(e.attendees) = 'array' then e.attendees else '[]'::jsonb end)
-         || (case when jsonb_typeof(e.organizer) = 'object' then jsonb_build_array(e.organizer) else '[]'::jsonb end)
-       ) p
-       where e.user_id = $1 and not e.is_cancelled and e.starts_at <= now() and jsonb_typeof(p) = 'object'
-         and lower(p->>'email') in (select sender from wanted)
-     ),
-     crm_hosts as (
-       select distinct c.workspace_id, split_part(c.normalized_email, '@', 2) as host
-       from crm.contacts c
-       join crm.activities a on a.contact_id = c.id and a.archived_at is null
-       where c.workspace_id = any($3::uuid[]) and c.archived_at is null
-         and split_part(c.normalized_email, '@', 2) in (select host from wanted where host <> all($4::text[]))
-     )
-     select 'sent' as kind, null::uuid as workspace_id, address as value from sent
-     union all select 'met', null, address from met
-     union all select 'crm', workspace_id, host from crm_hosts`,
-    [actor.userId, senders, [...new Set(items.map((item) => item.workspaceId))], [...FREE_MAIL_DOMAINS]],
+  const domains = [...new Set(senders.map(domainOf).filter((domain) => domain && !isFreeMailDomain(domain)))];
+  const result = await db.query<{ kind: "sent" | "domain" | "met" | "crm"; workspace_id: string | null; value: string }>(
+    `select 'sent' as kind, null::uuid as workspace_id, k.address as value
+     from crm.mail_known_addresses k where k.user_id = $1 and k.address = any($2::text[]) and k.sent_count > 0
+     union all
+     select 'met', null, k.address
+     from crm.mail_known_addresses k where k.user_id = $1 and k.address = any($2::text[]) and k.met_first <= now()
+     union all
+     select distinct 'domain', null::uuid, k.domain
+     from crm.mail_known_addresses k where k.user_id = $1 and k.domain = any($3::text[]) and k.sent_count > 0
+     union all
+     select distinct 'crm', c.workspace_id, split_part(c.normalized_email, '@', 2)
+     from crm.contacts c
+     join crm.activities a on a.contact_id = c.id and a.archived_at is null
+     where c.workspace_id = any($4::uuid[]) and c.archived_at is null
+       and c.normalized_email like any(array(select '%@' || d from unnest($3::text[]) as d))`,
+    [actor.userId, senders, domains, [...new Set(items.map((item) => item.workspaceId))]],
   );
   for (const row of result.rows) {
-    if (row.kind === "sent") {
-      facts.wroteSender.add(row.value);
-      const domain = domainOf(row.value);
-      if (domain && !isFreeMailDomain(domain)) facts.wroteDomain.add(domain);
-    } else if (row.kind === "met") facts.met.add(row.value);
+    if (row.kind === "sent") facts.wroteSender.add(row.value);
+    else if (row.kind === "domain") facts.wroteDomain.add(row.value);
+    else if (row.kind === "met") facts.met.add(row.value);
     else facts.crm.add(`${row.workspace_id}|${row.value}`);
   }
   return facts;
@@ -187,7 +167,8 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
         ? thread
         : undefined;
     const hint = listUsable && !listed.hide ? listed.category : null;
-    const judged = (verdict: Verdict, copy: Decision | null = null, retry = false): Judged<T> => ({ item, verdict, retry, copy: current ? null : copy, hint });
+    const stored = thread && thread.workspace_id === item.workspaceId ? thread.category : null;
+    const judged = (verdict: Verdict, copy: Decision | null = null, retry = false): Judged<T> => ({ item, verdict, retry, copy: current ? null : copy, hint, stored });
     if (exact?.rule) return judged(verdictFor(exact, exact.engine));
     if (domainRule?.rule) return judged(verdictFor(domainRule, domainRule.engine));
     if (facts.wroteSender.has(email) || facts.met.has(email)) {
@@ -200,7 +181,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
       if (current.category === null) return judged({ state: "shown", engine: "failed" }, null, now - new Date(current.decided_at).getTime() > RETRY_MS && configured);
       return judged(verdictFor(current, current.engine));
     }
-    if (exact && now - new Date(exact.decided_at).getTime() < CACHE_MS) {
+    if (exact && exact.category === "business" && now - new Date(exact.decided_at).getTime() < CACHE_MS) {
       return judged(verdictFor(exact, "cached"), { category: exact.category, engine: "cached", confidence: exact.confidence, reason: exact.reason });
     }
     if (!configured) return judged({ state: "shown", engine: null });
@@ -221,7 +202,7 @@ export async function storeThreadDecision(db: Db, actor: UserActor, item: Pick<C
 }
 
 export async function cacheSenderDecision(db: Db, actor: UserActor, workspaceId: string, sender: string, decision: Decision) {
-  if (!decision.category || (decision.engine !== "jev" && decision.engine !== "haiku")) return;
+  if (decision.category !== "business" || (decision.engine !== "jev" && decision.engine !== "haiku")) return;
   await db.query(
     `insert into crm.mail_sender_relevance (workspace_id, user_id, sender, category, engine, confidence, reason, rule)
      values ($1, $2, $3, $4, $5, $6, $7, false)
@@ -242,11 +223,20 @@ export async function setSenderRule(db: Db, actor: UserActor, workspaceId: strin
   );
 }
 
+export async function markSenderThreadsBusiness(db: Db, actor: UserActor, workspaceId: string, email: string, engine: "filed" | "shown") {
+  await db.query(
+    `update crm.mail_thread_relevance set category = 'business', engine = $4, confidence = null, reason = null, decided_at = now(), updated_at = now()
+     where user_id = $1 and workspace_id = $2 and sender = $3`,
+    [actor.userId, workspaceId, email.toLowerCase(), engine],
+  );
+}
+
 export async function recordFiledInDb(db: Db, actor: UserActor, workspaceId: string, email: string) {
   const sender = email.toLowerCase();
   await setSenderRule(db, actor, workspaceId, sender, "business", "filed");
   const target = ruleTarget(sender);
   if (target !== sender) await setSenderRule(db, actor, workspaceId, target, "business", "filed");
+  await markSenderThreadsBusiness(db, actor, workspaceId, sender, "filed");
 }
 
 export type SenderRule = { sender: string; kind: "never" | "always" };
@@ -263,32 +253,48 @@ export async function listSenderRulesInDb(db: Db, actor: UserActor): Promise<Sen
 }
 
 export async function removeSenderRuleInDb(db: Db, actor: UserActor, sender: string) {
-  const result = await db.query(
+  await db.query(
     "delete from crm.mail_sender_relevance where user_id = $1 and workspace_id = $2 and sender = $3 and rule and (category = 'muted' or engine = 'shown')",
     [actor.userId, actor.workspaceId, sender.trim().toLowerCase()],
   );
-  return (result.rowCount ?? 0) > 0;
 }
 
-export function notSensitiveThreadSql(userExpr: string, sourceExpr: string, threadExpr: string) {
+const CONFIDENTLY_SENSITIVE = `sensitive.category in ('personal', 'collections')
+      and (sensitive.engine in ('listed', 'headers') or coalesce(sensitive.confidence, 0) >= ${CONFIDENT})`;
+
+function noBusinessRuleSql(userExpr: string, workspaceExpr: string) {
+  return `not exists (
+      select 1 from crm.mail_sender_relevance kept
+      where kept.user_id = ${userExpr} and kept.workspace_id = ${workspaceExpr} and kept.rule and kept.category = 'business'
+        and kept.sender in (sensitive.sender, '@' || split_part(sensitive.sender, '@', 2))
+    )`;
+}
+
+export function notSensitiveThreadSql(userExpr: string, workspaceExpr: string, sourceExpr: string, threadExpr: string) {
   return `not exists (
     select 1 from crm.mail_thread_relevance sensitive
-    where sensitive.user_id = ${userExpr} and sensitive.source_id = ${sourceExpr} and sensitive.thread_key = ${threadExpr}
-      and sensitive.category in ('personal', 'collections')
+    where sensitive.user_id = ${userExpr} and sensitive.workspace_id = ${workspaceExpr}
+      and sensitive.source_id = ${sourceExpr} and sensitive.thread_key = ${threadExpr}
+      and ${CONFIDENTLY_SENSITIVE}
+      and ${noBusinessRuleSql(userExpr, workspaceExpr)}
   )`;
 }
 
-export function noSensitivePeopleSql(userExpr: string, peopleExpr: string) {
+export function noSensitivePeopleSql(userExpr: string, workspaceExpr: string, peopleExpr: string) {
   return `not exists (
     select 1 from crm.mail_thread_relevance sensitive
-    where sensitive.user_id = ${userExpr} and sensitive.sender = any(${peopleExpr}) and sensitive.category in ('personal', 'collections')
-  ) and not exists (
-    select 1 from crm.mail_sender_relevance sensitive
-    where sensitive.user_id = ${userExpr} and sensitive.sender = any(${peopleExpr}) and sensitive.category in ('personal', 'collections')
+    where sensitive.user_id = ${userExpr} and sensitive.workspace_id = ${workspaceExpr} and sensitive.sender = any(${peopleExpr})
+      and ${CONFIDENTLY_SENSITIVE}
+      and ${noBusinessRuleSql(userExpr, workspaceExpr)}
   )`;
 }
 
 export function sensitiveAddress(email: string | null | undefined) {
+  const listed = email ? listedSender(email) : null;
+  return Boolean(listed?.hide && (listed.category === "personal" || listed.category === "collections"));
+}
+
+export function possiblySensitiveAddress(email: string | null | undefined) {
   const category = email ? listedCategory(email) : null;
   return category === "personal" || category === "collections";
 }
@@ -308,8 +314,9 @@ export type History = {
   domainLast: string | null;
   activities: number;
   lastActivity: string | null;
-  meetings: number;
-  lastMeeting: string | null;
+  metSender: boolean;
+  metAtDomain: number;
+  firstMet: string | null;
 };
 
 type HistoryRow = {
@@ -324,8 +331,9 @@ type HistoryRow = {
   domain_last: Date | null;
   activities: number;
   last_activity: Date | null;
-  meetings: number;
-  last_meeting: Date | null;
+  met_sender: boolean;
+  met_at_domain: number;
+  first_met: Date | null;
 };
 
 function day(value: Date | null) {
@@ -339,61 +347,46 @@ export async function historyInDb(db: Db, actor: UserActor, workspaceId: string,
     const domain = domainOf(email);
     return domain && !isFreeMailDomain(domain) ? domain : null;
   });
+  const hosts = [...new Set(senders.map(domainOf).filter(Boolean))];
+  const companyDomains = [...new Set(domains.filter((domain): domain is string => Boolean(domain)))];
   const result = await db.query<HistoryRow>(
     `with wanted as (
-       select w.sender, w.domain, split_part(w.sender, '@', 2) as host from unnest($2::text[], $3::text[]) as w(sender, domain)
+       select w.sender, w.domain from unnest($2::text[], $3::text[]) as w(sender, domain)
      ),
      received as (
-       select lower(m.from_email) as address, coalesce(m.received_at, m.created_at) as at
+       select lower(m.from_email) as address, m.from_domain as host, coalesce(m.received_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where m.user_id = $1 and not m.is_draft and f.role not in ('sent', 'drafts', 'outbox')
-         and split_part(lower(m.from_email), '@', 2) in (select host from wanted)
+       where m.user_id = $1 and m.from_domain = any($5::text[]) and not m.is_draft and f.role not in ('sent', 'drafts', 'outbox')
      ),
-     sent as (
-       select lower(r->>'address') as address, coalesce(m.sent_at, m.created_at) as at
-       from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       cross join lateral jsonb_array_elements(coalesce(m.to_recipients, '[]'::jsonb) || coalesce(m.cc_recipients, '[]'::jsonb)) r
-       where m.user_id = $1 and not m.is_draft and f.role = 'sent' and jsonb_typeof(r) = 'object'
-         and split_part(lower(r->>'address'), '@', 2) in (select host from wanted)
-     ),
-     mail as (
-       select address, at, 'in' as way from received union all select address, at, 'out' from sent
+     known as (
+       select k.address, k.domain, k.sent_count, k.sent_first, k.sent_last, k.met_first
+       from crm.mail_known_addresses k
+       where k.user_id = $1 and (k.address = any($2::text[]) or k.domain = any($6::text[]))
      ),
      activity as (
        select w.sender, count(distinct a.id)::int as n, max(a.occurred_at) as last
        from wanted w
        join crm.contacts c on c.workspace_id = $4 and c.archived_at is null
-         and (c.normalized_email = w.sender or (w.domain is not null and split_part(c.normalized_email, '@', 2) = w.domain))
+         and (c.normalized_email = w.sender or (w.domain is not null and c.normalized_email like '%@' || w.domain))
        join crm.activities a on a.contact_id = c.id and a.archived_at is null
-       group by w.sender
-     ),
-     meetings as (
-       select w.sender, count(distinct e.id)::int as n, max(e.starts_at) filter (where e.starts_at <= now()) as last
-       from wanted w
-       join crm.calendar_events e on e.user_id = $1 and not e.is_cancelled
-       cross join lateral jsonb_array_elements(
-         (case when jsonb_typeof(e.attendees) = 'array' then e.attendees else '[]'::jsonb end)
-         || (case when jsonb_typeof(e.organizer) = 'object' then jsonb_build_array(e.organizer) else '[]'::jsonb end)
-       ) p
-       where jsonb_typeof(p) = 'object'
-         and (lower(p->>'email') = w.sender or (w.domain is not null and split_part(lower(p->>'email'), '@', 2) = w.domain))
        group by w.sender
      )
      select w.sender,
-       (select count(*)::int from mail x where x.way = 'in' and x.address = w.sender) as from_sender,
-       (select count(*)::int from mail x where x.way = 'out' and x.address = w.sender) as to_sender,
-       (select min(x.at) from mail x where x.address = w.sender) as sender_first,
-       (select max(x.at) from mail x where x.address = w.sender) as sender_last,
-       case when w.domain is null then null else (select count(*)::int from mail x where x.way = 'in' and split_part(x.address, '@', 2) = w.domain) end as from_domain,
-       case when w.domain is null then null else (select count(*)::int from mail x where x.way = 'out' and split_part(x.address, '@', 2) = w.domain) end as to_domain,
-       case when w.domain is null then null else (select min(x.at) from mail x where split_part(x.address, '@', 2) = w.domain) end as domain_first,
-       case when w.domain is null then null else (select max(x.at) from mail x where split_part(x.address, '@', 2) = w.domain) end as domain_last,
+       (select count(*)::int from received r where r.address = w.sender) as from_sender,
+       coalesce((select k.sent_count from known k where k.address = w.sender), 0) as to_sender,
+       least((select min(r.at) from received r where r.address = w.sender), (select k.sent_first from known k where k.address = w.sender)) as sender_first,
+       greatest((select max(r.at) from received r where r.address = w.sender), (select k.sent_last from known k where k.address = w.sender)) as sender_last,
+       case when w.domain is null then null else (select count(*)::int from received r where r.host = w.domain) end as from_domain,
+       case when w.domain is null then null else (select coalesce(sum(k.sent_count), 0)::int from known k where k.domain = w.domain) end as to_domain,
+       case when w.domain is null then null else least((select min(r.at) from received r where r.host = w.domain), (select min(k.sent_first) from known k where k.domain = w.domain)) end as domain_first,
+       case when w.domain is null then null else greatest((select max(r.at) from received r where r.host = w.domain), (select max(k.sent_last) from known k where k.domain = w.domain)) end as domain_last,
        coalesce((select a.n from activity a where a.sender = w.sender), 0) as activities,
        (select a.last from activity a where a.sender = w.sender) as last_activity,
-       coalesce((select e.n from meetings e where e.sender = w.sender), 0) as meetings,
-       (select e.last from meetings e where e.sender = w.sender) as last_meeting
+       exists (select 1 from known k where k.address = w.sender and k.met_first <= now()) as met_sender,
+       (select count(*)::int from known k where (k.address = w.sender or (w.domain is not null and k.domain = w.domain)) and k.met_first <= now()) as met_at_domain,
+       (select min(k.met_first) from known k where (k.address = w.sender or (w.domain is not null and k.domain = w.domain)) and k.met_first <= now()) as first_met
      from wanted w`,
-    [actor.userId, senders, domains, workspaceId],
+    [actor.userId, senders, domains, workspaceId, hosts, companyDomains],
   );
   return new Map(
     result.rows.map((row) => [
@@ -409,8 +402,9 @@ export async function historyInDb(db: Db, actor: UserActor, workspaceId: string,
         domainLast: day(row.domain_last),
         activities: row.activities,
         lastActivity: day(row.last_activity),
-        meetings: row.meetings,
-        lastMeeting: day(row.last_meeting),
+        metSender: row.met_sender,
+        metAtDomain: row.met_at_domain,
+        firstMet: day(row.first_met),
       },
     ]),
   );
@@ -440,7 +434,7 @@ export type EmailFacts = {
 };
 
 function historyFacts(history: History | undefined) {
-  if (!history) return { mailWithSender: "none", mailWithDomain: "none", userHasWrittenToSender: false, userHasWrittenToDomain: false, crmActivityAtDomain: 0, meetings: 0 };
+  if (!history) return { mailWithSender: "none", mailWithDomain: "none", userHasWrittenToSender: false, userHasWrittenToDomain: false, crmActivityAtDomain: 0, userHasMetSender: false, peopleMetAtDomain: 0 };
   const range = (first: string | null, last: string | null) => (first ? `, first ${first}, last ${last}` : "");
   return {
     mailWithSender: `${history.fromSender} from them, ${history.toSender} from the user${range(history.senderFirst, history.senderLast)}`,
@@ -450,8 +444,9 @@ function historyFacts(history: History | undefined) {
     userHasWrittenToDomain: (history.toDomain ?? 0) > 0,
     crmActivityAtDomain: history.activities,
     ...(history.lastActivity ? { lastCrmActivity: history.lastActivity } : {}),
-    meetings: history.meetings,
-    ...(history.lastMeeting ? { lastMeeting: history.lastMeeting } : {}),
+    userHasMetSender: history.metSender,
+    peopleMetAtDomain: history.metAtDomain,
+    ...(history.firstMet ? { firstMet: history.firstMet } : {}),
   };
 }
 
@@ -542,8 +537,9 @@ async function decideWithJev(state: DecisionState, options: DecideOptions): Prom
   const choice = answers.category?.choice;
   const category = RELEVANCE_CATEGORIES.find((item) => item === choice);
   if (!category) throw new Error("Jev gave no category.");
-  const fit = answers.could_do_business?.noul;
-  const raw = typeof fit === "number" ? (category === "business" ? fit : 1 - fit) : typeof answers.category?.confidence === "number" ? answers.category.confidence : null;
+  const rawFit = answers.could_do_business?.noul;
+  const fit = typeof rawFit === "number" && rawFit >= 0 && rawFit <= 1 ? rawFit : undefined;
+  const raw = typeof fit === "number" ? (category === "business" ? fit : 1 - fit) : typeof answers.category?.confidence === "number" && answers.category.confidence >= 0 && answers.category.confidence <= 1 ? answers.category.confidence : null;
   return {
     category,
     engine: "jev",

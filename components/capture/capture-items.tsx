@@ -37,7 +37,7 @@ import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 import FollowUpIcon from "@/public/assets/images/mail/follow-up.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 
-export type ClearInstead = { label: string; action: CaptureAction; done: string };
+export type ClearInstead = { label: string; short: string; action: CaptureAction; done: string };
 
 type Clear = (verb: string, action: CaptureAction, instead?: ClearInstead) => void;
 
@@ -507,7 +507,7 @@ export function EmailItem({
     onClear(
       "Dismissed",
       { kind: "email-ignore", key: item.key },
-      { label: `Never ask about ${item.neverAsk}`, action: { kind: "email-never", key: item.key }, done: `Won't ask about ${item.neverAsk} again` },
+      { label: `Never ask about ${item.neverAsk}`, short: "Never ask", action: { kind: "email-never", key: item.key }, done: `Won't ask about ${item.neverAsk}` },
     );
   const move = (target: WorkspaceChoiceRef) =>
     onClear(`Moved to ${target.name}`, {

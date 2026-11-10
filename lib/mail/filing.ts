@@ -28,7 +28,7 @@ import {
 import { splitCase, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { captureCutoff, ownAddressesSql } from "@/lib/mail/waiting";
-import { neverAskLabel, recordFiledInDb, ruleTarget, setSenderRule, storeThreadDecision } from "@/lib/mail/relevance";
+import { markSenderThreadsBusiness, neverAskLabel, recordFiledInDb, ruleTarget, setSenderRule, storeThreadDecision } from "@/lib/mail/relevance";
 import type { ThreadFiling } from "@/lib/mail/view";
 
 const CAPTURE_SCAN = 300;
@@ -404,6 +404,7 @@ export async function showUnknownMail(actor: UserActor, threadKey: string) {
   return withActor(actor, async (db) => {
     const sender = await captureSender(db, actor, sourceId, key);
     await setSenderRule(db, actor, actor.workspaceId, sender.email, "business", "shown");
+    await markSenderThreadsBusiness(db, actor, actor.workspaceId, sender.email, "shown");
     await storeThreadDecision(
       db,
       actor,

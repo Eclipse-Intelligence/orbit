@@ -196,9 +196,7 @@ async function attempt<T>(
 export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJsonResult<T>> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw missingKey(request.viewer);
-  if (process.env.NODE_TEST_CONTEXT && (request.fetchImpl ?? fetch) === nativeFetch) {
-    throw new LlmError("The AI isn't called for real in tests. Pass fetchImpl.");
-  }
+  refuseInTests(request.fetchImpl);
   const model = request.model?.trim() || llmModel();
   let last: unknown;
   for (let index = 0; index < Math.max(1, Math.min(request.attempts ?? MAX_ATTEMPTS, MAX_ATTEMPTS)); index += 1) {
@@ -226,7 +224,14 @@ const EMBEDDING_BATCH = 64;
 
 const EMBEDDING_PARALLEL = 4;
 
+function refuseInTests(fetchImpl: typeof fetch | undefined) {
+  if (process.env.NODE_TEST_CONTEXT && (fetchImpl ?? fetch) === nativeFetch) {
+    throw new LlmError("The AI isn't called for real in tests. Pass fetchImpl.");
+  }
+}
+
 async function embedBatch(batch: string[], apiKey: string, options: { fetchImpl?: typeof fetch; timeoutMs?: number; viewer?: Viewer }) {
+  refuseInTests(options.fetchImpl);
   let response: Response;
   try {
     response = await (options.fetchImpl ?? fetch)(`${baseUrl()}/embeddings`, {
@@ -284,6 +289,7 @@ export async function transcribeAudio(
 ): Promise<string> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw missingKey(options.viewer);
+  refuseInTests(options.fetchImpl);
   const form = new FormData();
   form.append("model", TRANSCRIBE_MODEL);
   form.append("response_format", "json");

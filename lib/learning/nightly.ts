@@ -281,9 +281,9 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
          from crm.mail_prepared p left join crm.mail_messages m on m.id = p.message_id
          where p.user_id = $1 and p.workspace_id = $3 and p.state = 'sent' and p.updated_at > $2
            and p.body is not null and p.sent_body is not null and btrim(p.body) <> btrim(p.sent_body)
-           and ${notSensitiveThreadSql("$1", "p.source_id", "p.thread_key")}
+           and ${notSensitiveThreadSql("$1", "$3", "p.source_id", "p.thread_key")}
        ) e
-       where ${noSensitivePeopleSql("$1", "e.people")}
+       where ${noSensitivePeopleSql("$1", "$3", "e.people")}
        order by e.updated_at desc limit 12`,
       [actor.userId, since, actor.workspaceId],
     );

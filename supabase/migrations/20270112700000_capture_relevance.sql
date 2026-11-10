@@ -1,3 +1,5 @@
+set lock_timeout = '3s';
+
 create table if not exists crm.mail_sender_relevance (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references crm.workspaces (id) on delete cascade,
@@ -67,7 +69,7 @@ create policy mail_thread_relevance_owner on crm.mail_thread_relevance
   with check (user_id = (select private.session_user_id()) and workspace_id in (select private.user_workspace_ids()));
 
 revoke all on crm.mail_thread_relevance from anon, authenticated, crm_agent;
-grant select, insert, update, delete on crm.mail_thread_relevance to authenticated;
+grant select, insert, update on crm.mail_thread_relevance to authenticated;
 
 create index if not exists mail_thread_relevance_sensitive_sender_idx on crm.mail_thread_relevance (user_id, sender)
   where category in ('personal', 'collections');
@@ -90,7 +92,173 @@ create policy mail_relevance_runs_owner on crm.mail_relevance_runs
 revoke all on crm.mail_relevance_runs from anon, authenticated, crm_agent;
 grant select, insert, update on crm.mail_relevance_runs to authenticated;
 
-create index if not exists mail_messages_user_sender_domain_idx on crm.mail_messages (user_id, (split_part(lower(from_email), '@', 2)));
+create table if not exists crm.mail_known_addresses (
+  user_id uuid not null references crm.profiles (id) on delete cascade,
+  address text not null,
+  domain text not null,
+  sent_count integer not null default 0,
+  sent_first timestamptz,
+  sent_last timestamptz,
+  met_first timestamptz,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, address),
+  constraint mail_known_addresses_address check (char_length(address) between 3 and 320 and address = lower(address))
+);
+
+create index if not exists mail_known_addresses_domain_idx on crm.mail_known_addresses (user_id, domain);
+
+alter table crm.mail_known_addresses enable row level security;
+alter table crm.mail_known_addresses force row level security;
+
+drop policy if exists mail_known_addresses_owner on crm.mail_known_addresses;
+create policy mail_known_addresses_owner on crm.mail_known_addresses
+  for select to authenticated
+  using (user_id = (select private.session_user_id()));
+
+revoke all on crm.mail_known_addresses from anon, authenticated, crm_agent;
+grant select on crm.mail_known_addresses to authenticated;
+
+create or replace function private.mail_known_sent()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_at timestamptz := coalesce(new.sent_at, new.created_at);
+begin
+  if new.is_draft or not exists (select 1 from crm.mail_folders f where f.id = new.folder_id and f.role = 'sent') then
+    return null;
+  end if;
+  insert into crm.mail_known_addresses as k (user_id, address, domain, sent_count, sent_first, sent_last)
+  select new.user_id, x.address, split_part(x.address, '@', 2), 1, v_at, v_at
+  from (
+    select distinct lower(btrim(r->>'address')) as address
+    from jsonb_array_elements(
+      (case when jsonb_typeof(new.to_recipients) = 'array' then new.to_recipients else '[]'::jsonb end)
+      || (case when jsonb_typeof(new.cc_recipients) = 'array' then new.cc_recipients else '[]'::jsonb end)
+      || (case when jsonb_typeof(new.bcc_recipients) = 'array' then new.bcc_recipients else '[]'::jsonb end)
+    ) r
+    where jsonb_typeof(r) = 'object' and jsonb_typeof(r->'address') = 'string'
+  ) x
+  where x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
+  on conflict (user_id, address) do update set
+    sent_count = k.sent_count + 1,
+    sent_first = least(k.sent_first, excluded.sent_first),
+    sent_last = greatest(k.sent_last, excluded.sent_last),
+    updated_at = now();
+  return null;
+end;
+$$;
+
+revoke all on function private.mail_known_sent() from public;
+
+drop trigger if exists mail_messages_known_sent on crm.mail_messages;
+create trigger mail_messages_known_sent
+  after insert or update of folder_id on crm.mail_messages
+  for each row execute function private.mail_known_sent();
+
+create or replace function private.calendar_known_met()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.is_cancelled or jsonb_typeof(new.attendees) <> 'array' or jsonb_array_length(new.attendees) > 25 then
+    return null;
+  end if;
+  insert into crm.mail_known_addresses as k (user_id, address, domain, met_first)
+  select new.user_id, x.address, split_part(x.address, '@', 2), new.starts_at
+  from (
+    select distinct lower(btrim(p->>'email')) as address
+    from jsonb_array_elements(
+      new.attendees || (case when jsonb_typeof(new.organizer) = 'object' then jsonb_build_array(new.organizer) else '[]'::jsonb end)
+    ) p
+    where jsonb_typeof(p) = 'object' and jsonb_typeof(p->'email') = 'string'
+  ) x
+  where x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
+  on conflict (user_id, address) do update set
+    met_first = least(coalesce(k.met_first, excluded.met_first), excluded.met_first),
+    updated_at = now();
+  return null;
+end;
+$$;
+
+revoke all on function private.calendar_known_met() from public;
+
+drop trigger if exists calendar_events_known_met on crm.calendar_events;
+create trigger calendar_events_known_met
+  after insert or update of attendees, organizer, starts_at, is_cancelled on crm.calendar_events
+  for each row execute function private.calendar_known_met();
+
+insert into crm.mail_known_addresses as k (user_id, address, domain, sent_count, sent_first, sent_last)
+select m.user_id, x.address, split_part(x.address, '@', 2), count(*)::int, min(coalesce(m.sent_at, m.created_at)), max(coalesce(m.sent_at, m.created_at))
+from crm.mail_messages m
+join crm.mail_folders f on f.id = m.folder_id and f.role = 'sent'
+cross join lateral (
+  select distinct lower(btrim(r->>'address')) as address
+  from jsonb_array_elements(
+    (case when jsonb_typeof(m.to_recipients) = 'array' then m.to_recipients else '[]'::jsonb end)
+    || (case when jsonb_typeof(m.cc_recipients) = 'array' then m.cc_recipients else '[]'::jsonb end)
+    || (case when jsonb_typeof(m.bcc_recipients) = 'array' then m.bcc_recipients else '[]'::jsonb end)
+  ) r
+  where jsonb_typeof(r) = 'object' and jsonb_typeof(r->'address') = 'string'
+) x
+where not m.is_draft and x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
+group by m.user_id, x.address
+on conflict (user_id, address) do update set
+  sent_count = excluded.sent_count,
+  sent_first = excluded.sent_first,
+  sent_last = excluded.sent_last,
+  updated_at = now();
+
+insert into crm.mail_known_addresses as k (user_id, address, domain, met_first)
+select e.user_id, x.address, split_part(x.address, '@', 2), min(e.starts_at)
+from crm.calendar_events e
+cross join lateral (
+  select distinct lower(btrim(p->>'email')) as address
+  from jsonb_array_elements(
+    e.attendees || (case when jsonb_typeof(e.organizer) = 'object' then jsonb_build_array(e.organizer) else '[]'::jsonb end)
+  ) p
+  where jsonb_typeof(p) = 'object' and jsonb_typeof(p->'email') = 'string'
+) x
+where not e.is_cancelled and jsonb_typeof(e.attendees) = 'array' and jsonb_array_length(e.attendees) <= 25
+  and x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
+group by e.user_id, x.address
+on conflict (user_id, address) do update set
+  met_first = least(coalesce(k.met_first, excluded.met_first), excluded.met_first),
+  updated_at = now();
+
+alter table crm.mail_messages add column if not exists from_domain text;
+
+create or replace function private.mail_message_from_domain()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.from_domain := nullif(split_part(lower(coalesce(new.from_email, '')), '@', 2), '');
+  return new;
+end;
+$$;
+
+revoke all on function private.mail_message_from_domain() from public;
+
+drop trigger if exists mail_messages_from_domain on crm.mail_messages;
+create trigger mail_messages_from_domain
+  before insert or update of from_email on crm.mail_messages
+  for each row execute function private.mail_message_from_domain();
+
+do $$
+begin
+  if to_regclass('crm.mail_messages_user_from_domain_idx') is null then
+    create index mail_messages_user_from_domain_idx on crm.mail_messages (user_id, from_domain);
+  end if;
+end;
+$$;
+
+create index if not exists activity_tones_workspace_created_idx on crm.activity_tones (workspace_id, created_at);
 
 create or replace function private.sensitive_email_activities(p_workspace uuid, p_since timestamptz)
 returns setof uuid
@@ -107,20 +275,17 @@ as $$
   )
   where a.workspace_id = p_workspace and a.type = 'email'
     and exists (select 1 from crm.activity_tones t where t.activity_id = a.id and t.created_at > p_since)
-    and (
-      exists (
-        select 1 from crm.mail_thread_relevance r
-        where r.user_id = m.user_id and r.source_id = m.source_id and r.thread_key = m.thread_key
-          and r.category in ('personal', 'collections')
-      )
-      or exists (
-        select 1 from crm.mail_thread_relevance r
-        where r.user_id = m.user_id and r.sender = lower(m.from_email) and r.category in ('personal', 'collections')
-      )
-      or exists (
-        select 1 from crm.mail_sender_relevance s
-        where s.user_id = m.user_id and s.sender = lower(m.from_email) and s.category in ('personal', 'collections')
-      )
+    and not exists (
+      select 1 from crm.mail_sender_relevance b
+      where b.user_id = m.user_id and b.workspace_id = a.workspace_id and b.rule and b.category = 'business'
+        and b.sender in (lower(m.from_email), '@' || split_part(lower(m.from_email), '@', 2))
+    )
+    and exists (
+      select 1 from crm.mail_thread_relevance r
+      where r.user_id = m.user_id and r.workspace_id = a.workspace_id
+        and ((r.source_id = m.source_id and r.thread_key = m.thread_key) or r.sender = lower(m.from_email))
+        and r.category in ('personal', 'collections')
+        and (r.engine in ('listed', 'headers') or coalesce(r.confidence, 0) >= 0.8)
     )
 $$;
 
@@ -208,3 +373,5 @@ end;
 $$;
 
 revoke all on function private.move_personal_rows(uuid, uuid, uuid) from public;
+
+reset lock_timeout;

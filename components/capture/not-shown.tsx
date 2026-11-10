@@ -4,6 +4,7 @@ import { useId, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import Tag from "@/components/_ui/tag";
 import { OFFLINE, postCapture } from "@/components/capture/capture-post";
 import { useComposer } from "@/components/mail/compose-dock";
@@ -36,10 +37,16 @@ export default function NotShown({
   const [restored, setRestored] = useState<Set<string>>(() => new Set());
   const [removed, setRemoved] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
+  const [seen, setSeen] = useState({ items, rules });
+  if (seen.items !== items || seen.rules !== rules) {
+    setSeen({ items, rules });
+    setRestored(new Set());
+    setRemoved(new Set());
+  }
   const left = items.filter((item) => !restored.has(item.key));
   const count = Math.max(0, total - (items.length - left.length));
   const shownRules = rules.filter((rule) => !removed.has(rule.sender));
-  if (count === 0 && shownRules.length === 0 && sorting === 0) return null;
+  if (total === 0 && rules.length === 0 && sorting === 0) return null;
 
   function mark(key: string, on: boolean) {
     setBusy((current) => {
@@ -50,18 +57,23 @@ export default function NotShown({
     });
   }
 
-  function focusAfter(key: string) {
-    const buttons = [...(listRef.current?.querySelectorAll<HTMLButtonElement>("[data-not-shown-action]") ?? [])];
-    const index = buttons.findIndex((button) => button.dataset.notShownAction === key);
+  function focusAfter(pressed: HTMLButtonElement | null) {
+    const active = document.activeElement;
+    const stillHere = !active || active === document.body || active === pressed || Boolean(listRef.current?.contains(active));
+    if (!stillHere) return;
+    const buttons = [...(listRef.current?.querySelectorAll<HTMLButtonElement>("[data-not-shown-action] button, button[data-not-shown-action]") ?? [])];
+    const index = pressed ? buttons.indexOf(pressed) : -1;
     const next = buttons.slice(index + 1).find((button) => !button.disabled) ?? buttons.slice(0, Math.max(0, index)).reverse().find((button) => !button.disabled);
     (next ?? toggleRef.current)?.focus();
   }
 
   async function run(key: string, work: () => Promise<unknown>, done: string, after: () => void) {
+    const holder = listRef.current?.querySelector(`[data-not-shown-action="${CSS.escape(key)}"]`) ?? null;
+    const pressed = holder instanceof HTMLButtonElement ? holder : (holder?.querySelector("button") ?? null);
     mark(key, true);
     try {
       await work();
-      focusAfter(key);
+      focusAfter(pressed);
       after();
       showToast({ message: done });
       router.refresh();
@@ -78,14 +90,14 @@ export default function NotShown({
     );
 
   const remove = (rule: SenderRule) =>
-    run(`rule:${rule.sender}`, () => postCapture({ kind: "rule-remove", sender: rule.sender }, workspaceId), "Rule removed", () =>
+    run(`rule:${rule.sender}`, () => postCapture({ kind: "rule-remove", sender: rule.sender }, workspaceId), "Rule deleted", () =>
       setRemoved((current) => new Set(current).add(rule.sender)),
     );
 
   return (
     <section aria-label="Not shown" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        {(count > 0 || shownRules.length > 0) && (
+        {(total > 0 || rules.length > 0) && (
           <Button
             ref={toggleRef}
             variant="ghost"
@@ -96,7 +108,7 @@ export default function NotShown({
             onClick={() => setOpen((current) => !current)}
           >
             <ChevronDownIcon aria-hidden className={cn("ease-power3-out size-3 transition-transform duration-150", !open && "-rotate-90")} />
-            {count > 0 ? (
+            {count > 0 || shownRules.length === 0 ? (
               <>
                 <span className="tabular-nums">{count}</span> not shown
               </>
@@ -116,7 +128,7 @@ export default function NotShown({
           {left.length > 0 && (
             <ul className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
               {left.map((item) => (
-                <li key={item.key} className="flex items-center gap-3 px-4 py-3">
+                <li key={item.key} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-3">
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <div className="flex min-w-0 items-center gap-2">
                       <Link href={threadHref(item.key)} className="ui-style text-foreground min-w-0 truncate hover:underline">
@@ -126,14 +138,16 @@ export default function NotShown({
                         {SKIPPED_LABELS[item.category]}
                       </Tag>
                     </div>
+                    {item.name && <p className="caption-style text-subtle truncate">{item.email}</p>}
                     <p className="caption-style text-subtle truncate">{item.subject?.trim() || "(no subject)"}</p>
-                    {item.reason && <p className="caption-style text-soft truncate">{item.reason}</p>}
+                    {item.reason && <p className="caption-style text-soft line-clamp-2">{item.reason}</p>}
                   </div>
                   <Button
                     variant="secondary"
                     size="sm"
-                    className="shrink-0"
+                    className="shrink-0 self-start sm:self-center"
                     data-not-shown-action={item.key}
+                    aria-label={`Show ${item.name || item.email} in Capture`}
                     disabled={busy.has(item.key)}
                     onClick={() => void show(item)}
                   >
@@ -146,25 +160,19 @@ export default function NotShown({
           )}
           {shownRules.length > 0 && (
             <div className="flex flex-col gap-2">
-              <h3 className="eyebrow-style text-subtle font-normal">Rules</h3>
+              <h2 className="eyebrow-style text-subtle font-normal">Rules</h2>
               <ul className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
                 {shownRules.map((rule) => (
-                  <li key={rule.sender} className="flex items-center gap-3 px-4 py-2.5">
-                    <span className="ui-style text-foreground min-w-0 flex-1 truncate">{rule.sender}</span>
+                  <li key={rule.sender} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5">
+                    <span className="ui-style text-foreground min-w-0 flex-1 break-all">{rule.sender}</span>
                     <Tag size="sm" className="text-[12px]">
                       {rule.kind === "never" ? "Never ask" : "Always show"}
                     </Tag>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0"
-                      data-not-shown-action={`rule:${rule.sender}`}
-                      aria-label={`Remove rule for ${rule.sender}`}
-                      disabled={busy.has(`rule:${rule.sender}`)}
-                      onClick={() => void remove(rule)}
-                    >
-                      Remove
-                    </Button>
+                    <span data-not-shown-action={`rule:${rule.sender}`} className="contents">
+                      <HoldButton tone="neutral" disabled={busy.has(`rule:${rule.sender}`)} onConfirm={() => void remove(rule)}>
+                        Hold to delete<span className="sr-only"> the rule for {rule.sender}</span>
+                      </HoldButton>
+                    </span>
                   </li>
                 ))}
               </ul>
