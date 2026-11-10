@@ -228,7 +228,7 @@ export async function docsRespond(actor: UserActor | null, run: (actor: UserActo
   } catch (error) {
     if (error instanceof CrmError) return Response.json({ error: error.message, code: error.code, details: error.details }, { status: error.status });
     console.error("docs request failed", error);
-    return Response.json({ error: "Docs didn't respond. Try again in a moment." }, { status: 500 });
+    return Response.json({ error: "Docs didn't respond." }, { status: 500 });
   }
 }
 

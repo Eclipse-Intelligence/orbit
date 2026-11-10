@@ -10,7 +10,7 @@ import { listHref } from "@/lib/docs/routes";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { archiveFolder, canPlaceAtTop, descendantsOf, placeableFolders } from "@/components/docs/docs-manage";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/_ui/popover";
-import { FolderSharePanel, SHARE_POPOVER_CLASS } from "@/components/docs/share-control";
+import { FolderSharePanel, SHARE_POPOVER_CLASS, useSharePlacement } from "@/components/docs/share-control";
 import type { Folder } from "@/lib/docs/client-types";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -50,6 +50,8 @@ export default function FolderMenu({
   const [archiving, setArchiving] = useState(false);
   const [sharing, setSharing] = useState(false);
   const shareNext = useRef(false);
+  const optionsButton = useRef<HTMLButtonElement>(null);
+  const sharePlacement = useSharePlacement();
   const owned = folder.owner.id === viewerId;
   const ownShared = folder.visibility === "shared";
   const placement = { ownerId: folder.owner.id, ownShared, viewerId, exclude: descendantsOf(folders, folder.id) };
@@ -73,6 +75,7 @@ export default function FolderMenu({
         <PopoverAnchor asChild>
           <DropdownMenuTrigger asChild>
             <Button
+              ref={optionsButton}
               variant={phone ? "secondary" : "ghost"}
               size={phone ? "icon" : "icon-sm"}
               tabIndex={phone ? undefined : -1}
@@ -146,7 +149,15 @@ export default function FolderMenu({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <PopoverContent align={phone ? "end" : "start"} side={phone ? "bottom" : "right"} sideOffset={10} className={SHARE_POPOVER_CLASS}>
+      <PopoverContent
+        {...(phone ? ({ side: "bottom", align: "end" } as const) : sharePlacement)}
+        sideOffset={10}
+        className={SHARE_POPOVER_CLASS}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          optionsButton.current?.focus();
+        }}
+      >
         <FolderSharePanel folder={folder} open={sharing} />
       </PopoverContent>
       <ConfirmDialog

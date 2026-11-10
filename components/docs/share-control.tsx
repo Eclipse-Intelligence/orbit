@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useId, useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { folderSharingAction } from "@/app/(crm)/docs/manage-actions";
 import Button from "@/components/_ui/button";
 import CopyButton from "@/components/_ui/copy-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { Radio } from "@/components/_ui/radio";
 import { ParticipantAvatar } from "@/components/docs/presence";
-import { useDocsNav } from "@/components/docs/use-docs";
+import { useDocsNav, useMedia } from "@/components/docs/use-docs";
 import type { Folder, PageSummary, Visibility } from "@/lib/docs/client-types";
 import { listHref, pageHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
@@ -96,24 +96,35 @@ function ShareFooter({ link }: { link: () => string }) {
 
 export const SHARE_POPOVER_CLASS = "w-[min(22.5rem,calc(100vw-2rem))] p-0";
 
+export function useSharePlacement() {
+  const narrow = useMedia("(max-width: 767px)");
+  return narrow ? ({ side: "bottom", align: "end" } as const) : ({ side: "right", align: "start" } as const);
+}
+
 type FolderSharingCounts = { sharedOnTheirOwn: number; ownedByOthers: number };
 
+const COUNT_FAILED = "Couldn't check who owns the notes here. Try again.";
+
 function useFolderSharing(folderId: string, open: boolean, version: string) {
-  const [state, setState] = useState<{ key: string; counts: FolderSharingCounts } | null>(null);
+  const [state, setState] = useState<{ key: string; counts: FolderSharingCounts | null; error: string | null } | null>(null);
   const key = `${folderId}:${version}`;
   useEffect(() => {
     if (!open) return;
     let live = true;
     void folderSharingAction(folderId)
       .then((result) => {
-        if (live && result.error === undefined) setState({ key, counts: result.data });
+        if (!live) return;
+        if (result.error === undefined) setState({ key, counts: result.data, error: null });
+        else setState({ key, counts: null, error: result.error || COUNT_FAILED });
       })
-      .catch(() => {});
+      .catch(() => {
+        if (live) setState({ key, counts: null, error: COUNT_FAILED });
+      });
     return () => {
       live = false;
     };
   }, [folderId, open, key]);
-  return state?.key === key ? state.counts : null;
+  return state?.key === key ? state : { counts: null, error: null };
 }
 
 export function FolderSharePanel({ folder, open }: { folder: Folder; open: boolean }) {
@@ -125,10 +136,16 @@ export function FolderSharePanel({ folder, open }: { folder: Folder; open: boole
   const [confirming, setConfirming] = useState(false);
   const owned = folder.owner.id === viewerId;
   const inherited = folder.visibility === "private" && folder.shared;
-  const counts = useFolderSharing(folder.id, open && owned, `${folder.visibility}:${folder.noteCount}`);
+  const { counts, error: countError } = useFolderSharing(folder.id, open && owned, `${folder.visibility}:${folder.noteCount}`);
   const sharedOnOwn = counts?.sharedOnTheirOwn ?? 0;
   const othersInside = folder.visibility === "shared" ? (counts?.ownedByOthers ?? 0) : 0;
+  const othersUnknown = folder.visibility === "shared" && counts === null;
   const groupLabel = useId();
+  const confirmButton = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (confirming) confirmButton.current?.focus();
+  }, [confirming]);
 
   async function apply(visibility: Visibility) {
     setConfirming(false);
@@ -139,7 +156,7 @@ export function FolderSharePanel({ folder, open }: { folder: Folder; open: boole
 
   function choose(visibility: Visibility) {
     if (visibility === folder.visibility || pending) return;
-    if (visibility === "private" && othersInside > 0) return setConfirming(true);
+    if (visibility === "private" && (othersInside > 0 || othersUnknown)) return setConfirming(true);
     void apply(visibility);
   }
 
@@ -171,25 +188,28 @@ export function FolderSharePanel({ folder, open }: { folder: Folder; open: boole
           </p>
         </ShareNotice>
       )}
-      {owned && (othersInside > 0 || sharedOnOwn > 0) && (
+      {owned && !confirming && (othersInside > 0 || sharedOnOwn > 0) && (
         <ShareNotice tone={othersInside > 0 ? "amber" : "plain"}>
           {othersInside > 0 && <p>{othersMoveText(othersInside)}</p>}
           {sharedOnOwn > 0 && <p>{sharedOnOwn === 1 ? "1 note here is shared on its own and stays shared." : `${sharedOnOwn} notes here are shared on their own and stay shared.`}</p>}
-          {confirming && (
-            <div className="flex justify-end gap-2 pt-1">
-              <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
-                Cancel
-              </Button>
-              <Button variant="primary" size="sm" disabled={pending} onClick={() => void apply("private")}>
-                Make private
-              </Button>
-            </div>
-          )}
         </ShareNotice>
       )}
-      {error && (
+      {owned && confirming && (
+        <ShareNotice tone="amber">
+          <p role="alert">{othersInside > 0 ? othersMoveText(othersInside) : "Anything here that belongs to other people moves to their owners' top level."}</p>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+            <Button ref={confirmButton} variant="primary" size="sm" disabled={pending} onClick={() => void apply("private")}>
+              Make private
+            </Button>
+          </div>
+        </ShareNotice>
+      )}
+      {(error ?? countError) && (
         <p role="alert" className="caption-style text-danger px-4 pt-3">
-          {error}
+          {error ?? countError}
         </p>
       )}
       <ShareFooter link={() => `${origin()}${listHref({ kind: "folder", folderId: folder.id })}`} />
@@ -199,12 +219,13 @@ export function FolderSharePanel({ folder, open }: { folder: Folder; open: boole
 
 export function FolderShare({ folder, compact = true }: { folder: Folder; compact?: boolean }) {
   const [open, setOpen] = useState(false);
+  const placement = useSharePlacement();
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <ShareButton shared={folder.shared} compact={compact} />
       </PopoverTrigger>
-      <PopoverContent align="start" side="right" sideOffset={10} className={SHARE_POPOVER_CLASS}>
+      <PopoverContent {...placement} sideOffset={10} className={SHARE_POPOVER_CLASS}>
         <FolderSharePanel folder={folder} open={open} />
       </PopoverContent>
     </Popover>

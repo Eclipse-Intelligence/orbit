@@ -39,7 +39,7 @@ import { CAPTURE_SECTIONS, NO_CAPTURE_COUNTS, useCompaniesStore, type CaptureCou
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 
 const UNDO_MS = 6_000;
-const FILING_GRACE_MS = 10_000;
+const FILING_MS = 30_000;
 const SETTLE_MS = 250;
 const OFFLINE = "That didn't save. Check your connection and try again.";
 
@@ -343,18 +343,20 @@ export default function CaptureScreen({
   }
 
   function commit(item: Pending, keepalive: boolean) {
+    dismissToast(item.toast);
+    const filing = FILED.has(item.action.kind) && mounted.current ? showToast({ message: "Filing…", duration: FILING_MS }) : null;
     post(item.action, workspaceId, keepalive)
       .then((outcome) => {
-        dismissToast(item.toast);
+        if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
         router.refresh();
       })
       .catch((error: Error) => {
+        if (filing !== null) dismissToast(filing);
         if (!mounted.current) {
           setCaptureCleared(NO_CAPTURE_COUNTS);
           return;
         }
-        dismissToast(item.toast);
         show(item.id);
         showToast({ message: error.message, tone: "alert" });
       });
@@ -429,7 +431,7 @@ export default function CaptureScreen({
       timer: 0,
       toast: showToast({
         message: verb,
-        duration: FILED.has(action.kind) ? UNDO_MS + FILING_GRACE_MS : UNDO_MS,
+        duration: UNDO_MS,
         action: { label: "Undo", run: () => void undo() },
       }),
     };

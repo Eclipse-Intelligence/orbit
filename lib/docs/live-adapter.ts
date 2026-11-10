@@ -51,7 +51,7 @@ const OFFLINE = "Couldn't reach Orbit. Check your connection.";
 
 async function failure(response: Response) {
   const payload = (await response.json().catch(() => null)) as { error?: string; code?: string; details?: Record<string, unknown> | null } | null;
-  return new DocsError(payload?.error || (response.status === 401 ? "Your session ended. Sign in again." : "Docs didn't respond. Try again in a moment."), payload?.code ?? String(response.status), payload?.details ?? null);
+  return new DocsError(payload?.error || (response.status === 401 ? "Your session ended. Sign in again." : "Docs didn't respond."), payload?.code ?? String(response.status), payload?.details ?? null);
 }
 
 async function getJson<T>(url: string): Promise<T> {

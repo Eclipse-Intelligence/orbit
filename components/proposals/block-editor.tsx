@@ -377,7 +377,7 @@ export function BlockEditor({
                 {text(block, "body", "Text", 4)}
                 <div className="grid gap-3 sm:grid-cols-2">
                   {text(block, "linkLabel", "Link text")}
-                  {text(block, "linkUrl", "Link")}
+                  {text(block, "linkUrl", "Link", undefined, "https://…")}
                 </div>
               </>
             )}

@@ -71,7 +71,7 @@ export const UNAVAILABLE = "That note doesn't exist, or it's private to someone 
 const SIGNED_OUT = "Your session ended. Sign in again.";
 const UNREACHABLE = "Couldn't reach Orbit.";
 const NOT_KEPT = "Not kept on this device. Keep this tab open until it saves.";
-const WILL_SYNC = "Offline, changes will sync";
+const WILL_SYNC = "Offline. Kept on this device.";
 
 let current: Current | null = null;
 const transports = new Map<LiveTransportKind, Promise<LiveTransport | null>>();

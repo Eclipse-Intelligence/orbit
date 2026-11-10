@@ -707,7 +707,7 @@ export async function placeableFolder(db: Db, actor: Actor, folderId: string, ow
   if (!folder) throw new CrmError("not_found", "That folder doesn't exist, or it's private to someone else.", 404, { field: "folderId" });
   if (folder.archived_at) throw new CrmError("invalid_input", `${folder.name} is archived. Restore it first, or choose another folder.`, 400, { field: "folderId" });
   if (!folder.effective_shared && folder.user_id !== ownerId) {
-    throw new CrmError("forbidden", `${folder.name} is private to someone else, so only their own docs can go in it.`, 403, { field: "folderId" });
+    throw new CrmError("forbidden", `${folder.name} is private to someone else, so only their own notes can go in it.`, 403, { field: "folderId" });
   }
   return folder;
 }
