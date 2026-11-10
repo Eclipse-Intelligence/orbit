@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 import { systemPrompt, turnContext, UNBRANDED } from "@/lib/assistant/prompt";
-import { runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { eclipseGuideText } from "@/lib/assistant/guides";
+import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 import { allowedEclipseUrl, clearEclipseSourceCache, readEclipsePage } from "@/lib/eclipse-sources";
 import { renderWithBrowserbase } from "@/lib/browserbase";
@@ -162,7 +163,7 @@ describe("Eclipse docs", () => {
     const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
     const prompt = systemPrompt(actor, { brand: { ...UNBRANDED, workspaceName: "Eclipse" } });
     assert.doesNotMatch(prompt, /geteclipse\.co\/articles|eclipse_articles/);
-    const { guide } = (await runTool({ ...actor, workspaceName: "Eclipse" }, "guide", { topic: "eclipse" })) as { guide: string };
+    const guide = eclipseGuideText("Eclipse");
     assert.match(guide, /use a published article from this brand's Eclipse client as the reason to get in touch/);
     assert.match(guide, /https:\/\/docs\.geteclipse\.co/);
     assert.match(prompt, /You can open any public web page with read_web_page/);

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { ALL_TOOLS_LOADED, decideActions, history, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { cacheMarkersFor, complete, resetCacheMarkers, withCacheMarkers } from "@/lib/assistant/gateway";
-import { GUIDE_TOPICS } from "@/lib/assistant/guides";
+import { eclipseGuideText, GUIDE_TOPICS, LINEAR_GUIDE } from "@/lib/assistant/guides";
 import { stablePrompt, systemPrompt, turnContext, UNBRANDED } from "@/lib/assistant/prompt";
-import { CORE_TOOLS, describeAction, findTool, loadedDomains, runTool, TOOL_DOMAIN_NAMES, TOOL_DOMAINS, toolDefinitions, toolDomainNames } from "@/lib/assistant/tools";
+import { CORE_TOOLS, describeAction, findTool, guideTopics, loadedDomains, runTool, TOOL_DOMAIN_NAMES, TOOL_DOMAINS, toolDefinitions, toolDomainNames } from "@/lib/assistant/tools";
 import { fenceText, fenceUntrusted, untrustedToken, withoutMarkers } from "@/lib/assistant/untrusted";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -53,13 +53,21 @@ describe("assistant guides and the system prompt", () => {
   it("returns every manual from the guide tool, and the old guide names still work", async () => {
     assert.deepEqual([...GUIDE_TOPICS].sort(), MANUAL_LINES.map(([topic]) => topic).sort());
     for (const [topic, line] of MANUAL_LINES) {
+      if (topic === "eclipse" || topic === "linear") {
+        const text = topic === "eclipse" ? eclipseGuideText(owner.workspaceName) : LINEAR_GUIDE;
+        assert.match(text, line, topic);
+        assert.doesNotMatch(text, /[\u2013\u2014]/, topic);
+        continue;
+      }
       const result = (await runTool(owner, "guide", { topic })) as { topic: string; guide: string };
       assert.equal(result.topic, topic);
       assert.match(result.guide, line, topic);
       assert.doesNotMatch(result.guide, /[\u2013\u2014]/, topic);
     }
-    const eclipse = (await runTool({ ...owner, workspaceName: "Mark Ridgeon" }, "guide", { topic: "eclipse" })) as { guide: string };
-    assert.match(eclipse.guide, /In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'/);
+    assert.deepEqual(await runTool(owner, "guide", { topic: "eclipse" }), { error: "Eclipse isn't available in this workspace." });
+    assert.deepEqual(await runTool(owner, "guide", { topic: "linear" }), { error: "Linear isn't connected in this workspace.", field: null });
+    assert.deepEqual(await runTool(owner, "guide", { topic: "linear" }, { linear: false }), { error: `Choose a topic: ${guideTopics({ linear: false }).join(", ")}.`, field: "topic" });
+    assert.match(eclipseGuideText("Mark Ridgeon"), /In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'/);
     const playbook = (await runTool(owner, "cold_email_playbook", {})) as { topic: string; guide: string; proofList: unknown[] };
     assert.equal(playbook.topic, "cold_email");
     assert.ok(Array.isArray(playbook.proofList));

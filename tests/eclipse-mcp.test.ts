@@ -11,7 +11,8 @@ import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { callEclipseTool, clearEclipseToolCache, eclipseGuide, findEclipseTools, OUT_OF_SCOPE, readClients, sameName } from "@/lib/eclipse-mcp";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, messageText, resetDatabase } from "./helpers";
+import { eclipseGuideText } from "@/lib/assistant/guides";
 
 let actor: UserActor;
 let ridgeon: UserActor;
@@ -239,8 +240,9 @@ describe("Eclipse MCP", () => {
       assert.match(prompt, /If no client of that name exists, say so and ask the user which client to use/);
       assert.match(prompt, /Never share one client's data with another company/);
     }
+    assert.ok("error" in ((await runTool({ ...actor, workspaceName: "Mark Ridgeon" }, "guide", { topic: "eclipse" })) as object));
     for (const workspaceName of ["Eclipse", "Mark Ridgeon"]) {
-      const { guide } = (await runTool({ ...actor, workspaceName }, "guide", { topic: "eclipse" })) as { guide: string };
+      const guide = eclipseGuideText(workspaceName);
       assert.match(guide, new RegExp(`In ${workspaceName}, use the Eclipse client named '${workspaceName}'`));
       assert.match(guide, /goes through eclipse_action, which the user approves/);
       assert.match(guide, /never share one client's data with another company/);
@@ -441,22 +443,35 @@ describe("Eclipse MCP", () => {
   it("offers the Eclipse tools and prompt section to the model only where the workspace has a client", async () => {
     process.env.LLM_API_KEY = "llm-test";
     const eclipse = server().fetchImpl;
-    const seen: { tools: string[]; system: string }[] = [];
+    type SentTool = { function?: { name: string; description: string; parameters: { properties?: Record<string, { items?: { enum?: string[] } }> } } };
+    const seen: { tools: string[]; areas: string[]; guides: string[]; system: string }[] = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       if (String(input).includes("geteclipse")) return eclipse(input, init);
       const body = JSON.parse(String(init?.body));
-      seen.push({ tools: (body.tools ?? []).map((tool: { function?: { name: string }; name?: string }) => tool.function?.name ?? tool.name), system: body.messages[0].content });
+      const tools = (body.tools ?? []) as SentTool[];
+      const schema = (name: string, key: string) => tools.find((tool) => tool.function?.name === name)?.function?.parameters.properties?.[key]?.items?.enum ?? [];
+      const guides = tools.find((tool) => tool.function?.name === "guide")?.function?.parameters.properties?.topic as { enum?: string[] } | undefined;
+      seen.push({ tools: tools.map((tool) => tool.function?.name ?? ""), areas: schema("find_tools", "domains"), guides: guides?.enum ?? [], system: messageText(body.messages[0].content) });
       return Response.json({ model: "claude-sonnet-5-5", choices: [{ message: { role: "assistant", content: "Hi." } }], usage: {} });
     };
     try {
       for (const who of [ridgeon, initech]) {
         await sendMessage(who, { message: "Hi", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, () => undefined, { deadline: Date.now() + 60_000, fetchImpl });
       }
-      assert.ok(seen[0].tools.includes("eclipse_read") && seen[0].tools.includes("eclipse_action"));
-      assert.match(seen[0].system, /# Eclipse\n/);
+      assert.ok(seen[0].tools.includes("find_tools") && seen[0].areas.includes("eclipse") && seen[0].guides.includes("eclipse"));
+      assert.match(seen[0].system, /Eclipse: In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'/);
+      assert.match(seen[0].system, /- eclipse: the Eclipse app and its docs/);
+      const loaded = (await runTool(ridgeon, "find_tools", { domains: ["eclipse"] }, { eclipse: true })) as { loaded: { tools: { name: string }[] }[] };
+      assert.ok(loaded.loaded[0].tools.some((tool) => tool.name === "eclipse_read"));
       assert.ok(!seen[1].tools.includes("eclipse_read") && !seen[1].tools.includes("eclipse_guide"));
-      assert.ok(seen[1].tools.includes("eclipse_docs"));
-      assert.doesNotMatch(seen[1].system, /# Eclipse\n|# Linear\n/);
+      assert.ok(seen[1].areas.includes("eclipse") && !seen[1].guides.includes("eclipse") && !seen[1].guides.includes("linear") && !seen[1].areas.includes("linear"));
+      assert.match(seen[1].system, /- eclipse: the Eclipse product docs/);
+      assert.doesNotMatch(seen[1].system, /Eclipse: (In|Ask)|- eclipse: once|- linear:|Linear: only/);
+      const docsOnly = (await runTool(initech, "find_tools", { domains: ["eclipse", "linear"] }, { eclipse: false, linear: false })) as { loaded: { domain: string; tools: { name: string }[] }[] };
+      assert.deepEqual(
+        docsOnly.loaded.map((area) => [area.domain, area.tools.map((tool) => tool.name)]),
+        [["eclipse", ["eclipse_docs"]]],
+      );
     } finally {
       delete process.env.LLM_API_KEY;
     }
