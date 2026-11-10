@@ -3,9 +3,12 @@ import MailScreen from "@/components/mail/mail-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { composeAccounts } from "@/lib/mail/compose";
 import { getThread, listThreads, mailNav } from "@/lib/mail/threads";
-import { readMailView, mailViewParam } from "@/lib/mail/view";
+import { readMailView, mailViewParam, type MailNav } from "@/lib/mail/view";
+import { isUuid } from "@/lib/crm/mutate";
 
 export const dynamic = "force-dynamic";
+
+const PARTIAL_NAV: MailNav = { accounts: [], folders: [], unread: 0, snoozed: 0, scheduled: 0, splits: [], partial: true };
 
 function requestTime() {
   return Date.now();
@@ -25,14 +28,17 @@ export default async function MailPage({
   const resolved = await searchParams;
   const view = readMailView(text(resolved.view) || "inbox");
   const query = text(resolved.q).trim().slice(0, 300);
-  const nav = await mailNav(user);
-  const account = nav.accounts.some((item) => item.id === text(resolved.account)) ? text(resolved.account) : null;
+  const account = isUuid(text(resolved.account)) ? text(resolved.account) : null;
   const threadKey = text(resolved.thread);
   const compose = text(resolved.compose);
   const scheduledView = text(resolved.view) === "scheduled" && !query;
+  const navPromise = mailNav(user).catch((error) => {
+    console.error("Mail nav failed", error);
+    return null;
+  });
   const [page, thread, accounts] = await Promise.all([
     scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId: account, query }),
-    threadKey ? getThread(user, threadKey).catch(() => null) : Promise.resolve(null),
+    threadKey ? getThread(user, threadKey, { reader: true }).catch(() => null) : Promise.resolve(null),
     composeAccounts(user).catch(() => []),
   ]);
 
@@ -45,7 +51,8 @@ export default async function MailPage({
         role: user.role,
         workspaceName: user.workspaceName,
       }}
-      initialNav={nav}
+      initialNav={PARTIAL_NAV}
+      navPromise={navPromise}
       initialQuery={{ view: scheduledView ? "scheduled" : mailViewParam(view), account, query }}
       initialPage={page}
       initialThread={thread}

@@ -24,11 +24,15 @@ function problem(error: unknown): never {
   throw new CrmError("upstream_error", "Outlook didn't send the attachment. Try again.", 502);
 }
 
+export async function listMessageAttachments(token: string, providerMessageId: string, fetchImpl: typeof fetch = fetch) {
+  const items = await listMicrosoftAttachments(token, providerMessageId, fetchImpl).catch(problem);
+  return items.filter((item) => !item.inline || !/^image\//.test(item.contentType ?? ""));
+}
+
 export async function listMailAttachments(actor: UserActor, messageId: string, fetchImpl: typeof fetch = fetch) {
   const row = await messageSource(actor, messageId);
   const token = await mailSourceToken(actor, row.source_id, fetchImpl);
-  const items = await listMicrosoftAttachments(token, row.provider_message_id, fetchImpl).catch(problem);
-  return items.filter((item) => !item.inline || !/^image\//.test(item.contentType ?? ""));
+  return listMessageAttachments(token, row.provider_message_id, fetchImpl);
 }
 
 export async function openMailAttachment(actor: UserActor, messageId: string, attachmentId: string, fetchImpl: typeof fetch = fetch) {
