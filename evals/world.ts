@@ -98,9 +98,7 @@ function inWorkspace(actor: UserActor, id: string, name: string): UserActor {
   return { ...actor, workspaceId: id, workspaceName: name, role: "owner", scopes: scopesForRole("owner") };
 }
 
-export type Embed = (texts: string[]) => Promise<number[][]>;
-
-async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSeed, now: Date, options: { embed?: Embed }) {
+async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSeed, now: Date) {
   const actor = key === "eclipse" ? world.eclipse : world.ridgeon;
   const admin = getAdminPool();
   const ids = world.ids;
@@ -144,6 +142,8 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
       { provenance: SEED },
     );
     ids.set(`contact:${contact.first} ${contact.last}`, created.body.contact.id);
+    if (contact.email) world.knownAddresses.add(contact.email.toLowerCase());
+    if (contact.linkedin) world.knownHosts.add(new URL(contact.linkedin).hostname.toLowerCase());
   }
   const stages = (await listPipeline(actor)).stages;
   for (const stage of stages) ids.set(`stage:${key}:${stage.name}`, stage.id);
@@ -237,6 +237,7 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
         ],
       );
       ids.set(`email:${email.key}`, row.rows[0].id);
+      world.emailFrom.set(row.rows[0].id, from.email.toLowerCase());
     }
     if ((seed.events ?? []).length > 0) {
       const connection = await admin.query<{ id: string }>("select connection_id as id from crm.mail_sources where id = $1", [box.sourceId]);
@@ -287,13 +288,7 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
        values ($1, $2, $3, 'file', $4, 'ready', $5, $6, $7, 1, $8, now()) returning id`,
       [actor.workspaceId, item.company ? "company" : "eclipse", ref("company", item.company), item.title, item.content.slice(0, 280), item.content, item.content.length, actor.userId],
     );
-    const [embedding] = options.embed ? await options.embed([item.content]).catch(() => [null]) : [null];
-    await admin.query("insert into crm.knowledge_chunks (workspace_id, item_id, position, content, embedding) values ($1, $2, 0, $3, $4::extensions.vector)", [
-      actor.workspaceId,
-      row.rows[0].id,
-      item.content,
-      embedding ? `[${embedding.join(",")}]` : null,
-    ]);
+    await admin.query("insert into crm.knowledge_chunks (workspace_id, item_id, position, content) values ($1, $2, 0, $3)", [actor.workspaceId, row.rows[0].id, item.content]);
     ids.set(`knowledge:${item.title}`, row.rows[0].id);
   }
   for (const entry of seed.proof ?? []) {
@@ -307,7 +302,10 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
     );
   }
   for (const change of seed.changes ?? []) {
-    await updateCompany(actor, world.id(`company:${change.company}`), { description: change.description }, { provenance: { operation: "update_company", source: "assistant" } });
+    const companyId = world.id(`company:${change.company}`);
+    await updateCompany(actor, companyId, { description: change.description }, { provenance: { operation: "update_company", source: "assistant" } });
+    const event = await admin.query<{ id: string }>("select id from crm.audit_events where entity_id = $1 order by created_at desc, id desc limit 1", [companyId]);
+    ids.set(`change:${change.company}`, event.rows[0].id);
   }
   if (seed.booking) {
     await saveBookingPage(actor, {
@@ -323,7 +321,7 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
   }
 }
 
-export async function buildWorld(fixture: Fixture, options: { workspace?: "eclipse" | "ridgeon"; now?: Date; embed?: Embed } = {}): Promise<World> {
+export async function buildWorld(fixture: Fixture, options: { workspace?: "eclipse" | "ridgeon"; now?: Date } = {}): Promise<World> {
   const now = options.now ?? new Date();
   const tag = randomUUID().slice(0, 8);
   const admin = getAdminPool();
@@ -333,10 +331,10 @@ export async function buildWorld(fixture: Fixture, options: { workspace?: "eclip
   const eclipse: UserActor = { ...mark, workspaceName: "Eclipse" };
   const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
   const ridgeon = inWorkspace(eclipse, created.id, "Mark Ridgeon");
-  const colleagueEmail = `priya@eclipse-${tag}.test`;
-  const colleagueId = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', 'Priya Shah') as id", [colleagueEmail])).rows[0].id;
+  const colleagueEmail = `tamsin@eclipse-${tag}.test`;
+  const colleagueId = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', 'Tamsin Holt') as id", [colleagueEmail])).rows[0].id;
   await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member') on conflict do nothing", [eclipse.workspaceId, colleagueId]);
-  const colleague: UserActor = { ...eclipse, userId: colleagueId, email: colleagueEmail, fullName: "Priya Shah", role: "member", scopes: scopesForRole("member") };
+  const colleague: UserActor = { ...eclipse, userId: colleagueId, email: colleagueEmail, fullName: "Tamsin Holt", role: "member", scopes: scopesForRole("member") };
   const ids = new Map<string, string>([
     ["workspace:eclipse", eclipse.workspaceId],
     ["workspace:ridgeon", ridgeon.workspaceId],
@@ -354,14 +352,17 @@ export async function buildWorld(fixture: Fixture, options: { workspace?: "eclip
     web: new Map(Object.entries(fixture.web ?? {}).map(([url, html]) => [normalUrl(url), html])),
     eclipseClients: fixture.eclipseClients ?? [],
     knownHosts: new Set(),
+    knownAddresses: new Set([addresses.eclipse, addresses.ridgeon, colleagueEmail]),
+    emailFrom: new Map(),
+    dns: new Map(Object.entries(fixture.dns ?? {}).map(([host, address]) => [host.toLowerCase(), address])),
     id: (key: string) => {
       const found = ids.get(key);
       if (!found) throw new Error(`The fixture has no ${key}.`);
       return found;
     },
   };
-  if (fixture.eclipse) await seedWorkspace(world, "eclipse", fixture.eclipse, now, options);
-  if (fixture.ridgeon) await seedWorkspace(world, "ridgeon", fixture.ridgeon, now, options);
+  if (fixture.eclipse) await seedWorkspace(world, "eclipse", fixture.eclipse, now);
+  if (fixture.ridgeon) await seedWorkspace(world, "ridgeon", fixture.ridgeon, now);
   return world;
 }
 

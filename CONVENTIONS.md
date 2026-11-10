@@ -72,7 +72,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 - Before every commit: `npx tsc --noEmit`, `npx eslint .`, `npm test` (needs the local `crm_test` database, see Test database in `README.md`).
 - Add tests in `tests/*.test.ts` for new behaviour in `lib/`. Fake outside APIs by passing `fetchImpl`, never by calling real services.
-- After a change to the assistant's prompt, tools or models, run `npm run eval` with `LLM_API_KEY` (it calls real models and costs money, so it isn't part of `npm test`). Add a task to `evals/tasks` when a chat shows a new kind of request or failure.
+- After a change to the assistant's prompt, tools or models, run `npm run eval -- --model <id>` with `LLM_API_KEY` (it calls real models and costs money, so it isn't part of `npm test`). Add a task to `evals/tasks` when a chat shows a new kind of request or failure.
 - For UI changes, run the production build locally and check the page in a browser at desktop and mobile sizes.
 
 ## Git

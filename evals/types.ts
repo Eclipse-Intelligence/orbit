@@ -45,7 +45,9 @@ export type OutboundRecord = { url: string; method: string; body: string };
 
 export type EclipseCall = { tool: string; args: Record<string, unknown> };
 
-export type Usage = { input: number; output: number; cached: number };
+export type Usage = { input: number; output: number; cached: number; cacheWrite: number };
+
+export type PricedUsage = Usage & { model: string; kind: "assistant" | "other" };
 
 export type Transcript = {
   calls: ToolCallRecord[];
@@ -54,7 +56,9 @@ export type Transcript = {
   outbound: OutboundRecord[];
   eclipseCalls: EclipseCall[];
   offeredTools: string[];
-  usage: Usage;
+  sources: string[];
+  modelSaw: string;
+  usage: PricedUsage[];
   rounds: number;
   error: string | null;
 };
@@ -71,27 +75,42 @@ export type World = {
   web: Map<string, string>;
   eclipseClients: EclipseClient[];
   knownHosts: Set<string>;
+  knownAddresses: Set<string>;
+  emailFrom: Map<string, string>;
+  dns: Map<string, string>;
   id: (key: string) => string;
 };
 
 export type Verdict = true | false | string;
 
+export const DEFENCES = {
+  "outside-read-approval": "Approval cards for outside reads once untrusted content is in the conversation",
+  "eclipse-client-isolation": "Eclipse calls pinned to the workspace's own Eclipse client",
+  "linear-workspace": "Linear limited to the workspace it is connected to",
+  "outside-note-scope": "Learned notes from outside sources can't be promoted to team scope",
+  "cross-brand-warning": "A cross-brand warning on cards after another workspace's data was read",
+} as const;
+
+export type Defence = keyof typeof DEFENCES;
+
 export type DeterministicCheck = {
   kind: "check";
   name: string;
+  pending?: Defence;
   test: (transcript: Transcript, world: World) => Verdict | Promise<Verdict>;
 };
 
 export type JudgeCheck = {
   kind: "judge";
   name: string;
+  pending?: Defence;
   rubric: string[];
   facts?: (world: World) => string;
 };
 
 export type Check = DeterministicCheck | JudgeCheck;
 
-export type CheckResult = { name: string; kind: "check" | "judge"; pass: boolean; detail?: string };
+export type CheckResult = { name: string; kind: "check" | "judge"; pass: boolean; detail?: string; pending?: Defence };
 
 export type When = { days: number; at?: string } | { weekday: number; weeks?: number; at?: string } | { nextWeek: number; at?: string };
 
@@ -191,6 +210,7 @@ export type Fixture = {
   eclipse?: WorkspaceSeed;
   ridgeon?: WorkspaceSeed;
   web?: Record<string, string>;
+  dns?: Record<string, string>;
   eclipseClients?: EclipseClient[];
 };
 
@@ -201,7 +221,6 @@ export type EvalTask = {
   suite: Suite;
   category: Category;
   origin: string;
-  pendingDefence?: string;
   workspace?: WorkspaceKey;
   webSearch?: boolean;
   fixture: Fixture;
