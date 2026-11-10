@@ -16,6 +16,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
+import { reconnectProblem } from "@/lib/mail/microsoft";
 import { routedAway } from "@/lib/mail/routing";
 import {
   fetchInboxMessages,
@@ -193,6 +194,7 @@ export async function saveMailbox(
     refreshToken: string;
     accessToken: string;
     expiresAt: string;
+    expected?: string | null;
   },
 ) {
   const email = canonicalEmail(input.email);
@@ -208,6 +210,17 @@ export async function saveMailbox(
   }
   await withActor(actor, async (db) => {
     const existing = await readStored(db, actor);
+    const expected = canonicalEmail(existing?.email ?? input.expected ?? "");
+    const extra = await isExtraAccount(db, actor, email);
+    if (expected && expected !== email) throw wrongAccount(email, expected, !extra);
+    if (extra) {
+      throw new CrmError(
+        "conflict",
+        `${email} is already connected as another account. Sign in with the account you want as your main one.`,
+        409,
+        { signedIn: email },
+      );
+    }
     if (existing) {
       await db.query(
         `update crm.mailbox_connections set
@@ -244,6 +257,21 @@ export async function saveMailbox(
       ],
     );
   });
+}
+
+export function wrongAccount(signedIn: string, expected: string, canAdd: boolean) {
+  return new CrmError("conflict", `You signed in as ${signedIn}. Sign in as ${expected} to reconnect it.`, 409, {
+    signedIn,
+    add: canAdd ? signedIn : null,
+  });
+}
+
+export async function isExtraAccount(db: Db, actor: UserActor, email: string) {
+  const result = await db.query(
+    "select 1 from crm.calendar_accounts where user_id = $1 and provider = 'microsoft' and lower(email) = $2 limit 1",
+    [actor.userId, email],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export type Sender = { id: string; email: string; label: string; primary: boolean; signature: string | null };
@@ -473,9 +501,10 @@ export async function sendContactEmail(
   } catch (error) {
     throw new CrmError(
       "upstream_error",
-      sanitizeMicrosoftError(
-        error instanceof Error ? error.message : "Could not send the email.",
-      ),
+      reconnectProblem(error, sender.email) ??
+        sanitizeMicrosoftError(
+          error instanceof Error ? error.message : "Could not send the email.",
+        ),
       502,
     );
   }
@@ -1154,7 +1183,7 @@ export async function sendOwnMail(
   } catch (error) {
     throw new CrmError(
       "upstream_error",
-      sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not send the email."),
+      reconnectProblem(error, mailbox.email) ?? sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not send the email."),
       502,
     );
   }

@@ -7,6 +7,8 @@ import BodyEditor, { type BodyEditorHandle } from "@/components/mail/body-editor
 import { useComposer } from "@/components/mail/compose-dock";
 import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from "@/components/mail/follow-up-composer";
 import { writeWithAi } from "@/components/mail/mail-cache";
+import { ComposerReconnect, flagReconnect } from "@/components/mail/reconnect-notice";
+import { fromFallback } from "@/lib/mail/mailboxes";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { useShortcutHint, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
@@ -54,9 +56,11 @@ export type ComposerStart = {
   draft: MailDraft | null;
   replaces?: string | null;
   fromId?: string | null;
+  fromEmail?: string | null;
 };
 
-type SaveState = { kind: "idle" | "saving" | "saved" | "error"; message?: string };
+
+type SaveState = { kind: "idle" | "saving" | "saved" | "held" | "error"; message?: string };
 
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
   const response = await fetch(url, {
@@ -65,8 +69,8 @@ async function postJson<T>(url: string, body: unknown, keepalive = false): Promi
     body: JSON.stringify(body),
     keepalive,
   });
-  const json = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(json.error ?? "Outlook didn't take the draft. Try again.");
+  const json = (await response.json().catch(() => ({}))) as T & { error?: string; reconnect?: unknown };
+  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the draft. Try again."), { status: response.status, reconnect: json.reconnect ?? null });
   return json;
 }
 
@@ -108,7 +112,12 @@ export default function MailComposer({
   const [fromId, setFromId] = useState(
     draft?.identityId ? `smtp:${draft.identityId}` : (start.fromId ?? draft?.sourceId ?? start.sourceId),
   );
-  const fromAccount = accounts.find((item) => item.id === fromId) ?? null;
+  const chosenAccount = accounts.find((item) => item.id === fromId) ?? null;
+  const [knownFrom, setKnownFrom] = useState(chosenAccount?.email ?? start.fromEmail ?? null);
+  if (chosenAccount && chosenAccount.email !== knownFrom) setKnownFrom(chosenAccount.email);
+  const fallbackAccount = chosenAccount || accounts.length === 0 ? null : fromFallback(accounts, start.mode === "new" ? null : (draft?.sourceId ?? start.sourceId));
+  const fromAccount = chosenAccount ?? fallbackAccount;
+  const lostFrom = fallbackAccount ? knownFrom : null;
   const sourceId = fromAccount?.sourceId ?? fromAccount?.id ?? draft?.sourceId ?? start.sourceId;
   const identityId = fromAccount?.identityId ?? null;
   const fromChoices = start.mode === "new" ? accounts : accounts.filter((item) => (item.sourceId ?? item.id) === (draft?.sourceId ?? start.sourceId));
@@ -204,7 +213,8 @@ export default function MailComposer({
         setSave({ kind: "saved" });
       } catch (problem) {
         dirty.current = true;
-        setSave({ kind: "error", message: problem instanceof Error ? problem.message : "Couldn't save the draft." });
+        if (flagReconnect(problem, { sourceId: snapshot.sourceId, email: account?.email ?? null })) setSave({ kind: "held", message: "Not saved" });
+        else setSave({ kind: "error", message: problem instanceof Error ? problem.message : "Couldn't save the draft." });
       }
     });
     chain.current = run;
@@ -374,7 +384,7 @@ export default function MailComposer({
     window.setTimeout(() => aiInput.current?.focus(), 0);
   }
 
-  const status = save.kind === "error" ? save.message : "";
+  const status = save.kind === "error" || save.kind === "held" ? save.message : "";
 
   return (
     <form
@@ -405,6 +415,11 @@ export default function MailComposer({
           </span>
         </div>
       )}
+      {fallbackAccount && (
+        <p role="status" className="caption-style text-subtle">
+          {lostFrom ? `${lostFrom} isn't connected any more.` : "That From address isn't connected any more."} Sending from {fallbackAccount.email}.
+        </p>
+      )}
       {fromChoices.length > 1 && (
         <div className="flex items-center gap-2">
           <label htmlFor={`${id}-from`} className="text-subtle w-8 shrink-0 text-[13px]">
@@ -413,7 +428,7 @@ export default function MailComposer({
           <span className="relative flex min-w-0 items-center">
             <select
               id={`${id}-from`}
-              value={fromId}
+              value={fromAccount?.id ?? fromId}
               onChange={(event) => change(setFromId)(event.target.value)}
               className="text-foreground h-7 min-w-0 cursor-pointer appearance-none truncate rounded-full bg-transparent pr-6 pl-0 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
             >
@@ -578,6 +593,7 @@ export default function MailComposer({
           {error}
         </p>
       )}
+      <ComposerReconnect sourceId={sourceId} email={account?.email ?? null} />
       <div className="flex items-center gap-1 pt-2">
         <Button variant="primary" type="submit" data-shortcut-submit title={`Send (${sendHint})`}>
           {scheduledFor ? "Send now" : "Send"}

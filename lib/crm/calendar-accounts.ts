@@ -2,7 +2,7 @@ import type { Db } from "@/lib/db/pool";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
-import { readStored, type StoredTokens } from "@/lib/crm/inbox";
+import { readStored, wrongAccount, type StoredTokens } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
@@ -161,7 +161,7 @@ export function calendarConnectError(detail: string | null | undefined) {
 
 export async function connectCalendarAccount(
   actor: UserActor,
-  input: { origin: string; code: string; purpose?: "calendar_account" | "send_account" },
+  input: { origin: string; code: string; purpose?: "calendar_account" | "send_account"; expected?: string | null },
   fetchImpl: typeof fetch = fetch,
 ) {
   const purpose = input.purpose ?? "calendar_account";
@@ -189,9 +189,15 @@ export async function connectCalendarAccount(
   const scopeMissing = grantsCalendar(token.scope) === false;
   const canSend = purpose === "send_account" ? grantsMailSend(token.scope) !== false : null;
   const calendarWrite = grantsCalendarWrite(token.scope);
+  const expected = canonicalEmail(input.expected ?? "");
   return withActor(actor, async (db) => {
     const primary = await readStored(db, actor);
-    if (primary && canonicalEmail(primary.email) === email) {
+    const isPrimary = Boolean(primary && canonicalEmail(primary.email) === email);
+    if (expected && expected !== email) {
+      const known = await db.query("select 1 from crm.calendar_accounts where user_id = $1 and provider = 'microsoft' and lower(email) = $2", [actor.userId, email]);
+      throw wrongAccount(email, expected, !isPrimary && (known.rowCount ?? 0) === 0);
+    }
+    if (isPrimary) {
       throw new CrmError("conflict", SAME_AS_PRIMARY, 409, { field: "email" });
     }
     const saved = await db.query<{ id: string }>(
@@ -237,28 +243,30 @@ export async function forgetInviteSender(db: Db, actor: UserActor, address: stri
   await db.query("delete from crm.invite_sender_choices where user_id = $1 and address = $2", [actor.userId, canonical]);
 }
 
-export async function disconnectCalendarAccount(actor: UserActor, accountId: string) {
+export async function disconnectCalendarAccount(actor: UserActor, accountId: string, confirmed: { email?: string | null } = {}) {
   if (!isUuid(accountId)) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
   const removed = await withActor(actor, async (db) => {
+    const found = await db.query<{ email: string | null; mail: boolean; addresses: string[] }>(
+      `select a.email,
+         exists (select 1 from crm.mail_sources s where s.account_id = a.id) as mail,
+         coalesce((select array_agg(i.email) from crm.send_identities i join crm.mail_sources s on s.id = i.source_id where s.account_id = a.id), '{}') as addresses
+       from crm.calendar_accounts a where a.id = $1 and a.user_id = $2`,
+      [accountId, actor.userId],
+    );
+    const account = found.rows[0];
+    if (!account) return 0;
+    const cascades = account.mail || account.addresses.length > 0;
+    if (cascades && canonicalEmail(confirmed.email ?? "") !== canonicalEmail(account.email ?? "")) {
+      throw new CrmError("conflict", `Confirm removing ${account.email ?? "this account"} first. It deletes Orbit's copy of its mail and its sending addresses.`, 409);
+    }
     const result = await db.query<{ email: string | null }>(
       "delete from crm.calendar_accounts where id = $1 and user_id = $2 returning email",
       [accountId, actor.userId],
     );
-    for (const row of result.rows) await forgetInviteSender(db, actor, row.email);
+    for (const address of [...result.rows.map((row) => row.email), ...account.addresses]) await forgetInviteSender(db, actor, address);
     return result.rowCount ?? 0;
   });
   if (removed === 0) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
-}
-
-export async function removeAccountsForEmail(actor: UserActor, email: string) {
-  const canonical = canonicalEmail(email);
-  if (!canonical) return;
-  await withActor(actor, async (db) => {
-    await db.query(
-      "delete from crm.calendar_accounts where user_id = $1 and provider = 'microsoft' and email = $2",
-      [actor.userId, canonical],
-    );
-  });
 }
 
 export async function hasCalendarAccounts(db: Db, actor: UserActor) {

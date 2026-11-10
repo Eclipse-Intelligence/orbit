@@ -40,6 +40,7 @@ import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
 import { setBadge } from "@/components/push/push-client";
 import PushPrompt from "@/components/push/push-prompt";
+import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/mail/reconnect-notice";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
@@ -315,8 +316,9 @@ export default function MailScreen({
     const token = request.current;
     setSyncing(true);
     (sync ? syncNow().catch(() => null) : Promise.resolve(null))
-      .then(() => Promise.all([fetchList(target), fetchNav()]))
-      .then(([fresh, freshNav]) => {
+      .then((synced) => Promise.all([fetchList(target), fetchNav(), synced?.problems ?? []] as const))
+      .then(([fresh, freshNav, problems]) => {
+        flagSyncProblems(problems, freshNav.accounts);
         setNav(freshNav);
         setNow(Date.now());
         if (token !== request.current) return;
@@ -402,7 +404,7 @@ export default function MailScreen({
       .then(() => fetchNav().then(setNav).catch(() => null))
       .catch((error: Error) => {
         if (thread && leaves) restore(thread, target.view);
-        showToast({ message: error.message, tone: "alert" });
+        if (!flagReconnect(error, { sourceId: thread?.sourceId })) showToast({ message: error.message, tone: "alert" });
       });
   }
 
@@ -479,7 +481,7 @@ export default function MailScreen({
             try {
               await run(thread);
             } catch (error) {
-              failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
+              if (!flagReconnect(error, { sourceId: thread.sourceId })) failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
               restore(thread, from);
             }
           }
@@ -555,7 +557,9 @@ export default function MailScreen({
                       forgetOtherLists(latest.current.query);
                       fetchNav().then(setNav).catch(() => null);
                     })
-                    .catch((error: Error) => showToast({ message: error.message, tone: "alert" }));
+                    .catch((error: Error) => {
+                      if (!flagReconnect(error, { sourceId: thread.sourceId })) showToast({ message: error.message, tone: "alert" });
+                    });
                 });
               },
             }
@@ -567,7 +571,7 @@ export default function MailScreen({
         })
         .catch((error: Error) => {
           restore(thread, from);
-          showToast({ message: error.message, tone: "alert" });
+          if (!flagReconnect(error, { sourceId: thread.sourceId })) showToast({ message: error.message, tone: "alert" });
         })
         .finally(() => removing.current.delete(key));
       return;
@@ -589,7 +593,7 @@ export default function MailScreen({
         forgetThread(key);
         fetchDetail(key, true);
         if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, -change));
-        showToast({ message: error.message, tone: "alert" });
+        if (!flagReconnect(error, { sourceId: thread.sourceId })) showToast({ message: error.message, tone: "alert" });
       });
   }
 
@@ -972,26 +976,10 @@ export default function MailScreen({
           </>
         }
       />
+      <ReconnectNotices accounts={nav.accounts} className="shrink-0 px-3 pt-2 lg:pt-3" />
       <div className="flex min-h-0 flex-1">
         <div className={cn("min-h-0 w-full flex-col md:flex md:w-[20rem] md:shrink-0 lg:w-[25rem] xl:w-[29rem]", open ? "hidden" : "flex")}>
           <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-1.5 lg:pt-3">
-            {nav.accounts.some((account) => !account.connected) && (
-              <div
-                role="status"
-                className="flex items-center justify-between gap-3 rounded-xl border border-[var(--tag-amber-border)] bg-[var(--tag-amber-bg)] py-2 pr-2 pl-3 text-[13px] leading-5 text-[var(--tag-amber-text)]"
-              >
-                <span className="min-w-0">
-                  {nav.accounts
-                    .filter((account) => !account.connected)
-                    .map((account) => account.email)
-                    .join(", ")}{" "}
-                  disconnected
-                </span>
-                <Button variant="secondary" size="sm" href="/settings/email" className="shrink-0">
-                  Reconnect
-                </Button>
-              </div>
-            )}
             <PushPrompt />
             <div className="lg:hidden">{searchForm("list")}</div>
             <nav

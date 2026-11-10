@@ -28,8 +28,8 @@ function listKey(query: ListQuery) {
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init });
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "Mail didn't load. Try again.");
+  const body = (await response.json().catch(() => ({}))) as T & { error?: string; reconnect?: unknown };
+  if (!response.ok) throw Object.assign(new Error(body.error ?? "Mail didn't load. Try again."), { status: response.status, reconnect: body.reconnect ?? null });
   return body;
 }
 
@@ -111,7 +111,7 @@ export function fetchScheduled() {
 }
 
 export function syncNow() {
-  return getJson<{ stored: number; removed: number }>("/api/mail/sync", { method: "POST" });
+  return getJson<{ stored: number; removed: number; problems?: string[] }>("/api/mail/sync", { method: "POST" });
 }
 
 export function loadSummary(key: string, latestId: string) {

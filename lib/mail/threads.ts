@@ -1,4 +1,5 @@
 import { withActor } from "@/lib/crm/context";
+import { readSourceHealth } from "@/lib/mail/accounts";
 import type { Db } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -492,10 +493,18 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
          (select count(*)::int from crm.mail_drafts where user_id = $1 and (send_at is not null or send_error is not null)) as scheduled`,
       [actor.userId],
     );
+    const health = new Map((await readSourceHealth(db, actor)).map((source) => [source.id, source]));
     const inboxUnread = (sourceId: string | null) =>
       folders.rows.filter((folder) => folder.role === "inbox" && (!sourceId || folder.source_id === sourceId)).reduce((sum, folder) => sum + folder.unread, 0);
     return {
-      accounts: accounts.rows.map((row) => ({ id: row.id, email: row.email, unread: inboxUnread(row.id), connected: row.connected })),
+      accounts: accounts.rows.map((row) => ({
+        id: row.id,
+        email: row.email,
+        unread: inboxUnread(row.id),
+        connected: row.connected,
+        needsReconnect: health.get(row.id)?.needsReconnect ?? !row.connected,
+        reconnectHref: health.get(row.id)?.reconnectHref,
+      })),
       folders: folders.rows.map((row) => ({ id: row.id, sourceId: row.source_id, name: row.name, role: row.role, unread: row.unread })),
       unread: inboxUnread(null),
       snoozed: counts.rows[0]?.snoozed ?? 0,

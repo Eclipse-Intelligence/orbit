@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
+import RemoveAccountButton from "@/components/crm/remove-account-button";
 import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import {
   addCalendarFeedAction,
@@ -22,7 +23,8 @@ const CONNECT_ACCOUNT = "/api/microsoft/connect?purpose=calendar_account";
 type Overrides = Record<string, Partial<Pick<CalendarEntry, "isVisible" | "useForCrm">>>;
 
 function reconnectHref(group: CalendarGroup) {
-  if (group.kind === "primary") return "/api/microsoft/connect";
+  if (group.kind === "primary") return `/api/microsoft/connect?hint=${encodeURIComponent(group.email ?? "")}`;
+  if (group.canSend) return `/api/microsoft/connect?purpose=send_account&hint=${encodeURIComponent(group.email ?? "")}`;
   return `${CONNECT_ACCOUNT}&hint=${encodeURIComponent(group.email ?? "")}`;
 }
 
@@ -106,7 +108,7 @@ export default function CalendarsSettings({
       setError(result.error);
       return;
     }
-    setMessage(`${group.provider === "ics" ? "Removed" : "Disconnected"} ${groupName(group)}.`);
+    setMessage(`Removed ${groupName(group)}.`);
     router.refresh();
   }
 
@@ -207,21 +209,27 @@ export default function CalendarsSettings({
                   Allow invites
                 </a>
               )}
-              {group.kind === "account" && (
+              {group.kind === "account" && group.provider === "microsoft" && (
+                <RemoveAccountButton
+                  accountId={group.id}
+                  email={group.email ?? groupName(group)}
+                  removes={group.removes}
+                  disabled={pending !== null}
+                  onDone={(result) => {
+                    setError(result.error ?? null);
+                    setMessage(result.message ?? null);
+                  }}
+                />
+              )}
+              {group.kind === "account" && group.provider === "ics" && (
                 <Button
                   variant="ghost"
                   size="sm"
                   disabled={pending !== null}
-                  aria-label={`${group.provider === "ics" ? "Remove" : "Disconnect"} ${groupName(group)}`}
+                  aria-label={`Remove ${groupName(group)}`}
                   onClick={() => disconnect(group)}
                 >
-                  {group.provider === "ics"
-                    ? pending === group.id
-                      ? "Removing…"
-                      : "Remove"
-                    : pending === group.id
-                      ? "Disconnecting…"
-                      : "Disconnect"}
+                  {pending === group.id ? "Removing…" : "Remove"}
                 </Button>
               )}
             </span>

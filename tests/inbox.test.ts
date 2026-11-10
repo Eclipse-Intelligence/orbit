@@ -41,6 +41,8 @@ describe("microsoft inbox", () => {
       userId: "user-1",
       workspaceId: "workspace-1",
       purpose: "mailbox",
+      hint: null,
+      back: "email",
     });
     assert.equal(readMicrosoftState(state, 1_000 + 11 * 60 * 1000), null);
     assert.equal(readMicrosoftState(`${state}x`, 1_000), null);
@@ -624,7 +626,7 @@ describe("microsoft inbox", () => {
             throw new Error("should not reach Microsoft");
           },
         ),
-      /connect Microsoft again/,
+      /Reconnect owner@cipher-inbox.test in Settings › Email/,
     );
   });
 
@@ -657,7 +659,7 @@ describe("microsoft inbox", () => {
               { status: 400 },
             ),
         ),
-      /Connect it again/,
+      /Reconnect owner@expired-send.test in Settings › Email/,
     );
   });
 

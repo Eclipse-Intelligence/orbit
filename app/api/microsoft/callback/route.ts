@@ -3,11 +3,7 @@ import { after, NextResponse } from "next/server";
 import { sessionCookieOptions } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
 import { resetCalendarSync, syncCalendar } from "@/lib/crm/calendar";
-import {
-  calendarConnectError,
-  connectCalendarAccount,
-  removeAccountsForEmail,
-} from "@/lib/crm/calendar-accounts";
+import { calendarConnectError, connectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { CrmError } from "@/lib/crm/errors";
 import { saveMailbox, syncMailbox } from "@/lib/crm/inbox";
 import {
@@ -23,6 +19,11 @@ export const dynamic = "force-dynamic";
 
 const STATE_COOKIE = "crm_ms_oauth";
 
+function addOffer(error: unknown) {
+  const add = error instanceof CrmError ? error.details?.add : null;
+  return typeof add === "string" && add ? add : null;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const origin = originFrom(request);
@@ -31,13 +32,17 @@ export async function GET(request: Request) {
   const returned = url.searchParams.get("state");
   const responseState = cookieStore.get(STATE_COOKIE)?.value;
   const forCalendar = state?.purpose === "calendar_account" || state?.purpose === "send_account";
-  const target = new URL(forCalendar ? SETTINGS_PATHS.calendars : SETTINGS_PATHS.email, origin);
+  const toEmail = state ? state.back === "email" : !forCalendar;
+  const target = new URL(toEmail ? SETTINGS_PATHS.email : SETTINGS_PATHS.calendars, origin);
 
-  function finish(error?: string, connected?: string) {
-    if (forCalendar) {
+  function finish(error?: string, connected?: string, add?: string | null) {
+    if (!toEmail) {
       if (error) target.searchParams.set("calendar_error", error);
       else target.searchParams.set("calendar_connected", connected ?? "1");
-    } else if (error) target.searchParams.set("error", error);
+    } else if (error) {
+      target.searchParams.set("error", error);
+      if (add) target.searchParams.set("add", add);
+    } else if (connected) target.searchParams.set("info", `Connected ${connected}.`);
     else target.searchParams.set("connected", "1");
     const response = NextResponse.redirect(target);
     response.cookies.set(STATE_COOKIE, "", sessionCookieOptions(0));
@@ -73,12 +78,19 @@ export async function GET(request: Request) {
     if (!code) return finish("Microsoft did not return a connection code.");
     let account: Awaited<ReturnType<typeof connectCalendarAccount>>;
     try {
-      account = await connectCalendarAccount(user, { origin, code, purpose: state.purpose === "send_account" ? "send_account" : "calendar_account" });
+      account = await connectCalendarAccount(user, {
+        origin,
+        code,
+        purpose: state.purpose === "send_account" ? "send_account" : "calendar_account",
+        expected: state.hint,
+      });
     } catch (error) {
       return finish(
         error instanceof CrmError
           ? error.message
           : calendarConnectError(error instanceof Error ? error.message : null),
+        undefined,
+        addOffer(error),
       );
     }
     after(async () => {
@@ -114,11 +126,12 @@ export async function GET(request: Request) {
       refreshToken: token.refreshToken,
       accessToken: token.accessToken,
       expiresAt: token.expiresAt,
+      expected: state.hint,
     });
-    await removeAccountsForEmail(user, email);
     await resetCalendarSync(user, token.scope);
     await syncMailbox(user);
   } catch (error) {
+    if (error instanceof CrmError) return finish(error.message, undefined, addOffer(error));
     return finish(
       sanitizeMicrosoftError(
         error instanceof Error ? error.message : "Could not connect Microsoft.",

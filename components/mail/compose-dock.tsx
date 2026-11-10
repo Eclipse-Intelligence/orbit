@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import LaterPicker, { type LaterRequest } from "@/components/mail/later-picker";
+import { flagReconnect, reconnectOf } from "@/components/mail/reconnect-notice";
 import MailComposer, { MODE_LABEL, type ComposerStart, type SendPayload } from "@/components/mail/mail-composer";
 import { emailRecipientAction } from "@/app/(crm)/quick-add";
 import type { MailAddress } from "@/lib/mail/types";
@@ -51,7 +52,7 @@ type ComposerContextValue = {
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status });
+  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status, reconnect: (json as { reconnect?: unknown }).reconnect ?? null });
   return json;
 }
 
@@ -87,7 +88,7 @@ export function useComposer() {
 
 async function loadAccounts(): Promise<ComposeAccount[]> {
   const response = await fetch("/api/mail/accounts", { cache: "no-store" });
-  if (!response.ok) return [];
+  if (!response.ok) throw new Error("Mail accounts didn't load.");
   const body = (await response.json()) as { accounts: ComposeAccount[] };
   return body.accounts;
 }
@@ -232,9 +233,11 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   }, [notice]);
 
   const openComposer = useCallback((options: OpenOptions = {}) => {
-    if (!accountsRequest.current) accountsRequest.current = loadAccounts().catch(() => []);
+    const previous = accountsRequest.current;
+    accountsRequest.current = loadAccounts().catch(() => previous ?? []);
     void (async () => {
-      const [list, contact] = await Promise.all([
+      const [earlier, list, contact] = await Promise.all([
+        previous ?? Promise.resolve([] as ComposeAccount[]),
         accountsRequest.current!,
         options.contactId ? emailRecipientAction(options.contactId).catch(() => null) : Promise.resolve(null),
       ]);
@@ -255,6 +258,9 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         subject: options.subject ?? "",
         draft: options.draft ?? prefilled,
         fromId: options.draft ? null : (preferred?.id ?? null),
+        fromEmail: options.draft
+          ? (earlier.find((item) => item.id === (options.draft!.identityId ? `smtp:${options.draft!.identityId}` : options.draft!.sourceId))?.email ?? null)
+          : null,
       };
       const existing = options.draft ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
       if (existing) {
@@ -324,8 +330,12 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               return;
             }
             item.onUndone?.();
+            const reconnect = reconnectOf(error);
+            if (reconnect) flagReconnect(error, { sourceId: payload.sourceId });
             showToast({
-              message: `“${payload.subject || "Your email"}” didn't send. ${error.message}`,
+              message: reconnect?.email
+                ? `“${payload.subject || "Your email"}” didn't send. Reconnect ${reconnect.email}, then send it again.`
+                : `“${payload.subject || "Your email"}” didn't send. ${error.message}`,
               tone: "alert",
               duration: 15_000,
               action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(payload) }) },

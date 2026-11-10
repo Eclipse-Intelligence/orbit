@@ -3,7 +3,8 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, reconnectProblem, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import { sourceReconnect } from "@/lib/mail/accounts";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailView } from "@/lib/mail/view";
@@ -142,9 +143,17 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
   }
 }
 
-function failureMessage(error: unknown) {
+async function sourceEmail(actor: UserActor, sourceId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ email: string }>("select email from crm.mail_sources where id = $1 and user_id = $2", [sourceId, actor.userId]);
+    return result.rows[0]?.email ?? null;
+  }).catch(() => null);
+}
+
+async function failureMessage(actor: UserActor, sourceId: string, error: unknown) {
+  const reconnect = reconnectProblem(error, await sourceEmail(actor, sourceId));
+  if (reconnect) return reconnect;
   if (error instanceof GraphMailError) {
-    if (error.status === 401 || error.status === 403) return "Microsoft didn't allow that change. Connect the account again in Settings › Email.";
     if (error.status === 404) return "Outlook no longer has that email. It will disappear after the next sync.";
     return error.message;
   }
@@ -216,7 +225,9 @@ export async function applyMailAction(
       }
     });
   }
-  if (failures.length > 0) throw new CrmError("mail_action_failed", failureMessage(failures[0]), 502);
+  if (failures.length > 0) {
+    throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
+  }
   return { changed: done.length };
 }
 
@@ -259,5 +270,5 @@ export async function moveMessages(
       }
     });
   }
-  return { moved: done.map((item) => item.id), error: failures.length ? failureMessage(failures[0]) : null };
+  return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };
 }

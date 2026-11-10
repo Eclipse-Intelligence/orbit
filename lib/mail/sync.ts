@@ -13,10 +13,13 @@ import {
   fetchMicrosoftClassifications,
   fetchMicrosoftDelta,
   fetchMicrosoftMessageFolder,
+  disconnectedMessage,
   GraphMailError,
+  reconnectProblem,
   initialDeltaUrl,
   listMicrosoftFolders,
 } from "@/lib/mail/microsoft";
+import { graphReconnect, readReconnectSource, reconnectError } from "@/lib/mail/accounts";
 import { trackingIdIn } from "@/lib/mail/html";
 import { classifyEmailTones } from "@/lib/crm/email-tone";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
@@ -68,6 +71,7 @@ export type MailSyncReport = {
   backfilling: number;
   paused: boolean;
   errors: string[];
+  reconnect: string[];
   arrived: string[];
   routed: number;
   filed: number;
@@ -96,6 +100,14 @@ async function storageFull(db: Db) {
 
 export const MAIL_HARD_STOP =
   "Mail sync is paused because the database is nearly full. Upgrade Supabase to Pro and raise MAIL_STORAGE_LIMIT_MB to keep syncing.";
+export const SYNC_PAUSED = "Mail sync is paused because storage is full.";
+export const SYNC_RETRYING = "Mail didn't refresh. Orbit will try again shortly.";
+
+export function syncProblems(report: Pick<MailSyncReport, "paused" | "errors" | "reconnect">) {
+  if (report.paused) return [SYNC_PAUSED];
+  if (report.reconnect.length) return [...new Set(report.reconnect)];
+  return report.errors.length ? [SYNC_RETRYING] : [];
+}
 
 async function loadSources(actor: UserActor): Promise<Source[]> {
   return withActor(actor, async (db) => {
@@ -198,8 +210,14 @@ async function loadSource(actor: UserActor, sourceId: string): Promise<Source | 
 
 export async function mailSourceToken(actor: UserActor, sourceId: string, fetchImpl: typeof fetch = fetch) {
   const source = await loadSource(actor, sourceId);
-  if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Settings › Email.", 404);
-  const token = await currentToken(source.tokens, fetchImpl);
+  if (!source) {
+    const known = await withActor(actor, (db) => readReconnectSource(db, actor, sourceId));
+    if (known) throw reconnectError(disconnectedMessage(known.email), known);
+    throw new CrmError("not_found", "That mail account isn't in Orbit any more. Choose another one to send from.", 404);
+  }
+  const token = await currentToken(source.tokens, fetchImpl).catch((error) => {
+    throw graphReconnect(error, { id: source.id, email: source.email, main: Boolean(source.connection_id) }) ?? error;
+  });
   if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
   return token.accessToken;
 }
@@ -552,7 +570,7 @@ export async function syncMail(
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, moved: 0, backfilling: 0, paused: false, errors: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, moved: 0, backfilling: 0, paused: false, errors: [], reconnect: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {
@@ -604,8 +622,10 @@ export async function syncMail(
         }
       }
     } catch (error) {
-      lastError = error instanceof GraphMailError || error instanceof Error ? error.message.slice(0, 500) : "Mail sync failed.";
-      report.errors.push(`${source.email}: ${lastError}`);
+      const reconnect = reconnectProblem(error, source.email);
+      lastError = reconnect ?? (error instanceof GraphMailError || error instanceof Error ? error.message.slice(0, 500) : "Mail sync failed.");
+      report.errors.push(reconnect ?? `${source.email}: ${lastError}`);
+      if (reconnect) report.reconnect.push(reconnect);
     } finally {
       await withActor(actor, (db) =>
         db.query(

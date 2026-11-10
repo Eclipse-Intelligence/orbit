@@ -14,6 +14,15 @@ export function microsoftPurpose(value: unknown): MicrosoftPurpose {
   return value === "calendar_account" || value === "send_account" ? value : "mailbox";
 }
 
+export type MicrosoftReturn = "email" | "calendars";
+
+export type MicrosoftStateExtra = { hint?: string | null; back?: MicrosoftReturn | null };
+
+export function microsoftReturn(value: unknown, purpose: MicrosoftPurpose): MicrosoftReturn {
+  if (value === "email" || value === "calendars") return value;
+  return purpose === "mailbox" ? "email" : "calendars";
+}
+
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
 export function microsoftConfigured() {
@@ -64,9 +73,17 @@ export function signMicrosoftState(
   workspaceId: string,
   now = Date.now(),
   purpose: MicrosoftPurpose = "mailbox",
+  extra: MicrosoftStateExtra = {},
 ) {
   const body = Buffer.from(
-    JSON.stringify({ userId, workspaceId, purpose, exp: now + STATE_MAX_AGE_MS }),
+    JSON.stringify({
+      userId,
+      workspaceId,
+      purpose,
+      hint: extra.hint || null,
+      back: microsoftReturn(extra.back, purpose),
+      exp: now + STATE_MAX_AGE_MS,
+    }),
   ).toString("base64url");
   const signature = createHmac("sha256", appSecret())
     .update(body)
@@ -97,13 +114,21 @@ export function readMicrosoftState(
       userId?: string;
       workspaceId?: string;
       purpose?: string;
+      hint?: unknown;
+      back?: unknown;
       exp?: number;
     };
     if (!parsed.userId || !parsed.workspaceId || typeof parsed.exp !== "number")
       return null;
     if (parsed.exp < now) return null;
     const purpose = microsoftPurpose(parsed.purpose);
-    return { userId: parsed.userId, workspaceId: parsed.workspaceId, purpose };
+    return {
+      userId: parsed.userId,
+      workspaceId: parsed.workspaceId,
+      purpose,
+      hint: typeof parsed.hint === "string" && parsed.hint ? parsed.hint : null,
+      back: microsoftReturn(parsed.back, purpose),
+    };
   } catch {
     return null;
   }

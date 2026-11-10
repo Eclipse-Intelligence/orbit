@@ -1,4 +1,6 @@
 import { readAccounts, type CalendarProvider } from "@/lib/crm/calendar-accounts";
+import { readRemovalImpacts } from "@/lib/mail/accounts";
+import type { RemovalImpact } from "@/lib/mail/mailboxes";
 import {
   createContactFromPerson,
   isPersonalEvent,
@@ -49,6 +51,7 @@ export type CalendarGroup = {
   canInvite: boolean;
   lastSyncedAt: string | null;
   lastError: string | null;
+  removes: RemovalImpact | null;
   calendars: CalendarEntry[];
 };
 
@@ -123,6 +126,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
   return withActor(actor, async (db) => {
     const stored = await readStored(db, actor);
     const accounts = await readAccounts(db, actor);
+    const impacts = await readRemovalImpacts(db, actor);
     const calendars = await db.query<CalendarRow>(
       `select id, account_id, connection_id, name, color, is_default, is_visible, use_for_crm, can_edit,
               owner_email, last_synced_at, last_error
@@ -155,6 +159,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
         canInvite: true,
         lastSyncedAt: iso(state.rows[0]?.last_synced_at ?? null),
         lastError: state.rows[0]?.last_error ?? null,
+        removes: null,
         calendars: calendars.rows.filter((row) => row.connection_id === stored.id).map(mapCalendar),
       });
     }
@@ -174,6 +179,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
         canInvite: account.provider === "microsoft" && account.canSend && account.calendarWrite === true,
         lastSyncedAt: account.lastSyncedAt,
         lastError: account.lastError,
+        removes: account.provider === "microsoft" ? (impacts.get(account.id) ?? null) : null,
         calendars: calendars.rows.filter((row) => row.account_id === account.id).map(mapCalendar),
       });
     }

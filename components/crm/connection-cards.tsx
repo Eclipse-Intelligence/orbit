@@ -9,13 +9,16 @@ import {
   syncInboxAction,
   syncTranscriptsAction,
 } from "@/app/(crm)/capture/actions";
-import MailMirrorStatus from "@/components/crm/mail-mirror-status";
+import MailMirrorProgress from "@/components/crm/mail-mirror-status";
+import RemoveAccountButton from "@/components/crm/remove-account-button";
 import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import { formatWhen } from "@/lib/companies";
 import type { CalendarStatus } from "@/lib/crm/calendar";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import type { GranolaStatus } from "@/lib/crm/granola";
 import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
+import type { Mailbox } from "@/lib/mail/accounts";
+import { addAccountHref } from "@/lib/mail/mailboxes";
 import type { MailSourceStatus } from "@/lib/mail/store";
 import type { LinearStatus } from "@/lib/linear";
 import GranolaKey from "@/components/crm/granola-key";
@@ -96,7 +99,17 @@ function Status({
   );
 }
 
-export function SettingsNotices({ notice, info, connected = false }: { notice: string | null; info: string | null; connected?: boolean }) {
+export function SettingsNotices({
+  notice,
+  info,
+  connected = false,
+  add = null,
+}: {
+  notice: string | null;
+  info: string | null;
+  connected?: boolean;
+  add?: string | null;
+}) {
   if (!connected && !notice && !info) return null;
   return (
     <div className="flex flex-col gap-2">
@@ -106,9 +119,14 @@ export function SettingsNotices({ notice, info, connected = false }: { notice: s
         </p>
       )}
       {notice && (
-        <p role="alert" className="caption-style text-danger rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
-          {notice}
-        </p>
+        <div role="alert" className="caption-style text-danger flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
+          <span className="min-w-0 flex-1 basis-[16em]">{notice}</span>
+          {add && (
+            <Button variant="secondary" size="sm" href={addAccountHref(add)} className="shrink-0">
+              Add {add} as another account
+            </Button>
+          )}
+        </div>
       )}
       {info && (
         <p role="status" className="caption-style text-soft rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
@@ -119,78 +137,117 @@ export function SettingsNotices({ notice, info, connected = false }: { notice: s
   );
 }
 
+function mailboxStatus(mailbox: Mailbox) {
+  if (!mailbox.connected) return "Disconnected";
+  if (mailbox.needsReconnect) return "Needs reconnecting";
+  return syncedLine(mailbox.lastSyncedAt);
+}
+
+function MailboxRow({
+  mailbox,
+  mirror,
+  configured,
+}: {
+  mailbox: Mailbox;
+  mirror: MailSourceStatus | null;
+  configured: boolean;
+}) {
+  const main = mailbox.kind === "main";
+  const tone = !mailbox.connected ? "off" : mailbox.needsReconnect || mailbox.problem ? "error" : "on";
+  return (
+    <li aria-label={mailbox.email} className="border-border flex flex-col gap-2 border-t pt-3 first:border-t-0 first:pt-0">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <span className="flex min-w-0 flex-1 basis-[14em] flex-col gap-1">
+          <span className="truncate text-[14px] leading-5">{mailbox.email}</span>
+          <Status tone={tone}>{`${main ? "Main" : "Other account"} · ${mailboxStatus(mailbox)}`}</Status>
+        </span>
+        {configured && (
+          <span className="flex shrink-0 flex-wrap items-center gap-2">
+            {main && mailbox.connected && !mailbox.needsReconnect && <SyncButton action={syncInboxAction} label="Sync now" shortcut="sync" />}
+            <Button
+              variant={mailbox.needsReconnect ? "primary" : "ghost"}
+              size="sm"
+              href={mailbox.reconnectHref}
+              aria-label={`Reconnect ${mailbox.email}`}
+            >
+              Reconnect
+            </Button>
+            {main ? (
+              mailbox.connected && (
+                <form action={disconnectInboxAction}>
+                  <Button variant="ghost" size="sm" type="submit" aria-label={`Disconnect ${mailbox.email}`}>
+                    Disconnect
+                  </Button>
+                </form>
+              )
+            ) : (
+              <RemoveAccountButton accountId={mailbox.id} email={mailbox.email} removes={mailbox.removes} />
+            )}
+          </span>
+        )}
+      </div>
+      {mailbox.problem && (
+        <p role="alert" className="caption-style text-danger leading-[1.4]">
+          {mailbox.problem}
+        </p>
+      )}
+      {mirror && <MailMirrorProgress source={mirror} />}
+    </li>
+  );
+}
+
 export function MicrosoftSettings({
   configured,
   redirectUri,
-  mailbox,
+  mailboxes,
   calendar,
   mirror,
 }: {
   configured: boolean;
   redirectUri: string;
-  mailbox: MailboxSummary | null;
+  mailboxes: Mailbox[];
   calendar: CalendarStatus | null;
   mirror: MailSourceStatus[];
 }) {
-  const live = mailbox?.status === "connected";
-  const mailboxError = mailbox?.lastError ?? null;
+  const main = mailboxes.find((mailbox) => mailbox.kind === "main") ?? null;
   return (
     <SettingsCard
       id="microsoft"
       title="Microsoft 365"
-      description="Outlook mail is filed onto the matching contact, and you can send from a contact. The main calendar and Teams calls come from the same account."
+      description="Outlook mail is filed onto the matching contact, and you can send from a contact. The main calendar and Teams calls come from the main account."
       action={
-        configured && !live ? (
+        configured && !main ? (
           <Button variant="primary" size="sm" href="/api/microsoft/connect">
-            {mailbox ? "Reconnect Microsoft" : "Connect Microsoft"}
+            Connect Microsoft
           </Button>
         ) : undefined
       }
     >
-      <div className="flex flex-col gap-1.5">
-        {live ? (
-          <Status
-            tone={mailboxError ? "error" : "on"}
-          >{`Connected as ${mailbox.email}`}</Status>
-        ) : (
-          <Status tone="off">
-            {!configured
-              ? "Not set up on this server"
-              : mailbox
-                ? `Disconnected (${mailbox.email})`
-                : "Not connected"}
-          </Status>
-        )}
-        {live && (
-          <span className="caption-style text-subtle">
-            {syncedLine(mailbox.lastSyncedAt)}
-          </span>
-        )}
-        {mailboxError && (
-          <span role="alert" className="caption-style text-danger leading-[1.4]">
-            {mailboxError}
-          </span>
-        )}
-      </div>
-      {live && configured && (
+      {!configured ? <Status tone="off">Not set up on this server</Status> : !main ? <Status tone="off">Not connected</Status> : null}
+      {mailboxes.length > 0 && (
+        <ul aria-label="Microsoft mailboxes" className="flex flex-col gap-3">
+          {mailboxes.map((mailbox) => (
+            <MailboxRow
+              key={`${mailbox.kind}-${mailbox.id}`}
+              mailbox={mailbox}
+              configured={configured}
+              mirror={mirror.find((source) => source.email.toLowerCase() === mailbox.email.toLowerCase()) ?? null}
+            />
+          ))}
+        </ul>
+      )}
+      {configured && main && (
         <Actions>
-          <SyncButton action={syncInboxAction} label="Sync now" shortcut="sync" />
-          <Button variant="ghost" size="sm" href="/api/microsoft/connect">
-            Reconnect
+          <Button variant="secondary" size="sm" href={addAccountHref()}>
+            Connect another Microsoft account
           </Button>
-          <form action={disconnectInboxAction}>
-            <Button variant="ghost" size="sm" type="submit">
-              Disconnect
-            </Button>
-          </form>
         </Actions>
       )}
-      {mirror.length > 0 && <MailMirrorStatus sources={mirror} />}
-      {live && configured && calendar && (
+      {main?.connected && configured && calendar && (
         <div className="border-border flex flex-col gap-2 border-t pt-3">
           <h4 className="text-[14px] leading-5">Outlook calendar</h4>
           {calendar.scopeMissing ? (
-            <Status tone="error">Reconnect Microsoft to include your calendar. Mail keeps working in the meantime.</Status>
+            <Status tone="error">{`Reconnect ${main.email} to include your calendar. Mail keeps working in the meantime.`}</Status>
           ) : (
             <>
               <Status tone={calendar.lastError ? "error" : "on"}>{syncedLine(calendar.lastSyncedAt)}</Status>
@@ -204,8 +261,8 @@ export function MicrosoftSettings({
           )}
           <Actions>
             {calendar.scopeMissing ? (
-              <Button variant="primary" size="sm" href="/api/microsoft/connect">
-                Reconnect Microsoft
+              <Button variant="primary" size="sm" href={main.reconnectHref} aria-label={`Reconnect ${main.email}`}>
+                Reconnect
               </Button>
             ) : (
               <SyncButton action={syncCalendarAction} label="Sync calendar" />
@@ -226,7 +283,7 @@ export function MicrosoftSettings({
         </SettingsDisclosure>
       )}
       <p className="caption-style text-subtle leading-[1.4]">
-        Extra Microsoft accounts and calendar links are in{" "}
+        Calendar-only accounts and calendar links are in{" "}
         <Button
           variant="link"
           size="none"

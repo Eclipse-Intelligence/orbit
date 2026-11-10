@@ -360,6 +360,8 @@ describe("extra calendar account oauth", () => {
       userId: "user-1",
       workspaceId: "workspace-1",
       purpose: "calendar_account",
+      hint: null,
+      back: "calendars",
     });
     const legacy = signMicrosoftState("user-1", "workspace-1", 1_000);
     assert.equal(readMicrosoftState(legacy, 1_000)?.purpose, "mailbox");

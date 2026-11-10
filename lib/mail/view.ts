@@ -240,7 +240,7 @@ export function replyDefaults(
 }
 
 export type MailNav = {
-  accounts: { id: string; email: string; unread: number; connected: boolean }[];
+  accounts: { id: string; email: string; unread: number; connected: boolean; needsReconnect?: boolean; reconnectHref?: string }[];
   folders: { id: string; sourceId: string; name: string; role: MailRole; unread: number }[];
   unread: number;
   snoozed: number;
