@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { applyCompanionResult, crossBrandLine, crossBrandWorkspaces, decideActions, getConversation, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { messageFence, turnFence } from "@/lib/assistant/untrusted";
-import { needsWebApproval, readTargets, webCard, webGateState } from "@/lib/assistant/web-gate";
+import { needsWebApproval, outsideRead, readTargets, webCard, webGateState } from "@/lib/assistant/web-gate";
 import { createActivity } from "@/lib/crm/activities";
 import { insertMemory, memoryBriefing } from "@/lib/learning/memories";
 import { findTool, toolDefinitions } from "@/lib/assistant/tools";
@@ -84,6 +84,17 @@ describe("web reads after outside content", () => {
     assert.equal(needsWebApproval("check_web", { about: "Pulse, pulse.co.uk", questions: [{ key: "funding", type: "yes_no", question: "Has Pulse raised money?" }] }, typed), false);
     assert.equal(needsWebApproval("search_records", { query: EVIL }, read), false);
     assert.equal(webGateState([{ role: "assistant", content: "Your brief" }]).outside, true);
+    const calendar = (notes: string | null, fromOutside: boolean) =>
+      JSON.stringify({ events: [{ subject: "Pricing call", notes, descriptionFromOutside: fromOutside && notes !== null }] });
+    const after = (content: string) => webGateState([{ role: "user", content: "What's on?" }, { role: "tool", tool_name: "list_calendar_events", content }]).outside;
+    assert.equal(after(calendar(null, true)), false);
+    assert.equal(after(calendar("Team stand-up agenda", false)), false);
+    assert.equal(after(calendar("Agenda from Juno", true)), true);
+    assert.equal(after(JSON.stringify({ events: [{ subject: '"descriptionFromOutside":true', notes: "x", descriptionFromOutside: false }] })), false);
+    assert.equal(outsideRead("get_overview", calendar("Agenda", true)), false);
+    assert.equal(outsideRead("list_calendar_events", "not json"), true);
+    assert.equal(outsideRead("list_calendar_events", JSON.stringify({ workspaces: [{ events: [{ notes: "x", descriptionFromOutside: true }] }] })), true);
+    assert.equal(outsideRead("list_calendar_events", JSON.stringify({ workspaces: [{ events: [{ notes: "x", descriptionFromOutside: false }] }] })), false);
     assert.deepEqual(webCard("read_web_page", { url: EVIL }), {
       title: `Open ${EVIL}?`,
       lines: ["This chat has read outside content, and this address didn't come from you or from Orbit. Check it before it's opened."],

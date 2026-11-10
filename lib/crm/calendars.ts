@@ -21,6 +21,8 @@ import { isUuid } from "@/lib/crm/mutate";
 import { maskFeedUrl } from "@/lib/ical/fetch";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
+import { query } from "@/lib/db/pool";
+import type { CalendarPerson } from "@/lib/microsoft/calendar";
 
 const EVENTS_SHOWN = 1500;
 const STALE_MS = 10 * 60 * 1000;
@@ -74,6 +76,9 @@ export type CalendarItem = {
   location: string | null;
   webLink: string | null;
   joinUrl: string | null;
+  notes: string | null;
+  descriptionFromOutside: boolean;
+  joinFromDescription: boolean;
   organizer: EventPerson | null;
   attendees: EventPerson[];
   granolaHref: string | null;
@@ -232,6 +237,8 @@ type ItemRow = {
   location: string | null;
   web_link: string | null;
   online_meeting_url: string | null;
+  notes: string | null;
+  join_from_description: boolean;
   organizer: unknown;
   attendees: unknown;
   granola_id: string | null;
@@ -258,6 +265,15 @@ function readResponse(value: unknown, email: string) {
   return null;
 }
 
+async function memberAddresses(workspaceId: string) {
+  const result = await query<{ address: string }>("select address from private.workspace_member_addresses($1) as address", [workspaceId]);
+  return new Set(result.rows.map((row) => row.address));
+}
+
+function fromOutside(organizer: CalendarPerson | null, members: Set<string>) {
+  return organizer === null || !members.has(organizer.email.toLowerCase());
+}
+
 export async function listCalendarItems(
   actor: UserActor,
   range: { start: Date; end: Date },
@@ -267,12 +283,16 @@ export async function listCalendarItems(
   return withActor(actor, async (db) => {
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
-              e.location, e.web_link, e.online_meeting_url, e.organizer, e.attendees,
+              e.location, e.web_link, coalesce(e.online_meeting_url, l.join_url) as online_meeting_url, n.notes,
+              (e.online_meeting_url is null and l.join_url is not null) as join_from_description,
+              e.organizer, e.attendees,
               e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
               e.invite_identity_id, e.invite_uid, e.contact_ids,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
+       left join crm.calendar_event_links l on l.event_id = e.id and l.user_id = e.user_id
+       left join crm.calendar_event_notes n on n.event_id = e.id and n.user_id = e.user_id
        left join lateral (
          select a.id, a.contact_id, a.company_id from crm.activities a
          where a.workspace_id = e.workspace_id
@@ -292,6 +312,7 @@ export async function listCalendarItems(
        limit ${EVENTS_SHOWN}`,
       [actor.userId, range.start.toISOString(), range.end.toISOString()],
     );
+    const members = result.rows.some((row) => row.notes !== null) ? await memberAddresses(actor.workspaceId) : new Set<string>();
     const emails = new Set<string>();
     for (const row of result.rows) {
       for (const person of [readPerson(row.organizer), ...readPeople(row.attendees)]) {
@@ -371,6 +392,9 @@ export async function listCalendarItems(
         location: row.location,
         webLink: row.web_link,
         joinUrl: row.online_meeting_url,
+        notes: row.notes,
+        descriptionFromOutside: row.notes !== null && fromOutside(readPerson(row.organizer), members),
+        joinFromDescription: row.join_from_description,
         organizer: describe(readPerson(row.organizer), null),
         attendees: readPeople(row.attendees).map(
           (person) => describe(person, readResponse(row.attendees, person.email))!,

@@ -9,6 +9,7 @@ import {
   readGrantedScopes,
   readPeople,
   readPerson,
+  saveEventExtras,
 } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
 import { createContactFromAttendeeInDb } from "@/lib/crm/conversations";
@@ -434,7 +435,9 @@ function fallbackEvent(
     isCancelled: false,
     location: values.link,
     webLink: null,
-    onlineMeetingUrl: null,
+    onlineMeetingUrl: values.link,
+    privateJoinUrl: null,
+    notes: null,
     organizer: values.organizer,
     attendees: values.guests.map((guest) => ({ ...guest, response: "none" })),
     showAs: "busy",
@@ -504,6 +507,7 @@ async function saveCreatedEvent(
       email?.notes ?? null,
     ],
   );
+  await saveEventExtras(db, calendarId, [event]);
   return result.rows[0].id;
 }
 
@@ -757,7 +761,7 @@ export async function sendInvite(
   const providerEventId = created.id?.trim();
   const saveWarning = email ? EMAIL_SAVE_WARNING : SAVE_WARNING;
   if (!providerEventId || providerEventId.length > 400) return { ...result, warning: saveWarning };
-  const parsed = toCalendarEvent(created);
+  const parsed = toCalendarEvent(created, { ownLink: link });
   const base = parsed
     ? { ...parsed, startsAt: input.start.toISOString(), endsAt: input.end.toISOString() }
     : fallbackEvent(providerEventId, created, { subject, start: input.start, end: input.end, link, organizer, guests });
@@ -877,7 +881,7 @@ async function createPersonalEvent(actor: UserActor, input: PersonalEvent, fetch
   const providerEventId = created.id?.trim();
   if (!providerEventId || providerEventId.length > 400) return { ...result, warning: PERSONAL_SAVE_WARNING };
   const organizer = { name: actor.fullName, email: calendar.address };
-  const parsed = toCalendarEvent(created);
+  const parsed = toCalendarEvent(created, { ownLink: link });
   const base = parsed
     ? { ...parsed, startsAt: result.startsAt, endsAt: result.endsAt }
     : fallbackEvent(providerEventId, created, { subject, start: window.start, end: window.end, link, organizer, guests: [] });

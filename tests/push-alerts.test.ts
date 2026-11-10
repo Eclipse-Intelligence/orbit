@@ -95,6 +95,19 @@ describe("alerts", () => {
     assert.equal(again.sent.length, 0);
   });
 
+  it("uses a join link found in the event's description", async () => {
+    await event("zoomed", 6, { ical_uid: "uid-zoomed" });
+    await getAdminPool().query(
+      `insert into crm.calendar_event_links (event_id, user_id, workspace_id, join_url)
+       select id, user_id, workspace_id, 'https://us02web.zoom.us/j/555' from crm.calendar_events where provider_event_id = 'p-zoomed'`,
+    );
+    const sent = pusher();
+    await calendarAlerts(owner, { now: now + 60_000, send: sent.send });
+    const zoomed = sent.sent.find((item) => item.title === "Meeting zoomed in 5 minutes");
+    assert.equal(zoomed?.url, "https://us02web.zoom.us/j/555");
+    assert.match(String(zoomed?.body), /Tap to join$/);
+  });
+
   it("follows the chosen lead time and can be turned off", async () => {
     await setMailNotifications(owner, { calendarMinutes: 30 });
     const wider = pusher();

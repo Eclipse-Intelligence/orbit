@@ -143,6 +143,7 @@ type SyncSource = {
 
 type SyncContext = {
   fetchImpl: typeof fetch;
+  ownLink: string | null;
   feedFetch?: typeof fetch;
   lookup?: Lookup;
   deadline: number;
@@ -287,8 +288,43 @@ async function saveEvents(
       ],
     );
     saved += result.rowCount ?? 0;
+    await saveEventExtras(db, calendarId, events.slice(index, index + SAVE_BATCH));
   }
   return saved;
+}
+
+export async function saveEventExtras(
+  db: Db,
+  calendarId: string,
+  events: Pick<CalendarEvent, "providerEventId" | "notes" | "privateJoinUrl">[],
+) {
+  if (events.length === 0) return;
+  const rows = JSON.stringify(
+    events.map((event) => ({ provider_event_id: event.providerEventId, notes: event.notes, join_url: event.privateJoinUrl })),
+  );
+  await db.query(
+    `with x as (
+       select * from jsonb_to_recordset($2::jsonb) as x(provider_event_id text, notes text, join_url text)
+     ), e as (
+       select e.id, e.user_id, e.workspace_id, x.notes, x.join_url
+       from crm.calendar_events e join x on x.provider_event_id = e.provider_event_id
+       where e.calendar_id = $1
+     ), dropped_notes as (
+       delete from crm.calendar_event_notes n using e where n.event_id = e.id and e.notes is null
+     ), dropped_links as (
+       delete from crm.calendar_event_links l using e where l.event_id = e.id and e.join_url is null
+     ), saved_links as (
+       insert into crm.calendar_event_links (event_id, user_id, workspace_id, join_url)
+       select id, user_id, workspace_id, join_url from e where join_url is not null
+       on conflict (event_id) do update set join_url = excluded.join_url, updated_at = now()
+       where crm.calendar_event_links.join_url is distinct from excluded.join_url
+     )
+     insert into crm.calendar_event_notes (event_id, user_id, workspace_id, notes)
+     select id, user_id, workspace_id, notes from e where notes is not null
+     on conflict (event_id) do update set notes = excluded.notes, updated_at = now()
+     where crm.calendar_event_notes.notes is distinct from excluded.notes`,
+    [calendarId, rows],
+  );
 }
 
 async function removeEvents(db: Db, calendarId: string, keep: string[] | null, window: { start: Date; end: Date }) {
@@ -625,7 +661,8 @@ async function readSources(actor: UserActor, accountId?: string) {
       });
     }
     sources.sort((left, right) => (left.lastAttemptAt ?? "").localeCompare(right.lastAttemptAt ?? ""));
-    return sources;
+    const profile = await db.query<{ meeting_link: string | null }>("select meeting_link from crm.profiles where id = $1", [actor.userId]);
+    return { sources, ownLink: profile.rows[0]?.meeting_link ?? null };
   });
 }
 
@@ -691,6 +728,7 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
           fetchImpl: context.fetchImpl,
           deadline: context.deadline,
           calendarId: calendar.providerCalendarId,
+          ownLink: context.ownLink,
         });
         const saved = await withActor(actor, (db) =>
           saveCalendarEvents(db, actor, source, calendar, fetched, window, context.now),
@@ -773,7 +811,7 @@ async function syncFeedSource(actor: UserActor, source: SyncSource, context: Syn
       return outcome;
     }
     const window = calendarWindow(context.now);
-    const parsed = readFeed(fetched.text, window);
+    const parsed = readFeed(fetched.text, window, { ownLink: context.ownLink });
     const listed: CalendarListFetch = {
       calendars: [
         {
@@ -869,7 +907,7 @@ export async function syncCalendar(
     scopeMissing: false,
     calendars: 0,
   };
-  const sources = await readSources(actor, options.accountId);
+  const { sources, ownLink } = await readSources(actor, options.accountId);
   if (sources.length === 0) return { ...result, error: NOT_CONNECTED };
   const now = options.now ?? Date.now();
   let complete = true;
@@ -884,6 +922,7 @@ export async function syncCalendar(
     result.ran = true;
     const outcome = await syncSource(actor, source, {
       fetchImpl,
+      ownLink,
       feedFetch: options.feedFetch,
       lookup: options.lookup,
       deadline,
@@ -986,7 +1025,8 @@ export async function getMeetings(
     const select = (upcoming: boolean) =>
       db.query<EventRow>(
         `select m.id, m.subject, m.starts_at, m.ends_at, m.is_all_day, m.location, m.web_link,
-                m.online_meeting_url, m.organizer, jsonb_array_length(m.attendees)::int as attendee_count,
+                coalesce(m.online_meeting_url, l.join_url) as online_meeting_url, m.organizer,
+                jsonb_array_length(m.attendees)::int as attendee_count,
                 g.id as granola_activity_id
          from (
            select distinct on (coalesce(e.ical_uid, e.id::text)) e.*
@@ -1000,6 +1040,7 @@ export async function getMeetings(
            order by coalesce(e.ical_uid, e.id::text), (e.user_id = $1) desc, (e.connection_id is not null) desc,
              c.is_default desc nulls last, e.id
          ) m
+         left join crm.calendar_event_links l on l.event_id = m.id
          left join lateral (
            select a.id from crm.activities a
            where a.workspace_id = m.workspace_id
