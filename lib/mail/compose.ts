@@ -449,9 +449,9 @@ async function logReply(actor: UserActor, input: DraftInput, subject: string, fr
 
 function checkSendable(input: DraftInput) {
   if (input.to.length + input.cc.length + input.bcc.length === 0) {
-    throw new CrmError("invalid_input", "Add at least one person to send to.", 400, { field: "To" });
+    throw new CrmError("invalid_input", "Add a recipient.", 400, { field: "To" });
   }
-  if (!input.body.trim() && input.mode !== "forward") throw new CrmError("invalid_input", "Write a message first.", 400, { field: "body" });
+  if (!input.body.trim() && input.mode !== "forward") throw new CrmError("invalid_input", "Add a message.", 400, { field: "body" });
   if (input.mode === "new" && !input.subject) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
 }
 
@@ -534,12 +534,12 @@ type SendOptions = {
   force?: boolean;
 };
 
-export const ALREADY_SENDING = "This email was already sending, so Orbit didn't send it again. Check Sent in Mail.";
+export const ALREADY_SENDING = "Already sending. Check Sent.";
 export const DRAFT_GONE = "This draft was already sent or deleted.";
-export const MAYBE_SENT = "This email may already have been sent. Check Sent, and if it isn't there, use Send anyway.";
+export const MAYBE_SENT = "May already be sent. Check Sent before using Send anyway.";
 export const SEND_FAILED = "The email didn't send. Try again.";
-export const SEND_UNCONFIRMED = "Outlook didn't confirm the email was sent. Check Sent before sending it again.";
-export const ALREADY_SENT_WARNING = "Outlook had already sent this email, so Orbit didn't send it again.";
+export const SEND_UNCONFIRMED = "Outlook didn't confirm the send. Check Sent before resending.";
+export const ALREADY_SENT_WARNING = "Already sent.";
 const RESEND_AFTER_MS = 2 * 60_000;
 
 type SendKeyClaim = { state: "new" | "retry"; draftId: string | null } | { state: "sent" } | { state: "busy" };
@@ -773,7 +773,7 @@ async function finishSend(actor: UserActor, input: DraftInput, finish: Finish): 
           () => false,
         ),
   ]);
-  return { warning: logged ? null : "Sent, but Orbit couldn't add it to the contact's timeline." };
+  return { warning: logged ? null : "Sent, but not added to the contact's timeline." };
 }
 
 async function finishEarlierSend(actor: UserActor, input: DraftInput, row: DraftRow, ids: string[], options: SendOptions) {
@@ -838,7 +838,7 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await noteIdentityError(actor, identity.id, reason).catch(() => undefined);
-      if (smtpUnsure(error)) throw new CrmError("upstream_error", `${identity.email} didn't confirm the email was sent. Check Sent before sending it again.`, 502);
+      if (smtpUnsure(error)) throw new CrmError("upstream_error", `${identity.email} didn't confirm the send. Check Sent before resending.`, 502);
       await clearAttempt(actor, draft.id).catch(() => undefined);
       throw new CrmError("upstream_error", `${identity.email} couldn't send: ${reason.slice(0, 200)}`, 502);
     }
@@ -953,9 +953,8 @@ export async function listScheduledDrafts(actor: UserActor): Promise<MailDraft[]
 
 type DueDraft = DraftRow & { signature: boolean };
 
-const SCHEDULED_GONE = "That scheduled email isn't in Orbit Mail any more. It has probably been sent or discarded, so check Sent in Mail.";
-const SCHEDULED_NOT_WAITING =
-  "That email isn't waiting to send any more. Either it's sending now (check Sent in Mail) or it was unscheduled and is in Drafts.";
+const SCHEDULED_GONE = "That scheduled email has gone. Check Sent.";
+const SCHEDULED_NOT_WAITING = "That email is no longer scheduled. Check Sent or Drafts.";
 
 async function scheduledRow(actor: UserActor, id: string) {
   if (!isUuid(id)) return null;
@@ -1015,7 +1014,7 @@ export async function changeScheduledDraft(
     bcc: changes.bcc === undefined ? current.bcc : cleanList(changes.bcc, "Bcc"),
   };
   const sendAt = changes.sendAt ?? (row.send_at ? new Date(row.send_at).toISOString() : null);
-  if (!sendAt) throw new CrmError("invalid_input", "This one didn't send, so give it a new send time.", 400, { field: "sendAt" });
+  if (!sendAt) throw new CrmError("invalid_input", "Choose a new send time.", 400, { field: "sendAt" });
   scheduleTime(sendAt);
   checkSendable(input);
   const held = await withActor(actor, async (db) => {
@@ -1249,7 +1248,7 @@ export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput,
         return result.rows[0] ?? null;
       })
     : null;
-  if (replying && !thread) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  if (replying && !thread) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   const accounts = await composeAccounts(actor);
   const account = chosen ?? (thread ? receivingIdentity(accounts, thread.source_id, [...(thread.to_recipients ?? []), ...(thread.cc_recipients ?? [])]) : null);
   if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
@@ -1354,7 +1353,7 @@ export async function sendForAgent(
   options: { origin: string | null; fetchImpl?: typeof fetch; smtp?: SmtpSender; saveSent?: SentSaver },
 ) {
   const stored = input.draftId ? await storedDraft(actor, input.draftId) : null;
-  if (input.draftId && !stored) throw new CrmError("not_found", "That draft isn't in Orbit Mail any more. Save it again.", 404);
+  if (input.draftId && !stored) throw new CrmError("not_found", "That draft isn't in Mail any more. Save it again.", 404);
   const replyTo = input.replyTo ?? stored?.reply_to ?? null;
   const replying = Boolean(replyTo);
   const accounts = await composeAccounts(actor);
@@ -1376,7 +1375,7 @@ export async function sendForAgent(
         return result.rows[0] ?? null;
       })
     : null;
-  if (replying && !original) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  if (replying && !original) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   if (original && !account) account = receivingIdentity(accounts, original.source_id, [...(original.to_recipients ?? []), ...(original.cc_recipients ?? [])]);
   const subject = input.subject?.trim() || stored?.subject?.trim() || "";
   if (!replying && !subject) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });

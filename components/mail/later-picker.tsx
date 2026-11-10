@@ -7,7 +7,7 @@ import type { LaterOption } from "@/lib/mail/later";
 import { laterDetail } from "@/lib/mail/later";
 import { parseDateTime } from "@/lib/time";
 
-export type LaterRequest = { title: string; description: string; options: LaterOption[]; now: number; onPick: (at: string, detail: string) => void };
+export type LaterRequest = { title: string; description?: string; options: LaterOption[]; now: number; onPick: (at: string, detail: string) => void };
 
 export default function LaterPicker({ request, onClose }: { request: LaterRequest | null; onClose: () => void }) {
   const id = useId();
@@ -49,10 +49,10 @@ export default function LaterPicker({ request, onClose }: { request: LaterReques
         }
       }}
     >
-      <DialogContent className="max-w-[360px]">
+      <DialogContent className="max-w-[360px]" {...(request?.description ? {} : { "aria-describedby": undefined })}>
         <div className="flex flex-col gap-1 px-5 pt-5 pb-3">
           <DialogTitle className="text-[15px] font-medium">{request?.title}</DialogTitle>
-          <DialogDescription>{request?.description}</DialogDescription>
+          {request?.description && <DialogDescription>{request.description}</DialogDescription>}
         </div>
         <ul aria-label="Times" onKeyDown={move} className="flex flex-col px-2">
           {request?.options.map((option, index) => (

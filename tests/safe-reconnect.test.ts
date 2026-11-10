@@ -244,7 +244,7 @@ describe("one reconnect notice per account", () => {
     );
     assert.ok(error instanceof CrmError);
     assert.equal(error.code, RECONNECT_NEEDED);
-    assert.match(error.message, /^Reconnect mark@markridgeon\.com in Settings › Email\. Microsoft has signed Orbit out of it\./);
+    assert.match(error.message, /^Reconnect mark@markridgeon\.com in Settings › Email\.$/);
     assert.deepEqual(error.details?.reconnect, {
       sourceId: setup.extraSourceId,
       email: EXTRA,
@@ -257,7 +257,7 @@ describe("one reconnect notice per account", () => {
     await assert.rejects(mailSourceToken(setup.owner, setup.extraSourceId), (error: unknown) => {
       assert.ok(error instanceof CrmError);
       assert.equal(error.code, RECONNECT_NEEDED);
-      assert.equal(error.message, `Reconnect ${EXTRA} in Settings › Email. It isn't connected to Orbit any more.`);
+      assert.equal(error.message, `Reconnect ${EXTRA} in Settings › Email.`);
       return true;
     });
     const nav = await mailNav(setup.owner);
@@ -284,13 +284,13 @@ describe("one reconnect notice per account", () => {
 
     const others = flagSyncProblems(
       [
-        `Reconnect ${MAIN} in Settings › Email. Microsoft has signed Orbit out of it.`,
-        "Reconnect amark@geteclipse.co in Settings › Email. Microsoft has signed Orbit out of it.",
-        "Mail didn't refresh. Orbit will try again shortly.",
+        `Reconnect ${MAIN} in Settings › Email.`,
+        "Reconnect amark@geteclipse.co in Settings › Email.",
+        "Mail didn't refresh. Retrying.",
       ],
       accounts,
     );
-    assert.deepEqual(others, ["Reconnect amark@geteclipse.co in Settings › Email. Microsoft has signed Orbit out of it.", "Mail didn't refresh. Orbit will try again shortly."]);
+    assert.deepEqual(others, ["Reconnect amark@geteclipse.co in Settings › Email.", "Mail didn't refresh. Retrying."]);
     assert.deepEqual(
       reconnectAccounts(accounts, readReconnects().flags).map((item) => item.email),
       [MAIN, EXTRA],
@@ -390,7 +390,7 @@ describe("the connect and callback flow", () => {
     assert.equal(refused.add, "someone@new.test");
     assert.deepEqual(await rows(setup.owner), before);
 
-    await getAdminPool().query("update crm.mail_sources set last_error = $2 where id = $1", [setup.mainSourceId, `Reconnect ${MAIN} in Settings › Email. Microsoft has signed Orbit out of it.`]);
+    await getAdminPool().query("update crm.mail_sources set last_error = $2 where id = $1", [setup.mainSourceId, `Reconnect ${MAIN} in Settings › Email.`]);
     await disconnectMailbox(setup.owner);
     assert.equal((await listMailboxes(setup.owner))[0].connected, false);
     const reconnected = await finishMicrosoftConnect(setup.owner, state, new URLSearchParams({ code: "c" }), "https://orbit.test", microsoft(MAIN, { id: PERSON }));
@@ -455,7 +455,7 @@ describe("what counts as needing a reconnect", () => {
 
   it("separates expired sign-ins, Orbit's own app and other refusals", () => {
     const expired = new MicrosoftTokenError("invalid_grant AADSTS700082: The refresh token has expired due to inactivity.");
-    assert.match(reconnectProblem(expired, MAIN) ?? "", /^Reconnect mark@geteclipse\.co in Settings › Email\. Microsoft has signed Orbit out of it\./);
+    assert.match(reconnectProblem(expired, MAIN) ?? "", /^Reconnect mark@geteclipse\.co in Settings › Email\.$/);
 
     for (const detail of ["invalid_client AADSTS7000222: The provided client secret keys for app are expired.", "AADSTS7000215: Invalid client secret provided."]) {
       const app = new MicrosoftTokenError(detail);
@@ -472,7 +472,7 @@ describe("what counts as needing a reconnect", () => {
     assert.match(reconnectProblem(folder, MAIN, false) ?? "", /allow every permission/);
     assert.match(reconnectProblem(new GraphMailError("x", 403, "Authorization_RequestDenied Insufficient privileges"), MAIN) ?? "", /allow every permission/);
     assert.match(reconnectProblem(new GraphMailError("x", 403, "AADSTS65001 consent_required"), MAIN) ?? "", /Ask your Microsoft admin/);
-    assert.match(reconnectProblem(new GraphMailError("x", 401, "InvalidAuthenticationToken"), MAIN) ?? "", /signed Orbit out/);
+    assert.equal(reconnectProblem(new GraphMailError("x", 401, "InvalidAuthenticationToken"), MAIN), `Reconnect ${MAIN} in Settings › Email.`);
     assert.equal(reconnectProblem(new GraphMailError("x", 500, "ServiceUnavailable"), MAIN), null);
     assert.equal(graphReconnect(folder, { id: "s", email: MAIN, main: true, scopes: "Mail.Send User.Read" })?.code, RECONNECT_NEEDED);
     assert.equal(graphReconnect(folder, { id: "s", email: MAIN, main: true, scopes: "Mail.ReadWrite Mail.Send" }), null);

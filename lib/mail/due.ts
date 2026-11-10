@@ -86,13 +86,7 @@ async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: {
   const title = deferred ? `Time to check in: ${subject}` : `No reply yet: ${subject}`;
   const href = mailHref(reminder.source_id, reminder.thread_key);
   const quiet = (await mailNotifyLevel(actor)) === "none";
-  const body = deferred
-    ? nudge
-      ? "They asked to pick this up now. Orbit has a check-in ready for you to send."
-      : "They asked to pick this up now. It's back at the top of your inbox."
-    : nudge
-      ? "Nobody has replied. Orbit has a follow-up ready for you to send."
-      : "Nobody has replied. It's back at the top of your inbox.";
+  const body = nudge ? (deferred ? "Check-in ready to send." : "Follow-up ready to send.") : "Back at the top of your inbox.";
   await sendAlert(
     actor,
     {
@@ -101,7 +95,7 @@ async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: {
       body,
       url: href,
       tag: `${reminder.source_id}|${reminder.thread_key}`,
-      bell: { title, body: "Orbit has put the conversation back at the top of your inbox.", href, category: "capture" },
+      bell: { title, body: "Back at the top of your inbox.", href, category: "capture" },
     },
     { send: quiet ? async () => undefined : options.send },
   );
@@ -200,11 +194,11 @@ export async function failReminder(actor: UserActor, id: string, message: string
 async function flagReminder(actor: UserActor, reminder: ReminderRow, message: string, send?: PushSender) {
   const subject = reminder.subject?.trim() || "(no subject)";
   const href = mailHref(reminder.source_id, reminder.thread_key);
-  const title = reminder.kind === "snooze" ? `Orbit couldn't bring back: ${subject}` : `Orbit couldn't check this follow-up: ${subject}`;
+  const title = reminder.kind === "snooze" ? `Still snoozed: ${subject}` : `Follow-up not checked: ${subject}`;
   const body =
     reminder.kind === "snooze"
-      ? `It's still in Snoozed. Orbit tried ${REMINDER_ATTEMPTS} times and stopped. ${message}`
-      : `Orbit tried ${REMINDER_ATTEMPTS} times and stopped. Check the conversation yourself. ${message}`;
+      ? `Move it back yourself. ${message}`
+      : `Check the conversation. ${message}`;
   await sendAlert(actor, { key: `reminder-failed:${reminder.id}`, title, body, url: href, tag: `${reminder.source_id}|${reminder.thread_key}`, bell: { title, body, href } }, { send });
 }
 

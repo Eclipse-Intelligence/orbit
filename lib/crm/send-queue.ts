@@ -35,7 +35,7 @@ export async function sendPaced<T extends { id: string }>(
     try {
       result = await send(item);
     } catch {
-      result = { error: "Could not reach Orbit." };
+      result = { error: "Couldn't reach Orbit." };
     }
     if (result.error) {
       options.onUpdate({ id: item.id, status: "failed", error: result.error });

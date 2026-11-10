@@ -142,7 +142,7 @@ function ComposeButton({ onCompose }: { onCompose: () => void }) {
   if (!slot) return null;
   return createPortal(
     <span data-compose-fab="" className="contents md:hidden">
-      <Button variant="primary" size="md" onClick={onCompose} title="Write an email" className="pointer-events-auto h-12 gap-2 px-5 text-[14px] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] md:hidden">
+      <Button variant="primary" size="md" onClick={onCompose} className="pointer-events-auto h-12 gap-2 px-5 text-[14px] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] md:hidden">
         <ComposeIcon aria-hidden className="size-4" />
         Compose
       </Button>
@@ -518,7 +518,6 @@ export default function MailScreen({
     const now = Date.now();
     pickLater({
       title: keys.length > 1 ? `Snooze ${keys.length} until` : "Snooze until",
-      description: keys.length > 1 ? "They come back to the top of your inbox." : "It comes back to the top of your inbox.",
       options: laterOptions(now),
       now,
       onPick: (at, detail) => (keys.length > 1 ? actMany(keys, "snooze", at, detail) : act(keys[0], "snooze", at, detail)),
@@ -540,7 +539,7 @@ export default function MailScreen({
       setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? { ...item, split } : item)) } : existing));
     }
     forgetOtherLists(target);
-    showToast({ message: `Email from ${sender} now goes to ${SPLIT_LABELS[split]}.` });
+    showToast({ message: `${sender} now goes to ${SPLIT_LABELS[split]}.` });
     postSenderSplit(sender, split)
       .then(() => fetchNav().then(setNav).catch(() => null))
       .catch((error: Error) => {
@@ -632,7 +631,7 @@ export default function MailScreen({
               await run(thread);
             } catch (error) {
               if (flagReconnect(error, { sourceId: thread.sourceId })) reconnecting = true;
-              else failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
+              else failures.push(error instanceof Error ? error.message : "Couldn't move it. Try again.");
               putBack(thread);
             }
           }
@@ -1128,21 +1127,16 @@ export default function MailScreen({
 
   const empty = query.query
     ? `No emails match “${query.query}”.`
-    : inInbox(query.view)
-      ? query.view === "inbox:important"
-        ? "Inbox zero. Nothing important is waiting for you."
-        : "Nothing here."
-      : activeFolder
-        ? `${activeFolder.name} is empty.`
-        : `Nothing in ${MORE_VIEWS.find((view) => view.id === query.view)?.label ?? "this folder"}.`;
+    : query.view === "inbox:important"
+      ? "Inbox zero"
+      : "Nothing here";
 
   if (nav.accounts.length === 0 && !nav.partial) {
     return (
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SectionHeader title="Mail" viewer={viewer} />
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <h2>Bring your mail into Orbit</h2>
-          <p className="text-subtle max-w-[28em]">Connect Microsoft in Settings › Email. Orbit copies every folder and keeps it in step with Outlook.</p>
+          <h2>No mailbox connected</h2>
           <Button variant="primary" href="/settings/email">
             Connect Microsoft
           </Button>
@@ -1170,7 +1164,7 @@ export default function MailScreen({
         }
         action={
           <>
-            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)" shortcut={["C", "M"]} className="max-md:hidden">
+            <Button variant="primary" onClick={() => openComposer()} shortcut={["C", "M"]} className="max-md:hidden">
               Compose
             </Button>
             {nav.accounts.length > 1 && (
@@ -1187,7 +1181,6 @@ export default function MailScreen({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[15rem]">
-                  <DropdownMenuLabel>Show mail from</DropdownMenuLabel>
                   <DropdownMenuRadioGroup
                     value={query.account ?? "all"}
                     onValueChange={(value) => {
@@ -1285,7 +1278,7 @@ export default function MailScreen({
                           </DropdownMenuRadioItem>
                         );
                       })}
-                      {folders.length > 0 && <DropdownMenuLabel>Your folders</DropdownMenuLabel>}
+                      {folders.length > 0 && <DropdownMenuLabel>Folders</DropdownMenuLabel>}
                       {folders.map((folder) => (
                         <DropdownMenuRadioItem key={folder.id} value={`folder:${folder.id}`}>
                           <span className="min-w-0 flex-1 truncate">{folder.name}</span>
@@ -1359,7 +1352,7 @@ export default function MailScreen({
             </div>
             {query.query && (
               <p role="status" className="caption-style text-subtle px-1">
-                {loading && threads.length === 0 ? "Searching…" : `Results for “${query.query}” across every folder${query.account ? ` in ${accountLabel}` : ""}.`}
+                {loading && threads.length === 0 ? "Searching…" : `Results for “${query.query}” in all folders${query.account ? ` of ${accountLabel}` : ""}`}
               </p>
             )}
           </div>
