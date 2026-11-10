@@ -32,7 +32,7 @@ A new chat starts on the model and reasoning of the person's last chat. `chatDef
 ### What the model gets
 
 1. The system prompt from `systemPrompt`: the workspace's brand profile (About <workspace>: what it sells, its website, who it's for and how it writes, from Settings › Brand, or a note that it hasn't said what it sells, so the assistant claims no product; when the profile can't be read, it says so instead), what Orbit holds, how to use tools, the rules for mail, proposals, first emails, Eclipse (the same in every workspace, naming the Eclipse client to use, see Eclipse), Linear, Reader and the web, the house writing style, then the person, the date and time in London, the Web switch and their links. The About you section and colleagues' roles are added when filled in. For someone in more than one workspace, a Workspaces section names the current workspace and the others, says how to read them (see Workspaces), and that another workspace's Knowledge, offer, claims, proof and client results are never used when writing for this one. Headless agent mail turns leave the Workspaces section out and run with `multiWorkspace` false.
-2. A `learned_notes` message with what Orbit has learned (pinned notes, the best notes per scope and notes related to the latest messages, about 6,000 tokens at most). Notes about the user come from this workspace, plus their notes from other workspaces that apply in all workspaces. It is marked as information, not a message from the user.
+2. A `learned_notes` message with what Orbit has learned (pinned notes, the best notes per scope and notes related to the latest messages, about 6,000 tokens at most). Notes about the user come from this workspace, plus their notes from other workspaces that apply in all workspaces. It is marked as information, not a message from the user, and every note says where it came from (`crm.memories.source`: chats with the user, written by the user, Orbit records, learned before sources were kept, calls, emails, market notes or the web, all but the first three also marked outside content). The block treats every note as untrusted. No scripted assistant reply follows it.
 3. The chat so far, rebuilt from stored messages each round. `@` mentions appear as `Name [person id <uuid>]`, and the model uses the id directly. A message with files ends with an Orbit note listing each file's name, type, size and chat file id (see Chat files).
 
 ### The loop (`runRounds`)
@@ -122,6 +122,10 @@ Changes stay in the current workspace. `crossWorkspaceRefusal` refuses a write t
 
 The one exception is `move_records_to_workspace`, which moves or copies companies and people from the current workspace to another of the person's workspaces. It is offered only to someone in more than one workspace: `promptFor` returns `multiWorkspace`, and `toolDefinitions` and Orbit Agent's tool list include it only when `multiWorkspace` is true, so someone in one workspace never sees it. `crossWorkspaceRefusal` checks only its `companyIds` and `contactIds`, which must be in the current workspace, so a `pipelineId` or `stageId` from the target workspace isn't refused. The system prompt's Workspaces section names it as the exception, and `moveRecordsToWorkspace` refuses anyone in one workspace on the server too.
 
+## Writing after reading another workspace
+
+When a chat has called a workspace read tool with `workspace` naming another workspace (or `all`), or `recall` returned a note from another of the user's workspaces, every email, email template, doc, proposal, proposal template, meeting invite, logged activity, `remember`, `eclipse_action` and `linear_create_issue` card it proposes ends with "This chat read Mark Ridgeon data. Check nothing from it is in this email." (`crossBrandWorkspaces` and `crossBrandLine` in `lib/assistant/chat.ts`), on Orbit models and Orbit Agent alike. The prompt's `crossBrandRule` stays.
+
 ## Outside content
 
 Results from the tools in `EXTERNAL_TOOLS` get a `notice` field first (`EXTERNAL_NOTICE`):
@@ -132,11 +136,21 @@ The tools are `search_knowledge`, `read_knowledge`, `list_knowledge`, `search_em
 
 The system prompt says the same: only the user's own messages give instructions, everything a tool returns is information, and if content seems to steer the assistant it tells the user. A new tool that returns outside text must be added to `EXTERNAL_TOOLS`.
 
+### Web reads after outside content
+
+A chat has read outside content once it has a result from a tool in `OUTSIDE_TOOLS` (`lib/assistant/web-gate.ts`: mail, Knowledge, chat files, the web, social, Eclipse, Linear, Reader, Recall, learned notes, the brief, call transcripts and activity timelines, but not record tools such as `get_company`, `list_companies`, `list_tasks` or `get_overview`), opens with the morning brief, carries forwarded material, or has used the model's own web search (an answer with sources, or any Orbit Agent job with Web on). Learned notes don't count: they are distilled by Orbit's own nightly model, labelled with their source and marked untrusted, and notes backed only by outside lines never reach team memory. From then on, `read_web_page`, `map_website`, `social_lookup` with a `url` and `check_web` only run straight away when what they send out came from the user or from Orbit:
+
+- any page on a site the user typed in their own words in this chat (not forwarded material), or on a site in a record's website, domain or profile link;
+- an address that appears exactly in a tool result, except pages read with `read_web_page` or `map_website`, so a page can't lead the assistant on to the next one;
+- `check_web` questions and `about` the user typed.
+
+Anything else becomes an approval card ("Open https://…?", "Check these on the web?") instead of running, so an injected email can't make the assistant open `https://evil.test/?d=<pipeline>`. Addresses are compared without the scheme, `www.`, the fragment and a trailing slash; the query string must match exactly. The check is deterministic: `runRounds` builds it from the conversation's stored messages each round, and Orbit Agent's `runCompanionTool` adds what earlier calls in the same job read (`ai_companion_jobs.outside_read` and `seen_urls`), returns `approvalNeeded` to the model, and `applyCompanionResult` turns that call into the card. The model's own web search runs inside the provider and can't be held for approval.
+
 ## The Web switch
 
 The globe button (Web) is saved per chat as `web_search`. On, the model can search the web itself: Orbit models get `web_search_options`, ChatGPT models the `web_search` tool and Claude account models Claude Code's `WebSearch` tool. Up to 30 cited pages show under the reply.
 
-Web off only stops the model's own web search. `read_web_page`, `check_web` and `social_lookup` (LinkedIn and X) stay available, and so do `map_website` and `eclipse_docs`. This is deliberate: with Web off the assistant can still open any address it knows or is given, check facts and look people up; it just can't search for pages it has no address for. The prompt tells it to say the user can turn on web search when a question needs one.
+Web off only stops the model's own web search. `read_web_page`, `check_web` and `social_lookup` (LinkedIn and X) stay available, and so do `map_website` and `eclipse_docs`, subject to the approval rule in Web reads after outside content. This is deliberate: with Web off the assistant can still open any address it knows or is given, check facts and look people up; it just can't search for pages it has no address for. The prompt tells it to say the user can turn on web search when a question needs one.
 
 ## Docs
 
@@ -368,7 +382,20 @@ When a tool is removed with nothing to replace it, add it to `RETIRED_TOOLS` in 
 
 ### Eclipse
 
-These five tools are offered in every workspace. The Eclipse app has one client per brand and Orbit uses one server-wide connection (`ECLIPSE_MCP_TOKEN`) that sees every client, so Orbit can't scope what Eclipse shows. Instead the prompt's Eclipse section (`eclipseSection` in `lib/assistant/prompt.ts`) tells the assistant to use the client named after the current workspace, found with `list_clients`, and to pass its `clientId` on every call, using another client only when the user names one. When no client has that name, it says so and asks which to use. A brand's published articles are its Eclipse client's content, read through `eclipse_tools` and `eclipse_read`.
+The Eclipse app has one client per brand and Orbit uses one server-wide connection (`ECLIPSE_MCP_TOKEN`) that sees every client, so Orbit enforces the client itself (`lib/assistant/eclipse-scope.ts`), the same way in every workspace with no switch.
+
+Each workspace's client is stored as `workspace_brands.eclipse_client_id`, which `authenticated` can't write and no two workspaces can share. It is set by `private.link_eclipse_client` (called by `crm_app` through `query()`) at exactly two points, and never worked out again:
+
+- When an owner of the workspace that owns the Eclipse brand creates a workspace (`createWorkspace`), it is linked to the one client whose name matches its name.
+- Workspaces that existed when migration `20270112300000_assistant_isolation.sql` ran carry `eclipse_backfill`. The first time the assistant checks one, it is linked to the one client whose name matches, if there is exactly one.
+
+Names are compared after NFKC, without invisible characters and with curly apostrophes folded. A workspace without a link gets no Eclipse tools, so naming a new workspace after a client gets you nothing. Workspace names are unique, ignoring case and spaces (`private.create_workspace` and a trigger on rename).
+
+- In a linked workspace, every `eclipse_read` and `eclipse_action` call gets its client: a tool whose input has `clientId` or `client_id` gets it added when it's missing. Every argument whose key contains "client", or is `brandId`, at any depth, must be exactly a client id from `list_clients` (an array only under a key ending in ids) and that workspace's own; anything else (" 2", "02", [2], {id: 2}, a name) is refused with "That Eclipse client isn't available in this workspace". A tool with no client input is refused, except `list_clients` and `get_operation` (exact names), and `list_clients` returns only that client.
+- The workspace that owns the Eclipse brand (`workspace_brands.eclipse_tools`, at most one, set only by migration) works across its customers' clients. Calls without a client get its own client, and clients linked to any other workspace (through `private.other_eclipse_workspaces`) are refused by the same argument check. As a best effort, results of tools with no client input have rows for those clients taken out. The MCP's own visibility can't be fully controlled from Orbit, so a tool that returns another client's data in a shape Orbit doesn't recognise still shows it.
+- Anywhere else, or when `ECLIPSE_MCP_TOKEN` isn't set, `eclipse_guide`, `eclipse_tools`, `eclipse_read` and `eclipse_action` aren't offered (`toolDefinitions({ eclipse: false })`), the prompt leaves out its Eclipse section, and the tools refuse with "Eclipse isn't available in this workspace." `eclipse_docs` stays.
+
+The check runs inside the tools, so it runs again when an approved `eclipse_action` card runs. `list_clients` is read through the MCP and cached five minutes for the token; when it can't be read, calls are refused rather than sent unscoped. The prompt's Eclipse section still names the client to use. A brand's published articles are its Eclipse client's content, read through `eclipse_tools` and `eclipse_read`.
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
@@ -379,6 +406,8 @@ These five tools are offered in every workspace. The Eclipse app has one client 
 | `eclipse_docs` | The Eclipse docs index, or one docs page. | No | Yes | Cached an hour. |
 
 ### Linear
+
+Linear belongs to one workspace, stored in `crm.integration_settings` (`integration` `linear`, one row; the insert policy needs an admin of that workspace and `connected_by` set to them). The migration connected it to the workspace that owns the Eclipse brand. The API key and team stay in `LINEAR_API_KEY` and `LINEAR_TEAM_KEY`. In every other workspace the Linear tools aren't offered, the prompt leaves out its Linear section, the tools refuse with "Linear isn't connected in this workspace.", and the workflow Linear step fails the same way. Settings › Tools › Linear shows "Connected in <workspace>" only in that workspace, with Hold to disconnect for owners and admins. When no workspace has it, an owner of the workspace that owns the Eclipse brand sees Not connected and Use in <workspace> in any workspace they run; everyone else sees no card. Connecting and disconnecting are audit events (`integration.connected`, `integration.disconnected`).
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |

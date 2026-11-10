@@ -209,7 +209,8 @@ describe("agent mailboxes in several workspaces", () => {
       assert.equal(job.rows[0].workspace_id, workspace.workspaceId);
       const prompt = JSON.stringify(job.rows[0].request);
       assert.doesNotMatch(prompt, /# Workspaces/);
-      assert.ok(prompt.includes(`use the Eclipse client named '${workspace.workspaceName}'`), workspace.workspaceName);
+      assert.ok(prompt.includes(`the CRM ${workspace.workspaceName} uses for its own sales`), workspace.workspaceName);
+      assert.doesNotMatch(prompt, /# Eclipse\\n|eclipse_read/);
     }
 
     for (let round = 0; round < 2; round += 1) {

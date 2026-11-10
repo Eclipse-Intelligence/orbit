@@ -13,6 +13,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { getEnrichmentSettings, icpHashOf } from "@/lib/enrichment/settings";
+import { clearEclipseToolCache } from "@/lib/eclipse-mcp";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const MIGRATION = "supabase/migrations/20261229200000_brand_profiles.sql";
@@ -44,10 +45,16 @@ async function joinAs(email: string, name: string, workspace: UserActor, role: "
   return { ...person, workspaceId: workspace.workspaceId, workspaceName: workspace.workspaceName, role, scopes: scopesForRole(role) };
 }
 
+const ECLIPSE_CLIENTS = [{ id: 1, name: "Eclipse" }, { id: 2, name: "Mark Ridgeon" }];
+
 function gateway() {
   const requests: Record<string, unknown>[] = [];
-  const fetchImpl = (async (_url: string, init?: RequestInit) => {
-    requests.push(JSON.parse(String(init?.body)));
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    if (String(url).includes("geteclipse")) {
+      return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify({ clients: ECLIPSE_CLIENTS }) }] } });
+    }
+    requests.push(body);
     return Response.json({ model: "claude-sonnet-5-5", choices: [{ message: { role: "assistant", content: "Done." } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   }) as typeof fetch;
   return { fetchImpl, requests };
@@ -209,30 +216,40 @@ describe("brand profile permissions", () => {
 
 describe("assistant in each workspace", () => {
   it("gives the Eclipse workspace its own context, and both workspaces the Eclipse app tools with their own client", async () => {
-    const seeded = await turn(eclipse);
-    assert.match(seeded.system, /the CRM Eclipse uses for its own sales and relationships/);
-    assert.ok(seeded.system.includes(`# About Eclipse\n${ECLIPSE_CONTEXT}`));
-    assert.ok(seeded.system.includes(ECLIPSE_IDEAL_CUSTOMER));
-    assert.match(seeded.system, /In Eclipse, use the Eclipse client named 'Eclipse'\. Find it with list_clients and pass its clientId on every call\. Use another client only when the user names it\./);
-    assert.match(seeded.system, /use a published article from this brand's Eclipse client as the reason to get in touch/);
-    assert.match(seeded.system, /Read eclipse_guide once before your first Eclipse call/);
-    assert.doesNotMatch(seeded.system, /eclipse_articles|geteclipse\.co\/articles/);
-    for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(seeded.tools.includes(name), name);
-    assert.ok(!seeded.tools.includes("eclipse_articles"));
+    process.env.ECLIPSE_MCP_TOKEN = "ecl_pat_test";
+    clearEclipseToolCache();
+    const pool = getAdminPool();
+    await pool.query("update crm.workspace_brands set eclipse_client_id = '1' where workspace_id = $1", [eclipse.workspaceId]);
+    await pool.query("insert into crm.workspace_brands (workspace_id, eclipse_client_id) values ($1, '2') on conflict (workspace_id) do update set eclipse_client_id = '2'", [ridgeon.workspaceId]);
+    try {
+      const seeded = await turn(eclipse);
+      assert.match(seeded.system, /the CRM Eclipse uses for its own sales and relationships/);
+      assert.ok(seeded.system.includes(`# About Eclipse\n${ECLIPSE_CONTEXT}`));
+      assert.ok(seeded.system.includes(ECLIPSE_IDEAL_CUSTOMER));
+      assert.match(seeded.system, /In Eclipse, use the Eclipse client named 'Eclipse'\. Find it with list_clients and pass its clientId on every call\. Use another client only when the user names it\./);
+      assert.match(seeded.system, /use a published article from this brand's Eclipse client as the reason to get in touch/);
+      assert.match(seeded.system, /Read eclipse_guide once before your first Eclipse call/);
+      assert.doesNotMatch(seeded.system, /eclipse_articles|geteclipse\.co\/articles/);
+      for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(seeded.tools.includes(name), name);
+      assert.ok(!seeded.tools.includes("eclipse_articles"));
 
-    await saveBrandProfile(ridgeon, { website: "", whatYouSell: "", whoItsFor: "", tone: "" }, WEB);
-    const empty = await turn(ridgeon);
-    assert.match(empty.system, /In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'\. Find it with list_clients/);
-    assert.match(empty.system, /If no client of that name exists, say so and ask the user which client to use/);
-    assert.match(empty.system, /never share one client's data with another company/);
-    assert.doesNotMatch(empty.system, /client named 'Eclipse'|eclipse_articles|piece"/);
-    assert.ok(!empty.system.includes(ECLIPSE_CONTEXT));
-    for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(empty.tools.includes(name), name);
-    assert.match(empty.system, /the CRM Mark Ridgeon uses for its own sales and relationships/);
-    assert.match(empty.system, /Mark Ridgeon hasn't said what it sells yet \(Settings, Brand\)/);
-    assert.match(empty.system, /Never claim a product, an offer or a client result on its behalf/);
-    assert.match(empty.system, /Always read cold_email_playbook first/);
-    assert.ok(empty.tools.includes("cold_email_playbook"));
+      await saveBrandProfile(ridgeon, { website: "", whatYouSell: "", whoItsFor: "", tone: "" }, WEB);
+      const empty = await turn(ridgeon);
+      assert.match(empty.system, /In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'\. Find it with list_clients/);
+      assert.match(empty.system, /If no client of that name exists, say so and ask the user which client to use/);
+      assert.match(empty.system, /never share one client's data with another company/);
+      assert.doesNotMatch(empty.system, /client named 'Eclipse'|eclipse_articles|piece"/);
+      assert.ok(!empty.system.includes(ECLIPSE_CONTEXT));
+      for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(empty.tools.includes(name), name);
+      assert.match(empty.system, /the CRM Mark Ridgeon uses for its own sales and relationships/);
+      assert.match(empty.system, /Mark Ridgeon hasn't said what it sells yet \(Settings, Brand\)/);
+      assert.match(empty.system, /Never claim a product, an offer or a client result on its behalf/);
+      assert.match(empty.system, /Always read cold_email_playbook first/);
+      assert.ok(empty.tools.includes("cold_email_playbook"));
+    } finally {
+      delete process.env.ECLIPSE_MCP_TOKEN;
+      clearEclipseToolCache();
+    }
   });
 
   it("uses the brand profile and tone, adding to the person's own way of writing", async () => {
@@ -246,14 +263,14 @@ describe("assistant in each workspace", () => {
     assert.doesNotMatch(branded.system, /How Eclipse writes|# About Eclipse/);
   });
 
-  it("runs the Eclipse tools in every workspace and answers old eclipse_articles calls politely", async () => {
+  it("refuses the Eclipse tools where Eclipse isn't set up, and answers old eclipse_articles calls politely", async () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
     for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(names.includes(name), name);
     assert.ok(!names.includes("eclipse_articles"));
     assert.match(systemPrompt(ridgeon, { webSearch: false, brand: UNBRANDED }), /Ask the user which Eclipse client to use, then find it with list_clients/);
 
-    const allowed = (await runTool(ridgeon, "eclipse_guide", {})) as { guide: string };
-    assert.match(allowed.guide, /Eclipse isn't connected/);
+    const refused = (await runTool(ridgeon, "eclipse_guide", {})) as { error: string };
+    assert.equal(refused.error, "Eclipse isn't available in this workspace.");
     const retired = (await runTool(ridgeon, "eclipse_articles", { query: "reddit" })) as { error: string };
     assert.match(retired.error, /^eclipse_articles is no longer available\. This brand's published articles are in its Eclipse client\./);
     assert.equal(toolLabel("eclipse_articles"), "Reading Eclipse articles");

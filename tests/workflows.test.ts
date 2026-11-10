@@ -9,6 +9,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { resetLinearCache } from "@/lib/linear";
+import { connectLinear } from "@/lib/crm/linear-connection";
 import { nextScheduleRun, safeDefinition, type WorkflowDefinition } from "@/lib/workflows/definition";
 import { automatedNote, workflowEmailBody } from "@/lib/workflows/engine";
 import { runWorkflowTick } from "@/lib/workflows/engine";
@@ -136,6 +137,8 @@ describe("workflows", () => {
   before(async () => {
     await resetDatabase();
     owner = await createUser("mark@flows.test", "Mark Ridgeon");
+    await getAdminPool().query("insert into crm.workspace_brands (workspace_id, eclipse_tools) values ($1, true) on conflict (workspace_id) do update set eclipse_tools = true", [owner.workspaceId]);
+    await connectLinear(owner);
     companyId = (await createCompany(owner, { name: "Acme Flows", domain: "acme-flows.test", ownerId: owner.userId })).body.company.id;
     contactId = (await createContact(owner, { firstName: "Jane", lastName: "Doe", companyId, email: "jane@acme-flows.test", jobTitle: "COO" })).body.contact.id;
     const admin = getAdminPool();
