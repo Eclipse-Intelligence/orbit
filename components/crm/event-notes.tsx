@@ -10,8 +10,6 @@ function hideClippedLinks(element: HTMLElement, clamped: boolean) {
   for (const link of element.querySelectorAll("a")) {
     const hidden = clamped && link.offsetTop >= limit;
     link.tabIndex = hidden ? -1 : 0;
-    if (hidden) link.setAttribute("aria-hidden", "true");
-    else link.removeAttribute("aria-hidden");
   }
 }
 

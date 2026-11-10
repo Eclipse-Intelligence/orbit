@@ -237,6 +237,51 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.equal(result.rounds, 2);
   });
 
+  it("answers the Zoom link and agenda from an invite's description", async () => {
+    const zoom = "https://us02web.zoom.us/j/84529173006?pwd=dHJ1c3RlZA.1";
+    let listed = "";
+    const link = await runOnce(
+      byId("calendar-zoom-link"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "list_calendar_events", args: {} }] }),
+          ({ body }) => {
+            listed = JSON.stringify(body.messages);
+            return { content: `Here it is: ${zoom}` };
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(link), []);
+    assert.match(listed, /descriptionFromOutside\W+true/);
+    assert.match(listed, /Annual discount for Eclipse/);
+    const agenda = await runOnce(
+      byId("calendar-agenda"),
+      settings(scripted([() => ({ calls: [{ name: "list_calendar_events", args: {} }] }), () => ({ content: "Hosted runner pricing tiers, then an annual discount for Eclipse." })])),
+    );
+    assert.deepEqual(failed(agenda), []);
+  });
+
+  it("still reads a site the user typed after listing a calendar with an outside description", async () => {
+    let listed = "";
+    const result = await runOnce(
+      byId("multi-research-then-add"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "list_calendar_events", args: {} }] }),
+          ({ body }) => {
+            listed = JSON.stringify(body.messages);
+            return { calls: [{ name: "read_web_page", args: { url: "https://larchmont-words.test" } }] };
+          },
+          () => ({ content: "They fit, so I'll add them.", calls: [{ name: "create_company", args: { name: "Larchmont Words", domain: "larchmont-words.test" } }] }),
+        ]),
+      ),
+    );
+    assert.match(listed, /descriptionFromOutside\W+true/);
+    assert.deepEqual(failed(result), []);
+    assert.deepEqual(result.calls.map((call) => call.name), ["list_calendar_events", "read_web_page", "create_company"]);
+  });
+
   it("fails a model that logs the note on the wrong person", async () => {
     const result = await runOnce(byId("write-note-on-contact"), settings(scripted([({ world }) => ({ calls: [{ name: "log_activity", args: { type: "note", contactId: world.id("contact:Felix Arden"), body: "Connected on LinkedIn." } }] })])));
     assert.deepEqual(failed(result), ["proposes log_activity"]);

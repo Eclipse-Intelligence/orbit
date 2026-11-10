@@ -16,6 +16,7 @@ import {
   unwrapSafeLink,
 } from "@/lib/meeting-links";
 import { textParts } from "@/lib/text-links";
+import { OUTLOOK_INVITE } from "./outlook-sample";
 
 function safeLink(target: string) {
   return `https://eur02.safelinks.protection.outlook.com/?url=${encodeURIComponent(target)}&data=05%7C02%7Cx&sdata=abc&reserved=0`;
@@ -94,6 +95,13 @@ describe("meeting links", () => {
     assert.equal(meetingLink("New to GoTo? https://meet.goto.com/install then https://meet.goto.com/123456789"), "https://meet.goto.com/123456789");
     assert.equal(meetingLink("Help: https://whereby.com/information/tos", "Room: https://whereby.com/eclipse"), "https://whereby.com/eclipse");
     assert.equal(meetingLink("https://www1.gotomeeting.com/join/123456789"), "https://www1.gotomeeting.com/join/123456789");
+    for (const link of [
+      "https://teams.microsoft.com/v2/?meetingjoin=true#/l/meetup-join/19:meeting_x@thread.v2/0",
+      "https://meet.google.com/abcdefghij",
+      "https://chime.aws/eclipseweekly",
+    ]) {
+      assert.equal(meetingLink(link), new URL(link).toString(), link);
+    }
     assert.equal(meetingLink("https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fmeetup-join%2F19%3Ameeting"), "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fmeetup-join%2F19%3Ameeting");
   });
 
@@ -108,6 +116,9 @@ describe("meeting links", () => {
   it("unwraps other link wrappers", () => {
     assert.equal(meetingLink("https://www.google.com/url?q=https://zoom.us/j/5&sa=D"), "https://zoom.us/j/5");
     assert.equal(meetingLink("https://urldefense.com/v3/__https://zoom.us/j/123__;!!abc"), "https://zoom.us/j/123");
+    assert.equal(meetingLink("https://urldefense.proofpoint.com/v2/url?u=https-3A__zoom.us_j_123&d=x"), "https://zoom.us/j/123");
+    assert.equal(meetingLink("https://www.google.evil/url?q=https://zoom.us/j/5"), null);
+    assert.equal(meetingLink("https://www.google.co.uk/url?q=https://zoom.us/j/5"), "https://zoom.us/j/5");
     assert.equal(
       meetingLink(`https://eur02.safelinks.protection.outlook.com/?data=x&amp;Url=${encodeURIComponent("https://zoom.us/j/9")}`),
       "https://zoom.us/j/9",
@@ -162,6 +173,54 @@ describe("meeting links", () => {
 });
 
 describe("event notes", () => {
+  it("reads a real Outlook invite as the first version did", () => {
+    assert.equal(
+      eventBodyText(OUTLOOK_INVITE, "html"),
+      [
+        "Hi Mark,",
+        "",
+        "Looking forward to catching up on the renewal. Agenda:",
+        "",
+        "- Pricing for next year",
+        "",
+        "- Onboarding the new team",
+        "",
+        "Thanks,",
+        "",
+        "Cara",
+        "",
+        "_".repeat(80),
+        "",
+        "Microsoft Teams Need help? <https://aka.ms/JoinTeamsMeeting?omkt=en-GB>",
+        "",
+        "Join the meeting now <https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%22Tid%22%3a%22t%22%7d>",
+        "",
+        "Meeting ID: 345 678 901 234",
+        "",
+        "Passcode: aB3cD4",
+        "",
+        "_".repeat(80),
+      ].join("\n"),
+    );
+    assert.equal(eventBodyText("<p>Hi all,<o:p></o:p></p><p><o:p>&nbsp;</o:p></p>", "html"), "Hi all,");
+    assert.equal(eventBodyText("<!DOCTYPE html><html><body>Agenda</body></html>", "html"), "Agenda");
+    assert.equal(eventBodyText('<?xml version="1.0"?><p><![if !supportLists]>1.<![endif]> One</p><my-widget>x</my-widget>', "html"), "1. One\nx");
+    assert.equal(eventBodyText("<p>  spaced   out  </p>", "html"), "spaced out");
+    assert.equal(eventBodyText("Mail <mark@example.com> or <https://zoom.us/j/1><br>bye"), "Mail <mark@example.com> or <https://zoom.us/j/1>\nbye");
+  });
+
+  it("never splits a character or a link at the caps", () => {
+    const emoji = eventBodyText(`<p>hi</p><!-- ${"x".repeat(199_981)} -->\u{1F600} tail`, "html")!;
+    assert.equal(emoji, "hi");
+    const split = eventBodyText(`${"a".repeat(199_999)}\u{1F600}`, "text")!;
+    assert.doesNotMatch(split, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    const words = `${"word ".repeat(39_995)}https://us02web.zoom.us/j/84529173006?pwd=abc`;
+    assert.equal(joinLink({ notes: eventBodyText(words, "text") }), null);
+    const clipped = clipNotes(`${"a".repeat(NOTES_MAX - 2)}\u{1F600}\u{1F600}`)!;
+    assert.doesNotMatch(clipped, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    assert.equal(eventBodyText("x\uD800y"), "xy");
+  });
+
   it("stays fast on hostile descriptions", () => {
     const size = 200_000;
     const fill = (piece: string) => piece.repeat(Math.ceil(size / piece.length)).slice(0, size);
@@ -256,6 +315,8 @@ describe("text links", () => {
     assert.match(markup, /<a href="mailto:jane@acme\.com" class="[^"]+">jane@acme\.com<\/a>/);
     assert.match(markup, /&lt;b&gt;bold&lt;\/b&gt;/);
     assert.match(markup, /&lt;script&gt;/);
+    const location = renderToStaticMarkup(createElement(LinkedText, { text: "Room \u202e4 https://good.example/\u202egnp.exe" }));
+    assert.doesNotMatch(location, /\u202e/);
     assert.doesNotMatch(markup, /<script|<b>/);
   });
 

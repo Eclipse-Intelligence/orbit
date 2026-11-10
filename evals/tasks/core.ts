@@ -398,7 +398,7 @@ export const CORE_TASKS: EvalTask[] = [
     category: "calendar",
     origin: "Follow-on to the Zoom link report: the agenda lives in the invite's description.",
     message: "What's on the agenda for the Driftbox call today?",
-    checks: [called("list_calendar_events"), answerIncludesAny(["annual discount", "Annual discount"], "names the second agenda item"), answerMatches(/runner/i, "names the hosted runner pricing item"), noWrites()],
+    checks: [called("list_calendar_events"), answerMatches(/annual discount/i, "names the second agenda item"), answerMatches(/runner/i, "names the hosted runner pricing item"), noWrites()],
   }),
   task({
     id: "calendar-decline",

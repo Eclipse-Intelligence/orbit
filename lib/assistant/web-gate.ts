@@ -30,10 +30,17 @@ export const OUTSIDE_TOOLS: ReadonlySet<string> = new Set([
   "read_chat_file",
 ]);
 
-const EVENT_NOTES = /"notes":\s*"/;
+function outsideDescription(content: string) {
+  try {
+    const parsed = JSON.parse(content) as { events?: unknown };
+    return Array.isArray(parsed.events) && parsed.events.some((event) => (event as { descriptionFromOutside?: unknown } | null)?.descriptionFromOutside === true);
+  } catch {
+    return false;
+  }
+}
 
 export function outsideRead(name: string, content: string) {
-  return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && EVENT_NOTES.test(content));
+  return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && outsideDescription(content));
 }
 
 const PAGE_TOOLS: ReadonlySet<string> = new Set(["read_web_page", "map_website"]);

@@ -8,6 +8,12 @@ export type TextPart =
 
 type Options = { emails?: boolean; markdown?: boolean };
 
+const INVISIBLE_CONTROLS = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+export function withoutBidi(text: string) {
+  return text.replace(INVISIBLE_CONTROLS, "");
+}
+
 function splitEmails(text: string): TextPart[] {
   if (!text.includes("@")) return [{ kind: "text", text }];
   const parts: TextPart[] = [];

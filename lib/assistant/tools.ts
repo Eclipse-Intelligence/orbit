@@ -1606,7 +1606,11 @@ const TOOL_LIST: AssistantTool[] = [
         overdueTasks: overdue.data.map(withTask),
         dueToday: today.data.map(withTask),
         attention,
-        meetingsNextTwoDays: meetings.map(({ notes, ...meeting }) => ({ ...meeting, hasDescription: notes !== null })),
+        meetingsNextTwoDays: meetings.map(({ notes, descriptionFromOutside, ...meeting }) => ({
+          ...meeting,
+          joinUrl: descriptionFromOutside && meeting.joinFromDescription ? null : meeting.joinUrl,
+          hasDescription: notes !== null,
+        })),
         quietRelationships: quiet,
       };
     },

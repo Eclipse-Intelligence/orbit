@@ -21,6 +21,8 @@ import { isUuid } from "@/lib/crm/mutate";
 import { maskFeedUrl } from "@/lib/ical/fetch";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
+import { query } from "@/lib/db/pool";
+import type { CalendarPerson } from "@/lib/microsoft/calendar";
 
 const EVENTS_SHOWN = 1500;
 const STALE_MS = 10 * 60 * 1000;
@@ -75,6 +77,8 @@ export type CalendarItem = {
   webLink: string | null;
   joinUrl: string | null;
   notes: string | null;
+  descriptionFromOutside: boolean;
+  joinFromDescription: boolean;
   organizer: EventPerson | null;
   attendees: EventPerson[];
   granolaHref: string | null;
@@ -234,6 +238,7 @@ type ItemRow = {
   web_link: string | null;
   online_meeting_url: string | null;
   notes: string | null;
+  join_from_description: boolean;
   organizer: unknown;
   attendees: unknown;
   granola_id: string | null;
@@ -260,16 +265,27 @@ function readResponse(value: unknown, email: string) {
   return null;
 }
 
+async function memberAddresses(workspaceId: string) {
+  const result = await query<{ address: string }>("select address from private.workspace_member_addresses($1) as address", [workspaceId]);
+  return new Set(result.rows.map((row) => row.address));
+}
+
+function fromOutside(organizer: CalendarPerson | null, members: Set<string>) {
+  return organizer !== null && !members.has(organizer.email.toLowerCase());
+}
+
 export async function listCalendarItems(
   actor: UserActor,
   range: { start: Date; end: Date },
   now = Date.now(),
 ): Promise<CalendarItem[]> {
   assertScope(actor.scopes, "crm:read");
+  const members = await memberAddresses(actor.workspaceId);
   return withActor(actor, async (db) => {
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
               e.location, e.web_link, coalesce(e.online_meeting_url, l.join_url) as online_meeting_url, n.notes,
+              (e.online_meeting_url is null and l.join_url is not null) as join_from_description,
               e.organizer, e.attendees,
               e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
               e.invite_identity_id, e.invite_uid, e.contact_ids,
@@ -377,6 +393,8 @@ export async function listCalendarItems(
         webLink: row.web_link,
         joinUrl: row.online_meeting_url,
         notes: row.notes,
+        descriptionFromOutside: row.notes !== null && fromOutside(readPerson(row.organizer), members),
+        joinFromDescription: row.join_from_description,
         organizer: describe(readPerson(row.organizer), null),
         attendees: readPeople(row.attendees).map(
           (person) => describe(person, readResponse(row.attendees, person.email))!,

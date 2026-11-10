@@ -1,5 +1,5 @@
 import { decodeEntities } from "@/lib/mail/text";
-import { URL_IN_TEXT } from "@/lib/text-links";
+import { URL_IN_TEXT, withoutBidi } from "@/lib/text-links";
 
 const ANY_URL = new RegExp(URL_IN_TEXT.source, "gi");
 const URL_MAX = 2000;
@@ -48,10 +48,11 @@ const PROVIDERS: { host: RegExp; room: Room }[] = [
     room: (segments, url) =>
       (segments[0] === "l" && segments[1] === "meetup-join" && segments.length > 2) ||
       (segments[0] === "meet" && room(segments[1])) ||
-      (segments[0] === "dl" && segments[1] === "launcher" && /meetup-join/i.test(decoded(url.search))),
+      (["dl", "v2", "_"].includes(segments[0] ?? "") && /meetup-join/i.test(decoded(url.search + url.hash))) ||
+      (segments.length === 0 && /meetup-join/i.test(decoded(url.hash))),
   },
   { host: /(^|\.)zoom(gov)?\.(us|com)$/, room: (segments) => ["j", "my", "w", "wc"].includes(segments[0]) && room(segments[1]) },
-  { host: /^meet\.google\.com$/, room: (segments) => /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(segments[0] ?? "") || (segments[0] === "lookup" && room(segments[1])) },
+  { host: /^meet\.google\.com$/, room: (segments) => /^([a-z]{3}-[a-z]{4}-[a-z]{3}|[a-z]{10})$/i.test(segments[0] ?? "") || (segments[0] === "lookup" && room(segments[1])) },
   { host: /(^|\.)whereby\.com$/, room: oneRoom },
   {
     host: /(^|\.)webex\.com$/,
@@ -67,7 +68,11 @@ const PROVIDERS: { host: RegExp; room: Room }[] = [
   { host: /^meet\.jit\.si$/, room: oneRoom },
   { host: /^8x8\.vc$/, room: (segments) => segments.length >= 1 && segments.length <= 2 && segments.every(room) },
   { host: /(^|\.)around\.co$/, room: (segments) => (segments[0] === "r" && room(segments[1])) || oneRoom(segments) },
-  { host: /(^|\.)chime\.aws$/, room: (segments) => /^\d{10}$/.test(segments[0] ?? "") || (segments[0] === "meetings" && room(segments[1])) },
+  {
+    host: /(^|\.)chime\.aws$/,
+    room: (segments, url) =>
+      /^\d{10}$/.test(segments[0] ?? "") || (segments[0] === "meetings" && room(segments[1])) || (url.hostname === "chime.aws" && oneRoom(segments)),
+  },
 ];
 
 function decoded(value: string) {
@@ -96,11 +101,12 @@ function param(url: URL, name: string) {
 function unwrapOnce(url: URL) {
   const host = url.hostname.toLowerCase();
   if (/(^|\.)safelinks\.protection\.outlook\.com$/.test(host)) return param(url, "url");
-  if (/^(www\.)?google\.[a-z.]+$/.test(host) && url.pathname === "/url") return param(url, "q") ?? param(url, "url");
+  if (/^(www\.)?google\.(com|co\.[a-z]{2}|com\.[a-z]{2}|[a-z]{2})$/.test(host) && url.pathname === "/url") return param(url, "q") ?? param(url, "url");
   if (host === "urldefense.com" || host === "urldefense.proofpoint.com") {
     const wrapped = /^\/v3\/__(.+?)__;/.exec(url.pathname + url.search);
     if (wrapped) return wrapped[1];
-    return param(url, "u")?.replace(/-/g, "%").replace(/_/g, "/") ?? null;
+    const encoded = url.pathname.startsWith("/v2/") ? param(url, "u") : null;
+    return encoded ? decoded(encoded.replace(/-/g, "%").replace(/_/g, "/")) : null;
   }
   return null;
 }
@@ -161,7 +167,7 @@ export function findMeetingLink(texts: (string | null | undefined)[], options: {
   const own = ownLink(options.own);
   for (const text of texts) {
     if (!text) continue;
-    for (const match of text.slice(0, BODY_SCAN_MAX).matchAll(ANY_URL)) {
+    for (const match of cutText(text, BODY_SCAN_MAX).matchAll(ANY_URL)) {
       const raw = candidateText(match[0]);
       const unwrapped = unwrapSafeLink(`${raw.slice(0, raw.indexOf(":")).toLowerCase()}${raw.slice(raw.indexOf(":"))}`);
       const url = parse(unwrapped);
@@ -204,9 +210,22 @@ export function unwrapSafeLinksIn(text: string) {
   });
 }
 
-const TAG_NAME = /^(\/?)([a-z][a-z0-9]{0,15})(?=[\s/>]|$)/i;
+const TAG_NAME = /^(\/?)([a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?)(?=[\s/>]|$)/i;
 const HREF = /\bhref\s*=\s*(?:"([^"]{0,2000})"|'([^']{0,2000})'|([^\s"'>]{1,2000}))/i;
-const SKIPPED = new Set(["head", "style", "script", "title", "noscript", "template"]);
+const SKIPPED = new Set(["head", "style", "script", "title", "noscript", "template", "xml"]);
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+export function wellFormed(text: string) {
+  return text.replace(LONE_SURROGATE, "");
+}
+
+export function cutText(text: string, max: number) {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max);
+  const boundary = Math.max(cut.lastIndexOf(" "), cut.lastIndexOf("\n"), cut.lastIndexOf("\t"), cut.lastIndexOf("<"), cut.lastIndexOf(">"));
+  if (boundary > max / 2) cut = cut.slice(0, boundary);
+  return cut.replace(/[\uD800-\uDBFF]$/, "");
+}
 const LINE_BREAKS = new Set(["br"]);
 const BLOCKS = new Set(["p", "div", "li", "tr", "table", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "section", "article", "header", "footer"]);
 const INLINE = new Set(["a", "b", "i", "u", "s", "em", "strong", "span", "font", "small", "big", "sub", "sup", "code", "mark", "abbr"]);
@@ -244,7 +263,12 @@ export function htmlBodyText(html: string) {
       push(html.slice(open));
       break;
     }
-    const name = close - open > TAG_MAX ? null : TAG_NAME.exec(html.slice(open + 1, open + 20));
+    const marker = html[open + 1];
+    if (marker === "!" || marker === "?") {
+      index = close + 1;
+      continue;
+    }
+    const name = close - open > TAG_MAX ? null : TAG_NAME.exec(html.slice(open + 1, open + 64));
     if (!name) {
       push("<");
       index = open + 1;
@@ -285,19 +309,19 @@ export function htmlBodyText(html: string) {
     else if (tag === "li" && !closing) push(tail === "\n" ? "- " : "\n- ");
     else if (BLOCKS.has(tag)) {
       if (closing || tail !== "\n") push("\n");
-    }
-    else if (!INLINE.has(tag)) push(" ");
+    } else if (!INLINE.has(tag) && !tag.includes(":") && !tag.includes("-")) push(" ");
   }
-  return decodeEntities(parts.join(""));
+  return decodeEntities(parts.join(""))
+    .replace(/[ \t\f\v\u00a0]+/g, " ")
+    .replace(/ ?\n ?/g, "\n");
 }
 
 function tidy(text: string) {
-  return text
+  return wellFormed(withoutBidi(text))
     .replace(/\r\n?/g, "\n")
-    .replace(/[‪-‮⁦-⁩‎‏]/g, "")
     .replace(/(?![\n\t])\p{Cc}/gu, "")
     .split("\n")
-    .map((line) => line.replace(/ /g, " ").trimEnd())
+    .map((line) => line.replace(/\u00a0/g, " ").trimEnd())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -305,7 +329,7 @@ function tidy(text: string) {
 
 export function eventBodyText(content: string | null | undefined, kind: "html" | "text" | "auto" = "auto") {
   if (!content?.trim()) return null;
-  const bounded = content.slice(0, BODY_SCAN_MAX);
+  const bounded = cutText(content, BODY_SCAN_MAX);
   const html = kind === "html" || (kind === "auto" && LOOKS_HTML.test(bounded));
   const cleaned = unwrapSafeLinksIn(tidy(html ? htmlBodyText(bounded) : bounded));
   return cleaned || null;
