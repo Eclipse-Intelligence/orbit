@@ -50,7 +50,7 @@ export type SendPayload = {
   force?: boolean;
 };
 
-export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null; replaces?: string | null };
+export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null; replaces?: string | null; unsaved?: boolean };
 
 export type SendTracker = () => { undone: () => void; delivered: () => void };
 
@@ -157,7 +157,7 @@ export default function MailComposer({
   const savedFiles = useRef(fileKey);
   const draftId = useRef<string | null>(draft?.id || null);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
-  const dirty = useRef(Boolean(start.heldKey));
+  const dirty = useRef(Boolean(start.heldKey || draft?.unsaved));
   const discarded = useRef(false);
   const heldKey = useRef<string | null>(start.heldKey ?? null);
   const heldNow = useRef(false);

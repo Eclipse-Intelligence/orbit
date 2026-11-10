@@ -230,15 +230,14 @@ async function createDraft(
   input: DraftInput,
   target: Target,
   token: string,
-  options: { origin: string | null; fetchImpl: typeof fetch; sending?: boolean },
+  options: DraftWriteOptions,
 ) {
   const { origin, fetchImpl } = options;
   const created = await createMicrosoftDraft(token, target.provider_message_id, target.provider_message_id ? input.mode : "new", fetchImpl).catch((error) =>
     graphProblem(error, target),
   );
-  if (input.replaces) await retireReplacedDraft(actor, input.replaces, fetchImpl);
   const tracked = origin ? await readStatusesOn(actor) : false;
-  return withActor(actor, async (db) => {
+  const made = await withActor(actor, async (db) => {
     const tracking = tracked
       ? await db.query<{ id: string }>(
           "insert into crm.mail_tracking (workspace_id, user_id, sender_email) values ($1, $2, $3) returning id",
@@ -263,6 +262,13 @@ async function createDraft(
         Boolean(options.sending),
       ],
     );
+    if (options.previous) {
+      await db.query("update crm.mail_send_keys set draft_id = $3 where user_id = $1 and draft_id = $2 and sent_at is null", [
+        actor.userId,
+        options.previous,
+        result.rows[0].id,
+      ]);
+    }
     if (input.replaces) {
       await db.query("update crm.mail_send_keys set draft_id = $3, created_at = now() where user_id = $1 and key = $2 and sent_at is null", [
         actor.userId,
@@ -272,6 +278,24 @@ async function createDraft(
     }
     return result.rows[0];
   });
+  await options.onDraftRow?.(made.id);
+  return made;
+}
+
+type DraftWriteOptions = {
+  origin: string | null;
+  fetchImpl: typeof fetch;
+  inline?: Record<string, string>;
+  attachments?: string[];
+  sending?: boolean;
+  previous?: string;
+  onDraftRow?: (id: string) => void | Promise<void>;
+};
+
+async function writeDraft(actor: UserActor, input: DraftInput, options: DraftWriteOptions) {
+  const written = await storeDraft(actor, input, options);
+  if (input.replaces) await retireReplacedDraft(actor, input.replaces, options.fetchImpl);
+  return written;
 }
 
 function contentHash(input: DraftInput, signature: string | null, subject: string) {
@@ -332,11 +356,7 @@ async function withFiles(db: Db, rows: DraftRow[]): Promise<MailDraft[]> {
   }));
 }
 
-async function writeDraft(
-  actor: UserActor,
-  input: DraftInput,
-  options: { origin: string | null; fetchImpl: typeof fetch; inline?: Record<string, string>; attachments?: string[]; sending?: boolean },
-) {
+async function storeDraft(actor: UserActor, input: DraftInput, options: DraftWriteOptions) {
   const first = await withActor(actor, async (db) => {
     const found = input.id
       ? (await db.query<DraftRow>(`select ${DRAFT_COLUMNS} from crm.mail_drafts where id = $1 and user_id = $2`, [input.id, actor.userId])).rows[0] ?? null
@@ -367,7 +387,7 @@ async function writeDraft(
     if (!(error instanceof GraphMailError && error.status === 404 && existing)) graphProblem(error, target);
     if (existing.send_attempted_at) throw maybeSent();
     await withActor(actor, (db) => db.query("delete from crm.mail_drafts where id = $1", [existing.id]));
-    row = await createDraft(actor, input, target, token, options);
+    row = await createDraft(actor, input, target, token, { ...options, previous: existing.id });
     await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl).catch((retry) =>
       graphProblem(retry, target),
     );
@@ -545,6 +565,7 @@ type SendOptions = {
 export const ALREADY_SENDING = "Already sending. Check Sent.";
 export const DRAFT_GONE = "This draft was already sent or deleted.";
 export const REPLACED_SENT = "Orbit already sent this draft, so it didn't send it again. Check Sent in Mail.";
+export const STILL_SAVING = "Still saving this draft. Try again in a few minutes.";
 export const MAYBE_SENT = "May already be sent. Check Sent before using Send anyway.";
 export const SEND_FAILED = "The email didn't send. Try again.";
 export const SEND_UNCONFIRMED = "Outlook didn't confirm the send. Check Sent before resending.";
@@ -555,7 +576,11 @@ type SendKeyClaim = { state: "new" | "retry"; draftId: string | null } | { state
 
 async function claimSendKey(actor: UserActor, key: string, draftId: string | null): Promise<SendKeyClaim> {
   return withActor(actor, async (db) => {
-    await db.query("delete from crm.mail_send_keys where user_id = $1 and created_at < now() - interval '7 days'", [actor.userId]);
+    await db.query(
+      `delete from crm.mail_send_keys k where k.user_id = $1 and coalesce(k.sent_at, k.created_at) < now() - interval '7 days'
+         and not exists (select 1 from crm.mail_drafts d where d.id = k.draft_id)`,
+      [actor.userId],
+    );
     const inserted = await db.query(
       `insert into crm.mail_send_keys (user_id, workspace_id, key, draft_id) values ($1, $2, $3, $4)
        on conflict (user_id, key) do nothing returning key`,
@@ -637,14 +662,11 @@ async function releaseReplaced(actor: UserActor, messageId: string) {
   );
 }
 
-async function replacedDraftId(actor: UserActor, messageId: string) {
+async function draftLive(actor: UserActor, id: string) {
+  if (!isUuid(id)) return false;
   return withActor(actor, async (db) => {
-    const result = await db.query<{ draft_id: string | null }>(
-      `select k.draft_id from crm.mail_send_keys k join crm.mail_drafts d on d.id = k.draft_id
-       where k.user_id = $1 and k.key = $2 and k.sent_at is null`,
-      [actor.userId, replacedKey(messageId)],
-    );
-    return result.rows[0]?.draft_id ?? null;
+    const result = await db.query("select 1 from crm.mail_drafts where id = $1 and user_id = $2", [id, actor.userId]);
+    return (result.rowCount ?? 0) > 0;
   });
 }
 
@@ -656,16 +678,16 @@ async function retireReplacedDraft(actor: UserActor, messageId: string, fetchImp
 }
 
 function replacedRefusal(claim: ReplacedClaim) {
-  return new CrmError("conflict", claim.state === "sent" ? REPLACED_SENT : ALREADY_SENDING, 409);
+  return new CrmError("conflict", claim.state === "sent" ? REPLACED_SENT : STILL_SAVING, 409);
 }
 
 async function withReplaced<T>(actor: UserActor, input: DraftInput, write: (input: DraftInput) => Promise<T>) {
-  if (input.id || !input.replaces) return write(input);
+  if (!input.replaces || (input.id && (await draftLive(actor, input.id)))) return write(input);
   const replaces = input.replaces;
   const claim = await claimReplaced(actor, replaces);
   if (claim.state === "sent" || claim.state === "busy") throw replacedRefusal(claim);
   try {
-    return await write(claim.state === "draft" ? { ...input, id: claim.draftId } : input);
+    return await write({ ...input, id: claim.state === "draft" ? claim.draftId : null });
   } catch (error) {
     if (claim.state === "claimed") await releaseReplaced(actor, replaces).catch(() => undefined);
     throw error;
@@ -687,8 +709,9 @@ export async function sendMailDraft(
   if (key?.state === "sent") return { warning: null };
   if (key?.state === "busy") throw new CrmError("conflict", ALREADY_SENDING, 409);
   let id = (key && "draftId" in key ? key.draftId : null) ?? input.id ?? null;
-  const replaces = !id && input.replaces && !options.claimed ? input.replaces : null;
+  const replaces = input.replaces && !options.claimed && (!id || !(await draftLive(actor, id))) ? input.replaces : null;
   const replaced = replaces ? await claimReplaced(actor, replaces) : null;
+  if (replaced) id = null;
   if (replaced?.state === "sent" || replaced?.state === "busy") {
     if (sendKey) await dropSendKey(actor, sendKey).catch(() => undefined);
     if (replaced.state === "sent" && replaces) await retireReplacedDraft(actor, replaces, options.fetchImpl ?? fetch);
@@ -716,7 +739,7 @@ export async function sendMailDraft(
       },
     });
   } catch (error) {
-    const made = current ?? (replaces ? await replacedDraftId(actor, replaces).catch(() => null) : null);
+    const made = current;
     const problem = await sendProblem(actor, error, made);
     if (!options.claimed && made) {
       const settle = claim === "scheduled" ? failDueDraft(actor, made, problem.message) : releaseDraft(actor, made);
@@ -901,11 +924,15 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
   if (earlier && options.force) await clearAttempt(actor, earlier.id);
   else if (earlier && (await settleEarlierSend(actor, earlier, fetchImpl)) === "sent") return finishEarlierSend(actor, input, earlier, ids, options);
   const inline = await inlineImages(actor, input.body, ids);
-  const [attached, written, identity] = await Promise.all([
+  const [attachedResult, writtenResult, identityResult] = await Promise.allSettled([
     loadAttachments(actor, ids, fetchImpl),
-    writeDraft(actor, input, { origin: options.origin, fetchImpl, inline, attachments: ids, sending: true }),
+    writeDraft(actor, input, { origin: options.origin, fetchImpl, inline, attachments: ids, sending: true, onDraftRow: options.onDraftRow }),
     input.identityId ? identityForSend(actor, input.identityId) : Promise.resolve(null),
   ]);
+  for (const result of [writtenResult, attachedResult, identityResult]) if (result.status === "rejected") throw result.reason;
+  const attached = (attachedResult as PromiseFulfilledResult<Awaited<ReturnType<typeof loadAttachments>>>).value;
+  const written = (writtenResult as PromiseFulfilledResult<Awaited<ReturnType<typeof writeDraft>>>).value;
+  const identity = (identityResult as PromiseFulfilledResult<Awaited<ReturnType<typeof identityForSend>> | null>).value;
   let { row } = written;
   await options.onDraftRow?.(row.id);
   const { target, token } = written;
@@ -961,7 +988,7 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
     if (error instanceof SendUnsettled) return unsettled(error, row);
     if (!(error instanceof GraphMailError && error.status === 404)) graphProblem(error, target);
     await withActor(actor, (db) => db.query("delete from crm.mail_drafts where id = $1", [row.id]));
-    row = (await writeDraft(actor, { ...input, id: null }, { origin: options.origin, fetchImpl, inline, attachments: ids, sending: true })).row;
+    row = (await writeDraft(actor, { ...input, id: null }, { origin: options.origin, fetchImpl, inline, attachments: ids, sending: true, previous: row.id, onDraftRow: options.onDraftRow })).row;
     await options.onDraftRow?.(row.id);
     try {
       await deliver(row);

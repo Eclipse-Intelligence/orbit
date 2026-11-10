@@ -74,6 +74,7 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
     sendProblem: failure?.detail?.maybeSent ? failure.message : null,
     sourceId: payload.sourceId,
     replaces: payload.replaces ?? null,
+    unsaved: true,
     mode: payload.mode,
     messageId: payload.messageId,
     to: payload.to,
