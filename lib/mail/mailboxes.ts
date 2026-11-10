@@ -52,6 +52,13 @@ export function removalText(impact: RemovalImpact | null, options: { calendars?:
 }
 
 export function fromFallback(accounts: ComposeAccount[], sourceId: string | null) {
-  const sameSource = sourceId ? accounts.find((item) => !item.identityId && item.id === sourceId) : null;
-  return sameSource ?? accounts.find((item) => item.default) ?? accounts.find((item) => !item.identityId) ?? accounts[0] ?? null;
+  const sameMailbox = sourceId ? accounts.filter((item) => (item.sourceId ?? item.id) === sourceId) : [];
+  return (
+    sameMailbox.find((item) => item.here) ??
+    sameMailbox.find((item) => !item.identityId) ??
+    accounts.find((item) => item.default) ??
+    accounts.find((item) => !item.identityId) ??
+    accounts[0] ??
+    null
+  );
 }

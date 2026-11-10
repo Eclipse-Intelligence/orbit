@@ -247,6 +247,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
             )}
           </div>
         )}
+        <div data-quick-add-slot="" className="contents" />
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
             <button

@@ -65,7 +65,7 @@ async function threadInfo(db: Db, actor: UserActor, sourceId: string, key: strin
   const result = await db.query<{ id: string; from_email: string | null; from_name: string | null; to_recipients: { address?: string; name?: string | null }[] | null; cc_recipients: { address?: string; name?: string | null }[] | null }>(
     `select m.id, m.from_email, m.from_name, m.to_recipients, m.cc_recipients
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-     where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3 and not m.is_draft and f.role <> 'outbox'
+     where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and not m.is_draft and f.role <> 'outbox'
      order by coalesce(m.received_at, m.sent_at, m.created_at) asc, m.id asc
      limit 200`,
     [actor.userId, sourceId, key],
@@ -107,7 +107,7 @@ async function threadMessagesFiledIn(actor: UserActor, sourceId: string, key: st
       `select distinct a.workspace_id from crm.activities a
        where a.workspace_id = any($4::uuid[]) and a.type = 'email' and a.metadata->>'mailMessageId' in (
          select m.id::text from crm.mail_messages m
-         where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
+         where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
        )`,
       [actor.userId, sourceId, key, workspaceIds],
     );
@@ -286,7 +286,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
          where x.e like '%@%' and split_part(x.e, '@', 2) <> all($4::text[])
        ),
        inbound as (
-         select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, coalesce(m.received_at, m.created_at) as at
+         select m.id, m.source_id, m.thread_key as tk, coalesce(m.received_at, m.created_at) as at
          from crm.mail_messages m
          join crm.mail_folders f on f.id = m.folder_id
          where m.user_id = $1 and not m.is_draft and f.role in ('inbox', 'archive', 'snoozed')

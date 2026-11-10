@@ -1,19 +1,28 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { flagReconnect, flagSyncProblems, readReconnects, reconnectAccounts, clearReconnects } from "@/components/mail/reconnect-store";
-import { connectCalendarAccount, disconnectCalendarAccount, SAME_AS_PRIMARY } from "@/lib/crm/calendar-accounts";
+import { calendarConnectError, connectCalendarAccount, disconnectCalendarAccount, SAME_AS_PRIMARY } from "@/lib/crm/calendar-accounts";
 import { CrmError } from "@/lib/crm/errors";
-import { saveMailbox } from "@/lib/crm/inbox";
+import { disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { listMailboxes } from "@/lib/mail/accounts";
+import { graphReconnect, listMailboxes } from "@/lib/mail/accounts";
 import { applyMailAction } from "@/lib/mail/actions";
 import { saveMailDraft } from "@/lib/mail/compose";
 import { fromFallback, RECONNECT_NEEDED, removalText } from "@/lib/mail/mailboxes";
+import { GraphMailError, reconnectProblem } from "@/lib/mail/microsoft";
 import { mailSourceToken, syncProblems } from "@/lib/mail/sync";
 import { mailNav } from "@/lib/mail/threads";
 import type { ComposeAccount, MailNav } from "@/lib/mail/view";
-import { microsoftAuthorizationUrl, readMicrosoftState, signMicrosoftState } from "@/lib/microsoft/oauth";
+import { finishMicrosoftConnect, startMicrosoftConnect } from "@/lib/microsoft/connect-flow";
+import {
+  APP_NEEDS_ATTENTION,
+  MicrosoftTokenError,
+  microsoftAuthorizationUrl,
+  readMicrosoftState,
+  sanitizeMicrosoftError,
+  signMicrosoftState,
+} from "@/lib/microsoft/oauth";
 import { createUser, resetDatabase } from "./helpers";
 
 const MAIN = "mark@geteclipse.co";
@@ -76,6 +85,11 @@ async function setUp(email: string) {
     `insert into crm.send_identities (workspace_id, user_id, source_id, email, smtp_host, smtp_port, username, password_cipher)
      values ($1, $2, $3, $4, 'smtp.test', 587, $4, 'cipher') returning id`,
     [owner.workspaceId, owner.userId, extraSource.rows[0].id, IDENTITY],
+  );
+  await admin.query(
+    `insert into crm.mail_drafts (workspace_id, user_id, source_id, provider_draft_id, mode, body, send_at)
+     values ($1, $2, $3, 'draft-a', 'new', 'Hi', null), ($1, $2, $3, 'draft-b', 'new', 'Later', now() + interval '1 day')`,
+    [owner.workspaceId, owner.userId, extraSource.rows[0].id],
   );
   return { owner, accountId: account.id, mainSourceId: mainSource.rows[0].id, extraSourceId: extraSource.rows[0].id, identityId: identity.rows[0].id };
 }
@@ -179,8 +193,12 @@ describe("reconnecting Microsoft never swaps or deletes an account", () => {
       ],
     );
     const extra = mailboxes[1];
-    assert.deepEqual(extra.removes, { emails: 2, addresses: [IDENTITY] });
-    assert.equal(removalText(extra.removes), `Orbit deletes its copy of 2 emails, its calendars and the sending address ${IDENTITY}. Nothing changes in Outlook.`);
+    assert.deepEqual(extra.removes, { emails: 2, drafts: 1, scheduled: 1, addresses: [IDENTITY] });
+    assert.equal(
+      removalText(extra.removes),
+      `Orbit deletes its copy of 2 emails, 1 draft, 1 scheduled email, its calendars and the sending address ${IDENTITY}. The scheduled email won't be sent. Nothing changes in Outlook.`,
+    );
+    assert.match(mailboxes[0].email, /geteclipse/);
   });
 
   it("only removes an account with mail when the removal is confirmed for that account", async () => {
@@ -202,16 +220,30 @@ describe("one reconnect notice per account", () => {
   beforeEach(() => clearReconnects());
 
   it("turns Microsoft refusals into a reconnect error that names the account and links to its own reconnect", async () => {
-    const refused: typeof fetch = async () => Response.json({ error: { code: "ErrorAccessDenied", message: "Access is denied." } }, { status: 403 });
-    await getAdminPool().query("update crm.calendar_accounts set access_token_expires_at = now() + interval '1 hour' where id = $1", [setup.accountId]);
+    const denied: typeof fetch = async () => Response.json({ error: { code: "ErrorAccessDenied", message: "Access is denied." } }, { status: 403 });
     const thread = `${setup.extraSourceId}|conv-1`;
+    const plain = await applyMailAction(setup.owner, { thread, action: "archive" }, denied).then(
+      () => null,
+      (problem: unknown) => problem,
+    );
+    assert.ok(plain instanceof CrmError);
+    assert.equal(plain.code, "mail_action_failed");
+    assert.equal(plain.message, "Outlook refused that change (access denied).");
+    await getAdminPool().query("update crm.calendar_accounts set granted_scopes = 'openid User.Read Calendars.Read' where id = $1", [setup.accountId]);
+    const missing = await applyMailAction(setup.owner, { thread, action: "archive" }, denied).then(
+      () => null,
+      (problem: unknown) => problem,
+    );
+    assert.ok(missing instanceof CrmError);
+    assert.equal(missing.code, RECONNECT_NEEDED);
+    const refused: typeof fetch = async () => Response.json({ error: { code: "InvalidAuthenticationToken", message: "Token expired." } }, { status: 401 });
     const error = await applyMailAction(setup.owner, { thread, action: "archive" }, refused).then(
       () => null,
       (problem: unknown) => problem,
     );
     assert.ok(error instanceof CrmError);
     assert.equal(error.code, RECONNECT_NEEDED);
-    assert.match(error.message, /^Reconnect mark@markridgeon\.com in Settings › Email/);
+    assert.match(error.message, /^Reconnect mark@markridgeon\.com in Settings › Email\. Microsoft has signed Orbit out of it\./);
     assert.deepEqual(error.details?.reconnect, {
       sourceId: setup.extraSourceId,
       email: EXTRA,
@@ -243,16 +275,21 @@ describe("one reconnect notice per account", () => {
     const failure = (sourceId: string | null) => Object.assign(new Error("Reconnect"), { reconnect: { sourceId, email: null, href: null } });
     assert.equal(flagReconnect(failure("s-extra")), true);
     assert.equal(flagReconnect(failure(null), { sourceId: "s-extra" }), true);
+    assert.equal(flagReconnect(failure(null)), false);
     assert.equal(flagReconnect(failure("s-extra")), true);
     assert.equal(flagReconnect(new Error("Outlook no longer has that email.")), false);
     assert.equal(readReconnects().flags.length, 1);
     assert.deepEqual(reconnectAccounts(accounts, readReconnects().flags), [{ key: "s-extra", email: EXTRA, href: "/extra" }]);
 
     const others = flagSyncProblems(
-      [`Reconnect ${MAIN} in Settings › Email. Microsoft has signed Orbit out of it.`, "Mail didn't refresh. Orbit will try again shortly."],
+      [
+        `Reconnect ${MAIN} in Settings › Email. Microsoft has signed Orbit out of it.`,
+        "Reconnect amark@geteclipse.co in Settings › Email. Microsoft has signed Orbit out of it.",
+        "Mail didn't refresh. Orbit will try again shortly.",
+      ],
       accounts,
     );
-    assert.deepEqual(others, ["Mail didn't refresh. Orbit will try again shortly."]);
+    assert.deepEqual(others, ["Reconnect amark@geteclipse.co in Settings › Email. Microsoft has signed Orbit out of it.", "Mail didn't refresh. Orbit will try again shortly."]);
     assert.deepEqual(
       reconnectAccounts(accounts, readReconnects().flags).map((item) => item.email),
       [MAIN, EXTRA],
@@ -275,6 +312,8 @@ describe("the composer never keeps a From address that has gone", () => {
     assert.equal(fromFallback(accounts, "s-extra")?.email, EXTRA);
     assert.equal(fromFallback(accounts, "s-gone")?.email, MAIN);
     assert.equal(fromFallback([], null), null);
+    const branded = accounts.map((item) => (item.identityId ? { ...item, here: true } : item));
+    assert.equal(fromFallback(branded, "s-extra")?.email, IDENTITY);
   });
 
   it("saves a draft whose sending address was removed without failing", async () => {
@@ -310,5 +349,111 @@ describe("the composer never keeps a From address that has gone", () => {
     );
     assert.equal(saved.sourceId, setup.extraSourceId);
     assert.equal(saved.identityId, null);
+  });
+});
+
+describe("the connect and callback flow", () => {
+  const PERSON = "aaaaaaaa-1111-2222-3333-444444444444";
+
+  function microsoft(email: string, options: { id?: string; upn?: string; inbox?: boolean } = {}) {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.includes("/oauth2/v2.0/token")) {
+        return Response.json({ access_token: `${email}-access`, refresh_token: `${email}-refresh`, expires_in: 3600, scope: "Mail.ReadWrite Mail.Send User.Read Calendars.ReadWrite" });
+      }
+      if (url.startsWith(`${GRAPH}/me?`)) return Response.json({ id: options.id ?? null, mail: email, userPrincipalName: options.upn ?? email, displayName: "Mark" });
+      if (url.startsWith(`${GRAPH}/me/mailFolders/inbox/messages`)) return Response.json({ value: [] });
+      return Response.json({ value: [] });
+    };
+    return fetchImpl;
+  }
+
+  it("asks for the stored main address whatever the link says", async () => {
+    const owner = await createUser("flow-hint@orbit.test", "Mark");
+    await saveMailbox(owner, { email: MAIN, refreshToken: "r", accessToken: "a", expiresAt: new Date(Date.now() + HOUR).toISOString() });
+    const started = await startMicrosoftConnect(owner, new URLSearchParams({ hint: EXTRA }), "https://orbit.test", 1_000);
+    assert.equal(started.url.searchParams.get("login_hint"), MAIN);
+    assert.equal(started.url.searchParams.get("prompt"), "select_account");
+    assert.equal(readMicrosoftState(started.state, 1_000)?.hint, MAIN);
+    const extra = await startMicrosoftConnect(owner, new URLSearchParams({ purpose: "send_account", hint: EXTRA, from: "email" }), "https://orbit.test", 1_000);
+    assert.equal(extra.url.searchParams.get("login_hint"), EXTRA);
+    assert.deepEqual(readMicrosoftState(extra.state, 1_000), { userId: owner.userId, workspaceId: owner.workspaceId, purpose: "send_account", hint: EXTRA, back: "email" });
+  });
+
+  it("refuses another account through the callback, then reconnects after Disconnect and clears the stale error", async () => {
+    const setup = await setUp("flow-callback@orbit.test");
+    const state = { userId: setup.owner.userId, workspaceId: setup.owner.workspaceId, purpose: "mailbox" as const, hint: MAIN, back: "email" as const };
+    const before = await rows(setup.owner);
+    const refused = await finishMicrosoftConnect(setup.owner, state, new URLSearchParams({ code: "c" }), "https://orbit.test", microsoft("someone@new.test"));
+    assert.equal(refused.error, `You signed in as someone@new.test. Sign in as ${MAIN} to reconnect it.`);
+    assert.equal(refused.add, "someone@new.test");
+    assert.deepEqual(await rows(setup.owner), before);
+
+    await getAdminPool().query("update crm.mail_sources set last_error = $2 where id = $1", [setup.mainSourceId, `Reconnect ${MAIN} in Settings › Email. Microsoft has signed Orbit out of it.`]);
+    await disconnectMailbox(setup.owner);
+    assert.equal((await listMailboxes(setup.owner))[0].connected, false);
+    const reconnected = await finishMicrosoftConnect(setup.owner, state, new URLSearchParams({ code: "c" }), "https://orbit.test", microsoft(MAIN, { id: PERSON }));
+    assert.deepEqual(reconnected, {});
+    const main = (await listMailboxes(setup.owner))[0];
+    assert.equal(main.connected, true);
+    assert.equal(main.needsReconnect, false);
+    assert.equal(main.problem, null);
+    assert.deepEqual(await rows(setup.owner), before);
+  });
+
+  it("matches on the Microsoft account id, so a changed address still reconnects and a reused one doesn't", async () => {
+    const owner = await createUser("flow-id@orbit.test", "Mark");
+    const state = { userId: owner.userId, workspaceId: owner.workspaceId, purpose: "mailbox" as const, hint: null, back: "email" as const };
+    assert.deepEqual(await finishMicrosoftConnect(owner, state, new URLSearchParams({ code: "c" }), "https://orbit.test", microsoft("old@tenant.test", { id: PERSON })), {});
+    const renamed = await finishMicrosoftConnect(owner, { ...state, hint: "old@tenant.test" }, new URLSearchParams({ code: "c" }), "https://orbit.test", microsoft("new@tenant.test", { id: PERSON }));
+    assert.deepEqual(renamed, {});
+    assert.deepEqual((await rows(owner)).main, ["new@tenant.test"]);
+    const reused = await finishMicrosoftConnect(owner, { ...state, hint: "new@tenant.test" }, new URLSearchParams({ code: "c" }), "https://orbit.test", microsoft("new@tenant.test", { id: "bbbbbbbb-1111-2222-3333-444444444444" }));
+    assert.match(reused.error ?? "", /Sign in as new@tenant\.test to reconnect it/);
+
+    const older = await createUser("flow-upn@orbit.test", "Mark");
+    await saveMailbox(older, { email: "alias@tenant.test", refreshToken: "r", accessToken: "a", expiresAt: new Date(Date.now() + HOUR).toISOString() });
+    const byUpn = await finishMicrosoftConnect(
+      older,
+      { ...state, userId: older.userId, workspaceId: older.workspaceId, hint: "alias@tenant.test" },
+      new URLSearchParams({ code: "c" }),
+      "https://orbit.test",
+      microsoft("primary@tenant.test", { upn: "alias@tenant.test" }),
+    );
+    assert.deepEqual(byUpn, {});
+  });
+
+  it("says sign in to add it when the address offered with Add as another account isn't used", async () => {
+    const setup = await setUp("flow-add@orbit.test");
+    const state = { userId: setup.owner.userId, workspaceId: setup.owner.workspaceId, purpose: "send_account" as const, hint: "new@other.test", back: "email" as const };
+    const outcome = await finishMicrosoftConnect(setup.owner, state, new URLSearchParams({ code: "c" }), "https://orbit.test", microsoft("third@other.test"));
+    assert.equal(outcome.error, "You signed in as third@other.test. Sign in as new@other.test to add it.");
+  });
+});
+
+describe("what counts as needing a reconnect", () => {
+  it("separates expired sign-ins, Orbit's own app and other refusals", () => {
+    const expired = new MicrosoftTokenError("invalid_grant AADSTS700082: The refresh token has expired due to inactivity.");
+    assert.match(reconnectProblem(expired, MAIN) ?? "", /^Reconnect mark@geteclipse\.co in Settings › Email\. Microsoft has signed Orbit out of it\./);
+
+    for (const detail of ["invalid_client AADSTS7000222: The provided client secret keys for app are expired.", "AADSTS7000215: Invalid client secret provided."]) {
+      const app = new MicrosoftTokenError(detail);
+      assert.equal(reconnectProblem(app, MAIN), null);
+      assert.equal(app.message, APP_NEEDS_ATTENTION);
+      assert.equal(sanitizeMicrosoftError(detail), APP_NEEDS_ATTENTION);
+      assert.equal(calendarConnectError(detail), APP_NEEDS_ATTENTION);
+      assert.equal(graphReconnect(app, null), null);
+    }
+
+    const folder = new GraphMailError("Outlook didn't let Orbit read that (access denied).", 403, "ErrorAccessDenied Access is denied. Check credentials and try again.");
+    assert.equal(reconnectProblem(folder, MAIN), null);
+    assert.equal(reconnectProblem(folder, MAIN, true), null);
+    assert.match(reconnectProblem(folder, MAIN, false) ?? "", /allow every permission/);
+    assert.match(reconnectProblem(new GraphMailError("x", 403, "Authorization_RequestDenied Insufficient privileges"), MAIN) ?? "", /allow every permission/);
+    assert.match(reconnectProblem(new GraphMailError("x", 403, "AADSTS65001 consent_required"), MAIN) ?? "", /Ask your Microsoft admin/);
+    assert.match(reconnectProblem(new GraphMailError("x", 401, "InvalidAuthenticationToken"), MAIN) ?? "", /signed Orbit out/);
+    assert.equal(reconnectProblem(new GraphMailError("x", 500, "ServiceUnavailable"), MAIN), null);
+    assert.equal(graphReconnect(folder, { id: "s", email: MAIN, main: true, scopes: "Mail.Send User.Read" })?.code, RECONNECT_NEEDED);
+    assert.equal(graphReconnect(folder, { id: "s", email: MAIN, main: true, scopes: "Mail.ReadWrite Mail.Send" }), null);
   });
 });

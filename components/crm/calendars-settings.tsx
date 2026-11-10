@@ -177,7 +177,9 @@ export default function CalendarsSettings({
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <span className="flex min-w-0 flex-col gap-1.5">
-              <span className="truncate text-[14px] leading-5">{groupName(group)}</span>
+              <span className="text-[14px] leading-5 [overflow-wrap:anywhere]" title={groupName(group)}>
+                {groupName(group)}
+              </span>
               <span className="caption-style text-subtle">
                 {sourceLine(group)} · {statusLine(group)}
               </span>
@@ -185,9 +187,9 @@ export default function CalendarsSettings({
                 <span className="caption-style text-danger">{group.lastError}</span>
               )}
             </span>
-            <span className="flex shrink-0 items-center gap-2">
+            <span className="flex min-w-0 flex-wrap items-center gap-2">
               {configured && needsReconnect(group) && (
-                <a href={reconnectHref(group)} className={buttonVariants({ variant: "secondary", size: "sm" })}>
+                <a href={reconnectHref(group)} aria-label={`Reconnect ${group.email ?? groupName(group)}`} className={buttonVariants({ variant: "secondary", size: "sm" })}>
                   Reconnect
                 </a>
               )}

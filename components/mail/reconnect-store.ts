@@ -32,6 +32,10 @@ export function clearReconnects() {
   publish({ ...snapshot, flags: [] });
 }
 
+export function hasReconnectHost() {
+  return snapshot.hosts > 0;
+}
+
 export function addReconnectHost() {
   publish({ ...snapshot, hosts: snapshot.hosts + 1 });
   return () => publish({ ...snapshot, hosts: Math.max(0, snapshot.hosts - 1) });

@@ -256,7 +256,7 @@ describe("mail home", () => {
     const { fetchImpl } = outlook({ refuse: true });
     await assert.rejects(
       () => applyMailAction(owner, { thread: intro, action: "trash", view: { role: "inbox" } }, fetchImpl),
-      /Reconnect mark@eclipse.test in Settings › Email/,
+      /Outlook refused that change \(access denied\)\./,
     );
     assert.equal((await listThreads(owner, { view: { role: "inbox" } })).threads.length, 2);
     assert.equal((await listThreads(owner, { view: { role: "trash" } })).threads.length, 0);

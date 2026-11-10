@@ -4,7 +4,7 @@ function count(value: number) {
   return new Intl.NumberFormat("en-GB").format(value);
 }
 
-export default function MailMirrorProgress({ source }: { source: MailSourceStatus }) {
+export default function MailMirrorProgress({ source, showPaused = true }: { source: MailSourceStatus; showPaused?: boolean }) {
   const total = Math.max(source.total, source.stored);
   const share = total > 0 ? Math.min(1, source.stored / total) : 1;
   const complete = source.folders.every((folder) => folder.state === "live");
@@ -24,7 +24,7 @@ export default function MailMirrorProgress({ source }: { source: MailSourceStatu
       >
         <div className="bg-primary/70 h-full rounded-full" style={{ width: `${share * 100}%` }} />
       </div>
-      {paused && (
+      {paused && showPaused && (
         <p role="alert" className="caption-style text-danger">
           {paused}
         </p>

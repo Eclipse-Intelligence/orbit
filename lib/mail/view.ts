@@ -67,6 +67,10 @@ export type ThreadMessage = {
   opens: { at: string; agent: string | null }[] | null;
 };
 
+export type MailAttachmentMeta = { id: string; name: string; contentType: string | null; size: number };
+
+export type CachedSummary = { latestId: string; summary: string | null; todo: string | null };
+
 export type ThreadPerson = {
   email: string;
   name: string | null;
@@ -173,9 +177,10 @@ export type ThreadDetail = {
   deferral?: DeferredFollowUp | null;
   subscription?: ThreadSubscription | null;
   filing?: ThreadFiling | null;
+  cachedSummary?: CachedSummary | null;
 };
 
-export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string; default?: boolean };
+export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string; default?: boolean; here?: boolean };
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
@@ -246,6 +251,8 @@ export type MailNav = {
   snoozed: number;
   scheduled: number;
   splits: { sourceId: string; split: MailSplit; total: number; unread: number }[];
+  version?: string;
+  partial?: boolean;
 };
 
 export type ThreadCursor = { at: string; key: string };

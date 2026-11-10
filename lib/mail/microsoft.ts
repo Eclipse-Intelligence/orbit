@@ -120,6 +120,14 @@ export function reconnectProblem(error: unknown, email: string | null | undefine
   return null;
 }
 
+const UNSURE_CODES = /^(UnknownError|ServiceUnavailable|GatewayTimeout|InternalServerError|ErrorInternalServerError|ErrorTimeoutExpired)$/i;
+
+export function sendOutcomeUnknown(error: unknown) {
+  if (!(error instanceof GraphMailError)) return true;
+  if (error.status < 500) return false;
+  return error.status !== 500 || !error.code || UNSURE_CODES.test(error.code);
+}
+
 const GRAPH_RETRIES = 2;
 const RETRY_WAIT_MAX_MS = 5_000;
 
@@ -390,6 +398,59 @@ export async function fetchInternetMessageId(token: string, messageId: string, f
     fetchImpl,
   );
   return message.internetMessageId?.slice(0, 1000) || null;
+}
+
+export type DraftState = "draft" | "sent" | "gone";
+
+export async function fetchDraftState(token: string, draftId: string, fetchImpl: typeof fetch = fetch): Promise<DraftState> {
+  try {
+    const message = await graphJson<{ id?: string; isDraft?: boolean }>(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}?$select=id,isDraft`, token, fetchImpl);
+    if (!message.id || typeof message.isDraft !== "boolean") throw new GraphMailError("Outlook didn't say whether the draft is still there.", 502);
+    return message.isDraft ? "draft" : "sent";
+  } catch (error) {
+    if (error instanceof GraphMailError && error.status === 404) return "gone";
+    throw error;
+  }
+}
+
+function sameSubject(left: string | null | undefined, right: string | null | undefined) {
+  const clean = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  return clean(left) === clean(right);
+}
+
+function sameRecipients(found: GraphRecipient[], wanted: string[]) {
+  const have = new Set(addresses(found).map((item) => item.address));
+  const want = new Set(wanted.map((item) => item.trim().toLowerCase()));
+  return want.size > 0 && have.size === want.size && [...want].every((item) => have.has(item));
+}
+
+type SentItem = Pick<GraphMessage, "id" | "subject" | "sentDateTime" | "isDraft" | "toRecipients" | "ccRecipients" | "bccRecipients">;
+
+export async function findSentCopy(
+  token: string,
+  match: { internetMessageId: string | null; conversationId: string | null; subject: string | null; recipients: string[]; since: Date },
+  fetchImpl: typeof fetch = fetch,
+) {
+  if (match.internetMessageId) {
+    const filter = encodeURIComponent(`internetMessageId eq '${match.internetMessageId.replace(/'/g, "''")}'`);
+    const page = await graphJson<{ value?: { id: string; isDraft?: boolean }[] }>(`${GRAPH}/me/messages?$filter=${filter}&$select=id,isDraft&$top=10`, token, fetchImpl);
+    return (page.value ?? []).some((message) => message.isDraft === false);
+  }
+  if (!match.conversationId) return false;
+  const filter = encodeURIComponent(`conversationId eq '${match.conversationId.replace(/'/g, "''")}'`);
+  const page = await graphJson<{ value?: SentItem[] }>(
+    `${GRAPH}/me/mailFolders/sentitems/messages?$filter=${filter}&$select=id,subject,sentDateTime,isDraft,toRecipients,ccRecipients,bccRecipients&$top=50`,
+    token,
+    fetchImpl,
+  );
+  const since = Math.floor(match.since.getTime() / 1000) * 1000;
+  return (page.value ?? []).some(
+    (message) =>
+      message.isDraft !== true &&
+      sameSubject(message.subject, match.subject) &&
+      new Date(message.sentDateTime ?? 0).getTime() >= since &&
+      sameRecipients([...(message.toRecipients ?? []), ...(message.ccRecipients ?? []), ...(message.bccRecipients ?? [])], match.recipients),
+  );
 }
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";

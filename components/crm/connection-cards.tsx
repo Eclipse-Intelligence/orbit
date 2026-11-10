@@ -122,8 +122,8 @@ export function SettingsNotices({
         <div role="alert" className="caption-style text-danger flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
           <span className="min-w-0 flex-1 basis-[16em]">{notice}</span>
           {add && (
-            <Button variant="secondary" size="sm" href={addAccountHref(add)} className="shrink-0">
-              Add {add} as another account
+            <Button variant="secondary" size="sm" href={addAccountHref(add)} aria-label={`Add ${add} as another account`}>
+              Add as another account
             </Button>
           )}
         </div>
@@ -158,11 +158,14 @@ function MailboxRow({
     <li aria-label={mailbox.email} className="border-border flex flex-col gap-2 border-t pt-3 first:border-t-0 first:pt-0">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <span className="flex min-w-0 flex-1 basis-[14em] flex-col gap-1">
-          <span className="truncate text-[14px] leading-5">{mailbox.email}</span>
+          <span className="text-[14px] leading-5 [overflow-wrap:anywhere]" title={mailbox.email}>
+            {mailbox.email}
+          </span>
           <Status tone={tone}>{`${main ? "Main" : "Other account"} · ${mailboxStatus(mailbox)}`}</Status>
+          {main && <span className="caption-style text-subtle">Reconnect only accepts this address.</span>}
         </span>
         {configured && (
-          <span className="flex shrink-0 flex-wrap items-center gap-2">
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
             {main && mailbox.connected && !mailbox.needsReconnect && <SyncButton action={syncInboxAction} label="Sync now" shortcut="sync" />}
             <Button
               variant={mailbox.needsReconnect ? "primary" : "ghost"}
@@ -191,7 +194,7 @@ function MailboxRow({
           {mailbox.problem}
         </p>
       )}
-      {mirror && <MailMirrorProgress source={mirror} />}
+      {mirror && <MailMirrorProgress source={mirror} showPaused={!mailbox.problem} />}
     </li>
   );
 }

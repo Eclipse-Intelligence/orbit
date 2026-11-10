@@ -5,5 +5,5 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const key = new URL(request.url).searchParams.get("key") ?? "";
-  return mailResponse((actor) => getThread(actor, key));
+  return mailResponse((actor) => getThread(actor, key, { reader: true }));
 }

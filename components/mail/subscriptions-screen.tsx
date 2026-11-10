@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
+import FilterChip from "@/components/_ui/filter-chip";
 import Tag from "@/components/_ui/tag";
 import { Monogram } from "@/components/beautifui/record-marks";
 import SectionHeader from "@/components/crm/section-header";
@@ -276,17 +277,9 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
               if (item.id !== "all" && count === 0) return null;
               const active = filter === item.id;
               return (
-                <Button
-                  key={item.id}
-                  variant="ghost"
-                  size="sm"
-                  aria-pressed={active}
-                  onClick={() => setFilter(item.id)}
-                  className={cn("h-8 px-2.5 text-[13px] font-normal", active && "text-foreground bg-white/[0.07]")}
-                >
+                <FilterChip key={item.id} active={active} aria-pressed={active} count={count} onClick={() => setFilter(item.id)}>
                   {item.label}
-                  <span className="text-soft tabular-nums">{count}</span>
-                </Button>
+                </FilterChip>
               );
             })}
           </nav>

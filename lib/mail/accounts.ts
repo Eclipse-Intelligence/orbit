@@ -43,30 +43,6 @@ export async function sourceReconnect(actor: UserActor, sourceId: string, error:
   return graphReconnect(error, source);
 }
 
-export type SourceHealth = { id: string; email: string; main: boolean; connected: boolean; lastError: string | null; reconnectHref: string; needsReconnect: boolean };
-
-export async function readSourceHealth(db: Db, actor: UserActor): Promise<SourceHealth[]> {
-  const result = await db.query<{ id: string; email: string; main: boolean; connected: boolean; last_error: string | null }>(
-    `select s.id, s.email, s.connection_id is not null as main, s.last_error,
-       coalesce(
-         (select c.status = 'connected' and c.refresh_token is not null from crm.mailbox_connections c where c.id = s.connection_id),
-         (select a.status = 'connected' and a.can_send and a.refresh_token is not null from crm.calendar_accounts a where a.id = s.account_id),
-         false
-       ) as connected
-     from crm.mail_sources s where s.user_id = $1 order by s.connection_id is null, s.created_at`,
-    [actor.userId],
-  );
-  return result.rows.map((row) => ({
-    id: row.id,
-    email: row.email,
-    main: row.main,
-    connected: row.connected,
-    lastError: row.last_error,
-    reconnectHref: reconnectHref(row.main ? "main" : "account", row.email),
-    needsReconnect: !row.connected || needsReconnecting(row.last_error),
-  }));
-}
-
 export async function readRemovalImpacts(db: Db, actor: UserActor) {
   const result = await db.query<{ account_id: string | null; connection_id: string | null; emails: number; drafts: number; scheduled: number; addresses: string[] }>(
     `select s.account_id, s.connection_id,

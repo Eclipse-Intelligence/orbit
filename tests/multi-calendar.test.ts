@@ -410,7 +410,7 @@ describe("extra calendar account oauth", () => {
     assert.equal(body.get("grant_type"), "authorization_code");
     assert.equal(body.get("scope"), CALENDAR_ACCOUNT_SCOPES);
     assert.equal(body.get("redirect_uri"), "https://orbit.test/api/microsoft/callback");
-    assert.match(calls[1].url, /\$select=mail,userPrincipalName,displayName/);
+    assert.match(calls[1].url, /\$select=id,mail,userPrincipalName,displayName/);
     const row = await getAdminPool().query<{
       email: string;
       display_name: string;
