@@ -1,4 +1,5 @@
 import { withActor } from "@/lib/crm/context";
+import { needsReconnecting, reconnectHref } from "@/lib/mail/mailboxes";
 import type { Db } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -523,8 +524,8 @@ export async function mailVersion(actor: UserActor) {
 export async function mailNav(actor: UserActor): Promise<MailNav> {
   return withActor(actor, async (db) => {
     const version = await readVersion(db, actor);
-    const accounts = await db.query<{ id: string; email: string; connected: boolean }>(
-      `select s.id, s.email,
+    const accounts = await db.query<{ id: string; email: string; connected: boolean; main: boolean; last_error: string | null }>(
+      `select s.id, s.email, s.connection_id is not null as main, s.last_error,
          coalesce(
            (select c.status = 'connected' and c.refresh_token is not null from crm.mailbox_connections c where c.id = s.connection_id),
            (select a.status = 'connected' and a.can_send and a.refresh_token is not null from crm.calendar_accounts a where a.id = s.account_id),
@@ -550,7 +551,14 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
     const inboxUnread = (sourceId: string | null) =>
       folders.rows.filter((folder) => folder.role === "inbox" && (!sourceId || folder.source_id === sourceId)).reduce((sum, folder) => sum + folder.unread, 0);
     return {
-      accounts: accounts.rows.map((row) => ({ id: row.id, email: row.email, unread: inboxUnread(row.id), connected: row.connected })),
+      accounts: accounts.rows.map((row) => ({
+        id: row.id,
+        email: row.email,
+        unread: inboxUnread(row.id),
+        connected: row.connected,
+        needsReconnect: !row.connected || needsReconnecting(row.last_error),
+        reconnectHref: reconnectHref(row.main ? "main" : "account", row.email),
+      })),
       folders: folders.rows.map((row) => ({ id: row.id, sourceId: row.source_id, name: row.name, role: row.role, unread: row.unread })),
       unread: inboxUnread(null),
       snoozed: counts.rows[0]?.snoozed ?? 0,

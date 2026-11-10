@@ -16,7 +16,6 @@ import {
   fetchInternetMessageId,
   findSentCopy,
   GraphMailError,
-  reconnectProblem,
   saveMicrosoftSentCopy,
   sendMicrosoftDraft,
   sendOutcomeUnknown,
@@ -27,6 +26,7 @@ import {
 import { threadFiledWorkspaces } from "@/lib/mail/filing";
 import { notePreparedSent } from "@/lib/mail/prepare";
 import { addressHomesInDb } from "@/lib/mail/routing";
+import { graphReconnect, SOURCE_SCOPES } from "@/lib/mail/accounts";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { readStatusesOn } from "@/lib/mail/tracking";
 import type { MailAddress } from "@/lib/mail/types";
@@ -97,7 +97,7 @@ type DraftRow = {
   sent_internet_id: string | null;
 };
 
-type Target = { id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string };
+type Target = { id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string; main: boolean; scopes: string | null };
 
 function cleanList(list: unknown, label: string): MailAddress[] {
   if (!Array.isArray(list)) return [];
@@ -179,7 +179,7 @@ const DRAFT_COLUMNS = `id, source_id, provider_draft_id, mode, reply_to, thread_
 
 async function loadTarget(db: Db, actor: UserActor, messageId: string) {
   const result = await db.query<Target>(
-    `select m.id, m.source_id, m.provider_message_id, m.thread_key, s.email
+    `select m.id, m.source_id, m.provider_message_id, m.thread_key, s.email, s.connection_id is not null as main, ${SOURCE_SCOPES} as scopes
      from crm.mail_messages m join crm.mail_sources s on s.id = m.source_id
      where m.id = $1 and m.user_id = $2`,
     [messageId, actor.userId],
@@ -190,13 +190,13 @@ async function loadTarget(db: Db, actor: UserActor, messageId: string) {
 }
 
 async function loadSourceTarget(db: Db, actor: UserActor, sourceId: string): Promise<Target> {
-  const result = await db.query<{ id: string; email: string }>("select id, email from crm.mail_sources where id = $1 and user_id = $2", [
+  const result = await db.query<{ id: string; email: string; main: boolean; scopes: string | null }>(`select s.id, s.email, s.connection_id is not null as main, ${SOURCE_SCOPES} as scopes from crm.mail_sources s where s.id = $1 and s.user_id = $2`, [
     sourceId,
     actor.userId,
   ]);
   const source = result.rows[0];
   if (!source) throw new CrmError("not_found", "That account isn't connected any more. Choose another one to send from.", 404);
-  return { id: null, source_id: source.id, provider_message_id: null, thread_key: null, email: source.email };
+  return { id: null, source_id: source.id, provider_message_id: null, thread_key: null, email: source.email, main: source.main, scopes: source.scopes };
 }
 
 async function senderEmail(db: Db, actor: UserActor, input: DraftInput, fallback: string) {
@@ -213,10 +213,10 @@ async function signatureFor(db: Db, actor: UserActor, email: string) {
   return result.rows[0]?.body ?? null;
 }
 
-function graphProblem(error: unknown, email?: string): never {
+function graphProblem(error: unknown, target?: Target): never {
   if (error instanceof CrmError) throw error;
-  const reconnect = reconnectProblem(error, email);
-  if (reconnect) throw new CrmError("upstream_error", reconnect, 502);
+  const reconnect = graphReconnect(error, target ? { id: target.source_id, email: target.email, main: target.main, scopes: target.scopes } : null);
+  if (reconnect) throw reconnect;
   if (error instanceof GraphMailError) throw new CrmError("upstream_error", error.message, 502);
   throw new CrmError("upstream_error", error instanceof Error ? error.message.slice(0, 240) : "Outlook didn't accept the email.", 502);
 }
@@ -234,7 +234,7 @@ async function createDraft(
   fetchImpl: typeof fetch,
 ) {
   const created = await createMicrosoftDraft(token, target.provider_message_id, target.provider_message_id ? input.mode : "new", fetchImpl).catch((error) =>
-    graphProblem(error, target.email),
+    graphProblem(error, target),
   );
   if (input.replaces) await deleteDraftMessage(actor, input.replaces, fetchImpl).catch(() => undefined);
   const tracked = origin ? await readStatusesOn(actor) : false;
@@ -356,20 +356,21 @@ async function writeDraft(
   try {
     await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl);
   } catch (error) {
-    if (!(error instanceof GraphMailError && error.status === 404 && existing)) graphProblem(error, target.email);
+    if (!(error instanceof GraphMailError && error.status === 404 && existing)) graphProblem(error, target);
     if (existing.send_attempted_at) throw maybeSent();
     await withActor(actor, (db) => db.query("delete from crm.mail_drafts where id = $1", [existing.id]));
     row = await createDraft(actor, input, target, token, options.origin, options.fetchImpl);
     await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl).catch((retry) =>
-      graphProblem(retry, target.email),
+      graphProblem(retry, target),
     );
   }
   const saved = await withActor(actor, async (db) => {
     const result = await db.query<DraftRow>(
       `update crm.mail_drafts set to_recipients = $2, cc_recipients = $3, bcc_recipients = $4, subject = $5, body = $6,
-         signature = $7, content_hash = $8, identity_id = $9, attachments = $10::uuid[], updated_at = now()
+         signature = $7, content_hash = $8, identity_id = (select i.id from crm.send_identities i where i.id = $9::uuid and i.user_id = $11),
+         attachments = $10::uuid[], updated_at = now()
        where id = $1 returning ${DRAFT_COLUMNS}`,
-      [row.id, JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc), subject, input.body, input.signature, hash, input.identityId ?? null, files],
+      [row.id, JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc), subject, input.body, input.signature, hash, input.identityId ?? null, files, actor.userId],
     );
     return result.rows[0];
   });
@@ -859,7 +860,7 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
     await deliver(row);
   } catch (error) {
     if (error instanceof SendUnsettled) return unsettled(error, row);
-    if (!(error instanceof GraphMailError && error.status === 404)) graphProblem(error, target.email);
+    if (!(error instanceof GraphMailError && error.status === 404)) graphProblem(error, target);
     await withActor(actor, (db) => db.query("delete from crm.mail_drafts where id = $1", [row.id]));
     row = (await writeDraft(actor, { ...input, id: null }, { origin: options.origin, fetchImpl, inline, attachments: ids })).row;
     await options.onDraftRow?.(row.id);
@@ -867,7 +868,7 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
       await deliver(row);
     } catch (retry) {
       if (retry instanceof SendUnsettled) return unsettled(retry, row);
-      graphProblem(retry, target.email);
+      graphProblem(retry, target);
     }
   }
   return finishSend(actor, input, {
@@ -1136,18 +1137,18 @@ export async function composeAccounts(actor: UserActor): Promise<ComposeAccount[
       ...result.rows.map((row) => ({ id: row.id, email: row.email, signature: row.signature })),
       ...identities.rows.map((row) => ({ id: `smtp:${row.id}`, email: row.email, signature: row.signature, sourceId: row.source_id, identityId: row.id })),
     ];
-    const chosen = await workspaceSender(db, actor, accounts);
-    return accounts.map((item) => (item === chosen ? { ...item, default: true } : item));
+    const { chosen, here } = await workspaceSender(db, actor, accounts);
+    return accounts.map((item) => ({ ...item, ...(here(item) ? { here: true } : {}), ...(item === chosen ? { default: true } : {}) }));
   });
 }
 
 async function workspaceSender(db: Db, actor: UserActor, accounts: ComposeAccount[]) {
-  if (accounts.length === 0) return null;
   const homes = new Map((await addressHomesInDb(db, actor)).map((home) => [home.address, home]));
   const homeOf = (item: ComposeAccount) => homes.get(item.email.toLowerCase());
   const chosenHere = (item: ComposeAccount) => homeOf(item)?.workspaceId === actor.workspaceId && homeOf(item)?.defaultWorkspaceId !== actor.workspaceId;
   const here = (item: ComposeAccount) => homeOf(item)?.workspaceId === actor.workspaceId;
-  return accounts.find(chosenHere) ?? accounts.find(here) ?? accounts.find((item) => !item.identityId) ?? accounts[0];
+  const chosen = accounts.length === 0 ? null : (accounts.find(chosenHere) ?? accounts.find(here) ?? accounts.find((item) => !item.identityId) ?? accounts[0]);
+  return { chosen, here };
 }
 
 export async function defaultSender(actor: UserActor) {

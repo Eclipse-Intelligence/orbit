@@ -4,6 +4,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, reconnectProblem, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import { sourceReconnect } from "@/lib/mail/accounts";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailView } from "@/lib/mail/view";
@@ -224,7 +225,9 @@ export async function applyMailAction(
       }
     });
   }
-  if (failures.length > 0) throw new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
+  if (failures.length > 0) {
+    throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
+  }
   return { changed: done.length };
 }
 

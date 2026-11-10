@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import { sessionCookieOptions } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
-import { canonicalEmail } from "@/lib/crm/normalize";
+import { startMicrosoftConnect } from "@/lib/microsoft/connect-flow";
 import {
-  microsoftAuthorizationUrl,
   microsoftConfigured,
   microsoftPurpose,
   microsoftRedirectOrigin,
+  microsoftReturn,
   originFrom,
-  signMicrosoftState,
   type MicrosoftPurpose,
+  type MicrosoftReturn,
 } from "@/lib/microsoft/oauth";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
@@ -17,8 +17,8 @@ export const dynamic = "force-dynamic";
 
 const STATE_COOKIE = "crm_ms_oauth";
 
-function connectReturnPath(purpose: MicrosoftPurpose) {
-  return purpose === "mailbox" ? SETTINGS_PATHS.email : SETTINGS_PATHS.calendars;
+function connectReturnPath(back: MicrosoftReturn) {
+  return back === "email" ? SETTINGS_PATHS.email : SETTINGS_PATHS.calendars;
 }
 
 export async function GET(request: Request) {
@@ -32,25 +32,21 @@ export async function GET(request: Request) {
     return NextResponse.redirect(moved);
   }
   const purpose: MicrosoftPurpose = microsoftPurpose(url.searchParams.get("purpose"));
+  const returnTo = microsoftReturn(url.searchParams.get("from"), purpose);
   const user = await getUserActor();
-  const back = new URL(connectReturnPath(purpose), origin);
+  const back = new URL(connectReturnPath(returnTo), origin);
   if (!user) {
     return NextResponse.redirect(new URL("/login", origin));
   }
   if (!microsoftConfigured()) {
     back.searchParams.set(
-      purpose === "mailbox" ? "error" : "calendar_error",
+      returnTo === "email" ? "error" : "calendar_error",
       "Add the Microsoft app credentials before connecting.",
     );
     return NextResponse.redirect(back);
   }
-  const state = signMicrosoftState(user.userId, user.workspaceId, Date.now(), purpose);
-  const response = NextResponse.redirect(
-    microsoftAuthorizationUrl(origin, state, {
-      purpose,
-      loginHint: canonicalEmail(url.searchParams.get("hint") ?? ""),
-    }),
-  );
+  const { state, url: authorize } = await startMicrosoftConnect(user, url.searchParams, origin);
+  const response = NextResponse.redirect(authorize);
   response.cookies.set(STATE_COOKIE, state, sessionCookieOptions(10 * 60));
   return response;
 }

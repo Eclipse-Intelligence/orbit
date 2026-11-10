@@ -13,6 +13,7 @@ import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getMailbox, listSenders } from "@/lib/crm/inbox";
 import { listHoldCalendars } from "@/lib/crm/invite-senders";
 import { getMyEmails } from "@/lib/crm/profile";
+import { listMailboxes } from "@/lib/mail/accounts";
 import { composeAccounts } from "@/lib/mail/compose";
 import { listIdentities } from "@/lib/mail/identities";
 import { mailHelpSettings } from "@/lib/mail/prepare";
@@ -35,8 +36,10 @@ export default async function EmailSettingsPage({
   const notice = typeof resolved.error === "string" ? resolved.error : null;
   const info = typeof resolved.info === "string" ? resolved.info : null;
   const connected = resolved.connected === "1";
-  const [mailbox, mirror, workspaces, homes, rules, myEmails, senders, readStatuses, identities, accounts, help, holdCalendars] = await Promise.all([
+  const add = typeof resolved.add === "string" ? resolved.add : null;
+  const [mailbox, mailboxes, mirror, workspaces, homes, rules, myEmails, senders, readStatuses, identities, accounts, help, holdCalendars] = await Promise.all([
     getMailbox(user),
+    listMailboxes(user),
     mailSyncStatus(user),
     getWorkspaceChoices(),
     listAddressHomes(user).catch(() => []),
@@ -64,14 +67,14 @@ export default async function EmailSettingsPage({
   const multi = workspaces.length > 1;
   return (
     <SettingsPage title="Email" description="Your mailboxes, the addresses you send from, signatures and help with replies.">
-      <SettingsNotices notice={notice} info={info} connected={connected} />
+      <SettingsNotices notice={notice} info={info} connected={connected} add={add} />
       {multi && (homes.length > 0 || rules.length > 0) && (
         <MailRoutingSettings homes={homes} rules={rules} workspaces={workspaces.map((item) => ({ id: item.id, name: item.name }))} />
       )}
       <MicrosoftSettings
         configured={microsoftConfigured()}
         redirectUri={microsoftRedirectUri(`${proto}://${host}`)}
-        mailbox={mailbox}
+        mailboxes={mailboxes}
         calendar={calendar}
         mirror={mirror}
       />

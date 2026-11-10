@@ -16,6 +16,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
+import { reconnectProblem } from "@/lib/mail/microsoft";
 import { routedAway } from "@/lib/mail/routing";
 import {
   fetchInboxMessages,
@@ -81,6 +82,7 @@ type SyncCounts = {
 
 export type StoredConnection = MailboxSummary & {
   workspaceId: string;
+  microsoftUserId: string | null;
   refreshTokenCipher: string | null;
   accessTokenCipher: string | null;
   accessTokenExpiresAt: string | null;
@@ -193,6 +195,10 @@ export async function saveMailbox(
     refreshToken: string;
     accessToken: string;
     expiresAt: string;
+    expected?: string | null;
+    microsoftUserId?: string | null;
+    tenantId?: string | null;
+    aliases?: string[];
   },
 ) {
   const email = canonicalEmail(input.email);
@@ -208,6 +214,18 @@ export async function saveMailbox(
   }
   await withActor(actor, async (db) => {
     const existing = await readStored(db, actor);
+    const signedIn: SignedInAccount = { email, id: input.microsoftUserId ?? null, aliases: input.aliases ?? [] };
+    const extra = await isExtraAccount(db, actor, signedIn);
+    const expected = existing ?? (input.expected ? { email: input.expected, microsoftUserId: null } : null);
+    if (expected && !sameMicrosoftAccount(expected, signedIn)) throw wrongAccount(email, canonicalEmail(expected.email) || expected.email, !extra);
+    if (extra && !existing) {
+      throw new CrmError(
+        "conflict",
+        `${email} is already connected as another account. Sign in with the account you want as your main one.`,
+        409,
+        { signedIn: email },
+      );
+    }
     if (existing) {
       await db.query(
         `update crm.mailbox_connections set
@@ -216,24 +234,29 @@ export async function saveMailbox(
            refresh_token = $3,
            access_token = $4,
            access_token_expires_at = $5,
-           last_error = null
+           last_error = null,
+           microsoft_user_id = coalesce($6, microsoft_user_id),
+           tenant_id = coalesce($7, tenant_id)
          where id = $1`,
-        [existing.id, email, encryptSecret(input.refreshToken), encryptSecret(input.accessToken), input.expiresAt],
+        [existing.id, email, encryptSecret(input.refreshToken), encryptSecret(input.accessToken), input.expiresAt, input.microsoftUserId ?? null, input.tenantId ?? null],
       );
+      await db.query("update crm.mail_sources set last_error = null where connection_id = $1", [existing.id]);
       return;
     }
     await db.query(
       `insert into crm.mailbox_connections (
          workspace_id, user_id, provider, email, status,
-         refresh_token, access_token, access_token_expires_at, last_error
-       ) values ($1, $2, 'microsoft', $3, 'connected', $4, $5, $6, null)
+         refresh_token, access_token, access_token_expires_at, last_error, microsoft_user_id, tenant_id
+       ) values ($1, $2, 'microsoft', $3, 'connected', $4, $5, $6, null, $7, $8)
        on conflict (workspace_id, user_id, provider) do update set
          email = excluded.email,
          status = 'connected',
          refresh_token = excluded.refresh_token,
          access_token = excluded.access_token,
          access_token_expires_at = excluded.access_token_expires_at,
-         last_error = null`,
+         last_error = null,
+         microsoft_user_id = coalesce(excluded.microsoft_user_id, crm.mailbox_connections.microsoft_user_id),
+         tenant_id = coalesce(excluded.tenant_id, crm.mailbox_connections.tenant_id)`,
       [
         actor.workspaceId,
         actor.userId,
@@ -241,9 +264,34 @@ export async function saveMailbox(
         encryptSecret(input.refreshToken),
         encryptSecret(input.accessToken),
         input.expiresAt,
+        input.microsoftUserId ?? null,
+        input.tenantId ?? null,
       ],
     );
   });
+}
+
+export type SignedInAccount = { email: string; id: string | null; aliases: string[] };
+
+export function sameMicrosoftAccount(known: { email: string | null; microsoftUserId: string | null }, signedIn: SignedInAccount) {
+  if (known.microsoftUserId && signedIn.id) return known.microsoftUserId === signedIn.id;
+  const wanted = canonicalEmail(known.email ?? "");
+  return Boolean(wanted) && [signedIn.email, ...signedIn.aliases].some((item) => canonicalEmail(item) === wanted);
+}
+
+export function wrongAccount(signedIn: string, expected: string, canAdd: boolean, adding = false) {
+  return new CrmError("conflict", `You signed in as ${signedIn}. Sign in as ${expected} to ${adding ? "add" : "reconnect"} it.`, 409, {
+    signedIn,
+    add: canAdd ? signedIn : null,
+  });
+}
+
+export async function isExtraAccount(db: Db, actor: UserActor, signedIn: SignedInAccount) {
+  const result = await db.query<{ email: string | null; microsoft_user_id: string | null }>(
+    "select email, microsoft_user_id from crm.calendar_accounts where user_id = $1 and provider = 'microsoft'",
+    [actor.userId],
+  );
+  return result.rows.some((row) => sameMicrosoftAccount({ email: row.email, microsoftUserId: row.microsoft_user_id }, signedIn));
 }
 
 export type Sender = { id: string; email: string; label: string; primary: boolean; signature: string | null };
@@ -473,9 +521,10 @@ export async function sendContactEmail(
   } catch (error) {
     throw new CrmError(
       "upstream_error",
-      sanitizeMicrosoftError(
-        error instanceof Error ? error.message : "Could not send the email.",
-      ),
+      reconnectProblem(error, sender.email) ??
+        sanitizeMicrosoftError(
+          error instanceof Error ? error.message : "Could not send the email.",
+        ),
       502,
     );
   }
@@ -1097,8 +1146,9 @@ export async function readStored(
     last_synced_at: Date | string | null;
     last_attempt_at: Date | string | null;
     last_error: string | null;
+    microsoft_user_id: string | null;
   }>(
-    `select id, workspace_id, email, status, refresh_token, access_token, access_token_expires_at,
+    `select id, workspace_id, email, status, refresh_token, access_token, access_token_expires_at, microsoft_user_id,
             last_synced_at, last_attempt_at, last_error
      from crm.mailbox_connections
      where user_id = $1 and provider = 'microsoft'
@@ -1119,6 +1169,7 @@ export async function readStored(
     refreshTokenCipher: row.refresh_token,
     accessTokenCipher: row.access_token,
     accessTokenExpiresAt: iso(row.access_token_expires_at),
+    microsoftUserId: row.microsoft_user_id,
   };
 }
 
@@ -1154,7 +1205,7 @@ export async function sendOwnMail(
   } catch (error) {
     throw new CrmError(
       "upstream_error",
-      sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not send the email."),
+      reconnectProblem(error, mailbox.email) ?? sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not send the email."),
       502,
     );
   }

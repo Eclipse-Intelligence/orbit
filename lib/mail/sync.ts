@@ -19,6 +19,7 @@ import {
   initialDeltaUrl,
   listMicrosoftFolders,
 } from "@/lib/mail/microsoft";
+import { graphReconnect, readReconnectSource, reconnectError } from "@/lib/mail/accounts";
 import { trackingIdIn } from "@/lib/mail/html";
 import { classifyEmailTones } from "@/lib/crm/email-tone";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
@@ -27,7 +28,7 @@ import { routeArrivedMail } from "@/lib/mail/subscriptions";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
 import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
-import type { MicrosoftToken } from "@/lib/microsoft/oauth";
+import { grantsMailWrite, type MicrosoftToken } from "@/lib/microsoft/oauth";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const LOCK_GRACE_SECONDS = 60;
@@ -210,15 +211,12 @@ async function loadSource(actor: UserActor, sourceId: string): Promise<Source | 
 export async function mailSourceToken(actor: UserActor, sourceId: string, fetchImpl: typeof fetch = fetch) {
   const source = await loadSource(actor, sourceId);
   if (!source) {
-    const email = await withActor(actor, async (db) => {
-      const result = await db.query<{ email: string }>("select email from crm.mail_sources where id = $1 and user_id = $2", [sourceId, actor.userId]);
-      return result.rows[0]?.email ?? null;
-    });
-    throw new CrmError("not_found", email ? disconnectedMessage(email) : "That mail account is no longer connected. Connect it again in Settings › Email.", 404);
+    const known = await withActor(actor, (db) => readReconnectSource(db, actor, sourceId));
+    if (known) throw reconnectError(disconnectedMessage(known.email), known);
+    throw new CrmError("not_found", "That mail account isn't in Orbit any more. Choose another one to send from.", 404);
   }
   const token = await currentToken(source.tokens, fetchImpl).catch((error) => {
-    const reconnect = reconnectProblem(error, source.email);
-    throw reconnect ? new CrmError("upstream_error", reconnect, 502) : error;
+    throw graphReconnect(error, { id: source.id, email: source.email, main: Boolean(source.connection_id) }) ?? error;
   });
   if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
   return token.accessToken;
@@ -624,7 +622,8 @@ export async function syncMail(
         }
       }
     } catch (error) {
-      const reconnect = reconnectProblem(error, source.email);
+      const scopes = error instanceof GraphMailError && error.status === 403 ? (await withActor(actor, (db) => readReconnectSource(db, actor, source.id)).catch(() => null))?.scopes : null;
+      const reconnect = reconnectProblem(error, source.email, grantsMailWrite(scopes));
       lastError = reconnect ?? (error instanceof GraphMailError || error instanceof Error ? error.message.slice(0, 500) : "Mail sync failed.");
       report.errors.push(reconnect ?? `${source.email}: ${lastError}`);
       if (reconnect) report.reconnect.push(reconnect);

@@ -6,6 +6,8 @@ import Button from "@/components/_ui/button";
 import type { LaterRequest } from "@/components/mail/later-picker";
 import type { ComposerDraft, ComposerStart, SendPayload } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
+import { heldDrafts } from "@/components/mail/held-drafts";
+import { flagReconnect, hasReconnectHost, reconnectOf } from "@/components/mail/reconnect-store";
 import { MODE_LABEL } from "@/lib/mail/format";
 import { emailRecipientAction } from "@/app/(crm)/quick-add";
 import type { MailAddress } from "@/lib/mail/types";
@@ -42,7 +44,7 @@ type Card = {
   onSent?: () => void;
 };
 
-type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void };
+type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void; heldKey?: string; fromEmail?: string | null };
 
 type ComposerContextValue = {
   openComposer: (options?: OpenOptions) => void;
@@ -58,7 +60,9 @@ type ComposerContextValue = {
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status, detail: json });
+  if (!response.ok) {
+    throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status, detail: json, reconnect: (json as { reconnect?: unknown }).reconnect ?? null });
+  }
   return json;
 }
 
@@ -118,7 +122,7 @@ export function useComposer() {
 
 async function loadAccounts(): Promise<ComposeAccount[]> {
   const response = await fetch("/api/mail/accounts", { cache: "no-store" });
-  if (!response.ok) return [];
+  if (!response.ok) throw new Error("Mail accounts didn't load.");
   const body = (await response.json()) as { accounts: ComposeAccount[] };
   return body.accounts;
 }
@@ -151,6 +155,7 @@ const ComposeCard = memo(function ComposeCard({
   const setTitle = useCallback((subject: string) => onChange(card.key, { title: subject.trim() }), [onChange, card.key]);
   const remove = useCallback(() => onRemove(card.key), [onRemove, card.key]);
   const front = useCallback(() => onFront(card.key), [onFront, card.key]);
+  const [held, setHeld] = useState(false);
   const draggable = desktop && !sheet;
   const fitsKeyboard = sheet && !card.minimised;
 
@@ -233,7 +238,14 @@ const ComposeCard = memo(function ComposeCard({
         <Button variant="ghost" size="icon-sm" aria-label={`Minimise ${title}`} title="Minimise" onClick={() => onChange(card.key, { minimised: true })} className="pointer-coarse:size-11">
           <MinimiseIcon aria-hidden className="size-2.5" />
         </Button>
-        <Button variant="ghost" size="icon-sm" aria-label={`Close ${title}, keeping the draft`} title="Close (the draft stays in Outlook)" onClick={remove} className="pointer-coarse:size-11">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={held ? `Close ${title}. It isn't saved yet` : `Close ${title}, keeping the draft`}
+          title={held ? "Close (not saved yet, kept in this tab)" : "Close (the draft stays in Outlook)"}
+          onClick={remove}
+          className="pointer-coarse:size-11"
+        >
           <CloseIcon aria-hidden className="size-2.5" />
         </Button>
       </div>
@@ -250,6 +262,7 @@ const ComposeCard = memo(function ComposeCard({
             onSent={remove}
             onDelivered={card.onSent}
             onScheduled={card.onSent}
+            onHeld={setHeld}
           />
         )}
       </div>
@@ -273,7 +286,8 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const cardsRef = useRef<Card[]>([]);
   const counter = useRef(0);
   const layers = useRef(0);
-  const accountsRequest = useRef<Promise<ComposeAccount[]> | null>(null);
+  const accountsCache = useRef<ComposeAccount[] | null>(null);
+  const accountsRequest = useRef<Promise<ComposeAccount[] | null> | null>(null);
 
   useEffect(() => {
     cardsRef.current = cards;
@@ -299,13 +313,21 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   }, [notice]);
 
   const openComposer = useCallback((options: OpenOptions = {}) => {
-    if (!accountsRequest.current) accountsRequest.current = loadAccounts().catch(() => []);
+    const cached = accountsCache.current;
+    const fresh = loadAccounts().catch(() => null);
+    accountsRequest.current = fresh;
+    void fresh.then((list) => {
+      if (!list || accountsRequest.current !== fresh) return;
+      accountsCache.current = list;
+      setAccounts(list);
+    });
     void (async () => {
       const [list, contact] = await Promise.all([
-        accountsRequest.current!,
+        cached ? Promise.resolve(cached) : fresh.then((loaded) => loaded ?? []),
         options.contactId ? emailRecipientAction(options.contactId).catch(() => null) : Promise.resolve(null),
       ]);
-      setAccounts(list);
+      const earlier = cached ?? [];
+      setAccounts(accountsCache.current ?? list);
       const to = options.to ?? (contact?.email ? [{ address: contact.email.toLowerCase(), name: contact.name }] : []);
       const preferred = list.find((item) => item.default) ?? list[0];
       const sourceId = options.draft?.sourceId ?? preferred?.sourceId ?? preferred?.id ?? "";
@@ -322,8 +344,14 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         subject: options.subject ?? "",
         draft: options.draft ?? prefilled,
         fromId: options.draft ? null : (preferred?.id ?? null),
+        fromEmail:
+          options.fromEmail ??
+          (options.draft
+            ? (earlier.find((item) => item.id === (options.draft!.identityId ? `smtp:${options.draft!.identityId}` : options.draft!.sourceId))?.email ?? null)
+            : null),
+        heldKey: options.heldKey,
       };
-      const existing = options.draft ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
+      const existing = options.draft?.id ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
       if (existing) {
         const layer = ++layers.current;
         setCards((current) => current.map((card) => (card.key === existing.key ? { ...card, minimised: false, layer } : card)));
@@ -347,6 +375,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       setCards((current) => [...current, card]);
     })();
   }, []);
+
+  useEffect(() => {
+    for (const held of heldDrafts().slice(0, MAX_CARDS)) openComposer({ draft: held.draft, heldKey: held.key, fromEmail: held.fromEmail });
+  }, [openComposer]);
 
   const dismiss = useCallback((id: number) => {
     window.clearTimeout(toastTimers.current.get(id));
@@ -392,9 +424,15 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               return;
             }
             item.onUndone?.();
+            const reconnect = reconnectOf(error);
+            const covered = reconnect ? flagReconnect(error, { sourceId: payload.sourceId }) && hasReconnectHost() : false;
             showToast({
-              message: error.detail?.maybeSent ? error.message : `“${payload.subject || "Your email"}” didn't send. ${error.message}`,
-              tone: "alert",
+              message: error.detail?.maybeSent
+                ? error.message
+                : reconnect?.email
+                  ? `“${payload.subject || "Your email"}” didn't send. Reconnect ${reconnect.email}, then send it again.`
+                  : `“${payload.subject || "Your email"}” didn't send. ${error.message}`,
+              tone: covered ? "status" : "alert",
               duration: 15_000,
               action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(payload, error) }) },
             });

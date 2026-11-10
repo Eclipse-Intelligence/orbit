@@ -411,7 +411,8 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
 
   it("names the account and the fix when Microsoft refuses", async () => {
     assert.equal(reconnectProblem(new GraphMailError("x", 401), "mark@geteclipse.co"), "Reconnect mark@geteclipse.co in Settings › Email. Microsoft has signed Orbit out of it.");
-    assert.match(reconnectProblem(new GraphMailError("x", 403, "ErrorAccessDenied"), "mark@geteclipse.co") ?? "", /^Reconnect mark@geteclipse.co in Settings › Email and allow every permission/);
+    assert.equal(reconnectProblem(new GraphMailError("x", 403, "ErrorAccessDenied"), "mark@geteclipse.co"), null);
+    assert.match(reconnectProblem(new GraphMailError("x", 403, "ErrorAccessDenied"), "mark@geteclipse.co", false) ?? "", /^Reconnect mark@geteclipse.co in Settings › Email and allow every permission/);
     assert.match(reconnectProblem(new GraphMailError("x", 403, "AADSTS65001 consent_required"), "mark@geteclipse.co") ?? "", /^Ask your Microsoft admin to approve Orbit for mark@geteclipse.co/);
     assert.match(reconnectProblem(new MicrosoftTokenError("AADSTS70008: invalid_grant, the refresh token has expired"), "mark@geteclipse.co") ?? "", /^Reconnect mark@geteclipse.co in Settings › Email\./);
     assert.equal(reconnectProblem(new GraphMailError("Busy", 503), "mark@geteclipse.co"), null);

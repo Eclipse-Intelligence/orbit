@@ -51,8 +51,8 @@ export type MailRequestError = Error & { status?: number };
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init }).catch(() => null);
   if (!response) throw new Error(OFFLINE);
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw Object.assign(new Error(body.error ?? statusProblem(response.status)), { status: response.status });
+  const body = (await response.json().catch(() => ({}))) as T & { error?: string; reconnect?: unknown };
+  if (!response.ok) throw Object.assign(new Error(body.error ?? statusProblem(response.status)), { status: response.status, reconnect: body.reconnect ?? null });
   return body;
 }
 

@@ -180,7 +180,7 @@ export type ThreadDetail = {
   cachedSummary?: CachedSummary | null;
 };
 
-export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string; default?: boolean };
+export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string; default?: boolean; here?: boolean };
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
@@ -245,7 +245,7 @@ export function replyDefaults(
 }
 
 export type MailNav = {
-  accounts: { id: string; email: string; unread: number; connected: boolean }[];
+  accounts: { id: string; email: string; unread: number; connected: boolean; needsReconnect?: boolean; reconnectHref?: string }[];
   folders: { id: string; sourceId: string; name: string; role: MailRole; unread: number }[];
   unread: number;
   snoozed: number;

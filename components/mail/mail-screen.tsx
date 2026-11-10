@@ -49,6 +49,7 @@ import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
 import { setBadge } from "@/components/push/push-client";
 import PushPrompt from "@/components/push/push-prompt";
+import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/mail/reconnect-notice";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
@@ -227,7 +228,7 @@ export default function MailScreen({
   initialCompose?: ComposeIntent | null;
   initialNow: number;
 }) {
-  const { openComposer, sent: sentCount, pickLater, showToast, undoLatest } = useComposer();
+  const { openComposer, sent: sentCount, pickLater, showToast, dismissToast, undoLatest } = useComposer();
   const [scheduled, setScheduled] = useState<MailDraft[] | null>(null);
   const [ask, setAsk] = useState<AskState | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -259,9 +260,11 @@ export default function MailScreen({
   const fullRefresh = useRef(0);
   const seenVersion = useRef(initialNav.version);
   const navTimer = useRef<number | null>(null);
+  const navAccounts = useRef(nav.accounts);
 
   useEffect(() => {
     latest.current = { query, page, cursor, open };
+    navAccounts.current = nav.accounts;
   });
 
   useEffect(() => {
@@ -431,7 +434,7 @@ export default function MailScreen({
     (sync
       ? syncNow().then(
           (result) => {
-            problems = result.problems ?? [];
+            problems = flagSyncProblems(result.problems ?? [], navAccounts.current);
             return result;
           },
           (error: unknown) => {
@@ -542,7 +545,7 @@ export default function MailScreen({
       .then(() => fetchNav().then(setNav).catch(() => null))
       .catch((error: Error) => {
         if (thread && leaves) restore(thread, target);
-        showToast({ message: error.message, tone: "alert" });
+        if (!flagReconnect(error, { sourceId: thread?.sourceId })) showToast({ message: error.message, tone: "alert" });
       });
   }
 
@@ -617,6 +620,7 @@ export default function MailScreen({
       closeReader();
     }
     forgetOtherLists(target);
+    let reconnecting = false;
     const runAll = async (run: (thread: ThreadSummary) => Promise<unknown>) => {
       const failures: string[] = [];
       let next = 0;
@@ -627,7 +631,8 @@ export default function MailScreen({
             try {
               await run(thread);
             } catch (error) {
-              failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
+              if (flagReconnect(error, { sourceId: thread.sourceId })) reconnecting = true;
+              else failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
               putBack(thread);
             }
           }
@@ -644,7 +649,7 @@ export default function MailScreen({
     };
     const pending = runAll((thread) => postAction(thread.key, action, from, until));
     const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
-    showToast({
+    const shown = showToast({
       message: labels[action],
       action:
         action === "inbox"
@@ -664,6 +669,7 @@ export default function MailScreen({
     });
     void pending
       .then((failures) => {
+        if (reconnecting) dismissToast(shown);
         if (failures.length) showToast({ message: `${failures.length} of ${count} didn't move. ${failures[0]}`, tone: "alert" });
         settleNav();
       })
@@ -697,7 +703,7 @@ export default function MailScreen({
       forgetOtherLists(target);
       const undoable = (inInbox(from) && action !== "inbox") || action === "snooze";
       const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
-      showToast({
+      const shown = showToast({
         message: action === "snooze" && detail ? `Snoozed until ${detail}.` : DONE_LABEL[action],
         action: undoable
           ? {
@@ -707,7 +713,9 @@ export default function MailScreen({
                   putBack();
                   postAction(key, "inbox", undoFrom)
                     .then(() => forgetOtherLists(latest.current.query))
-                    .catch((error: Error) => showToast({ message: error.message, tone: "alert" }))
+                    .catch((error: Error) => {
+                      if (!flagReconnect(error, { sourceId: thread.sourceId })) showToast({ message: error.message, tone: "alert" });
+                    })
                     .finally(settleNav);
                 });
               },
@@ -718,7 +726,8 @@ export default function MailScreen({
         .then(() => undefined)
         .catch((error: Error) => {
           putBack();
-          showToast({ message: error.message, tone: "alert" });
+          if (flagReconnect(error, { sourceId: thread.sourceId })) dismissToast(shown);
+          else showToast({ message: error.message, tone: "alert" });
         })
         .finally(() => {
           removing.current.delete(key);
@@ -743,7 +752,8 @@ export default function MailScreen({
         forgetThread(key);
         fetchDetail(key, true);
         if (change && inInbox(from)) settleNav();
-        if (!silent) showToast({ message: error.message, tone: "alert" });
+        const handled = flagReconnect(error, { sourceId: thread.sourceId });
+        if (!silent && !handled) showToast({ message: error.message, tone: "alert" });
       });
   }
 
@@ -1214,6 +1224,7 @@ export default function MailScreen({
           </>
         }
       />
+      <ReconnectNotices accounts={nav.accounts} className="shrink-0 px-3 pt-2 lg:pt-3" onReturn={() => fetchNav().then(setNav).catch(() => null)} />
       <div className="relative flex min-h-0 flex-1 overflow-x-clip">
         <div
           onAnimationEnd={(event) => {
@@ -1226,23 +1237,6 @@ export default function MailScreen({
           )}
         >
           <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-1.5 lg:pt-3">
-            {nav.accounts.some((account) => !account.connected) && (
-              <div
-                role="status"
-                className="flex items-center justify-between gap-3 rounded-xl border border-[var(--tag-amber-border)] bg-[var(--tag-amber-bg)] py-2 pr-2 pl-3 text-[13px] leading-5 text-[var(--tag-amber-text)]"
-              >
-                <span className="min-w-0">
-                  {nav.accounts
-                    .filter((account) => !account.connected)
-                    .map((account) => account.email)
-                    .join(", ")}{" "}
-                  disconnected
-                </span>
-                <Button variant="secondary" size="sm" href="/settings/email" className="shrink-0">
-                  Reconnect
-                </Button>
-              </div>
-            )}
             <PushPrompt />
             <div className="lg:hidden">{searchForm("list")}</div>
             <div className="relative">
