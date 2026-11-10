@@ -10,7 +10,7 @@ import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from
 import { holdDraft, releaseDraft } from "@/components/mail/held-drafts";
 import { ComposerReconnect, flagReconnect, reconnectOf } from "@/components/mail/reconnect-notice";
 import { fromFallback } from "@/lib/mail/mailboxes";
-import { holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
+import { draftQueued, holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { MODE_LABEL } from "@/lib/mail/format";
@@ -50,7 +50,9 @@ export type SendPayload = {
   force?: boolean;
 };
 
-export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null };
+export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null; replaces?: string | null; unsaved?: boolean };
+
+export type SendTracker = () => { undone: () => void; delivered: () => void };
 
 export type ComposerStart = {
   mode: DraftMode;
@@ -89,6 +91,9 @@ export default function MailComposer({
   onSubject,
   onDelivered,
   onUndone,
+  onReopen,
+  onAlreadySending,
+  track,
   onScheduled,
   onDiscard,
   onHeld,
@@ -104,10 +109,13 @@ export default function MailComposer({
   onSubject?: (subject: string) => void;
   onDelivered?: () => void;
   onUndone?: () => void;
+  onReopen?: (draft: ComposerDraft) => boolean;
+  onAlreadySending?: () => void;
+  track?: SendTracker;
   onScheduled?: () => void;
   onDiscard?: () => void;
 }) {
-  const { queueSend, scheduleSend, pickLater } = useComposer();
+  const { queueSend, scheduleSend, pickLater, showToast } = useComposer();
   const [aiOpen, setAiOpen] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
@@ -149,7 +157,7 @@ export default function MailComposer({
   const savedFiles = useRef(fileKey);
   const draftId = useRef<string | null>(draft?.id || null);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
-  const dirty = useRef(Boolean(start.heldKey));
+  const dirty = useRef(Boolean(start.heldKey || draft?.unsaved));
   const discarded = useRef(false);
   const heldKey = useRef<string | null>(start.heldKey ?? null);
   const heldNow = useRef(false);
@@ -248,7 +256,7 @@ export default function MailComposer({
   function saveNow() {
     const run = chain.current.then(async () => {
       if (!dirty.current || discarded.current) return;
-      const snapshot = { ...payload.current, id: draftId.current };
+      const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       dirty.current = false;
       setSave({ kind: "saving" });
@@ -292,6 +300,7 @@ export default function MailComposer({
         sendAt: null,
         sendError: null,
         identityId: current.identityId,
+        replaces: current.replaces,
         attachments: heldExtras.current.files,
         remindHours: current.remindHours,
         followUpDays: current.followUpDays,
@@ -320,7 +329,7 @@ export default function MailComposer({
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       void chain.current
         .catch(() => null)
-        .then(() => postJson("/api/mail/drafts", { ...snapshot, id: draftId.current }, true))
+        .then(() => postJson("/api/mail/drafts", { ...snapshot, id: draftId.current, sendKey: sendKey.current }, true))
         .then(() => releaseDraft(heldKey.current))
         .catch((problem: unknown) => {
           if (reconnectOf(problem)) keepRef.current();
@@ -405,16 +414,28 @@ export default function MailComposer({
   function send(event?: FormEvent, force = false) {
     event?.preventDefault();
     if (queued.current || !ready()) return;
+    if (draftQueued(draftId.current, start.replaces)) {
+      dirty.current = false;
+      showToast({ message: "This email is already sending. Undo it to make changes." });
+      (onAlreadySending ?? onClose)();
+      return;
+    }
     queued.current = true;
     sendKey.current ??= newSendKey();
     const handed = handOver(force);
-    const release = holdQueuedDraft(draftId.current, handed);
+    const release = holdQueuedDraft(draftId.current, handed, start.replaces ?? null);
+    const tracked = track?.();
     queueSend(handed, {
-      onDelivered,
-      onReleased: () => void release(),
+      onDelivered: () => {
+        onDelivered?.();
+        tracked?.delivered();
+      },
+      onReopen,
+      track,
       onUndone: () => {
         void release();
         onUndone?.();
+        tracked?.undone();
       },
     });
     onSent(body, [...to, ...cc]);
