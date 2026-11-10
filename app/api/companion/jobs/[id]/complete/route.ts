@@ -12,7 +12,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const auth = await requireCompanionJob(request, id);
     const result = readCompanionResult(await readObject(request, 4_000_000));
-    await finishCompanionJob(auth, id, (actor, conversationId) => applyCompanionResult(actor, conversationId, result));
+    await finishCompanionJob(auth, id, (actor, conversationId, switches) => applyCompanionResult(actor, conversationId, result, switches));
     continueAfterCompanionLater(auth.actor, id);
     return Response.json({ ok: true }, { headers: NO_STORE });
   });

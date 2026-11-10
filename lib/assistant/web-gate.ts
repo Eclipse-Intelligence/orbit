@@ -48,7 +48,8 @@ const HOST_PREFIX = "host:";
 const FORWARDED_START = "[Forwarded material starts.";
 const FORWARDED_END = "[Forwarded material ends.]";
 const FIRST_PARTY_FIELD = /^(domain|website|url|linkedin(url)?|x(url)?|twitter(url)?|homepage)$/i;
-const PAGE_OUTSIDE_LINE = /^(?:Text in the search box:|Open: email thread |Event they last opened:|Capture item they last selected:)/m;
+const PAGE_OUTSIDE_LINE =
+  /^(?:Open: email thread |Event they last opened:|Capture item they last selected: (?:waiting for a reply|email from someone|sent email nobody|email reminder|suggested follow-up email|unfiled ))/m;
 const PAGE_DOMAIN = /(?:^|, )domain "([^"\\]+)"/gm;
 
 function text(value: unknown) {

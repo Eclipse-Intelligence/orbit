@@ -296,7 +296,6 @@ async function runInWorld(task: EvalTask, settings: RunSettings): Promise<RunRes
 export type SuiteOptions = Omit<RunSettings, "model"> & {
   models: string[];
   repeat: number;
-  concurrency?: number;
   onRun?: (task: EvalTask, model: string, attempt: number, result: RunResult) => void;
 };
 
@@ -320,7 +319,7 @@ export async function runSuite(tasks: EvalTask[], options: SuiteOptions): Promis
       }
     }
   };
-  await Promise.allSettled(Array.from({ length: Math.max(1, Math.min(options.concurrency ?? 1, jobs.length)) }, worker));
+  await worker();
   const reports: TaskReport[] = tasks.flatMap((task) =>
     options.models.map((model) => {
       const runs = results.get(`${task.id}|${model}`) ?? [];

@@ -296,9 +296,9 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
   }
   for (const memory of seed.memories ?? []) {
     await admin.query(
-      `insert into crm.memories (workspace_id, user_id, scope, kind, title, body, sources, confidence, origin)
-       values ($1, $2, $3, $4, $5, $6, $7::jsonb, 'medium', 'learning')`,
-      [actor.workspaceId, memory.scope === "personal" ? actor.userId : null, memory.scope, memory.kind, memory.title, memory.body, JSON.stringify(memory.sources ?? [])],
+      `insert into crm.memories (workspace_id, user_id, scope, kind, title, body, sources, confidence, origin, source)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, 'medium', 'learning', $8)`,
+      [actor.workspaceId, memory.scope === "personal" ? actor.userId : null, memory.scope, memory.kind, memory.title, memory.body, JSON.stringify(memory.sources ?? []), fixtureSource(memory)],
     );
   }
   for (const change of seed.changes ?? []) {
@@ -323,8 +323,19 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
 
 const WORLD_NAMES = ["Eclipse", "Mark Ridgeon"];
 
+function fixtureSource(memory: { scope: string; sources?: unknown }) {
+  const types = (Array.isArray(memory.sources) ? memory.sources : []).map((item) => String((item as { type?: unknown } | null)?.type ?? ""));
+  if (memory.scope === "market" || types.includes("market_note")) return "market";
+  for (const source of ["email", "call", "web"]) if (types.includes(source)) return source;
+  return memory.scope === "personal" ? "chat" : "learned";
+}
+
+const WORLD_DATABASE = /^crm_(?:eval|test)(?:_[a-z0-9_]+)?$/;
+
 async function retireEarlierWorlds(keep: string) {
   const admin = getAdminPool();
+  const database = (await admin.query<{ name: string }>("select current_database() as name")).rows[0]?.name ?? "";
+  if (!WORLD_DATABASE.test(database)) throw new Error(`Evaluation worlds only run in crm_eval or crm_test databases, not ${database || "(none)"}.`);
   await admin.query("update crm.workspace_brands set eclipse_client_id = null, eclipse_tools = false where eclipse_client_id is not null or eclipse_tools");
   await admin.query("delete from crm.integration_settings where integration = 'linear'");
   await admin.query("update crm.workspaces set name = name || ' ' || left(id::text, 8) where name = any($1::text[]) and id <> $2", [WORLD_NAMES, keep]);

@@ -3,8 +3,8 @@ import { assistantModel, settingsFor, startingSettings, type ModelSource, type R
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { pageContext, readPageInput } from "@/lib/assistant/page-context";
 import { connectedProviders } from "@/lib/ai-accounts/store";
-import { systemPrompt, turnContext } from "@/lib/assistant/prompt";
-import { turnFence, withoutMarkers } from "@/lib/assistant/untrusted";
+import { approvalNote, systemPrompt, turnContext } from "@/lib/assistant/prompt";
+import { messageFence, turnFence, withoutMarkers } from "@/lib/assistant/untrusted";
 import { docLinkOf } from "@/lib/assistant/doc-link";
 import {
   ACTION_ALTERNATIVES,
@@ -22,7 +22,9 @@ import {
   toolJson,
   toolLabel,
   WORKSPACE_READ_TOOLS,
+  hiddenToolRefusal,
   type ToolOptions,
+  type ToolSwitches,
 } from "@/lib/assistant/tools";
 import { eclipseAvailable } from "@/lib/assistant/eclipse-scope";
 import { isWebApproval, needsWebApproval, webCard, webGateState, WEB_TOOLS } from "@/lib/assistant/web-gate";
@@ -141,6 +143,7 @@ type MessageRow = {
   provider_state: ProviderState | null;
   files?: ChatFile[] | null;
   page_context?: string | null;
+  turn_context?: string | null;
   created_at: Date | string;
 };
 
@@ -195,7 +198,7 @@ function parseArgs(raw: string) {
   return argsOf(raw) ?? {};
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, created_at";
+const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, turn_context, created_at";
 const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
 const EMAIL_MARK = "exists (select 1 from crm.agent_mail_threads t where t.conversation_id = crm.assistant_conversations.id) as email";
 
@@ -566,11 +569,18 @@ function companionTools(options: ToolOptions) {
   ];
 }
 
-async function refusedWrites(actor: UserActor, writes: ToolCall[]) {
-  const refused = new Map<string, string>();
+type Refusal = { error: string; field: string | null };
+
+async function refusedWrites(actor: UserActor, writes: ToolCall[], switches?: ToolSwitches) {
+  const refused = new Map<string, Refusal>();
   for (const call of writes) {
+    const hidden = switches ? hiddenToolRefusal(call.function.name, switches) : null;
+    if (hidden) {
+      refused.set(call.id, { error: hidden, field: null });
+      continue;
+    }
     const reason = await crossWorkspaceRefusal(actor, call.function.name, parseArgs(call.function.arguments)).catch(() => null);
-    if (reason) refused.set(call.id, reason);
+    if (reason) refused.set(call.id, { error: reason, field: "workspace" });
   }
   return refused;
 }
@@ -646,7 +656,7 @@ function toToolCall(call: { id: string; name: string; arguments: string }): Tool
   return { id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } };
 }
 
-export async function applyCompanionResult(actor: UserActor, conversationId: string, result: CompanionResult) {
+export async function applyCompanionResult(actor: UserActor, conversationId: string, result: CompanionResult, switches?: ToolSwitches) {
   await withActor(actor, (db) => readConversation(db, actor, conversationId));
   const entries: { content: string; reads: ToolCall[] }[] = [];
   const writes: ToolCall[] = [];
@@ -662,11 +672,11 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     }
     if (step.text.trim() || reads.length > 0) entries.push({ content: withoutMarkers(step.text).trim(), reads });
   }
-  const refused = await refusedWrites(actor, writes.filter((call) => !gated.has(call.id)));
+  const refused = await refusedWrites(actor, writes.filter((call) => !gated.has(call.id)), switches);
   const unrun = writes.filter((call) => !refused.has(call.id) && !gated.has(call.id) && result.results[call.id]?.content !== PROPOSED);
   const proposed = writes.filter((call) => !refused.has(call.id) && !unrun.includes(call));
   if (refused.size > 0) {
-    const reasons = [...new Set(refused.values())].join("\n\n");
+    const reasons = [...new Set([...refused.values()].map((entry) => entry.error))].join("\n\n");
     const last = entries.at(-1);
     if (last) last.content = [last.content, reasons].filter(Boolean).join("\n\n");
     else entries.push({ content: reasons, reads: [] });
@@ -699,7 +709,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     for (const call of writes.filter((entry) => refused.has(entry.id))) {
       await insertMessage(actor, conversationId, {
         role: "tool",
-        content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        content: toolJson(refused.get(call.id)),
         toolCallId: call.id,
         toolName: call.function.name,
       });
@@ -781,6 +791,19 @@ function contextFor(now: Date, conversation: ConversationRow, prompt: { learned:
   return turnContext({ now, webSearch: conversation.web_search, briefReady: prompt.briefReady, notes: prompt.learned, fence });
 }
 
+async function savedContext(actor: UserActor, conversation: ConversationRow, rows: MessageRow[], prompt: { learned: string; briefReady: boolean }) {
+  const user = rows.filter((row) => row.role === "user").at(-1);
+  if (!user) return "";
+  if (user.turn_context) return user.turn_context;
+  const rendered = contextFor(new Date(), conversation, prompt, messageFence(user.id));
+  return withActor(actor, async (db) => {
+    const saved = await db.query("update crm.assistant_messages set turn_context = $2 where id = $1 and turn_context is null", [user.id, rendered]);
+    if ((saved.rowCount ?? 0) > 0) return rendered;
+    const stored = await db.query<{ turn_context: string | null }>("select turn_context from crm.assistant_messages where id = $1", [user.id]);
+    return stored.rows[0]?.turn_context ?? rendered;
+  });
+}
+
 function toolsFor(rows: MessageRow[], options: ToolOptions) {
   const calls = rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments })));
   return toolDefinitions({ ...options, domains: loadedDomains(calls) });
@@ -801,7 +824,7 @@ async function runCompanionTurn(
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
   const prompt = await promptFor(actor, conversation, { headless: Boolean(headless), fetchImpl });
-  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, contextFor(new Date(), conversation, prompt, turnFence(rows, conversation.id))));
+  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, await savedContext(actor, conversation, rows, prompt)));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
@@ -809,7 +832,7 @@ async function runCompanionTurn(
     system: `${prompt.system}\n\n${ALL_TOOLS_LOADED}`,
     prompt: transcript,
     tools: companionTools(prompt.tools),
-  }, { agentMailId: headless?.agentMailId ?? null });
+  }, { agentMailId: headless?.agentMailId ?? null, switches: { multiWorkspace: prompt.tools.multiWorkspace === true, eclipse: prompt.tools.eclipse === true, linear: prompt.tools.linear === true } });
   if (headless) {
     headless.queued?.({ jobId, online });
     return;
@@ -966,14 +989,13 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const prompt = await promptFor(actor, conversation, { fetchImpl });
   const { system, tools: toolOptions } = prompt;
   const switches = { multiWorkspace: toolOptions.multiWorkspace, eclipse: toolOptions.eclipse, linear: toolOptions.linear };
-  const now = new Date();
   let continuedAfterCut = false;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
     const tools = toolsFor(rows, toolOptions);
     const fence = turnFence(rows, conversation.id);
-    const context = contextFor(now, conversation, prompt, fence);
+    const context = await savedContext(actor, conversation, rows, prompt);
     const remaining = deadline - Date.now();
     if (remaining < 15_000) {
       const paused = await insertMessage(actor, conversation.id, {
@@ -1056,11 +1078,11 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       }),
     );
     if (signal?.aborted) return;
-    const refused = await refusedWrites(actor, writes);
+    const refused = await refusedWrites(actor, writes, switches);
     for (const call of writes.filter((entry) => refused.has(entry.id))) {
       await insertMessage(actor, conversation.id, {
         role: "tool",
-        content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        content: toolJson(refused.get(call.id)),
         toolCallId: call.id,
         toolName: call.function.name,
       });
@@ -1180,6 +1202,7 @@ export async function decideActions(
   }));
   emit({ type: "conversation", conversation: summary(conversation) });
   const decisions = new Map(input.decisions.map((decision) => [decision.id, decision.approve]));
+  const approved = approvalNote(new Date());
   const variants = new Map(input.decisions.map((decision) => [decision.id, decision.variant]));
   const owner = rows.find((row) => (row.actions ?? []).some((action) => decisions.has(action.id)));
   if (!owner || decisions.size === 0) throw new AssistantError("That action is no longer available.");
@@ -1223,11 +1246,11 @@ export async function decideActions(
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {
       role: "tool",
-      content: toolJson(
-        chosenAlternative && output && typeof output === "object"
-          ? { ...output, note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` }
-          : output,
-      ),
+      content: toolJson({
+        approved,
+        ...(output && typeof output === "object" && !Array.isArray(output) ? output : { result: output }),
+        ...(chosenAlternative ? { note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` } : {}),
+      }),
       toolCallId: action.id,
       toolName: action.name,
     });

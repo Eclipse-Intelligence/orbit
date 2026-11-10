@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { after } from "next/server";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
-import { everywhereAllowed, forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
+import { everywhereAllowed, forgetMemory, lessTrusted, listMemories, OUTSIDE_ORIGINS, recall, rememberNote, type NoteOrigin } from "@/lib/learning/memories";
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
 import { latestBrief, learningKinds, learnNow, LEARNING_KINDS, type LearningKind } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
@@ -25,7 +25,7 @@ import { mapSite } from "@/lib/knowledge/site";
 import { MindcaseError } from "@/lib/mindcase";
 import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools, type EclipseScope } from "@/lib/eclipse-mcp";
 import { ECLIPSE_SCOPED_TOOLS, ECLIPSE_UNAVAILABLE, eclipseScopeFor } from "@/lib/assistant/eclipse-scope";
-import { assertLinearHere } from "@/lib/crm/linear-connection";
+import { assertLinearHere, LINEAR_ELSEWHERE } from "@/lib/crm/linear-connection";
 import { checkColdEmail, evidenceFrom, playbookFor, proofListFor, senderFirstName, withProofList } from "@/lib/assistant/cold-email";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { listProof } from "@/lib/crm/proof";
@@ -577,6 +577,35 @@ function detail(name: Names, key: string) {
 }
 
 const REMEMBER_HERE_KEY = "remember:this_workspace";
+const REMEMBER_BASIS_KEY = "remember:basis";
+
+const OUTSIDE_SOURCE_LINES: Partial<Record<NoteOrigin, string>> = {
+  email: "From an email",
+  call: "From a call",
+  web: "From the web",
+  market: "From a market note",
+  learned: "From a note learned before sources were kept",
+};
+
+function contentWords(text: string) {
+  return new Set(text.toLowerCase().match(/[\p{L}\p{N}£$€%]{4,}/gu) ?? []);
+}
+
+async function rememberBasis(actor: UserActor, args: Args): Promise<NoteOrigin | null> {
+  const id = str(args.basedOn);
+  const proposed = `${str(args.title)} ${str(args.body)}`.toLowerCase();
+  const words = contentWords(proposed);
+  const notes = (await listMemories(actor, { limit: 200 })).filter((note) => OUTSIDE_ORIGINS.has(note.source));
+  const byId = isUuid(id) ? notes.find((note) => note.id === id) : undefined;
+  const matches = (note: (typeof notes)[number]) => {
+    const title = note.title.trim().toLowerCase();
+    if (title.length >= 8 && proposed.includes(title)) return true;
+    const body = [...contentWords(note.body)];
+    return body.length >= 5 && body.filter((word) => words.has(word)).length / body.length >= 0.5;
+  };
+  const found = byId ?? notes.find(matches);
+  return found ? found.source : null;
+}
 
 function sendFromKey(args: Args) {
   return `${str(args.draftId) || str(args.replyToEmailId) || "new"}:send_from`;
@@ -1111,7 +1140,15 @@ const MULTI_WORKSPACE_TOOLS: ReadonlySet<string> = new Set([MOVE_TOOL]);
 
 export const LINEAR_TOOLS: ReadonlySet<string> = new Set(["linear_search_issues", "linear_get_issue", "linear_create_issue", "linear_update_issue"]);
 
-type ToolSwitches = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean };
+export type ToolSwitches = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean };
+
+export function hiddenToolRefusal(name: string, options: ToolSwitches) {
+  const resolved = findTool(name)?.name ?? name;
+  if (!hiddenTool(resolved, options)) return null;
+  if (LINEAR_TOOLS.has(resolved)) return LINEAR_ELSEWHERE;
+  if (ECLIPSE_SCOPED_TOOLS.has(resolved)) return ECLIPSE_UNAVAILABLE;
+  return `There is no tool called ${name}.`;
+}
 
 function hiddenTool(name: string, options: ToolSwitches) {
   return (
@@ -1423,6 +1460,12 @@ function withWorkspaceParam(tool: AssistantTool): AssistantTool {
   if (!WORKSPACE_READ_TOOLS.has(tool.name)) return tool;
   const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
   return { ...tool, parameters: { ...tool.parameters, properties: { ...properties, workspace: WORKSPACE_PARAM } } };
+}
+
+function withoutWorkspaceParam(tool: AssistantTool): AssistantTool {
+  if (!WORKSPACE_READ_TOOLS.has(tool.name)) return tool;
+  const properties = Object.fromEntries(Object.entries((tool.parameters.properties ?? {}) as Record<string, unknown>).filter(([key]) => key !== "workspace"));
+  return { ...tool, parameters: { ...tool.parameters, properties } };
 }
 
 export type WorkspaceLabel = { id: string; name: string };
@@ -5507,6 +5550,7 @@ const TOOL_LIST: AssistantTool[] = [
         shared: { type: "boolean", description: "True for business knowledge the whole workspace should share." },
         allWorkspaces: { type: "boolean", description: "For a note about the user, true when it applies in every workspace they work in. Leave out to keep it to this workspace." },
         forgetId: { type: "string", description: "Id of a learned note to forget instead of saving one." },
+        basedOn: { type: "string", description: "Id of the learned note this saves, from recall, when the user asks to keep or share one." },
       },
     },
     details: async (actor, args): Promise<Record<string, string>> => {
@@ -5514,9 +5558,11 @@ const TOOL_LIST: AssistantTool[] = [
         const note = await noteToForget(actor, str(args.forgetId));
         return note ? { [`${str(args.forgetId)}:memory`]: JSON.stringify({ ...note, refusal: forgetRefusal(actor, note) }) } : {};
       }
-      if (args.shared === true || args.allWorkspaces !== true) return {};
+      const basis = await rememberBasis(actor, args).catch(() => null);
+      const found: Record<string, string> = basis ? { [REMEMBER_BASIS_KEY]: basis } : {};
+      if (args.shared === true || args.allWorkspaces !== true) return found;
       const allowed = await everywhereAllowed(actor, str(args.kind) || "note", `${str(args.title)} ${str(args.body)}`);
-      return allowed ? {} : { [REMEMBER_HERE_KEY]: "yes" };
+      return allowed ? found : { ...found, [REMEMBER_HERE_KEY]: "yes" };
     },
     describe: (args, name) =>
       str(args.forgetId)
@@ -5527,6 +5573,7 @@ const TOOL_LIST: AssistantTool[] = [
               str(args.title),
               str(args.body),
               args.shared !== true && args.allWorkspaces === true ? (detail(name, REMEMBER_HERE_KEY) ? "This workspace" : "All workspaces") : "",
+              OUTSIDE_SOURCE_LINES[detail(name, REMEMBER_BASIS_KEY) as NoteOrigin] ?? "",
             ].filter(Boolean),
           },
     run: async (actor, args) => {
@@ -5536,7 +5583,8 @@ const TOOL_LIST: AssistantTool[] = [
         if (refusal) return { error: refusal };
         return forgetMemory(actor, forgetId);
       }
-      const memory = await rememberNote(actor, args, "assistant", toolSource() === "email" ? "email" : "chat");
+      const asked: NoteOrigin = toolSource() === "email" ? "email" : "chat";
+      const memory = await rememberNote(actor, args, "assistant", lessTrusted(asked, await rememberBasis(actor, args).catch(() => null)));
       const downgraded = args.shared !== true && args.allWorkspaces === true && memory.allWorkspaces !== true;
       return {
         memory,
@@ -5751,9 +5799,9 @@ export function loadedDomains(calls: { name: string; arguments: string }[]) {
 }
 
 export function assistantTools(options: ToolOptions = {}) {
-  const offered = ASSISTANT_TOOLS.filter((tool) => !hiddenTool(tool.name, options)).map((tool) =>
-    tool.name === "find_tools" ? { ...tool, ...findToolsSchema(options) } : tool.name === "guide" ? { ...tool, ...guideSchema(options) } : tool,
-  );
+  const offered = ASSISTANT_TOOLS.filter((tool) => !hiddenTool(tool.name, options))
+    .map((tool) => (options.multiWorkspace === true ? tool : withoutWorkspaceParam(tool)))
+    .map((tool) => (tool.name === "find_tools" ? { ...tool, ...findToolsSchema(options) } : tool.name === "guide" ? { ...tool, ...guideSchema(options) } : tool));
   if (!options.domains) return offered;
   const allowed = toolDomainNames(options);
   const order = [...CORE_TOOLS, ...options.domains.filter((domain) => allowed.includes(domain)).flatMap((domain) => domainTools(domain, options))];

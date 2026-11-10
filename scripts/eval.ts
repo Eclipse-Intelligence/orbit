@@ -26,7 +26,6 @@ const { values } = parseArgs({
     reasoning: { type: "string", default: DEFAULT_REASONING },
     "judge-model": { type: "string", default: DEFAULT_JUDGE_MODEL },
     "no-judge": { type: "boolean", default: false },
-    concurrency: { type: "string", default: "1" },
     timeout: { type: "string", default: "300" },
     now: { type: "string" },
     out: { type: "string" },
@@ -86,7 +85,6 @@ async function main() {
   if (models.length === 0) throw new Error("Pick at least one model with --model, for example --model claude-sonnet-5-5.");
   for (const model of models) usableModel(model);
   const repeat = whole(values.repeat, "--repeat", 1, 20);
-  const concurrency = whole(values.concurrency, "--concurrency", 1, 16);
   const timeoutMs = whole(values.timeout, "--timeout", 30, 1_800) * 1000;
   const clock = values.now ? new Date(values.now) : pinnedWednesday();
   if (Number.isNaN(clock.getTime())) throw new Error("--now is a date and time, for example 2026-11-11T15:00:00Z.");
@@ -114,7 +112,6 @@ async function main() {
       judgeModel: values["judge-model"],
       useJudge,
       timeoutMs,
-      concurrency,
       onRun: (item, model, attempt, result) => {
         const failed = result.checks.filter((check) => !check.pass).map((check) => `${check.name}${check.pending ? ` [waits on ${check.pending}]` : ""}`);
         console.log(`${result.pass ? "pass" : "FAIL"}  ${item.id} on ${model}, run ${attempt + 1} (${Math.round(result.ms / 1000)}s)${failed.length ? `: ${failed.join("; ")}` : ""}`);

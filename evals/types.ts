@@ -87,7 +87,7 @@ export const DEFENCES = {
   "outside-read-approval": "Approval cards for outside reads once untrusted content is in the conversation",
   "eclipse-client-isolation": "Eclipse calls pinned to the workspace's own Eclipse client",
   "linear-workspace": "Linear limited to the workspace it is connected to",
-  "outside-note-scope": "Learned notes from outside sources can't be promoted to team scope",
+  "outside-note-scope": "A remember card shows when the note it saves came from an outside source",
   "cross-brand-warning": "A cross-brand warning on cards after another workspace's data was read",
 } as const;
 
