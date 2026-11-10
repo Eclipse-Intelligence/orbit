@@ -154,7 +154,7 @@ async function failureMessage(actor: UserActor, sourceId: string, error: unknown
   const reconnect = reconnectProblem(error, await sourceEmail(actor, sourceId));
   if (reconnect) return reconnect;
   if (error instanceof GraphMailError) {
-    if (error.status === 404) return "Outlook no longer has that email. It will disappear after the next sync.";
+    if (error.status === 404) return "That email is no longer in Outlook.";
     return error.message;
   }
   return error instanceof Error ? error.message : "Outlook didn't accept that change. Try again.";
@@ -232,14 +232,14 @@ export async function applyMailAction(
 }
 
 export async function threadForEmail(actor: UserActor, emailId: string) {
-  if (!isUuid(emailId)) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  if (!isUuid(emailId)) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   return withActor(actor, async (db) => {
     const result = await db.query<{ source_id: string; tk: string; subject: string | null }>(
       "select source_id, thread_key as tk, subject from crm.mail_messages where id = $1 and user_id = $2",
       [emailId, actor.userId],
     );
     const row = result.rows[0];
-    if (!row) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+    if (!row) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
     return { thread: `${row.source_id}|${row.tk}`, subject: row.subject };
   });
 }

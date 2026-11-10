@@ -136,7 +136,7 @@ describe("LinkedIn capture pairing", () => {
 
     await assert.rejects(decidePairing(mark, { code, name: "Chrome", workspaceIds: [], approve: true }), /at least one workspace/);
     assert.equal(await decidePairing(mark, { code: code.toLowerCase(), name: "Chrome on MacBook Pro", workspaceIds: [mark.workspaceId], approve: true }), "approved");
-    await assert.rejects(decidePairing(mark, { code, name: "Again", workspaceIds: [mark.workspaceId], approve: true }), /expired or was already used/);
+    await assert.rejects(decidePairing(mark, { code, name: "Again", workspaceIds: [mark.workspaceId], approve: true }), /isn't valid/);
 
     const wrong = await call<{ error: { code: string } }>(redeemRoute, "/api/extension/pair/redeem", { body: { code, secret: "not-the-secret" } });
     assert.equal(wrong.status, 410);
@@ -159,7 +159,7 @@ describe("LinkedIn capture pairing", () => {
     const expired = await startPairing("https://orbit.test");
     await getAdminPool().query("update crm.extension_pairings set expires_at = now() - interval '1 minute' where status = 'pending'");
     assert.equal((await pairingState(expired.code)).state, "expired");
-    await assert.rejects(decidePairing(mark, { code: expired.code, name: "Chrome", workspaceIds: [mark.workspaceId], approve: true }), /expired/);
+    await assert.rejects(decidePairing(mark, { code: expired.code, name: "Chrome", workspaceIds: [mark.workspaceId], approve: true }), /isn't valid/);
     await assert.rejects(redeemPairing(expired.code, expired.secret), /expired/);
 
     const declined = await startPairing("https://orbit.test");

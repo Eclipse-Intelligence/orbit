@@ -139,7 +139,7 @@ export function ImageField({ id, label, value, onChange, round }: { id: string; 
       <input ref={input} id={id} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="sr-only" onChange={(event) => void pick(event.target.files?.[0])} />
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="secondary" size="sm" disabled={busy} onClick={() => input.current?.click()}>
-          {busy ? "Uploading" : value ? "Change" : "Upload image"}
+          {busy ? "Uploading…" : value ? "Change" : "Upload image"}
         </Button>
         {value && (
           <Button variant="ghost" size="sm" onClick={() => onChange("")}>
@@ -180,7 +180,7 @@ function DocumentPicker({ block, knowledge, onChange }: { block: Extract<Block, 
     else onChange(block.items.filter((item) => item.id !== option.id));
   };
   if (knowledge.length === 0 && missing.length === 0) {
-    return <p className="caption-style text-subtle">Nothing in Knowledge yet. Add documents on the company page or in Settings › Knowledge.</p>;
+    return <p className="caption-style text-subtle">Nothing in Knowledge. Add documents in Settings › Knowledge.</p>;
   }
   return (
     <fieldset className="flex flex-col gap-3">
@@ -324,7 +324,10 @@ export function BlockEditor({
 
   return (
     <div ref={root} className="flex flex-col gap-4">
-      <FieldButtons onInsert={insert} />
+      <div className="flex flex-col gap-1.5">
+        <FieldButtons onInsert={insert} />
+        <p className="caption-style text-subtle">Blank line for a new paragraph, - for bullets, **bold**, [text](https://…).</p>
+      </div>
       <ol className="flex flex-col gap-3">
         {blocks.map((block, index) => (
           <li
@@ -360,14 +363,12 @@ export function BlockEditor({
               <>
                 {text(block, "heading", "Heading")}
                 {text(block, "body", "Text", 6)}
-                <p className="caption-style text-subtle">Leave a blank line between paragraphs. Start lines with - for bullets, and use **bold** or [link text](https://…).</p>
               </>
             )}
             {block.type === "pricing" && (
               <>
                 {text(block, "heading", "Heading")}
-                {text(block, "intro", "Text above the prices", 2)}
-                <p className="caption-style text-subtle">The products and totals chosen for each proposal appear here.</p>
+                {text(block, "intro", "Intro", 2)}
               </>
             )}
             {block.type === "terms" && (
@@ -376,7 +377,7 @@ export function BlockEditor({
                 {text(block, "body", "Text", 4)}
                 <div className="grid gap-3 sm:grid-cols-2">
                   {text(block, "linkLabel", "Link text")}
-                  {text(block, "linkUrl", "Link to your terms (https://…)")}
+                  {text(block, "linkUrl", "Link", undefined, "https://…")}
                 </div>
               </>
             )}
@@ -403,19 +404,18 @@ export function BlockEditor({
             {block.type === "documents" && (
               <>
                 {text(block, "heading", "Heading")}
-                {text(block, "intro", "Text above the documents", 2)}
+                {text(block, "intro", "Intro", 2)}
                 <DocumentPicker block={block} knowledge={knowledge} onChange={(items) => update(block.id, { items })} />
               </>
             )}
             {block.type === "steps" && (
               <>
                 {text(block, "heading", "Heading")}
-                {text(block, "intro", "Text above the steps", 2)}
+                {text(block, "intro", "Intro", 2)}
                 {context === "proposal" ? (
-                  <p className="caption-style text-subtle">Manage this proposal&apos;s steps in Next steps below.</p>
+                  <p className="caption-style text-subtle">Edit the steps in Next steps below.</p>
                 ) : (
                   <>
-                    <p className="caption-style text-subtle">Every proposal from this template starts with these steps.</p>
                     <ol className="flex flex-col gap-3">
                       {block.items.map((item, itemIndex) => {
                         const set = (patch: Partial<typeof item>) =>
@@ -435,14 +435,14 @@ export function BlockEditor({
                               </div>
                               {field(
                                 `${block.id}-d${itemIndex}`,
-                                "Due, days after creating",
+                                "Due (days after creating)",
                                 item.dueInDays === null ? "" : String(item.dueInDays),
                                 (value) => set({ dueInDays: value === "" ? null : Math.max(0, Math.min(365, Math.trunc(Number(value)) || 0)) }),
                                 { type: "number" },
                               )}
                             </div>
-                            <Button variant="ghost" size="sm" className="self-start" onClick={() => update(block.id, { items: block.items.filter((_, position) => position !== itemIndex) })}>
-                              Remove step
+                            <Button variant="ghost" size="sm" className="self-start" aria-label={`Remove step ${itemIndex + 1}`} onClick={() => update(block.id, { items: block.items.filter((_, position) => position !== itemIndex) })}>
+                              Remove
                             </Button>
                           </li>
                         );
@@ -463,8 +463,8 @@ export function BlockEditor({
             {block.type === "booking" && (
               <>
                 {text(block, "heading", "Heading")}
-                {text(block, "intro", "Text above the calendar", 2)}
-                <p className="caption-style text-subtle">Shows the proposal owner&apos;s booking page, filled in with the client&apos;s name and email.</p>
+                {text(block, "intro", "Intro", 2)}
+                <p className="caption-style text-subtle">Shows the owner&apos;s booking page.</p>
               </>
             )}
             {block.type === "quote" && (
@@ -496,8 +496,8 @@ export function BlockEditor({
                         (answer) => update(block.id, { items: block.items.map((entry, position) => (position === itemIndex ? { ...entry, answer } : entry)) }),
                         { rows: 3, maxLength: 4000 },
                       )}
-                      <Button variant="ghost" size="sm" className="self-start" onClick={() => update(block.id, { items: block.items.filter((_, position) => position !== itemIndex) })}>
-                        Remove question
+                      <Button variant="ghost" size="sm" className="self-start" aria-label={`Remove question ${itemIndex + 1}`} onClick={() => update(block.id, { items: block.items.filter((_, position) => position !== itemIndex) })}>
+                        Remove
                       </Button>
                     </li>
                   ))}
@@ -525,12 +525,12 @@ export function BlockEditor({
                         </div>
                         {field(`${block.id}-e${personIndex}`, "Email", person.email, (email) => set({ email }), { type: "text", maxLength: 200 })}
                         <ImageField id={`${block.id}-p${personIndex}`} label="Photo" value={person.photo} round onChange={(photo) => set({ photo })} />
-                        <Button variant="ghost" size="sm" className="self-start" onClick={() => {
+                        <Button variant="ghost" size="sm" className="self-start" aria-label={`Remove person ${personIndex + 1}`} onClick={() => {
                             setPeopleKeys((current) => ({ ...current, [block.id]: withoutTeamKey(current[block.id], block.people.length, block.id, personIndex) }));
                             update(block.id, { people: block.people.filter((_, position) => position !== personIndex) });
                           }}
                         >
-                          Remove person
+                          Remove
                         </Button>
                       </li>
                     );

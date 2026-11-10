@@ -74,7 +74,7 @@ export function HistoryRail({
       </div>
       {versions === null && (
         <p role="status" className="caption-style text-subtle px-4">
-          Loading
+          Loading…
         </p>
       )}
       {live && (
@@ -102,7 +102,7 @@ export function HistoryRail({
           </button>
         </div>
       )}
-      {versions?.length === 0 && <p className="caption-style text-subtle px-4">No versions yet. Orbit saves one as you write.</p>}
+      {versions?.length === 0 && <p className="caption-style text-subtle px-4">No versions yet</p>}
       {groups.map((group) => (
         <section key={group.day} className="flex flex-col px-2 pb-2">
           <h4 className="eyebrow-style text-subtle px-2 pt-2 pb-1.5 text-[11px]">{group.day}</h4>
@@ -166,7 +166,6 @@ export function VersionBanner({
       <ClockIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
       <p className="ui-style text-soft min-w-0 flex-1 truncate">
         <span className="text-foreground">{label}</span> by {selected.version.author.name}
-        {selected.previous ? ", compared with the version before" : ""}
       </p>
       {selected.previous && (
         <label className="caption-style text-soft flex shrink-0 items-center gap-2">
@@ -176,7 +175,7 @@ export function VersionBanner({
       )}
       <Button variant="secondary" size="sm" onClick={onRestore} disabled={pending}>
         <UndoIcon aria-hidden className="size-3.5" />
-        {pending ? "Restoring" : "Restore"}
+        {pending ? "Restoring…" : "Restore"}
       </Button>
       <Button variant="ghost" size="sm" shortcut={["Esc"]} onClick={onBack}>
         Back to live
@@ -246,7 +245,7 @@ export function VersionPreview({ page, selected, showChanges }: { page: Page; se
     <>
       {!loaded && (
         <p role="status" className="caption-style text-subtle">
-          Loading the version
+          Loading…
         </p>
       )}
       <div ref={host} />

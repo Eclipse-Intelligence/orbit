@@ -1,6 +1,8 @@
 import type { LaterOption } from "@/lib/mail/later";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 
+export const SYNC_RETRYING = "Mail didn't refresh. Retrying.";
+
 const MAIL_ROLES = ["inbox", "snoozed", "sent", "drafts", "archive", "trash", "junk"] as const;
 export type MailViewRole = (typeof MAIL_ROLES)[number];
 export const MAIL_SPLITS = ["important", "other", "news", "calendar"] as const;
@@ -99,9 +101,9 @@ export type SubscriptionStatus = "subscribed" | "kept" | "unsubscribed" | "ignor
 
 export const SUBSCRIPTION_LABELS: Record<SubscriptionStatus, string> = {
   subscribed: "Subscribed",
-  kept: "Subscribed",
+  kept: "Kept",
   unsubscribed: "Unsubscribed",
-  ignored: "Ignored your unsubscribe",
+  ignored: "Unsubscribe ignored",
   research: "Research",
   blocked: "Blocked",
 };

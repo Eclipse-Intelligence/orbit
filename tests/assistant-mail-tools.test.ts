@@ -516,7 +516,7 @@ describe("assistant mail tools", () => {
     assert.ok((await listScheduledDrafts(owner)).some((item) => item.id === draftId));
 
     await admin.query("update crm.mail_drafts set send_at = null where id = $1", [draftId]);
-    const sending = "That email isn't waiting to send any more. Either it's sending now (check Sent in Mail) or it was unscheduled and is in Drafts.";
+    const sending = "That email is no longer scheduled. Check Sent or Drafts.";
     assert.equal(((await withFetch(env.fetchImpl, () => runTool(owner, "change_scheduled_email", change))) as { error: string }).error, sending);
     const cancel = { draftId, cancel: true };
     assert.equal(((await runTool(owner, "change_scheduled_email", cancel)) as { error: string }).error, sending);
@@ -537,7 +537,7 @@ describe("assistant mail tools", () => {
     assert.equal((await draftFiles(draftId))?.length, 1);
 
     await admin.query("delete from crm.mail_drafts where id = $1", [draftId]);
-    const gone = "That scheduled email isn't in Orbit Mail any more. It has probably been sent or discarded, so check Sent in Mail.";
+    const gone = "That scheduled email has gone. Check Sent.";
     assert.equal(((await runTool(owner, "change_scheduled_email", cancel)) as { error: string }).error, gone);
     assert.equal(((await withFetch(env.fetchImpl, () => runTool(owner, "change_scheduled_email", change))) as { error: string }).error, gone);
   });

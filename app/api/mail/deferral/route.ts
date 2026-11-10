@@ -16,6 +16,6 @@ export async function POST(request: Request) {
       await cancelDeferral(actor, id);
       return { ok: true, deferral: null };
     }
-    throw new CrmError("invalid_input", "Choose Change date or Don't follow up.", 400, { field: "action" });
+    throw new CrmError("invalid_input", "Choose Change date or Cancel.", 400, { field: "action" });
   });
 }

@@ -130,7 +130,6 @@ function Confirmation({ booking, embedded }: { booking: BookingConfirmation; emb
         <p className="text-soft text-[14px] leading-5">
           An invitation is on its way to <span className="text-foreground font-medium break-all">{booking.email}</span>.
         </p>
-        {!embedded && <p className="caption-style text-subtle leading-4">You can close this page.</p>}
       </div>
     </div>
   );
@@ -187,7 +186,7 @@ export function BookingPanel({
       .then(async (response) => {
         const body = (await response.json().catch(() => null)) as (SlotMonth & { error?: { message?: string } }) | null;
         if (!response.ok || !body || body.error) {
-          throw new Error(body?.error?.message ?? "Couldn't load times. Try again.");
+          throw new Error(body?.error?.message ?? "Couldn't load times.");
         }
         return body;
       })
@@ -206,7 +205,7 @@ export function BookingPanel({
         requested.delete(key);
         setResults((current) => ({
           ...current,
-          [key]: { ok: false, error: error instanceof Error ? error.message : "Couldn't load times. Try again." },
+          [key]: { ok: false, error: error instanceof Error ? error.message : "Couldn't load times." },
         }));
       });
     return () => {
@@ -298,7 +297,7 @@ export function BookingPanel({
       }
       setErrors({ form: message });
     } catch {
-      setErrors({ form: "Couldn't reach the server. Check your connection and try again." });
+      setErrors({ form: "No connection. Try again." });
     } finally {
       setPending(false);
     }
@@ -420,16 +419,13 @@ export function BookingPanel({
                 })}
               </ul>
             ) : (
-              <div className="flex flex-col items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
-                <p className="text-soft text-[14px] leading-5">
-                  Every slot this month is taken or out of range.
-                </p>
-                {data && shownMonth && shownMonth < data.last && (
-                  <Button variant="secondary" size="md" onClick={() => changeMonth(1)}>
-                    See next month
-                  </Button>
-                )}
-              </div>
+              data &&
+              shownMonth &&
+              shownMonth < data.last && (
+                <Button variant="secondary" size="md" className="self-start" onClick={() => changeMonth(1)}>
+                  Next month
+                </Button>
+              )
             )}
           </div>
 
@@ -485,7 +481,7 @@ export function BookingPanel({
               <Field
                 label="Note"
                 htmlFor={fieldId("note")}
-                hint="Optional. Anything you'd like to cover?"
+                hint="Anything you'd like to cover? (optional)"
                 error={errors.note}
               >
                 <textarea
@@ -534,7 +530,6 @@ export function BookingPanel({
           )}
         </>
       )}
-      {!embedded && <p className="caption-style text-soft mt-auto pt-2 text-center">Scheduling by Orbit</p>}
     </div>
   );
 }

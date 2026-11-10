@@ -195,10 +195,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "inbox-sync", label: "Sync Microsoft mail", group: "Settings", combos: [{ key: "s" }], target: "sync", palette: true },
   { id: "capture-approve", label: "Approve, or add as a contact", group: "Capture", combos: [{ key: "a" }], rowKey: "a" },
   { id: "capture-reply", label: "Reply, or reject an approval", group: "Capture", combos: [{ key: "r" }], rowKey: "r" },
-  { id: "capture-done", label: "Done or Not needed", group: "Capture", combos: [{ key: "e" }], rowKey: "e" },
+  { id: "capture-done", label: "Done, or dismiss a follow-up", group: "Capture", combos: [{ key: "e" }], rowKey: "e" },
   { id: "capture-snooze", label: "Snooze", group: "Capture", combos: [{ key: "h" }], rowKey: "h" },
   { id: "inbox-file", label: "File to…", group: "Capture", combos: [{ key: "f" }], rowKey: "f" },
-  { id: "inbox-ignore", label: "Ignore or hide", group: "Capture", combos: [{ key: "i" }], rowKey: "i" },
+  { id: "inbox-ignore", label: "Dismiss from To file", group: "Capture", combos: [{ key: "i" }], rowKey: "i" },
   { id: "capture-undo", label: "Undo the last change", group: "Capture", combos: [{ key: "z" }] },
   ...[1, 2, 3, 4, 5, 6].map((index) => ({
     id: `capture-filter-${index}`,

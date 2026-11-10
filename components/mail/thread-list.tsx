@@ -304,7 +304,7 @@ function Row({
                 {laterDetail(thread.snoozedUntil, now)}
               </time>
             ) : thread.followUpAt ? (
-              <time dateTime={thread.followUpAt} title={`Follow-up goes out ${mailFullWhen(thread.followUpAt)} if nobody replies`} className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums">
+              <time dateTime={thread.followUpAt} title={`Follow-up ${mailFullWhen(thread.followUpAt)} if no reply`} className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums">
                 <FollowUpIcon aria-hidden className="size-3" />
                 <span className="sr-only">Follow-up on</span>
                 {followUpDay(thread.followUpAt)}

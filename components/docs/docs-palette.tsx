@@ -237,7 +237,7 @@ export default function DocsPaletteGroups({
     <>
       {failedQuery === trimmed && !current && (
         <p role="alert" className="caption-style text-danger px-4 py-3">
-          Docs search didn&apos;t work. Try again in a moment.
+          Search failed. Try again.
         </p>
       )}
       {(titleRows.length > 0 || textRows.length > 0) && (

@@ -111,7 +111,7 @@ export default function ArchivedSheet() {
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-3 pb-10">
           {!loaded && (
             <p role="status" className="caption-style text-subtle px-2">
-              Loading
+              Loading…
             </p>
           )}
           {loaded?.error && (
@@ -166,29 +166,24 @@ export default function ArchivedSheet() {
               </ul>
             </section>
           )}
-          {data?.formerMembers && (
+          {data?.formerMembers && data.formerMembers.length > 0 && (
             <section aria-labelledby="former-members" className="border-line-strong mt-2 border-t px-2 pt-4">
               <h2 id="former-members" className="eyebrow-style text-subtle pb-1 text-[11px]">
-                Former members&apos; docs
+                Former members&apos; notes
               </h2>
-              <p className="caption-style text-subtle pb-2">Admins only. Take over someone&apos;s notes and folders after they leave the workspace.</p>
-              {data.formerMembers.length === 0 ? (
-                <p className="caption-style text-subtle">No former members&apos; docs you can see.</p>
-              ) : (
-                <ul className="flex flex-col">
-                  {data.formerMembers.map((member) => (
-                    <li key={member.id} className="flex min-h-11 items-center gap-3 py-1.5">
-                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <span className="text-foreground truncate text-[14px] leading-5">{member.name}</span>
-                        <span className="caption-style text-subtle truncate">{member.examples.join(", ")}</span>
-                      </span>
-                      <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => setTakeOver(member)}>
-                        Take over
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <ul className="flex flex-col">
+                {data.formerMembers.map((member) => (
+                  <li key={member.id} className="flex min-h-11 items-center gap-3 py-1.5">
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="text-foreground truncate text-[14px] leading-5">{member.name}</span>
+                      <span className="caption-style text-subtle truncate">{member.examples.join(", ")}</span>
+                    </span>
+                    <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => setTakeOver(member)}>
+                      Take over
+                    </Button>
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
         </div>
@@ -197,8 +192,8 @@ export default function ArchivedSheet() {
         open={takeOver !== null}
         onOpenChange={(next) => !next && setTakeOver(null)}
         tone="neutral"
-        title={`Take over ${takeOver?.name ?? ""}'s docs?`}
-        description="Their notes and folders, private ones included, become yours. Shared ones stay shared. Their daily notes stay with them."
+        title={`Take over ${takeOver?.name ?? ""}'s notes?`}
+        description="Their notes and folders, private ones included, become yours. Shared ones stay shared. Daily notes stay with them."
         confirmLabel="Take over"
         onConfirm={() => {
           if (takeOver) confirmTakeOver(takeOver);

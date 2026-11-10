@@ -232,7 +232,7 @@ describe("assistant can edit without asking", () => {
     assert.equal(lastActions(run.events)[0].status, "pending");
     assert.equal((await getDoc(mark, doc.id)).content, "Start");
     const shared = await createDoc(mark, { title: "Priya's view", content: "x", shared: true });
-    await assert.rejects(setAssistantCanEdit(priya, shared.id, true), /Only Mark Ridgeon can let the assistant edit this doc without asking/);
+    await assert.rejects(setAssistantCanEdit(priya, shared.id, true), /Only Mark Ridgeon can let the assistant edit this note without asking/);
     assert.equal((await getDoc(mark, shared.id)).assistantCanEdit, false);
     assert.equal((await getDoc(priya, shared.id)).canChangeAssistantEdit, false);
   });

@@ -64,7 +64,7 @@ describe("Docs over MCP", () => {
       const updated = (await mcp.call("update_doc", { id: created.id, mode: "edit", find: "Hello", replace: "Hi" })).value!;
       assert.deepEqual(updated.changed, { added: 1, removed: 1 });
       const stale = await mcp.call("update_doc", { id: created.id, mode: "append", content: "x", base_revision: 1 });
-      assert.match(stale.error ?? "", /^conflict: This doc changed/);
+      assert.match(stale.error ?? "", /^conflict: This note changed/);
       assert.match((await mcp.call("update_doc", { id: created.id, mode: "replace" })).error ?? "", /^invalid_input: Give content, the whole new text/);
       assert.equal((await getDoc(mark, created.id)).content, "Hi [[Other]] #clients/acme");
       assert.match((await mcp.call("read_doc", { id: created.id, offset: 1e12 })).error ?? "", /offset|too_big|Too big|less than/i);
@@ -110,14 +110,14 @@ describe("Docs over MCP", () => {
       const listed = ((await mcp.call("list_docs", {})).value!.docs as { title: string }[]).map((doc) => doc.title);
       assert.ok(listed.includes("Team shared"));
       assert.ok(!listed.includes("Mark private"));
-      assert.match((await mcp.call("read_doc", { id: privateDoc.id })).error ?? "", /^not_found: That doc doesn't exist, or it's private to someone else/);
+      assert.match((await mcp.call("read_doc", { id: privateDoc.id })).error ?? "", /^not_found: That note doesn't exist, or it's private to someone else/);
       assert.match((await mcp.call("update_doc", { id: privateDoc.id, mode: "append", content: "x" })).error ?? "", /^not_found/);
       assert.deepEqual(((await mcp.call("search_docs", { query: "Mark private" })).value!.results as unknown[]).length, 0);
       await mcp.call("update_doc", { id: sharedDoc.id, mode: "append", content: "From the agent" });
       const after = await getDoc(mark, sharedDoc.id);
       assert.equal(after.content, "Start\n\nFrom the agent");
       assert.equal(after.lastEditor?.name, "Claude Code");
-      assert.match((await mcp.call("share_doc", { id: sharedDoc.id, shared: false })).error ?? "", /^forbidden: Only Mark Ridgeon can make this doc private/);
+      assert.match((await mcp.call("share_doc", { id: sharedDoc.id, shared: false })).error ?? "", /^forbidden: Only Mark Ridgeon can make this note private/);
       const teamFolder = await createFolder(mark, { name: "Team", shared: true });
       const inFolder = await createDoc(mark, { title: "Shared by folder", folderId: teamFolder.id });
       assert.match((await mcp.call("move_doc", { id: inFolder.id, folder_id: null })).error ?? "", /^forbidden: That would make it private to Mark Ridgeon/);

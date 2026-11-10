@@ -246,7 +246,7 @@ export default function NoteEditor({
     setMounted(true);
     if (restored) {
       scheduleNoteSave(liveId, latest.current.page);
-      notify("Restored changes that hadn't saved yet.");
+      notify("Restored unsaved changes.");
     }
     return () => {
       view.contentDOM.removeEventListener("focus", focusWatcher);

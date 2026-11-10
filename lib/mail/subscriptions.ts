@@ -134,7 +134,7 @@ async function assertNotOwn(db: Db, actor: UserActor, key: string) {
   const own = await db.query<{ email: string }>(`select own.email from ${ownSql("$1", "$2")} as own(email) where own.email is not null`, [actor.userId, actor.email]);
   const emails = own.rows.map((row) => row.email);
   if (key.startsWith("@") && emails.some((email) => domainOf(email) === key.slice(1))) {
-    throw new CrmError("invalid_input", `${key} is your own domain, so Orbit won't unsubscribe from or block it. Choose a single sender instead.`, 400, { field: "sender" });
+    throw new CrmError("invalid_input", `${key} is your own domain. Choose a single sender.`, 400, { field: "sender" });
   }
   if (emails.includes(key)) throw new CrmError("invalid_input", `${key} is one of your own addresses.`, 400, { field: "sender" });
 }
@@ -306,7 +306,7 @@ async function latestMessage(db: Db, actor: UserActor, input: { thread?: string;
       [actor.userId, sourceId, key, actor.email],
     );
     const row = result.rows[0];
-    if (!row) throw new CrmError("not_found", "This conversation has no email from anyone else to unsubscribe from.", 404);
+    if (!row) throw new CrmError("not_found", "No one else in this conversation to unsubscribe from.", 404);
     return row;
   }
   const key = readKey(input.sender ?? "");
@@ -318,7 +318,7 @@ async function latestMessage(db: Db, actor: UserActor, input: { thread?: string;
     [actor.userId, key],
   );
   const row = result.rows[0];
-  if (!row) throw new CrmError("not_found", `Orbit has no email from ${key} to unsubscribe with. Block them instead.`, 404);
+  if (!row) throw new CrmError("not_found", `No email from ${key} to unsubscribe with. Block them instead.`, 404);
   return row;
 }
 
@@ -678,7 +678,7 @@ export async function unsubscribeMany(
         const index = next++;
         const sender = keys[index];
         if (options.deadline && Date.now() > options.deadline - BULK_RESERVE_MS) {
-          results[index] = { sender, error: "Orbit ran out of time before this one. Try it again." };
+          results[index] = { sender, error: "Ran out of time. Try again." };
           continue;
         }
         try {

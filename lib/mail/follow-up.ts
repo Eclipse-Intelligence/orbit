@@ -97,14 +97,14 @@ function isOriginal(row: SendFollowUpRow, latest: Latest) {
 }
 
 function blocker(row: SendFollowUpRow, latest: Latest | null) {
-  if (!latest) return "Orbit can't find your email in this conversation yet, so it didn't send the follow-up.";
-  if (!latest.own) return "The latest email in the conversation isn't yours, so Orbit didn't send the follow-up.";
-  if (!isOriginal(row, latest)) return "You've sent another email in this conversation since, so Orbit didn't send the follow-up.";
+  if (!latest) return "Your email isn't in this conversation yet.";
+  if (!latest.own) return "The latest email isn't yours.";
+  if (!isOriginal(row, latest)) return "You've sent another email since.";
   if (row.recipients?.to?.length && !sameAddresses(addressSet([row.recipients.to, row.recipients.cc]), addressSet([latest.to_recipients, latest.cc_recipients]))) {
-    return "The people on your latest email in this conversation have changed, so Orbit didn't send the follow-up.";
+    return "The recipients have changed.";
   }
   if (row.used_identity && !row.identity_id) {
-    return "The address you sent the email from isn't in Orbit any more, so Orbit didn't send the follow-up from a different one.";
+    return "The From address is no longer in Orbit.";
   }
   return null;
 }
@@ -180,7 +180,7 @@ async function deliverFollowUp(
       return null;
     });
     body = readFollowUpBody(written?.body);
-    if (!body) return failed("Orbit couldn't write the follow-up.", false, null, state.latest!.id);
+    if (!body) return failed("Couldn't write the follow-up.", false, null, state.latest!.id);
     if (!(await keepBody(actor, row.id, options.from, body))) return { kind: "gone" };
   }
   state = await threadState(actor, row);
@@ -196,7 +196,7 @@ async function deliverFollowUp(
     remote = await outlookReply(actor, row, options.fetchImpl);
   } catch (error) {
     console.error("Checking Outlook for a reply failed", error instanceof Error ? error.message : error);
-    return failed("Orbit couldn't check Outlook for a reply, so it didn't send the follow-up.", false, body, latest.id);
+    return failed("Couldn't check Outlook for a reply.", false, body, latest.id);
   }
   if (remote) {
     await moveState(actor, row.id, options.from, "replied");
@@ -227,7 +227,7 @@ async function deliverFollowUp(
   } catch (error) {
     await moveState(actor, row.id, "sending", options.from);
     const reason = error instanceof Error ? error.message : "Outlook didn't send it.";
-    return failed(`The follow-up didn't send. ${reason}`.slice(0, 400), false, body, latest.id);
+    return failed(reason.slice(0, 400), false, body, latest.id);
   }
   await withActor(actor, (db) =>
     db.query("update crm.mail_reminders set state = 'sent', sent_at = now(), follow_up_body = $2 where id = $1", [row.id, body]),
@@ -271,7 +271,7 @@ export async function sendDueFollowUp(
     await storeNudge(actor, { sourceId: row.source_id, key: row.thread_key, messageId: outcome.messageId, body: outcome.body }).catch(() => undefined);
   }
   const title = `Follow-up not sent: ${subject}`;
-  const body = `${outcome.reason} Nobody has replied, so the conversation is back at the top of your inbox.`;
+  const body = `${outcome.reason} Back at the top of your inbox.`;
   await sendAlert(
     actor,
     { key: `follow-up:${row.id}`, title, body, url: href, tag: `${row.source_id}|${row.thread_key}`, bell: { title, body, href } },
@@ -306,8 +306,8 @@ export async function recoverStuckFollowUps(actor: UserActor, options: { send?: 
   const push = await pushFor(actor, options.send);
   for (const row of rows) {
     const href = mailHref(row.source_id, row.thread_key);
-    const title = "Check Sent: Orbit may not have sent this follow-up";
-    const body = `${row.subject?.trim() || "(no subject)"}. Orbit stopped partway through sending it and won't try again, so check Sent before you send it yourself.`;
+    const title = "Check Sent: follow-up may not have sent";
+    const body = `${row.subject?.trim() || "(no subject)"}. Check Sent before sending it yourself.`;
     await sendAlert(
       actor,
       { key: `follow-up-stuck:${row.id}`, title, body, url: href, tag: `${row.source_id}|${row.thread_key}`, bell: { title, body, href } },
@@ -329,7 +329,7 @@ async function waitingRow(actor: UserActor, id: string) {
   });
 }
 
-const GONE = "That follow-up isn't waiting any more. It may have been sent or cancelled.";
+const GONE = "That follow-up was already sent or cancelled.";
 
 export async function followUpUnwritten(actor: UserActor, id: string) {
   const row = await waitingRow(actor, id);
@@ -346,10 +346,10 @@ export async function sendFollowUpNow(actor: UserActor, id: string, options: { o
     deadline: options.deadline ?? Date.now() + 25_000,
   });
   if (outcome.kind === "sent") return { sent: true, to: firstNames(outcome.to) };
-  if (outcome.kind === "replied") throw new CrmError("conflict", `${outcome.name} replied, so Orbit didn't send the follow-up.`, 409);
+  if (outcome.kind === "replied") throw new CrmError("conflict", `${outcome.name} replied. Follow-up not sent.`, 409);
   if (outcome.kind === "gone") throw new CrmError("conflict", GONE, 409);
-  if (outcome.conflict) throw new CrmError("conflict", outcome.reason, 409);
-  throw new CrmError("upstream_error", outcome.reason, 502);
+  if (outcome.conflict) throw new CrmError("conflict", `Follow-up not sent. ${outcome.reason}`, 409);
+  throw new CrmError("upstream_error", `Follow-up not sent. ${outcome.reason}`, 502);
 }
 
 export async function writeFollowUpNow(actor: UserActor, id: string, options: { fetchImpl?: typeof fetch } = {}) {
@@ -360,7 +360,7 @@ export async function writeFollowUpNow(actor: UserActor, id: string, options: { 
     return null;
   });
   const body = readFollowUpBody(written?.body);
-  if (!body) throw new CrmError("upstream_error", "Orbit couldn't write the follow-up. Try again, or write it yourself.", 502);
+  if (!body) throw new CrmError("upstream_error", "Couldn't write the follow-up. Try again or write it yourself.", 502);
   return saveFollowUpBody(actor, id, body);
 }
 

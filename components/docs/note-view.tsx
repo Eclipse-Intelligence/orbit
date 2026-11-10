@@ -151,7 +151,7 @@ function ConflictNotice({ id }: { id: string }) {
   return (
     <div role="alert" className="mt-2 mb-6 flex w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-(--tag-amber-bg) px-3.5 py-2.5">
       <p className="ui-style text-soft min-w-0 flex-1">
-        {latest.updatedBy.name} changed this note while you were editing. Your text is still here and hasn&apos;t been saved.
+        {latest.updatedBy.name} changed this note while you were editing. Your text isn&apos;t saved yet.
       </p>
       <span className="flex shrink-0 items-center gap-2">
         <Button variant="primary" size="sm" onClick={() => resolve(id, "mine")}>
@@ -161,7 +161,7 @@ function ConflictNotice({ id }: { id: string }) {
           Use theirs
         </Button>
       </span>
-      <p className="caption-style text-subtle w-full">Keep mine saves your text as a new version, so theirs stays in the history.</p>
+      <p className="caption-style text-subtle w-full">Theirs stays in the history.</p>
     </div>
   );
 }
@@ -187,7 +187,7 @@ function SaveState({ id }: { id: string }) {
   if (live === "offline" && save?.status !== "error") {
     return (
       <span role="status" className="text-(--tag-amber-text)/80">
-        Offline, changes will sync
+        Offline. Kept on this device.
       </span>
     );
   }
@@ -204,7 +204,7 @@ function SaveState({ id }: { id: string }) {
   }
   return (
     <span role="status" className={cn(save.status === "offline" ? "text-(--tag-amber-text)/80" : "text-subtle")}>
-      {save.status === "offline" ? (save.message ?? "Offline. Kept on this device.") : save.status === "saved" ? "Saved" : "Saving"}
+      {save.status === "offline" ? (save.message ?? "Offline. Kept on this device.") : save.status === "saved" ? "Saved" : "Saving…"}
     </span>
   );
 }
@@ -256,7 +256,6 @@ function DailyHeading({ page }: { page: Page }) {
   const today = useToday() === date;
   return (
     <>
-      <p className="eyebrow-style text-subtle mb-3 text-[11px]">Daily note</p>
       <h1 className="note-title">{longDay(date)}</h1>
       <div className="text-subtle mt-3 mb-8 flex min-h-5 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5">
         {list.length > 0 && (
@@ -290,7 +289,6 @@ export default function NoteView({
   missing,
   empty,
   firstRun = false,
-  onNewNote,
   hiddenOnPhone,
 }: {
   page: Page | null;
@@ -301,7 +299,6 @@ export default function NoteView({
   missing: boolean;
   empty: boolean;
   firstRun?: boolean;
-  onNewNote?: () => void;
   hiddenOnPhone: boolean;
 }) {
   const nav = useDocsNav();
@@ -419,17 +416,7 @@ export default function NoteView({
   if (empty) {
     return (
       <section aria-label="No note open" className={cn("flex min-h-0 min-w-0 flex-1 items-center justify-center md:my-2 md:mr-2 md:rounded-2xl md:bg-white/[0.02]", hiddenOnPhone && "max-md:hidden")}>
-        <div className="flex max-w-[24em] flex-col items-center gap-3 px-6 text-center">
-          {firstRun && <h2>No notes yet</h2>}
-          <p className="text-subtle">
-            {firstRun ? "Notes are private until you share them. Link them with [[, tag them with # and mention people and companies with @." : "Choose a note, or press C then N to start one."}
-          </p>
-          {onNewNote && (
-            <Button variant="primary" size="sm" shortcut={["C", "N"]} onClick={onNewNote}>
-              New note
-            </Button>
-          )}
-        </div>
+        {firstRun && <p className="text-subtle max-w-[24em] px-6 text-center">Notes are private until you share them.</p>}
       </section>
     );
   }
@@ -588,7 +575,7 @@ export default function NoteView({
             ) : missing ? (
               <div role="alert" className="flex flex-col items-start gap-3 pt-1">
                 <h1 className="note-title">This note isn&apos;t available</h1>
-                <p className="text-subtle">It may have been archived, or it isn&apos;t shared with you.</p>
+                <p className="text-subtle">It may be archived, or private to someone else.</p>
                 <Button variant="secondary" size="sm" href={backHref} onClick={(event) => within(event, backHref)}>
                   Back to {backLabel}
                 </Button>

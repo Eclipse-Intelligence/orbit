@@ -114,7 +114,7 @@ export function checkSlug(raw: string): Check<string> {
   if (!SLUG_PATTERN.test(slug)) {
     return {
       ok: false,
-      error: "Use lowercase letters, numbers and single hyphens, starting and ending with a letter or number.",
+      error: "Use lowercase letters, numbers and single hyphens between them.",
     };
   }
   if (RESERVED_SLUGS.has(slug)) return { ok: false, error: `“${slug}” is reserved. Pick another.` };

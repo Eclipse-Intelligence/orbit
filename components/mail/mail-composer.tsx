@@ -26,7 +26,7 @@ import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
 const SAVE_DELAY_MS = 1500;
-const FILE_LINK_ERROR = "That's a link to a file on your computer, which no one else can open. Drag the screenshot itself, or copy it and paste it here.";
+const FILE_LINK_ERROR = "That's a link to a local file. Drag or paste the file itself.";
 
 export type SendPayload = {
   id: string | null;
@@ -76,7 +76,7 @@ async function postJson<T>(url: string, body: unknown, keepalive = false): Promi
     keepalive,
   });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string; reconnect?: unknown };
-  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the draft. Try again."), { status: response.status, reconnect: json.reconnect ?? null });
+  if (!response.ok) throw Object.assign(new Error(json.error ?? "Couldn't save the draft. Try again."), { status: response.status, reconnect: json.reconnect ?? null });
   return json;
 }
 
@@ -128,7 +128,6 @@ export default function MailComposer({
   const fallbackAccount = chosenAccount || accounts.length === 0 ? null : fromFallback(accounts, draft?.sourceId ?? start.sourceId);
   const fromAccount = chosenAccount ?? fallbackAccount;
   const lostFrom = fallbackAccount ? knownFrom : null;
-  const lostAddress = fromId.startsWith("smtp:");
   const sourceId = fromAccount?.sourceId ?? fromAccount?.id ?? draft?.sourceId ?? start.sourceId;
   const identityId = fromAccount?.identityId ?? null;
   const fromChoices = start.mode === "new" ? accounts : accounts.filter((item) => (item.sourceId ?? item.id) === (draft?.sourceId ?? start.sourceId));
@@ -380,7 +379,7 @@ export default function MailComposer({
   function ready() {
     if (attachments.blocked) return false;
     if (to.length + cc.length + bcc.length === 0) {
-      setError("Add at least one person to send to.");
+      setError("Add a recipient.");
       return false;
     }
     if (start.mode === "new" && !subject.trim()) {
@@ -388,7 +387,7 @@ export default function MailComposer({
       return false;
     }
     if (!body.trim() && start.mode !== "forward") {
-      setError("Write a message first.");
+      setError("Add a message.");
       return false;
     }
     return true;
@@ -426,7 +425,6 @@ export default function MailComposer({
     const now = Date.now();
     pickLater({
       title: "Send later",
-      description: "Orbit keeps the draft in Outlook and sends it at this time.",
       options: laterOptions(now),
       now,
       onPick: (at, detail) => {
@@ -448,7 +446,7 @@ export default function MailComposer({
     } catch (problem) {
       const status = (problem as MailRequestError).status;
       if (status !== 404 && status !== 409) setScheduledFor(previous);
-      setError(problem instanceof Error ? problem.message : "Orbit couldn't unschedule the email. Try again.");
+      setError(problem instanceof Error ? problem.message : "Couldn't unschedule. Try again.");
     }
   }
 
@@ -512,21 +510,20 @@ export default function MailComposer({
     >
       <div data-composer-scroll="" className={card ? "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-4 pt-1" : "contents"}>
       {!card && (
-        <div className="flex items-center justify-between gap-3 pb-1">
-          <span className="caption-style text-subtle">
-            {MODE_LABEL[start.mode]} from {account?.email ?? "your mailbox"}
-          </span>
-          <span role="status" className={cn("caption-style", save.kind === "error" ? "text-danger" : "text-subtle")}>
+        <div className={fromChoices.length > 1 && !status ? "sr-only" : "flex items-center justify-between gap-3 pb-1"}>
+          {fromChoices.length <= 1 && (
+            <span className="caption-style text-subtle">
+              {MODE_LABEL[start.mode]} from {account?.email ?? "your mailbox"}
+            </span>
+          )}
+          <span role="status" className={cn("caption-style ml-auto", save.kind === "error" ? "text-danger" : "text-subtle")}>
             {status}
           </span>
         </div>
       )}
       {fallbackAccount && (
         <p role="status" className="caption-style text-subtle">
-          {lostFrom
-            ? `${lostFrom} ${lostAddress ? "isn't a sending address any more" : "isn't connected any more"}.`
-            : "That From address isn't available any more."}{" "}
-          Sending from {fallbackAccount.email}.
+          {`${lostFrom ?? "That address"} is no longer available. Sending from ${fallbackAccount.email}.`}
         </p>
       )}
       {fromChoices.length > 1 && (
@@ -612,7 +609,7 @@ export default function MailComposer({
                   editor.current?.focus();
                 }
               }}
-              placeholder={body.trim() ? "How should it change? Or press Enter to polish it" : "What should it say? Or press Enter for a sensible reply"}
+              placeholder={body.trim() ? "How should it change? (optional)" : "What should it say? (optional)"}
               className="text-foreground placeholder:text-subtle h-7 min-w-0 flex-1 bg-transparent text-[14px] outline-none disabled:opacity-60"
             />
             <Button variant="ghost" size="sm" onClick={() => void writeAi()} disabled={aiBusy}>
@@ -629,7 +626,7 @@ export default function MailComposer({
       {aiUndo !== null && !aiOpen && (
         <p className="caption-style text-subtle flex items-center gap-2 pt-2">
           <SparkleIcon aria-hidden className="size-3" />
-          Written with AI. Check it before you send.
+          Written with AI. Check before sending.
           <Button
             variant="link"
             size="none"
