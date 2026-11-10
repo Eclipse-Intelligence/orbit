@@ -124,16 +124,13 @@ async function placeThreads(db: Db, actor: UserActor, actors: UserActor[], threa
     else open.push(thread);
   }
   if (open.length > 0) {
-    const single = open.filter((thread) => thread.key.startsWith("m:") && isUuid(thread.key.slice(2))).map((thread) => thread.key.slice(2));
     const matched = await db.query<{ source_id: string; tk: string; workspace_id: string }>(
       `${routedSql(`m.id in (
          select x.id from crm.mail_messages x
          join unnest($6::uuid[], $7::text[]) as u(source_id, thread_key) on x.source_id = u.source_id and x.thread_key = u.thread_key
-         union all
-         select x.id from crm.mail_messages x where x.id = any($8::uuid[]) and x.thread_key is null
        )`)}
        select distinct x.source_id, x.tk, x.workspace_id from matched x`,
-      routedParams(actor, ids, [open.map((thread) => thread.sourceId), open.map((thread) => thread.key), single]),
+      routedParams(actor, ids, [open.map((thread) => thread.sourceId), open.map((thread) => thread.key)]),
     );
     const found = new Map<string, string[]>();
     for (const row of matched.rows) {
@@ -205,7 +202,7 @@ function repliesSql() {
     ),
     latest as (
       select n.* from candidates n
-      where n.thread_key is null or not exists (
+      where not exists (
         select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
         where o.source_id = n.source_id and o.thread_key = n.thread_key and o.id <> n.id and not o.is_draft
           and coalesce(o.received_at, o.sent_at, o.created_at) > n.at

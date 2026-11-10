@@ -65,7 +65,6 @@ export type ThreadMessage = {
   text: string | null;
   webLink: string | null;
   opens: { at: string; agent: string | null }[] | null;
-  attachments?: MailAttachmentMeta[];
 };
 
 export type MailAttachmentMeta = { id: string; name: string; contentType: string | null; size: number };

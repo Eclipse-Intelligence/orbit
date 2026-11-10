@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Suspense, use, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
 import {
@@ -152,10 +152,18 @@ function shiftUnread(nav: MailNav, thread: Pick<ThreadSummary, "sourceId" | "spl
 }
 
 const FULL_REFRESH_MS = 5 * 60_000;
+const NAV_SETTLE_MS = 1_500;
+
+function NavStream({ promise, onNav }: { promise: Promise<MailNav | null>; onNav: (nav: MailNav | null) => void }) {
+  const streamed = use(promise);
+  useEffect(() => onNav(streamed), [streamed, onNav]);
+  return null;
+}
 
 export default function MailScreen({
   viewer,
   initialNav,
+  navPromise,
   initialQuery,
   initialPage,
   initialThread,
@@ -166,6 +174,7 @@ export default function MailScreen({
   viewer: Viewer;
   accounts: ComposeAccount[];
   initialNav: MailNav;
+  navPromise?: Promise<MailNav | null>;
   initialQuery: ListQuery;
   initialPage: ThreadPage;
   initialThread: ThreadDetail | null;
@@ -198,17 +207,37 @@ export default function MailScreen({
   const loadingMore = useRef(false);
   const searchInput = useRef<HTMLInputElement>(null);
   const searchInputList = useRef<HTMLInputElement>(null);
-  const latest = useRef({ query, page, cursor, version: nav.version });
+  const latest = useRef({ query, page, cursor });
   const fullRefresh = useRef(0);
+  const seenVersion = useRef(initialNav.version);
+  const navTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    latest.current = { query, page, cursor, version: nav.version };
+    latest.current = { query, page, cursor };
   });
 
   useEffect(() => {
     fullRefresh.current = Date.now();
-    if (initialNav.partial) fetchNav().then(setNav).catch(() => null);
-  }, [initialNav]);
+  }, []);
+
+  const receiveNav = useCallback((streamed: MailNav | null) => {
+    const apply = (fresh: MailNav) => {
+      setNav(fresh);
+      seenVersion.current ??= fresh.version;
+      const current = latest.current.query;
+      if (current.account && !fresh.accounts.some((account) => account.id === current.account)) showRef.current({ ...current, account: null });
+    };
+    if (streamed) apply(streamed);
+    else fetchNav().then(apply).catch(() => null);
+  }, []);
+
+  function settleNav() {
+    if (navTimer.current) return;
+    navTimer.current = window.setTimeout(() => {
+      navTimer.current = null;
+      fetchNav().then(setNav).catch(() => null);
+    }, NAV_SETTLE_MS);
+  }
 
   useEffect(() => {
     if (page) storeList(query, page);
@@ -216,9 +245,10 @@ export default function MailScreen({
 
   const importantUnread = nav.splits.filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0);
   useEffect(() => {
+    if (nav.partial) return;
     setMailUnread(importantUnread);
     setBadge(importantUnread);
-  }, [importantUnread, setMailUnread]);
+  }, [importantUnread, setMailUnread, nav.partial]);
 
   useEffect(() => {
     if (initialThread) storeThread(initialThread);
@@ -243,7 +273,9 @@ export default function MailScreen({
     total: splitRows.filter((row) => row.split === split).reduce((sum, row) => sum + row.total, 0),
     unread: splitRows.filter((row) => row.split === split).reduce((sum, row) => sum + row.unread, 0),
   })).filter((tab) => tab.split === "important" || tab.total > 0 || query.view === tab.id);
-  const accountLabel = nav.accounts.find((account) => account.id === query.account)?.email ?? "All accounts";
+  const accountLabel =
+    nav.accounts.find((account) => account.id === query.account)?.email ??
+    (query.account ? (threads.find((thread) => thread.sourceId === query.account)?.account ?? "One account") : "All accounts");
 
   function writeUrl(next: ListQuery, thread: string | null) {
     window.history.replaceState(window.history.state, "", mailUrl(next, thread));
@@ -327,18 +359,19 @@ export default function MailScreen({
     setSyncing(true);
     (sync ? syncNow().catch(() => null) : Promise.resolve(null))
       .then((synced) => {
-        const unchanged = poll && synced?.version && synced.version === latest.current.version && Date.now() - fullRefresh.current < FULL_REFRESH_MS;
+        const unchanged = poll && synced?.version && synced.version === seenVersion.current && Date.now() - fullRefresh.current < FULL_REFRESH_MS;
         if (unchanged) {
           setNow(Date.now());
           return null;
         }
-        return Promise.all([fetchList(target), fetchNav()]);
+        return Promise.all([fetchList(target), fetchNav().catch(() => null), synced?.version ?? null]);
       })
       .then((loaded) => {
         if (!loaded) return;
-        const [fresh, freshNav] = loaded;
+        const [fresh, freshNav, version] = loaded;
         fullRefresh.current = Date.now();
-        setNav(freshNav);
+        seenVersion.current = version ?? freshNav?.version ?? seenVersion.current;
+        if (freshNav) setNav(freshNav);
         setNow(Date.now());
         if (token !== request.current) return;
         const hidden = new Set(removing.current);
@@ -484,7 +517,15 @@ export default function MailScreen({
     const chosenKeys = new Set(chosen.map((thread) => thread.key));
     chosen.forEach((thread) => removing.current.add(thread.key));
     setPage({ ...currentPage!, threads: currentPage!.threads.filter((thread) => !chosenKeys.has(thread.key)) });
-    if (inInbox(from)) setNav((existing) => chosen.filter((thread) => thread.unread).reduce((shifted, thread) => shiftUnread(shifted, thread, -1), existing));
+    const unread = chosen.filter((thread) => thread.unread);
+    if (inInbox(from)) setNav((existing) => unread.reduce((shifted, thread) => shiftUnread(shifted, thread, -1), existing));
+    else if (action === "inbox") setNav((existing) => unread.reduce((shifted, thread) => shiftUnread(shifted, thread, 1), existing));
+    const restored = new Set<string>();
+    const putBack = (thread: ThreadSummary) => {
+      if (restored.has(thread.key)) return;
+      restored.add(thread.key);
+      restore(thread, from);
+    };
     if (latest.current.cursor && chosenKeys.has(latest.current.cursor)) {
       select(null);
       setOpen(false);
@@ -501,7 +542,7 @@ export default function MailScreen({
               await run(thread);
             } catch (error) {
               failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
-              restore(thread, from);
+              putBack(thread);
             }
           }
         }),
@@ -526,8 +567,11 @@ export default function MailScreen({
               label: "Undo",
               run: () => {
                 void pending.then(() => {
-                  chosen.forEach((thread) => restore(thread, from));
-                  void runAll((thread) => postAction(thread.key, "inbox", undoFrom)).then(() => forgetOtherLists(latest.current.query));
+                  chosen.forEach(putBack);
+                  void runAll((thread) => postAction(thread.key, "inbox", undoFrom)).then(() => {
+                    forgetOtherLists(latest.current.query);
+                    settleNav();
+                  });
                 });
               },
             },
@@ -535,6 +579,7 @@ export default function MailScreen({
     void pending
       .then((failures) => {
         if (failures.length) showToast({ message: `${failures.length} of ${count} didn't move. ${failures[0]}`, tone: "alert" });
+        settleNav();
       })
       .finally(() => chosen.forEach((thread) => removing.current.delete(thread.key)));
   }
@@ -551,6 +596,13 @@ export default function MailScreen({
       removing.current.add(key);
       setPage({ ...currentPage!, threads: remaining });
       if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, -1));
+      else if (thread.unread && action === "inbox") setNav((existing) => shiftUnread(existing, thread, 1));
+      let restored = false;
+      const putBack = () => {
+        if (restored) return;
+        restored = true;
+        restore(thread, from);
+      };
       if (latest.current.cursor === key) {
         const next = remaining[index] ?? remaining[index - 1] ?? null;
         select(next?.key ?? null);
@@ -566,10 +618,11 @@ export default function MailScreen({
               label: "Undo",
               run: () => {
                 void pendingMove.then(() => {
-                  restore(thread, from);
+                  putBack();
                   postAction(key, "inbox", undoFrom)
                     .then(() => forgetOtherLists(latest.current.query))
-                    .catch((error: Error) => showToast({ message: error.message, tone: "alert" }));
+                    .catch((error: Error) => showToast({ message: error.message, tone: "alert" }))
+                    .finally(settleNav);
                 });
               },
             }
@@ -578,10 +631,13 @@ export default function MailScreen({
       const pendingMove = postAction(key, action, from, until)
         .then(() => undefined)
         .catch((error: Error) => {
-          restore(thread, from);
+          putBack();
           showToast({ message: error.message, tone: "alert" });
         })
-        .finally(() => removing.current.delete(key));
+        .finally(() => {
+          removing.current.delete(key);
+          settleNav();
+        });
       return;
     }
     if (action === "unread") keptUnread.current.add(key);
@@ -597,7 +653,7 @@ export default function MailScreen({
         setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, undoAction) : item)) } : existing));
         forgetThread(key);
         fetchDetail(key, true);
-        if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, -change));
+        if (change && inInbox(from)) settleNav();
         showToast({ message: error.message, tone: "alert" });
       });
   }
@@ -897,7 +953,7 @@ export default function MailScreen({
         ? `${activeFolder.name} is empty.`
         : `Nothing in ${MORE_VIEWS.find((view) => view.id === query.view)?.label ?? "this folder"}.`;
 
-  if (nav.accounts.length === 0) {
+  if (nav.accounts.length === 0 && !nav.partial) {
     return (
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SectionHeader title="Mail" viewer={viewer} />
@@ -915,6 +971,11 @@ export default function MailScreen({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 touch-pan-y flex-col overscroll-x-none">
       <MailOverscroll />
+      {navPromise && (
+        <Suspense fallback={null}>
+          <NavStream promise={navPromise} onNav={receiveNav} />
+        </Suspense>
+      )}
       <SectionHeader
         title="Mail"
         viewer={viewer}

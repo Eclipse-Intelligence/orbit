@@ -8,15 +8,7 @@ import { isUuid } from "@/lib/crm/mutate";
 
 export const dynamic = "force-dynamic";
 
-const NAV_WAIT_MS = 1_500;
-
 const PARTIAL_NAV: MailNav = { accounts: [], folders: [], unread: 0, snoozed: 0, scheduled: 0, splits: [], partial: true };
-
-function navWithin(request: Promise<MailNav>) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<MailNav>((resolve) => (timer = setTimeout(() => resolve(PARTIAL_NAV), NAV_WAIT_MS)));
-  return Promise.race([request.catch(() => PARTIAL_NAV), late]).finally(() => clearTimeout(timer));
-}
 
 function requestTime() {
   return Date.now();
@@ -36,19 +28,19 @@ export default async function MailPage({
   const resolved = await searchParams;
   const view = readMailView(text(resolved.view) || "inbox");
   const query = text(resolved.q).trim().slice(0, 300);
-  const asked = isUuid(text(resolved.account)) ? text(resolved.account) : null;
+  const account = isUuid(text(resolved.account)) ? text(resolved.account) : null;
   const threadKey = text(resolved.thread);
   const compose = text(resolved.compose);
   const scheduledView = text(resolved.view) === "scheduled" && !query;
-  const list = (sourceId: string | null) => (scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId, query }));
-  const [nav, listed, thread, accounts] = await Promise.all([
-    navWithin(mailNav(user)),
-    list(asked),
+  const navPromise = mailNav(user).catch((error) => {
+    console.error("Mail nav failed", error);
+    return null;
+  });
+  const [page, thread, accounts] = await Promise.all([
+    scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId: account, query }),
     threadKey ? getThread(user, threadKey, { reader: true }).catch(() => null) : Promise.resolve(null),
     composeAccounts(user).catch(() => []),
   ]);
-  const account = asked && (nav.partial || nav.accounts.some((item) => item.id === asked)) ? asked : null;
-  const page = asked && !account ? await list(null) : listed;
 
   return (
     <MailScreen
@@ -59,7 +51,8 @@ export default async function MailPage({
         role: user.role,
         workspaceName: user.workspaceName,
       }}
-      initialNav={nav}
+      initialNav={PARTIAL_NAV}
+      navPromise={navPromise}
       initialQuery={{ view: scheduledView ? "scheduled" : mailViewParam(view), account, query }}
       initialPage={page}
       initialThread={thread}

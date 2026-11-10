@@ -14,8 +14,6 @@ import { firstName } from "@/lib/mail/format";
 import { replyAfterSql } from "@/lib/mail/follow-up-rules";
 import { threadDeferral } from "@/lib/mail/deferrals";
 import type { CachedSummary, MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
-import { listMessageAttachments } from "@/lib/mail/attachments";
-import { mailSourceToken } from "@/lib/mail/sync";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { threadFilingInDb } from "@/lib/mail/routing";
 
@@ -214,46 +212,17 @@ export async function listThreads(
   });
 }
 
-export type ThreadOptions = { reader?: boolean; attachments?: boolean; fetchImpl?: typeof fetch };
+export type ThreadOptions = { reader?: boolean };
 
-const ATTACHMENT_WAIT_MS = 2_500;
-const ATTACHMENT_MESSAGES = 4;
 const SHORT_SUMMARY = 280;
-
-async function readerAttachments(actor: UserActor, detail: ThreadDetail, sourceId: string, providerIds: Map<string, string>, fetchImpl: typeof fetch) {
-  const last = detail.messages.length - 1;
-  const wanted = detail.messages
-    .filter((message, index) => message.hasAttachments && (index === last || !message.isRead) && providerIds.has(message.id))
-    .slice(-ATTACHMENT_MESSAGES);
-  if (wanted.length === 0) return;
-  const work = (async () => {
-    const token = await mailSourceToken(actor, sourceId, fetchImpl);
-    await Promise.all(
-      wanted.map(async (message) => {
-        const items = await listMessageAttachments(token, providerIds.get(message.id)!, fetchImpl).catch(() => null);
-        if (items) message.attachments = items.map((item) => ({ id: item.id, name: item.name, contentType: item.contentType, size: item.size }));
-      }),
-    );
-  })().catch(() => null);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([work, new Promise((resolve) => (timer = setTimeout(resolve, ATTACHMENT_WAIT_MS)))]);
-  clearTimeout(timer);
-}
 
 export async function getThread(actor: UserActor, key: string, options: ThreadOptions = {}): Promise<ThreadDetail> {
   const actors = workspaceActors(actor);
   actors.catch(() => null);
-  const { detail, providerIds, sourceId } = await readThread(actor, key, actors, options);
-  await Promise.all([
-    detail.prepared?.times
-      ? freshPrepared(actor, detail.prepared.id)
-          .catch(() => null)
-          .then((fresh) => {
-            if (fresh && detail.prepared) detail.prepared = fresh;
-          })
-      : null,
-    options.attachments ? readerAttachments(actor, detail, sourceId, providerIds, options.fetchImpl ?? fetch) : null,
-  ]);
+  const detail = await readThread(actor, key, actors, options);
+  if (detail.prepared?.times) {
+    detail.prepared = (await freshPrepared(actor, detail.prepared.id).catch(() => null)) ?? detail.prepared;
+  }
   return detail;
 }
 
@@ -483,7 +452,7 @@ async function readThread(actor: UserActor, key: string, actorsReady: Promise<Us
       }),
       ...(cachedSummary !== undefined ? { cachedSummary } : {}),
     };
-    return { detail, sourceId, providerIds: new Map(rows.map((row) => [row.id, row.provider_message_id])) };
+    return detail;
   });
 }
 

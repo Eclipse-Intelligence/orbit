@@ -65,14 +65,6 @@ function outlook(pages: Record<string, unknown[]>, calls: string[] = []) {
         ],
       });
     }
-    if (/\/me\/messages\/[^/]+\/attachments/.test(url)) {
-      return Response.json({
-        value: [
-          { id: "att-1", name: "Terms.pdf", contentType: "application/pdf", size: 2048, isInline: false },
-          { id: "att-2", name: "logo.png", contentType: "image/png", size: 10, isInline: true },
-        ],
-      });
-    }
     const folder = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/)?.[1];
     const value = folder && !url.includes("token=") ? (pages[folder] ?? []) : [];
     return Response.json({ value, "@odata.deltaLink": `${GRAPH}/me/mailFolders/${folder ?? "x"}/messages/delta?$deltatoken=done` });
@@ -216,24 +208,61 @@ describe("mail speed", () => {
     assert.equal(visible, 0);
   });
 
-  it("sends the reader only what it renders, with the stored summary and the attachments", async () => {
+  it("leaves the version alone when a sync finds nothing new", async () => {
+    const before = await mailVersion(owner);
+    const report = await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook({}) });
+    assert.deepEqual(report.errors, []);
+    assert.equal(report.sources, 1);
+    assert.equal(await mailVersion(owner), before);
+  });
+
+  it("moves the version for people with mail when a contact's address changes", async () => {
+    const before = Number(await mailVersion(owner));
+    const contact = (await createContact(owner, { firstName: "Sam", lastName: "Stranger", email: "sam@stranger.test" })).body.contact;
+    assert.equal(Number(await mailVersion(owner)), before + 1);
+    assert.equal(await mailVersion(other), "0");
+    await getAdminPool().query("update crm.contacts set job_title = 'Founder' where id = $1", [contact.id]);
+    assert.equal(Number(await mailVersion(owner)), before + 1);
+    await getAdminPool().query("update crm.contacts set archived_at = now() where id = $1", [contact.id]);
+    assert.equal(Number(await mailVersion(owner)), before + 2);
+  });
+
+  it("deletes a person who has mail", async () => {
+    const leaving = await createUser("mail-speed-leaving@orbit.test", "Leaving");
+    await saveMailbox(leaving, {
+      email: "leaving@eclipse.test",
+      refreshToken: "refresh",
+      accessToken: "access",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    await syncMail(leaving, {
+      budgetMs: 30_000,
+      fetchImpl: outlook({
+        "f-inbox": [message("l-1", { conversationId: "conv-leaving" })],
+        "f-sent": [message("l-2", { conversationId: "conv-leaving", from: { emailAddress: { name: "Leaving", address: "leaving@eclipse.test" } } })],
+      }),
+    });
+    assert.notEqual(await mailVersion(leaving), "0");
+    const admin = getAdminPool();
+    await admin.query("delete from auth.users where id = $1", [leaving.userId]);
+    const left = await admin.query("select (select count(*) from crm.mail_messages where user_id = $1)::int as messages, (select count(*) from crm.mail_versions where user_id = $1)::int as versions", [leaving.userId]);
+    assert.deepEqual(left.rows[0], { messages: 0, versions: 0 });
+  });
+
+  it("sends the reader only what it renders, with the stored summary", async () => {
     const inbox = await listThreads(owner, { view: { role: "inbox" } });
     const contract = inbox.threads.find((thread) => thread.subject === "Contract")!;
     const full = await getThread(owner, contract.key);
     assert.ok(full.messages[0].text);
     assert.equal(full.cachedSummary, undefined);
-    assert.equal(full.messages[0].attachments, undefined);
 
     const previous = process.env.LLM_API_KEY;
     process.env.LLM_API_KEY = "test-key";
     try {
-      const calls: string[] = [];
-      const reader = await getThread(owner, contract.key, { reader: true, attachments: true, fetchImpl: outlook({}, calls) });
+      const reader = await getThread(owner, contract.key, { reader: true });
       assert.equal(reader.messages[0].text, null);
       assert.ok(reader.messages[0].html);
       assert.equal(reader.cachedSummary, null);
-      assert.deepEqual(reader.messages[0].attachments, [{ id: "att-1", name: "Terms.pdf", contentType: "application/pdf", size: 2048 }]);
-      assert.equal(calls.filter((call) => call.includes("/attachments")).length, 1);
 
       const admin = getAdminPool();
       await admin.query(
@@ -243,7 +272,6 @@ describe("mail speed", () => {
       );
       const summarised = await getThread(owner, contract.key, { reader: true });
       assert.deepEqual(summarised.cachedSummary, { latestId: contract.latestId, summary: "Priya sent the contract.", todo: "Sign it" });
-      assert.equal(summarised.messages[0].attachments, undefined);
 
       const cold = inbox.threads.find((thread) => thread.subject === "Quick question")!;
       const short = await getThread(owner, cold.key, { reader: true });

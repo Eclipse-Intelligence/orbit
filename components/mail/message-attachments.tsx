@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { AttachmentDownload, AttachmentLink } from "@/components/_common/attachment-viewer";
 import Button from "@/components/_ui/button";
-import { cachedAttachments } from "@/components/mail/mail-cache";
+import { cachedAttachments, loadAttachments } from "@/components/mail/mail-cache";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { addAttachmentToKnowledgeAction } from "@/app/(crm)/knowledge";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
@@ -17,31 +17,6 @@ const READABLE = /\.(pdf|docx|pptx|xlsx|txt|md|csv|tsv|html?|json|vtt|srt)$/i;
 
 function readable(item: Attachment) {
   return READABLE.test(item.name) || /^(application\/pdf|text\/)/i.test(item.contentType ?? "");
-}
-
-const loaded = new Map<string, Promise<Attachment[]>>();
-
-function load(messageId: string) {
-  const hit = loaded.get(messageId);
-  if (hit) return hit;
-  const known = cachedAttachments(messageId);
-  if (known) {
-    const ready = Promise.resolve(known);
-    loaded.set(messageId, ready);
-    return ready;
-  }
-  const request = fetch(`/api/mail/attachments?message=${encodeURIComponent(messageId)}`, { cache: "no-store" })
-    .then(async (response) => {
-      const body = (await response.json().catch(() => ({}))) as { attachments?: Attachment[]; error?: string };
-      if (!response.ok) throw new Error(body.error ?? "Attachments didn't load.");
-      return body.attachments ?? [];
-    })
-    .catch((error) => {
-      loaded.delete(messageId);
-      throw error;
-    });
-  loaded.set(messageId, request);
-  return request;
 }
 
 function size(bytes: number) {
@@ -70,7 +45,7 @@ export default function MessageAttachments({ messageId, companies = [], workspac
 
   useEffect(() => {
     let live = true;
-    load(messageId)
+    loadAttachments(messageId)
       .then((items) => live && setState({ id: messageId, items, error: null }))
       .catch((error: Error) => live && setState({ id: messageId, items: null, error: error.message }));
     return () => {

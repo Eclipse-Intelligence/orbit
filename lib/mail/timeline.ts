@@ -77,8 +77,8 @@ async function ruledSenders(db: Db, actor: UserActor, workspaceIds: string[], fi
   return result.rows;
 }
 
-const LOGGED_AT_SEND = `a.mail_id is null and a.internet_id is null
-  and (a.direction = 'outbound') = (x.direction = 'outbound')
+const LOGGED_AT_SEND = `a.metadata->>'mailMessageId' is null and a.metadata->>'internetMessageId' is null
+  and (a.metadata->>'direction' = 'outbound') = (x.direction = 'outbound')
   and a.title = left(coalesce(nullif(trim(x.subject), ''), '(no subject)'), 200)
   and abs(extract(epoch from a.occurred_at - x.at)) < 180`;
 
@@ -88,11 +88,11 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
   const limitParam = `$${6 + filter.params.length}`;
   const result = await db.query<Candidate>(
     `${routedSql(filter.sql)},
-     logged as (
-       select a.metadata->>'mailMessageId' as mail_id, a.metadata->>'internetMessageId' as internet_id, a.workspace_id, a.contact_id, a.company_id,
-         a.metadata->>'direction' as direction, a.title, a.occurred_at
+     company_logged as materialized (
+       select a.metadata->>'mailMessageId' as mail_id, a.metadata->>'internetMessageId' as internet_id, a.workspace_id
        from crm.activities a
        where a.type = 'email' and a.workspace_id = any($3::uuid[])
+         and exists (select 1 from matched m where m.contact_id is null)
      )
      select distinct on (x.id, x.workspace_id, coalesce(x.contact_id, x.company_id))
        x.id as message_id, x.internet_message_id, x.subject, x.snippet, x.body_text, x.at, x.account, x.folder_role,
@@ -107,21 +107,20 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
        ) end as relink_id
      from matched x
      where not exists (
-       select 1 from logged a
-       where a.mail_id = x.id::text and a.workspace_id = x.workspace_id and (x.contact_id is null or a.contact_id = x.contact_id)
+       select 1 from crm.activities a
+       where a.contact_id = x.contact_id and a.workspace_id = x.workspace_id and a.type = 'email'
+         and (${SAME_MESSAGE} or (${LOGGED_AT_SEND}))
      )
-     and not exists (
-       select 1 from logged a
-       where a.internet_id = x.internet_message_id and a.workspace_id = x.workspace_id and (x.contact_id is null or a.contact_id = x.contact_id)
-     )
-     and not exists (
-       select 1 from logged a
-       where a.contact_id = x.contact_id and a.workspace_id = x.workspace_id and ${LOGGED_AT_SEND}
-     )
-     and not exists (
-       select 1 from logged a
-       where x.contact_id is null and a.company_id = x.company_id and a.contact_id is null and a.workspace_id = x.workspace_id and ${LOGGED_AT_SEND}
-     )
+     and not (x.contact_id is null and exists (
+       select 1 from company_logged l where l.mail_id = x.id::text and l.workspace_id = x.workspace_id
+     ))
+     and not (x.contact_id is null and x.internet_message_id is not null and exists (
+       select 1 from company_logged l where l.internet_id = x.internet_message_id and l.workspace_id = x.workspace_id
+     ))
+     and not (x.contact_id is null and exists (
+       select 1 from crm.activities a
+       where a.company_id = x.company_id and a.contact_id is null and a.workspace_id = x.workspace_id and a.type = 'email' and ${LOGGED_AT_SEND}
+     ))
      order by x.id, x.workspace_id, coalesce(x.contact_id, x.company_id), x.at desc
      limit ${limitParam}`,
     routedParams(actor, workspaceIds, [...filter.params, limit]),

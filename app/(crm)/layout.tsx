@@ -120,7 +120,6 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
             boards={boards}
             companyCount={companyCount}
             openActionCount={openActionCount}
-            mailUnread={0}
             capture={capture}
             workspace={{
               id: user.workspaceId,

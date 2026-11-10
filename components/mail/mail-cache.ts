@@ -17,9 +17,10 @@ export type ListQuery = { view: string; account: string | null; query: string };
 
 const lists = new Map<string, ThreadPage>();
 const details = new Map<string, ThreadDetail>();
-const pending = new Map<string, Promise<ThreadDetail>>();
-const prefetching = new Map<string, Promise<ThreadDetail>>();
+const generations = new Map<string, number>();
+const pending = new Map<string, { generation: number; request: Promise<ThreadDetail> }>();
 const summaries = new Map<string, Promise<ThreadSummaryText>>();
+const attachmentRequests = new Map<string, Promise<MailAttachmentMeta[]>>();
 const attachmentLists = new Map<string, MailAttachmentMeta[]>();
 
 export type ThreadSummaryText = { summary: string | null; todo: string | null };
@@ -62,43 +63,79 @@ export function cachedThread(key: string) {
   return details.get(key) ?? null;
 }
 
-function keep(detail: ThreadDetail) {
-  details.set(detail.key, detail);
+function generation(key: string) {
+  return generations.get(key) ?? 0;
+}
+
+function primeSummary(detail: ThreadDetail) {
   const cached = detail.cachedSummary;
   if (cached && !summaries.has(`${detail.key}|${cached.latestId}`)) {
     summaries.set(`${detail.key}|${cached.latestId}`, Promise.resolve({ summary: cached.summary, todo: cached.todo }));
   }
-  for (const message of detail.messages) if (message.attachments) attachmentLists.set(message.id, message.attachments);
 }
 
 export function storeThread(detail: ThreadDetail) {
-  keep(detail);
-}
-
-export function cachedAttachments(messageId: string) {
-  return attachmentLists.get(messageId) ?? null;
+  generations.set(detail.key, generation(detail.key) + 1);
+  details.set(detail.key, detail);
+  primeSummary(detail);
 }
 
 export function forgetThread(key: string) {
+  generations.set(key, generation(key) + 1);
   details.delete(key);
 }
 
-function requestThread(key: string, attachments: boolean) {
-  const queue = attachments ? prefetching : pending;
-  const request = getJson<ThreadDetail>(`/api/mail/thread?key=${encodeURIComponent(key)}${attachments ? "&attachments=1" : ""}`)
+function requestThread(key: string) {
+  const started = generation(key);
+  const request = getJson<ThreadDetail>(`/api/mail/thread?key=${encodeURIComponent(key)}`)
     .then((detail) => {
-      keep(detail);
+      if (generation(key) !== started) return details.get(key) ?? detail;
+      storeThread(detail);
       return detail;
     })
-    .finally(() => queue.delete(key));
-  queue.set(key, request);
+    .finally(() => {
+      if (pending.get(key)?.request === request) pending.delete(key);
+    });
+  pending.set(key, { generation: started, request });
   return request;
 }
 
 export function loadThread(key: string, fresh = false) {
   const hit = details.get(key);
   if (hit && !fresh) return Promise.resolve(hit);
-  return pending.get(key) ?? requestThread(key, false);
+  const inflight = pending.get(key);
+  if (inflight && inflight.generation === generation(key)) return inflight.request;
+  return requestThread(key);
+}
+
+export function cachedAttachments(messageId: string) {
+  return attachmentLists.get(messageId) ?? null;
+}
+
+export function loadAttachments(messageId: string) {
+  const hit = attachmentRequests.get(messageId);
+  if (hit) return hit;
+  const request = fetch(`/api/mail/attachments?message=${encodeURIComponent(messageId)}`, { cache: "no-store" })
+    .then(async (response) => {
+      const body = (await response.json().catch(() => ({}))) as { attachments?: MailAttachmentMeta[]; error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Attachments didn't load.");
+      const items = body.attachments ?? [];
+      attachmentLists.set(messageId, items);
+      return items;
+    })
+    .catch((error: unknown) => {
+      attachmentRequests.delete(messageId);
+      throw error;
+    });
+  attachmentRequests.set(messageId, request);
+  return request;
+}
+
+function prefetchAttachments(detail: ThreadDetail) {
+  const last = detail.messages.length - 1;
+  for (const [index, message] of detail.messages.entries()) {
+    if (message.hasAttachments && (index === last || !message.isRead)) void loadAttachments(message.id).catch(() => null);
+  }
 }
 
 export function prefetchThreads(keys: string[]) {
@@ -107,7 +144,8 @@ export function prefetchThreads(keys: string[]) {
     while (index < keys.length) {
       const key = keys[index++];
       if (details.has(key) || pending.has(key)) continue;
-      await (prefetching.get(key) ?? requestThread(key, true)).catch(() => null);
+      const detail = await loadThread(key).catch(() => null);
+      if (detail) prefetchAttachments(detail);
     }
   };
   void Promise.all([work(), work()]);

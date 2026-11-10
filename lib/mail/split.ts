@@ -12,10 +12,8 @@ export const AUTOMATED_SENDER =
 export const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
 export const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
 
-const SINGLE_KEY = "^m:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
-
 export function sameThread(alias: string, key: string) {
-  return `(${alias}.thread_key = ${key} or (${alias}.thread_key is null and ${alias}.id = (case when ${key} ~ '${SINGLE_KEY}' then substr(${key}, 3)::uuid end)))`;
+  return `${alias}.thread_key = ${key}`;
 }
 
 export function splitJoin(alias: string, userParam: string) {
