@@ -340,8 +340,8 @@ function fieldList(changes: Record<string, unknown> | null) {
   return { fields: unique, before, after };
 }
 
-function changedSince(label: string) {
-  return `Can't undo: ${label} has changed since.`;
+function changedSince(label: string, value: unknown, field: string, names: Map<string, string>) {
+  return `Can't undo: ${label} has changed since (now ${shownValue(field, value, names)}).`;
 }
 
 function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, before: Record<string, unknown>, fields: string[], provenance: Provenance) {
@@ -481,7 +481,7 @@ async function describeEvent(
     restores = `Puts back ${fields.fields.map((field) => `${labels[field]}: ${shownValue(field, fields.before[field], names)}`).join("; ")}.`;
     if (current) {
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
-      if (moved) check = changedSince(labels[moved]);
+      if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is deleted.`;
     }
     run = restoreActivityFields(db, actor, event.entity_id, fields.before, fields.fields, changes, provenance);
@@ -501,7 +501,7 @@ async function describeEvent(
     }
     if (current) {
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
-      if (moved) check = changedSince(labels[moved]);
+      if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
     }
     run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance);

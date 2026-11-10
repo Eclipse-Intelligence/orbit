@@ -162,7 +162,10 @@ describe("linear client", () => {
     await assert.rejects(searchLinearIssues({}, { apiKey: null }), /Linear isn't set up\./);
     resetLinearCache();
     const graphError: typeof fetch = async () => Response.json({ errors: [{ message: "Field 'internalField' doesn't exist on type 'Issue'" }] });
-    await assert.rejects(searchLinearIssues({}, { fetchImpl: graphError, apiKey: "k" }), (error: unknown) => error instanceof Error && error.message === "Linear returned an error.");
+    await assert.rejects(
+      searchLinearIssues({}, { fetchImpl: graphError, apiKey: "k" }),
+      (error: unknown) => error instanceof Error && error.message === "Linear returned an error: Field 'internalField' doesn't exist on type 'Issue'.",
+    );
     assert.deepEqual(await linearStatus({ fetchImpl: graphError, apiKey: "k" }), { configured: true, team: null, error: "Linear returned an error." });
     const offline: typeof fetch = async () => {
       throw new TypeError("fetch failed");
@@ -223,7 +226,7 @@ describe("linear in the assistant", () => {
 
   it("files an issue linked back to the company, and explains when Linear isn't set up", async () => {
     const missing = await runTool(owner, "linear_search_issues", { query: "x" });
-    assert.deepEqual(missing, { error: "Linear isn't set up." });
+    assert.deepEqual(missing, { error: "Linear isn't set up. Add LINEAR_API_KEY." });
 
     process.env.LINEAR_API_KEY = "lin_api_test";
     process.env.SITE_URL = "https://orbit.example.com";

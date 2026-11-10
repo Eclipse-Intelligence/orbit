@@ -91,8 +91,8 @@ function ProofForm({ entry, products, usual, onClose }: { entry: ProofEntry | nu
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
-    if (!client.trim()) return setError({ message: "Add the client's name.", field: "client" });
-    if (!result.trim()) return setError({ message: "Add the result.", field: "result" });
+    if (!client.trim()) return setError({ message: "Enter the client's name.", field: "client" });
+    if (!result.trim()) return setError({ message: "Enter the result.", field: "result" });
     if (!permission) return setError({ message: "Choose whether they can be named.", field: "permission" });
     setPending(true);
     setError(null);

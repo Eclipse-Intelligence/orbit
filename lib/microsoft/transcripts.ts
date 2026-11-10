@@ -60,14 +60,15 @@ function transcriptResource(userId: string) {
   return `users/${userId}/adhocCalls/getAllTranscripts`;
 }
 
-export function sanitizeTranscriptError(message: string, fallback = MICROSOFT_UNREACHABLE) {
+export function sanitizeTranscriptError(message: string, fallback = MICROSOFT_UNREACHABLE, code?: string | null) {
   const compact = message.replace(/\s+/g, " ").trim();
   if (compact === TRANSCRIPT_PERMISSION_MESSAGE) return compact;
-  if (/GraphAccessToTranscriptsDisabled/i.test(compact)) return TRANSCRIPTS_DISABLED_MESSAGE;
-  if (/Authorization_RequestDenied|Forbidden|insufficient privileges|CallTranscripts\.Read/i.test(compact)) {
+  const both = [code, compact].filter(Boolean).join(": ");
+  if (/GraphAccessToTranscriptsDisabled/i.test(both)) return TRANSCRIPTS_DISABLED_MESSAGE;
+  if (/Authorization_RequestDenied|Forbidden|insufficient privileges|CallTranscripts\.Read/i.test(both)) {
     return TRANSCRIPT_PERMISSION_MESSAGE;
   }
-  return microsoftProblem(compact, fallback);
+  return microsoftProblem(compact, fallback, code);
 }
 
 export function transcriptErrorText(error: unknown, fallback: string) {
@@ -105,7 +106,8 @@ async function graphError(response: Response, fallback: string) {
   if (response.status === 401) {
     return new GraphError(APP_CREDENTIALS_REJECTED, 401);
   }
-  return new GraphError(sanitizeTranscriptError(codes.trim(), fallback), response.status);
+  const code = [body.error?.code, body.error?.innerError?.code, body.error?.innererror?.code].filter(Boolean).join(" ");
+  return new GraphError(sanitizeTranscriptError(body.error?.message ?? "", fallback, code), response.status);
 }
 
 export async function fetchTranscripts(

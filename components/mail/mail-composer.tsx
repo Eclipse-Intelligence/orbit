@@ -383,7 +383,7 @@ export default function MailComposer({
       return false;
     }
     if (start.mode === "new" && !subject.trim()) {
-      setError("Add a subject.");
+      setError("Enter a subject.");
       return false;
     }
     if (!body.trim() && start.mode !== "forward") {

@@ -106,9 +106,9 @@ export function likelihoodText(answer: { likelihood: number | null; confidence: 
 
 export const MONTHLY_LIMIT_USD = 100;
 
-export function webChecksNotSetUp(viewer?: { type?: string; role?: string } | null) {
+export function webChecksNotSetUp(viewer?: { type?: string; role?: string } | null, log = true) {
   if (viewer?.type !== "agent" && viewer?.role === "owner") return "Web checks aren't set up. Add PARALLEL_API_KEY.";
-  console.error("Web checks aren't set up: PARALLEL_API_KEY is missing.");
+  if (log) console.error("Web checks aren't set up: PARALLEL_API_KEY is missing.");
   return "Web checks aren't set up.";
 }
 export const DECISION_COST = 0.001;

@@ -1,5 +1,5 @@
 import { ShownError, notSetUp } from "@/lib/crm/errors";
-import { logUpstream, unreachable, upstreamFailure } from "@/lib/upstream";
+import { clipReason, logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const MACHINE_MAIL_API = "https://api.machinemail.dev/v0";
@@ -46,8 +46,20 @@ function path(value: string) {
   return encodeURIComponent(value);
 }
 
+function errorReason(text: string) {
+  try {
+    const body = JSON.parse(text) as { error?: { message?: unknown } | string; message?: unknown };
+    return clipReason(typeof body.error === "string" ? body.error : typeof body.error?.message === "string" ? body.error.message : body.message);
+  } catch {
+    return "";
+  }
+}
+
 async function readError(response: Response) {
-  return upstreamFailure("MachineMail", response);
+  const text = await response.text().catch(() => "");
+  logUpstream("MachineMail", response.status, text);
+  const reason = response.status >= 400 && response.status < 500 && ![401, 403, 408, 429].includes(response.status) ? errorReason(text) : "";
+  return reason ? `MachineMail returned an error: ${reason}.` : upstreamMessage("MachineMail", response.status);
 }
 
 async function call<T>(route: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}, fetchImpl: typeof fetch = fetch): Promise<{ status: number; body: T }> {

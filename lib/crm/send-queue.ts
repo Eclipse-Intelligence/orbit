@@ -1,13 +1,13 @@
-import { stopsRun } from "@/lib/crm/personalise";
-
 export type SendUpdate =
   | { id: string; status: "sending" }
   | { id: string; status: "sent"; warning?: string }
   | { id: string; status: "failed"; error: string };
 
+export type SendResult = { error?: string | null; warning?: string | null; stopsRun?: boolean };
+
 export async function sendPaced<T extends { id: string }>(
   items: T[],
-  send: (item: T) => Promise<{ error?: string | null; warning?: string | null }>,
+  send: (item: T) => Promise<SendResult>,
   options: {
     gapMs: number;
     stopped: () => boolean;
@@ -31,7 +31,7 @@ export async function sendPaced<T extends { id: string }>(
     const item = items[index];
     started = now();
     options.onUpdate({ id: item.id, status: "sending" });
-    let result: { error?: string | null; warning?: string | null };
+    let result: SendResult;
     try {
       result = await send(item);
     } catch {
@@ -39,7 +39,7 @@ export async function sendPaced<T extends { id: string }>(
     }
     if (result.error) {
       options.onUpdate({ id: item.id, status: "failed", error: result.error });
-      if (stopsRun(result.error)) {
+      if (result.stopsRun) {
         halted = result.error;
         index += 1;
         break;

@@ -1,5 +1,5 @@
 import { ShownError, errorText, notFoundMessage, notSetUp } from "@/lib/crm/errors";
-import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
+import { clipReason, logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 const DEFAULT_URL = "https://api.linear.app/graphql";
 const TIMEOUT_MS = 15_000;
 const TEAM_TTL_MS = 5 * 60 * 1000;
@@ -41,7 +41,20 @@ type LinearIssueDetail = LinearIssue & {
   comments: { author: string | null; body: string; createdAt: string }[];
 };
 
-export class LinearError extends ShownError {}
+export class LinearError extends ShownError {
+  readonly generic: string;
+
+  constructor(message: string, generic = message) {
+    super(message);
+    this.generic = generic;
+  }
+}
+
+function linearFailure(status: number | null, reason: unknown) {
+  const generic = status === null || status === 200 ? "Linear returned an error." : upstreamMessage("Linear", status);
+  const detail = status === null || status === 200 || status === 400 ? clipReason(reason) : "";
+  return new LinearError(detail ? `Linear returned an error: ${detail}.` : generic, generic);
+}
 
 type IssueNode = {
   id: string;
@@ -93,17 +106,17 @@ async function linearRequest<T>(query: string, variables: Record<string, unknown
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (error) {
-    logUpstream("Linear", null, error);
+    logUpstream("Linear", null, error, [apiKey]);
     throw new LinearError(unreachable("Linear"));
   }
   const payload = (await response.json().catch(() => null)) as { data?: T; errors?: { message?: string }[] } | null;
   if (!response.ok) {
-    logUpstream("Linear", response.status, payload?.errors?.[0]?.message ?? payload);
-    throw new LinearError(upstreamMessage("Linear", response.status));
+    logUpstream("Linear", response.status, payload?.errors?.[0]?.message ?? payload, [apiKey]);
+    throw linearFailure(response.status, payload?.errors?.[0]?.message);
   }
   if (!payload || payload.errors?.length || !payload.data) {
-    logUpstream("Linear", response.status, payload?.errors?.[0]?.message ?? "no data");
-    throw new LinearError("Linear returned an error.");
+    logUpstream("Linear", response.status, payload?.errors?.[0]?.message ?? "no data", [apiKey]);
+    throw linearFailure(null, payload?.errors?.[0]?.message);
   }
   return payload.data;
 }
@@ -324,6 +337,6 @@ export async function linearStatus(options: LinearOptions = {}): Promise<LinearS
     const team = await getLinearTeam(options);
     return { configured: true, team: { key: team.key, name: team.name }, error: null };
   } catch (error) {
-    return { configured: true, team: null, error: errorText(error, unreachable("Linear")) };
+    return { configured: true, team: null, error: error instanceof LinearError ? error.generic : errorText(error, unreachable("Linear")) };
   }
 }

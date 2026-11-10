@@ -26,7 +26,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
 import { readFeed } from "@/lib/ical/events";
-import { FeedError, fetchFeed, type Lookup } from "@/lib/ical/fetch";
+import { FeedError, feedErrorSummary, fetchFeed, type Lookup } from "@/lib/ical/fetch";
 import { IcsParseError } from "@/lib/ical/parse";
 import {
   CalendarScopeError,
@@ -820,7 +820,7 @@ async function syncFeedSource(actor: UserActor, source: SyncSource, context: Syn
     const message =
       error instanceof FeedError || error instanceof IcsParseError ? error.message : FEED_FAILED;
     if (!(error instanceof FeedError || error instanceof IcsParseError)) {
-      console.error("Calendar link sync failed", error);
+      console.error("Calendar link sync failed", feedErrorSummary(error));
     }
     await withActor(actor, (db) =>
       db.query("update crm.calendars set last_attempt_at = now(), last_error = $2 where account_id = $1", [

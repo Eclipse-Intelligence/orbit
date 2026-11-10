@@ -601,7 +601,7 @@ Live editing runs over Supabase Realtime whenever `NEXT_PUBLIC_SUPABASE_URL` and
 
 Every CRM page has an "Ask Orbit anything" bar at the bottom. Click it or press `O` to open the assistant; `Esc` minimises it. It answers from Orbit's data using tools, and proposes changes for you to approve. It works as you, with your role's permissions and the same row-level security as the app.
 
-Set `LLM_API_KEY` to turn it on. Without it, every request returns "Set LLM_API_KEY in Vercel to use the assistant.", including for ChatGPT and Claude account models.
+Set `LLM_API_KEY` to turn it on. Without it, every request returns "The assistant isn't set up." (with "Add LLM_API_KEY." for the workspace owner), including for ChatGPT and Claude account models.
 
 ### Files in the chat
 

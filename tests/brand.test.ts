@@ -426,12 +426,20 @@ describe("drafting from the website", () => {
         const url = String(input);
         if (url === "https://ridgeon.test/") return html(HOME);
         if (url === "https://ridgeon.test/services") return html(SERVICES);
-        if (url.endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "upstream provider key sk-live-123 rejected" } }), { status: 400 });
+        if (url.endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "upstream provider shard 7 rejected the request" } }), { status: 400 });
         return new Response("missing", { status: 404 });
       };
       await assert.rejects(draftBrandFromWebsite(ridgeon, { website: "ridgeon.test" }, { fetchImpl: gatewayDown, lookup: PUBLIC, render: null }), (error: Error) => {
         assert.equal(error.message, "Couldn't write the draft. Try again.");
-        assert.doesNotMatch(error.message, /sk-live|upstream|400/);
+        assert.doesNotMatch(error.message, /shard|upstream|400/);
+        return true;
+      });
+      const keyRejected: typeof fetch = async (input, init) => {
+        if (String(input).endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "bad key" } }), { status: 401 });
+        return gatewayDown(input, init);
+      };
+      await assert.rejects(draftBrandFromWebsite(ridgeon, { website: "ridgeon.test" }, { fetchImpl: keyRejected, lookup: PUBLIC, render: null }), (error: Error) => {
+        assert.equal(error.message, ridgeon.role === "owner" ? "The AI rejected the key. Check LLM_API_KEY." : "The AI rejected the key.");
         return true;
       });
       const broken: typeof fetch = async () => {
@@ -445,7 +453,7 @@ describe("drafting from the website", () => {
     } finally {
       console.error = realConsoleError;
     }
-    assert.ok(logged.some((line) => /sk-live|upstream provider/.test(line)));
+    assert.ok(logged.some((line) => /upstream provider shard 7/.test(line)));
   });
 });
 

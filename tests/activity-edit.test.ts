@@ -90,8 +90,8 @@ describe("editing activities", () => {
   it("refuses edits that would leave nothing to show or an unreadable time", async () => {
     const note = (await createActivity(owner, { type: "note", body: "Only text", companyId: acme })).body.activity;
     await assert.rejects(updateActivity(owner, note.id, { body: "  " }, WEB), code("invalid_input", /Enter a title or a note/));
-    await assert.rejects(updateActivity(owner, note.id, { occurredAt: "next week sometime" }, WEB), code("invalid_input", /Enter a (valid )?date and time/));
-    await assert.rejects(updateActivity(owner, note.id, { occurredAt: null }, WEB), code("invalid_input", /Enter a (valid )?date and time/));
+    await assert.rejects(updateActivity(owner, note.id, { occurredAt: "next week sometime" }, WEB), code("invalid_input", /valid date and time/));
+    await assert.rejects(updateActivity(owner, note.id, { occurredAt: null }, WEB), code("invalid_input", /valid date and time/));
     await assert.rejects(updateActivity(owner, note.id, { type: "fax" as never }, WEB), code("invalid_input", /Unknown activity type/));
     await assert.rejects(updateActivity(owner, "not-an-id", { body: "x" }, WEB), code("not_found"));
   });
@@ -162,7 +162,7 @@ describe("editing activities", () => {
     const note = (await createActivity(owner, { type: "note", body: "Gone soon", companyId: acme })).body.activity;
     await archiveActivity(owner, note.id, { operation: "archive_activity", source: "web" });
     await assert.rejects(updateActivity(owner, note.id, { body: "Too late" }, WEB), (error: unknown) => {
-      return error instanceof CrmError && error.status === 409 && /This activity is deleted\. Restore it first\./.test(error.message);
+      return error instanceof CrmError && error.status === 409 && /This activity is deleted\. Undo the delete first\./.test(error.message);
     });
   });
 

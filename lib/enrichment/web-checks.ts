@@ -92,7 +92,8 @@ export async function saveWebCheck(actor: UserActor, input: { id?: unknown; kind
   const kind: WebCheckKind = input.kind === "signal" ? "signal" : "tag";
   const raw = typeof input.label === "string" ? input.label.replace(/\s+/g, " ").trim() : "";
   const label = kind === "tag" ? normalizeTag(raw) : raw;
-  if (!label || label.length > 60) throw invalid(tooLong("the name", 60), "label");
+  if (!label) throw invalid("Enter a name.", "label");
+  if (label.length > 60) throw invalid(tooLong("the name", 60), "label");
   const question = typeof input.question === "string" ? input.question.replace(/\s+/g, " ").trim() : "";
   if (question.length < 10 || question.length > 1000) throw invalid("Enter a question of 10 to 1,000 characters.", "question");
   const noteKind = NOTE_KINDS.find((item) => item === input.noteKind) ?? "signal";

@@ -270,7 +270,7 @@ describe("call insights", () => {
     });
     assert.equal(denied.requests.length, 1);
     assert.equal(failed.status, "failed");
-    assert.equal(failed.error, "The AI returned an error. Try again.");
+    assert.equal(failed.error, "The AI rejected the key.");
     assert.doesNotMatch(failed.error ?? "", /invalid api key|401/);
 
     const third = await setup("gateway-three@example.com");

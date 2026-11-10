@@ -203,14 +203,14 @@ export async function syncCalls(
   if (!claim) return idle;
 
   try {
-    const identity = await resolveIdentity(stored, claim, fetchImpl);
+    const identity = await resolveIdentity(stored, claim, fetchImpl, actor);
     const to = new Date();
     const floor = to.getTime() - CALL_MAX_WINDOW_MS;
     const start = claim.lastSyncedAt
       ? new Date(claim.lastSyncedAt).getTime() - CALL_OVERLAP_MS
       : to.getTime() - CALL_LOOKBACK_MS;
     const from = new Date(Math.max(start, floor));
-    const appToken = await appAccessToken(identity.tenantId, fetchImpl);
+    const appToken = await appAccessToken(identity.tenantId, fetchImpl, Date.now(), actor);
     const fetched = await fetchPstnCalls(appToken, from, to, fetchImpl);
     const rows: CallRow[] = [];
     let skipped = 0;
@@ -310,6 +310,7 @@ async function resolveIdentity(
   stored: StoredConnection,
   claim: Claim,
   fetchImpl: typeof fetch,
+  viewer?: UserActor,
 ) {
   let claims = tokenClaims(readSecret(stored.accessTokenCipher));
   let refreshed: MicrosoftToken | null = null;
@@ -323,7 +324,7 @@ async function resolveIdentity(
   }
   const tenantId = fixed ?? claims?.tenantId ?? claim.tenantId;
   if (!tenantId) {
-    throw new MicrosoftError(notSetUp("Microsoft tenant", "MICROSOFT_TENANT"));
+    throw new MicrosoftError(notSetUp("Microsoft tenant", "MICROSOFT_TENANT", viewer));
   }
   return { tenantId, objectId: claims?.objectId ?? null, refreshed };
 }
@@ -344,6 +345,7 @@ export async function teamsIdentity(actor: UserActor, fetchImpl: typeof fetch = 
     stored,
     { tenantId: prepared.tenantId, lastSyncedAt: null },
     fetchImpl,
+    actor,
   );
   let { objectId, refreshed } = identity;
   if (!objectId) {

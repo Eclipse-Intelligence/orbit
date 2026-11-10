@@ -141,9 +141,9 @@ async function chatFileBytes(file: { id: string; name: string; size: number }, f
   try {
     bytes = await readObject(chatFileKey(file.id), fetchImpl);
   } catch (error) {
-    throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it again.`, 400, { field: "attachments", cause: storageFailure(error).message });
+    throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it to the chat again.`, 400, { field: "attachments", cause: storageFailure(error).message });
   }
-  if (bytes.byteLength !== file.size) throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it again.`, 400, { field: "attachments" });
+  if (bytes.byteLength !== file.size) throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it to the chat again.`, 400, { field: "attachments" });
   return bytes;
 }
 
@@ -179,8 +179,8 @@ export async function attachableFiles(actor: UserActor, ids: unknown, fetchImpl:
         continue;
       }
       const item = found.knowledge.find((row) => row.id === id);
-      if (!item) throw new CrmError("not_found", "File not found.", 404, { field: "attachments" });
-      if (!item.file_path) throw new CrmError("invalid_input", `${item.title} isn't a file.`, 400, { field: "attachments" });
+      if (!item) throw new CrmError("not_found", "One of the files isn't in Knowledge, on the draft or in your chats.", 404, { field: "attachments" });
+      if (!item.file_path) throw new CrmError("invalid_input", `${item.title} is a link or text in Knowledge, not a file, so it can't be attached.`, 400, { field: "attachments" });
       if ((item.size_bytes ?? 0) > ATTACHMENT_MAX_BYTES) {
         throw new CrmError("invalid_input", `${item.title} is over the ${megabytes(ATTACHMENT_MAX_BYTES)} attachment limit.`, 400, { field: "attachments" });
       }

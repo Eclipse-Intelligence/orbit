@@ -77,6 +77,24 @@ describe("web checks", () => {
     assert.equal(rule.label, "agency");
     await assert.rejects(saveWebCheck(owner, { kind: "tag", label: "AGENCY", question: "Is the company a marketing agency?" }), /agency already exists/);
     await saveWebCheck(owner, { kind: "tag", label: "fintech", question: "Is the company a financial technology business?" });
+    await assert.rejects(saveWebCheck(owner, { kind: "tag", label: "  ", question: "Is the company a marketing agency?" }), /^CrmError: Enter a name\.$/);
+    await assert.rejects(saveWebCheck(owner, { kind: "signal", label: "x".repeat(61), question: "Did the company raise money?" }), /Keep the name to 60 characters\./);
+  });
+
+  it("stops checking when Parallel wants payment, a key or a pause, but not on a server error", async () => {
+    const company = (await createCompany(owner, { name: "Payment Due", domain: "payment-due.test" })).body.company;
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      for (const [status, stop] of [[402, true], [401, true], [429, true], [500, false]] as const) {
+        const api = parallel(() => new Response("no", { status }));
+        const result = await checkCompany(owner, company.id, { tags: true, gaps: true, fetchImpl: api.fetchImpl, env: ENV });
+        assert.equal(result.status, "failed", String(status));
+        assert.equal(result.stop, stop, String(status));
+      }
+    } finally {
+      console.error = realConsoleError;
+    }
   });
 
   it("adds confident tags and fills only the gaps context.dev left", async () => {

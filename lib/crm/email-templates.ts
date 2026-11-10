@@ -77,7 +77,7 @@ function cleanName(value: unknown) {
 function cleanSubject(value: unknown) {
   if (value == null) return "";
   if (typeof value !== "string")
-    invalid("Invalid subject.", "subject");
+    invalid("The subject must be text.", "subject");
   const subject = value.replace(/\s+/g, " ").trim();
   if (subject.length > TEMPLATE_SUBJECT_MAX) {
     invalid(
@@ -90,13 +90,13 @@ function cleanSubject(value: unknown) {
 
 function cleanBody(value: unknown) {
   if (value == null) return "";
-  if (typeof value !== "string") invalid("Invalid message.", "body");
+  if (typeof value !== "string") invalid("The message must be text.", "body");
   const body = plainBody(value)
     .replace(/^(?:[ \t]*\n)+/, "")
     .trimEnd();
   if (body.length > TEMPLATE_BODY_MAX) {
     invalid(
-      `Messages must be ${TEMPLATE_BODY_MAX.toLocaleString("en-GB")} characters or fewer.`,
+      tooLong("the message", TEMPLATE_BODY_MAX),
       "body",
     );
   }
@@ -106,7 +106,7 @@ function cleanBody(value: unknown) {
 function cleanTags(value: unknown) {
   if (value == null) return [];
   if (!Array.isArray(value) || value.some((tag) => typeof tag !== "string")) {
-    invalid("Invalid tags.", "tags");
+    invalid("Tags must be text.", "tags");
   }
   return normalizeTags(value as string[]);
 }

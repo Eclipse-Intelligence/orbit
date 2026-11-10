@@ -17,15 +17,44 @@ export function upstreamMessage(provider: string, status: number, options: Upstr
   return `${provider} returned an error (${status}).`;
 }
 
-function detailText(detail: unknown) {
-  if (detail === undefined || detail === null || detail === "") return "";
-  if (detail instanceof Error) return detail.message;
-  const text = typeof detail === "string" ? detail : JSON.stringify(detail);
-  return (text ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
+const SECRET_NAME = /(KEY|TOKEN|SECRET|PASSWORD)$/;
+
+function secretValues() {
+  return Object.entries(process.env)
+    .filter(([name, value]) => SECRET_NAME.test(name) && typeof value === "string" && value.trim().length >= 6)
+    .map(([, value]) => value!.trim());
 }
 
-export function logUpstream(provider: string, status: number | null, detail?: unknown) {
-  console.error(`${provider} request failed`, status ?? "no status", detailText(detail));
+export function redactSecrets(text: string, extra: (string | null | undefined)[] = []) {
+  let clean = text;
+  for (const value of [...secretValues(), ...extra.filter((item): item is string => typeof item === "string" && item.trim().length >= 6)]) {
+    clean = clean.split(value.trim()).join("[redacted]");
+  }
+  return clean
+    .replace(/\b(wss?|https?):\/\/[^\s"'<>]*[?&](api[_-]?key|key|token|signature|sig|secret|access_token)=[^\s"'<>]*/gi, "$1://[redacted url]")
+    .replace(/\b(api[_-]?key|apikey|access[_-]?token|token|secret|signature|password)(["']?\s*[:=]\s*["']?)[^\s"',}&]+/gi, "$1$2[redacted]")
+    .replace(/\bBearer\s+[^\s"',}]+/gi, "Bearer [redacted]")
+    .replace(/\b(sk|pk|rk)[-_](live|test|proj)?[-_]?[A-Za-z0-9]{8,}/g, "[redacted]");
+}
+
+function detailText(detail: unknown, secrets: (string | null | undefined)[] = []) {
+  if (detail === undefined || detail === null || detail === "") return "";
+  const text = detail instanceof Error ? `${detail.name}: ${detail.message}` : typeof detail === "string" ? detail : JSON.stringify(detail);
+  return redactSecrets((text ?? "").replace(/\s+/g, " ").trim(), secrets).slice(0, 500);
+}
+
+export function redactedError(error: unknown) {
+  return detailText(error) || String(error);
+}
+
+export function clipReason(reason: unknown, max = 200) {
+  if (typeof reason !== "string") return "";
+  const text = redactSecrets(reason.replace(/\s+/g, " ").trim()).slice(0, max).trim();
+  return text.replace(/[.\s]+$/, "");
+}
+
+export function logUpstream(provider: string, status: number | null, detail?: unknown, secrets: (string | null | undefined)[] = []) {
+  console.error(`${provider} request failed`, status ?? "no status", detailText(detail, secrets));
 }
 
 export async function upstreamFailure(provider: string, response: Response, options: UpstreamOptions = {}) {

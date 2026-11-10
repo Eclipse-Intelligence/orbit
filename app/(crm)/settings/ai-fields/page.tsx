@@ -34,8 +34,8 @@ export default async function AiFieldsSettingsPage() {
       ]),
   );
   return (
-    <AiFieldsSettings fields={fields.map(publicField)} stats={stats} spend={spend.amount} views={views} configured={webChecksConfigured()} canAdmin={canAdmin}>
-      <WebChecksSettings settings={enrichment} checks={checks} configured={webChecksConfigured()} canAdmin={canAdmin} unchecked={unchecked} columns={columns} />
+    <AiFieldsSettings fields={fields.map(publicField)} stats={stats} spend={spend.amount} views={views} configured={webChecksConfigured()} canAdmin={canAdmin} isOwner={user.role === "owner"}>
+      <WebChecksSettings settings={enrichment} checks={checks} configured={webChecksConfigured()} canAdmin={canAdmin} isOwner={user.role === "owner"} unchecked={unchecked} columns={columns} />
     </AiFieldsSettings>
   );
 }

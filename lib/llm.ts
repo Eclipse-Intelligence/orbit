@@ -1,5 +1,5 @@
 import { ShownError, notSetUp } from "@/lib/crm/errors";
-import { logUpstream } from "@/lib/upstream";
+import { logUpstream, upstreamMessage } from "@/lib/upstream";
 import type { z } from "zod";
 
 const DEFAULT_BASE_URL = "https://api.llmapi.ai/v1";
@@ -14,17 +14,29 @@ const UNREACHABLE = "Couldn't reach the AI. Try again.";
 const AI_ERROR = "The AI returned an error. Try again.";
 const TRANSCRIBE_FAILED = "Couldn't transcribe. Try again.";
 
-function missingKey() {
-  return new LlmError(notSetUp("AI", "LLM_API_KEY"));
+type Viewer = { type?: string; role?: string } | null | undefined;
+
+function missingKey(viewer?: Viewer) {
+  return new LlmError(notSetUp("AI", "LLM_API_KEY", viewer), false, true);
+}
+
+function gatewayFailure(status: number, fallback: string, viewer: Viewer, retryable: boolean) {
+  if (status === 401 || status === 403 || status === 429) {
+    const owner = viewer?.type !== "agent" && viewer?.role === "owner";
+    return new LlmError(upstreamMessage("The AI", status, { fix: owner ? "Check LLM_API_KEY." : undefined }), retryable, true);
+  }
+  return new LlmError(fallback, retryable);
 }
 
 export class LlmError extends ShownError {
   readonly retryable: boolean;
+  readonly actionable: boolean;
 
-  constructor(message: string, retryable = false) {
+  constructor(message: string, retryable = false, actionable = false) {
     super(message);
     this.name = "LlmError";
     this.retryable = retryable;
+    this.actionable = actionable;
   }
 }
 
@@ -38,6 +50,7 @@ type LlmJsonRequest<T> = {
   deadline?: number;
   model?: string;
   webSearch?: boolean;
+  viewer?: Viewer;
 };
 
 type LlmJsonResult<T> = {
@@ -148,7 +161,7 @@ async function attempt<T>(
   }
   if (!response.ok) {
     logUpstream("LLM gateway", response.status, await gatewayDetail(response));
-    throw new LlmError(AI_ERROR, response.status >= 500);
+    throw gatewayFailure(response.status, AI_ERROR, request.viewer, response.status >= 500);
   }
   let body: {
     model?: unknown;
@@ -180,7 +193,7 @@ async function attempt<T>(
 
 export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJsonResult<T>> {
   const apiKey = process.env.LLM_API_KEY?.trim();
-  if (!apiKey) throw missingKey();
+  if (!apiKey) throw missingKey(request.viewer);
   const model = request.model?.trim() || llmModel();
   let last: unknown;
   for (let index = 0; index < MAX_ATTEMPTS; index += 1) {
@@ -208,7 +221,7 @@ const EMBEDDING_BATCH = 64;
 
 const EMBEDDING_PARALLEL = 4;
 
-async function embedBatch(batch: string[], apiKey: string, options: { fetchImpl?: typeof fetch; timeoutMs?: number }) {
+async function embedBatch(batch: string[], apiKey: string, options: { fetchImpl?: typeof fetch; timeoutMs?: number; viewer?: Viewer }) {
   let response: Response;
   try {
     response = await (options.fetchImpl ?? fetch)(`${baseUrl()}/embeddings`, {
@@ -223,7 +236,7 @@ async function embedBatch(batch: string[], apiKey: string, options: { fetchImpl?
   }
   if (!response.ok) {
     logUpstream("LLM gateway embeddings", response.status, await gatewayDetail(response));
-    throw new LlmError(AI_ERROR, response.status >= 500 || response.status === 429);
+    throw gatewayFailure(response.status, AI_ERROR, options.viewer, response.status >= 500 || response.status === 429);
   }
   const body = (await response.json().catch(() => null)) as { data?: { index?: number; embedding?: unknown }[] } | null;
   const data = [...(body?.data ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
@@ -237,9 +250,9 @@ async function embedBatch(batch: string[], apiKey: string, options: { fetchImpl?
   });
 }
 
-export async function embedTexts(texts: string[], options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<number[][]> {
+export async function embedTexts(texts: string[], options: { fetchImpl?: typeof fetch; timeoutMs?: number; viewer?: Viewer } = {}): Promise<number[][]> {
   const apiKey = process.env.LLM_API_KEY?.trim();
-  if (!apiKey) throw missingKey();
+  if (!apiKey) throw missingKey(options.viewer);
   const batches: string[][] = [];
   for (let start = 0; start < texts.length; start += EMBEDDING_BATCH) batches.push(texts.slice(start, start + EMBEDDING_BATCH));
   const results: number[][][] = new Array(batches.length);
@@ -262,10 +275,10 @@ export async function transcribeAudio(
   bytes: Uint8Array,
   name: string,
   contentType: string,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number; language?: string; signal?: AbortSignal } = {},
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; language?: string; signal?: AbortSignal; viewer?: Viewer } = {},
 ): Promise<string> {
   const apiKey = process.env.LLM_API_KEY?.trim();
-  if (!apiKey) throw missingKey();
+  if (!apiKey) throw missingKey(options.viewer);
   const form = new FormData();
   form.append("model", TRANSCRIBE_MODEL);
   form.append("response_format", "json");
@@ -285,7 +298,7 @@ export async function transcribeAudio(
   }
   if (!response.ok) {
     logUpstream("LLM gateway transcription", response.status, await gatewayDetail(response));
-    throw new LlmError(TRANSCRIBE_FAILED, response.status >= 500 || response.status === 429);
+    throw gatewayFailure(response.status, TRANSCRIBE_FAILED, options.viewer, response.status >= 500 || response.status === 429);
   }
   const body = (await response.json().catch(() => null)) as { text?: unknown } | null;
   if (typeof body?.text !== "string") throw new LlmError(TRANSCRIBE_FAILED);

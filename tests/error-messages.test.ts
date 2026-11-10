@@ -136,6 +136,10 @@ describe("pgFailure", () => {
     assert.equal(writtenForPeople("Forbidden"), false);
     assert.equal(writtenForPeople("password must be at least 8 characters"), false);
     assert.equal(writtenForPeople("First line.\nSecond line."), false);
+    assert.equal(writtenForPeople("eBay is archived, so it can't be merged into."), true);
+    assert.equal(writtenForPeople("bob@example.com is already in this workspace."), true);
+    const lowerName = pgFailure(Object.assign(new Error("eBay is archived, so it can't be merged into."), { code: "22023" }));
+    assert.equal(lowerName?.message, "eBay is archived, so it can't be merged into.");
   });
 });
 

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Renderer } from "@/lib/browserbase";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError, errorText, tooLong, tooMany } from "@/lib/crm/errors";
+import { CrmError, ShownError, isPgError, errorText, tooLong, tooMany } from "@/lib/crm/errors";
 import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -87,7 +87,7 @@ function text(input: Record<string, unknown>, key: keyof typeof BRAND_LIMITS, la
 
 function website(value: unknown) {
   if (value !== undefined && value !== null && typeof value !== "string") {
-    throw new CrmError("invalid_input", "Invalid website.", 400, { field: "website" });
+    throw new CrmError("invalid_input", "The website must be text.", 400, { field: "website" });
   }
   const checked = normaliseWebsite(value ?? "");
   if (!checked.ok) throw new CrmError("invalid_input", "Enter a website, such as example.com.", 400, { field: "website" });
@@ -215,7 +215,9 @@ export async function draftBrandFromWebsite(
   try {
     pages = await readSite(site, options);
   } catch (error) {
-    throw new CrmError("unavailable", `Couldn't read ${site}. ${errorText(error, "Try again.")}`, 502, { field: "website" });
+    if (!(error instanceof ShownError)) console.error("Reading the website for the brand profile failed", error);
+    const reason = error instanceof ShownError ? errorText(error, "Try again.") : "Try again.";
+    throw new CrmError("unavailable", `Couldn't read ${site}. ${reason}`, 502, { field: "website" });
   }
   const material = pages.map((page) => `Page from the website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, 8_000)}`);
   const name = actor.workspaceName;
@@ -235,6 +237,7 @@ export async function draftBrandFromWebsite(
       timeoutMs: 60_000,
       deadline: options.deadline,
       fetchImpl: options.fetchImpl,
+      viewer: actor,
     });
     const clip = (value: string, max: number) => value.trim().slice(0, max);
     const draft = {
@@ -252,7 +255,7 @@ export async function draftBrandFromWebsite(
   } catch (error) {
     if (error instanceof LlmError) {
       console.error("Drafting the brand profile failed", error.message);
-      throw new CrmError("unavailable", "Couldn't write the draft. Try again.", 502);
+      throw new CrmError("unavailable", error.actionable ? error.message : "Couldn't write the draft. Try again.", 502);
     }
     throw error;
   }

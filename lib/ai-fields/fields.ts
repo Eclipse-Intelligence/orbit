@@ -201,7 +201,8 @@ export type AiFieldInput = {
 export async function saveAiField(actor: Actor, input: AiFieldInput, link: { webCheckId?: string } = {}) {
   assertFieldAdmin(actor);
   const label = cleanText(input.label);
-  if (!label || label.length > AI_FIELD_LABEL_MAX) throw invalid(tooLong("the name", AI_FIELD_LABEL_MAX), "label");
+  if (!label) throw invalid("Enter a name.", "label");
+  if (label.length > AI_FIELD_LABEL_MAX) throw invalid(tooLong("the name", AI_FIELD_LABEL_MAX), "label");
   const question = cleanText(input.question);
   if (question.length < 10 || question.length > 1000) throw invalid("Enter a question of 10 to 1,000 characters.", "question");
   const kind = AI_FIELD_KINDS.find((item) => item === input.kind);

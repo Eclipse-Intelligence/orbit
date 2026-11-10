@@ -229,7 +229,7 @@ describe("email templates", () => {
         body: "x",
         tags: "sales" as unknown as string[],
       }, WEB),
-      code("invalid_input", /Invalid tags/),
+      code("invalid_input", /Tags must be text/),
     );
     const exact = await createEmailTemplate(owner, {
       name: "n".repeat(120),

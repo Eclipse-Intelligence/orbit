@@ -135,9 +135,8 @@ async function summarise(title: string, text: string, options: IndexOptions) {
 
 function failureMessage(error: unknown) {
   if (error instanceof KnowledgeReadError) return error.message;
-  if (error instanceof LlmError) return "Couldn't index it. Try again.";
   console.error("Knowledge indexing failed", error);
-  return "Couldn't read it. Try again.";
+  return error instanceof LlmError ? "Couldn't index it. Try again." : "Couldn't read it. Try again.";
 }
 
 async function claim(actor: UserActor, id: string, force: boolean) {
@@ -200,7 +199,6 @@ export async function indexKnowledgeItem(actor: UserActor, id: string, options: 
     });
     return stored ? { status: "ready" as const, chunks: chunks.length } : null;
   } catch (error) {
-    if (!(error instanceof KnowledgeReadError)) console.error("Knowledge indexing failed", error);
     const message = failureMessage(error).slice(0, 500);
     await withActor(actor, (db) =>
       db.query("update crm.knowledge_items set status = 'failed', error = $2 where id = $1 and archived_at is null and status = 'indexing' and updated_at = $3::timestamptz", [id, message, token]),

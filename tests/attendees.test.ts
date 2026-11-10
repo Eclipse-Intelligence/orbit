@@ -97,7 +97,7 @@ describe("my email addresses", () => {
       ["mark@ridgeon.me", "marky@gmail.com"],
     );
     assert.throws(() => cleanOtherEmails(["not an email"], "mark@geteclipse.co"), /isn't a valid email/);
-    assert.throws(() => cleanOtherEmails("mark@ridgeon.me", "mark@geteclipse.co"), /Invalid email addresses/);
+    assert.throws(() => cleanOtherEmails("mark@ridgeon.me", "mark@geteclipse.co"), /list of email/);
     const many = Array.from({ length: 21 }, (_, index) => `me${index}@example.com`);
     assert.throws(() => cleanOtherEmails(many, "mark@geteclipse.co"), /Up to 20/);
     assert.equal(cleanOtherEmails([...many.slice(0, 20), "mark@geteclipse.co"], "mark@geteclipse.co").length, 20);

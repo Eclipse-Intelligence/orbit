@@ -14,7 +14,7 @@ const DAILY_WORDS = new Set(["daily", "note", "daily note", "journal", "jot", ""
 export function readQuickCapture(input: unknown): QuickCapture {
   const source = typeof input === "string" ? { text: input } : input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const text = typeof source.text === "string" ? source.text.replace(/\r\n?/g, "\n").trim() : "";
-  if (!text) throw new CrmError("invalid_input", "Nothing to add", 400, { field: "text" });
+  if (!text) throw new CrmError("invalid_input", "Nothing to add.", 400, { field: "text" });
   if (text.length > QUICK_TEXT_MAX) throw new CrmError("invalid_input", tooLong("it", QUICK_TEXT_MAX), 400, { field: "text" });
   const target = typeof source.to === "string" ? source.to.trim().toLowerCase() : "";
   if (TASK_WORDS.has(target)) return { to: "task", text };
@@ -24,7 +24,7 @@ export function readQuickCapture(input: unknown): QuickCapture {
 
 export async function quickActor(request: Request) {
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? "";
-  if (!isPersonalToken(bearer)) throw new CrmError("unauthorized", "Send your Orbit token as a Bearer token. Create one in Settings › API tokens.", 401);
+  if (!isPersonalToken(bearer)) throw new CrmError("unauthorized", "Send your Orbit token in the Authorization header (Bearer orbit_…). Create one in Settings › API tokens.", 401);
   const found = await authenticatePersonal(bearer);
   await consumePersonalRateLimit(found.tokenId);
   return found.actor;

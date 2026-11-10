@@ -32,7 +32,8 @@ export function cleanViewParams(value: unknown) {
 
 function cleanName(value: unknown) {
   const name = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-  if (!name || name.length > 60) throw new CrmError("invalid_input", tooLong("the name", 60), 400, { field: "name" });
+  if (!name) throw new CrmError("invalid_input", "Enter a name.", 400, { field: "name" });
+  if (name.length > 60) throw new CrmError("invalid_input", tooLong("the name", 60), 400, { field: "name" });
   if (name.toLowerCase() === "all companies") throw new CrmError("invalid_input", "Choose another name.", 400, { field: "name" });
   return name;
 }

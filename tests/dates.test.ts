@@ -63,8 +63,8 @@ describe("reading dates people and agents type", () => {
     assert.equal(iso("1 July 2026 9am"), "2026-07-01T08:00:00.000Z");
     assert.equal(iso("1 July 2026 12am"), "2026-06-30T23:00:00.000Z");
     assert.equal(iso("1 July 2026 12:15 pm"), "2026-07-01T11:15:00.000Z");
-    refused("1 July 2026 13pm", /Enter a date and time/);
-    refused("1 July 2026 9", /Enter a date and time/);
+    refused("1 July 2026 13pm", /Enter a valid date and time/);
+    refused("1 July 2026 9", /Enter a valid date and time/);
   });
 
   it("reads RFC 2822 dates with zone names as their fixed offsets", () => {
@@ -83,13 +83,13 @@ describe("reading dates people and agents type", () => {
     assert.equal(iso("Thu Jul 02 2026 10:00:00 GMT+0100 (British Summer Time)"), "2026-07-02T09:00:00.000Z");
     assert.equal(iso("Sun, 25 Oct 2026 01:30:00 BST"), "2026-10-25T00:30:00.000Z");
     assert.equal(iso("Sun, 25 Oct 2026 01:30:00 GMT"), "2026-10-25T01:30:00.000Z");
-    refused("Wed, 01 Jul 2026 10:00:00 AEST", /Enter a date and time/);
+    refused("Wed, 01 Jul 2026 10:00:00 AEST", /Enter a valid date and time/);
   });
 
   it("refuses ambiguous or impossible dates with a reason instead of guessing", () => {
     refused("07/11/26", /year in full/);
-    refused("11/07", /Enter a date and time/);
-    refused("next Tuesday-ish", /Enter a date and time/);
+    refused("11/07", /Enter a valid date and time/);
+    refused("next Tuesday-ish", /Enter a valid date and time/);
     refused("31/02/2026", /isn't a real date/);
     refused("2026-02-30T09:00", /isn't a real date and time/);
     refused("2026-02-30T10:00:00Z", /isn't a real date and time/);

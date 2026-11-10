@@ -37,8 +37,14 @@ export function stopsParallel(error: unknown) {
   return error instanceof ParallelError && error.status !== null && STOPPING_STATUSES.has(error.status);
 }
 
-function missingKey() {
-  return new ParallelError(webChecksNotSetUp(), 401);
+type Viewer = { type?: string; role?: string } | null;
+
+let missingKeyLogged = false;
+
+function missingKey(viewer?: Viewer) {
+  const log = !missingKeyLogged;
+  missingKeyLogged = true;
+  return new ParallelError(webChecksNotSetUp(viewer, log), 401);
 }
 
 function timeLeft(deadline: number | undefined, wanted: number) {
@@ -100,10 +106,10 @@ function retryable(status: number) {
 export async function decide(
   state: Record<string, unknown>,
   questions: Record<string, DecisionQuestion>,
-  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; excerpts?: boolean; retryPauseMs?: number; deadline?: number } = {},
+  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; excerpts?: boolean; retryPauseMs?: number; deadline?: number; viewer?: Viewer } = {},
 ): Promise<Decision> {
   const key = parallelKey(options.env);
-  if (!key) throw missingKey();
+  if (!key) throw missingKey(options.viewer);
   if (Object.keys(questions).length === 0) return { answers: {}, citations: [], id: null };
   checkLimits(questions);
   const send = async () => {
@@ -154,11 +160,11 @@ export type TaskField = { type: "number" | "string"; description: string };
 
 const TASK_STATUSES: TaskStatus[] = ["queued", "action_required", "running", "completed", "failed", "cancelling", "cancelled"];
 
-type TaskOptions = { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; deadline?: number };
+type TaskOptions = { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; deadline?: number; viewer?: Viewer };
 
-function taskKey(env: Record<string, string | undefined> | undefined) {
-  const key = parallelKey(env);
-  if (!key) throw missingKey();
+function taskKey(options: TaskOptions) {
+  const key = parallelKey(options.env);
+  if (!key) throw missingKey(options.viewer);
   return key;
 }
 
@@ -219,7 +225,7 @@ export async function createTaskRun(
   fields: Record<string, TaskField>,
   options: TaskOptions & { processor?: string; metadata?: Record<string, string> } = {},
 ): Promise<TaskRun> {
-  const key = taskKey(options.env);
+  const key = taskKey(options);
   const names = Object.keys(fields);
   if (names.length === 0) throw new ParallelError("A task needs at least one field.");
   if (names.length > 100) throw new ParallelError("A task can fill up to 100 fields at once.");
@@ -251,7 +257,7 @@ export async function createTaskRun(
 }
 
 export async function getTaskRun(runId: string, options: TaskOptions = {}): Promise<TaskRun | null> {
-  const key = taskKey(options.env);
+  const key = taskKey(options);
   const response = await taskRequest(`${TASK_RUNS_URL}/${encodeURIComponent(runId)}`, { headers: { "x-api-key": key } }, options);
   if (!response) return null;
   if (!response.ok) {
@@ -264,7 +270,7 @@ export async function getTaskRun(runId: string, options: TaskOptions = {}): Prom
 }
 
 export async function getTaskResult(runId: string, options: TaskOptions & { waitSeconds?: number } = {}): Promise<TaskResult | null> {
-  const key = taskKey(options.env);
+  const key = taskKey(options);
   const wait = Math.max(1, Math.min(600, Math.round(options.waitSeconds ?? 5)));
   const response = await taskRequest(
     `${TASK_RUNS_URL}/${encodeURIComponent(runId)}/result?timeout=${wait}`,

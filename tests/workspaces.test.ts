@@ -55,9 +55,39 @@ describe("workspaces", () => {
       assert.equal(forbidden?.message, "You don't have permission to do that.");
       assert.equal(pgFailure(await raise("user required", "22023"))?.message, "That isn't valid.");
       assert.equal(pgFailure(await raise("Only workspace owners can create a workspace.", "42501"))?.message, "Only workspace owners can create a workspace.");
+      assert.equal(pgFailure(await raise("eBay is archived, so it can''t be merged into.", "22023"))?.message, "eBay is archived, so it can't be merged into.");
     } finally {
       console.error = realConsoleError;
     }
+  });
+
+  it("turns create_workspace's own 'forbidden' into a sentence a person can read", async () => {
+    const admin = getAdminPool();
+    const original = await admin.query<{ definition: string }>(
+      "select pg_get_functiondef('private.create_workspace(uuid, text, uuid)'::regprocedure) as definition",
+    );
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      await admin.query(
+        "create or replace function private.create_workspace(p_user uuid, p_name text, p_brand_source uuid) returns uuid language plpgsql security definer set search_path = '' as $$ begin raise exception 'forbidden' using errcode = '42501'; end $$",
+      );
+      await assert.rejects(
+        createWorkspace(mark, { name: "Refused" }),
+        (error: unknown) => error instanceof CrmError && error.code === "forbidden" && error.message === "Only workspace owners can create a workspace.",
+      );
+      await assert.rejects(
+        createWorkspace({ ...mark, userId: null as unknown as string }, { name: "Nobody" }),
+        (error: unknown) => error instanceof CrmError && error.code === "forbidden" && !/forbidden/.test(error.message),
+      );
+    } finally {
+      console.error = realConsoleError;
+      await admin.query(original.rows[0].definition);
+    }
+    await assert.rejects(
+      createWorkspace({ ...mark, userId: null as unknown as string }, { name: "Nobody" }),
+      (error: unknown) => error instanceof CrmError && error.code === "invalid_input" && error.message === "That isn't valid.",
+    );
   });
 
   it("lets only owners create a workspace, which comes ready to use", async () => {

@@ -318,7 +318,7 @@ describe("mail replies and read statuses", () => {
     assert.ok(trackingIdIn(html));
     await assert.rejects(
       () => sendMailDraft(owner, { ...input, id: draft.id, subject: "" }, { storedFiles: "replace", origin: ORIGIN, fetchImpl }),
-      /Add a subject/,
+      /Enter a subject/,
     );
     const send = outlook(state);
     await sendMailDraft(owner, { ...input, id: draft.id }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: send.fetchImpl });

@@ -137,7 +137,7 @@ export default function BulkEmailDialog({
           keepAttachments: true,
           from,
         });
-        if ("error" in sent && sent.error) return { error: sent.error };
+        if ("error" in sent && sent.error) return { error: sent.error, stopsRun: "stopsRun" in sent && sent.stopsRun === true };
         return { warning: "warning" in sent ? sent.warning : null };
       },
       {

@@ -157,7 +157,7 @@ function prepareActivity(input: ActivityWrite): {
     if (typeof input.metadata !== "object" || Array.isArray(input.metadata)) {
       throw new CrmError(
         "invalid_input",
-        "Invalid activity metadata.",
+        "Activity metadata must be an object.",
         400,
         {
           field: "metadata",
@@ -825,7 +825,7 @@ export async function updateActivityInDb(db: Db, actor: Actor, id: string, input
   if (!isUuid(id)) throw notFound("activity");
   const row = await readForEdit(db, actor, id);
   if (row.archived_at) {
-    throw new CrmError("conflict", "This activity is deleted. Restore it first.", 409);
+    throw new CrmError("conflict", "This activity is deleted. Undo the delete first.", 409);
   }
   const before = editValues(row);
   const transcript = await db.query("select 1 from crm.call_insights where activity_id = $1 and workspace_id = $2", [id, actor.workspaceId]);

@@ -433,8 +433,8 @@ describe("recall", () => {
 
   it("explains rejected keys, bad requests and rate limits, retrying once", async () => {
     await assert.rejects(recallSearch(owner, { query: "trigger 422" }, live()), (error: Error) => {
-      assert.equal(error.message, "Recall couldn't use that request. Check the filters.");
-      assert.doesNotMatch(error.message, /String should have/);
+      assert.equal(error.message, "Recall couldn't use that request: q: String should have at most 1000 characters.");
+      assert.doesNotMatch(error.message, /string_too_long|loc/);
       return true;
     });
     assert.equal(recallDetail({ detail: { message: "date_from must be before or equal to date_to" } }), "date_from must be before or equal to date_to");

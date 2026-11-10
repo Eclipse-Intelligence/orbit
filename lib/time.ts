@@ -112,7 +112,7 @@ const ZONE_OFFSETS: Record<string, number> = {
 const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 
-const FORMAT_HINT = "Enter a date and time, such as 7 Nov 2026 14:30.";
+const FORMAT_HINT = "Enter a valid date and time, such as 2026-11-07 14:30, 07/11/2026 or 7 Nov 2026.";
 
 export type DateTimeReading = { ok: true; date: Date; dateOnly: boolean } | { ok: false; error: string };
 

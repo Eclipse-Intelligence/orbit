@@ -1,4 +1,5 @@
 import { ShownError } from "@/lib/crm/errors";
+import { redactedError } from "@/lib/upstream";
 import { lookup as dnsLookupEach, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP, type LookupFunction } from "node:net";
@@ -290,7 +291,7 @@ export async function readWebPage(
     rendered = await render(url.href, { proxies: direct.proxies });
   } catch (error) {
     if (direct.fallback) return direct.fallback;
-    console.error("Opening a page in a browser failed", url.hostname, error);
+    console.error("Opening a page in a browser failed", url.hostname, redactedError(error));
     throw new WebPageError(direct.blocked);
   }
   const landed = await checkUrl(rendered.url, lookup).catch(() => url);

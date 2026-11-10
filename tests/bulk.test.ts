@@ -26,7 +26,6 @@ import {
 import {
   personalise,
   splitRecipients,
-  stopsRun,
   unknownTokens,
   type Recipient,
 } from "@/lib/crm/personalise";
@@ -103,16 +102,6 @@ describe("personalise", () => {
     );
   });
 
-  it("stops a run on mailbox errors only", () => {
-    assert.equal(stopsRun("Connect Microsoft in Inbox before sending."), true);
-    assert.equal(stopsRun("Microsoft rejected the mailbox connection. Connect it again."), true);
-    assert.equal(stopsRun("Add an email address before sending."), false);
-    assert.equal(stopsRun("Contact not found."), false);
-    assert.equal(
-      stopsRun("Orbit could not read the saved Microsoft connection. Disconnect, then connect Microsoft again."),
-      true,
-    );
-  });
 });
 
 describe("paced sending", () => {
@@ -154,17 +143,27 @@ describe("paced sending", () => {
     assert.deepEqual(updates[5], { id: "c", status: "sent", warning: "Not filed." });
   });
 
+  it("decides whether to stop by the flag, not the wording", async () => {
+    const fake = clock();
+    const result = await sendPaced(
+      [{ id: "a" }, { id: "b" }],
+      async () => ({ error: "Couldn't connect Microsoft. Try again." }),
+      { gapMs: 0, stopped: () => false, wait: fake.wait, now: fake.now, onUpdate: () => {} },
+    );
+    assert.deepEqual(result, { sent: 0, halted: null, unsent: [] });
+  });
+
   it("halts on a mailbox error and when stopped", async () => {
     const fake = clock();
     const halted = await sendPaced(
       [{ id: "a" }, { id: "b" }, { id: "c" }],
       async (item) =>
-        item.id === "a" ? {} : { error: "Microsoft rejected the mailbox connection. Connect it again." },
+        item.id === "a" ? {} : { error: "Microsoft is busy. Try again in a minute.", stopsRun: true },
       { gapMs: 2100, stopped: () => false, wait: fake.wait, now: fake.now, onUpdate: () => {} },
     );
     assert.deepEqual(halted, {
       sent: 1,
-      halted: "Microsoft rejected the mailbox connection. Connect it again.",
+      halted: "Microsoft is busy. Try again in a minute.",
       unsent: ["c"],
     });
 

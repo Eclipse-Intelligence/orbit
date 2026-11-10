@@ -1,3 +1,6 @@
+import { ShownError } from "@/lib/crm/errors";
+import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
+
 export type ProviderId = "context" | "hunter" | "enrow" | "icypeas";
 
 export type ContactField = "email" | "linkedin" | "phone";
@@ -34,7 +37,7 @@ type Provider = {
   verify?: (email: string, context: ProviderContext) => Promise<Verdict>;
 };
 
-export class ProviderFailure extends Error {
+export class ProviderFailure extends ShownError {
   constructor(message: string) {
     super(message);
     this.name = "ProviderFailure";
@@ -68,18 +71,19 @@ async function call(
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
       signal: AbortSignal.timeout(remaining(context)),
     });
-  } catch {
-    throw new ProviderFailure(`${provider} didn't respond.`);
+  } catch (error) {
+    logUpstream(provider, null, error);
+    throw new ProviderFailure(unreachable(provider));
   }
   let body: unknown = null;
   try {
     body = await response.json();
   } catch {}
-  if (response.status === 401) throw new ProviderFailure(`${provider} rejected the API key.`);
-  if (response.status === 403) throw new ProviderFailure(`${provider} refused the request.`);
-  if (response.status === 402) throw new ProviderFailure(`${provider} is out of credits.`);
-  if (response.status === 429) throw new ProviderFailure(`${provider} is rate limiting or out of credits.`);
-  if (response.status >= 500) throw new ProviderFailure(`${provider} had a server error.`);
+  if (response.status === 402 || response.status === 401 || response.status === 403 || response.status === 429 || response.status >= 500) {
+    logUpstream(provider, response.status, body);
+    if (response.status === 402) throw new ProviderFailure(`${provider} is out of credits.`);
+    throw new ProviderFailure(upstreamMessage(provider, response.status, { busy: "It may be out of credits." }));
+  }
   return { status: response.status, body };
 }
 

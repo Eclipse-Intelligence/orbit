@@ -212,6 +212,7 @@ export function actionError(error: unknown) {
       field: typeof error.details?.field === "string" ? error.details.field : undefined,
       existingId:
         typeof error.details?.existingId === "string" ? error.details.existingId : undefined,
+      stopsRun: error.details?.stopsRun === true ? true : undefined,
     };
   }
   return { error: GENERIC_ERROR };

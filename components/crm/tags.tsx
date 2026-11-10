@@ -191,7 +191,7 @@ export function TagOptions({
       <CommandList>
         <CommandEmpty className="py-6">
           {tooLong
-            ? `Tags are ${TAG_MAX_LENGTH} characters or fewer.`
+            ? `Keep each tag to ${TAG_MAX_LENGTH} characters.`
             : exclude.includes(typed)
               ? "Already tagged."
               : "Type a name for the tag."}

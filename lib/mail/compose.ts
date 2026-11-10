@@ -452,7 +452,7 @@ function checkSendable(input: DraftInput) {
     throw new CrmError("invalid_input", "Add a recipient.", 400, { field: "To" });
   }
   if (!input.body.trim() && input.mode !== "forward") throw new CrmError("invalid_input", "Add a message.", 400, { field: "body" });
-  if (input.mode === "new" && !input.subject) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+  if (input.mode === "new" && !input.subject) throw new CrmError("invalid_input", "Enter a subject.", 400, { field: "subject" });
 }
 
 export function readAttachmentIds(value: unknown) {
@@ -1251,7 +1251,7 @@ export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput,
   if (replying && !thread) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   const accounts = await composeAccounts(actor);
   const account = chosen ?? (thread ? receivingIdentity(accounts, thread.source_id, [...(thread.to_recipients ?? []), ...(thread.cc_recipients ?? [])]) : null);
-  if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+  if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Enter a subject.", 400, { field: "subject" });
   const mode: DraftMode = replying ? (input.replyAll ? "reply_all" : "reply") : "new";
   const defaults = thread
     ? replyDefaults(
@@ -1378,7 +1378,7 @@ export async function sendForAgent(
   if (replying && !original) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   if (original && !account) account = receivingIdentity(accounts, original.source_id, [...(original.to_recipients ?? []), ...(original.cc_recipients ?? [])]);
   const subject = input.subject?.trim() || stored?.subject?.trim() || "";
-  if (!replying && !subject) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+  if (!replying && !subject) throw new CrmError("invalid_input", "Enter a subject.", 400, { field: "subject" });
   const mode: DraftMode = stored?.mode === "forward" && !input.replyTo ? "forward" : replying ? (input.replyAll ? "reply_all" : "reply") : "new";
   const defaults = original
     ? replyDefaults(

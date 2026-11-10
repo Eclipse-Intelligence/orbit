@@ -107,7 +107,7 @@ describe("knowledge media", () => {
     assert.equal(calls.length, 2);
   });
 
-  it("falls back to Supadata when YouTube won't share captions, and explains when it isn't set up", async () => {
+  it("falls back to Supadata when YouTube won't share captions, and logs the missing key when it isn't set up", async () => {
     const handler: Handler = (url) => {
       if (url.startsWith("https://www.youtube.com/youtubei/v1/player")) return player([], "LOGIN_REQUIRED");
       if (url.startsWith("https://www.youtube.com/oembed")) return Response.json({ title: "Acme keynote", author_name: "Acme" });
@@ -115,7 +115,17 @@ describe("knowledge media", () => {
       if (url === "https://api.supadata.ai/v1/transcript/job-1") return Response.json({ status: "completed", content: [{ text: "Welcome to the keynote.", offset: 1000 }] });
       return null;
     };
-    await assert.rejects(readYouTube("https://youtu.be/dQw4w9WgXcQ", { ...fake(handler), lookup }), /No captions available/);
+    const realConsoleError = console.error;
+    const logged: string[] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    try {
+      await assert.rejects(readYouTube("https://youtu.be/dQw4w9WgXcQ", { ...fake(handler), lookup }), (error: Error) => error.message === "No captions available. Upload the transcript instead.");
+    } finally {
+      console.error = realConsoleError;
+    }
+    assert.ok(logged.some((line) => line.includes("SUPADATA_API_KEY")));
     process.env.SUPADATA_API_KEY = "supa";
     const result = await readYouTube("https://youtu.be/dQw4w9WgXcQ", { ...fake(handler), lookup });
     assert.equal(result.title, "How Acme sells");

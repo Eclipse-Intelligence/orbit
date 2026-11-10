@@ -1,4 +1,4 @@
-import { ShownError } from "@/lib/crm/errors";
+import { ShownError, notSetUp } from "@/lib/crm/errors";
 import { htmlToText } from "@/lib/mail/text";
 import { LlmError, transcribeAudio, TRANSCRIBE_MAX_BYTES } from "@/lib/llm";
 import { downloadPublic, WebPageError, type Lookup } from "@/lib/web-page";
@@ -210,11 +210,9 @@ export async function readYouTube(target: string, options: MediaOptions): Promis
   const fallback = await supadata(watch, options);
   if (fallback) return { title: named.title, text: withHeader({ ...named, description: direct?.description }, fallback) };
   if (direct?.status && direct.status !== "OK" && direct.status !== "LOGIN_REQUIRED") throw new MediaError("That video isn't available.");
-  throw new MediaError(
-    supadataKey()
-      ? "That video has no captions to read."
-      : "No captions available. Upload the transcript instead.",
-  );
+  if (supadataKey()) throw new MediaError("That video has no captions to read.");
+  notSetUp("YouTube transcripts", "SUPADATA_API_KEY");
+  throw new MediaError("No captions available. Upload the transcript instead.");
 }
 
 type Episode = { title: string | null; show: string | null; audioUrl: string; feedUrl: string | null; description: string | null };

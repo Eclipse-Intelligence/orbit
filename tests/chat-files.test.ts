@@ -179,7 +179,7 @@ describe("chat files", () => {
     assert.match(image.note, /can't pass images to the model yet/);
     const zip = await upload(env, "Bundle.zip", new Uint8Array([80, 75, 3, 4]), "application/zip");
     const unreadable = (await withFetch(env.fetchImpl, () => runTool(owner, "read_chat_file", { fileId: zip }))) as { error: string };
-    assert.match(unreadable.error, /Orbit can't read text from Bundle\.zip\. PDF, Word/);
+    assert.match(unreadable.error, /Can't read text from Bundle\.zip\. Use PDF, Word/);
   });
 
   it("keeps another person's chat files out of reach", async () => {
@@ -190,7 +190,7 @@ describe("chat files", () => {
     const read = (await withFetch(env.fetchImpl, () => runTool(other, "read_chat_file", { fileId: id }))) as { error: string };
     assert.match(read.error, /That file isn't in your chats/);
     const email = (await withFetch(env.fetchImpl, () => runTool(other, "send_email", { to: ["x@acme.test"], subject: "Hi", body: "Hi", attachmentIds: [id] }))) as { error: string };
-    assert.equal(email.error, "File not found.");
+    assert.equal(email.error, "One of the files isn't in Knowledge, on the draft or in your chats.");
     const filed = (await withFetch(env.fetchImpl, () => runTool(other, "add_to_knowledge", { chatFileId: id, eclipse: true }))) as { error: string };
     assert.match(filed.error, /That file isn't in your chats/);
     await assert.rejects(sendWith(other, "Read this", [id]), /A file has expired/);

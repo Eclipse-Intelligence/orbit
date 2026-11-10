@@ -183,7 +183,7 @@ describe("About you", () => {
     try {
       const { fetchImpl: site } = world({ jobTitle: "", about: "", interests: "", writing: "" });
       const gatewayDown: typeof fetch = async (input, init) => {
-        if (String(input).endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "upstream provider key sk-live-123 rejected" } }), { status: 400 });
+        if (String(input).endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "upstream provider shard 7 rejected the request" } }), { status: 400 });
         return site(input, init);
       };
       await assert.rejects(draftPersonalContext(owner, { websiteUrl: "ridgeon.test" }, { fetchImpl: gatewayDown, lookup: PUBLIC, render: null }), (error: Error) => {

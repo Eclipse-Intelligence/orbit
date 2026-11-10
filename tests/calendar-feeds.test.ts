@@ -13,6 +13,7 @@ import { meetingLink, readFeed } from "@/lib/ical/events";
 import {
   assertPublicHost,
   FEED_MAX_BYTES,
+  feedErrorSummary,
   fetchFeed,
   isPublicAddress,
   maskFeedUrl,
@@ -246,6 +247,12 @@ describe("calendar link safety", () => {
     assert.ok(gone instanceof Error);
     assert.equal(gone.message, "The calendar link stopped working. Add it again.");
     assert.doesNotMatch(gone.message, /gone\.ics|e\.example/);
+  });
+
+  it("keeps the private link out of logs", () => {
+    const summary = feedErrorSummary(new TypeError("Invalid URL: webcal://outlook.example/owa/calendar/abc123secret/reachcalendar.ics"));
+    assert.equal(summary, "TypeError: Invalid URL: <link>");
+    assert.doesNotMatch(feedErrorSummary(new Error("fetch failed for https://feeds.example/private/token=xyz")), /token=xyz/);
   });
 
   it("refuses loopback even when connecting directly", async () => {

@@ -62,7 +62,7 @@ export function errorText(error: unknown, fallback: string) {
 
 export function writtenForPeople(message: string | null | undefined) {
   const text = message?.trim() ?? "";
-  return text.length > 1 && text.length <= 300 && !text.includes("\n") && /^[A-Z]/.test(text) && text.endsWith(".");
+  return text.length > 1 && text.length <= 300 && !text.includes("\n") && text.endsWith(".");
 }
 
 export function isPgError(

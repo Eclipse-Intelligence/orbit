@@ -13,7 +13,7 @@ export function bulkIds(ids: unknown) {
     throw new CrmError("invalid_input", "Choose at least one record.", 400);
   }
   if (ids.some((id) => typeof id !== "string")) {
-    throw new CrmError("invalid_input", "Invalid record ids.", 400);
+    throw new CrmError("invalid_input", "Record ids must be strings.", 400);
   }
   const unique = [...new Set(ids as string[])];
   if (unique.length > BULK_LIMIT) {

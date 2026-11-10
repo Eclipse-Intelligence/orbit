@@ -182,7 +182,7 @@ export async function sendFromAgentMailbox(
       sent = await sendNewMessage(mailbox.address, { to, cc, subject, text: emailText(input.body), html: emailHtml(input.body) }, fetchImpl);
     }
   } catch (error) {
-    if (error instanceof MachineMailError) throw new CrmError("upstream_error", `MachineMail didn't send it: ${error.message}`, 502);
+    if (error instanceof MachineMailError) throw new CrmError("upstream_error", `Couldn't send the email. ${error.message}`, 502);
     throw error;
   }
   await recordOutbound(actor, mailbox, sent, { to, cc, subject, text: emailText(input.body) }).catch((error) => console.error("Saving the agent mailbox copy failed", error instanceof Error ? error.message : "unknown"));

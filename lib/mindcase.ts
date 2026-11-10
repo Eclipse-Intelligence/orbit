@@ -1,5 +1,5 @@
 import { ShownError, notSetUp } from "@/lib/crm/errors";
-import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
+import { clipReason, logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 import { withActor } from "@/lib/crm/context";
 import type { Actor } from "@/lib/crm/types";
 
@@ -19,7 +19,14 @@ export type MindcaseAgent = keyof typeof MINDCASE_PRICES;
 type Row = Record<string, unknown>;
 type RunReply = { job_id?: string; status?: string; data?: Row[]; error?: string; detail?: string };
 
-export class MindcaseError extends ShownError {}
+export class MindcaseError extends ShownError {
+  readonly generic: string;
+
+  constructor(message: string, generic = message) {
+    super(message);
+    this.generic = generic;
+  }
+}
 
 export function mindcaseConfigured() {
   return Boolean(process.env.MINDCASE_API_KEY?.trim());
@@ -66,7 +73,9 @@ async function call(path: string, init: RequestInit, fetchImpl: typeof fetch): P
   if (response.status === 402) throw new MindcaseError("The Mindcase wallet is empty. Top it up at mindcase.co.");
   if (!response.ok) {
     logUpstream("Mindcase", response.status, body.detail ?? body.error ?? null);
-    throw new MindcaseError(upstreamMessage("Mindcase", response.status));
+    const generic = upstreamMessage("Mindcase", response.status);
+    const reason = response.status >= 400 && response.status < 500 && ![401, 403, 408, 429].includes(response.status) ? clipReason(body.detail ?? body.error) : "";
+    throw new MindcaseError(reason ? `Mindcase returned an error: ${reason}.` : generic, generic);
   }
   return body;
 }

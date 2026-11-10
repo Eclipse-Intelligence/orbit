@@ -1,5 +1,5 @@
 import { CrmError } from "@/lib/crm/errors";
-import { logUpstream, unreachable } from "@/lib/upstream";
+import { clipReason, logUpstream, unreachable } from "@/lib/upstream";
 
 export const RECALL_BASE_URL = "https://backend.getrecall.ai/api/v1";
 export const RECALL_TAG_PATHS = ["/tags", "/tags/", "/cards/tags"] as const;
@@ -176,7 +176,10 @@ export function recallClient(options: RecallClientOptions) {
     const body: unknown = await response.json().catch(() => null);
     logUpstream("Recall", response.status, { detail: recallDetail(body)?.slice(0, 300) ?? null, requestId: requestId(body) });
     if (response.status === 401 || response.status === 403) throw new CrmError("upstream_unauthorized", RECALL_REJECTED, 400);
-    if (response.status === 422) throw new CrmError("invalid_input", "Recall couldn't use that request. Check the filters.", 400);
+    if (response.status === 422) {
+      const reason = clipReason(recallDetail(body));
+      throw new CrmError("invalid_input", reason ? `Recall couldn't use that request: ${reason}.` : "Recall couldn't use that request. Check the filters.", 400);
+    }
     if (response.status === 404) throw new CrmError("not_found", notFound, 404);
     if (response.status === 429) throw new CrmError("upstream_error", "Recall is busy. Try again in a minute.", 429);
     throw new CrmError("upstream_error", `Recall returned an error (${response.status}). Try again.`, 502);

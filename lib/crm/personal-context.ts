@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, errorText, tooLong } from "@/lib/crm/errors";
+import { CrmError, ShownError, errorText, tooLong } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { completeJson, LlmError } from "@/lib/llm";
-import { mindcaseConfigured } from "@/lib/mindcase";
+import { MindcaseError, mindcaseConfigured } from "@/lib/mindcase";
 import { normaliseLinkedIn, normaliseWebsite, PERSONAL_LIMITS, type AboutYouInput, type YouInput } from "@/lib/personal-context-rules";
 import { socialLookup } from "@/lib/social-lookup";
 import { readWebPage, type Lookup, type WebPage } from "@/lib/web-page";
@@ -65,7 +65,7 @@ function text(input: Record<string, unknown>, key: keyof typeof PERSONAL_LIMITS 
 
 function link(value: unknown, field: "linkedinUrl" | "websiteUrl") {
   if (value !== undefined && value !== null && typeof value !== "string") {
-    throw new CrmError("invalid_input", "Invalid link.", 400, { field });
+    throw new CrmError("invalid_input", "Links must be text.", 400, { field });
   }
   const checked = field === "linkedinUrl" ? normaliseLinkedIn(value ?? "") : normaliseWebsite(value ?? "");
   if (!checked.ok) throw new CrmError("invalid_input", checked.error, 400, { field });
@@ -210,7 +210,8 @@ export async function draftPersonalContext(
         sources.push(page.url);
       }
     } catch (error) {
-      notes.push(`Couldn't read ${website}. ${errorText(error, "Try again.")}`);
+      if (!(error instanceof ShownError)) console.error("Reading the website for About you failed", error);
+      notes.push(`Couldn't read ${website}. ${error instanceof ShownError ? errorText(error, "Try again.") : "Try again."}`);
     }
   }
 
@@ -227,7 +228,9 @@ export async function draftPersonalContext(
         material.push(`Their LinkedIn profile:\n${JSON.stringify(profile.value.profile)}`);
         sources.push(linkedin);
       } else {
-        notes.push(`Couldn't read the LinkedIn profile.${profile.status === "rejected" ? ` ${errorText(profile.reason, "Try again.")}` : ""}`);
+        if (profile.status === "rejected" && !(profile.reason instanceof ShownError)) console.error("Reading the LinkedIn profile for About you failed", profile.reason);
+        const reason = profile.status === "rejected" ? (profile.reason instanceof MindcaseError ? profile.reason.generic : profile.reason instanceof ShownError ? errorText(profile.reason, "Try again.") : "Try again.") : "";
+        notes.push(`Couldn't read the LinkedIn profile.${reason ? ` ${reason}` : ""}`);
       }
       const recent = posts.status === "fulfilled" && "posts" in posts.value ? (posts.value.posts ?? []) : [];
       if (recent.length) {
@@ -265,6 +268,7 @@ export async function draftPersonalContext(
       timeoutMs: 60_000,
       deadline: options.deadline,
       fetchImpl: options.fetchImpl,
+      viewer: actor,
     });
     const clip = (value: string, max: number) => value.trim().slice(0, max);
     return {
@@ -280,7 +284,7 @@ export async function draftPersonalContext(
   } catch (error) {
     if (error instanceof LlmError) {
       console.error("Drafting About you failed", error.message);
-      throw new CrmError("unavailable", "Couldn't write the draft. Try again.", 502);
+      throw new CrmError("unavailable", error.actionable ? error.message : "Couldn't write the draft. Try again.", 502);
     }
     throw error;
   }

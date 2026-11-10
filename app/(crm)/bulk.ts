@@ -14,6 +14,7 @@ import {
   type BulkOutcome,
 } from "@/lib/crm/bulk";
 import { getCompaniesByIds } from "@/lib/crm/companies";
+import { GENERIC_ERROR } from "@/lib/utils";
 import { getContactsByIds, listContactsAtCompanies } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import type { Recipient } from "@/lib/crm/personalise";
@@ -41,7 +42,7 @@ async function bulk(
     revalidateRecordPages();
     return { results };
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Something went wrong." };
+    return { error: error instanceof CrmError ? error.message : GENERIC_ERROR };
   }
 }
 

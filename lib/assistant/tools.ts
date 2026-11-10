@@ -198,6 +198,10 @@ type Defer = (work: () => Promise<unknown>) => void;
 
 type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval; multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean };
 
+function undoRefusal(reason: string) {
+  return /^Can't undo:|can't be undone/i.test(reason) ? reason : `Can't be undone: ${reason}`;
+}
+
 function afterResponse(work: () => Promise<unknown>) {
   try {
     after(work);
@@ -2652,7 +2656,7 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["about", "questions"],
     },
-    run: async (_actor, args) => checkWeb(args),
+    run: async (actor, args) => checkWeb(args, { viewer: actor }),
   },
   {
     name: "search_knowledge",
@@ -3403,7 +3407,7 @@ const TOOL_LIST: AssistantTool[] = [
       const described = await describeUndo(actor, id);
       return {
         [`${id}:summary`]: described.summary,
-        [`${id}:restores`]: described.canUndo ? (described.restores ?? "") : `Can't be undone: ${described.reason ?? ""}`,
+        [`${id}:restores`]: described.canUndo ? (described.restores ?? "") : undoRefusal(described.reason ?? ""),
       };
     },
     describe: (args, name) => {
@@ -3798,7 +3802,7 @@ const TOOL_LIST: AssistantTool[] = [
       const ids = lookupIds(args.contactIds);
       if (ids.length === 0) return { error: "Say who, using contact ids." };
       if (ids.length > LOOKUP_MAX) return { error: `Look up at most ${LOOKUP_MAX} people at a time.` };
-      if (!(await enrichmentAllowed(actor.userId, ids.length))) return { error: "That's a lot of lookups this hour. Try again later." };
+      if (!(await enrichmentAllowed(actor.userId, ids.length))) return { error: "Hourly lookup limit reached. Try again later." };
       const results = await enrichContacts(actor, ids, field);
       const providerName = (id: string) => PROVIDER_BY_ID.get(id as never)?.name ?? id;
       return {
@@ -5230,7 +5234,7 @@ const TOOL_LIST: AssistantTool[] = [
       },
     },
     run: async (actor, args) => ({
-      issues: await assertLinearHere(actor).then(() => searchLinearIssues({ query: optionalStr(args.query), includeDone: args.includeDone === true, limit: int(args.limit, 20, 1, 50) })),
+      issues: await assertLinearHere(actor).then(() => searchLinearIssues({ query: optionalStr(args.query), includeDone: args.includeDone === true, limit: int(args.limit, 20, 1, 50) }, { viewer: actor })),
     }),
   },
   {
@@ -5244,7 +5248,7 @@ const TOOL_LIST: AssistantTool[] = [
     },
     run: async (actor, args) => {
       await assertLinearHere(actor);
-      return { issue: await getLinearIssue(required(args.issue, "An issue")) };
+      return { issue: await getLinearIssue(required(args.issue, "An issue"), { viewer: actor }) };
     },
   },
   {
@@ -5294,7 +5298,7 @@ const TOOL_LIST: AssistantTool[] = [
         status: optionalStr(args.status),
         labels: strings(args.labels),
         assignToMe: args.assignToMe === true,
-      });
+      }, { viewer: actor });
       return { issue };
     },
   },
@@ -5330,8 +5334,8 @@ const TOOL_LIST: AssistantTool[] = [
       const comment = optionalStr(args.comment);
       const changing = Object.values(changes).some(Boolean);
       if (!changing && !comment) throw new CrmError("invalid_input", "Say what to change (title, status or priority) or give a comment.", 400);
-      const updated = changing ? await updateLinearIssue(issue, changes) : undefined;
-      const commented = comment ? await commentOnLinearIssue(issue, comment) : undefined;
+      const updated = changing ? await updateLinearIssue(issue, changes, { viewer: actor }) : undefined;
+      const commented = comment ? await commentOnLinearIssue(issue, comment, { viewer: actor }) : undefined;
       return { ...(updated ? { issue: updated } : {}), ...(commented ? { comment: commented } : {}) };
     },
   },

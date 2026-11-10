@@ -95,8 +95,11 @@ describe("undoing changes", () => {
     await updateCompany(owner, company.id, { industry: "Fintech" });
     const first = await latest(owner, company.id, "company.updated");
     await updateCompany(owner, company.id, { industry: "Health" });
-    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/^Can't undo: Industry has changed since\.$/));
+    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/^Can't undo: Industry has changed since \(now Health\)\.$/));
     assert.equal((await getCompany(owner, company.id)).industry, "Health");
+    const args = { changeId: first.id };
+    const card = describeAction("undo_change", args, await recordNames(owner, [args], ["undo_change"]));
+    assert.equal(card.lines[1], "Can't undo: Industry has changed since (now Health).");
   });
 
   it("waits for an edit in progress and refuses rather than overwrite it", async () => {
@@ -116,7 +119,7 @@ describe("undoing changes", () => {
       await editor.query("update crm.companies set industry = 'Health' where id = $1", [company.id]);
       await editor.query("commit");
       const error = await undo;
-      assert.ok(refused(/^Can't undo: Industry has changed since\.$/)(error), `expected a refusal, got ${String(error)}`);
+      assert.ok(refused(/^Can't undo: Industry has changed since \(now Health\)\.$/)(error), `expected a refusal, got ${String(error)}`);
     } finally {
       editor.release();
     }
@@ -322,7 +325,7 @@ describe("undoing changes", () => {
     await updateActivity(owner, note.id, { title: "First rename" }, { operation: "update_activity", source: "web" });
     const first = await latest(owner, note.id, "activity.updated");
     await updateActivity(owner, note.id, { title: "Second rename" }, { operation: "update_activity", source: "web" });
-    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/^Can't undo: Title has changed since\.$/));
+    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/^Can't undo: Title has changed since \(now Second rename\)\.$/));
 
     const timed = await latest(owner, note.id, "activity.updated");
     await archiveActivity(owner, note.id, { operation: "archive_activity", source: "web" });
@@ -347,7 +350,7 @@ describe("undoing changes", () => {
       await editor.query("update crm.activities set title = 'Draft three' where id = $1", [note.id]);
       await editor.query("commit");
       const error = await undo;
-      assert.ok(refused(/^Can't undo: Title has changed since\.$/)(error), `expected a refusal, got ${String(error)}`);
+      assert.ok(refused(/^Can't undo: Title has changed since \(now Draft three\)\.$/)(error), `expected a refusal, got ${String(error)}`);
     } finally {
       editor.release();
     }

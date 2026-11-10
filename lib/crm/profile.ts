@@ -18,7 +18,7 @@ function mapEmails(actor: UserActor, row: ProfileRow | undefined): MyEmails {
 
 export function cleanOtherEmails(values: unknown, loginEmail: string) {
   if (!Array.isArray(values)) {
-    throw new CrmError("invalid_input", "Invalid email addresses.", 400, { field: "otherEmails" });
+    throw new CrmError("invalid_input", "Send a list of email addresses.", 400, { field: "otherEmails" });
   }
   const login = canonicalEmail(loginEmail);
   const seen = new Set<string>();

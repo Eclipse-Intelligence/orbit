@@ -5,7 +5,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { runMindcase } from "@/lib/mindcase";
+import { MindcaseError, runMindcase } from "@/lib/mindcase";
 import { socialLookup } from "@/lib/social-lookup";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -99,7 +99,9 @@ describe("Mindcase lookups", () => {
     delete process.env.MINDCASE_MONTHLY_LIMIT_USD;
     const failing = mindcase([() => Response.json({ detail: "Upstream scraper 7f3a crashed on node eu-2" }, { status: 422 })]);
     await assert.rejects(runMindcase(owner, "linkedin/profiles", { queries: ["https://www.linkedin.com/in/x"] }, { source: "test", expectedRows: 1, fetchImpl: failing.fetchImpl }), (error: Error) => {
-      assert.equal(error.message, "Mindcase returned an error (422).");
+      assert.equal(error.message, "Mindcase returned an error: Upstream scraper 7f3a crashed on node eu-2.");
+      assert.ok(error instanceof MindcaseError);
+      assert.equal(error.generic, "Mindcase returned an error (422).");
       return true;
     });
     const stuck = mindcase([() => Response.json({ status: "weird_internal_state" })]);

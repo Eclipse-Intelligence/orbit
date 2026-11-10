@@ -18,6 +18,12 @@ type FeedResult =
   | { status: "not_modified" }
   | { status: "ok"; text: string; etag: string | null; lastModified: string | null };
 
+export function feedErrorSummary(error: unknown) {
+  const name = error instanceof Error ? error.name : typeof error;
+  const message = error instanceof Error ? error.message : "";
+  return `${name}: ${message.replace(/\b(?:https?|webcals?):\/\/\S+/gi, "<link>")}`.slice(0, 300);
+}
+
 export class FeedError extends ShownError {
   constructor(message: string) {
     super(message);
@@ -250,7 +256,7 @@ export async function fetchFeed(
       response = await fetchImpl(current.toString(), { method: "GET", headers, redirect: "manual", signal });
     } catch (error) {
       if (error instanceof FeedError) throw error;
-      console.error("Calendar link unreachable", host, error);
+      console.error("Calendar link unreachable", host, feedErrorSummary(error));
       throw new FeedError(`Couldn't reach ${host}. Orbit will retry.`);
     }
     if (REDIRECTS.has(response.status)) {

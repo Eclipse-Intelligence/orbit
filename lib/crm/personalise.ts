@@ -89,7 +89,3 @@ export function splitRecipients(recipients: Recipient[]) {
   }
   return { sendable, skipped };
 }
-
-export function stopsRun(error: string) {
-  return /connect microsoft|connect it again|sign in to send|throttl|too many requests/i.test(error);
-}

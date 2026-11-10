@@ -183,7 +183,7 @@ export default function CallInsightPanel({
           <p role="alert" className="caption-style text-danger">
             {stalled
               ? "The summary stopped before it finished."
-              : (insight.error ?? "Could not summarise the call.")}
+              : (insight.error ?? "Couldn't summarise the call. Try again.")}
           </p>
           <Button
             variant="secondary"
