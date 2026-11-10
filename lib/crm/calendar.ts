@@ -142,6 +142,7 @@ type SyncSource = {
 
 type SyncContext = {
   fetchImpl: typeof fetch;
+  ownLink: string | null;
   feedFetch?: typeof fetch;
   lookup?: Lookup;
   deadline: number;
@@ -241,6 +242,7 @@ async function saveEvents(
       location: event.location,
       web_link: event.webLink,
       online_meeting_url: event.onlineMeetingUrl,
+      notes: event.notes,
       organizer: event.organizer,
       attendees: event.attendees,
       show_as: event.showAs,
@@ -250,15 +252,15 @@ async function saveEvents(
       `insert into crm.calendar_events (
          workspace_id, calendar_id, connection_id, account_id, user_id, provider_event_id, ical_uid,
          subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
-         online_meeting_url, organizer, attendees, show_as, response_status
+         online_meeting_url, notes, organizer, attendees, show_as, response_status
        )
        select $1, $2, $3::uuid, $4::uuid, $5, e.provider_event_id, e.ical_uid,
               e.subject, e.starts_at, e.ends_at, e.is_all_day, e.is_cancelled, e.location, e.web_link,
-              e.online_meeting_url, e.organizer, coalesce(e.attendees, '[]'::jsonb), e.show_as, e.response_status
+              e.online_meeting_url, e.notes, e.organizer, coalesce(e.attendees, '[]'::jsonb), e.show_as, e.response_status
        from jsonb_to_recordset($6::jsonb) as e(
          provider_event_id text, ical_uid text, subject text, starts_at timestamptz,
          ends_at timestamptz, is_all_day boolean, is_cancelled boolean, location text,
-         web_link text, online_meeting_url text, organizer jsonb, attendees jsonb, show_as text,
+         web_link text, online_meeting_url text, notes text, organizer jsonb, attendees jsonb, show_as text,
          response_status text
        )
        on conflict (calendar_id, provider_event_id) do update set
@@ -271,6 +273,7 @@ async function saveEvents(
          location = excluded.location,
          web_link = excluded.web_link,
          online_meeting_url = excluded.online_meeting_url,
+         notes = excluded.notes,
          organizer = case when crm.calendar_events.invite_identity_id is null then excluded.organizer else crm.calendar_events.organizer end,
          attendees = case when crm.calendar_events.invite_identity_id is null then excluded.attendees else crm.calendar_events.attendees end,
          show_as = excluded.show_as,
@@ -624,7 +627,8 @@ async function readSources(actor: UserActor, accountId?: string) {
       });
     }
     sources.sort((left, right) => (left.lastAttemptAt ?? "").localeCompare(right.lastAttemptAt ?? ""));
-    return sources;
+    const profile = await db.query<{ meeting_link: string | null }>("select meeting_link from crm.profiles where id = $1", [actor.userId]);
+    return { sources, ownLink: profile.rows[0]?.meeting_link ?? null };
   });
 }
 
@@ -690,6 +694,7 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
           fetchImpl: context.fetchImpl,
           deadline: context.deadline,
           calendarId: calendar.providerCalendarId,
+          ownLink: context.ownLink,
         });
         const saved = await withActor(actor, (db) =>
           saveCalendarEvents(db, actor, source, calendar, fetched, window, context.now),
@@ -772,7 +777,7 @@ async function syncFeedSource(actor: UserActor, source: SyncSource, context: Syn
       return outcome;
     }
     const window = calendarWindow(context.now);
-    const parsed = readFeed(fetched.text, window);
+    const parsed = readFeed(fetched.text, window, { ownLink: context.ownLink });
     const listed: CalendarListFetch = {
       calendars: [
         {
@@ -868,7 +873,7 @@ export async function syncCalendar(
     scopeMissing: false,
     calendars: 0,
   };
-  const sources = await readSources(actor, options.accountId);
+  const { sources, ownLink } = await readSources(actor, options.accountId);
   if (sources.length === 0) return { ...result, error: NOT_CONNECTED };
   const now = options.now ?? Date.now();
   let complete = true;
@@ -883,6 +888,7 @@ export async function syncCalendar(
     result.ran = true;
     const outcome = await syncSource(actor, source, {
       fetchImpl,
+      ownLink,
       feedFetch: options.feedFetch,
       lookup: options.lookup,
       deadline,

@@ -434,7 +434,8 @@ function fallbackEvent(
     isCancelled: false,
     location: values.link,
     webLink: null,
-    onlineMeetingUrl: null,
+    onlineMeetingUrl: values.link,
+    notes: null,
     organizer: values.organizer,
     attendees: values.guests.map((guest) => ({ ...guest, response: "none" })),
     showAs: "busy",
@@ -457,9 +458,9 @@ async function saveCreatedEvent(
        workspace_id, calendar_id, connection_id, account_id, user_id, provider_event_id, ical_uid,
        subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
        online_meeting_url, organizer, attendees, show_as, response_status, created_by_orbit,
-       invite_identity_id, invite_uid, invite_sequence, invite_notes
+       invite_identity_id, invite_uid, invite_sequence, invite_notes, notes
      ) values ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18, $19, true,
-               $20::uuid, $21, $22, $23)
+               $20::uuid, $21, $22, $23, $24)
      on conflict (calendar_id, provider_event_id) do update set
        ical_uid = excluded.ical_uid,
        subject = excluded.subject,
@@ -476,7 +477,8 @@ async function saveCreatedEvent(
        invite_identity_id = excluded.invite_identity_id,
        invite_uid = excluded.invite_uid,
        invite_sequence = excluded.invite_sequence,
-       invite_notes = excluded.invite_notes
+       invite_notes = excluded.invite_notes,
+       notes = excluded.notes
      returning id`,
     [
       actor.workspaceId,
@@ -502,6 +504,7 @@ async function saveCreatedEvent(
       email?.uid ?? null,
       email?.sequence ?? 0,
       email?.notes ?? null,
+      event.notes,
     ],
   );
   return result.rows[0].id;
@@ -757,7 +760,7 @@ export async function sendInvite(
   const providerEventId = created.id?.trim();
   const saveWarning = email ? EMAIL_SAVE_WARNING : SAVE_WARNING;
   if (!providerEventId || providerEventId.length > 400) return { ...result, warning: saveWarning };
-  const parsed = toCalendarEvent(created);
+  const parsed = toCalendarEvent(created, { ownLink: link });
   const base = parsed
     ? { ...parsed, startsAt: input.start.toISOString(), endsAt: input.end.toISOString() }
     : fallbackEvent(providerEventId, created, { subject, start: input.start, end: input.end, link, organizer, guests });
@@ -877,7 +880,7 @@ async function createPersonalEvent(actor: UserActor, input: PersonalEvent, fetch
   const providerEventId = created.id?.trim();
   if (!providerEventId || providerEventId.length > 400) return { ...result, warning: PERSONAL_SAVE_WARNING };
   const organizer = { name: actor.fullName, email: calendar.address };
-  const parsed = toCalendarEvent(created);
+  const parsed = toCalendarEvent(created, { ownLink: link });
   const base = parsed
     ? { ...parsed, startsAt: result.startsAt, endsAt: result.endsAt }
     : fallbackEvent(providerEventId, created, { subject, start: window.start, end: window.end, link, organizer, guests: [] });

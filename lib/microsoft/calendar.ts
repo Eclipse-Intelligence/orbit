@@ -1,6 +1,7 @@
 import { ShownError } from "@/lib/crm/errors";
 import { resolveZone } from "@/lib/ical/parse";
 import { canonicalEmail } from "@/lib/crm/normalize";
+import { clipNotes, eventBodyText, joinLink, safeUrl } from "@/lib/meeting-links";
 import { MICROSOFT_REJECTED, MicrosoftError, microsoftProblem } from "@/lib/microsoft/oauth";
 import { parseDateTime, zonedParts } from "@/lib/time";
 
@@ -57,11 +58,14 @@ const EVENT_FIELDS = [
   "webLink",
   "onlineMeeting",
   "onlineMeetingUrl",
+  "body",
   "organizer",
   "attendees",
   "showAs",
   "responseStatus",
 ].join(",");
+
+export const VIEW_PREFER = 'outlook.timezone="UTC", outlook.body-content-type="text"';
 
 type GraphDateTime = { dateTime?: string | null; timeZone?: string | null };
 type GraphAddress = { emailAddress?: { name?: string | null; address?: string | null } | null };
@@ -78,6 +82,7 @@ export type GraphEvent = {
   webLink?: string | null;
   onlineMeeting?: { joinUrl?: string | null } | null;
   onlineMeetingUrl?: string | null;
+  body?: { contentType?: string | null; content?: string | null } | null;
   organizer?: GraphAddress | null;
   attendees?: (GraphAddress & { type?: string | null; status?: { response?: string | null } | null })[] | null;
   showAs?: string | null;
@@ -120,6 +125,7 @@ export type CalendarEvent = {
   location: string | null;
   webLink: string | null;
   onlineMeetingUrl: string | null;
+  notes: string | null;
   organizer: CalendarPerson | null;
   attendees: CalendarAttendee[];
   showAs: string | null;
@@ -239,18 +245,7 @@ function person(value: GraphAddress | null | undefined): CalendarPerson | null {
   return { name: name && name.toLowerCase() !== email ? name : null, email };
 }
 
-function safeUrl(value: string | null | undefined) {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed.length > 2000) return null;
-  try {
-    const url = new URL(trimmed);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-export function toCalendarEvent(event: GraphEvent): CalendarEvent | null {
+export function toCalendarEvent(event: GraphEvent, options: { ownLink?: string | null } = {}): CalendarEvent | null {
   const providerEventId = event.id?.trim();
   if (!providerEventId || providerEventId.length > 400) return null;
   const startsAt = graphInstant(event.start);
@@ -266,6 +261,8 @@ export function toCalendarEvent(event: GraphEvent): CalendarEvent | null {
     attendees.push({ ...found, response: clip(attendee.status?.response, 40) });
     if (attendees.length >= 500) break;
   }
+  const location = clip(event.location?.displayName, 500);
+  const body = eventBodyText(event.body?.content, event.body?.contentType?.toLowerCase() === "html" ? "html" : "text");
   return {
     providerEventId,
     icalUid: clip(event.iCalUId, 400),
@@ -274,9 +271,15 @@ export function toCalendarEvent(event: GraphEvent): CalendarEvent | null {
     endsAt: endsAt < startsAt ? startsAt : endsAt,
     isAllDay: Boolean(event.isAllDay),
     isCancelled: Boolean(event.isCancelled),
-    location: clip(event.location?.displayName, 500),
+    location,
     webLink: safeUrl(event.webLink),
-    onlineMeetingUrl: safeUrl(event.onlineMeeting?.joinUrl) ?? safeUrl(event.onlineMeetingUrl),
+    onlineMeetingUrl: joinLink({
+      provided: [event.onlineMeeting?.joinUrl, event.onlineMeetingUrl],
+      location,
+      notes: body,
+      own: options.ownLink,
+    }),
+    notes: clipNotes(body),
     organizer: person(event.organizer),
     attendees,
     showAs: showAs(event.showAs),
@@ -324,6 +327,7 @@ export async function fetchCalendarView(
     deadline?: number;
     pageLimit?: number;
     calendarId?: string | null;
+    ownLink?: string | null;
   } = {},
 ): Promise<CalendarFetch> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -342,14 +346,14 @@ export async function fetchCalendarView(
     const response = await fetchImpl(next, {
       headers: {
         authorization: `Bearer ${accessToken}`,
-        prefer: 'outlook.timezone="UTC"',
+        prefer: VIEW_PREFER,
       },
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw await calendarError(response);
     const body = (await response.json()) as { value?: GraphEvent[]; "@odata.nextLink"?: string };
     for (const item of body.value ?? []) {
-      const event = toCalendarEvent(item);
+      const event = toCalendarEvent(item, { ownLink: options.ownLink });
       if (!event || seen.has(event.providerEventId)) continue;
       seen.add(event.providerEventId);
       events.push(event);

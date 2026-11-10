@@ -9,7 +9,8 @@ import { DEFAULT_STEPS } from "@/lib/crm/scheduler";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { meetingLink, readFeed } from "@/lib/ical/events";
+import { readFeed } from "@/lib/ical/events";
+import { meetingLink } from "@/lib/meeting-links";
 import {
   assertPublicHost,
   FEED_MAX_BYTES,
@@ -374,6 +375,8 @@ describe("iCal parsing", () => {
     assert.equal(utc.startsAt, "2026-10-21T14:00:00.000Z");
     assert.equal(utc.endsAt, "2026-10-21T14:45:00.000Z");
     assert.equal(utc.onlineMeetingUrl, "https://meet.google.com/abc-defg-hij");
+    assert.equal(utc.notes, "Agenda\nJoin: https://meet.google.com/abc-defg-hij.\nOther https://example.com/x");
+    assert.equal(ny.notes, null);
     assert.equal(utc.webLink, "https://example.com/event/1");
     assert.equal(utc.showAs, "busy");
     assert.equal(events.get("floating@test")!.startsAt, "2026-10-22T16:00:00.000Z");
@@ -390,7 +393,8 @@ describe("iCal parsing", () => {
       "https://teams.microsoft.com/l/meetup-join/19%3a",
     );
     assert.equal(meetingLink("https://evil.example/meet.google.com"), null);
-    assert.equal(meetingLink("http://meet.google.com/abc"), null);
+    assert.equal(meetingLink("http://meet.google.com/abc"), "https://meet.google.com/abc");
+    assert.equal(meetingLink("webcal://meet.google.com/abc"), null);
   });
 
   it("rejects text that isn't a calendar", () => {
@@ -580,6 +584,14 @@ describe("calendar link sync", () => {
           "SUMMARY:Lunch",
           "X-GOOGLE-CONFERENCE:https://meet.google.com/aaa-bbbb-ccc",
         ]),
+        ...vevent([
+          "UID:zoom@test",
+          "DTSTART:20261016T150000Z",
+          "DTEND:20261016T160000Z",
+          "SUMMARY:Zoom call",
+          "LOCATION:Online",
+          "DESCRIPTION:<p>Hi Mark</p><p><a href=\"https://us02web.zoom.us/j/555?pwd=k\">Join Zoom Meeting</a></p>",
+        ]),
       ],
       ["X-WR-CALNAME:me@example.com"],
     );
@@ -608,8 +620,9 @@ describe("calendar link sync", () => {
       provider_event_id: string;
       subject: string;
       online_meeting_url: string | null;
+      notes: string | null;
     }>(
-      `select e.provider_event_id, e.subject, e.online_meeting_url
+      `select e.provider_event_id, e.subject, e.online_meeting_url, e.notes
        from crm.calendar_events e join crm.calendar_accounts a on a.id = e.account_id
        where e.user_id = $1 and a.provider = 'ics' order by e.starts_at`,
       [userId],
@@ -666,9 +679,11 @@ describe("calendar link sync", () => {
     const events = await feedEventRows(owner.userId);
     assert.deepEqual(
       events.map((event) => event.provider_event_id),
-      ["weekly@test/20261012T083000Z", "lunch@test", "weekly@test/20261019T083000Z", "weekly@test/20261026T093000Z"],
+      ["weekly@test/20261012T083000Z", "lunch@test", "zoom@test", "weekly@test/20261019T083000Z", "weekly@test/20261026T093000Z"],
     );
     assert.equal(events[1].online_meeting_url, "https://meet.google.com/aaa-bbbb-ccc");
+    assert.equal(events[2].online_meeting_url, "https://us02web.zoom.us/j/555?pwd=k");
+    assert.equal(events[2].notes, "Hi Mark\nJoin Zoom Meeting <https://us02web.zoom.us/j/555?pwd=k>");
 
     const groups = await listCalendarGroups(owner);
     const group = groups.find((item) => item.provider === "ics")!;
@@ -680,7 +695,7 @@ describe("calendar link sync", () => {
       start: new Date(Date.UTC(2026, 9, 12)),
       end: new Date(Date.UTC(2026, 9, 20)),
     });
-    assert.equal(items.filter((item) => item.calendarId === group.calendars[0].id).length, 3);
+    assert.equal(items.filter((item) => item.calendarId === group.calendars[0].id).length, 4);
   });
 
   it("refuses duplicates, private hosts and links that don't work, leaving nothing behind", async () => {
@@ -738,7 +753,7 @@ describe("calendar link sync", () => {
     assert.match(result.error ?? "", /Couldn't sync this calendar\. Orbit will retry\./);
     const [row] = await feedRows(owner.userId);
     assert.match(row.last_error ?? "", /Couldn't sync this calendar\. Orbit will retry\./);
-    assert.equal((await feedEventRows(owner.userId)).length, 4);
+    assert.equal((await feedEventRows(owner.userId)).length, 5);
     const group = (await listCalendarGroups(owner)).find((item) => item.provider === "ics")!;
     assert.match(group.lastError ?? "", /Couldn't sync this calendar\. Orbit will retry\./);
     assert.equal(group.connected, true);

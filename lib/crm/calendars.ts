@@ -74,6 +74,7 @@ export type CalendarItem = {
   location: string | null;
   webLink: string | null;
   joinUrl: string | null;
+  notes: string | null;
   organizer: EventPerson | null;
   attendees: EventPerson[];
   granolaHref: string | null;
@@ -232,6 +233,7 @@ type ItemRow = {
   location: string | null;
   web_link: string | null;
   online_meeting_url: string | null;
+  notes: string | null;
   organizer: unknown;
   attendees: unknown;
   granola_id: string | null;
@@ -267,7 +269,7 @@ export async function listCalendarItems(
   return withActor(actor, async (db) => {
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
-              e.location, e.web_link, e.online_meeting_url, e.organizer, e.attendees,
+              e.location, e.web_link, e.online_meeting_url, e.notes, e.organizer, e.attendees,
               e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
               e.invite_identity_id, e.invite_uid, e.contact_ids,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
@@ -371,6 +373,7 @@ export async function listCalendarItems(
         location: row.location,
         webLink: row.web_link,
         joinUrl: row.online_meeting_url,
+        notes: row.notes,
         organizer: describe(readPerson(row.organizer), null),
         attendees: readPeople(row.attendees).map(
           (person) => describe(person, readResponse(row.attendees, person.email))!,

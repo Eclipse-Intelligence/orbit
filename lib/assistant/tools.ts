@@ -332,6 +332,10 @@ function withOpportunity(opportunity: Opportunity) {
   };
 }
 
+function withoutNotes<T extends { notes: string | null }>(item: T) {
+  return Object.fromEntries(Object.entries(item).filter(([key]) => key !== "notes")) as Omit<T, "notes">;
+}
+
 function withTask(task: Task) {
   return {
     ...task,
@@ -1606,7 +1610,7 @@ const TOOL_LIST: AssistantTool[] = [
         overdueTasks: overdue.data.map(withTask),
         dueToday: today.data.map(withTask),
         attention,
-        meetingsNextTwoDays: meetings,
+        meetingsNextTwoDays: meetings.map(withoutNotes),
         quietRelationships: quiet,
       };
     },
@@ -2168,7 +2172,7 @@ const TOOL_LIST: AssistantTool[] = [
       const requestedEnd = args.to ? dayStart(args.to, start) : new Date(start.getTime() + 7 * DAY_MS);
       const end = new Date(Math.min(requestedEnd.getTime() + (args.to ? DAY_MS : 0), start.getTime() + 62 * DAY_MS));
       const [events, status] = await Promise.all([listCalendarItems(actor, { start, end }), getCalendarStatus(actor)]);
-      return { from: start.toISOString(), to: end.toISOString(), calendarConnected: status?.connected ?? false, events };
+      return { from: start.toISOString(), to: end.toISOString(), calendarConnected: status?.connected ?? false, events: events.map(withoutNotes) };
     },
   },
   {
