@@ -8,11 +8,8 @@ describe("settings navigation", () => {
   it("shows two groups to someone in two workspaces, You first and then the workspace", () => {
     const groups = settingsNav({ name: "Eclipse", multi: true });
     assert.deepEqual(
-      groups.map((group) => [group.heading, group.caption]),
-      [
-        ["You", "The same in every workspace"],
-        ["Eclipse", "Only in Eclipse"],
-      ],
+      groups.map((group) => group.heading),
+      ["You", "Eclipse"],
     );
     assert.deepEqual(
       groups[0].items.map((item) => item.label),
@@ -24,14 +21,14 @@ describe("settings navigation", () => {
     );
   });
 
-  it("shows the same pages in one list with no headings or workspace words to someone in one workspace", () => {
+  it("shows one list with no headings or workspace words to someone in one workspace, with About you in General and Memory in Learning", () => {
     const groups = settingsNav({ name: "Acme", multi: false });
     assert.equal(groups.length, 1);
     assert.equal(groups[0].heading, null);
-    assert.equal(groups[0].caption, null);
     const single = groups[0].items.map((item) => item.href).sort();
     const multi = settingsNav({ name: "Acme", multi: true })
       .flatMap((group) => group.items.map((item) => item.href))
+      .filter((href) => href !== SETTINGS_PATHS.aboutYou && href !== SETTINGS_PATHS.memory)
       .sort();
     assert.deepEqual(single, multi);
     assert.equal(new Set(single).size, single.length);

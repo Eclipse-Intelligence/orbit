@@ -33,31 +33,31 @@ async function act<T>(fallback: string, work: (user: Awaited<ReturnType<typeof r
 }
 
 export async function addMemoryAction(input: { title: string; body: string; shared: boolean; allWorkspaces?: boolean }) {
-  return act("Could not save the note.", (user) => rememberNote(user, input, "manual"));
+  return act("Couldn't save the note.", (user) => rememberNote(user, input, "manual"));
 }
 
 export async function updateMemoryAction(id: string, patch: { title?: string; body?: string; pinned?: boolean; allWorkspaces?: boolean }) {
-  return act("Could not update the note.", (user) => updateMemory(user, id, patch));
+  return act("Couldn't update the note.", (user) => updateMemory(user, id, patch));
 }
 
 export async function forgetMemoryAction(id: string) {
-  return act("Could not forget the note.", (user) => forgetMemory(user, id));
+  return act("Couldn't forget the note.", (user) => forgetMemory(user, id));
 }
 
 export async function addWatchAction(item: { kind: string; label: string; url: string; notes: string }) {
-  return act("Could not add it to the watchlist.", (user) => addWatchItems(user, [item]));
+  return act("Couldn't add it to the watchlist.", (user) => addWatchItems(user, [item]));
 }
 
 export async function removeWatchAction(id: string) {
-  return act("Could not remove it.", (user) => removeWatchItems(user, [id]));
+  return act("Couldn't remove it.", (user) => removeWatchItems(user, [id]));
 }
 
 export async function deleteMarketNoteAction(id: string) {
-  return act("Could not delete the note.", (user) => deleteMarketNote(user, id));
+  return act("Couldn't delete the note.", (user) => deleteMarketNote(user, id));
 }
 
 export async function connectGrokAction() {
-  return act("Could not create the Grok Bot token.", (user) => issueMarketAgentToken(user));
+  return act("Couldn't create the Grok Bot token.", (user) => issueMarketAgentToken(user));
 }
 
 export async function learnNowAction() {

@@ -21,10 +21,7 @@ export default async function BookingPageSettingsPage() {
   if (!user) redirect("/login");
   const [page, setup, origin] = await Promise.all([getBookingPage(user), getBookingSetup(user), siteOrigin()]);
   return (
-    <SettingsPage
-      title="Booking page"
-      description="A public page where people pick a time with you. Orbit sends the invite from your Outlook calendar and files the meeting."
-    >
+    <SettingsPage title="Booking page">
       <BookingPageSettings page={page} setup={setup} origin={origin} />
     </SettingsPage>
   );

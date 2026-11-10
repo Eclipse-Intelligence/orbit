@@ -51,14 +51,17 @@ const NAV: [string, string, string, string?][] = [
   ["s", "Settings", "/settings/general", "preferences"],
 ];
 
+export const MULTI_WORKSPACE_SHORTCUTS = new Set(["settings-about-you", "settings-memory"]);
+
 const SETTINGS_SECTIONS: [string, string, string][] = [
-  ["General", "/settings/general", "account password linkedin how you write notifications meeting link shortcuts"],
+  ["General", "/settings/general", "account password role about linkedin how you write notifications meeting link shortcuts"],
   ["Email", "/settings/email", "microsoft mailbox outlook addresses sending signatures prepared replies read statuses workspace"],
   ["Calendars", "/settings/calendars", "outlook ics gmail accounts allow sending"],
   ["Connections", "/settings/connections", "granola readwise recall teams calls linkedin capture ai accounts chatgpt claude orbit agent"],
   ["Memory", "/settings/memory", "notes learned about you"],
   ["API tokens", "/settings/api-tokens", "personal tokens mcp claude iphone shortcut"],
   ["About you", "/settings/about-you", "role about"],
+  ["Learning", "/settings/learning", "notes memory"],
   ["Email templates", "/settings/email-templates", "email templates"],
   ["Booking page", "/settings/booking-page", "booking scheduling"],
   ["Tools", "/settings/tools", "clickup linear enrichment agent mailbox webhooks agents"],

@@ -16,7 +16,7 @@ export default async function ApiTokensSettingsPage() {
   const origin = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
   const workspaceName = workspaces.length > 1 ? user.workspaceName : null;
   return (
-    <SettingsPage title="API tokens" description="Personal tokens that let Claude, your iPhone and other apps use Orbit as you.">
+    <SettingsPage title="API tokens">
       <PersonalTokenSettings origin={origin} initial={tokens} workspaceName={workspaceName} />
       <IphoneShortcutSettings origin={origin} workspaceName={workspaceName} />
     </SettingsPage>

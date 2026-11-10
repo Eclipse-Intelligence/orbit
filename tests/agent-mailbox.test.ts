@@ -654,7 +654,7 @@ describe("receiving agent mail", () => {
     assert.equal(eventTypeFor(["SPAM", "UNREAD"]), "message.received.spam");
   });
 
-  it("acts on mail quarantined only for giving the agent instructions, and holds the rest for Run it anyway", async () => {
+  it("acts on mail quarantined only for giving the agent instructions, and holds the rest for Run anyway", async () => {
     const instructions = [
       "Quarantined: instructions-to-agent probability 0.81 >= threshold 0.80",
       "DKIM passed for geteclipse.co",
@@ -677,7 +677,7 @@ describe("receiving agent mail", () => {
     assert.equal(phishy.result.job, undefined);
     const held = await heldAgentMail(owner);
     const item = held.find((entry) => entry.subject === "Looks phishy");
-    assert.ok(item, "it's held for Run it anyway");
+    assert.ok(item, "it's held for Run anyway");
     assert.ok(!held.some((entry) => entry.subject === "Deck for Andy"));
     const job = await runHeldAgentMail(owner, item.id);
     assert.equal(job.userId, owner.userId);

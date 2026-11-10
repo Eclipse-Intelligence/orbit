@@ -80,7 +80,7 @@ type PushTestResult = { sent: number; host: string | null; failures: { status: n
 export async function sendPushTest(): Promise<PushTestResult> {
   const registration = await navigator.serviceWorker.getRegistration("/");
   const subscription = await registration?.pushManager.getSubscription();
-  if (!subscription) throw new Error("This device isn't set up yet. Press Turn on for this device.");
+  if (!subscription) throw new Error("This device isn't set up yet. Turn notifications on first.");
   const response = await fetch("/api/push/test", {
     method: "POST",
     headers: { "content-type": "application/json" },
