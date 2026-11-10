@@ -15,6 +15,10 @@ function stripTrackers(html: string) {
   return html.replace(TRACKERS, "");
 }
 
+export function trackingPixelUrl(origin: string | null | undefined, trackingId: string | null | undefined) {
+  return origin && trackingId ? `${origin}${TRACKING_PATH}${trackingId}` : null;
+}
+
 export function trackingIdIn(html: string | null | undefined) {
   return html?.match(TRACKING_ID)?.[1]?.toLowerCase() ?? null;
 }
@@ -82,7 +86,8 @@ function formatLine(line: string, inline: Record<string, string>) {
   return marker ? `<strong>${text}</strong>` : text;
 }
 
-function textToHtml(text: string, inline: Record<string, string> = {}) {
+function textToHtml(text: string, inline: Record<string, string> = {}, plain = false) {
+  const line = (value: string) => (plain ? plainPart(value, inline) : formatLine(value, inline));
   return text
     .replace(/\r\n/g, "\n")
     .trim()
@@ -91,18 +96,25 @@ function textToHtml(text: string, inline: Record<string, string> = {}) {
       (paragraph) =>
         `<p style="margin:0 0 1em 0">${paragraph
           .split("\n")
-          .map((line) => formatLine(line, inline))
+          .map(line)
           .join("<br>")}</p>`,
     )
     .join("");
 }
 
-export function composeEmailHtml(input: { body: string; signature?: string | null; pixel?: string | null; quote?: string | null; inline?: Record<string, string> }) {
+export function composeEmailHtml(input: {
+  body: string;
+  signature?: string | null;
+  pixel?: string | null;
+  quote?: string | null;
+  inline?: Record<string, string>;
+  plain?: boolean;
+}) {
   const signature = input.signature?.trim() ? `<div style="color:#555">${textToHtml(input.signature)}</div>` : "";
   const pixel = input.pixel
     ? `<img src="${escapeHtml(input.pixel)}" alt="" width="1" height="1" style="display:block;width:1px;height:1px;border:0;opacity:0">`
     : "";
-  const own = `<div style="font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt;color:#111">${textToHtml(input.body, input.inline)}${signature}${pixel}</div>`;
+  const own = `<div style="font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt;color:#111">${textToHtml(input.body, input.inline, input.plain)}${signature}${pixel}</div>`;
   const quote = input.quote ? stripTrackers(input.quote) : "";
   if (!quote) return own;
   const body = quote.match(/<body\b[^>]*>/i);

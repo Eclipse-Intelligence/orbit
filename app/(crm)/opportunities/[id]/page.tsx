@@ -10,6 +10,7 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { getOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { stageHistory } from "@/lib/crm/pipeline-history";
 import { getCompanyContext } from "@/lib/crm/relationships";
+import { timelineReads } from "@/lib/mail/tracking";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,7 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
     getMailbox(user),
     stageHistory(user, opportunity.id),
   ]);
+  const reads = await timelineReads(user, context.timeline);
 
   return (
     <OpportunityRecord
@@ -51,6 +53,7 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
       stages={pipeline.stages}
       stays={history.stays}
       context={context}
+      reads={reads}
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
     />

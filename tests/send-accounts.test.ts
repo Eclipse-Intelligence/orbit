@@ -208,12 +208,14 @@ describe("sending from other accounts", () => {
     await sendContactEmail(owner, contactId, { subject: "Signed", body: "Hello Jane" }, out.fetchImpl);
     await sendContactEmail(owner, contactId, { subject: "Consulting", body: "Hello Jane", from: consultancy.id }, out.fetchImpl);
     await sendContactEmail(owner, contactId, { subject: "Plain", body: "Hello Jane", signature: false }, out.fetchImpl);
-    const bodies = out.sent.map((item) => (item.body.message as { body: { content: string } }).body.content);
-    assert.deepEqual(bodies, [
-      "Hello Jane\n\nMark Ridgeon\nFounder, Eclipse",
-      "Hello Jane\n\nMark Ridgeon\nIndependent consultant",
-      "Hello Jane",
-    ]);
+    const bodies = out.sent.map((item) => (item.body.message as { body: { contentType: string; content: string } }).body);
+    assert.deepEqual(
+      bodies.map((body) => body.contentType),
+      ["HTML", "HTML", "HTML"],
+    );
+    assert.match(bodies[0].content, /<p style="margin:0 0 1em 0">Hello Jane<\/p><div style="color:#555"><p style="margin:0 0 1em 0">Mark Ridgeon<br>Founder, Eclipse<\/p><\/div>/);
+    assert.match(bodies[1].content, /Hello Jane<\/p><div style="color:#555"><p style="margin:0 0 1em 0">Mark Ridgeon<br>Independent consultant<\/p><\/div>/);
+    assert.doesNotMatch(bodies[2].content, /Mark Ridgeon|color:#555/);
     const logged = (await listActivities(owner, { contactId, type: "email" })).data.find((item) => item.title === "Signed")!;
     assert.equal(logged.body, "Hello Jane");
 

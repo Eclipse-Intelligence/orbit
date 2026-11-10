@@ -11,6 +11,7 @@ import DetailSection from "@/components/companies/detail/detail-section";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
+import ReadStatus from "@/components/mail/read-status";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import {
   activityByline,
@@ -31,7 +32,8 @@ import {
 import { mayEditActivity } from "@/lib/crm/activity-edit";
 import { cn } from "@/lib/utils";
 import type { Recipient } from "@/lib/crm/personalise";
-import type { Activity, CallInsight } from "@/lib/crm/types";
+import type { Activity, CallInsight, EmailRead } from "@/lib/crm/types";
+import EyeIcon from "@/public/assets/images/mail/eye.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import CallIcon from "@/public/assets/images/crm/activity/call.svg";
 import EmailIcon from "@/public/assets/images/crm/activity/email.svg";
@@ -192,6 +194,7 @@ export function ActivityComposer({
 export function ActivityTimeline({
   activities: given,
   insights,
+  reads,
   showContact,
   viewerId,
   viewerRole,
@@ -200,6 +203,7 @@ export function ActivityTimeline({
 }: {
   activities: Activity[];
   insights?: Record<string, CallInsight>;
+  reads?: Record<string, EmailRead>;
   showContact?: boolean;
   viewerId?: string | null;
   viewerRole?: string | null;
@@ -261,6 +265,7 @@ export function ActivityTimeline({
                       panelId={`${baseId}-panel-${activity.id}`}
                       activity={activity}
                       insight={insights?.[activity.id] ?? null}
+                      read={reads?.[activity.id] ?? null}
                       showContact={showContact}
                       viewerId={viewerId}
                       editable={mayEditActivity({ userId: viewerId, role: viewerRole }, activity)}
@@ -294,6 +299,7 @@ export default function ContactActivities({
   viewerRole,
   activities,
   insights,
+  reads,
   className,
 }: {
   contactId: string;
@@ -304,6 +310,7 @@ export default function ContactActivities({
   viewerRole?: string | null;
   activities: Activity[];
   insights?: Record<string, CallInsight>;
+  reads?: Record<string, EmailRead>;
   className?: string;
 }) {
   const draft = useActivityDraft();
@@ -325,6 +332,7 @@ export default function ContactActivities({
       <ActivityTimeline
         activities={draft.withAdded(activities)}
         insights={insights}
+        reads={reads}
         viewerId={viewerId}
         viewerRole={viewerRole}
         empty="No activity"
@@ -413,6 +421,7 @@ function ActivityRow({
   panelId,
   activity,
   insight,
+  read,
   showContact,
   viewerId,
   editable,
@@ -424,6 +433,7 @@ function ActivityRow({
   panelId: string;
   activity: Activity;
   insight: CallInsight | null;
+  read: EmailRead | null;
   showContact?: boolean;
   viewerId?: string | null;
   editable: boolean;
@@ -445,8 +455,9 @@ function ActivityRow({
   const party = activity.type === "email" ? emailParty(activity) : null;
   const attached = activity.type === "email" ? emailAttachments(activity) : [];
   const insightful = activity.type === "call" || activity.type === "meeting";
+  const reads = read?.opens.length ?? 0;
   const emptyPanel =
-    !details.body && !details.attendees && !granola && !party && !insightful;
+    !details.body && !details.attendees && !granola && !party && !read && !insightful;
 
   return (
     <li id={`activity-${activity.id}`} className="flex scroll-mt-10 flex-col">
@@ -483,6 +494,13 @@ function ActivityRow({
                 className="text-primary-foreground size-3 shrink-0 self-center"
               />
             )}
+            {reads > 0 && (
+              <EyeIcon
+                role="img"
+                aria-label={reads === 1 ? "Read once" : `Read ${reads} times`}
+                className="text-status size-3 shrink-0 self-center"
+              />
+            )}
             <time
               dateTime={activity.occurredAt}
               title={activityWhen(activity.occurredAt, now)}
@@ -504,7 +522,12 @@ function ActivityRow({
         hidden={!open}
         className="flex flex-col gap-3 pr-2 pt-1 pb-3 pl-12"
       >
-        {party && <span className="caption-style text-subtle">{party}</span>}
+        {(party || read) && (
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            {party && <span className="caption-style text-subtle min-w-0 break-words">{party}</span>}
+            {read && <ReadStatus opens={read.opens} recipients={read.recipients} sentAt={read.sentAt} />}
+          </div>
+        )}
         {attached.length > 0 && (
           <span className="caption-style text-subtle flex flex-wrap items-center gap-1.5">
             <PaperclipIcon aria-hidden className="size-3" />

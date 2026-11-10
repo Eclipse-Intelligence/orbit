@@ -18,7 +18,7 @@ import { formatMoney } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
 import { formatDateLabel, instantDateLabel } from "@/lib/date-input";
 import type { StageStay } from "@/lib/crm/pipeline-history";
-import type { CompanyContext, Member, Opportunity, PipelineStage } from "@/lib/crm/types";
+import type { CompanyContext, EmailRead, Member, Opportunity, PipelineStage } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 const CURRENCIES = ["GBP", "USD", "EUR"];
@@ -44,6 +44,7 @@ export default function OpportunityRecord({
   stages,
   stays,
   context,
+  reads = {},
   members,
   mailboxConnected,
 }: {
@@ -52,6 +53,7 @@ export default function OpportunityRecord({
   stages: PipelineStage[];
   stays: StageStay[];
   context: CompanyContext;
+  reads?: Record<string, EmailRead>;
   members: Member[];
   mailboxConnected: boolean;
 }) {
@@ -256,6 +258,7 @@ export default function OpportunityRecord({
             contacts={context.contacts}
             timeline={context.timeline}
             insights={context.insights}
+            reads={reads}
             mailboxConnected={mailboxConnected}
             viewerId={viewer.id}
             viewerRole={viewer.role}

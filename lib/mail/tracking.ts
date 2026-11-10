@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { appSecret } from "@/lib/auth/config";
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
-import type { UserActor } from "@/lib/crm/types";
+import type { Actor, EmailRead, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
 export function addressHash(address: string | null | undefined) {
@@ -80,4 +80,48 @@ export async function setReadStatuses(actor: UserActor, on: boolean) {
     ),
   );
   return on;
+}
+
+export async function activityReads(actor: Actor, activityIds: string[]): Promise<Record<string, EmailRead>> {
+  const ids = [...new Set(activityIds.filter(isUuid))];
+  if (actor.type !== "user" || ids.length === 0) return {};
+  const rows = await withActor(actor, async (db) => {
+    const result = await db.query<{
+      activity_id: string;
+      recipients: { name: string | null; address: string }[] | null;
+      sent_at: Date | string | null;
+      opens: { at: string; agent: string | null }[];
+    }>(
+      `select distinct on (t.activity_id) t.activity_id, t.recipients, t.sent_at,
+         coalesce((
+           select json_agg(json_build_object('at', o.opened_at, 'agent', o.agent) order by o.opened_at desc)
+           from crm.mail_opens o where o.tracking_id = t.id and o.user_id = $2
+         ), '[]'::json) as opens
+       from crm.mail_tracking t
+       where t.activity_id = any($1::uuid[]) and t.user_id = $2 and t.workspace_id = $3 and t.sent_at is not null
+       order by t.activity_id, t.sent_at desc`,
+      [ids, actor.userId, actor.workspaceId],
+    );
+    return result.rows;
+  });
+  return Object.fromEntries(
+    rows.map((row) => [
+      row.activity_id,
+      {
+        opens: row.opens.map((open) => ({ at: new Date(open.at).toISOString(), agent: open.agent })),
+        recipients: Array.isArray(row.recipients) ? row.recipients : [],
+        sentAt: row.sent_at ? new Date(row.sent_at).toISOString() : null,
+      },
+    ]),
+  );
+}
+
+export async function timelineReads(actor: Actor, activities: { id: string; type: string }[]) {
+  return activityReads(
+    actor,
+    activities.filter((activity) => activity.type === "email").map((activity) => activity.id),
+  ).catch((error: unknown) => {
+    console.error("Read statuses failed to load", error);
+    return {} as Record<string, EmailRead>;
+  });
 }

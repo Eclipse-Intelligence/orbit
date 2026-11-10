@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type PointerEvent } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { afterSending, mailFullWhen, personName } from "@/lib/mail/format";
 import type { MailAddress } from "@/lib/mail/types";
@@ -23,12 +23,14 @@ export default function ReadStatus({
   const closing = useRef<number | null>(null);
   const read = opens.length > 0;
 
-  function show() {
+  function show(event: PointerEvent) {
+    if (event.pointerType !== "mouse") return;
     if (closing.current) window.clearTimeout(closing.current);
     setOpen(true);
   }
 
-  function hide() {
+  function hide(event: PointerEvent) {
+    if (event.pointerType !== "mouse") return;
     closing.current = window.setTimeout(() => setOpen(false), 150);
   }
 
@@ -46,15 +48,15 @@ export default function ReadStatus({
       <PopoverTrigger asChild>
         <button
           type="button"
-          onMouseEnter={show}
-          onMouseLeave={hide}
+          onPointerEnter={show}
+          onPointerLeave={hide}
           className="ease-power3-out text-status inline-flex cursor-pointer items-center gap-1.5 rounded-sm text-[13px] transition-colors duration-150 outline-none hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <EyeIcon aria-hidden className="size-3.5" />
           {readLabel(recipients)}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[18rem] p-1" onMouseEnter={show} onMouseLeave={hide}>
+      <PopoverContent align="end" className="w-[18rem] p-1" onPointerEnter={show} onPointerLeave={hide}>
         <p className="caption-style text-subtle px-2.5 pt-1.5 pb-1">
           Read {opens.length === 1 ? "once" : `${opens.length} times`}
         </p>
