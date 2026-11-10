@@ -161,6 +161,10 @@ function mailUrl(query: ListQuery, thread: string | null) {
   return text ? `/mail?${text}` : "/mail";
 }
 
+type OutgoingThread = { thread: ThreadSummary | null; origin: ListQuery; left: boolean; cleared: boolean };
+
+const UNTRACKED = { undone: () => undefined, delivered: () => undefined };
+
 function insertByDate(threads: ThreadSummary[], thread: ThreadSummary) {
   if (threads.some((item) => item.key === thread.key)) return threads;
   const index = threads.findIndex((item) => (item.latestAt ?? "") < (thread.latestAt ?? ""));
@@ -252,6 +256,7 @@ export default function MailScreen({
   const [peeking, setPeeking] = useState(false);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
+  const sendingThreads = useRef(new Map<string, OutgoingThread[]>());
   const keptUnread = useRef(new Set<string>());
   const loadingMore = useRef(false);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -408,14 +413,15 @@ export default function MailScreen({
       loadScheduled();
       return;
     }
-    setPage(cachedList(next));
+    const cached = cachedList(next);
+    setPage(cached ? { ...cached, threads: settleSending(cached.threads) } : null);
     setLoading(true);
     writeUrl(next, null);
     fetchList(next)
       .then((fresh) => {
         storeList(next, fresh);
         if (token !== request.current) return;
-        setPage(fresh);
+        setPage({ ...fresh, threads: settleSending(fresh.threads) });
         prefetchThreads(fresh.threads.slice(0, 4).map((thread) => thread.key));
       })
       .catch((error: Error) => {
@@ -431,7 +437,7 @@ export default function MailScreen({
     const token = request.current;
     setSyncing(true);
     let problems: string[] = [];
-    (sync
+    return (sync
       ? syncNow().then(
           (result) => {
             problems = flagSyncProblems(result.problems ?? [], navAccounts.current);
@@ -473,7 +479,7 @@ export default function MailScreen({
           const oldest = fresh.threads[fresh.threads.length - 1]?.latestAt ?? "";
           const tail = (existing?.threads ?? []).filter((thread) => !keys.has(thread.key) && (thread.latestAt ?? "") < oldest);
           return {
-            threads: [...fresh.threads, ...tail].filter((thread) => !hidden.has(thread.key)),
+            threads: settleSending([...fresh.threads, ...tail].filter((thread) => !hidden.has(thread.key))),
             next: tail.length > 0 ? (existing?.next ?? fresh.next) : fresh.next,
           };
         });
@@ -756,14 +762,73 @@ export default function MailScreen({
       });
   }
 
-  function sent(key: string) {
+  function settleSending(threads: ThreadSummary[]) {
+    const outgoing = sendingThreads.current;
+    return threads
+      .filter((thread) => !removing.current.has(thread.key))
+      .map((thread) => (thread.draft && outgoing.get(thread.key)?.some((entry) => entry.cleared) ? { ...thread, draft: false } : thread));
+  }
+
+  function leave(key: string) {
+    if (latest.current.cursor !== key) return;
+    const list = latest.current.page?.threads ?? [];
+    const index = list.findIndex((item) => item.key === key);
+    const remaining = list.filter((item) => item.key !== key);
+    const next = index === -1 ? null : (remaining[index] ?? remaining[index - 1] ?? null);
+    select(next?.key ?? null);
+    closeReader();
+  }
+
+  function sending(key: string, draftOnly: boolean, others: boolean) {
+    const { page: currentPage, query: target } = latest.current;
+    const list = currentPage?.threads ?? [];
+    const thread = list.find((item) => item.key === key) ?? null;
+    const left = Boolean(thread) && !others && (draftOnly || (target.view === "drafts" && !target.query));
+    const cleared = Boolean(thread?.draft) && !others && !left;
+    const entry: OutgoingThread = { thread, origin: target, left, cleared };
+    const outgoing = sendingThreads.current;
+    outgoing.set(key, [...(outgoing.get(key) ?? []), entry]);
+    if (left) removing.current.add(key);
+    if (left || cleared) setPage((existing) => (existing ? { ...existing, threads: settleSending(existing.threads) } : existing));
+    if (draftOnly) leave(key);
+    let settled = false;
+    const finish = () => {
+      if (settled) return false;
+      settled = true;
+      const rest = (outgoing.get(key) ?? []).filter((item) => item !== entry);
+      if (rest.length) outgoing.set(key, rest);
+      else outgoing.delete(key);
+      if (entry.left && !rest.some((item) => item.left)) removing.current.delete(key);
+      return true;
+    };
+    return {
+      undone: () => {
+        if (!finish() || !entry.thread) return;
+        if (entry.left && !removing.current.has(key)) restore(entry.thread, entry.origin);
+        else if (entry.cleared) {
+          const shown = entry.thread;
+          setPage((existing) =>
+            existing ? { ...existing, threads: settleSending(existing.threads.map((item) => (item.key === key ? { ...item, draft: shown.draft } : item))) } : existing,
+          );
+        }
+      },
+      delivered: () => {
+        window.setTimeout(() => {
+          finish();
+          sent(key);
+        }, 2500);
+      },
+    };
+  }
+
+  function sent(key: string, wait = 0) {
     window.setTimeout(() => {
       forgetThread(key);
-      refreshRef.current(true);
+      void refreshRef.current(true);
       window.setTimeout(() => {
         if (latest.current.cursor === key) fetchDetail(key, true);
       }, 9000);
-    }, 2500);
+    }, wait);
   }
 
   const actRef = useRef(act);
@@ -1027,7 +1092,7 @@ export default function MailScreen({
     if (!cursor) return false;
     snooze([cursor]);
   });
-  useShortcut("mail-refresh", () => refresh(true));
+  useShortcut("mail-refresh", () => void refresh(true));
   function visibleSearch() {
     return window.matchMedia("(min-width: 64rem)").matches ? searchInput.current : searchInputList.current;
   }
@@ -1456,7 +1521,9 @@ export default function MailScreen({
             onSplit={(sender, split) => cursor && moveSender(cursor, sender, split)}
             onUnsubscribe={(mode) => cursor && setUnsubscribing({ thread: cursor, mode })}
             onBlock={() => cursor && setUnsubscribing({ thread: cursor, mode: "block" })}
-            onSent={() => cursor && sent(cursor)}
+            onSent={() => cursor && sent(cursor, 2500)}
+            onSending={(draftOnly, others) => (cursor ? sending(cursor, draftOnly, others) : UNTRACKED)}
+            onLeave={() => cursor && leave(cursor)}
           />
         </div>
       </div>

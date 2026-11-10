@@ -96,10 +96,14 @@ export function restoreToList(origin: ListQuery, thread: ThreadSummary) {
 const queuedDrafts = new Map<string, Set<string>>();
 
 function withoutQueued(detail: ThreadDetail) {
-  const hidden = detail.drafts?.filter((draft) => queuedDrafts.has(draft.id)) ?? [];
+  const hidden = [...(detail.drafts ?? []), ...(detail.messages ?? [])].filter((item) => queuedDrafts.has(item.id));
   if (hidden.length === 0) return detail;
-  for (const draft of hidden) queuedDrafts.get(draft.id)!.add(detail.key);
-  return { ...detail, drafts: detail.drafts.filter((draft) => !queuedDrafts.has(draft.id)) };
+  for (const item of hidden) queuedDrafts.get(item.id)!.add(detail.key);
+  return {
+    ...detail,
+    drafts: (detail.drafts ?? []).filter((draft) => !queuedDrafts.has(draft.id)),
+    messages: (detail.messages ?? []).filter((message) => !queuedDrafts.has(message.id)),
+  };
 }
 
 function hideDraft(id: string | null | undefined) {
@@ -125,11 +129,16 @@ function showDrafts(ids: (string | null | undefined)[]) {
   }
 }
 
-export function holdQueuedDraft(current: string | null, payload: Promise<{ id: string | null }>) {
+export function draftQueued(...ids: (string | null | undefined)[]) {
+  return ids.some((id) => Boolean(id) && queuedDrafts.has(id!));
+}
+
+export function holdQueuedDraft(current: string | null, payload: Promise<{ id: string | null }>, replaces: string | null = null) {
   hideDraft(current);
+  hideDraft(replaces);
   const settled = payload.then((value) => value.id, () => null);
   void settled.then((id) => hideDraft(id));
-  return () => settled.then((id) => showDrafts([current, id]));
+  return () => settled.then((id) => showDrafts([current, replaces, id]));
 }
 
 export function newSendKey() {

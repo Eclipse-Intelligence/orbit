@@ -8,6 +8,7 @@ import { applyMailAction } from "@/lib/mail/actions";
 import {
   ALREADY_SENDING,
   ALREADY_SENT_WARNING,
+  DRAFT_GONE,
   MAYBE_SENT,
   SEND_FAILED,
   readDraftInput,
@@ -31,6 +32,7 @@ import { listNotifications } from "@/lib/workflows/store";
 import {
   cachedList,
   cachedThread,
+  draftQueued,
   dwellReadDue,
   forgetDwellRead,
   holdQueuedDraft,
@@ -356,6 +358,19 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     assert.equal(repeat.calls.length, 0);
   });
 
+  it("ignores a second send of the same draft from another composer instead of sending it again", async () => {
+    const box = outlook("ok");
+    const { input } = await draftFor(box, "Pressed twice");
+    const send = (sendKey: string) => sendMailDraft(owner, { ...input, sendKey }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    const results = await Promise.allSettled([send(randomUUID()), send(randomUUID())]);
+    assert.equal(box.sends(), 1);
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    for (const result of results) if (result.status === "rejected") assert.equal(result.reason.message, ALREADY_SENDING);
+    await assert.rejects(() => send(randomUUID()), { message: DRAFT_GONE });
+    assert.equal(box.sends(), 1);
+    assert.equal(box.created(), 1);
+  });
+
   it("reuses the draft from a failed keyed send instead of making another", async () => {
     const box = outlook("refused");
     const sendKey = randomUUID();
@@ -521,6 +536,38 @@ describe("send readiness and the Mail cache", () => {
     for (let wait = 0; wait < 10 && !cachedThread("t-draft"); wait += 1) await new Promise((done) => setImmediate(done));
     assert.deepEqual(asked, ["/api/mail/thread?key=t-draft"]);
     assert.deepEqual(cachedThread("t-draft")?.drafts.map((draft) => draft.id), ["d-1", "d-2"]);
+  });
+
+  it("ignores a second send of a draft while its send is queued, and allows it again after Undo", async () => {
+    const detail = { key: "t-twice", drafts: [{ id: "d-twice" }], messages: [{ id: "m-outside" }, { id: "m-kept" }] } as unknown as ThreadDetail;
+    storeThread(detail);
+    const release = holdQueuedDraft("d-twice", Promise.resolve({ id: "d-twice" }), "m-outside");
+    assert.equal(draftQueued("d-twice"), true);
+    assert.equal(draftQueued(null, "m-outside"), true);
+    assert.equal(draftQueued("d-other", null), false);
+    assert.deepEqual(cachedThread("t-twice")?.drafts, []);
+    assert.deepEqual(cachedThread("t-twice")?.messages.map((message) => message.id), ["m-kept"]);
+    storeThread(detail);
+    assert.deepEqual(cachedThread("t-twice")?.messages.map((message) => message.id), ["m-kept"]);
+    globalThis.fetch = (async () => Response.json(detail)) as typeof fetch;
+    await release();
+    assert.equal(draftQueued("d-twice", "m-outside"), false);
+    for (let wait = 0; wait < 10 && !cachedThread("t-twice"); wait += 1) await new Promise((done) => setImmediate(done));
+    assert.deepEqual(cachedThread("t-twice")?.messages.map((message) => message.id), ["m-outside", "m-kept"]);
+  });
+
+  it("hides a draft again when its Undo card is sent, and stops the reader's copy sending it twice", async () => {
+    const detail = { key: "t-card", drafts: [{ id: "d-card" }], messages: [] } as unknown as ThreadDetail;
+    storeThread(detail);
+    const undo = holdQueuedDraft("d-card", Promise.resolve({ id: "d-card" }));
+    globalThis.fetch = (async () => Response.json(detail)) as typeof fetch;
+    await undo();
+    for (let wait = 0; wait < 10 && !cachedThread("t-card"); wait += 1) await new Promise((done) => setImmediate(done));
+    assert.equal(draftQueued("d-card"), false);
+    assert.deepEqual(cachedThread("t-card")?.drafts.map((draft) => draft.id), ["d-card"]);
+    holdQueuedDraft("d-card", Promise.resolve({ id: "d-card" }));
+    assert.equal(draftQueued("d-card"), true);
+    assert.deepEqual(cachedThread("t-card")?.drafts, []);
   });
 
   it("keeps a draft being sent hidden when a conversation load lands afterwards", async () => {

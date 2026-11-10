@@ -4,7 +4,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRe
 import dynamic from "next/dynamic";
 import Button from "@/components/_ui/button";
 import type { LaterRequest } from "@/components/mail/later-picker";
-import type { ComposerDraft, ComposerStart, SendPayload } from "@/components/mail/mail-composer";
+import type { ComposerDraft, ComposerStart, SendPayload, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
 import { heldDrafts } from "@/components/mail/held-drafts";
 import { flagReconnect, hasReconnectHost, reconnectOf } from "@/components/mail/reconnect-store";
@@ -28,11 +28,11 @@ type Toast = { message: string; tone?: "status" | "alert"; action?: { label: str
 
 type ShownToast = Toast & { id: number };
 
-type SendMeta = { onDelivered?: () => void; onUndone?: () => void; onReleased?: () => void };
+type SendMeta = { onDelivered?: () => void; onUndone?: () => void; onReopen?: (draft: ComposerDraft) => boolean; track?: SendTracker };
 
 type Outgoing = SendMeta & { payload: Promise<SendPayload>; timer: number };
 
-type SendFailure = Error & { status?: number; detail?: { draftId?: string; maybeSent?: boolean } };
+type SendFailure = Error & { status?: number; detail?: { draftId?: string; maybeSent?: boolean; stillSaving?: boolean } };
 
 type Card = {
   key: number;
@@ -42,9 +42,10 @@ type Card = {
   position: { x: number; y: number } | null;
   layer: number;
   onSent?: () => void;
+  track?: SendTracker;
 };
 
-type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void; heldKey?: string; fromEmail?: string | null };
+type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void; heldKey?: string; fromEmail?: string | null; track?: SendTracker };
 
 type ComposerContextValue = {
   openComposer: (options?: OpenOptions) => void;
@@ -72,6 +73,8 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
     sendKey: payload.sendKey ?? null,
     sendProblem: failure?.detail?.maybeSent ? failure.message : null,
     sourceId: payload.sourceId,
+    replaces: payload.replaces ?? null,
+    unsaved: Boolean(failure?.detail?.draftId || failure?.detail?.stillSaving),
     mode: payload.mode,
     messageId: payload.messageId,
     to: payload.to,
@@ -262,6 +265,7 @@ const ComposeCard = memo(function ComposeCard({
             onSent={remove}
             onDelivered={card.onSent}
             onScheduled={card.onSent}
+            track={card.track}
             onHeld={setHeld}
           />
         )}
@@ -350,6 +354,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             ? (earlier.find((item) => item.id === (options.draft!.identityId ? `smtp:${options.draft!.identityId}` : options.draft!.sourceId))?.email ?? null)
             : null),
         heldKey: options.heldKey,
+        replaces: options.draft?.replaces ?? null,
       };
       const existing = options.draft?.id ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
       if (existing) {
@@ -370,6 +375,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         position: null,
         layer: ++layers.current,
         onSent: options.onSent,
+        track: options.track,
       };
       cardsRef.current = [...cardsRef.current, card];
       setCards((current) => [...current, card]);
@@ -417,24 +423,18 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             if (result.warning) showToast({ message: result.warning, tone: "alert" });
           })
           .catch((error: SendFailure) => {
-            if (error.status === 409 && !error.detail?.maybeSent) {
-              item.onReleased?.();
-              item.onDelivered?.();
-              showToast({ message: error.message, tone: "alert" });
-              return;
-            }
             item.onUndone?.();
             const reconnect = reconnectOf(error);
             const covered = reconnect ? flagReconnect(error, { sourceId: payload.sourceId }) && hasReconnectHost() : false;
             showToast({
-              message: error.detail?.maybeSent
+              message: error.detail?.maybeSent || error.status === 409
                 ? error.message
                 : reconnect?.email
                   ? `“${payload.subject || "Your email"}” didn't send. Reconnect ${reconnect.email}, then send it again.`
                   : `“${payload.subject || "Your email"}” didn't send. ${error.message}`,
               tone: covered ? "status" : "alert",
               duration: 15_000,
-              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(payload, error) }) },
+              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(payload, error), track: item.track }) },
             });
           }),
       );
@@ -460,7 +460,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               window.clearTimeout(item.timer);
               outgoing.current.delete(id);
               item.onUndone?.();
-              void item.payload.then((value) => openComposer({ draft: payloadDraft(value) }));
+              void item.payload.then((value) => {
+                const draft = payloadDraft(value);
+                if (!item.onReopen?.(draft)) openComposer({ draft, track: item.track });
+              });
             },
           },
         },
