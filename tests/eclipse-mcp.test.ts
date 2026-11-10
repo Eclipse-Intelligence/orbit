@@ -164,21 +164,26 @@ describe("Eclipse MCP", () => {
     }
   });
 
-  it("gives every workspace the same Eclipse tools and names its own client in the prompt", () => {
+  it("gives every workspace the same Eclipse tools and names its own client in the prompt and the guide", async () => {
     for (const multiWorkspace of [false, true]) {
       const names = toolDefinitions({ multiWorkspace }).map((tool) => tool.function.name);
       for (const name of ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action", "eclipse_docs"]) assert.ok(names.includes(name), name);
       assert.ok(!names.includes("eclipse_articles"));
     }
-    const eclipse = systemPrompt({ ...actor, workspaceName: "Eclipse" }, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse" } });
-    const ridgeon = systemPrompt({ ...actor, workspaceName: "Mark Ridgeon" }, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Mark Ridgeon" } });
+    const eclipse = systemPrompt({ ...actor, workspaceName: "Eclipse" }, { brand: { ...UNBRANDED, workspaceName: "Eclipse" } });
+    const ridgeon = systemPrompt({ ...actor, workspaceName: "Mark Ridgeon" }, { brand: { ...UNBRANDED, workspaceName: "Mark Ridgeon" } });
     assert.match(eclipse, /In Eclipse, use the Eclipse client named 'Eclipse'\. Find it with list_clients and pass its clientId on every call\. Use another client only when the user names it\./);
     assert.match(ridgeon, /In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'\. Find it with list_clients and pass its clientId on every call\. Use another client only when the user names it\./);
     assert.doesNotMatch(ridgeon, /client named 'Eclipse'/);
     for (const prompt of [eclipse, ridgeon]) {
       assert.match(prompt, /If no client of that name exists, say so and ask the user which client to use/);
-      assert.match(prompt, /goes through eclipse_action, which the user approves/);
-      assert.match(prompt, /never share one client's data with another company/);
+      assert.match(prompt, /Never share one client's data with another company/);
+    }
+    for (const workspaceName of ["Eclipse", "Mark Ridgeon"]) {
+      const { guide } = (await runTool({ ...actor, workspaceName }, "guide", { topic: "eclipse" })) as { guide: string };
+      assert.match(guide, new RegExp(`In ${workspaceName}, use the Eclipse client named '${workspaceName}'`));
+      assert.match(guide, /goes through eclipse_action, which the user approves/);
+      assert.match(guide, /never share one client's data with another company/);
     }
   });
 

@@ -1,5 +1,6 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
+import { untrustedToken } from "@/lib/assistant/untrusted";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -315,7 +316,7 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
   if (tool.write) return { content: toolJson({ error: "Changes need the user's approval in Orbit." }), isError: true };
   const id = String(call.id || `${call.name}-${Date.now()}`).slice(0, 120);
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "running" });
-  const output = (await runTool(auth.actor, call.name, parseArgs(call.arguments))) as Record<string, unknown> | null;
+  const output = (await runTool(auth.actor, call.name, parseArgs(call.arguments), { fence: untrustedToken() })) as Record<string, unknown> | null;
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "done" });
   return sendResult(auth, jobId, id, toolJson(output), Boolean(output && typeof output === "object" && "error" in output));
 }

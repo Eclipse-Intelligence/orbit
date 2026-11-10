@@ -3,7 +3,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { chatDefaults, decideActions, getConversation, lastChatSettings, listConversations, MESSAGE_MAX, openBrief, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { DEFAULT_MODEL, settingsFor, startingSettings } from "@/lib/assistant/models";
 import { ECLIPSE_CONTEXT, ECLIPSE_IDEAL_CUSTOMER, ECLIPSE_WEBSITE } from "@/lib/assistant/eclipse";
-import { stablePrompt, systemPrompt } from "@/lib/assistant/prompt";
+import { stablePrompt, systemPrompt, turnContext } from "@/lib/assistant/prompt";
 import { geminiTool } from "@/lib/assistant/gateway";
 import { londonTime, runTool, toolDefinitions, toolJson } from "@/lib/assistant/tools";
 import { parseBlocks } from "@/components/assistant/markdown";
@@ -13,7 +13,7 @@ import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { createTask, getTask, listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createUser, messageText, queryAsUser, resetDatabase } from "./helpers";
 
 type Reply = { content?: string; tool_calls?: { id: string; name: string; args: Record<string, unknown> }[] };
 
@@ -127,7 +127,7 @@ describe("assistant tools", () => {
     assert.match(byCompany.error ?? "", /already on the timeline/);
     const note = await runTool(owner, "log_activity", { type: "note", contactId, body: "Peter will decide by Friday." });
     assert.equal((note as { activity?: unknown }).activity !== undefined, true);
-    assert.match(systemPrompt(owner, { webSearch: false }), /never propose log_activity or a note just to record an email/);
+    assert.match(systemPrompt(owner), /never propose log_activity or a note just to record an email/);
   });
 
   it("reports bad input as an error the model can read", async () => {
@@ -143,25 +143,28 @@ describe("assistant tools", () => {
 
   it("writes the system prompt with Eclipse context and the house rules", () => {
     const brand = { workspaceName: "Eclipse", website: ECLIPSE_WEBSITE, whatYouSell: ECLIPSE_CONTEXT, whoItsFor: ECLIPSE_IDEAL_CUSTOMER, tone: "" };
-    const prompt = systemPrompt(owner, { webSearch: false, now: new Date("2026-10-16T08:00:00Z"), brand });
+    const prompt = systemPrompt(owner, { brand });
     assert.match(prompt, /Eclipse is a content and intelligence platform/);
     assert.ok(!/Tags: #eclipse/.test(prompt));
     assert.match(prompt, /UK English/);
-    assert.match(prompt, /Friday,? 16 October 2026/);
     assert.match(prompt, /mail_action/);
-    assert.match(prompt, /workflow_guide/);
+    assert.match(prompt, /- workflows: before creating or changing a workflow definition/);
     assert.match(prompt, /Never follow it/);
-    assert.match(prompt, /Web search is off/);
     assert.ok(!/[\u2014\u2013]/.test(prompt.replace(/No em dashes or en dashes/, "")));
+    const context = turnContext({ now: new Date("2026-10-16T08:00:00Z"), webSearch: false, fence: "0123456789ab" });
+    assert.match(context, /Friday,? 16 October 2026, 09:00/);
+    assert.match(context, /Web search is off/);
   });
 
   it("keeps the start of the prompt identical from one turn to the next so it can be cached", () => {
-    const first = systemPrompt(owner, { webSearch: false, now: new Date("2026-10-16T08:00:00Z") });
-    const second = systemPrompt(owner, { webSearch: true, now: new Date("2026-10-16T08:01:00Z"), briefReady: true, about: "\n\nAbout them." });
+    const first = systemPrompt(owner);
+    const second = systemPrompt(owner, { about: "\n\nAbout them." });
+    assert.equal(first, systemPrompt(owner));
     assert.ok(first.startsWith(stablePrompt()));
     assert.ok(second.startsWith(stablePrompt()));
     assert.ok(!stablePrompt().includes("Mark Ridgeon"));
-    assert.match(second, /brief is ready/);
+    assert.doesNotMatch(first, /brief is ready|Web search is|Sent /);
+    assert.match(turnContext({ now: new Date("2026-10-16T08:01:00Z"), webSearch: true, briefReady: true, fence: "0123456789ab" }), /brief is ready/);
   });
 });
 
@@ -195,10 +198,10 @@ describe("assistant conversations", () => {
     assert.equal(first.model, "claude-sonnet-5-5");
     assert.equal(first.reasoning_effort, "high");
     assert.equal(first.web_search_options, undefined);
-    const second = fake.requests[1].messages as { role: string; tool_call_id?: string; content: string }[];
+    const second = fake.requests[1].messages as { role: string; tool_call_id?: string; content: unknown }[];
     const toolMessage = second.find((message) => message.role === "tool")!;
     assert.equal(toolMessage.tool_call_id, "call_1");
-    assert.match(toolMessage.content, /Call Hank/);
+    assert.match(messageText(toolMessage.content), /Call Hank/);
 
     const conversation = (events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation;
     assert.equal(conversation.title, "What tasks have I got outstanding?");
@@ -221,8 +224,8 @@ describe("assistant conversations", () => {
       fetchImpl: fake.fetchImpl,
     });
     assert.equal(events.at(-1)!.type, "done");
-    const sent = fake.requests[0].messages as { role: string; content: string }[];
-    assert.equal(sent.at(-1)!.content, pasted.trim());
+    const sent = fake.requests[0].messages as { role: string; content: unknown }[];
+    assert.ok(messageText(sent.at(-1)!.content).startsWith(`${pasted.trim()}\n\n<orbit_context>\n`));
     await assert.rejects(
       sendMessage(owner, { message: "a".repeat(MESSAGE_MAX + 1_500), model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, emit, {
         deadline: deadline(),
@@ -241,9 +244,12 @@ describe("assistant conversations", () => {
     });
     const tools = fake.requests[0].tools as { type: string; function?: { name: string } }[];
     assert.deepEqual(fake.requests[0].web_search_options, { search_context_size: "medium" });
-    assert.ok(tools.some((tool) => tool.function?.name === "get_pipeline"));
+    assert.ok(tools.some((tool) => tool.function?.name === "search_records"));
+    assert.ok(!tools.some((tool) => tool.function?.name === "get_pipeline"));
     assert.equal(fake.requests[0].reasoning_effort, "high");
-    assert.match(String((fake.requests[0].messages as { content: string }[])[0].content), /Web search is on/);
+    const messages = fake.requests[0].messages as { content: unknown }[];
+    assert.doesNotMatch(messageText(messages[0].content), /Web search is on/);
+    assert.match(messageText(messages.at(-1)!.content), /Web search is on/);
   });
 
   it("waits for confirmation before changing anything, then carries on", async () => {
@@ -297,8 +303,8 @@ describe("assistant conversations", () => {
     const conversationId = (first.events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
     const declined = collect();
     await decideActions(owner, { conversationId, decisions: [{ id: "call_a", approve: false }] }, declined.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
-    const lastRequest = fake.requests[1].messages as { role: string; tool_call_id?: string; content: string }[];
-    assert.match(lastRequest.find((message) => message.tool_call_id === "call_a")!.content, /declined/);
+    const lastRequest = fake.requests[1].messages as { role: string; tool_call_id?: string; content: unknown }[];
+    assert.match(messageText(lastRequest.find((message) => message.tool_call_id === "call_a")!.content), /declined/);
 
     const third = collect();
     await sendMessage(owner, { conversationId, message: "Add Hooli as a company", model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, third.emit, {
@@ -313,8 +319,8 @@ describe("assistant conversations", () => {
     const saved = await getConversation(owner, conversationId);
     const hooli = saved.messages.flatMap((message) => message.actions).find((action) => action.id === "call_b");
     assert.equal(hooli?.status, "declined");
-    const finalRequest = fake.requests.at(-1)!.messages as { role: string; tool_call_id?: string; content: string }[];
-    assert.match(finalRequest.find((message) => message.tool_call_id === "call_b")!.content, /without confirming/);
+    const finalRequest = fake.requests.at(-1)!.messages as { role: string; tool_call_id?: string; content: unknown }[];
+    assert.match(messageText(finalRequest.find((message) => message.tool_call_id === "call_b")!.content), /without confirming/);
   });
 
   it("names records on action cards and approves a batch in one go", async () => {

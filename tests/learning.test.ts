@@ -205,7 +205,7 @@ describe("nightly learning", () => {
     assert.match(briefing, /Agencies want a paid pilot first/);
     assert.match(briefing, /## This morning's brief/);
     assert.doesNotMatch(await memoryBriefing(sam), /Keeps first emails short/);
-    assert.match(systemPrompt(owner, { webSearch: false, about: briefing }), /use recall to search everything learned/);
+    assert.match(systemPrompt(owner, { about: briefing }), /use recall to search everything learned/);
   });
 
   it("lets the assistant recall, remember and forget, keeping personal notes private", async () => {

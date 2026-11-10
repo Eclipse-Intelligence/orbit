@@ -335,7 +335,38 @@ async function completeGateway(input: CompleteInput): Promise<Completion> {
   }
 }
 
+let cacheMarkersRefused = false;
+
+export function cacheMarkersFor(model: string) {
+  return !cacheMarkersRefused && /^(?:anthropic\/)?claude-/.test(model);
+}
+
+type GatewayMessage = ReturnType<typeof plain>[number];
+
+export function withCacheMarkers(messages: GatewayMessage[]) {
+  const roles = messages.map((message) => message.role);
+  const points = new Set([roles.indexOf("system"), roles.lastIndexOf("user"), messages.length - 1]);
+  return messages.map((message, index) => {
+    if (!points.has(index) || message.role === "assistant" || typeof message.content !== "string" || !message.content) return message;
+    return { ...message, content: [{ type: "text", text: message.content, cache_control: { type: "ephemeral" } }] };
+  });
+}
+
+class MarkersRefusedError extends AssistantError {}
+
 async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<Completion> {
+  const marks = cacheMarkersFor(input.model);
+  try {
+    return await gatewayRequest(input, timeoutMs, marks);
+  } catch (error) {
+    if (!marks || !(error instanceof MarkersRefusedError) || input.signal?.aborted) throw error;
+    const result = await gatewayRequest(input, timeoutMs, false);
+    cacheMarkersRefused = true;
+    return result;
+  }
+}
+
+async function gatewayRequest(input: CompleteInput, timeoutMs: number, marks: boolean): Promise<Completion> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
   const raw = input.tools ?? toolDefinitions();
@@ -347,7 +378,7 @@ async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: input.model,
-        messages: plain(input.messages),
+        messages: marks ? withCacheMarkers(plain(input.messages)) : plain(input.messages),
         tools,
         tool_choice: "auto",
         reasoning_effort: input.reasoning,
@@ -367,6 +398,7 @@ async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<
   if (!response.ok) {
     const reason = await detail(response);
     const message = `The LLM gateway returned ${response.status}${reason ? `: ${reason}` : "."}`;
+    if (marks && response.status === 400) throw new MarkersRefusedError(message);
     throw RETRY_STATUSES.has(response.status) ? new RetryableGatewayError(message) : new AssistantError(message);
   }
   if (input.onText && (response.headers.get("content-type") ?? "").includes("text/event-stream")) {

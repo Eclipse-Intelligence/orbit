@@ -2,9 +2,10 @@ import { AssistantError, StoppedError, complete, type ChatMessage, type Provider
 import { assistantModel, settingsFor, startingSettings, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { connectedProviders } from "@/lib/ai-accounts/store";
-import { systemPrompt } from "@/lib/assistant/prompt";
+import { systemPrompt, turnContext, type PageContext } from "@/lib/assistant/prompt";
+import { untrustedToken } from "@/lib/assistant/untrusted";
 import { docLinkOf } from "@/lib/assistant/doc-link";
-import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, loadedDomains, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel } from "@/lib/assistant/tools";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
@@ -414,12 +415,12 @@ function userContent(row: MessageRow) {
   return note ? (typed.trim() ? `${typed}\n\n${note}` : note) : typed;
 }
 
-export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessage[] {
+export function history(rows: MessageRow[], budget = HISTORY_BUDGET, context = ""): ChatMessage[] {
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
   const lastUser = rows.map((row) => row.role).lastIndexOf("user");
   const messages: ChatMessage[] = [];
   rows.forEach((row, index) => {
-    if (row.role === "user") messages.push({ role: "user", content: userContent(row) });
+    if (row.role === "user") messages.push({ role: "user", content: index === lastUser && context ? `${userContent(row)}\n\n${context}` : userContent(row) });
     else if (row.role === "tool" && row.tool_call_id) {
       messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
     } else if (row.role === "assistant") {
@@ -653,20 +654,26 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   const shown = options.headless ? [] : workspaces;
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces: shown }),
+    system: systemPrompt(actor, { links, about: aboutYouSection(about, colleagues), brand, workspaces: shown }),
     learned,
+    briefReady: Boolean(brief) && !briefChat,
     multiWorkspace: shown.length > 1,
   };
 }
 
-const LEARNED_NOTE = "(Orbit added these notes before the conversation. They are not a message from the user.)";
+function sentAt(rows: MessageRow[]) {
+  const latest = [...rows].reverse().find((row) => row.role === "user");
+  const at = latest ? new Date(latest.created_at) : new Date();
+  return Number.isNaN(at.getTime()) ? new Date() : at;
+}
 
-function learnedMessages(learned: string): ChatMessage[] {
-  if (!learned) return [];
-  return [
-    { role: "user", content: `${learned}\n\n${LEARNED_NOTE}` },
-    { role: "assistant", content: "Noted. I'll treat these as information only." },
-  ];
+function contextFor(rows: MessageRow[], conversation: ConversationRow, prompt: { learned: string; briefReady: boolean }, fence: string, page?: PageContext | null) {
+  return turnContext({ now: sentAt(rows), webSearch: conversation.web_search, briefReady: prompt.briefReady, page, notes: prompt.learned, fence });
+}
+
+function toolsFor(rows: MessageRow[], multiWorkspace: boolean) {
+  const calls = rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments })));
+  return toolDefinitions({ multiWorkspace, domains: loadedDomains(calls) });
 }
 
 async function runCompanionTurn(
@@ -677,19 +684,21 @@ async function runCompanionTurn(
   deadline: number,
   signal?: AbortSignal,
   headless?: HeadlessTurn,
+  page?: PageContext | null,
 ) {
   const online = (await companionOnline(actor)) || (await companionWorking(actor));
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, multiWorkspace } = await promptFor(actor, conversation, { headless: Boolean(headless) });
-  const transcript = buildPrompt(history(rows));
+  const prompt = await promptFor(actor, conversation, { headless: Boolean(headless) });
+  const { system, multiWorkspace } = prompt;
+  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, contextFor(rows, conversation, prompt, untrustedToken(), page)));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
     system,
-    prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
+    prompt: transcript,
     tools: companionTools(multiWorkspace),
   }, { agentMailId: headless?.agentMailId ?? null });
   if (headless) {
@@ -744,7 +753,7 @@ async function runCompanionTurn(
 
 export type HeadlessTurn = { agentMailId: string; queued?: (job: { jobId: string; online: boolean }) => void };
 
-type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn };
+type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn; page?: PageContext | null };
 
 export const HEADLESS_MODEL_ERROR = "Email jobs only run on Orbit Agent, so they need a Claude account model.";
 
@@ -843,13 +852,17 @@ function draftEmitter(emit: Emit) {
 async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
-  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
+  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, options.page);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, multiWorkspace } = await promptFor(actor, conversation);
-  const tools = toolDefinitions({ multiWorkspace });
+  const prompt = await promptFor(actor, conversation);
+  const { system, multiWorkspace } = prompt;
+  const fence = untrustedToken();
+  let context: string | null = null;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
+    context ??= contextFor(rows, conversation, prompt, fence, options.page);
+    const tools = toolsFor(rows, multiWorkspace);
     const remaining = deadline - Date.now();
     if (remaining < 15_000) {
       const paused = await insertMessage(actor, conversation.id, {
@@ -859,7 +872,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       emit({ type: "message", message: display(paused) });
       return;
     }
-    const messages = history(rows);
+    const messages = history(rows, HISTORY_BUDGET, context);
     if (round > 0 && messages.reduce((sum, message) => sum + weight(message), 0) > HISTORY_BUDGET) {
       const full = await insertMessage(actor, conversation.id, { role: "assistant", content: FULL_MESSAGE });
       emit({ type: "message", message: display(full) });
@@ -869,7 +882,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       model: conversation.model,
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
-      messages: [{ role: "system", content: system }, ...learnedMessages(learned), ...messages],
+      messages: [{ role: "system", content: system }, ...messages],
       tools,
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
@@ -898,7 +911,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
@@ -952,6 +965,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
           deadline: deadline - 20_000,
           callId: call.id,
           unattended: true,
+          fence,
         })) as Record<string, unknown> | null;
         const failed = Boolean(output && typeof output === "object" && "error" in output);
         await insertMessage(actor, conversation.id, { role: "tool", content: toolJson(output), toolCallId: call.id, toolName: call.function.name });
@@ -1027,6 +1041,7 @@ export async function decideActions(
   }));
   emit({ type: "conversation", conversation: summary(conversation) });
   const decisions = new Map(input.decisions.map((decision) => [decision.id, decision.approve]));
+  const fence = untrustedToken();
   const variants = new Map(input.decisions.map((decision) => [decision.id, decision.variant]));
   const owner = rows.find((row) => (row.actions ?? []).some((action) => decisions.has(action.id)));
   if (!owner || decisions.size === 0) throw new AssistantError("That action is no longer available.");
@@ -1064,6 +1079,7 @@ export async function decideActions(
       callId: call.id,
       approval: action.name === "save_doc" ? approvalFor(action) : undefined,
       source: options.headless ? "email" : undefined,
+      fence,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {

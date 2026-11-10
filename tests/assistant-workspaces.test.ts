@@ -15,13 +15,13 @@ import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import type { WorkflowDefinition } from "@/lib/workflows/definition";
 import { createWorkflow, decideApproval, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, messageText, resetDatabase } from "./helpers";
 
 type Labelled = { workspace: { id: string; name: string }; note?: string; current?: boolean; error?: string };
 type Found = Labelled & { companies?: { id: string; name: string }[]; data?: { id: string; title?: string }[]; company?: { id: string; name: string } };
 
 function gateway(replies: { content?: string; calls?: { id: string; name: string; args: Record<string, unknown> }[] }[]) {
-  const requests: { messages: { role: string; content: string; tool_call_id?: string }[]; tools: { function: { name: string; parameters: { properties?: Record<string, unknown> } } }[] }[] = [];
+  const requests: { messages: { role: string; content: unknown; tool_call_id?: string }[]; tools: { function: { name: string; parameters: { properties?: Record<string, unknown> } } }[] }[] = [];
   const fetchImpl = (async (_url: string, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body)));
     const reply = replies.shift() ?? { content: "Done." };
@@ -205,12 +205,12 @@ describe("assistant across workspaces", () => {
     }
     assert.ok(!events.some((event) => event.type === "actions"));
     assert.equal(fake.requests.length, 2);
-    const system = fake.requests[0].messages[0].content;
+    const system = messageText(fake.requests[0].messages[0].content);
     assert.match(system, /The user is working in Eclipse\. They are also in Mark Ridgeon\./);
     const searchTool = fake.requests[0].tools.find((tool) => tool.function.name === "search_records");
     assert.ok(searchTool?.function.parameters.properties?.workspace);
     const result = fake.requests[1].messages.find((message) => message.role === "tool" && message.tool_call_id === "call_cross");
-    assert.match(result?.content ?? "", /That company is in Mark Ridgeon/);
+    assert.match(messageText(result?.content), /That company is in Mark Ridgeon/);
     assert.equal((await getCompany(ridgeon, consulting)).name, "Acme Consulting");
   });
 
@@ -219,13 +219,13 @@ describe("assistant across workspaces", () => {
       { id: eclipse.workspaceId, name: "Eclipse" },
       { id: ridgeon.workspaceId, name: "Mark Ridgeon" },
     ];
-    const prompt = systemPrompt(eclipse, { webSearch: false, workspaces });
+    const prompt = systemPrompt(eclipse, { workspaces });
     assert.match(prompt, /# Workspaces\nThe user is working in Eclipse\. They are also in Mark Ridgeon\./);
     assert.match(prompt, /pass workspace to one of get_overview, search_records/);
     assert.match(prompt, /Changes only happen in Eclipse/);
     assert.doesNotMatch(prompt, /[\u2013\u2014]/);
-    assert.doesNotMatch(systemPrompt(eclipse, { webSearch: false, workspaces: workspaces.slice(0, 1) }), /# Workspaces/);
-    assert.doesNotMatch(systemPrompt(priya, { webSearch: false }), /# Workspaces/);
+    assert.doesNotMatch(systemPrompt(eclipse, { workspaces: workspaces.slice(0, 1) }), /# Workspaces/);
+    assert.doesNotMatch(systemPrompt(priya), /# Workspaces/);
   });
 
   it("reads the pipeline, boards, quiet relationships and overview of another workspace", async () => {

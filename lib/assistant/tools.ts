@@ -159,6 +159,21 @@ import { recallRead, recallSearch } from "@/lib/recall/live";
 import { siteOrigin } from "@/lib/site-url";
 import { toolSource, withToolSource, type AssistantSource } from "@/lib/assistant/source";
 import { AGENT_MAILBOX, agentMailThread, isAgentMail, searchAgentMail, sendFromAgentMailbox } from "@/lib/agent-mail/store";
+import {
+  CHANGES_GUIDE,
+  coldEmailGuide,
+  DOCS_GUIDE,
+  eclipseGuideText,
+  GUIDE_SUMMARIES,
+  GUIDE_TOPICS,
+  LINEAR_GUIDE,
+  PROPOSALS_GUIDE,
+  READER_GUIDE,
+  RECALL_GUIDE,
+  WORKFLOWS_RULES,
+  type GuideTopic,
+} from "@/lib/assistant/guides";
+import { fenceUntrusted } from "@/lib/assistant/untrusted";
 
 type Args = Record<string, unknown>;
 type JsonSchema = Record<string, unknown>;
@@ -857,7 +872,7 @@ const TASK_FIELDS = {
     enum: REMINDER_OPTIONS.map((option) => option.minutes),
     description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080. Needs a due date.",
   },
-  priority: { type: "string", enum: ["low", "normal", "high"] },
+  priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent it is: low, normal or high. New tasks are normal unless set." },
   ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
 };
 
@@ -867,43 +882,43 @@ const LIFECYCLE_PARAM = {
 };
 
 const COMPANY_FIELDS = {
-  name: { type: "string" },
+  name: { type: "string", description: "The company's name, for example \"Acme Ltd\"." },
   domain: { type: "string", description: "Website domain such as acme.com." },
-  website: { type: "string" },
-  description: { type: "string" },
-  industry: { type: "string" },
-  sizeCategory: { type: "string" },
+  website: { type: "string", description: "Full website address, for example https://acme.com." },
+  description: { type: "string", description: "A short description of what the company does." },
+  industry: { type: "string", description: "The company's industry, for example \"B2B SaaS\" or \"Marketing agency\"." },
+  sizeCategory: { type: "string", description: "Headcount band as free text, for example \"11-50\" or \"51-200\"." },
   lifecycle: LIFECYCLE_PARAM,
   ownerId: { type: "string", description: "Team member id from list_team_members." },
-  source: { type: "string" },
+  source: { type: "string", description: "Where the company came from, for example \"Referral\", \"LinkedIn\" or \"Event\"." },
 };
 
 const CONTACT_FIELDS = {
-  firstName: { type: "string" },
-  lastName: { type: "string" },
-  email: { type: "string" },
-  phone: { type: "string" },
-  jobTitle: { type: "string" },
-  linkedinUrl: { type: "string" },
+  firstName: { type: "string", description: "First name." },
+  lastName: { type: "string", description: "Last name." },
+  email: { type: "string", description: "Work email address, for example jane@acme.com." },
+  phone: { type: "string", description: "Phone number, ideally with the country code, for example +44 7700 900123." },
+  jobTitle: { type: "string", description: "Their current job title, for example \"Head of Marketing\"." },
+  linkedinUrl: { type: "string", description: "LinkedIn profile link, linkedin.com/in/<name>." },
   location: { type: "string", description: "Where they are, such as Bristol, England." },
   salesNavigatorUrl: { type: "string", description: "Sales Navigator lead link, linkedin.com/sales/lead/<id>." },
   companyId: { type: "string", description: "Company id to link the person to." },
-  ownerId: { type: "string" },
-  source: { type: "string" },
-  notes: { type: "string" },
+  ownerId: { type: "string", description: "Team member id from list_team_members." },
+  source: { type: "string", description: "Where the person came from, for example \"Referral\", \"LinkedIn\" or \"Event\"." },
+  notes: { type: "string", description: "Free text notes about the person." },
 };
 
 const OPPORTUNITY_FIELDS = {
-  name: { type: "string" },
+  name: { type: "string", description: "The deal's name, for example \"Acme content retainer\"." },
   stageId: { type: "string", description: "Stage id from get_pipeline." },
-  status: { type: "string", enum: [...OPPORTUNITY_STATUSES] },
-  value: { type: "number" },
+  status: { type: "string", enum: [...OPPORTUNITY_STATUSES], description: `Deal status: ${OPPORTUNITY_STATUSES.join(", ")}.` },
+  value: { type: "number", description: "Deal value in the deal's currency, as a plain number, for example 12000." },
   currency: { type: "string", description: "Three-letter currency code. Defaults to GBP." },
-  probability: { type: "integer", minimum: 0, maximum: 100 },
+  probability: { type: "integer", minimum: 0, maximum: 100, description: "Chance of winning, 0 to 100." },
   expectedCloseDate: { type: "string", description: "YYYY-MM-DD." },
   primaryContactId: { type: "string", description: "A contact who works at the company." },
-  ownerId: { type: "string" },
-  source: { type: "string" },
+  ownerId: { type: "string", description: "Team member id from list_team_members." },
+  source: { type: "string", description: "Where the deal came from, for example \"Referral\" or \"Inbound\"." },
 };
 
 const BULK_COMPANY_KEYS = ["ownerId", "lifecycle", "industry", "sizeCategory", "source"];
@@ -999,40 +1014,52 @@ const BLOCK_ITEM = {
   type: "object",
   properties: {
     id: { type: "string", description: "Keep existing ids; new blocks need a new short id such as b20." },
-    type: { type: "string", enum: ["tab", "cover", "section", "pricing", "terms", "video", "image", "documents", "steps", "booking", "faq", "quote", "team", "embed"] },
-    label: { type: "string", description: "tab" },
-    title: { type: "string", description: "cover" },
-    subtitle: { type: "string", description: "cover" },
-    image: { type: "string", description: "cover image url" },
-    heading: { type: "string" },
-    body: { type: "string", description: "section and terms" },
-    intro: { type: "string", description: "pricing, documents, steps and booking" },
-    linkLabel: { type: "string", description: "terms" },
-    linkUrl: { type: "string", description: "terms" },
-    url: { type: "string", description: "video, image and embed" },
-    caption: { type: "string", description: "video, image and embed" },
-    quote: { type: "string", description: "quote" },
-    name: { type: "string", description: "quote" },
-    role: { type: "string", description: "quote" },
+    type: {
+      type: "string",
+      enum: ["tab", "cover", "section", "pricing", "terms", "video", "image", "documents", "steps", "booking", "faq", "quote", "team", "embed"],
+      description: "The kind of block. A tab block starts a new tab, and the blocks after it sit in that tab.",
+    },
+    label: { type: "string", description: "For a tab: the tab's name, for example \"Overview\"." },
+    title: { type: "string", description: "For a cover: the main title." },
+    subtitle: { type: "string", description: "For a cover: the line under the title." },
+    image: { type: "string", description: "For a cover: the image url, from add_proposal_image." },
+    heading: { type: "string", description: "The block's heading, shown above it." },
+    body: { type: "string", description: "For a section or terms: the text, in Markdown." },
+    intro: { type: "string", description: "For pricing, documents, steps and booking: a short line above the block." },
+    linkLabel: { type: "string", description: "For terms: the text of the link to the full terms." },
+    linkUrl: { type: "string", description: "For terms: the address of the full terms." },
+    url: { type: "string", description: "For a video, image or embed: its address. Images come from add_proposal_image." },
+    caption: { type: "string", description: "For a video, image or embed: a caption under it." },
+    quote: { type: "string", description: "For a quote: the quoted words, exactly as the user gave them." },
+    name: { type: "string", description: "For a quote: who said it." },
+    role: { type: "string", description: "For a quote: their role and company." },
     items: {
       type: "array",
       description: "documents: [{id}] of Knowledge items. faq: [{question, answer}]. steps: [{title, side (client or us), dueInDays}] (template defaults only).",
       items: {
         type: "object",
         properties: {
-          id: { type: "string" },
-          question: { type: "string" },
-          answer: { type: "string" },
-          title: { type: "string" },
-          side: { type: "string", enum: ["client", "us"] },
-          dueInDays: { type: "integer" },
+          id: { type: "string", description: "For documents: a Knowledge item id from list_knowledge or search_knowledge." },
+          question: { type: "string", description: "For faq: the question." },
+          answer: { type: "string", description: "For faq: the answer." },
+          title: { type: "string", description: "For steps: what happens in this step." },
+          side: { type: "string", enum: ["client", "us"], description: "For steps: who does it, client or us." },
+          dueInDays: { type: "integer", description: "For steps: how many days after the plan is set up the step is due." },
         },
       },
     },
     people: {
       type: "array",
-      description: "team",
-      items: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, email: { type: "string" }, photo: { type: "string" } } },
+      description: "For a team block: the people to show.",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Their full name." },
+          role: { type: "string", description: "Their role, for example \"Account director\"." },
+          email: { type: "string", description: "Their email address." },
+          photo: { type: "string", description: "Photo url, from add_proposal_image." },
+        },
+      },
     },
   },
   required: ["id", "type"],
@@ -1067,6 +1094,187 @@ export const WORKSPACE_READ_TOOLS: ReadonlySet<string> = new Set([
 export const MOVE_TOOL = "move_records_to_workspace";
 
 const MULTI_WORKSPACE_TOOLS: ReadonlySet<string> = new Set([MOVE_TOOL]);
+
+export const CORE_TOOLS: readonly string[] = [
+  "get_overview",
+  "search_records",
+  "list_companies",
+  "get_company",
+  "update_company",
+  "list_contacts",
+  "get_contact",
+  "update_contact",
+  "list_opportunities",
+  "search_email",
+  "get_email_thread",
+  "send_email",
+  "list_tasks",
+  "create_task",
+  "update_task",
+  "list_activities",
+  "log_activity",
+  "read_chat_file",
+  "recall",
+  "get_daily_brief",
+  "guide",
+  "find_tools",
+];
+
+export const TOOL_DOMAINS = {
+  records: {
+    summary: "creating, merging, tagging and archiving records, relationship labels, contact details, verify_email, team members, undo, activities and transcripts",
+    tools: [
+      "create_company",
+      "merge_companies",
+      "set_relationship",
+      "list_quiet_relationships",
+      "create_contact",
+      "merge_contacts",
+      "find_contact_details",
+      "verify_email",
+      "archive_records",
+      "tag_records",
+      "list_tags",
+      "list_team_members",
+      "list_recent_changes",
+      "undo_change",
+      "archive_activity",
+      "update_activity",
+      "get_call_transcript",
+    ],
+  },
+  mail: {
+    summary: "Capture, filing, attachments, mail_action, sending addresses, sync status, templates, drafts, scheduled emails and cold_email_check",
+    tools: [
+      "get_capture",
+      "file_conversation",
+      "list_email_attachments",
+      "mail_action",
+      "get_mail_sync_status",
+      "list_email_senders",
+      "list_email_templates",
+      "save_email_template",
+      "save_email_draft",
+      "change_scheduled_email",
+      "cold_email_check",
+    ],
+  },
+  pipeline: {
+    summary: "the pipeline, deals, reports, stalled deals and boards",
+    tools: [
+      "get_pipeline",
+      "get_deal_history",
+      "pipeline_report",
+      "stalled_deals",
+      "create_opportunity",
+      "update_opportunity",
+      "list_boards",
+      "get_board",
+      "add_to_board",
+      "create_board",
+      "update_board",
+      "set_board_stages",
+      "delete_board",
+      "move_card",
+      "remove_from_board",
+    ],
+  },
+  proposals: {
+    summary: "proposals, NDAs, products and proposal templates",
+    tools: [
+      "list_proposals",
+      "get_proposal",
+      "list_products",
+      "list_proposal_templates",
+      "create_proposal",
+      "update_proposal",
+      "update_proposal_steps",
+      "send_proposal",
+      "revise_proposal",
+      "withdraw_proposal",
+      "create_proposal_template",
+      "update_proposal_template",
+      "add_proposal_image",
+      "save_product",
+    ],
+  },
+  workflows: {
+    summary: "workflows, their runs, tests and approvals",
+    tools: [
+      "list_workflows",
+      "get_workflow",
+      "get_workflow_run",
+      "list_workflow_approvals",
+      "test_workflow",
+      "create_workflow",
+      "update_workflow",
+      "set_workflow_status",
+      "share_workflow",
+      "delete_workflow",
+      "run_workflow",
+      "decide_workflow_approval",
+    ],
+  },
+  calendar: {
+    summary: "calendar events and meeting invites",
+    tools: ["list_calendar_events", "create_meeting_invite", "move_meeting", "cancel_meeting", "respond_to_meeting"],
+  },
+  knowledge: {
+    summary: "Knowledge and Docs",
+    tools: ["search_knowledge", "read_knowledge", "list_knowledge", "map_website", "add_to_knowledge", "remove_knowledge", "save_doc"],
+  },
+  eclipse: {
+    summary: "the Eclipse app and its docs",
+    tools: ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action", "eclipse_docs"],
+  },
+  linear: {
+    summary: "Linear issues",
+    tools: ["linear_search_issues", "linear_get_issue", "linear_create_issue", "linear_update_issue"],
+  },
+  reader_recall: {
+    summary: "the user's Readwise Reader and Recall",
+    tools: ["reader_list", "reader_read", "recall_search", "recall_read"],
+  },
+  web: {
+    summary: "read_web_page, check_web and social_lookup",
+    tools: ["read_web_page", "check_web", "social_lookup"],
+  },
+  settings: {
+    summary: "settings, remember, run_learning and the watchlist",
+    tools: ["get_settings", "remember", "run_learning", "list_watchlist", "update_watchlist"],
+  },
+  workspace: {
+    summary: "moving or copying records to another workspace",
+    tools: [MOVE_TOOL],
+  },
+} satisfies Record<string, { summary: string; tools: string[] }>;
+
+export type ToolDomain = keyof typeof TOOL_DOMAINS;
+
+export const TOOL_DOMAIN_NAMES = Object.keys(TOOL_DOMAINS) as ToolDomain[];
+
+const DOMAIN_OF = new Map<string, ToolDomain>(TOOL_DOMAIN_NAMES.flatMap((domain) => TOOL_DOMAINS[domain].tools.map((name) => [name, domain] as const)));
+
+function firstSentence(text: string) {
+  return text.split(/(?<=\.)\s/)[0] ?? text;
+}
+
+async function coldEmailPlaybook(actor: UserActor) {
+  const [page, proof, brand] = await Promise.all([getBookingPage(actor).catch(() => null), listProof(actor), brandOrEmpty(actor)]);
+  const booking = page?.exists && page.enabled ? bookingUrl(page.slug) : null;
+  const owner = actor.workspaceName || "This workspace";
+  return {
+    playbook: brand.playbook ? playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl: booking }, brand.playbook) : null,
+    ...(brand.playbook
+      ? {}
+      : {
+          playbookNote: `${owner} has no cold email playbook yet (Settings, Brand). Write from your evidence and the brand profile, keep to the rules for first emails in this guide, and run cold_email_check.`,
+        }),
+    outreachBrief: brand.outreachBrief || null,
+    proofList: proofListFor(proof),
+    ...(proof.length === 0 ? { proofNote: "The proof list is empty, so there's no client proof to use yet. Use a finding or something made for them. Proof is added in Settings, Knowledge." } : {}),
+  };
+}
 
 const CROSS_WORKSPACE_ARGS: Record<string, string[]> = { [MOVE_TOOL]: ["companyIds", "contactIds"] };
 
@@ -1279,7 +1487,12 @@ const TOOL_LIST: AssistantTool[] = [
     description: "Search companies, people and opportunities by name, email, domain or company. Use it to find ids before other tools.",
     parameters: {
       type: "object",
-      properties: { query: { type: "string" } },
+      properties: {
+        query: {
+          type: "string",
+          description: "Words to match against names, emails, domains and company names, for example \"Acme\" or \"jane@acme.com\". Up to 25 of each kind come back.",
+        },
+      },
       required: ["query"],
     },
     run: async (actor, args) => {
@@ -1304,26 +1517,26 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string" },
+        query: { type: "string", description: "Words to match against the company's name, domain or industry, for example \"acme\"." },
         lifecycle: LIFECYCLE_PARAM,
         health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "Account health from calls; none means not set yet." },
-        tag: { type: "string" },
+        tag: { type: "string", description: "Only companies with this tag, for example \"partner\". See list_tags." },
         ownerId: { type: "string", description: "Member id, or 'unassigned'." },
         sort: { type: "string", enum: ["name", "domain", "updated", "created", "interaction", "strength", "owner", "fit"], description: "fit sorts by ICP fit, best first; interaction by last contact." },
-        order: { type: "string", enum: ["asc", "desc"] },
+        order: { type: "string", enum: ["asc", "desc"], description: "asc for A to Z or lowest first, desc for Z to A or highest first." },
         ai: {
           type: "array",
           description: "AI field filters, all of which must match. Give field (column name) and one of: is (yes, no or unknown) for yes or no fields; min and/or max for numbers; contains for short text; anyOf (option names) for pick from list. includeUnknown also keeps companies without an answer for ranges and anyOf.",
           items: {
             type: "object",
             properties: {
-              field: { type: "string" },
-              is: { type: "string", enum: ["yes", "no", "unknown"] },
-              min: { type: "number" },
-              max: { type: "number" },
-              contains: { type: "string" },
-              anyOf: { type: "array", items: { type: "string" } },
-              includeUnknown: { type: "boolean" },
+              field: { type: "string", description: "The AI field's column name, as in aiFields." },
+              is: { type: "string", enum: ["yes", "no", "unknown"], description: "For a yes or no field: the answer to match." },
+              min: { type: "number", description: "For a number field: the lowest value to keep." },
+              max: { type: "number", description: "For a number field: the highest value to keep." },
+              contains: { type: "string", description: "For a short text field: words the answer must contain." },
+              anyOf: { type: "array", items: { type: "string" }, description: "For a pick from list field: keep companies with any of these option names." },
+              includeUnknown: { type: "boolean", description: "Also keep companies with no answer, for min, max and anyOf." },
             },
             required: ["field"],
           },
@@ -1407,10 +1620,10 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string" },
-        companyId: { type: "string" },
-        tag: { type: "string" },
-        ownerId: { type: "string" },
+        query: { type: "string", description: "Words to match against the person's name, email, job title, phone or company name, for example \"Priya\" or \"head of marketing\"." },
+        companyId: { type: "string", description: "Only people at this company, by company id." },
+        tag: { type: "string", description: "Only people with this tag. See list_tags." },
+        ownerId: { type: "string", description: "Only people owned by this team member, by id from list_team_members." },
         limit: limitParam,
         offset: offsetParam,
       },
@@ -1465,10 +1678,14 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         mine: { type: "boolean", description: "Only the user's own tasks: assigned to them or unassigned. Use for \"my tasks\"." },
-        view: { type: "string", enum: TASK_VIEWS.filter((view) => view !== "none") },
-        query: { type: "string" },
-        companyId: { type: "string" },
-        contactId: { type: "string" },
+        view: {
+          type: "string",
+          enum: TASK_VIEWS.filter((view) => view !== "none"),
+          description: "all (every open task, the default), overdue, today (due today), upcoming (due later) or completed.",
+        },
+        query: { type: "string", description: "Words to match against the task's title, detail or company name, for example \"proposal\"." },
+        companyId: { type: "string", description: "Only tasks on this company, by company id." },
+        contactId: { type: "string", description: "Only tasks on this person, by contact id." },
         limit: { ...limitParam, description: "How many to return, up to 100. Defaults to 100." },
         offset: offsetParam,
       },
@@ -1701,13 +1918,6 @@ const TOOL_LIST: AssistantTool[] = [
     run: async (actor) => ({ approvals: await listApprovals(actor) }),
   },
   {
-    name: "workflow_guide",
-    label: "Reading the workflow guide",
-    description: "How a workflow definition is written: every trigger and step type, their settings and the {{variables}} each one gives. Read it before create_workflow or update_workflow with a definition.",
-    parameters: { type: "object", properties: {} },
-    run: async () => ({ guide: WORKFLOW_GUIDE }),
-  },
-  {
     name: "test_workflow",
     label: "Testing a workflow",
     description:
@@ -1716,7 +1926,7 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         workflowId: idParam("Workflow id."),
-        recordType: { type: "string", enum: ["company", "contact"] },
+        recordType: { type: "string", enum: ["company", "contact"], description: "Whether recordId is a company or a contact. Defaults to company." },
         recordId: { type: "string", description: "Company or contact id. Not needed for schedule triggers." },
       },
       required: ["workflowId"],
@@ -1739,9 +1949,9 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string" },
-        companyId: { type: "string" },
-        status: { type: "string", enum: [...OPPORTUNITY_STATUSES] },
+        query: { type: "string", description: "Words to match against the deal's name, its company or its stage, for example \"retainer\"." },
+        companyId: { type: "string", description: "Only deals and cards for this company, by company id." },
+        status: { type: "string", enum: [...OPPORTUNITY_STATUSES], description: `Only deals with this status: ${OPPORTUNITY_STATUSES.join(", ")}.` },
         limit: limitParam,
         offset: offsetParam,
       },
@@ -1764,10 +1974,10 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string" },
-        companyId: { type: "string" },
-        contactId: { type: "string" },
-        type: { type: "string", enum: [...ACTIVITY_TYPES] },
+        query: { type: "string", description: "Words to match against the activity's title, text or company name, for example \"pricing\"." },
+        companyId: { type: "string", description: "Only activity on this company, by company id." },
+        contactId: { type: "string", description: "Only activity with this person, by contact id." },
+        type: { type: "string", enum: [...ACTIVITY_TYPES], description: `Only this kind of activity: ${ACTIVITY_TYPES.join(", ")}.` },
         limit: limitParam,
         offset: offsetParam,
       },
@@ -2006,7 +2216,7 @@ const TOOL_LIST: AssistantTool[] = [
           description: "scheduled lists every email waiting to send later (Mail's Scheduled view), soonest first, with recipients, subject, message, files, send time and any send error, and ids for change_scheduled_email. subscriptions lists newsletter and bulk senders with open counts, for mail_action unsubscribe, keep, research or block. research returns research mail with its text. The other options don't apply to these three.",
         },
         days: { type: "integer", minimum: 1, maximum: 365, description: "For subscriptions, the window for counts and suggestions (default 90; 3 months is 90). For research, how many days back (default 1)." },
-        limit: { type: "integer", minimum: 1, maximum: 50 },
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "How many emails to return, up to 50. Defaults to 20." },
         mailbox: {
           type: "string",
           enum: [AGENT_MAILBOX],
@@ -2124,7 +2334,11 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         emailIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 50, description: "Email ids from search_email, for the conversation actions." },
         senders: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 50, description: "For unsubscribe, keep, research and block: addresses or @domains from search_email folder subscriptions." },
-        action: { type: "string", enum: [...CONVERSATION_ACTIONS, ...SENDER_TOOL_ACTIONS] },
+        action: {
+          type: "string",
+          enum: [...CONVERSATION_ACTIONS, ...SENDER_TOOL_ACTIONS],
+          description: `With emailIds: ${CONVERSATION_ACTIONS.join(", ")}. With senders: ${SENDER_TOOL_ACTIONS.join(", ")}.`,
+        },
         existingMail: { type: "string", enum: ["archive", "trash", "leave"], description: "For unsubscribe and block: what to do with mail already received from them. Default archive." },
         until: { type: "string", description: "For snooze and remind_if_no_reply: YYYY-MM-DDTHH:mm London time." },
         summary: { type: "string", description: "Which emails or senders these are, in a few words, for the approval card (for example 3 newsletters from Substack)." },
@@ -2203,7 +2417,10 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_quiet_relationships",
     label: "Finding quiet relationships",
     description: "Every company with no interaction in the last N days (default 21, up to 100 companies). get_overview already includes the 25 quietest.",
-    parameters: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 3650 } } },
+    parameters: {
+      type: "object",
+      properties: { days: { type: "integer", minimum: 1, maximum: 3650, description: "How many days without any interaction counts as quiet. Defaults to 21." } },
+    },
     run: async (actor, args) => ({ companies: await findStaleRelationships(actor, int(args.days, 21, 1, 3650), 100) }),
   },
   {
@@ -2237,10 +2454,10 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         id: idParam("Template id from list_email_templates, to update or archive."),
-        name: { type: "string" },
-        subject: { type: "string" },
-        body: { type: "string" },
-        tags: { type: "array", items: { type: "string" } },
+        name: { type: "string", description: "The template's name in the list, for example \"Follow-up after demo\"." },
+        subject: { type: "string", description: "The email subject. Tokens like {{first_name}} work here too." },
+        body: { type: "string", description: "The message as plain text, with tokens like {{first_name}} where they fit." },
+        tags: { type: "array", items: { type: "string" }, description: "Tags to group the template by, for example [\"follow-up\"]. Replaces the existing tags." },
         archived: { type: "boolean", description: "True archives the template. Only with id, and on its own without other changes." },
       },
     },
@@ -2295,12 +2512,13 @@ const TOOL_LIST: AssistantTool[] = [
         about: { type: "string", description: "Who or what the questions are about, such as \"Pulse, pulse.co.uk\" or \"Jane Doe, CMO at Pulse\". Names, job titles and websites only." },
         questions: {
           type: "array",
+          description: "The questions to check, up to 20, all about the same company or person.",
           items: {
             type: "object",
             properties: {
               key: { type: "string", description: "Short name for the answer, such as has_funding." },
-              type: { type: "string", enum: ["yes_no", "choice", "score"] },
-              question: { type: "string" },
+              type: { type: "string", enum: ["yes_no", "choice", "score"], description: "yes_no gives how likely it is true (0 to 100), choice picks one of options, score picks a level from options." },
+              question: { type: "string", description: "The question in plain words, for example \"Has Pulse raised funding in the last 12 months?\"." },
               options: { type: "array", items: { type: "string" }, description: "choice: the options. score: 2 to 10 levels, lowest first." },
             },
             required: ["key", "type", "question"],
@@ -2321,7 +2539,11 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         query: { type: "string", description: "What to look for, in plain words." },
         companyId: idParam("Only this company's knowledge."),
-        scope: { type: "string", enum: ["all", "company", "business"] },
+        scope: {
+          type: "string",
+          enum: ["all", "company", "business"],
+          description: "all searches everything (the default), company searches the companyId's items, business searches only the workspace's own material and leaves Docs out.",
+        },
         withBusiness: { type: "boolean", description: "With companyId, also search the workspace's own material." },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "How many passages to return, up to 100. Defaults to 10. Ask for more when a question needs a lot of one document." },
         docs: { type: "boolean", description: "Also search Docs. Defaults to true; false searches Knowledge alone." },
@@ -2367,7 +2589,7 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         itemId: idParam("Knowledge item id."),
         docId: idParam("Doc id, from the docs in search_knowledge or a doc link."),
-        offset: { type: "integer", minimum: 0 },
+        offset: { type: "integer", minimum: 0, description: "Character to start reading from: 0, the offset a search_knowledge result gave, or the last nextOffset." },
       },
     },
     run: async (actor, args) => {
@@ -2501,7 +2723,10 @@ const TOOL_LIST: AssistantTool[] = [
       "Read the text of a file the user attached in this chat, by its chat file id, 100,000 characters at a time. Works for PDF, Word, PowerPoint, Excel, text, CSV and HTML files. Start at offset 0 and pass nextOffset to keep reading. To read, review or check a whole file, keep going until nextOffset is null before answering. Images can't be seen: the result says so.",
     parameters: {
       type: "object",
-      properties: { fileId: idParam("Chat file id from the note on the user's message."), offset: { type: "integer", minimum: 0 } },
+      properties: {
+        fileId: idParam("Chat file id from the note on the user's message."),
+        offset: { type: "integer", minimum: 0, description: "Character to start reading from: 0 at first, then the last nextOffset." },
+      },
       required: ["fileId"],
     },
     run: async (actor, args) => readChatFile(actor, required(args.fileId, "A chat file id"), int(args.offset, 0, 0, CONTENT_LIMIT)),
@@ -2555,7 +2780,14 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Finding an Eclipse tool",
     description:
       "Search the Eclipse app's own tools (over 300, through its MCP server) by what you want to do, for example 'list clients', 'article status', 'geo visibility trends', 'keyword rankings' or 'create canvas'. Returns matching tool names, whether each is a read or needs approval, their descriptions and exact inputs. Always find a tool here before calling it.",
-    parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 20 } }, required: ["query"] },
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What you want to do in Eclipse, in plain words, for example \"list clients\" or \"geo visibility trends\"." },
+        limit: { type: "integer", minimum: 1, maximum: 20, description: "How many tools to return, up to 20. Defaults to 8." },
+      },
+      required: ["query"],
+    },
     run: async (_actor, args) =>
       findEclipseTools(required(args.query, "What to look for"), { limit: typeof args.limit === "number" ? args.limit : 8 }).catch((error: Error) => ({
         error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.",
@@ -2569,7 +2801,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        tool: { type: "string" },
+        tool: { type: "string", description: "The exact Eclipse tool name from eclipse_tools, for example list_clients." },
         argumentsJson: { type: "string", description: 'The tool\'s arguments as a JSON object, for example {"canvasId": 12}. Use "{}" when it takes none.' },
       },
       required: ["tool", "argumentsJson"],
@@ -2588,7 +2820,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        tool: { type: "string" },
+        tool: { type: "string", description: "The exact Eclipse tool name from eclipse_tools, one that eclipse_tools marks as needing approval." },
         argumentsJson: { type: "string", description: 'The tool\'s arguments as a JSON object, for example {"canvasId": 12, "question": "..."}. Use "{}" when it takes none.' },
         summary: { type: "string", description: "One plain sentence for the approval card on what this does and any cost." },
       },
@@ -2615,25 +2847,65 @@ const TOOL_LIST: AssistantTool[] = [
     },
   },
   {
-    name: "cold_email_playbook",
-    label: "Reading the cold email playbook",
-    description:
-      "How to research a prospect and write a first email to someone who doesn't know the user: checks before research, research steps and tools, the three angles (client proof from the proof list, a finding, or something made for them) and when not to send, how to use client proof, the rules (50 to 90 words, no link, one figure, one easy question, no meeting ask, no invented facts), the follow-up, replies, measuring, examples, and the outreach brief of what may and may not be claimed, and the proof list of client results, which the user keeps and which can be used as it stands without checking it against anything. Read it before writing any first email to a prospect.",
-    parameters: { type: "object", properties: {} },
-    run: async (actor) => {
-      const [page, proof, brand] = await Promise.all([getBookingPage(actor).catch(() => null), listProof(actor), brandOrEmpty(actor)]);
-      const booking = page?.exists && page.enabled ? bookingUrl(page.slug) : null;
-      const owner = actor.workspaceName || "This workspace";
+    name: "guide",
+    label: "Reading a guide",
+    description: `A guide to one kind of job in Orbit. Read the right one before that job: ${GUIDE_TOPICS.map((topic) => `${topic} (${GUIDE_SUMMARIES[topic]})`).join("; ")}. Each guide is written for you and names the find_tools domain its tools are in.`,
+    parameters: {
+      type: "object",
+      properties: {
+        topic: {
+          type: "string",
+          enum: [...GUIDE_TOPICS],
+          description: "Which guide to read, for example cold_email before a first email to a prospect or workflows before writing a workflow definition.",
+        },
+      },
+      required: ["topic"],
+    },
+    run: async (actor, args) => {
+      const topic = oneOf(args.topic, GUIDE_TOPICS);
+      if (!topic) return { error: `Choose a topic: ${GUIDE_TOPICS.join(", ")}.`, field: "topic" };
+      if (topic === "cold_email") return { topic, guide: coldEmailGuide(actor.workspaceName), ...(await coldEmailPlaybook(actor)) };
+      if (topic === "workflows") return { topic, guide: `${WORKFLOWS_RULES}\n${WORKFLOW_GUIDE}` };
+      if (topic === "eclipse") return { topic, guide: eclipseGuideText(actor.workspaceName) };
+      const texts: Record<Exclude<GuideTopic, "cold_email" | "workflows" | "eclipse">, string> = {
+        changes: CHANGES_GUIDE,
+        proposals: PROPOSALS_GUIDE,
+        linear: LINEAR_GUIDE,
+        docs: DOCS_GUIDE,
+        reader: READER_GUIDE,
+        recall: RECALL_GUIDE,
+      };
+      return { topic, guide: texts[topic] };
+    },
+  },
+  {
+    name: "find_tools",
+    label: "Loading tools",
+    description: `Load the tools for one or more areas so you can call them. Only the main tools are loaded at the start; the rest are grouped by area: ${TOOL_DOMAIN_NAMES.map((domain) => `${domain} (${TOOL_DOMAINS[domain].summary})`).join("; ")}. Loaded tools stay available for the rest of the conversation. Load every area a task needs in one call.`,
+    parameters: {
+      type: "object",
+      properties: {
+        domains: {
+          type: "array",
+          items: { type: "string", enum: [...TOOL_DOMAIN_NAMES] },
+          minItems: 1,
+          description: "The areas to load, for example [\"proposals\"] or [\"web\", \"knowledge\"].",
+        },
+      },
+      required: ["domains"],
+    },
+    run: async (actor, args) => {
+      const wanted = strings(args.domains).map((domain) => oneOf(domain, TOOL_DOMAIN_NAMES)).filter((domain): domain is ToolDomain => Boolean(domain));
+      if (wanted.length === 0) return { error: `Choose at least one area: ${TOOL_DOMAIN_NAMES.join(", ")}.`, field: "domains" };
+      const multiWorkspace = (await workspaceActors(actor).catch(() => [actor])).length > 1;
       return {
-        playbook: brand.playbook ? playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl: booking }, brand.playbook) : null,
-        ...(brand.playbook
-          ? {}
-          : {
-              playbookNote: `${owner} has no cold email playbook yet (Settings, Brand). Write from your evidence and the brand profile, keep to the rules for first emails in your instructions, and run cold_email_check.`,
-            }),
-        outreachBrief: brand.outreachBrief || null,
-        proofList: proofListFor(proof),
-        ...(proof.length === 0 ? { proofNote: "The proof list is empty, so there's no client proof to use yet. Use a finding or something made for them. Proof is added in Settings, Knowledge." } : {}),
+        loaded: [...new Set(wanted)].map((domain) => ({
+          domain,
+          tools: TOOL_DOMAINS[domain].tools
+            .filter((name) => multiWorkspace || !MULTI_WORKSPACE_TOOLS.has(name))
+            .map((name) => ({ name, description: firstSentence(TOOL_LIST.find((tool) => tool.name === name)?.description ?? "") })),
+        })),
+        note: "These tools are now loaded, with their full inputs, from your next step for the rest of this conversation.",
       };
     },
   },
@@ -2641,14 +2913,15 @@ const TOOL_LIST: AssistantTool[] = [
     name: "cold_email_check",
     label: "Checking the email",
     description:
-      "Check a draft first email to a prospect against cold_email_playbook before proposing it: value as well as format, that every figure appears in your evidence, and that any client proof comes from the proof list, without naming a described only client. Pass all your evidence (each fact with its source, including the exact figures you quote) and what their company already offers. For each proof entry, pass an evidence item with kind proof and its id from proofList as source; the check reads the entry from the list. Fix every item in fixes and check again, at most twice. It spends a little on model calls.",
+      "Check a draft first email to a prospect against the cold_email guide before proposing it: value as well as format, that every figure appears in your evidence, and that any client proof comes from the proof list, without naming a described only client. Pass all your evidence (each fact with its source, including the exact figures you quote) and what their company already offers. For each proof entry, pass an evidence item with kind proof and its id from proofList as source; the check reads the entry from the list. Fix every item in fixes and check again, at most twice. It spends a little on model calls.",
     parameters: {
       type: "object",
       properties: {
-        subject: { type: "string" },
+        subject: { type: "string", description: "The draft's subject line." },
         body: { type: "string", description: "The whole email body, including greeting and sign-off." },
         evidence: {
           type: "array",
+          description: "Every fact the email relies on, each with its source, including the exact figures quoted and one item per proof entry used.",
           items: {
             type: "object",
             properties: {
@@ -2685,7 +2958,11 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        kind: { type: "string", enum: ["linkedin_profile", "linkedin_company", "linkedin_posts", "x_profile", "x_posts"] },
+        kind: {
+          type: "string",
+          enum: ["linkedin_profile", "linkedin_company", "linkedin_posts", "x_profile", "x_posts"],
+          description: "What to read: a LinkedIn profile, company page or recent posts, or an X profile or recent posts.",
+        },
         url: { type: "string", description: "LinkedIn profile or company link, or an X handle or profile link." },
         contactId: idParam("Use this contact's LinkedIn link."),
         companyId: idParam("Use this company's LinkedIn link."),
@@ -2708,7 +2985,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "eclipse_docs",
     label: "Reading the Eclipse docs",
     description:
-      "The Eclipse product documentation at https://docs.geteclipse.co. Without page it returns the index of every docs page with a one-line description. Pass page (a docs link or path from the index, such as /features/content/planner) to read that page. Use it to understand how an Eclipse feature works before explaining or selling it.",
+      "The Eclipse product documentation at https://docs.geteclipse.co. Without page it returns the index of every docs page with a one-line description. Pass page (a docs link or path from the index, such as /features/content/planner) to read that page. Read it when the user asks how Eclipse works.",
     parameters: {
       type: "object",
       properties: { page: { type: "string", description: "A docs link or path, for example https://docs.geteclipse.co/features/cortex/canvas." } },
@@ -2781,8 +3058,8 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         ...TASK_FIELDS,
-        companyId: { type: "string" },
-        contactId: { type: "string" },
+        companyId: { type: "string", description: "Company id to link the task to." },
+        contactId: { type: "string", description: "Contact id to link the task to." },
         sendToClickUp: { type: "boolean", description: "Defaults to true." },
       },
       required: ["title"],
@@ -2866,11 +3143,11 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        type: { type: "string", enum: ["note", "call", "email"] },
-        companyId: { type: "string" },
-        contactId: { type: "string" },
+        type: { type: "string", enum: ["note", "call", "email"], description: "note, call, or email (only for an email that happened outside Orbit)." },
+        companyId: { type: "string", description: "Company id to log it on." },
+        contactId: { type: "string", description: "Contact id to log it on." },
         title: { type: "string", description: "Subject or call summary line." },
-        body: { type: "string" },
+        body: { type: "string", description: "What happened or what was said, as plain text." },
       },
       required: ["type", "body"],
     },
@@ -2942,7 +3219,7 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         activityId: idParam("Activity id."),
-        type: { type: "string", enum: [...EDITABLE_TYPES] },
+        type: { type: "string", enum: [...EDITABLE_TYPES], description: `The activity's new type: ${EDITABLE_TYPES.join(", ")}.` },
         title: { type: "string", description: "Title, subject or call summary line. Pass null to remove it." },
         body: { type: "string", description: "The text. Pass null to remove it." },
         occurredAt: { type: "string", description: "When it happened: YYYY-MM-DDTHH:mm in London time, or ISO 8601." },
@@ -3039,7 +3316,7 @@ const TOOL_LIST: AssistantTool[] = [
     description: "Add a company.",
     parameters: {
       type: "object",
-      properties: { ...COMPANY_FIELDS, tags: { type: "array", items: { type: "string" } } },
+      properties: { ...COMPANY_FIELDS, tags: { type: "array", items: { type: "string" }, description: "Tags to add, for example [\"partner\"]. Lowercased, up to 20." } },
       required: ["name"],
     },
     describe: (args, name) => ({
@@ -3068,7 +3345,7 @@ const TOOL_LIST: AssistantTool[] = [
         companyIds: { type: "array", items: { type: "string" }, description: `Company ids, to make the same change to many (up to ${BULK_LIMIT}).` },
         ...COMPANY_FIELDS,
         health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "healthy, watch or at_risk; none clears it. Only with companyId." },
-        healthReason: { type: "string" },
+        healthReason: { type: "string", description: "One sentence on why, when setting health by hand." },
       },
     },
     describe: (args, name) => {
@@ -3139,7 +3416,7 @@ const TOOL_LIST: AssistantTool[] = [
     description: "Add a person, optionally linked to a company. Needs an email address, or a first or last name.",
     parameters: {
       type: "object",
-      properties: { ...CONTACT_FIELDS, tags: { type: "array", items: { type: "string" } } },
+      properties: { ...CONTACT_FIELDS, tags: { type: "array", items: { type: "string" }, description: "Tags to add, for example [\"speaker\"]. Lowercased, up to 20." } },
     },
     describe: (args, name) => ({
       title: `Create contact: ${[str(args.firstName), str(args.lastName)].filter(Boolean).join(" ") || str(args.email)}`,
@@ -3394,7 +3671,7 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         contactIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: LOOKUP_MAX, description: "Contact ids." },
-        field: { type: "string", enum: ["email", "linkedin", "phone"] },
+        field: { type: "string", enum: ["email", "linkedin", "phone"], description: "What to look for: a work email, a LinkedIn profile or a phone number." },
       },
       required: ["contactIds", "field"],
     },
@@ -3440,9 +3717,9 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        companyIds: { type: "array", items: { type: "string" } },
-        contactIds: { type: "array", items: { type: "string" } },
-        opportunityIds: { type: "array", items: { type: "string" } },
+        companyIds: { type: "array", items: { type: "string" }, description: "Company ids to archive." },
+        contactIds: { type: "array", items: { type: "string" }, description: "Contact ids to archive." },
+        opportunityIds: { type: "array", items: { type: "string" }, description: "Opportunity ids to archive. Board cards use remove_from_board instead." },
         taskIds: { type: "array", items: { type: "string" }, description: "Task ids from list_tasks." },
       },
     },
@@ -3521,7 +3798,7 @@ const TOOL_LIST: AssistantTool[] = [
         stageId: { type: "string", description: "Stage id from get_board." },
         primaryContactId: { type: "string", description: "A contact who works at the company." },
         expectedCloseDate: { type: "string", description: "Due date, YYYY-MM-DD." },
-        ownerId: { type: "string" },
+        ownerId: { type: "string", description: "Team member id from list_team_members who owns the card." },
       },
       required: ["boardId", "companyId"],
     },
@@ -3550,7 +3827,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        name: { type: "string" },
+        name: { type: "string", description: "The board's name, for example \"Onboarding\"." },
         stages: { type: "array", items: { type: "string" }, description: "Stage names in order. Defaults to To start, In progress, Done." },
         addOnWon: { type: "boolean", description: "Add a company to the first stage when one of its deals is won." },
       },
@@ -3578,7 +3855,11 @@ const TOOL_LIST: AssistantTool[] = [
     description: "Rename a board, or turn adding companies when a deal is won on or off.",
     parameters: {
       type: "object",
-      properties: { boardId: idParam("Board id."), name: { type: "string" }, addOnWon: { type: "boolean" } },
+      properties: {
+        boardId: idParam("Board id."),
+        name: { type: "string", description: "The board's new name." },
+        addOnWon: { type: "boolean", description: "True adds a company to the first stage when one of its deals is won; false stops that." },
+      },
       required: ["boardId"],
     },
     describe: (args, name) => ({
@@ -3606,11 +3887,12 @@ const TOOL_LIST: AssistantTool[] = [
         boardId: { type: "string", description: "Board id. Leave out for the Opportunities pipeline." },
         stages: {
           type: "array",
+          description: "The full stage list in order. Stages left out are removed.",
           items: {
             type: "object",
             properties: {
               id: { type: "string", description: "Existing stage id from get_board or get_pipeline." },
-              name: { type: "string" },
+              name: { type: "string", description: "The stage's name, for example \"Kick-off\"." },
               probability: { type: "integer", minimum: 0, maximum: 100, description: "Opportunities only." },
               isWon: { type: "boolean", description: "Opportunities only." },
               isLost: { type: "boolean", description: "Opportunities only." },
@@ -3664,7 +3946,7 @@ const TOOL_LIST: AssistantTool[] = [
         stageId: { type: "string", description: "Stage id on the same board." },
         expectedCloseDate: { type: "string", description: "Due date, YYYY-MM-DD, or empty to clear." },
         primaryContactId: { type: "string", description: "A contact who works at the company." },
-        ownerId: { type: "string" },
+        ownerId: { type: "string", description: "Team member id from list_team_members who owns the card." },
       },
       required: ["cardId"],
     },
@@ -3700,14 +3982,14 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Creating a workflow",
     write: true,
     description:
-      "Create a workflow for the user, either from a template (a starter template key or a shared workflow id from list_workflows) or from a definition. It starts off; turn it on with set_workflow_status once it looks right. Read workflow_guide before writing a definition.",
+      "Create a workflow for the user, either from a template (a starter template key or a shared workflow id from list_workflows) or from a definition. It starts off; turn it on with set_workflow_status once it looks right. Read the workflows guide before writing a definition.",
     parameters: {
       type: "object",
       properties: {
-        name: { type: "string" },
-        description: { type: "string" },
+        name: { type: "string", description: "The workflow's name, for example \"Follow up after demo calls\". Defaults to the template's name." },
+        description: { type: "string", description: "A sentence on what the workflow does." },
         template: { type: "string", description: "Starter template key or shared workflow id." },
-        definition: { type: "object", description: "{trigger, steps}, in the format workflow_guide describes." },
+        definition: { type: "object", description: "{trigger, steps}, in the format the workflows guide describes." },
       },
     },
     describe: (args) => {
@@ -3738,13 +4020,13 @@ const TOOL_LIST: AssistantTool[] = [
     name: "update_workflow",
     label: "Updating a workflow",
     write: true,
-    description: "Rename a workflow, change its description, or replace its definition (send the whole definition, in the format workflow_guide describes).",
+    description: "Rename a workflow, change its description, or replace its definition (send the whole definition, in the format the workflows guide describes).",
     parameters: {
       type: "object",
       properties: {
         workflowId: idParam("Workflow id."),
-        name: { type: "string" },
-        description: { type: "string" },
+        name: { type: "string", description: "The workflow's new name." },
+        description: { type: "string", description: "A sentence on what the workflow does. An empty string clears it." },
         definition: { type: "object", description: "{trigger, steps}, or {trigger, nodes, edges} as returned by get_workflow." },
       },
       required: ["workflowId"],
@@ -3768,7 +4050,11 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Turning a workflow on or off",
     write: true,
     description: "Turn one of the user's workflows on or off.",
-    parameters: { type: "object", properties: { workflowId: idParam("Workflow id."), on: { type: "boolean" } }, required: ["workflowId", "on"] },
+    parameters: {
+      type: "object",
+      properties: { workflowId: idParam("Workflow id."), on: { type: "boolean", description: "True turns it on, false turns it off." } },
+      required: ["workflowId", "on"],
+    },
     describe: (args, name) => ({ title: `${args.on ? "Turn on" : "Turn off"}: ${name(args.workflowId)}`, lines: [] }),
     run: async (actor, args) => ({
       workflow: workflowSummary(await setWorkflowStatus(actor, required(args.workflowId, "A workflow id"), args.on === true ? "active" : "paused")),
@@ -3779,7 +4065,11 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Sharing a workflow",
     write: true,
     description: "Share one of the user's workflows as a template the whole workspace can copy, or stop sharing it.",
-    parameters: { type: "object", properties: { workflowId: idParam("Workflow id."), shared: { type: "boolean" } }, required: ["workflowId", "shared"] },
+    parameters: {
+      type: "object",
+      properties: { workflowId: idParam("Workflow id."), shared: { type: "boolean", description: "True shares it as a template, false stops sharing it." } },
+      required: ["workflowId", "shared"],
+    },
     describe: (args, name) => ({ title: `${args.shared ? "Share as a template" : "Stop sharing"}: ${name(args.workflowId)}`, lines: [] }),
     run: async (actor, args) => ({
       workflow: workflowSummary(await setWorkflowTemplate(actor, required(args.workflowId, "A workflow id"), args.shared === true)),
@@ -3806,7 +4096,7 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         workflowId: idParam("Workflow id."),
-        recordType: { type: "string", enum: ["company", "contact"] },
+        recordType: { type: "string", enum: ["company", "contact"], description: "Whether recordId is a company or a contact." },
         recordId: idParam("Company or contact id."),
       },
       required: ["workflowId", "recordType", "recordId"],
@@ -3825,7 +4115,11 @@ const TOOL_LIST: AssistantTool[] = [
     description: "Approve or reject a workflow step that is waiting for the user (run id from list_workflow_approvals).",
     parameters: {
       type: "object",
-      properties: { runId: idParam("Run id."), approve: { type: "boolean" }, note: { type: "string" } },
+      properties: {
+        runId: idParam("Run id."),
+        approve: { type: "boolean", description: "True approves the step so the run carries on, false rejects it." },
+        note: { type: "string", description: "An optional note saved with the decision." },
+      },
       required: ["runId", "approve"],
     },
     describe: (args) => ({ title: args.approve ? "Approve workflow step" : "Reject workflow step", lines: str(args.note) ? [`Note: ${str(args.note)}`] : [] }),
@@ -3869,10 +4163,10 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        kind: { type: "string", enum: ["company", "contact"] },
-        ids: { type: "array", items: { type: "string" } },
-        add: { type: "array", items: { type: "string" } },
-        remove: { type: "array", items: { type: "string" } },
+        kind: { type: "string", enum: ["company", "contact"], description: "Whether ids are companies or contacts." },
+        ids: { type: "array", items: { type: "string" }, description: "Company or contact ids, all of the same kind." },
+        add: { type: "array", items: { type: "string" }, description: "Tags to add, for example [\"partner\", \"event-2026\"]. Lowercased." },
+        remove: { type: "array", items: { type: "string" }, description: "Tags to remove." },
       },
       required: ["kind", "ids"],
     },
@@ -3898,9 +4192,13 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         companyId: idParam("Company id."),
         contactId: idParam("Contact id."),
-        status: { type: "string", enum: ["all", "draft", "open", "sent", "viewed", "client_signed", "completed", "declined", "withdrawn", "expired"] },
-        kind: { type: "string", enum: ["proposal", "nda"] },
-        search: { type: "string" },
+        status: {
+          type: "string",
+          enum: ["all", "draft", "open", "sent", "viewed", "client_signed", "completed", "declined", "withdrawn", "expired"],
+          description: "Only this status. open means anything waiting on a signature. Defaults to all.",
+        },
+        kind: { type: "string", enum: ["proposal", "nda"], description: "Only proposals or only NDAs." },
+        search: { type: "string", description: "Words to match against the title, company or contact, for example \"Acme\"." },
       },
     },
     run: async (actor, args) => ({
@@ -3957,12 +4255,21 @@ const TOOL_LIST: AssistantTool[] = [
         templateId: idParam("Active template id from list_proposal_templates."),
         companyId: idParam("Company id."),
         contactId: idParam("Contact id, a person at that company."),
-        currency: { type: "string", enum: ["GBP", "USD"] },
+        currency: { type: "string", enum: ["GBP", "USD"], description: "The proposal's currency, GBP or USD. Prices come from each product's price in it." },
         items: {
           type: "array",
-          items: { type: "object", properties: { productId: { type: "string" }, quantity: { type: "integer", minimum: 1 }, unitPrice: { type: "number" } }, required: ["productId"] },
+          description: "Products to include, for proposals.",
+          items: {
+            type: "object",
+            properties: {
+              productId: { type: "string", description: "Product id from list_products." },
+              quantity: { type: "integer", minimum: 1, description: "How many. Defaults to 1." },
+              unitPrice: { type: "number", description: "A price per unit in the proposal's currency, to override the list price." },
+            },
+            required: ["productId"],
+          },
         },
-        title: { type: "string" },
+        title: { type: "string", description: "The proposal's title, for example \"Content programme for Acme\". Defaults to the template's." },
       },
       required: ["templateId", "companyId", "contactId"],
     },
@@ -3991,12 +4298,22 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         id: idParam("Proposal id."),
-        title: { type: "string" },
-        currency: { type: "string", enum: ["GBP", "USD"] },
-        validUntil: { type: "string" },
+        title: { type: "string", description: "The proposal's new title." },
+        currency: { type: "string", enum: ["GBP", "USD"], description: "The proposal's currency, GBP or USD." },
+        validUntil: { type: "string", description: "The last day the client can sign it, YYYY-MM-DD." },
         items: {
           type: "array",
-          items: { type: "object", properties: { productId: { type: "string" }, quantity: { type: "integer", minimum: 1 }, unitPrice: { type: "number" }, description: { type: "string" } }, required: ["productId"] },
+          description: "The full product list. Replaces what's there.",
+          items: {
+            type: "object",
+            properties: {
+              productId: { type: "string", description: "Product id from list_products." },
+              quantity: { type: "integer", minimum: 1, description: "How many. Defaults to 1." },
+              unitPrice: { type: "number", description: "A price per unit in the proposal's currency, to override the list price." },
+              description: { type: "string", description: "Wording for this line, to replace the product's own description." },
+            },
+            required: ["productId"],
+          },
         },
         blocks: blocksParam("Every block, in order, as get_proposal returns them. Keep each block's id."),
       },
@@ -4029,11 +4346,11 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         id: idParam("Proposal id."),
-        action: { type: "string", enum: ["add", "done", "undone", "remove"] },
-        stepId: { type: "string" },
-        title: { type: "string" },
-        side: { type: "string", enum: ["client", "us"] },
-        dueDate: { type: "string" },
+        action: { type: "string", enum: ["add", "done", "undone", "remove"], description: "add a new step, done ticks one off, undone unticks it, remove deletes it." },
+        stepId: { type: "string", description: "For done, undone and remove: the step id from get_proposal's Next steps." },
+        title: { type: "string", description: "For add: what happens in the step, for example \"Kick-off call\"." },
+        side: { type: "string", enum: ["client", "us"], description: "For add: who does it, client or us." },
+        dueDate: { type: "string", description: "For add: when it's due, YYYY-MM-DD." },
       },
       required: ["id", "action"],
     },
@@ -4065,7 +4382,11 @@ const TOOL_LIST: AssistantTool[] = [
       "Send a draft proposal or NDA: locks this version, makes a private link for the contact and emails it from the user's mailbox with an optional subject and message. On a sent one, emails the same link again. The client signs first, then the user countersigns in Orbit.",
     parameters: {
       type: "object",
-      properties: { id: idParam("Proposal id."), subject: { type: "string" }, message: { type: "string", description: "Plain text; the link is added below it." } },
+      properties: {
+        id: idParam("Proposal id."),
+        subject: { type: "string", description: "The email's subject. Defaults to the proposal's title." },
+        message: { type: "string", description: "Plain text; the link is added below it." },
+      },
       required: ["id"],
     },
     details: async (actor, args) => {
@@ -4154,14 +4475,14 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        name: { type: "string" },
-        kind: { type: "string", enum: ["proposal", "nda"] },
+        name: { type: "string", description: "The template's name, for example \"Content retainer\"." },
+        kind: { type: "string", enum: ["proposal", "nda"], description: "A proposal or an NDA template." },
         starter: { type: "string", description: "Starter key, such as proposal, mutual-nda or one-way-nda." },
         copyOf: idParam("Template id to copy."),
         blocks: blocksParam("Every block, in order. Replaces the starter's or copy's blocks."),
         accent: { type: "string", description: "Accent colour such as #4124fb." },
         validDays: { type: "integer", minimum: 1, maximum: 365, description: "Days a proposal stays valid after it's created." },
-        status: { type: "string", enum: ["draft", "active"] },
+        status: { type: "string", enum: ["draft", "active"], description: "draft (the default) or active, which lets people use it." },
       },
     },
     describe: (args, name) => ({
@@ -4197,10 +4518,10 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         id: idParam("Template id."),
-        name: { type: "string" },
-        status: { type: "string", enum: ["draft", "active", "archived"] },
+        name: { type: "string", description: "The template's new name." },
+        status: { type: "string", enum: ["draft", "active", "archived"], description: "draft, active (people can use it) or archived (no longer offered)." },
         accent: { type: "string", description: "Accent colour such as #4124fb." },
-        validDays: { type: "integer", minimum: 1, maximum: 365 },
+        validDays: { type: "integer", minimum: 1, maximum: 365, description: "Days a proposal stays valid after it's created." },
         blocks: blocksParam("Every block, in order, as list_proposal_templates with id returns them. Keep each block's id."),
       },
       required: ["id"],
@@ -4248,11 +4569,11 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         id: idParam("Product id, to update."),
-        name: { type: "string" },
-        description: { type: "string" },
-        priceGbp: { type: "number" },
-        priceUsd: { type: "number" },
-        billing: { type: "string", enum: ["one_off", "monthly", "yearly"] },
+        name: { type: "string", description: "The product's name, for example \"Cited article pack\"." },
+        description: { type: "string", description: "What the client gets, shown on proposals." },
+        priceGbp: { type: "number", description: "Price in pounds, as a plain number, for example 1500." },
+        priceUsd: { type: "number", description: "Price in dollars, as a plain number, for example 1900." },
+        billing: { type: "string", enum: ["one_off", "monthly", "yearly"], description: "How it's billed: one_off, monthly or yearly." },
         archived: { type: "boolean", description: "Only with id." },
       },
     },
@@ -4286,7 +4607,7 @@ const TOOL_LIST: AssistantTool[] = [
         replyAll: { type: "boolean", description: "Reply to everyone on that email." },
         contactId: idParam("Contact to send to."),
         to: { type: "array", items: { type: "string" }, description: "Email addresses." },
-        cc: { type: "array", items: { type: "string" } },
+        cc: { type: "array", items: { type: "string" }, description: "Email addresses to copy in." },
         subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
         body: { type: "string", description: "Written the way a person writes an email, with a greeting and sign-off: no headings, tables or links to Orbit pages. **bold** and *italic* are sent as real formatting. Orbit adds the signature." },
         from: { type: "string", description: "Address to send from. Leave out for the main mailbox, or the account the conversation is in for a reply." },
@@ -4358,7 +4679,7 @@ const TOOL_LIST: AssistantTool[] = [
         draftId: idParam("A draft saved with save_email_draft that this sends."),
         contactId: idParam("Contact to send to."),
         to: { type: "array", items: { type: "string" }, description: "Email addresses." },
-        cc: { type: "array", items: { type: "string" } },
+        cc: { type: "array", items: { type: "string" }, description: "Email addresses to copy in." },
         subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
         body: { type: "string", description: "Written the way a person writes an email, with a greeting and sign-off: no headings, tables or links to Orbit pages. **bold** and *italic* are sent as real formatting. Orbit adds the signature." },
         from: {
@@ -4498,7 +4819,7 @@ const TOOL_LIST: AssistantTool[] = [
         draftId: idParam("Scheduled email id from search_email with folder scheduled."),
         cancel: { type: "boolean", description: "True to stop it sending and keep it in Drafts. Can't be combined with other changes." },
         sendAt: { type: "string", description: "New send time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year." },
-        subject: { type: "string" },
+        subject: { type: "string", description: "The new subject line." },
         body: { type: "string", description: "The whole new message, written the way a person writes an email, with greeting and sign-off. **bold** and *italic* are sent as real formatting." },
         to: { type: "array", items: { type: "string" }, description: "Email addresses. Replaces the To list." },
         cc: { type: "array", items: { type: "string" }, description: "Replaces the Cc list; an empty list removes everyone." },
@@ -4598,16 +4919,23 @@ const TOOL_LIST: AssistantTool[] = [
           type: "string",
           description: "The address that sends the invite, or the Microsoft calendar for a personal event. Defaults to this workspace's address.",
         },
-        title: { type: "string" },
+        title: { type: "string", description: "The meeting's title, for example \"Kick-off with Acme\"." },
         startLocal: { type: "string", description: "YYYY-MM-DDTHH:mm London time." },
-        durationMinutes: { type: "integer", minimum: 15, maximum: 480 },
+        durationMinutes: { type: "integer", minimum: 15, maximum: 480, description: "How long it lasts, 15 to 480 minutes, for example 30." },
         attendees: {
           type: "array",
           description: "The guests. Leave empty to add a personal event with no guests.",
-          items: { type: "object", properties: { email: { type: "string" }, name: { type: "string" } }, required: ["email"] },
+          items: {
+            type: "object",
+            properties: {
+              email: { type: "string", description: "The guest's email address." },
+              name: { type: "string", description: "The guest's name, as it should appear on the invite." },
+            },
+            required: ["email"],
+          },
         },
         contactIds: { type: "array", items: { type: "string" }, description: "Orbit contacts the meeting is with." },
-        notes: { type: "string" },
+        notes: { type: "string", description: "The invite's text, such as an agenda. Plain text." },
         includeMeetingLink: { type: "boolean", description: "Add your saved meeting link. Defaults to true with guests and false without." },
       },
       required: ["title", "startLocal", "durationMinutes"],
@@ -4741,7 +5069,7 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         eventId: idParam("Meeting id from list_calendar_events."),
-        response: { type: "string", enum: [...MEETING_RESPONSES] },
+        response: { type: "string", enum: [...MEETING_RESPONSES], description: `The answer: ${MEETING_RESPONSES.join(", ")}.` },
         note: { type: "string", description: "Optional note to the organiser." },
         tellOrganiser: { type: "boolean", description: "Defaults to true. False updates the calendar without telling the organiser, and can't carry a note or a new time." },
         proposedStartLocal: { type: "string", description: "Optional new start to suggest with tentative or decline, YYYY-MM-DDTHH:mm London time." },
@@ -4787,9 +5115,9 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string" },
+        query: { type: "string", description: `Words in the title or description, or an identifier such as ${linearTeamKey()}-123. Leave out to list recent issues.` },
         includeDone: { type: "boolean", description: "Include completed and cancelled issues." },
-        limit: { type: "integer", minimum: 1, maximum: 50 },
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "How many issues to return, up to 50. Defaults to 20." },
       },
     },
     run: async (_actor, args) => ({
@@ -4815,9 +5143,9 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        title: { type: "string" },
+        title: { type: "string", description: "A short, clear title for the piece of work." },
         description: { type: "string", description: "Markdown." },
-        priority: { type: "string", enum: [...LINEAR_PRIORITIES] },
+        priority: { type: "string", enum: [...LINEAR_PRIORITIES], description: `The issue's priority: ${LINEAR_PRIORITIES.join(", ")}.` },
         status: { type: "string", description: "Workflow status name, for example Backlog or Todo. Leave out for the team default. An unknown name is refused with the list of valid ones." },
         labels: { type: "array", items: { type: "string" }, description: "Existing label names." },
         assignToMe: { type: "boolean", description: "Assign the issue to the user." },
@@ -4867,9 +5195,9 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         issue: { type: "string", description: `Identifier like ${linearTeamKey()}-123.` },
-        title: { type: "string" },
+        title: { type: "string", description: "The issue's new title." },
         status: { type: "string", description: "Workflow status name, for example In Progress or Done. An unknown name is refused with the list of valid ones." },
-        priority: { type: "string", enum: [...LINEAR_PRIORITIES] },
+        priority: { type: "string", enum: [...LINEAR_PRIORITIES], description: `The issue's new priority: ${LINEAR_PRIORITIES.join(", ")}.` },
         comment: { type: "string", description: "A comment to add, in markdown." },
       },
       required: ["issue"],
@@ -4903,8 +5231,8 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         highlights: { type: "boolean", description: "List highlights and their notes instead of documents." },
         documentId: { type: "string", description: "With highlights: only highlights in this Reader document." },
-        location: { type: "string", enum: [...READER_LOCATIONS] },
-        category: { type: "string", enum: [...READER_CATEGORIES] },
+        location: { type: "string", enum: [...READER_LOCATIONS], description: `Only documents in this Reader location: ${READER_LOCATIONS.join(", ")} (new is the Inbox).` },
+        category: { type: "string", enum: [...READER_CATEGORIES], description: `Only this kind of document: ${READER_CATEGORIES.join(", ")}.` },
         tags: { type: "array", items: { type: "string" }, description: "Tag keys, for example orbit. With highlights, one tag." },
         updatedAfter: { type: "string", description: "Only documents or highlights updated after this date, YYYY-MM-DD or ISO." },
         limit: { type: "integer", minimum: 1, maximum: 200, description: "Documents: default 20, up to 100. Highlights: default 50, up to 200." },
@@ -5100,7 +5428,11 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         title: { type: "string", description: "At most 12 words. Not needed with forgetId: the card shows the note's own title." },
         body: { type: "string", description: "The note, at most 70 words, written as a fact." },
-        kind: { type: "string", enum: ["preference", "correction", "instruction", "person", "goal", "writing", "icp", "objection", "competitor", "messaging", "fact"] },
+        kind: {
+          type: "string",
+          enum: ["preference", "correction", "instruction", "person", "goal", "writing", "icp", "objection", "competitor", "messaging", "fact"],
+          description: "What sort of note it is. icp, objection, competitor and messaging are about the business, so they always stay in this workspace.",
+        },
         shared: { type: "boolean", description: "True for business knowledge the whole workspace should share." },
         allWorkspaces: { type: "boolean", description: "For a note about the user, true when it applies in every workspace they work in. Leave out to keep it to this workspace." },
         forgetId: { type: "string", description: "Id of a learned note to forget instead of saving one." },
@@ -5155,7 +5487,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: [...SAVE_DOC_ACTIONS] },
+        action: { type: "string", enum: [...SAVE_DOC_ACTIONS], description: "What to do, as the description lists. Prefer edit or append over replace." },
         docId: idParam("The doc to change."),
         title: { type: "string", description: "For create and rename." },
         content: { type: "string", description: "Markdown for create, replace, append and append_daily." },
@@ -5193,11 +5525,12 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         add: {
           type: "array",
+          description: "Things to start watching.",
           items: {
             type: "object",
             properties: {
-              kind: { type: "string", enum: [...WATCH_KINDS] },
-              label: { type: "string" },
+              kind: { type: "string", enum: [...WATCH_KINDS], description: `What it is: ${WATCH_KINDS.join(", ")}.` },
+              label: { type: "string", description: "What to watch, in a few words, for example \"AI search visibility\" or \"Acme Ltd\"." },
               url: { type: "string", description: "Optional link, for example an X or LinkedIn profile." },
               notes: { type: "string", description: "Why it's watched." },
             },
@@ -5283,6 +5616,8 @@ const MERGED_TOOLS: Record<string, { tool: string; args: (args: Args) => Args }>
   linear_comment: { tool: "linear_update_issue", args: ({ issue, body }) => ({ issue, comment: body }) },
   forget: { tool: "remember", args: ({ memoryId, title }) => ({ forgetId: memoryId, title }) },
   get_proposal_template: { tool: "list_proposal_templates", args: ({ id }) => ({ id }) },
+  cold_email_playbook: { tool: "guide", args: () => ({ topic: "cold_email" }) },
+  workflow_guide: { tool: "guide", args: () => ({ topic: "workflows" }) },
 };
 
 function resolveTool(name: string, args: Args = {}) {
@@ -5320,10 +5655,36 @@ export function toolLabel(name: string) {
   return findTool(name)?.label ?? (Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].label : name);
 }
 
-export type ToolOptions = { multiWorkspace?: boolean };
+export type ToolOptions = { multiWorkspace?: boolean; domains?: readonly ToolDomain[] };
+
+export function toolDomain(name: string) {
+  const tool = findTool(name);
+  return tool ? (DOMAIN_OF.get(tool.name) ?? null) : null;
+}
+
+export function loadedDomains(calls: { name: string; arguments: string }[]) {
+  const loaded: ToolDomain[] = [];
+  const add = (domain: ToolDomain | null | undefined) => {
+    if (domain && !loaded.includes(domain)) loaded.push(domain);
+  };
+  for (const call of calls) {
+    if (call.name === "find_tools") {
+      let args: unknown = null;
+      try {
+        args = JSON.parse(call.arguments || "{}");
+      } catch {}
+      for (const domain of strings((args as Args | null)?.domains)) add(oneOf(domain, TOOL_DOMAIN_NAMES));
+    } else add(toolDomain(call.name));
+  }
+  return loaded;
+}
 
 export function assistantTools(options: ToolOptions = {}) {
-  return ASSISTANT_TOOLS.filter((tool) => !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)));
+  const offered = ASSISTANT_TOOLS.filter((tool) => !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)));
+  if (!options.domains) return offered;
+  const order = [...CORE_TOOLS, ...options.domains.flatMap((domain) => TOOL_DOMAINS[domain].tools)];
+  const byName = new Map(offered.map((tool) => [tool.name, tool]));
+  return [...new Set(order)].flatMap((name) => byName.get(name) ?? []);
 }
 
 export function toolDefinitions(options: ToolOptions = {}) {
@@ -5398,9 +5759,9 @@ export function dropStrayNulls(value: unknown, schema: unknown): unknown {
   return out;
 }
 
-function marked(name: string, output: unknown) {
+function marked(name: string, output: unknown, fence?: string) {
   if (!EXTERNAL_TOOLS.has(name) || !output || typeof output !== "object" || Array.isArray(output) || "error" in (output as object)) return output;
-  return { notice: EXTERNAL_NOTICE, ...(output as Record<string, unknown>) };
+  return { notice: EXTERNAL_NOTICE, ...((fence ? fenceUntrusted(output, fence) : output) as Record<string, unknown>) };
 }
 
 function collectIds(value: unknown, into: Set<string>) {
@@ -5608,7 +5969,7 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource } = {},
+  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource; fence?: string } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
@@ -5655,7 +6016,7 @@ export async function runTool(
       }),
       late,
     ]);
-    return marked(tool.name, output);
+    return marked(tool.name, output, options.fence);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };
     if (error instanceof LinearError) return { error: error.message };

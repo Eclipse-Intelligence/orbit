@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
-import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
-import { toolDefinitions } from "@/lib/assistant/tools";
+import { systemPrompt, turnContext, UNBRANDED } from "@/lib/assistant/prompt";
+import { runTool, toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 import { allowedEclipseUrl, clearEclipseSourceCache, readEclipsePage } from "@/lib/eclipse-sources";
 import { renderWithBrowserbase } from "@/lib/browserbase";
@@ -155,15 +155,17 @@ describe("Eclipse docs", () => {
     assert.equal(allowedEclipseUrl("http://docs.geteclipse.co/x"), null);
   });
 
-  it("gives the assistant the tools and tells it how to use them", () => {
+  it("gives the assistant the tools and tells it how to use them", async () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
     for (const name of ["read_web_page", "eclipse_docs"]) assert.ok(names.includes(name), name);
     assert.ok(!names.includes("eclipse_articles"));
     const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
-    const prompt = systemPrompt(actor, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse" } });
+    const prompt = systemPrompt(actor, { brand: { ...UNBRANDED, workspaceName: "Eclipse" } });
     assert.doesNotMatch(prompt, /geteclipse\.co\/articles|eclipse_articles/);
-    assert.match(prompt, /use a published article from this brand's Eclipse client as the reason to get in touch/);
-    assert.match(prompt, /https:\/\/docs\.geteclipse\.co/);
-    assert.match(prompt, /you can still open any address you know or are given with read_web_page/);
+    const { guide } = (await runTool({ ...actor, workspaceName: "Eclipse" }, "guide", { topic: "eclipse" })) as { guide: string };
+    assert.match(guide, /use a published article from this brand's Eclipse client as the reason to get in touch/);
+    assert.match(guide, /https:\/\/docs\.geteclipse\.co/);
+    assert.match(prompt, /You can open any public web page with read_web_page/);
+    assert.match(turnContext({ now: new Date(), webSearch: false, fence: "0123456789ab" }), /you can still open any address you know or are given with read_web_page/);
   });
 });

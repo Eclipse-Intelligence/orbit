@@ -3,7 +3,8 @@ import { afterEach, describe, it } from "node:test";
 import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, figuresIn, lintColdEmail, playbookFor, proofListFor, senderFirstName, withProofList, type Evidence } from "@/lib/assistant/cold-email";
 import type { ProofEntry } from "@/lib/crm/proof-rules";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { toolDefinitions } from "@/lib/assistant/tools";
+import { findTool, toolDefinitions } from "@/lib/assistant/tools";
+import { coldEmailGuide } from "@/lib/assistant/guides";
 import type { UserActor } from "@/lib/crm/types";
 
 const ARTICLE = "https://geteclipse.co/articles/why-your-ai-visibility-platform-needs-repeated-prompt-tests/";
@@ -346,14 +347,13 @@ describe("cold email triggers, subjects and tailored offers", () => {
     assert.doesNotMatch(COLD_EMAIL_PLAYBOOK, /Until the check is updated/);
     assert.doesNotMatch(ECLIPSE_OUTREACH_BRIEF, /no customer results are approved/);
     assert.doesNotMatch(`${COLD_EMAIL_PLAYBOOK}\n${ECLIPSE_OUTREACH_BRIEF}`, /[–—]/);
-    assert.match(systemPrompt(actor, { webSearch: false }), /hooks on a recent trigger/);
+    assert.match(coldEmailGuide("Eclipse"), /hooks on a recent trigger/);
   });
 
-  it("names only tools the assistant has", () => {
-    const names = new Set(toolDefinitions().map((tool) => tool.function.name));
-    const mentioned = [...COLD_EMAIL_PLAYBOOK.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g)].map((match) => match[0]);
+  it("names only tools the assistant has, or old names it still answers", () => {
+    const mentioned = [...`${COLD_EMAIL_PLAYBOOK}\n${coldEmailGuide("Eclipse")}`.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g)].map((match) => match[0]);
     assert.ok(mentioned.length >= 10);
-    for (const name of mentioned) assert.ok(names.has(name), name);
+    for (const name of mentioned) if (name !== "cold_email") assert.ok(findTool(name), name);
   });
 });
 
@@ -523,7 +523,8 @@ describe("cold email value grading", () => {
 describe("assistant guidance", () => {
   it("gives the assistant the playbook and the check, and tells it to aim for value", async () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
-    assert.ok(names.includes("cold_email_playbook") && names.includes("cold_email_check"));
+    assert.ok(names.includes("guide") && names.includes("cold_email_check"));
+    assert.equal(findTool("cold_email_playbook")?.name, "guide");
     const playbook = { playbook: COLD_EMAIL_PLAYBOOK, eclipseBrief: ECLIPSE_OUTREACH_BRIEF };
     assert.match(playbook.playbook, /Every email carries one thing they probably don't know\. There are three kinds/);
     assert.match(playbook.playbook, /Never write "we can do the same for you"/);
@@ -535,13 +536,16 @@ describe("assistant guidance", () => {
     const evidence = check.parameters.properties.evidence.items.properties;
     assert.deepEqual(Object.keys(evidence), ["fact", "source", "kind"]);
     assert.match(playbook.playbook, /cold_email_playbook returns it as proofList/);
-    const prompt = systemPrompt(actor, { webSearch: false });
-    assert.match(prompt, /Always read cold_email_playbook first/);
-    assert.match(prompt, /worth a busy expert's time/);
-    assert.match(prompt, /never tells them about themselves/);
-    assert.match(prompt, /50 to 90 words with no link or attachment and at most one figure/);
-    assert.match(prompt, /use any entry as it stands and never check it against Orbit or mail/);
+    const prompt = systemPrompt(actor);
+    assert.match(prompt, /Always read the cold_email guide first/);
+    const guide = coldEmailGuide("Eclipse");
+    assert.match(guide, /worth a busy expert's time/);
+    assert.match(guide, /never tells them about themselves/);
+    assert.match(guide, /50 to 90 words with no link or attachment and at most one figure/);
+    assert.match(guide, /use any entry as it stands and never check it against Orbit or mail/);
+    assert.match(guide, /check it with verify_email\. Never send to an invalid address/);
     assert.match(playbook.playbook, /Agreeing with them, repeating their point, describing their own business/);
-    assert.match(prompt, /Never put a colon in the middle of a sentence/);
+    assert.match(COLD_EMAIL_PLAYBOOK, /colons/);
+    assert.doesNotMatch(prompt, /Never put a colon in the middle of a sentence/);
   });
 });

@@ -5,7 +5,7 @@ import { getConversation, sendMessage, type AssistantEvent } from "@/lib/assista
 import { COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, playbookFor } from "@/lib/assistant/cold-email";
 import { ECLIPSE_CONTEXT, ECLIPSE_IDEAL_CUSTOMER, ECLIPSE_WEBSITE } from "@/lib/assistant/eclipse";
 import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
-import { runTool, toolDefinitions, toolLabel } from "@/lib/assistant/tools";
+import { runTool, TOOL_DOMAINS, toolDefinitions, toolLabel } from "@/lib/assistant/tools";
 import { brandOrEmpty, draftBrandFromWebsite, getBrand, saveBrandPlaybook, saveBrandProfile } from "@/lib/crm/brand";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -13,7 +13,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { getEnrichmentSettings, icpHashOf } from "@/lib/enrichment/settings";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createUser, messageText, queryAsUser, resetDatabase } from "./helpers";
 
 const MIGRATION = "supabase/migrations/20261229200000_brand_profiles.sql";
 const SWITCH_MIGRATION = "supabase/migrations/20270109100000_remove_eclipse_switch.sql";
@@ -62,7 +62,7 @@ async function turn(actor: UserActor) {
   });
   const request = fake.requests[0];
   return {
-    system: String((request.messages as { role: string; content: string }[])[0].content),
+    system: messageText((request.messages as { role: string; content: unknown }[])[0].content),
     tools: (request.tools as { function: { name: string } }[]).map((tool) => tool.function.name),
   };
 }
@@ -146,7 +146,7 @@ describe("moving Eclipse's rules into its brand profile", () => {
     assert.deepEqual(moved.formerNames, ["Cntent"]);
     assert.doesNotMatch(moved.playbook, /eclipse_articles/);
     assert.equal(moved.tone, `Short and plain. ${PIECE_TONE}`);
-    assert.ok(systemPrompt(eclipse, { webSearch: false, brand: moved }).includes(`How Eclipse writes:\nShort and plain. ${PIECE_TONE}`));
+    assert.ok(systemPrompt(eclipse, { brand: moved }).includes(`How Eclipse writes:\nShort and plain. ${PIECE_TONE}`));
     assert.deepEqual(await topics(eclipse.workspaceId), ["ai search", "AI visibility", "Content Agencies", "Content operations", "Generative engine optimisation (GEO)"]);
     const untouched = await getBrand(ridgeon);
     assert.deepEqual([untouched.playbook, untouched.tone, untouched.formerNames, untouched.playbookUpdatedAt], ["", "", [], null]);
@@ -214,25 +214,29 @@ describe("assistant in each workspace", () => {
     assert.ok(seeded.system.includes(`# About Eclipse\n${ECLIPSE_CONTEXT}`));
     assert.ok(seeded.system.includes(ECLIPSE_IDEAL_CUSTOMER));
     assert.match(seeded.system, /In Eclipse, use the Eclipse client named 'Eclipse'\. Find it with list_clients and pass its clientId on every call\. Use another client only when the user names it\./);
-    assert.match(seeded.system, /use a published article from this brand's Eclipse client as the reason to get in touch/);
-    assert.match(seeded.system, /Read eclipse_guide once before your first Eclipse call/);
+    const guide = ((await runTool(eclipse, "guide", { topic: "eclipse" })) as { guide: string }).guide;
+    assert.match(guide, /use a published article from this brand's Eclipse client as the reason to get in touch/);
+    assert.match(guide, /Read eclipse_guide once before your first Eclipse call/);
+    assert.match(seeded.system, /- eclipse: once before your first Eclipse call in a conversation/);
     assert.doesNotMatch(seeded.system, /eclipse_articles|geteclipse\.co\/articles/);
-    for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(seeded.tools.includes(name), name);
+    assert.ok(seeded.tools.includes("find_tools"));
+    for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(TOOL_DOMAINS.eclipse.tools.includes(name) && !seeded.tools.includes(name), name);
     assert.ok(!seeded.tools.includes("eclipse_articles"));
 
     await saveBrandProfile(ridgeon, { website: "", whatYouSell: "", whoItsFor: "", tone: "" }, WEB);
     const empty = await turn(ridgeon);
     assert.match(empty.system, /In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'\. Find it with list_clients/);
     assert.match(empty.system, /If no client of that name exists, say so and ask the user which client to use/);
-    assert.match(empty.system, /never share one client's data with another company/);
+    assert.match(empty.system, /Never share one client's data with another company/);
     assert.doesNotMatch(empty.system, /client named 'Eclipse'|eclipse_articles|piece"/);
     assert.ok(!empty.system.includes(ECLIPSE_CONTEXT));
-    for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(empty.tools.includes(name), name);
+    assert.ok(empty.tools.includes("find_tools"));
     assert.match(empty.system, /the CRM Mark Ridgeon uses for its own sales and relationships/);
     assert.match(empty.system, /Mark Ridgeon hasn't said what it sells yet \(Settings, Brand\)/);
     assert.match(empty.system, /Never claim a product, an offer or a client result on its behalf/);
-    assert.match(empty.system, /Always read cold_email_playbook first/);
-    assert.ok(empty.tools.includes("cold_email_playbook"));
+    assert.match(empty.system, /Always read the cold_email guide first/);
+    assert.ok(empty.tools.includes("guide"));
+    assert.ok(!empty.tools.includes("cold_email_playbook"));
   });
 
   it("uses the brand profile and tone, adding to the person's own way of writing", async () => {
@@ -250,7 +254,7 @@ describe("assistant in each workspace", () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
     for (const name of ["eclipse_docs", "eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(names.includes(name), name);
     assert.ok(!names.includes("eclipse_articles"));
-    assert.match(systemPrompt(ridgeon, { webSearch: false, brand: UNBRANDED }), /Ask the user which Eclipse client to use, then find it with list_clients/);
+    assert.match(systemPrompt(ridgeon, { brand: UNBRANDED }), /Ask the user which Eclipse client to use, then find it with list_clients/);
 
     const allowed = (await runTool(ridgeon, "eclipse_guide", {})) as { guide: string };
     assert.match(allowed.guide, /Eclipse isn't connected/);
@@ -390,10 +394,10 @@ describe("when the brand profile can't be read", () => {
     const broken: UserActor = { ...eclipse, workspaceId: "not-a-workspace" };
     const brand = await brandOrEmpty(broken);
     assert.equal(brand.unread, true);
-    const prompt = systemPrompt(broken, { webSearch: false, brand });
+    const prompt = systemPrompt(broken, { brand });
     assert.doesNotMatch(prompt, /hasn't said what it sells/);
     assert.match(prompt, /couldn't read Eclipse's brand profile/);
     assert.doesNotMatch(prompt, /eclipse_articles/);
-    assert.match(systemPrompt(eclipse, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse" } }), /hasn't said what it sells/);
+    assert.match(systemPrompt(eclipse, { brand: { ...UNBRANDED, workspaceName: "Eclipse" } }), /hasn't said what it sells/);
   });
 });
