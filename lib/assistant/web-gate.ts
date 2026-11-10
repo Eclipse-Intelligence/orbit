@@ -32,6 +32,12 @@ export const OUTSIDE_TOOLS: ReadonlySet<string> = new Set([
 
 const PAGE_TOOLS: ReadonlySet<string> = new Set(["read_web_page", "map_website"]);
 
+const OUTSIDE_RECORD = /\\?"source\\?"\s*:\s*\\?"meta_lead_ad\\?"/;
+
+export function hasOutsideRecord(content: string) {
+  return OUTSIDE_RECORD.test(content);
+}
+
 export const WEB_APPROVAL_MARK = "web";
 
 export const WEB_APPROVAL_RESULT =
@@ -137,7 +143,7 @@ export function pageGate(pageContext: string | null | undefined) {
 export function readTargets(name: string, content: string) {
   if (PAGE_TOOLS.has(name)) return [];
   const exact = [...seenTargets(content)];
-  const hosts = OUTSIDE_TOOLS.has(name) ? [] : [...firstPartyHosts(content)].map((host) => `${HOST_PREFIX}${host}`);
+  const hosts = OUTSIDE_TOOLS.has(name) || hasOutsideRecord(content) ? [] : [...firstPartyHosts(content)].map((host) => `${HOST_PREFIX}${host}`);
   return [...exact, ...hosts];
 }
 
@@ -165,7 +171,7 @@ export function webGateState(rows: GateRow[], extra: { outside?: boolean; seen?:
     } else if (row.role === "assistant") {
       if (Array.isArray(row.sources) && row.sources.length > 0) outside = true;
     } else if (row.role === "tool" && row.tool_name) {
-      if (OUTSIDE_TOOLS.has(row.tool_name)) outside = true;
+      if (OUTSIDE_TOOLS.has(row.tool_name) || hasOutsideRecord(content)) outside = true;
       for (const item of readTargets(row.tool_name, content)) {
         if (item.startsWith(HOST_PREFIX)) hosts.add(item.slice(HOST_PREFIX.length));
         else if (seen.size < SEEN_MAX) seen.add(item);

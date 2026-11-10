@@ -23,6 +23,7 @@ import { syncReaderToKnowledge } from "@/lib/readwise/sync";
 
 const CRON_BUDGET_MS = 50_000;
 const STEP_MIN_MS = 3_000;
+const META_BACKUP_MS = 10_000;
 
 type CronAuth = "ok" | "unauthorized" | "unconfigured";
 
@@ -311,6 +312,12 @@ export async function handleCronRequest(
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
   const report = await run();
+  try {
+    const { runMetaLeadBackup } = await import("@/lib/crm/meta-leads");
+    await runMetaLeadBackup({ deadline: Date.now() + META_BACKUP_MS });
+  } catch (error) {
+    console.error("Meta lead backup failed", error);
+  }
   try {
     const { deliverDueWebhooks } = await import("@/lib/crm/webhooks");
     await deliverDueWebhooks();

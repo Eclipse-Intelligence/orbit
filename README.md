@@ -87,7 +87,7 @@ Settings has one page per area. If you are in more than one workspace, the pages
 | Workspace | Email templates | `/settings/email-templates` | Reusable emails (below) |
 | Workspace | Booking page | `/settings/booking-page` | Your public booking page at `/book/<link>` (below) |
 | Workspace | Learning | `/settings/learning` | Business and market notes (and notes about you with one workspace), the market watchlist, market notes, the Grok Bot connection and Learn now |
-| Workspace | Tools | `/settings/tools` | ClickUp, enrichment providers, the agent mailbox, Linear, agents (REST and MCP addresses, how to issue agent tokens) and webhooks |
+| Workspace | Tools | `/settings/tools` | ClickUp, enrichment providers, the agent mailbox, Meta lead ads, Linear, agents (REST and MCP addresses, how to issue agent tokens) and webhooks |
 | Workspace | Activity log | `/settings/activity` | Activities logged by a person (below) |
 
 Rarely used parts (token instructions, recent webhook deliveries, watched ClickUp lists, and similar) are collapsed until you open them. Old links keep working: `/settings/integrations` opens Connections, `/settings/api` opens API tokens, and old anchors such as `#calendars`, `#webhooks`, `#clickup`, `#microsoft` or `#signatures` open the page that now holds them.
@@ -363,6 +363,29 @@ Nothing from Recall is copied into Orbit. When you ask, the assistant searches a
 3. Set `SITE_URL` to the production https origin so Orbit can subscribe to new transcripts. Without it Orbit still polls.
 
 Each mailbox owner's transcripts, sync state, and subscription are their own: other workspace members cannot see or file a transcript until it is filed on a contact, after which it is part of the shared timeline like any other activity. Orbit reads the user's ad hoc call transcripts (Graph `getAllTranscripts`) since the last sync less six hours (the first sync looks back 7 days). A transcript waits until its Teams call log appears, then attaches to that call's activity and is summarised. If the call never matches a contact within 48 hours, it moves to Unfiled conversations; filing it there also links the call log. Orbit keeps a Graph change notification subscription for new transcripts (two days, renewed when less than a day is left, recreated if Microsoft removes it). Microsoft only notifies about transcripts started after the subscription existed; polling picks up the rest. If Settings › Connections says to grant `CallTranscripts.Read.All`, step 1 is missing; if it says your admin has turned off API access to Teams transcripts, the tenant blocks Graph access to transcripts.
+
+## Meta lead ads
+
+Every Facebook or Instagram lead form submission becomes a contact. Meta calls `/api/webhooks/meta-leads` when a form is sent, and an hourly check picks up any lead the webhook missed.
+
+1. In the Meta app (developers.facebook.com), add the Webhooks product, choose Page, and subscribe to the `leadgen` field. Use the Callback URL from Settings › Tools › Meta lead ads (`https://<orbit>/api/webhooks/meta-leads`) and a verify token of your choice.
+2. In Business Settings, make a System User with access to the Page and the ad account, and generate a token with `leads_retrieval`, `pages_manage_ads`, `pages_read_engagement`, `pages_show_list` and `ads_management`. Subscribe the app to the Page (`POST /{page-id}/subscribed_apps?subscribed_fields=leadgen`, or the Lead Ads Testing tool's subscribe button).
+3. In Vercel, add `META_APP_SECRET` (the app's App Secret), `META_VERIFY_TOKEN` (the token from step 1) and `META_ACCESS_TOKEN` (the System User token), and redeploy. `META_GRAPH_VERSION` is optional; the default is `v27.0`.
+4. In Settings › Tools › Meta lead ads, an owner or admin adds the Facebook Page ID of each Page whose leads belong in this workspace. A Page can be linked to one workspace.
+
+What happens to a lead:
+
+- `GET` answers Meta's subscription check: when `hub.mode` is `subscribe` and `hub.verify_token` matches `META_VERIFY_TOKEN` it returns `hub.challenge` as plain text, otherwise 403.
+- `POST` checks `X-Hub-Signature-256` (HMAC SHA-256 of the raw body with `META_APP_SECRET`, compared in constant time) and returns 403 when it doesn't match. Bodies over 256 KB get 413, and each address gets 300 requests a minute. A signed request gets 200 at once; the leads are fetched and saved after the response.
+- Each `leadgen` change is saved in `crm.meta_leads` by its Meta lead ID, once, however often Meta sends it. Orbit then reads the lead from the Graph API (`created_time`, `field_data`, the ad, ad set and campaign names and IDs, `form_id`, `platform`, `is_organic`) with `META_ACCESS_TOKEN`, and the form's name.
+- The standard questions fill the contact: `full_name` (or `first_name` and `last_name`), `email` (or `work_email`), `phone_number` (or `work_phone_number`), `job_title`, `company_name` and `city` (as the location). A non-archived contact with the same email is used instead of a new one, and only its empty fields are filled. The contact gets the source "Meta Lead Ad", the lead ID as its source reference and the tag "meta lead".
+- With `company_name`, Orbit uses the company with the email's domain (never a free-mail domain such as gmail.com), else one with the same name, else adds one with lifecycle Lead and that domain.
+- A note, "Meta lead: <form name>", lists every answer, custom questions included, then the campaign, ad set, ad and platform. Everything is written by the Page's linker (or an owner) with the source `meta_lead_ad`, so Record created and Activity logged workflows and outbound webhooks (`contact.created`, `company.created`, `activity.created`, `lead.created`) fire as for other new records, without counting as created by that person.
+- The workspace's owners and admins, and whoever linked the Page, get a bell notification and a push: "New lead: <name>" with the campaign, opening the contact.
+- A lead from a Page that isn't linked is kept with no workspace. Owners get "Lead from a Page that isn't linked" (once a day per Page), Settings › Tools lists it for owners with Link, and the lead is filed as soon as the Page is linked.
+- Lead answers are stored as data and shown as plain text. The assistant treats them as outside content (see `docs/assistant.md`).
+
+The hourly check runs from `/api/cron/sync`: each linked Page is checked once an hour (`last_attempt_at`), listing its lead forms and the leads created since its last successful check less two hours (the first check looks back a day), and importing any that aren't saved yet. Leads that couldn't be fetched or saved are retried on each cron run, up to ten times. The card shows each Page's last check and error.
 
 ## ClickUp
 
@@ -903,6 +926,8 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `GRANOLA_API_KEY`, `GRANOLA_API_BASE_URL` | Granola for the key's owner | Others connect their own key in Settings. |
 | `CLICKUP_API_TOKEN`, `CLICKUP_API_BASE_URL` | ClickUp | |
 | `MACHINE_MAIL_API_KEY` | Agent mailbox | MachineMail organisation key. Server only. See Agent mailbox. |
+| `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_ACCESS_TOKEN` | Meta lead ads | The Meta app's App Secret (checks webhook signatures), the verify token you chose for the webhook, and a System User token with `leads_retrieval` and the Page permissions. Server only. See Meta lead ads. |
+| `META_GRAPH_VERSION`, `META_GRAPH_URL` | Meta lead ads | Optional. Graph API version (default `v27.0`) and base URL (default `https://graph.facebook.com`, for a local fake; `http` only on `localhost` or `127.0.0.1`). |
 | `LINEAR_API_KEY`, `LINEAR_TEAM_KEY`, `LINEAR_API_URL` | Linear | Team key default `CNT`. |
 | `CONTEXT_DEV_API_KEY`, `HUNTER_API_KEY`, `ENROW_API_KEY`, `ICYPEAS_API_KEY` | Enrichment | Each key turns its provider on. |
 | `PARALLEL_API_KEY` | Web checks | Turns on the Parallel Decisions API for tagging, filling gaps, weekly signals and Fit score, the Check the web workflow step, the assistant's `check_web`, and AI fields (with the Parallel Task API for number and short text fields). |
