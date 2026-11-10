@@ -201,7 +201,7 @@ async function liveBusy(
     const view = await fetchCalendarView(
       sender.token.accessToken,
       { start: new Date(start - buffer - MINUTE), end: new Date(end + buffer + MINUTE) },
-      { calendarId: sender.calendarId, fetchImpl, pageLimit: 2 },
+      { calendarId: sender.calendarId, fetchImpl, pageLimit: 2, body: false },
     );
     return view.events
       .filter((event) => !event.isCancelled && event.showAs?.toLowerCase() !== "free")

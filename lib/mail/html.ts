@@ -1,4 +1,5 @@
 import { formatSpans, headingMarker, type FormatSpan } from "@/lib/mail/inline-format";
+import { textParts } from "@/lib/text-links";
 
 const BLOCKED_BLOCKS = /<(script|iframe|object|frameset|applet|noscript)\b[\s\S]*?<\/\1\s*>/gi;
 const BLOCKED_TAGS = /<\/?(script|iframe|object|embed|form|frameset|frame|applet|base|link|noscript)\b[^>]*>/gi;
@@ -41,17 +42,10 @@ function escapeHtml(text: string) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"]+[^\s<>"'.,;:!?)\]]/g;
-
 function linkify(text: string) {
-  let html = "";
-  let last = 0;
-  for (const match of text.matchAll(URL_IN_TEXT)) {
-    const url = escapeHtml(match[0]);
-    html += `${escapeHtml(text.slice(last, match.index))}<a href="${url}">${url}</a>`;
-    last = match.index + match[0].length;
-  }
-  return html + escapeHtml(text.slice(last));
+  return textParts(text)
+    .map((part) => (part.kind === "text" ? escapeHtml(part.text) : `<a href="${escapeHtml(part.href)}">${escapeHtml(part.text)}</a>`))
+    .join("");
 }
 
 const IMAGE_MARKER = /\[Image: ([^\]\n]{1,200})\]/g;

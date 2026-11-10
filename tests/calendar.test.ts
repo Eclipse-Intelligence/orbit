@@ -17,8 +17,11 @@ import { createContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { createContactFromAttendee, ensureIntegration } from "@/lib/crm/conversations";
 import { saveMailbox, syncMailbox } from "@/lib/crm/inbox";
+import { listCalendarItems } from "@/lib/crm/calendars";
+import { saveMeetingLink } from "@/lib/crm/invites";
 import { saveOtherEmails } from "@/lib/crm/profile";
 import { DEFAULT_STEPS } from "@/lib/crm/scheduler";
+import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import {
@@ -28,6 +31,7 @@ import {
   toCalendarEvent,
   type GraphEvent,
 } from "@/lib/microsoft/calendar";
+import { NOTES_MAX } from "@/lib/meeting-links";
 import { grantsCalendar, MICROSOFT_SCOPES } from "@/lib/microsoft/oauth";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
@@ -193,6 +197,8 @@ describe("graph calendar view", () => {
     assert.equal(first.searchParams.get("$top"), "100");
     assert.match(first.searchParams.get("$select") ?? "", /attendees/);
     assert.match(first.searchParams.get("$select") ?? "", /onlineMeeting,/);
+    assert.match(first.searchParams.get("$select") ?? "", /,body$/);
+    assert.doesNotMatch(new URL(calendarViewUrl(start, end, null, { body: false })).searchParams.get("$select") ?? "", /body/);
 
     const at = Date.UTC(2026, 9, 16, 13);
     const pages = [[graphEvent("a", at), graphEvent("b", at)], [graphEvent("b", at), graphEvent("c", at)], [graphEvent("d", at)]];
@@ -205,7 +211,7 @@ describe("graph calendar view", () => {
     );
     assert.equal(calls.length, 3);
     const headers = calls[0].init?.headers as Record<string, string>;
-    assert.equal(headers.prefer, 'outlook.timezone="UTC"');
+    assert.equal(headers.prefer, 'outlook.timezone="UTC", outlook.body-content-type="text"');
     assert.equal(headers.authorization, "Bearer token");
 
     const capped: Call[] = [];
@@ -230,6 +236,233 @@ describe("graph calendar view", () => {
     const stopped = await fetchCalendarView("token", { start, end }, { fetchImpl: foreign });
     assert.equal(stopped.complete, false);
     assert.equal(stopped.events.length, 1);
+  });
+});
+
+describe("calendar notes and join links", () => {
+  it("stores the description and finds the join link in the location or the body", async () => {
+    const owner = await createUser("mark@orbit-notes.test", "Mark");
+    await connect(owner, "mark@orbit-notes.test");
+    await saveMeetingLink(owner, "https://rooms.orbit-notes.test/mark");
+    const client = (await createContact(owner, { firstName: "Cara", lastName: "Client", email: "cara@client-notes.test" })).body.contact.id;
+    const guest = await createUser("guest@orbit-notes.test", "Guest");
+    const bystander = await createUser("bystander@orbit-notes.test", "Bystander");
+    for (const member of [guest, bystander]) {
+      await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [
+        owner.workspaceId,
+        member.userId,
+      ]);
+    }
+    const now = Date.now();
+    const zoom = "https://us02web.zoom.us/j/81234567890?pwd=abc";
+    const meet = "https://meet.google.com/abc-defg-hij";
+    const safe = `https://eur02.safelinks.protection.outlook.com/?url=${encodeURIComponent(meet)}&data=05%7C02&reserved=0`;
+    const text = (content: string) => ({ contentType: "text", content });
+    const people = [{ email: "cara@client-notes.test" }, { email: "guest@orbit-notes.test" }];
+    const pages = [
+      [
+        graphEvent("teams", now + DAY, {
+          body: text("Agenda\r\n________________\r\nJoin the meeting now<https://teams.microsoft.com/l/meetup-join/other>"),
+        }),
+        graphEvent("zoom", now + DAY, {
+          onlineMeeting: null,
+          location: { displayName: zoom },
+          body: text(`Hi all\r\nAlso on ${meet}`),
+        }),
+        graphEvent("meet", now + DAY, {
+          onlineMeeting: null,
+          location: { displayName: "Office" },
+          body: text(`Agenda: pricing\r\nQuestions to jane@acme.com\r\nJoin<${safe}>`),
+          people,
+        }),
+        graphEvent("own", now + DAY, {
+          onlineMeeting: null,
+          location: { displayName: "" },
+          body: { contentType: "html", content: '<p>Call on <a href="https://rooms.orbit-notes.test/mark">my room</a></p>' },
+        }),
+        graphEvent("plain", now + DAY, {
+          onlineMeeting: null,
+          location: { displayName: "Room 1" },
+          body: text(`${"Long agenda line\n".repeat(1000)}End`),
+        }),
+        graphEvent("bare", now + DAY, { onlineMeeting: null, body: null }),
+        graphEvent("orphan", now + DAY, { onlineMeeting: null, organizer: null, body: text("Feed text with no organiser") }),
+        graphEvent("legacy", now + DAY, {
+          onlineMeeting: null,
+          organizer: { emailAddress: { name: "Old Exchange", address: "/O=EXCHANGELABS/OU=EXCHANGE ADMINISTRATIVE GROUP/CN=RECIPIENTS/CN=X" } },
+          body: text("Legacy organiser text"),
+        }),
+        graphEvent("team", now + DAY, {
+          onlineMeeting: null,
+          location: { displayName: "Office" },
+          body: text("Team room https://whereby.com/orbit-notes-team"),
+          people: [{ email: "cara@client-notes.test" }, { email: "rooms@orbit-notes.test" }],
+        }),
+        graphEvent("internal", now + DAY, {
+          onlineMeeting: null,
+          organizer: { emailAddress: { name: "Guest", address: "guest@orbit-notes.test" } },
+          body: text("Team stand-up notes"),
+        }),
+      ],
+    ];
+    const calls: Call[] = [];
+    const result = await syncCalendar(owner, { fetchImpl: graphStub(() => pages, calls), now });
+    assert.equal(result.error, undefined);
+    assert.equal(result.saved, 10);
+    const view = calls.find((call) => !isCalendarList(call.url))!;
+    assert.match(new URL(view.url).searchParams.get("$select") ?? "", /\bbody\b/);
+    assert.match((view.init?.headers as Record<string, string>).prefer, /outlook\.body-content-type="text"/);
+
+    const stored = async () => {
+      const rows = await getAdminPool().query<{ provider_event_id: string; online_meeting_url: string | null; join_url: string | null; notes: string | null }>(
+        `select e.provider_event_id, e.online_meeting_url, l.join_url, n.notes
+         from crm.calendar_events e
+         left join crm.calendar_event_links l on l.event_id = e.id
+         left join crm.calendar_event_notes n on n.event_id = e.id
+         where e.user_id = $1`,
+        [owner.userId],
+      );
+      return new Map(rows.rows.map((row) => [row.provider_event_id, row]));
+    };
+    const byId = await stored();
+    assert.equal(byId.get("teams")!.online_meeting_url, "https://teams.microsoft.com/l/meetup-join/teams");
+    assert.equal(byId.get("teams")!.join_url, null);
+    assert.equal(byId.get("teams")!.notes, "Agenda\n________________\nJoin the meeting now<https://teams.microsoft.com/l/meetup-join/other>");
+    assert.equal(byId.get("zoom")!.online_meeting_url, zoom);
+    assert.equal(byId.get("zoom")!.join_url, null);
+    assert.equal(byId.get("meet")!.online_meeting_url, null);
+    assert.equal(byId.get("meet")!.join_url, meet);
+    assert.equal(byId.get("meet")!.notes, `Agenda: pricing\nQuestions to jane@acme.com\nJoin<${meet}>`);
+    assert.equal(byId.get("own")!.online_meeting_url, null);
+    assert.equal(byId.get("own")!.join_url, "https://rooms.orbit-notes.test/mark");
+    assert.equal(byId.get("own")!.notes, "Call on my room <https://rooms.orbit-notes.test/mark>");
+    assert.equal(byId.get("plain")!.join_url, null);
+    assert.equal(byId.get("plain")!.notes!.length, NOTES_MAX);
+    assert.ok(byId.get("plain")!.notes!.endsWith("…"));
+    assert.equal(byId.get("bare")!.online_meeting_url, null);
+    assert.equal(byId.get("bare")!.notes, null);
+
+    const items = await listCalendarItems(owner, { start: new Date(now), end: new Date(now + 2 * DAY) });
+    const meetItem = items.find((item) => item.subject === "Meeting meet")!;
+    assert.equal(meetItem.joinUrl, meet);
+    assert.match(meetItem.notes ?? "", /jane@acme\.com/);
+    assert.equal(meetItem.descriptionFromOutside, true);
+    assert.equal(meetItem.joinFromDescription, true);
+    const internalItem = items.find((item) => item.subject === "Meeting internal")!;
+    assert.equal(internalItem.notes, "Team stand-up notes");
+    assert.equal(internalItem.descriptionFromOutside, false);
+    assert.equal(items.find((item) => item.subject === "Meeting bare")!.descriptionFromOutside, false);
+    assert.equal(items.find((item) => item.subject === "Meeting orphan")!.descriptionFromOutside, true);
+    assert.equal(items.find((item) => item.subject === "Meeting legacy")!.descriptionFromOutside, true);
+
+    for (const member of [guest, bystander]) {
+      const notes = await queryAsUser<{ count: number }>(member.userId, "select count(*)::int as count from crm.calendar_event_notes");
+      assert.equal(notes[0].count, 0);
+      const visible = await queryAsUser<{ count: number }>(member.userId, "select count(*)::int as count from crm.calendar_events where provider_event_id = 'meet'");
+      assert.equal(visible[0].count, 1);
+    }
+    await assert.rejects(
+      queryAsUser(guest.userId, "insert into crm.calendar_event_notes (event_id, user_id, workspace_id, notes) select id, user_id, workspace_id, 'x' from crm.calendar_events where provider_event_id = 'meet'"),
+      /row-level security/,
+    );
+    const guestLinks = await queryAsUser<{ join_url: string }>(guest.userId, "select join_url from crm.calendar_event_links");
+    assert.deepEqual(guestLinks.map((row) => row.join_url), [meet]);
+    const bystanderLinks = await queryAsUser<{ count: number }>(bystander.userId, "select count(*)::int as count from crm.calendar_event_links");
+    assert.equal(bystanderLinks[0].count, 0);
+    await saveOtherEmails(bystander, ["cara@client-notes.test", "guest@orbit-notes.test"]);
+    const claimed = await queryAsUser<{ count: number }>(bystander.userId, "select count(*)::int as count from crm.calendar_event_links");
+    assert.equal(claimed[0].count, 0);
+    const connectAccount = (email: string) =>
+      getAdminPool().query(
+        "insert into crm.calendar_accounts (workspace_id, user_id, provider, email, status, refresh_token) values ($1, $2, 'microsoft', $3, 'connected', 'token')",
+        [owner.workspaceId, bystander.userId, email],
+      );
+    await connectAccount("cara@client-notes.test");
+    const spoofed = await queryAsUser<{ join_url: string }>(bystander.userId, "select join_url from crm.calendar_event_links");
+    assert.deepEqual(spoofed, []);
+    await connectAccount("rooms@orbit-notes.test");
+    const sameDomain = await queryAsUser<{ join_url: string }>(bystander.userId, "select join_url from crm.calendar_event_links");
+    assert.deepEqual(sameDomain.map((row) => row.join_url), ["https://whereby.com/orbit-notes-team"]);
+    await getAdminPool().query("delete from crm.calendar_accounts where user_id = $1", [bystander.userId]);
+    const changed = await queryAsUser(guest.userId, "update crm.calendar_event_links set join_url = 'https://evil.example/x' returning event_id");
+    assert.deepEqual(changed, []);
+    const removed = await queryAsUser(guest.userId, "delete from crm.calendar_event_links returning event_id");
+    assert.deepEqual(removed, []);
+
+    assert.equal((await getMeetings(owner, { contactId: client }, now)).upcoming[0].joinUrl, meet);
+    const asMember = (member: UserActor): UserActor => ({ ...member, workspaceId: owner.workspaceId, role: "member", scopes: scopesForRole("member") });
+    assert.equal((await getMeetings(asMember(guest), { contactId: client }, now)).upcoming[0].joinUrl, meet);
+    const forBystander = await getMeetings(asMember(bystander), { contactId: client }, now);
+    assert.equal(forBystander.upcoming[0].subject, "Meeting meet");
+    assert.equal(forBystander.upcoming[0].joinUrl, null);
+    assert.equal(JSON.stringify(forBystander).includes("pricing"), false);
+
+    pages[0][2] = graphEvent("meet", now + DAY, { onlineMeeting: null, location: { displayName: "Office" }, body: text("Moved to the office"), people });
+    await getAdminPool().query("update crm.integration_state set last_attempt_at = null where source = 'calendar'");
+    await syncCalendar(owner, { fetchImpl: graphStub(() => pages, []), now });
+    const updated = (await stored()).get("meet")!;
+    assert.deepEqual({ ...updated }, { provider_event_id: "meet", online_meeting_url: null, join_url: null, notes: "Moved to the office" });
+
+    await getAdminPool().query("delete from crm.calendar_events where user_id = $1 and provider_event_id = 'own'", [owner.userId]);
+    const orphans = await getAdminPool().query<{ count: number }>(
+      `select (select count(*) from crm.calendar_event_notes n where not exists (select 1 from crm.calendar_events e where e.id = n.event_id))
+            + (select count(*) from crm.calendar_event_links l where not exists (select 1 from crm.calendar_events e where e.id = l.event_id)) as count`,
+    );
+    assert.equal(Number(orphans.rows[0].count), 0);
+  });
+
+  it("keeps descriptions and description links with their owner when they move workspace", async () => {
+    const owner = await createUser("mover@orbit-notes.test", "Mover");
+    await connect(owner, "mover@orbit-notes.test");
+    const other = await createUser("host@orbit-notes.test", "Host");
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [other.workspaceId, owner.userId]);
+    const now = Date.now();
+    const meet = "https://meet.google.com/abc-defg-hij";
+    const event = (body: string) =>
+      graphEvent("moving", now + DAY, { onlineMeeting: null, location: { displayName: "Office" }, body: { contentType: "text", content: body } });
+    let pages = [[event(`Agenda\r\nJoin ${meet}`)]];
+    await syncCalendar(owner, { fetchImpl: graphStub(() => pages, []), now });
+    await getAdminPool().query("select private.move_personal_rows($1, $2, $3)", [owner.userId, owner.workspaceId, other.workspaceId]);
+    const moved: UserActor = { ...owner, workspaceId: other.workspaceId, role: "member", scopes: scopesForRole("member") };
+    const rows = await getAdminPool().query<{ notes: number; links: number }>(
+      `select (select count(*)::int from crm.calendar_event_notes where user_id = $1 and workspace_id = $2) as notes,
+              (select count(*)::int from crm.calendar_event_links where user_id = $1 and workspace_id = $2) as links`,
+      [owner.userId, other.workspaceId],
+    );
+    assert.deepEqual(rows.rows[0], { notes: 1, links: 1 });
+    const items = await listCalendarItems(moved, { start: new Date(now), end: new Date(now + 2 * DAY) });
+    assert.equal(items[0].notes, `Agenda\nJoin ${meet}`);
+    assert.equal(items[0].joinUrl, meet);
+    pages = [[event("No link any more")]];
+    await getAdminPool().query("update crm.integration_state set last_attempt_at = null where source = 'calendar'");
+    const again = await syncCalendar(moved, { fetchImpl: graphStub(() => pages, []), now });
+    assert.equal(again.error, undefined);
+    const after = await listCalendarItems(moved, { start: new Date(now), end: new Date(now + 2 * DAY) });
+    assert.equal(after[0].notes, "No link any more");
+    assert.equal(after[0].joinUrl, null);
+  });
+
+  it("re-applies the notes migration", async () => {
+    const sql = readFileSync("supabase/migrations/20270113000000_calendar_notes.sql", "utf8");
+    await getAdminPool().query("alter table crm.calendar_events add column if not exists notes text");
+    await getAdminPool().query(
+      "alter table crm.calendar_events add constraint calendar_events_notes_length check (notes is null or char_length(notes) <= 8000)",
+    );
+    await getAdminPool().query(sql);
+    await getAdminPool().query(sql);
+    const column = await getAdminPool().query("select 1 from information_schema.columns where table_schema = 'crm' and table_name = 'calendar_events' and column_name = 'notes'");
+    assert.equal(column.rowCount, 0);
+    const tables = await getAdminPool().query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+      "select relname, relrowsecurity, relforcerowsecurity from pg_class where relname in ('calendar_event_notes', 'calendar_event_links') order by relname",
+    );
+    assert.deepEqual(tables.rows, [
+      { relname: "calendar_event_links", relrowsecurity: true, relforcerowsecurity: true },
+      { relname: "calendar_event_notes", relrowsecurity: true, relforcerowsecurity: true },
+    ]);
+    await assert.rejects(
+      getAdminPool().query("update crm.calendar_event_notes set notes = repeat('x', 8001)"),
+      /calendar_event_notes_length/,
+    );
   });
 });
 

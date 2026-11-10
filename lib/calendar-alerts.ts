@@ -40,12 +40,14 @@ export async function calendarAlerts(actor: UserActor, options: { now?: number; 
     const minutes = pref.rows.length ? pref.rows[0].notify_calendar_minutes : 10;
     if (minutes === null) return { minutes, events: [] as EventRow[] };
     const result = await db.query<EventRow>(
-      `select subject, starts_at, ends_at, location, online_meeting_url, ical_uid, provider_event_id
-       from crm.calendar_events
-       where user_id = $1 and not is_cancelled and not is_all_day
-         and starts_at > $2::timestamptz - interval '2 minutes'
-         and starts_at <= $2::timestamptz + make_interval(mins => $3)
-       order by starts_at
+      `select e.subject, e.starts_at, e.ends_at, e.location, coalesce(e.online_meeting_url, l.join_url) as online_meeting_url,
+              e.ical_uid, e.provider_event_id
+       from crm.calendar_events e
+       left join crm.calendar_event_links l on l.event_id = e.id
+       where e.user_id = $1 and not e.is_cancelled and not e.is_all_day
+         and e.starts_at > $2::timestamptz - interval '2 minutes'
+         and e.starts_at <= $2::timestamptz + make_interval(mins => $3)
+       order by e.starts_at
        limit 20`,
       [actor.userId, new Date(now).toISOString(), minutes],
     );
