@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { listActivities } from "@/lib/crm/activities";
 import { createContact } from "@/lib/crm/contacts";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import { saveMailbox, saveSignature, sendContactEmail } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { trackingIdIn } from "@/lib/mail/html";
+import { composeEmailHtml, trackingIdIn } from "@/lib/mail/html";
 import { setMailNotifications } from "@/lib/mail/notify";
 import { alertFirstRead } from "@/lib/mail/read-alert";
 import { activityReads, recordOpen, setReadStatuses } from "@/lib/mail/tracking";
@@ -201,5 +202,102 @@ describe("read statuses on emails sent from a contact", () => {
     const unsigned = graph();
     await sendContactEmail(owner, jane, { subject: "Bare", body: "Hello", signature: false, origin: null }, unsigned.fetchImpl);
     assert.doesNotMatch(unsigned.sent[0].content, /Founder, Eclipse/);
+  });
+
+  it("shows the read status on a timeline in a second workspace", async () => {
+    const created = await createWorkspace(owner, { name: "Mark Ridgeon" });
+    const ridgeon: UserActor = { ...owner, workspaceId: created.id, workspaceName: "Mark Ridgeon" };
+    const client = (await createContact(ridgeon, { firstName: "Rosa", lastName: "Lane", email: "rosa@consulting.test" })).body.contact.id;
+    await sendContactEmail(ridgeon, client, { subject: "Consulting", body: "Hello Rosa", origin: ORIGIN }, graph().fetchImpl);
+    const [row] = await trackingRows();
+    await getAdminPool().query("update crm.mail_tracking set sent_at = now() - interval '1 hour' where id = $1", [row.id]);
+    const stored = await getAdminPool().query<{ workspace_id: string }>("select workspace_id from crm.mail_tracking where id = $1", [row.id]);
+    assert.notEqual(stored.rows[0].workspace_id, ridgeon.workspaceId);
+    assert.equal(await recordOpen(row.id, "203.0.113.20", "Macintosh"), true);
+    const activity = (await listActivities(ridgeon, { contactId: client, type: "email" })).data[0];
+    const reads = await activityReads(ridgeon, [activity.id]);
+    assert.deepEqual(
+      reads[activity.id]?.opens.map((open) => open.agent),
+      ["Mac"],
+    );
+    assert.deepEqual(await activityReads(colleague, [activity.id]), {});
+    await getAdminPool().query("delete from crm.mail_tracking");
+  });
+
+  it("still sends, untracked, when the read status can't be started", async () => {
+    const admin = getAdminPool();
+    await admin.query("alter table crm.mail_tracking add constraint mail_tracking_refuse check (false) not valid");
+    try {
+      const out = graph();
+      const result = await sendContactEmail(owner, jane, { subject: "Still goes", body: "Hello", origin: ORIGIN }, out.fetchImpl);
+      assert.equal(result.warning, null);
+      assert.equal(out.sent.length, 1);
+      assert.doesNotMatch(out.sent[0].content, /api\/mail\/open/);
+    } finally {
+      await admin.query("alter table crm.mail_tracking drop constraint mail_tracking_refuse");
+    }
+    assert.deepEqual(await trackingRows(), []);
+  });
+
+  it("keeps the timeline entry when linking the read status fails", async () => {
+    const admin = getAdminPool();
+    await admin.query(`create or replace function public.refuse_tracking_link() returns trigger language plpgsql as $$
+      begin raise exception 'link refused'; end $$`);
+    await admin.query(
+      "create trigger refuse_tracking_link before update of activity_id on crm.mail_tracking for each row when (new.activity_id is not null) execute function public.refuse_tracking_link()",
+    );
+    try {
+      const result = await sendContactEmail(owner, jane, { subject: "Unlinked", body: "Hello", origin: ORIGIN }, graph().fetchImpl);
+      assert.equal(result.warning, null);
+    } finally {
+      await admin.query("drop trigger refuse_tracking_link on crm.mail_tracking");
+      await admin.query("drop function public.refuse_tracking_link()");
+    }
+    const activity = (await listActivities(owner, { contactId: jane, type: "email" })).data.find((item) => item.title === "Unlinked");
+    assert.ok(activity);
+    const [row] = await trackingRows();
+    assert.ok(row.sent_at);
+    assert.equal(row.activity_id, null);
+    await admin.query("delete from crm.mail_tracking");
+  });
+
+  it("keeps the read status when Microsoft times out and the email may have gone", async () => {
+    const fetchImpl: typeof fetch = async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    };
+    await assert.rejects(sendContactEmail(owner, jane, { subject: "Maybe sent", body: "Hello", origin: ORIGIN }, fetchImpl));
+    const [row] = await trackingRows();
+    assert.ok(row?.sent_at);
+    assert.equal(row.subject, "Maybe sent");
+    assert.deepEqual(row.recipients, [{ name: "Jane Doe", address: "jane@client.test" }]);
+    await getAdminPool().query("delete from crm.mail_tracking");
+  });
+});
+
+describe("email HTML", () => {
+  for (const plain of [false, true]) {
+    it(`links URLs in angle brackets, quotes and with query strings${plain ? " in plain text" : ""}`, () => {
+      const html = composeEmailHtml({
+        body: 'See <https://eclipse.test/a?x=1&y=2> now, "https://eclipse.test/b" too and https://eclipse.test/c?x=1&z=2.',
+        plain,
+      });
+      assert.ok(html.includes('See &lt;<a href="https://eclipse.test/a?x=1&amp;y=2">https://eclipse.test/a?x=1&amp;y=2</a>&gt; now'));
+      assert.ok(html.includes('&quot;<a href="https://eclipse.test/b">https://eclipse.test/b</a>&quot; too'));
+      assert.ok(html.includes('and <a href="https://eclipse.test/c?x=1&amp;z=2">https://eclipse.test/c?x=1&amp;z=2</a>.'));
+      assert.doesNotMatch(html, /&gt"|&quot"|&gt<\/a>|&quot<\/a>/);
+    });
+  }
+
+  it("keeps indentation, runs of spaces, tabs and blank lines in plain text", () => {
+    const html = composeEmailHtml({ body: "Items:\n  - one\n\t- two\nA    B\n\n\n\nEnd", plain: true });
+    assert.ok(html.includes("Items:<br>&nbsp;&nbsp;- one<br>&nbsp;&nbsp;&nbsp;&nbsp;- two<br>A&nbsp;&nbsp;&nbsp; B</p>"));
+    assert.ok(html.includes('<p style="margin:0 0 1em 0"><br><br>End</p>'));
+    assert.equal(composeEmailHtml({ body: "A    B" }).includes("&nbsp;"), false);
+  });
+
+  it("leaves the signature unformatted in plain text", () => {
+    const html = composeEmailHtml({ body: "Hi", signature: "*Founder*\n# 1 agency", plain: true });
+    assert.ok(html.includes('<div style="color:#555"><p style="margin:0 0 1em 0">*Founder*<br># 1 agency</p></div>'));
+    assert.ok(composeEmailHtml({ body: "Hi", signature: "*Founder*" }).includes("<em>Founder</em>"));
   });
 });

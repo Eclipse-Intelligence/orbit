@@ -41,8 +41,17 @@ function escapeHtml(text: string) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function linkify(escaped: string) {
-  return escaped.replace(/\bhttps?:\/\/[^\s<]+[^\s<.,;:!?)\]'"]/g, (url) => `<a href="${url}">${url}</a>`);
+const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"]+[^\s<>"'.,;:!?)\]]/g;
+
+function linkify(text: string) {
+  let html = "";
+  let last = 0;
+  for (const match of text.matchAll(URL_IN_TEXT)) {
+    const url = escapeHtml(match[0]);
+    html += `${escapeHtml(text.slice(last, match.index))}<a href="${url}">${url}</a>`;
+    last = match.index + match[0].length;
+  }
+  return html + escapeHtml(text.slice(last));
 }
 
 const IMAGE_MARKER = /\[Image: ([^\]\n]{1,200})\]/g;
@@ -59,7 +68,7 @@ function placeImages(escaped: string, inline: Record<string, string>) {
 }
 
 function plainPart(text: string, inline: Record<string, string>) {
-  return placeImages(linkify(escapeHtml(text)), inline);
+  return placeImages(linkify(text), inline);
 }
 
 function spansToHtml(line: string, spans: FormatSpan[], from: number, to: number, inline: Record<string, string>): string {
@@ -86,20 +95,39 @@ function formatLine(line: string, inline: Record<string, string>) {
   return marker ? `<strong>${text}</strong>` : text;
 }
 
+const HARD_SPACE = "\u00a0";
+
+function keepSpacing(line: string) {
+  return line
+    .replace(/\t/g, HARD_SPACE.repeat(4))
+    .replace(/^ +/, (lead) => HARD_SPACE.repeat(lead.length))
+    .replace(/ {2,}/g, (run) => `${HARD_SPACE.repeat(run.length - 1)} `);
+}
+
+function plainLine(line: string, inline: Record<string, string>) {
+  return plainPart(keepSpacing(line), inline).replace(/\u00a0/g, "&nbsp;");
+}
+
+function paragraphHtml(paragraph: string, line: (value: string) => string, gap = 0) {
+  return `<p style="margin:0 0 1em 0">${"<br>".repeat(gap)}${paragraph.split("\n").map(line).join("<br>")}</p>`;
+}
+
 function textToHtml(text: string, inline: Record<string, string> = {}, plain = false) {
-  const line = (value: string) => (plain ? plainPart(value, inline) : formatLine(value, inline));
-  return text
-    .replace(/\r\n/g, "\n")
-    .trim()
-    .split(/\n{2,}/)
-    .map(
-      (paragraph) =>
-        `<p style="margin:0 0 1em 0">${paragraph
-          .split("\n")
-          .map(line)
-          .join("<br>")}</p>`,
-    )
-    .join("");
+  const normal = text.replace(/\r\n/g, "\n");
+  if (!plain) {
+    return normal
+      .trim()
+      .split(/\n{2,}/)
+      .map((paragraph) => paragraphHtml(paragraph, (value) => formatLine(value, inline)))
+      .join("");
+  }
+  const parts = normal.replace(/^\s*\n/, "").trimEnd().split(/(\n{2,})/);
+  let html = "";
+  for (let index = 0; index < parts.length; index += 2) {
+    const gap = index > 0 ? parts[index - 1].length - 2 : 0;
+    html += paragraphHtml(parts[index], (value) => plainLine(value, inline), gap);
+  }
+  return html;
 }
 
 export function composeEmailHtml(input: {
@@ -110,7 +138,7 @@ export function composeEmailHtml(input: {
   inline?: Record<string, string>;
   plain?: boolean;
 }) {
-  const signature = input.signature?.trim() ? `<div style="color:#555">${textToHtml(input.signature)}</div>` : "";
+  const signature = input.signature?.trim() ? `<div style="color:#555">${textToHtml(input.signature, {}, input.plain)}</div>` : "";
   const pixel = input.pixel
     ? `<img src="${escapeHtml(input.pixel)}" alt="" width="1" height="1" style="display:block;width:1px;height:1px;border:0;opacity:0">`
     : "";

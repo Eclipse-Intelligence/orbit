@@ -509,10 +509,13 @@ export async function sendContactEmail(
   const sender = prepared.sender!;
   const attached = await loadAttachments(actor, input.attachments ?? [], fetchImpl);
   const origin = input.origin === undefined ? mailOrigin() : input.origin;
-  const trackingId = origin && (await readStatusesOn(actor)) ? await startTracking(actor, sender.email) : null;
+  const trackingId = origin ? await startTracking(actor, sender.email) : null;
+  const sent = { recipients: [{ name: contact.name, address: to }], subject, senderEmail: sender.email };
   let token: MicrosoftToken;
+  let attempted = false;
   try {
     token = await currentToken(sender.tokens, fetchImpl);
+    attempted = true;
     await sendGraphMail(
       token.accessToken,
       {
@@ -531,7 +534,12 @@ export async function sendContactEmail(
       fetchImpl,
     );
   } catch (error) {
-    if (trackingId) await dropUnsentTracking(actor, trackingId).catch(() => undefined);
+    if (trackingId) {
+      const unsure = attempted && !(error instanceof MicrosoftError);
+      await (unsure ? markTrackingSent(actor, trackingId, sent) : dropUnsentTracking(actor, trackingId)).catch((failure: unknown) =>
+        console.error("Couldn't settle the read status after a failed send", failure),
+      );
+    }
     const reconnect = reconnectProblem(error, sender.email);
     throw new CrmError(
       "upstream_error",
@@ -550,11 +558,12 @@ export async function sendContactEmail(
     });
   } catch {}
   if (trackingId) {
-    await markTrackingSent(actor, trackingId, { recipients: [{ name: contact.name, address: to }], subject, senderEmail: sender.email }).catch((error: unknown) =>
+    await markTrackingSent(actor, trackingId, sent).catch((error: unknown) =>
       console.error("Couldn't mark the read status as sent", error),
     );
   }
   if (attached.summary.length && !input.keepAttachments) await discardAttachments(actor, input.attachments ?? [], fetchImpl);
+  let activityId: string | null = null;
   try {
     await withActor(actor, async (db) => {
       const activity = await createActivityInDb(
@@ -576,24 +585,37 @@ export async function sendContactEmail(
         },
         input.provenance ?? { operation: "send_email", source: "microsoft" },
       );
-      if (trackingId && activity) {
-        await db.query("update crm.mail_tracking set activity_id = $2 where id = $1 and user_id = $3", [trackingId, activity.id, actor.userId]);
-      }
+      activityId = activity?.id ?? null;
     });
   } catch {
     return { warning: UNFILED_WARNING };
+  }
+  if (trackingId && activityId) {
+    await linkTracking(actor, trackingId, activityId).catch((error: unknown) => console.error("Couldn't link the read status to the timeline", error));
   }
   return { warning: null };
 }
 
 async function startTracking(actor: UserActor, senderEmail: string) {
-  return withActor(actor, async (db) => {
-    const created = await db.query<{ id: string }>(
-      "insert into crm.mail_tracking (workspace_id, user_id, sender_email) values ($1, $2, $3) returning id",
-      [actor.workspaceId, actor.userId, senderEmail],
-    );
-    return created.rows[0].id;
-  });
+  try {
+    if (!(await readStatusesOn(actor))) return null;
+    return await withActor(actor, async (db) => {
+      const created = await db.query<{ id: string }>(
+        "insert into crm.mail_tracking (workspace_id, user_id, sender_email) values ($1, $2, $3) returning id",
+        [actor.workspaceId, actor.userId, senderEmail],
+      );
+      return created.rows[0].id;
+    });
+  } catch (error) {
+    console.error("Couldn't start the read status, sending without it", error);
+    return null;
+  }
+}
+
+async function linkTracking(actor: UserActor, trackingId: string, activityId: string) {
+  await withActor(actor, (db) =>
+    db.query("update crm.mail_tracking set activity_id = $2 where id = $1 and user_id = $3", [trackingId, activityId, actor.userId]),
+  );
 }
 
 async function dropUnsentTracking(actor: UserActor, trackingId: string) {

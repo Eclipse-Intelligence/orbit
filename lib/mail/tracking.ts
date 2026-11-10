@@ -98,9 +98,9 @@ export async function activityReads(actor: Actor, activityIds: string[]): Promis
            from crm.mail_opens o where o.tracking_id = t.id and o.user_id = $2
          ), '[]'::json) as opens
        from crm.mail_tracking t
-       where t.activity_id = any($1::uuid[]) and t.user_id = $2 and t.workspace_id = $3 and t.sent_at is not null
+       where t.activity_id = any($1::uuid[]) and t.user_id = $2 and t.sent_at is not null
        order by t.activity_id, t.sent_at desc`,
-      [ids, actor.userId, actor.workspaceId],
+      [ids, actor.userId],
     );
     return result.rows;
   });

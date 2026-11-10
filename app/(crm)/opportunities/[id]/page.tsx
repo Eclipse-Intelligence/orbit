@@ -37,14 +37,13 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
   if (!opportunity || opportunity.archivedAt) notFound();
   if (opportunity.pipelineKind === "board") redirect(opportunityHref(opportunity));
 
-  const [pipeline, context, members, mailbox, history] = await Promise.all([
+  const [pipeline, { context, reads }, members, mailbox, history] = await Promise.all([
     listPipeline(user, opportunity.pipelineId),
-    getCompanyContext(user, opportunity.companyId),
+    getCompanyContext(user, opportunity.companyId).then(async (context) => ({ context, reads: await timelineReads(user, context.timeline) })),
     listMembers(user),
     getMailbox(user),
     stageHistory(user, opportunity.id),
   ]);
-  const reads = await timelineReads(user, context.timeline);
 
   return (
     <OpportunityRecord
