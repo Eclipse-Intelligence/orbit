@@ -335,10 +335,14 @@ async function completeGateway(input: CompleteInput): Promise<Completion> {
   }
 }
 
-let cacheMarkersRefused = false;
+const markersRefused = new Set<string>();
 
 export function cacheMarkersFor(model: string) {
-  return !cacheMarkersRefused && /^(?:anthropic\/)?claude-/.test(model);
+  return !markersRefused.has(model) && /^(?:anthropic\/)?claude-/.test(model);
+}
+
+export function resetCacheMarkers() {
+  markersRefused.clear();
 }
 
 type GatewayMessage = ReturnType<typeof plain>[number];
@@ -356,12 +360,14 @@ class MarkersRefusedError extends AssistantError {}
 
 async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<Completion> {
   const marks = cacheMarkersFor(input.model);
+  const started = Date.now();
   try {
     return await gatewayRequest(input, timeoutMs, marks);
   } catch (error) {
     if (!marks || !(error instanceof MarkersRefusedError) || input.signal?.aborted) throw error;
-    const result = await gatewayRequest(input, timeoutMs, false);
-    cacheMarkersRefused = true;
+    const result = await gatewayRequest(input, Math.max(5_000, timeoutMs - (Date.now() - started)), false);
+    markersRefused.add(input.model);
+    console.error(`The LLM gateway refused cache markers for ${input.model}, so Orbit stops sending them for it until the server restarts.`, error.message);
     return result;
   }
 }
@@ -398,7 +404,7 @@ async function gatewayRequest(input: CompleteInput, timeoutMs: number, marks: bo
   if (!response.ok) {
     const reason = await detail(response);
     const message = `The LLM gateway returned ${response.status}${reason ? `: ${reason}` : "."}`;
-    if (marks && response.status === 400) throw new MarkersRefusedError(message);
+    if (marks && response.status === 400 && /cache_control/i.test(reason)) throw new MarkersRefusedError(message);
     throw RETRY_STATUSES.has(response.status) ? new RetryableGatewayError(message) : new AssistantError(message);
   }
   if (input.onText && (response.headers.get("content-type") ?? "").includes("text/event-stream")) {

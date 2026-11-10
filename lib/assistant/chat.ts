@@ -3,7 +3,7 @@ import { assistantModel, settingsFor, startingSettings, type ModelSource, type R
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt, turnContext, type PageContext } from "@/lib/assistant/prompt";
-import { untrustedToken } from "@/lib/assistant/untrusted";
+import { untrustedToken, withoutMarkers } from "@/lib/assistant/untrusted";
 import { docLinkOf } from "@/lib/assistant/doc-link";
 import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, loadedDomains, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel } from "@/lib/assistant/tools";
 import { brandOrEmpty } from "@/lib/crm/brand";
@@ -66,6 +66,8 @@ export type AssistantAction = {
 };
 
 export const UNATTENDED_NOTE = "Made without asking, because this doc lets the assistant edit it.";
+
+export const ALL_TOOLS_LOADED = "On Orbit Agent every tool is already loaded, so call any tool directly and never call find_tools.";
 
 export type ConversationSummary = {
   id: string;
@@ -522,7 +524,7 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
 
 function companionTools(multiWorkspace: boolean) {
   return [
-    ...assistantTools({ multiWorkspace }).map((tool) => ({
+    ...assistantTools({ multiWorkspace }).filter((tool) => tool.name !== "find_tools").map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -556,7 +558,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       if (!tool) continue;
       (tool.write ? writes : reads).push(toToolCall(call));
     }
-    if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
+    if (step.text.trim() || reads.length > 0) entries.push({ content: withoutMarkers(step.text).trim(), reads });
   }
   const refused = await refusedWrites(actor, writes);
   const proposed = writes.filter((call) => !refused.has(call.id));
@@ -661,14 +663,8 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
   };
 }
 
-function sentAt(rows: MessageRow[]) {
-  const latest = [...rows].reverse().find((row) => row.role === "user");
-  const at = latest ? new Date(latest.created_at) : new Date();
-  return Number.isNaN(at.getTime()) ? new Date() : at;
-}
-
-function contextFor(rows: MessageRow[], conversation: ConversationRow, prompt: { learned: string; briefReady: boolean }, fence: string, page?: PageContext | null) {
-  return turnContext({ now: sentAt(rows), webSearch: conversation.web_search, briefReady: prompt.briefReady, page, notes: prompt.learned, fence });
+function contextFor(now: Date, conversation: ConversationRow, prompt: { learned: string; briefReady: boolean }, fence: string, page?: PageContext | null) {
+  return turnContext({ now, webSearch: conversation.web_search, briefReady: prompt.briefReady, page, notes: prompt.learned, fence });
 }
 
 function toolsFor(rows: MessageRow[], multiWorkspace: boolean) {
@@ -692,12 +688,12 @@ async function runCompanionTurn(
   const earlier = new Set(rows.map((row) => row.id));
   const prompt = await promptFor(actor, conversation, { headless: Boolean(headless) });
   const { system, multiWorkspace } = prompt;
-  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, contextFor(rows, conversation, prompt, untrustedToken(), page)));
+  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, contextFor(new Date(), conversation, prompt, untrustedToken(), page)));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
-    system,
+    system: `${system}\n\n${ALL_TOOLS_LOADED}`,
     prompt: transcript,
     tools: companionTools(multiWorkspace),
   }, { agentMailId: headless?.agentMailId ?? null });
@@ -724,7 +720,7 @@ async function runCompanionTurn(
     seen = job.events.length;
     if (job.status === "running" && job.draft && job.draft !== draft) {
       draft = job.draft;
-      emit({ type: "draft", text: job.draft });
+      emit({ type: "draft", text: withoutMarkers(job.draft) });
     }
     if (job.status === "done") {
       if (!job.result) continue;
@@ -845,7 +841,7 @@ function draftEmitter(emit: Emit) {
     const now = Date.now();
     if (now - last < DRAFT_EVERY_MS) return;
     last = now;
-    emit({ type: "draft", text });
+    emit({ type: "draft", text: withoutMarkers(text) });
   };
 }
 
@@ -857,11 +853,10 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const prompt = await promptFor(actor, conversation);
   const { system, multiWorkspace } = prompt;
   const fence = untrustedToken();
-  let context: string | null = null;
+  const context = contextFor(new Date(), conversation, prompt, fence, options.page);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
-    context ??= contextFor(rows, conversation, prompt, fence, options.page);
     const tools = toolsFor(rows, multiWorkspace);
     const remaining = deadline - Date.now();
     if (remaining < 15_000) {
@@ -893,7 +888,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
     if (signal?.aborted) return;
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: result.content.trim() || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
+      content: result.content.trim() || result.toolCalls.length > 0 ? withoutMarkers(result.content) : EMPTY_REPLY,
       toolCalls: result.toolCalls,
       sources: result.sources,
       model: result.model,
@@ -911,7 +906,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, multiWorkspace });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),

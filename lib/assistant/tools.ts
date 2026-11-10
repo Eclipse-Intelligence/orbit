@@ -162,6 +162,7 @@ import { AGENT_MAILBOX, agentMailThread, isAgentMail, searchAgentMail, sendFromA
 import {
   CHANGES_GUIDE,
   coldEmailGuide,
+  currentToolNames,
   DOCS_GUIDE,
   eclipseGuideText,
   GUIDE_SUMMARIES,
@@ -173,7 +174,7 @@ import {
   WORKFLOWS_RULES,
   type GuideTopic,
 } from "@/lib/assistant/guides";
-import { fenceUntrusted } from "@/lib/assistant/untrusted";
+import { fenceUntrusted, withoutMarkers } from "@/lib/assistant/untrusted";
 
 type Args = Record<string, unknown>;
 type JsonSchema = Record<string, unknown>;
@@ -193,7 +194,7 @@ type Names = (id: unknown) => string;
 
 type Defer = (work: () => Promise<unknown>) => void;
 
-type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval };
+type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval; multiWorkspace?: boolean };
 
 function afterResponse(work: () => Promise<unknown>) {
   try {
@@ -887,7 +888,7 @@ const COMPANY_FIELDS = {
   website: { type: "string", description: "Full website address, for example https://acme.com." },
   description: { type: "string", description: "A short description of what the company does." },
   industry: { type: "string", description: "The company's industry, for example \"B2B SaaS\" or \"Marketing agency\"." },
-  sizeCategory: { type: "string", description: "Headcount band as free text, for example \"11-50\" or \"51-200\"." },
+  sizeCategory: { type: "string", description: "Headcount band. Orbit's bands are 1-10, 11-50, 51-200, 201-1000 and 1000+." },
   lifecycle: LIFECYCLE_PARAM,
   ownerId: { type: "string", description: "Team member id from list_team_members." },
   source: { type: "string", description: "Where the company came from, for example \"Referral\", \"LinkedIn\" or \"Event\"." },
@@ -1024,7 +1025,7 @@ const BLOCK_ITEM = {
     subtitle: { type: "string", description: "For a cover: the line under the title." },
     image: { type: "string", description: "For a cover: the image url, from add_proposal_image." },
     heading: { type: "string", description: "The block's heading, shown above it." },
-    body: { type: "string", description: "For a section or terms: the text, in Markdown." },
+    body: { type: "string", description: "For a section or terms: the text. Blank lines between paragraphs, - bullets, **bold** and [text](https://…) links work; other Markdown shows as typed." },
     intro: { type: "string", description: "For pricing, documents, steps and booking: a short line above the block." },
     linkLabel: { type: "string", description: "For terms: the text of the link to the full terms." },
     linkUrl: { type: "string", description: "For terms: the address of the full terms." },
@@ -1100,11 +1101,18 @@ export const CORE_TOOLS: readonly string[] = [
   "search_records",
   "list_companies",
   "get_company",
+  "create_company",
   "update_company",
   "list_contacts",
   "get_contact",
+  "create_contact",
   "update_contact",
+  "list_team_members",
   "list_opportunities",
+  "update_opportunity",
+  "list_calendar_events",
+  "search_knowledge",
+  "read_web_page",
   "search_email",
   "get_email_thread",
   "send_email",
@@ -1122,20 +1130,17 @@ export const CORE_TOOLS: readonly string[] = [
 
 export const TOOL_DOMAINS = {
   records: {
-    summary: "creating, merging, tagging and archiving records, relationship labels, contact details, verify_email, team members, undo, activities and transcripts",
+    summary: "merging, tagging and archiving records, relationship labels, contact details, verify_email, undo, activities and transcripts",
     tools: [
-      "create_company",
       "merge_companies",
       "set_relationship",
       "list_quiet_relationships",
-      "create_contact",
       "merge_contacts",
       "find_contact_details",
       "verify_email",
       "archive_records",
       "tag_records",
       "list_tags",
-      "list_team_members",
       "list_recent_changes",
       "undo_change",
       "archive_activity",
@@ -1160,14 +1165,13 @@ export const TOOL_DOMAINS = {
     ],
   },
   pipeline: {
-    summary: "the pipeline, deals, reports, stalled deals and boards",
+    summary: "the pipeline, new deals, deal history, pipeline_report, stalled_deals and boards",
     tools: [
       "get_pipeline",
       "get_deal_history",
       "pipeline_report",
       "stalled_deals",
       "create_opportunity",
-      "update_opportunity",
       "list_boards",
       "get_board",
       "add_to_board",
@@ -1216,12 +1220,12 @@ export const TOOL_DOMAINS = {
     ],
   },
   calendar: {
-    summary: "calendar events and meeting invites",
-    tools: ["list_calendar_events", "create_meeting_invite", "move_meeting", "cancel_meeting", "respond_to_meeting"],
+    summary: "meeting invites, and moving, cancelling or answering meetings",
+    tools: ["create_meeting_invite", "move_meeting", "cancel_meeting", "respond_to_meeting"],
   },
   knowledge: {
-    summary: "Knowledge and Docs",
-    tools: ["search_knowledge", "read_knowledge", "list_knowledge", "map_website", "add_to_knowledge", "remove_knowledge", "save_doc"],
+    summary: "reading more of Knowledge, adding and removing it, mapping a website, and changing Docs",
+    tools: ["read_knowledge", "list_knowledge", "map_website", "add_to_knowledge", "remove_knowledge", "save_doc"],
   },
   eclipse: {
     summary: "the Eclipse app and its docs",
@@ -1236,8 +1240,8 @@ export const TOOL_DOMAINS = {
     tools: ["reader_list", "reader_read", "recall_search", "recall_read"],
   },
   web: {
-    summary: "read_web_page, check_web and social_lookup",
-    tools: ["read_web_page", "check_web", "social_lookup"],
+    summary: "check_web and social_lookup",
+    tools: ["check_web", "social_lookup"],
   },
   settings: {
     summary: "settings, remember, run_learning and the watchlist",
@@ -1255,6 +1259,29 @@ export const TOOL_DOMAIN_NAMES = Object.keys(TOOL_DOMAINS) as ToolDomain[];
 
 const DOMAIN_OF = new Map<string, ToolDomain>(TOOL_DOMAIN_NAMES.flatMap((domain) => TOOL_DOMAINS[domain].tools.map((name) => [name, domain] as const)));
 
+export function toolDomainNames(options: { multiWorkspace?: boolean } = {}) {
+  return TOOL_DOMAIN_NAMES.filter((domain) => options.multiWorkspace === true || !TOOL_DOMAINS[domain].tools.some((name) => MULTI_WORKSPACE_TOOLS.has(name)));
+}
+
+function findToolsSchema(multiWorkspace: boolean) {
+  const offered = toolDomainNames({ multiWorkspace });
+  return {
+    description: `Load the tools for one or more areas so you can call them. Only the main tools are loaded at the start; the rest are grouped by area: ${offered.map((domain) => `${domain} (${TOOL_DOMAINS[domain].summary})`).join("; ")}. Loaded tools stay available for the rest of the conversation. Load every area a task needs in one call.`,
+    parameters: {
+      type: "object",
+      properties: {
+        domains: {
+          type: "array",
+          items: { type: "string", enum: [...offered] },
+          minItems: 1,
+          description: "The areas to load, for example [\"proposals\"] or [\"web\", \"knowledge\"].",
+        },
+      },
+      required: ["domains"],
+    },
+  };
+}
+
 function firstSentence(text: string) {
   return text.split(/(?<=\.)\s/)[0] ?? text;
 }
@@ -1270,7 +1297,7 @@ async function coldEmailPlaybook(actor: UserActor) {
       : {
           playbookNote: `${owner} has no cold email playbook yet (Settings, Brand). Write from your evidence and the brand profile, keep to the rules for first emails in this guide, and run cold_email_check.`,
         }),
-    outreachBrief: brand.outreachBrief || null,
+    outreachBrief: brand.outreachBrief ? currentToolNames(brand.outreachBrief) : null,
     proofList: proofListFor(proof),
     ...(proof.length === 0 ? { proofNote: "The proof list is empty, so there's no client proof to use yet. Use a finding or something made for them. Proof is added in Settings, Knowledge." } : {}),
   };
@@ -1490,7 +1517,7 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         query: {
           type: "string",
-          description: "Words to match against names, emails, domains and company names, for example \"Acme\" or \"jane@acme.com\". Up to 25 of each kind come back.",
+          description: "One phrase, matched as written against names, emails, domains and company names, for example \"Acme\" or \"jane@acme.com\" (\"Priya Acme\" matches nothing). Up to 25 of each kind come back.",
         },
       },
       required: ["query"],
@@ -1517,7 +1544,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Words to match against the company's name, domain or industry, for example \"acme\"." },
+        query: { type: "string", description: "One phrase, matched as written against the company's name, domain or industry, for example \"acme\"." },
         lifecycle: LIFECYCLE_PARAM,
         health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "Account health from calls; none means not set yet." },
         tag: { type: "string", description: "Only companies with this tag, for example \"partner\". See list_tags." },
@@ -1620,7 +1647,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Words to match against the person's name, email, job title, phone or company name, for example \"Priya\" or \"head of marketing\"." },
+        query: { type: "string", description: "One phrase, matched as written against the person's name, email, job title, phone or company name, for example \"Priya\" or \"head of marketing\"." },
         companyId: { type: "string", description: "Only people at this company, by company id." },
         tag: { type: "string", description: "Only people with this tag. See list_tags." },
         ownerId: { type: "string", description: "Only people owned by this team member, by id from list_team_members." },
@@ -1683,7 +1710,7 @@ const TOOL_LIST: AssistantTool[] = [
           enum: TASK_VIEWS.filter((view) => view !== "none"),
           description: "all (every open task, the default), overdue, today (due today), upcoming (due later) or completed.",
         },
-        query: { type: "string", description: "Words to match against the task's title, detail or company name, for example \"proposal\"." },
+        query: { type: "string", description: "One phrase, matched as written against the task's title, detail or company name, for example \"proposal\"." },
         companyId: { type: "string", description: "Only tasks on this company, by company id." },
         contactId: { type: "string", description: "Only tasks on this person, by contact id." },
         limit: { ...limitParam, description: "How many to return, up to 100. Defaults to 100." },
@@ -1949,7 +1976,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Words to match against the deal's name, its company or its stage, for example \"retainer\"." },
+        query: { type: "string", description: "One phrase, matched as written against the deal's name, its company or its stage, for example \"retainer\"." },
         companyId: { type: "string", description: "Only deals and cards for this company, by company id." },
         status: { type: "string", enum: [...OPPORTUNITY_STATUSES], description: `Only deals with this status: ${OPPORTUNITY_STATUSES.join(", ")}.` },
         limit: limitParam,
@@ -1974,7 +2001,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Words to match against the activity's title, text or company name, for example \"pricing\"." },
+        query: { type: "string", description: "One phrase, matched as written against the activity's title, text or company name, for example \"pricing\"." },
         companyId: { type: "string", description: "Only activity on this company, by company id." },
         contactId: { type: "string", description: "Only activity with this person, by contact id." },
         type: { type: "string", enum: [...ACTIVITY_TYPES], description: `Only this kind of activity: ${ACTIVITY_TYPES.join(", ")}.` },
@@ -2216,7 +2243,7 @@ const TOOL_LIST: AssistantTool[] = [
           description: "scheduled lists every email waiting to send later (Mail's Scheduled view), soonest first, with recipients, subject, message, files, send time and any send error, and ids for change_scheduled_email. subscriptions lists newsletter and bulk senders with open counts, for mail_action unsubscribe, keep, research or block. research returns research mail with its text. The other options don't apply to these three.",
         },
         days: { type: "integer", minimum: 1, maximum: 365, description: "For subscriptions, the window for counts and suggestions (default 90; 3 months is 90). For research, how many days back (default 1)." },
-        limit: { type: "integer", minimum: 1, maximum: 50, description: "How many emails to return, up to 50. Defaults to 20." },
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "How many emails to return, up to 50. Defaults to 20, or 50 for folder research." },
         mailbox: {
           type: "string",
           enum: [AGENT_MAILBOX],
@@ -2881,29 +2908,15 @@ const TOOL_LIST: AssistantTool[] = [
   {
     name: "find_tools",
     label: "Loading tools",
-    description: `Load the tools for one or more areas so you can call them. Only the main tools are loaded at the start; the rest are grouped by area: ${TOOL_DOMAIN_NAMES.map((domain) => `${domain} (${TOOL_DOMAINS[domain].summary})`).join("; ")}. Loaded tools stay available for the rest of the conversation. Load every area a task needs in one call.`,
-    parameters: {
-      type: "object",
-      properties: {
-        domains: {
-          type: "array",
-          items: { type: "string", enum: [...TOOL_DOMAIN_NAMES] },
-          minItems: 1,
-          description: "The areas to load, for example [\"proposals\"] or [\"web\", \"knowledge\"].",
-        },
-      },
-      required: ["domains"],
-    },
-    run: async (actor, args) => {
-      const wanted = strings(args.domains).map((domain) => oneOf(domain, TOOL_DOMAIN_NAMES)).filter((domain): domain is ToolDomain => Boolean(domain));
-      if (wanted.length === 0) return { error: `Choose at least one area: ${TOOL_DOMAIN_NAMES.join(", ")}.`, field: "domains" };
-      const multiWorkspace = (await workspaceActors(actor).catch(() => [actor])).length > 1;
+    ...findToolsSchema(false),
+    run: async (_actor, args, context) => {
+      const offered = toolDomainNames({ multiWorkspace: context.multiWorkspace === true });
+      const wanted = strings(args.domains).map((domain) => oneOf(domain, offered)).filter((domain): domain is ToolDomain => Boolean(domain));
+      if (wanted.length === 0) return { error: `Choose at least one area: ${offered.join(", ")}.`, field: "domains" };
       return {
         loaded: [...new Set(wanted)].map((domain) => ({
           domain,
-          tools: TOOL_DOMAINS[domain].tools
-            .filter((name) => multiWorkspace || !MULTI_WORKSPACE_TOOLS.has(name))
-            .map((name) => ({ name, description: firstSentence(TOOL_LIST.find((tool) => tool.name === name)?.description ?? "") })),
+          tools: TOOL_DOMAINS[domain].tools.map((name) => ({ name, description: firstSentence(TOOL_LIST.find((tool) => tool.name === name)?.description ?? "") })),
         })),
         note: "These tools are now loaded, with their full inputs, from your next step for the rest of this conversation.",
       };
@@ -4198,7 +4211,7 @@ const TOOL_LIST: AssistantTool[] = [
           description: "Only this status. open means anything waiting on a signature. Defaults to all.",
         },
         kind: { type: "string", enum: ["proposal", "nda"], description: "Only proposals or only NDAs." },
-        search: { type: "string", description: "Words to match against the title, company or contact, for example \"Acme\"." },
+        search: { type: "string", description: "One phrase, matched as written against the title, company or contact, for example \"Acme\"." },
       },
     },
     run: async (actor, args) => ({
@@ -5680,9 +5693,12 @@ export function loadedDomains(calls: { name: string; arguments: string }[]) {
 }
 
 export function assistantTools(options: ToolOptions = {}) {
-  const offered = ASSISTANT_TOOLS.filter((tool) => !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)));
+  const offered = ASSISTANT_TOOLS.filter((tool) => !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name))).map((tool) =>
+    tool.name === "find_tools" ? { ...tool, ...findToolsSchema(options.multiWorkspace === true) } : tool,
+  );
   if (!options.domains) return offered;
-  const order = [...CORE_TOOLS, ...options.domains.flatMap((domain) => TOOL_DOMAINS[domain].tools)];
+  const allowed = toolDomainNames(options);
+  const order = [...CORE_TOOLS, ...options.domains.filter((domain) => allowed.includes(domain)).flatMap((domain) => TOOL_DOMAINS[domain].tools)];
   const byName = new Map(offered.map((tool) => [tool.name, tool]));
   return [...new Set(order)].flatMap((name) => byName.get(name) ?? []);
 }
@@ -5737,7 +5753,16 @@ const EXTERNAL_TOOLS = new Set([
   "list_email_templates",
   "list_email_attachments",
   "read_chat_file",
+  "list_workflow_approvals",
 ]);
+
+const OWN_FIELDS: Record<string, ReadonlySet<string>> = {
+  get_proposal: new Set(["blocks", "items", "steps", "settings", "title"]),
+  get_workflow: new Set(["workflow"]),
+  list_email_templates: new Set(["templates"]),
+  get_capture: new Set(["draft"]),
+  get_email_thread: new Set(["drafts", "prepared", "followUp"]),
+};
 
 const TOOL_TIMEOUT_MS = 90_000;
 
@@ -5761,7 +5786,7 @@ export function dropStrayNulls(value: unknown, schema: unknown): unknown {
 
 function marked(name: string, output: unknown, fence?: string) {
   if (!EXTERNAL_TOOLS.has(name) || !output || typeof output !== "object" || Array.isArray(output) || "error" in (output as object)) return output;
-  return { notice: EXTERNAL_NOTICE, ...((fence ? fenceUntrusted(output, fence) : output) as Record<string, unknown>) };
+  return { notice: EXTERNAL_NOTICE, ...((fence ? fenceUntrusted(output, fence, OWN_FIELDS[name]) : output) as Record<string, unknown>) };
 }
 
 function collectIds(value: unknown, into: Set<string>) {
@@ -5956,7 +5981,7 @@ export function describeAction(name: string, args: Args, names: Map<string, stri
     const key = str(id);
     return names.get(key) ?? (isUuid(key) ? "Unknown record" : key);
   };
-  const described = tool.describe(resolved.args, lookup);
+  const described = tool.describe(withoutMarkers(resolved.args), lookup);
   return {
     title: described.title,
     lines: described.lines.filter(Boolean),
@@ -5969,13 +5994,13 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource; fence?: string } = {},
+  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource; fence?: string; multiWorkspace?: boolean } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
   if (!resolved) return { error: Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].error : `There is no tool called ${name}.` };
   const { tool } = resolved;
-  const { workspace: requestedWorkspace, ...cleaned } = dropStrayNulls(resolved.args, tool.parameters) as Args;
+  const { workspace: requestedWorkspace, ...cleaned } = dropStrayNulls(tool.write ? withoutMarkers(resolved.args) : resolved.args, tool.parameters) as Args;
   let scope: { targets: UserActor[]; all: boolean } | null = null;
   try {
     if (tool.write) {
@@ -6011,6 +6036,7 @@ export async function runTool(
           defer: options.defer,
           unattended: options.unattended === true,
           approval: options.approval,
+          multiWorkspace: options.multiWorkspace === true,
         };
         return scope ? runAcross(tool, actor, scope, cleaned, context) : tool.run(actor, cleaned, context);
       }),

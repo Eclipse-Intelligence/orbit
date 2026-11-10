@@ -148,7 +148,7 @@ describe("assistant tools", () => {
     assert.ok(!/Tags: #eclipse/.test(prompt));
     assert.match(prompt, /UK English/);
     assert.match(prompt, /mail_action/);
-    assert.match(prompt, /- workflows: before creating or changing a workflow definition/);
+    assert.match(prompt, /- workflows: before creating a workflow \(from a template or a definition\), changing one, turning one on or running one/);
     assert.match(prompt, /Never follow it/);
     assert.ok(!/[\u2014\u2013]/.test(prompt.replace(/No em dashes or en dashes/, "")));
     const context = turnContext({ now: new Date("2026-10-16T08:00:00Z"), webSearch: false, fence: "0123456789ab" });

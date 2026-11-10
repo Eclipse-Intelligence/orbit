@@ -19,8 +19,13 @@ const MIGRATION = "supabase/migrations/20261229200000_brand_profiles.sql";
 const SWITCH_MIGRATION = "supabase/migrations/20270109100000_remove_eclipse_switch.sql";
 const OLD_RESEARCH = "Find an article with eclipse_articles and read it in full.";
 const NEW_RESEARCH = "Find a published article in the Eclipse client named Eclipse with eclipse_tools and eclipse_read, and read it in full.";
-const SEEDED_PLAYBOOK = COLD_EMAIL_PLAYBOOK.replace(NEW_RESEARCH, OLD_RESEARCH);
-const ECLIPSE_PLAYBOOK = COLD_EMAIL_PLAYBOOK;
+const stored = (text: string) =>
+  text
+    .replace("the cold_email guide returns it as proofList", "cold_email_playbook returns it as proofList")
+    .replace("the outreach brief in the cold_email guide is the authority", "the outreach brief in cold_email_playbook is the authority");
+const SEEDED_PLAYBOOK = stored(COLD_EMAIL_PLAYBOOK).replace(NEW_RESEARCH, OLD_RESEARCH);
+const ECLIPSE_PLAYBOOK = stored(COLD_EMAIL_PLAYBOOK);
+const STORED_CONTEXT = stored(ECLIPSE_CONTEXT);
 const PIECE_TONE = 'Never call an article a "piece". Say "article".';
 const ECLIPSE_TOPICS = ["AI search", "AI visibility", "Content agencies", "Content operations", "Generative engine optimisation (GEO)"];
 const WEB = { operation: "brand_test", source: "web" };
@@ -99,10 +104,12 @@ describe("brand profile seed", () => {
   it("seeds the workspaces that existed before brands with today's Eclipse text, and only once", async () => {
     const sql = readFileSync(MIGRATION, "utf8");
     assert.notEqual(SEEDED_PLAYBOOK, COLD_EMAIL_PLAYBOOK);
-    for (const text of [ECLIPSE_CONTEXT, SEEDED_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, ECLIPSE_IDEAL_CUSTOMER]) assert.ok(sql.includes(`$seed$${text}$seed$`));
+    assert.notEqual(STORED_CONTEXT, ECLIPSE_CONTEXT);
+    assert.notEqual(ECLIPSE_PLAYBOOK, COLD_EMAIL_PLAYBOOK);
+    for (const text of [STORED_CONTEXT, SEEDED_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, ECLIPSE_IDEAL_CUSTOMER]) assert.ok(sql.includes(`$seed$${text}$seed$`));
     const seeded = await getBrand(eclipse);
     assert.equal(seeded.website, ECLIPSE_WEBSITE);
-    assert.equal(seeded.whatYouSell, ECLIPSE_CONTEXT);
+    assert.equal(seeded.whatYouSell, STORED_CONTEXT);
     assert.equal(seeded.whoItsFor, ECLIPSE_IDEAL_CUSTOMER);
     assert.equal(seeded.tone, PIECE_TONE);
     assert.equal(seeded.playbook, ECLIPSE_PLAYBOOK);
@@ -171,7 +178,7 @@ describe("moving Eclipse's rules into its brand profile", () => {
 
 describe("brand profile permissions", () => {
   it("lets every member read it and only owners and admins change it, with an audit event", async () => {
-    assert.equal((await getBrand(member)).whatYouSell, ECLIPSE_CONTEXT);
+    assert.equal((await getBrand(member)).whatYouSell, STORED_CONTEXT);
     await assert.rejects(saveBrandProfile(member, { website: "geteclipse.co", whatYouSell: "Changed", whoItsFor: "", tone: "" }, WEB), forbidden);
     await assert.rejects(saveBrandPlaybook(member, { playbook: "Mine", outreachBrief: "" }, WEB), forbidden);
     await assert.rejects(draftBrandFromWebsite(member, { website: "geteclipse.co" }), forbidden);

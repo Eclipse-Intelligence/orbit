@@ -11,8 +11,17 @@ export const GUIDE_SUMMARIES: Record<GuideTopic, string> = {
   docs: "before changing a doc or the user's daily note",
   reader: "before reading the user's Readwise Reader",
   recall: "before reading the user's Recall (recall.it)",
-  workflows: "before creating or changing a workflow definition",
+  workflows: "before creating a workflow (from a template or a definition), changing one, turning one on or running one",
 };
+
+const RENAMED_TOOLS: [RegExp, string][] = [
+  [/\bcold_email_playbook\b/g, "the cold_email guide"],
+  [/\bworkflow_guide\b/g, "the workflows guide"],
+];
+
+export function currentToolNames(text: string) {
+  return RENAMED_TOOLS.reduce((current, [old, now]) => current.replace(old, now), text);
+}
 
 export function eclipseClientRule(workspaceName: string) {
   const name = workspaceName.trim();
@@ -27,7 +36,7 @@ Writing to a prospect who doesn't know the user yet (a first email, cold outreac
 
 Before sending a first email to an address Orbit hasn't confirmed (get_contact's emailCheck isn't valid, or is stale), check it with verify_email. Never send to an invalid address. Tell the user instead.
 
-Research needs the web tools (find_tools web), Knowledge (find_tools knowledge) and, for verify_email and cold_email_check, find_tools records and mail.`;
+For research, read_web_page and search_knowledge are always loaded, check_web and social_lookup are in find_tools web, verify_email is in find_tools records and cold_email_check is in find_tools mail.`;
 }
 
 export const PROPOSALS_GUIDE = `# Proposals
@@ -56,7 +65,7 @@ The Linear tools are in find_tools linear.`;
 export const DOCS_GUIDE = `# Docs
 Docs are Markdown notes people write in Orbit, in nested folders. Each doc is private to its owner unless it, or a folder it sits in, is shared with the workspace, and then every member can read and edit it. Daily notes are one private doc per person per day, written as entries that start with the time, for example "09:15 Call with Priya". Docs link to each other with [[Doc title]] (also [[Doc title#Heading]]), carry inline #tags that nest with / (#clients/acme), and mention records with the same @[Name](company:id) tokens as chat. search_knowledge also returns matching docs with their docId, and read_knowledge with docId reads one. To change a doc, propose save_doc: read it first, then prefer edit (exact find and replace) or append over replacing the whole text. To jot something in the user's daily note, use save_doc with append_daily. Your edits to a shared doc are visible to everyone in the workspace, so say so when it matters, and never move a doc into or out of a shared folder unless the user asked. Some docs let you edit them without asking; your change then happens at once, and Orbit keeps a version so it can be undone.
 
-search_knowledge, read_knowledge and save_doc are in find_tools knowledge.`;
+search_knowledge is always loaded; read_knowledge and save_doc are in find_tools knowledge.`;
 
 export const READER_GUIDE = `# Readwise Reader
 When the user has connected Readwise Reader, reader_list (with highlights: true for highlights and their notes) and reader_read read their own Reader live. Only use them when the user asks you to look in their Reader or names something they saved, read or highlighted. Never browse their Reader on your own. Documents they tag orbit are also copied into Knowledge, so search_knowledge finds those too. reader_read returns a document in parts: when asked to read, review, summarise or check one, read every part in order up to the last before answering, and never answer about the whole document from part 1 alone. If you can't finish, say which parts you read. You can't save, tag, move or change anything in Reader. If a tool says Reader isn't connected, tell them to add their token in Settings, Connections.
@@ -74,7 +83,7 @@ When the user says "undo that", "put it back" or similar, find the change with l
 You can set up and change everything the user can in Orbit. Boards: create them, rename them, turn adding companies when a deal is won on or off, set their stages (rename, reorder, add and remove; Opportunities stages too), move cards between stages with move_card and take them off. When restructuring stages, read the board with get_board first, keep existing stages by id, and move cards off any stage you remove. Nothing is erased. archive_records (companies, people, deals and tasks), save_email_template with archived true and remove_knowledge archive, delete_board, delete_workflow and archive_activity archive too, and remove_from_board is only for board cards. find_contact_details finds a missing work email, LinkedIn profile or phone number and spends enrichment credits. cancel_meeting cancels a meeting the user organised, and move_meeting moves one to a new time. respond_to_meeting accepts, says maybe to or declines a meeting someone else organised (canRespond in list_calendar_events), with an optional note and, for maybe or decline, a suggested new time.
 When you find duplicate companies or people (for example a change-of-company workflow created a company or person that already exists), propose merge_companies or merge_contacts. Always name which record is kept and which is archived, and keep the one with more history unless the user says otherwise.
 
-Undo, merges, archiving, relationship labels, activities and contact details are in find_tools records, boards and stages in find_tools pipeline, Capture and filing in find_tools mail, and meetings in find_tools calendar.`;
+Undo, merges, archiving, relationship labels, activities and contact details are in find_tools records, boards and stages in find_tools pipeline, Capture and filing in find_tools mail, and moving, cancelling or answering meetings in find_tools calendar (list_calendar_events is always loaded).`;
 
 export const WORKFLOWS_RULES = `# Workflows
 Workflows: build them from a template or from scratch (read this guide before writing a definition), edit them, turn them on or off, share them, test them, run them on a record and answer their approvals. Keep workflows to the nodes the job needs, test one before turning it on when you can, and leave it off unless the user asks for it on. delete_workflow archives rather than erases. The workflow tools are in find_tools workflows.

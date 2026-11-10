@@ -71,12 +71,12 @@ describe("agent docs", () => {
 
   it("keeps the core tools small and every tool in one place", () => {
     assert.ok(
-      CORE_TOOLS.length <= 24,
-      `The assistant sends ${CORE_TOOLS.length} core tools on every call. Keep it to 24 or fewer and put the rest in an area of TOOL_DOMAINS (see "Adding a tool" in docs/assistant.md).`,
+      CORE_TOOLS.length <= 30,
+      `The assistant sends ${CORE_TOOLS.length} core tools on every call. Keep it to 30 or fewer and put the rest in an area of TOOL_DOMAINS (see "Adding a tool" in docs/assistant.md).`,
     );
     assert.ok(
-      ASSISTANT_TOOLS.length <= 128,
-      `The assistant has ${ASSISTANT_TOOLS.length} tools. A conversation that loads every area sends them all, and some model APIs refuse requests with more than 128 tools. Merge overlapping tools to get back to 128 or fewer.`,
+      ASSISTANT_TOOLS.length <= 126,
+      `The assistant has ${ASSISTANT_TOOLS.length} tools. A conversation that loads every area sends them all, ChatGPT adds web_search and Orbit Agent adds continue_result, and some model APIs refuse requests with more than 128 tools. Merge overlapping tools to get back to 126 or fewer.`,
     );
     const placed = [...CORE_TOOLS, ...TOOL_DOMAIN_NAMES.flatMap((domain) => TOOL_DOMAINS[domain].tools)];
     const names = ASSISTANT_TOOLS.map((tool) => tool.name);

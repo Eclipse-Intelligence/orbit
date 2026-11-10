@@ -4,7 +4,8 @@ import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, 
 import type { ProofEntry } from "@/lib/crm/proof-rules";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { findTool, toolDefinitions } from "@/lib/assistant/tools";
-import { coldEmailGuide } from "@/lib/assistant/guides";
+import { coldEmailGuide, GUIDE_TOPICS } from "@/lib/assistant/guides";
+import { ECLIPSE_CONTEXT } from "@/lib/assistant/eclipse";
 import type { UserActor } from "@/lib/crm/types";
 
 const ARTICLE = "https://geteclipse.co/articles/why-your-ai-visibility-platform-needs-repeated-prompt-tests/";
@@ -350,10 +351,16 @@ describe("cold email triggers, subjects and tailored offers", () => {
     assert.match(coldEmailGuide("Eclipse"), /hooks on a recent trigger/);
   });
 
-  it("names only tools the assistant has, or old names it still answers", () => {
-    const mentioned = [...`${COLD_EMAIL_PLAYBOOK}\n${coldEmailGuide("Eclipse")}`.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g)].map((match) => match[0]);
+  it("names only tools the assistant has, and the guide by its topic", () => {
+    const names = new Set(toolDefinitions().map((tool) => tool.function.name));
+    const text = `${playbookFor({ firstName: "Mark", bookingUrl: null }, COLD_EMAIL_PLAYBOOK)}\n${coldEmailGuide("Eclipse")}\n${ECLIPSE_CONTEXT}`;
+    const mentioned = [...text.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g)].map((match) => match[0]);
     assert.ok(mentioned.length >= 10);
-    for (const name of mentioned) if (name !== "cold_email") assert.ok(findTool(name), name);
+    for (const name of mentioned) assert.ok(names.has(name) || GUIDE_TOPICS.includes(name as never), name);
+    assert.doesNotMatch(text, /cold_email_playbook|workflow_guide/);
+    const legacy = COLD_EMAIL_PLAYBOOK.replace("the cold_email guide returns it as proofList", "cold_email_playbook returns it as proofList");
+    assert.notEqual(legacy, COLD_EMAIL_PLAYBOOK);
+    assert.equal(playbookFor({ firstName: "Priya", bookingUrl: null }, legacy), playbookFor({ firstName: "Priya", bookingUrl: null }, COLD_EMAIL_PLAYBOOK));
   });
 });
 
@@ -535,7 +542,7 @@ describe("assistant guidance", () => {
     };
     const evidence = check.parameters.properties.evidence.items.properties;
     assert.deepEqual(Object.keys(evidence), ["fact", "source", "kind"]);
-    assert.match(playbook.playbook, /cold_email_playbook returns it as proofList/);
+    assert.match(playbook.playbook, /the cold_email guide returns it as proofList/);
     const prompt = systemPrompt(actor);
     assert.match(prompt, /Always read the cold_email guide first/);
     const guide = coldEmailGuide("Eclipse");
@@ -546,6 +553,7 @@ describe("assistant guidance", () => {
     assert.match(guide, /check it with verify_email\. Never send to an invalid address/);
     assert.match(playbook.playbook, /Agreeing with them, repeating their point, describing their own business/);
     assert.match(COLD_EMAIL_PLAYBOOK, /colons/);
-    assert.doesNotMatch(prompt, /Never put a colon in the middle of a sentence/);
+    assert.match(prompt, /Never put a colon in the middle of a sentence in emails or drafts\./);
+    assert.doesNotMatch(prompt.slice(prompt.indexOf("# How to answer")), /colon/);
   });
 });
