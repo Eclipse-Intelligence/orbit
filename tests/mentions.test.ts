@@ -5,7 +5,7 @@ import { createCompany } from "@/lib/crm/companies";
 import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
 import { encodeMentions, expandMentions, liveMentions, mentionsIn, plainMentions, splitMentions } from "@/lib/mentions";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, messageText, resetDatabase } from "./helpers";
 
 const JANE = { kind: "contact" as const, id: "11111111-1111-4111-8111-111111111111", name: "Jane Doe" };
 const ACME = { kind: "company" as const, id: "22222222-2222-4222-8222-222222222222", name: "Acme" };
@@ -48,7 +48,7 @@ describe("assistant with tagged records", () => {
   it("gives the model the exact ids and keeps the chat title readable", async () => {
     process.env.LLM_API_KEY = "test-key";
     const company = (await createCompany(owner, { name: "Initech", domain: "initech-mention.test" })).body.company;
-    const requests: { messages: { role: string; content: string }[] }[] = [];
+    const requests: { messages: { role: string; content: unknown }[] }[] = [];
     const fetchImpl = (async (_url: string, init?: RequestInit) => {
       requests.push(JSON.parse(String(init?.body)));
       return new Response(JSON.stringify({ model: "claude-sonnet-5-5", choices: [{ message: { role: "assistant", content: "On it." } }] }), {
@@ -63,8 +63,8 @@ describe("assistant with tagged records", () => {
       fetchImpl,
     });
     const sent = requests[0].messages;
-    assert.equal(sent.at(-1)?.content, `How is Initech [company id ${company.id}] doing?`);
-    assert.match(sent[0].content, /tags a record with @/);
+    assert.ok(messageText(sent.at(-1)?.content).startsWith(`How is Initech [company id ${company.id}] doing?\n\n<orbit_context>\n`));
+    assert.match(messageText(sent[0].content), /tags a record with @/);
     const conversations = await listConversations(owner);
     assert.equal(conversations[0].title, "How is @Initech doing?");
     const saved = await getConversation(owner, conversations[0].id);

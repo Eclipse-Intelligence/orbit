@@ -1,5 +1,6 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
+import { untrustedToken } from "@/lib/assistant/untrusted";
 import { needsWebApproval, OUTSIDE_TOOLS, readTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
@@ -347,7 +348,7 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
   }
   const id = String(call.id || `${call.name}-${Date.now()}`).slice(0, 120);
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "running" });
-  const output = (await runTool(auth.actor, call.name, args)) as Record<string, unknown> | null;
+  const output = (await runTool(auth.actor, call.name, args, { fence: untrustedToken() })) as Record<string, unknown> | null;
   await noteRead(auth, jobId, tool.name, toolJson(output));
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "done" });
   return sendResult(auth, jobId, id, toolJson(output), Boolean(output && typeof output === "object" && "error" in output));

@@ -93,7 +93,7 @@ export function anthropicRequest(input: AnthropicInput): Anthropic.MessageStream
   return {
     model: input.apiModel,
     max_tokens: input.maxTokens,
-    ...(system ? { system } : {}),
+    ...(system ? { system: [{ type: "text" as const, text: system, cache_control: { type: "ephemeral" as const } }] } : {}),
     messages,
     ...(tools.length > 0 ? { tools, tool_choice: { type: "auto" as const } } : {}),
     thinking,

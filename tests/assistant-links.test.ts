@@ -13,13 +13,13 @@ describe("the user's links in the assistant", () => {
     try {
       assert.equal(bookingUrl("mark"), "https://orbit.geteclipse.co/book/mark");
       const links = { booking: { url: bookingUrl("mark"), enabled: true, title: "Book a call with Mark", durationMinutes: 30 }, meetingLink: "https://geteclipse.whereby.com/room" };
-      const prompt = systemPrompt(actor, { webSearch: false, links });
+      const prompt = systemPrompt(actor, { links });
       assert.match(prompt, /Booking page, where people pick a time with the user: https:\/\/orbit\.geteclipse\.co\/book\/mark \("Book a call with Mark", 30 minutes\)\./);
       assert.match(prompt, /Video meeting link for calls: https:\/\/geteclipse\.whereby\.com\/room\. This is a meeting room, not the booking page\./);
       assert.match(prompt, /exactly as written above/);
       assert.match(linksSection({ ...links, booking: { ...links.booking, enabled: false } }), /currently switched off/);
       assert.match(linksSection({ booking: null, meetingLink: null }), /No booking page yet/);
-      assert.ok(!systemPrompt(actor, { webSearch: false }).includes("# The user's links"));
+      assert.ok(!systemPrompt(actor).includes("# The user's links"));
     } finally {
       if (previous === undefined) delete process.env.SITE_URL;
       else process.env.SITE_URL = previous;

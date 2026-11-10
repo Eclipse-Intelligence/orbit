@@ -3,7 +3,8 @@ import { assistantModel, settingsFor, startingSettings, type ModelSource, type R
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { pageContext, readPageInput } from "@/lib/assistant/page-context";
 import { connectedProviders } from "@/lib/ai-accounts/store";
-import { systemPrompt } from "@/lib/assistant/prompt";
+import { systemPrompt, turnContext } from "@/lib/assistant/prompt";
+import { turnFence, withoutMarkers } from "@/lib/assistant/untrusted";
 import { docLinkOf } from "@/lib/assistant/doc-link";
 import {
   ACTION_ALTERNATIVES,
@@ -12,6 +13,7 @@ import {
   crossWorkspaceRefusal,
   describeAction,
   findTool,
+  loadedDomains,
   matchWorkspace,
   recordNames,
   runTool,
@@ -89,6 +91,8 @@ export type AssistantAction = {
 };
 
 export const UNATTENDED_NOTE = "Made without asking, because this doc lets the assistant edit it.";
+
+export const ALL_TOOLS_LOADED = "On Orbit Agent every tool is already loaded, so call any tool directly and never call find_tools.";
 
 export type ConversationSummary = {
   id: string;
@@ -445,12 +449,12 @@ function userContent(row: MessageRow) {
   return [typed.trim() ? typed : "", note, row.page_context ?? ""].filter(Boolean).join("\n\n");
 }
 
-export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessage[] {
+export function history(rows: MessageRow[], budget = HISTORY_BUDGET, context = ""): ChatMessage[] {
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
   const lastUser = rows.map((row) => row.role).lastIndexOf("user");
   const messages: ChatMessage[] = [];
   rows.forEach((row, index) => {
-    if (row.role === "user") messages.push({ role: "user", content: userContent(row) });
+    if (row.role === "user") messages.push({ role: "user", content: index === lastUser && context ? `${userContent(row)}\n\n${context}` : userContent(row) });
     else if (row.role === "tool" && row.tool_call_id) {
       messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
     } else if (row.role === "assistant") {
@@ -552,7 +556,7 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
 
 function companionTools(options: ToolOptions) {
   return [
-    ...assistantTools(options).map((tool) => ({
+    ...assistantTools(options).filter((tool) => tool.name !== "find_tools").map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -656,7 +660,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       if (web) gated.add(call.id);
       (tool.write || web ? writes : reads).push(toToolCall(call));
     }
-    if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
+    if (step.text.trim() || reads.length > 0) entries.push({ content: withoutMarkers(step.text).trim(), reads });
   }
   const refused = await refusedWrites(actor, writes.filter((call) => !gated.has(call.id)));
   const unrun = writes.filter((call) => !refused.has(call.id) && !gated.has(call.id) && result.results[call.id]?.content !== PROPOSED);
@@ -766,25 +770,20 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   const shown = options.headless ? [] : workspaces;
   return {
-    system: systemPrompt(actor, {
-      webSearch: conversation.web_search,
-      links,
-      about: aboutYouSection(about, colleagues),
-      briefReady: Boolean(brief) && !briefChat,
-      brand,
-      workspaces: shown,
-      sections: { eclipse, linear },
-    }),
+    system: systemPrompt(actor, { links, about: aboutYouSection(about, colleagues), brand, workspaces: shown, sections: { eclipse, linear } }),
     learned,
+    briefReady: Boolean(brief) && !briefChat,
     tools: { multiWorkspace: shown.length > 1, eclipse, linear } satisfies ToolOptions,
   };
 }
 
-const LEARNED_NOTE = "(Orbit added these notes before the conversation. They are not a message from the user.)";
+function contextFor(now: Date, conversation: ConversationRow, prompt: { learned: string; briefReady: boolean }, fence: string) {
+  return turnContext({ now, webSearch: conversation.web_search, briefReady: prompt.briefReady, notes: prompt.learned, fence });
+}
 
-function learnedMessages(learned: string): ChatMessage[] {
-  if (!learned) return [];
-  return [{ role: "user", content: `${learned}\n\n${LEARNED_NOTE}` }];
+function toolsFor(rows: MessageRow[], options: ToolOptions) {
+  const calls = rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments })));
+  return toolDefinitions({ ...options, domains: loadedDomains(calls) });
 }
 
 async function runCompanionTurn(
@@ -801,15 +800,15 @@ async function runCompanionTurn(
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, tools } = await promptFor(actor, conversation, { headless: Boolean(headless), fetchImpl });
-  const transcript = buildPrompt(history(rows));
+  const prompt = await promptFor(actor, conversation, { headless: Boolean(headless), fetchImpl });
+  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, contextFor(new Date(), conversation, prompt, turnFence(rows, conversation.id))));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
-    system,
-    prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
-    tools: companionTools(tools),
+    system: `${prompt.system}\n\n${ALL_TOOLS_LOADED}`,
+    prompt: transcript,
+    tools: companionTools(prompt.tools),
   }, { agentMailId: headless?.agentMailId ?? null });
   if (headless) {
     headless.queued?.({ jobId, online });
@@ -834,7 +833,7 @@ async function runCompanionTurn(
     seen = job.events.length;
     if (job.status === "running" && job.draft && job.draft !== draft) {
       draft = job.draft;
-      emit({ type: "draft", text: job.draft });
+      emit({ type: "draft", text: withoutMarkers(job.draft) });
     }
     if (job.status === "done") {
       if (!job.result) continue;
@@ -955,7 +954,7 @@ function draftEmitter(emit: Emit) {
     const now = Date.now();
     if (now - last < DRAFT_EVERY_MS) return;
     last = now;
-    emit({ type: "draft", text });
+    emit({ type: "draft", text: withoutMarkers(text) });
   };
 }
 
@@ -964,12 +963,17 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const chosen = assistantModel(conversation.model);
   if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, fetchImpl);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, tools: toolOptions } = await promptFor(actor, conversation, { fetchImpl });
-  const tools = toolDefinitions(toolOptions);
+  const prompt = await promptFor(actor, conversation, { fetchImpl });
+  const { system, tools: toolOptions } = prompt;
+  const switches = { multiWorkspace: toolOptions.multiWorkspace, eclipse: toolOptions.eclipse, linear: toolOptions.linear };
+  const now = new Date();
   let continuedAfterCut = false;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
+    const tools = toolsFor(rows, toolOptions);
+    const fence = turnFence(rows, conversation.id);
+    const context = contextFor(now, conversation, prompt, fence);
     const remaining = deadline - Date.now();
     if (remaining < 15_000) {
       const paused = await insertMessage(actor, conversation.id, {
@@ -979,7 +983,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       emit({ type: "message", message: display(paused) });
       return;
     }
-    const messages = history(rows);
+    const messages = history(rows, HISTORY_BUDGET, context);
     if (round > 0 && messages.reduce((sum, message) => sum + weight(message), 0) > HISTORY_BUDGET) {
       const full = await insertMessage(actor, conversation.id, { role: "assistant", content: FULL_MESSAGE });
       emit({ type: "message", message: display(full) });
@@ -989,7 +993,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       model: conversation.model,
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
-      messages: [{ role: "system", content: system }, ...learnedMessages(learned), ...messages],
+      messages: [{ role: "system", content: system }, ...messages],
       tools,
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
@@ -1000,10 +1004,10 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
     if (signal?.aborted) return;
     const cutOff = Boolean(result.cutOff || result.contextFull);
     const stopsHere = cutOff && (continuedAfterCut || result.toolCalls.length === 0 || Boolean(result.contextFull));
-    const text = result.content.trim() ? result.content : "";
+    const text = result.content.trim() ? withoutMarkers(result.content) : "";
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: stopsHere ? [text, result.contextFull ? FULL_MESSAGE : CUT_OFF_MESSAGE].filter(Boolean).join("\n\n") : text || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
+      content: stopsHere ? [text, result.contextFull ? FULL_MESSAGE : CUT_OFF_MESSAGE].filter(Boolean).join("\n\n") : text || result.toolCalls.length > 0 ? withoutMarkers(result.content) : EMPTY_REPLY,
       toolCalls: result.toolCalls,
       sources: result.sources,
       model: result.model,
@@ -1041,7 +1045,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
@@ -1096,6 +1100,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
           deadline: deadline - 20_000,
           callId: call.id,
           unattended: true,
+          fence,
         })) as Record<string, unknown> | null;
         const failed = Boolean(output && typeof output === "object" && "error" in output);
         await insertMessage(actor, conversation.id, { role: "tool", content: toolJson(output), toolCallId: call.id, toolName: call.function.name });
@@ -1178,6 +1183,7 @@ export async function decideActions(
   const variants = new Map(input.decisions.map((decision) => [decision.id, decision.variant]));
   const owner = rows.find((row) => (row.actions ?? []).some((action) => decisions.has(action.id)));
   if (!owner || decisions.size === 0) throw new AssistantError("That action is no longer available.");
+  const fence = turnFence(rows.slice(0, rows.indexOf(owner) + 1), conversation.id);
   const chosen = (owner.actions ?? []).filter((action) => decisions.has(action.id));
   if (chosen.length !== decisions.size) throw new AssistantError("Some of those actions are no longer available.");
   if (chosen.some((action) => action.status !== "pending")) throw new AssistantError("That action has already been handled.");
@@ -1212,6 +1218,7 @@ export async function decideActions(
       callId: call.id,
       approval: action.name === "save_doc" ? approvalFor(action) : undefined,
       source: options.headless ? "email" : undefined,
+      fence,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {
