@@ -10,7 +10,7 @@ import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from
 import { holdDraft, releaseDraft } from "@/components/mail/held-drafts";
 import { ComposerReconnect, flagReconnect, reconnectOf } from "@/components/mail/reconnect-notice";
 import { fromFallback } from "@/lib/mail/mailboxes";
-import { holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
+import { draftQueued, holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { MODE_LABEL } from "@/lib/mail/format";
@@ -50,7 +50,7 @@ export type SendPayload = {
   force?: boolean;
 };
 
-export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null };
+export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null; replaces?: string | null };
 
 export type ComposerStart = {
   mode: DraftMode;
@@ -89,6 +89,7 @@ export default function MailComposer({
   onSubject,
   onDelivered,
   onUndone,
+  onReopen,
   onScheduled,
   onDiscard,
   onHeld,
@@ -104,6 +105,7 @@ export default function MailComposer({
   onSubject?: (subject: string) => void;
   onDelivered?: () => void;
   onUndone?: () => void;
+  onReopen?: (draft: ComposerDraft) => boolean;
   onScheduled?: () => void;
   onDiscard?: () => void;
 }) {
@@ -407,11 +409,17 @@ export default function MailComposer({
     event?.preventDefault();
     if (queued.current || !ready()) return;
     queued.current = true;
+    if (draftQueued(draftId.current, start.replaces)) {
+      dirty.current = false;
+      onClose();
+      return;
+    }
     sendKey.current ??= newSendKey();
     const handed = handOver(force);
-    const release = holdQueuedDraft(draftId.current, handed);
+    const release = holdQueuedDraft(draftId.current, handed, start.replaces ?? null);
     queueSend(handed, {
       onDelivered,
+      onReopen,
       onReleased: () => void release(),
       onUndone: () => {
         void release();

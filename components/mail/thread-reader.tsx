@@ -9,7 +9,7 @@ import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
 import { cancelReminder, loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
-import type { ComposerStart } from "@/components/mail/mail-composer";
+import type { ComposerDraft, ComposerStart } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
 import { useComposer } from "@/components/mail/compose-dock";
 import Button from "@/components/_ui/button";
@@ -558,6 +558,8 @@ export default function ThreadReader({
   onAction,
   onBack,
   onSent,
+  onSending,
+  onSendUndone,
   onNext,
   onPrevious,
   previous,
@@ -586,6 +588,8 @@ export default function ThreadReader({
   onAction: (action: ReaderAction) => void;
   onBack: () => void;
   onSent: () => void;
+  onSending: (draftOnly: boolean) => void;
+  onSendUndone: () => void;
   onNext: (swiped?: boolean) => void;
 }) {
   const surface = useRef<HTMLDivElement>(null);
@@ -792,6 +796,27 @@ export default function ThreadReader({
   function closeComposer() {
     setComposer(null);
     setDismissed(true);
+  }
+
+  function hideSentDraft(id: string | null | undefined) {
+    if (id) setRemovedDrafts((existing) => new Set(existing).add(id));
+  }
+
+  function reopenSent(draft: ComposerDraft) {
+    if (!alive.current || !target || draft.mode === "new" || !surface.current?.getClientRects().length) return false;
+    setEcho(null);
+    setAutoOpened(false);
+    setComposer({
+      mode: draft.mode,
+      messageId: draft.messageId ?? target.id,
+      sourceId: draft.sourceId,
+      to: draft.to,
+      cc: draft.cc,
+      subject: draft.subject,
+      replaces: draft.replaces ?? null,
+      draft,
+    });
+    return true;
   }
 
   useEffect(() => {
@@ -1095,10 +1120,17 @@ export default function ThreadReader({
                   }}
                   onSent={(body, to) => {
                     setEcho({ body, to, count: detail.messages.length });
+                    hideSentDraft(active.replaces);
                     closeComposer();
+                    onSending(false);
                   }}
                   onDelivered={onSent}
-                  onUndone={() => setEcho(null)}
+                  onUndone={() => {
+                    setEcho(null);
+                    if (active.replaces) restoreDraft(active.replaces);
+                    onSendUndone();
+                  }}
+                  onReopen={reopenSent}
                 />
                 </div>
               ) : !target && newDraft ? (
@@ -1118,8 +1150,9 @@ export default function ThreadReader({
                     passive
                     accounts={accounts}
                     onClose={onBack}
-                    onSent={() => onBack()}
+                    onSent={() => onSending(true)}
                     onDelivered={onSent}
+                    onUndone={onSendUndone}
                   />
                 </div>
               ) : (

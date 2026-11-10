@@ -28,7 +28,7 @@ type Toast = { message: string; tone?: "status" | "alert"; action?: { label: str
 
 type ShownToast = Toast & { id: number };
 
-type SendMeta = { onDelivered?: () => void; onUndone?: () => void; onReleased?: () => void };
+type SendMeta = { onDelivered?: () => void; onUndone?: () => void; onReleased?: () => void; onReopen?: (draft: ComposerDraft) => boolean };
 
 type Outgoing = SendMeta & { payload: Promise<SendPayload>; timer: number };
 
@@ -72,6 +72,7 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
     sendKey: payload.sendKey ?? null,
     sendProblem: failure?.detail?.maybeSent ? failure.message : null,
     sourceId: payload.sourceId,
+    replaces: payload.replaces ?? null,
     mode: payload.mode,
     messageId: payload.messageId,
     to: payload.to,
@@ -350,6 +351,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             ? (earlier.find((item) => item.id === (options.draft!.identityId ? `smtp:${options.draft!.identityId}` : options.draft!.sourceId))?.email ?? null)
             : null),
         heldKey: options.heldKey,
+        replaces: options.draft?.replaces ?? null,
       };
       const existing = options.draft?.id ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
       if (existing) {
@@ -460,7 +462,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               window.clearTimeout(item.timer);
               outgoing.current.delete(id);
               item.onUndone?.();
-              void item.payload.then((value) => openComposer({ draft: payloadDraft(value) }));
+              void item.payload.then((value) => {
+                const draft = payloadDraft(value);
+                if (!item.onReopen?.(draft)) openComposer({ draft });
+              });
             },
           },
         },

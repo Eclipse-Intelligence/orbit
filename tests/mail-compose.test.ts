@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import { listActivities } from "@/lib/crm/activities";
 import { createContact } from "@/lib/crm/contacts";
@@ -7,7 +8,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import { DRAFT_GONE, deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
 import { ignoreUnknownMail, setThreadFiling } from "@/lib/mail/filing";
 import { composeEmailHtml, imageMarkers, trackingIdIn } from "@/lib/mail/html";
 import { attachToDraft } from "@/lib/microsoft/oauth";
@@ -355,6 +356,23 @@ describe("mail replies and read statuses", () => {
     await deleteDraftMessage(owner, ids["outside-2"], removal.fetchImpl);
     assert.deepEqual(removal.calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "")}`), ["DELETE /me/messages/outside-2"]);
     await assert.rejects(() => deleteDraftMessage(owner, jane, outlook(state).fetchImpl), /already gone/);
+    state.drafts = [];
+  });
+
+  it("sends a draft made outside Orbit once, and refuses a second send of it from another composer", async () => {
+    state.drafts = [message("outside-3", { isDraft: true, subject: "Re: Renewal pricing", from: { emailAddress: { address: "mark@eclipse.test" } }, body: { contentType: "text", content: "Sounds good." } })];
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook(state).fetchImpl });
+    const outside = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'outside-3'")).rows[0].id;
+    const input = readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Sounds good.", replaces: outside, sendKey: randomUUID() });
+    const first = outlook(state);
+    await sendMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: first.fetchImpl });
+    assert.equal(first.calls.filter((call) => call.url.endsWith("/send")).length, 1);
+    const second = outlook(state);
+    await assert.rejects(
+      () => sendMailDraft(owner, { ...input, sendKey: randomUUID() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: second.fetchImpl }),
+      { message: DRAFT_GONE },
+    );
+    assert.deepEqual(second.calls, []);
     state.drafts = [];
   });
 

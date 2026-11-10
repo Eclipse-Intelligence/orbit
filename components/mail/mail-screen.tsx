@@ -252,6 +252,7 @@ export default function MailScreen({
   const [peeking, setPeeking] = useState(false);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
+  const sendingThreads = useRef(new Map<string, { thread: ThreadSummary | null; origin: ListQuery; left: boolean }>());
   const keptUnread = useRef(new Set<string>());
   const loadingMore = useRef(false);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -415,7 +416,7 @@ export default function MailScreen({
       .then((fresh) => {
         storeList(next, fresh);
         if (token !== request.current) return;
-        setPage(fresh);
+        setPage({ ...fresh, threads: fresh.threads.filter((thread) => !removing.current.has(thread.key)) });
         prefetchThreads(fresh.threads.slice(0, 4).map((thread) => thread.key));
       })
       .catch((error: Error) => {
@@ -431,7 +432,7 @@ export default function MailScreen({
     const token = request.current;
     setSyncing(true);
     let problems: string[] = [];
-    (sync
+    return (sync
       ? syncNow().then(
           (result) => {
             problems = flagSyncProblems(result.problems ?? [], navAccounts.current);
@@ -757,10 +758,46 @@ export default function MailScreen({
       });
   }
 
+  function sending(key: string, draftOnly: boolean) {
+    const { page: currentPage, query: target } = latest.current;
+    const list = currentPage?.threads ?? [];
+    const index = list.findIndex((item) => item.key === key);
+    const thread = index === -1 ? null : list[index];
+    const left = Boolean(thread) && (draftOnly || (target.view === "drafts" && !target.query));
+    sendingThreads.current.set(key, { thread, origin: target, left });
+    const remaining = left ? list.filter((item) => item.key !== key) : list;
+    if (left) {
+      removing.current.add(key);
+      setPage({ ...currentPage!, threads: remaining });
+    } else if (thread?.draft) {
+      setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? { ...item, draft: false } : item)) } : existing));
+    }
+    if (draftOnly && latest.current.cursor === key) {
+      const next = index === -1 ? null : (remaining[index] ?? remaining[index - 1] ?? null);
+      select(next?.key ?? null);
+      closeReader();
+    }
+  }
+
+  function sendUndone(key: string) {
+    const entry = sendingThreads.current.get(key);
+    if (!entry) return;
+    sendingThreads.current.delete(key);
+    removing.current.delete(key);
+    const thread = entry.thread;
+    if (!thread) return;
+    if (entry.left) restore(thread, entry.origin);
+    else if (thread.draft) setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? { ...item, draft: true } : item)) } : existing));
+  }
+
   function sent(key: string) {
+    const entry = sendingThreads.current.get(key);
+    sendingThreads.current.delete(key);
     window.setTimeout(() => {
       forgetThread(key);
-      refreshRef.current(true);
+      void refreshRef.current(true).finally(() => {
+        if (entry?.left) removing.current.delete(key);
+      });
       window.setTimeout(() => {
         if (latest.current.cursor === key) fetchDetail(key, true);
       }, 9000);
@@ -1028,7 +1065,7 @@ export default function MailScreen({
     if (!cursor) return false;
     snooze([cursor]);
   });
-  useShortcut("mail-refresh", () => refresh(true));
+  useShortcut("mail-refresh", () => void refresh(true));
   function visibleSearch() {
     return window.matchMedia("(min-width: 64rem)").matches ? searchInput.current : searchInputList.current;
   }
@@ -1464,6 +1501,8 @@ export default function MailScreen({
             onUnsubscribe={(mode) => cursor && setUnsubscribing({ thread: cursor, mode })}
             onBlock={() => cursor && setUnsubscribing({ thread: cursor, mode: "block" })}
             onSent={() => cursor && sent(cursor)}
+            onSending={(draftOnly) => cursor && sending(cursor, draftOnly)}
+            onSendUndone={() => cursor && sendUndone(cursor)}
           />
         </div>
       </div>

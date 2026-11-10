@@ -590,6 +590,17 @@ async function dropSendKey(actor: UserActor, key: string) {
   await withActor(actor, (db) => db.query("delete from crm.mail_send_keys where user_id = $1 and key = $2 and sent_at is null", [actor.userId, key]));
 }
 
+async function outsideDraftLeft(actor: UserActor, messageId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query(
+      `select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+       where m.id = $1 and m.user_id = $2 and m.is_draft and f.role = 'drafts'`,
+      [messageId, actor.userId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  });
+}
+
 export async function sendMailDraft(
   actor: UserActor,
   input: DraftInput & { attachments?: string[] },
@@ -601,6 +612,10 @@ export async function sendMailDraft(
   if (key?.state === "sent") return { warning: null };
   if (key?.state === "busy") throw new CrmError("conflict", ALREADY_SENDING, 409);
   const id = (key && "draftId" in key ? key.draftId : null) ?? input.id ?? null;
+  if (!id && input.replaces && !options.claimed && !(await outsideDraftLeft(actor, input.replaces))) {
+    if (sendKey) await dropSendKey(actor, sendKey).catch(() => undefined);
+    throw new CrmError("conflict", DRAFT_GONE, 409);
+  }
   const claim = id && !options.claimed ? await claimScheduledDraft(actor, id) : null;
   if (claim === "gone") {
     if (sendKey && (await sendKeySent(actor, sendKey))) return { warning: null };
