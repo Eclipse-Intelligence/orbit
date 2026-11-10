@@ -16,8 +16,11 @@ import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
+import { composeEmailHtml, trackingPixelUrl } from "@/lib/mail/html";
 import { appNeedsAttention, reconnectProblem } from "@/lib/mail/microsoft";
+import { mailOrigin } from "@/lib/mail/origin";
 import { routedAway } from "@/lib/mail/routing";
+import { readStatusesOn } from "@/lib/mail/tracking";
 import {
   fetchInboxMessages,
   MicrosoftError,
@@ -434,6 +437,7 @@ export async function sendContactEmail(
     from?: string | null;
     signature?: boolean;
     provenance?: Provenance;
+    origin?: string | null;
   },
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ warning: string | null }> {
@@ -504,21 +508,38 @@ export async function sendContactEmail(
   }
   const sender = prepared.sender!;
   const attached = await loadAttachments(actor, input.attachments ?? [], fetchImpl);
+  const origin = input.origin === undefined ? mailOrigin() : input.origin;
+  const trackingId = origin ? await startTracking(actor, sender.email) : null;
+  const sent = { recipients: [{ name: contact.name, address: to }], subject, senderEmail: sender.email };
   let token: MicrosoftToken;
+  let attempted = false;
   try {
     token = await currentToken(sender.tokens, fetchImpl);
+    attempted = true;
     await sendGraphMail(
       token.accessToken,
       {
         to,
         toName: contact.name,
         subject,
-        body: input.signature !== false && sender.signature ? `${body}\n\n${sender.signature}` : body,
+        body: composeEmailHtml({
+          body,
+          signature: input.signature !== false ? sender.signature : null,
+          pixel: trackingPixelUrl(origin, trackingId),
+          plain: true,
+        }),
+        html: true,
         attachments: attached.files,
       },
       fetchImpl,
     );
   } catch (error) {
+    if (trackingId) {
+      const unsure = attempted && !(error instanceof MicrosoftError);
+      await (unsure ? markTrackingSent(actor, trackingId, sent) : dropUnsentTracking(actor, trackingId)).catch((failure: unknown) =>
+        console.error("Couldn't settle the read status after a failed send", failure),
+      );
+    }
     const reconnect = reconnectProblem(error, sender.email);
     throw new CrmError(
       "upstream_error",
@@ -536,10 +557,16 @@ export async function sendContactEmail(
       await sender.save(db, token);
     });
   } catch {}
+  if (trackingId) {
+    await markTrackingSent(actor, trackingId, sent).catch((error: unknown) =>
+      console.error("Couldn't mark the read status as sent", error),
+    );
+  }
   if (attached.summary.length && !input.keepAttachments) await discardAttachments(actor, input.attachments ?? [], fetchImpl);
+  let activityId: string | null = null;
   try {
     await withActor(actor, async (db) => {
-      await createActivityInDb(
+      const activity = await createActivityInDb(
         db,
         actor,
         {
@@ -558,11 +585,56 @@ export async function sendContactEmail(
         },
         input.provenance ?? { operation: "send_email", source: "microsoft" },
       );
+      activityId = activity?.id ?? null;
     });
   } catch {
     return { warning: UNFILED_WARNING };
   }
+  if (trackingId && activityId) {
+    await linkTracking(actor, trackingId, activityId).catch((error: unknown) => console.error("Couldn't link the read status to the timeline", error));
+  }
   return { warning: null };
+}
+
+async function startTracking(actor: UserActor, senderEmail: string) {
+  try {
+    if (!(await readStatusesOn(actor))) return null;
+    return await withActor(actor, async (db) => {
+      const created = await db.query<{ id: string }>(
+        "insert into crm.mail_tracking (workspace_id, user_id, sender_email) values ($1, $2, $3) returning id",
+        [actor.workspaceId, actor.userId, senderEmail],
+      );
+      return created.rows[0].id;
+    });
+  } catch (error) {
+    console.error("Couldn't start the read status, sending without it", error);
+    return null;
+  }
+}
+
+async function linkTracking(actor: UserActor, trackingId: string, activityId: string) {
+  await withActor(actor, (db) =>
+    db.query("update crm.mail_tracking set activity_id = $2 where id = $1 and user_id = $3", [trackingId, activityId, actor.userId]),
+  );
+}
+
+async function dropUnsentTracking(actor: UserActor, trackingId: string) {
+  await withActor(actor, (db) =>
+    db.query("delete from crm.mail_tracking where id = $1 and user_id = $2 and sent_at is null", [trackingId, actor.userId]),
+  );
+}
+
+async function markTrackingSent(
+  actor: UserActor,
+  trackingId: string,
+  sent: { recipients: { name: string | null; address: string }[]; subject: string; senderEmail: string },
+) {
+  await withActor(actor, (db) =>
+    db.query(
+      "update crm.mail_tracking set sent_at = now(), recipients = $3, subject = $4, sender_email = $5 where id = $1 and user_id = $2",
+      [trackingId, actor.userId, JSON.stringify(sent.recipients), sent.subject, sent.senderEmail],
+    ),
+  );
 }
 
 export async function disconnectMailbox(actor: UserActor) {

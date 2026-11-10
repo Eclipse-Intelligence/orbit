@@ -18,6 +18,7 @@ import { resumeStale, scheduleCallBackfill } from "@/lib/knowledge/background";
 import { listKnowledge } from "@/lib/knowledge/store";
 import { getCompanyAnswers } from "@/lib/ai-fields/answers";
 import { publicField } from "@/lib/ai-fields/fields";
+import { timelineReads } from "@/lib/mail/tracking";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -52,7 +53,7 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge, fit, ai, moveTargets] = await Promise.all([
+  const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge, fit, ai, moveTargets, reads] = await Promise.all([
     listMembers(user),
     getMailbox(user),
     getClickUpPicker(user),
@@ -70,6 +71,7 @@ export default async function CompanyPage({
       return { fields: [], answers: [] };
     }),
     getMoveTargets(user),
+    timelineReads(user, context.timeline),
   ]);
   resumeStale(user, knowledge);
   scheduleCallBackfill(user, context.company.id);
@@ -84,6 +86,7 @@ export default async function CompanyPage({
         workspaceName: user.workspaceName,
       }}
       context={context}
+      reads={reads}
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
       clickup={clickup}

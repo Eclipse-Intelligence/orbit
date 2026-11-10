@@ -20,6 +20,7 @@ import { contactLookups } from "@/lib/enrichment/contacts";
 import { latestEmailCheck } from "@/lib/enrichment/email-check";
 import { configuredVerifiers } from "@/lib/enrichment/providers";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
+import { timelineReads } from "@/lib/mail/tracking";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -86,14 +87,17 @@ export default async function ContactPage({
   const canCheckEmail = configuredVerifiers().length > 0;
   const emailCheck = canCheckEmail ? await latestEmailCheck(user, contact.email) : null;
   const activities = activitiesByContact[contact.id] ?? [];
-  const insights = await getInsightsForActivities(
-    user,
-    activities
-      .filter(
-        (activity) => activity.type === "call" || activity.type === "meeting",
-      )
-      .map((activity) => activity.id),
-  );
+  const [insights, reads] = await Promise.all([
+    getInsightsForActivities(
+      user,
+      activities
+        .filter(
+          (activity) => activity.type === "call" || activity.type === "meeting",
+        )
+        .map((activity) => activity.id),
+    ),
+    timelineReads(user, activities),
+  ]);
 
   return (
     <ContactRecord
@@ -118,6 +122,7 @@ export default async function ContactPage({
       mailboxConnected={mailbox?.status === "connected"}
       activities={activities}
       insights={insights}
+      reads={reads}
       meetings={meetings}
       tags={tags}
       invite={invite}

@@ -473,6 +473,7 @@ export async function sendGraphMail(
     toName?: string | null;
     subject: string;
     body: string;
+    html?: boolean;
     attachments?: MailAttachment[];
   },
   fetchImpl: typeof fetch = fetch,
@@ -486,7 +487,7 @@ export async function sendGraphMail(
     body: JSON.stringify({
       message: {
         subject: message.subject,
-        body: { contentType: "Text", content: message.body },
+        body: { contentType: message.html ? "HTML" : "Text", content: message.body },
         toRecipients: recipients(message),
         ...(attachments.length
           ? {
@@ -563,7 +564,7 @@ export async function attachToDraft(
 
 async function sendLargeGraphMail(
   accessToken: string,
-  message: { to: string; toName?: string | null; subject: string; body: string },
+  message: { to: string; toName?: string | null; subject: string; body: string; html?: boolean },
   attachments: MailAttachment[],
   fetchImpl: typeof fetch,
 ) {
@@ -573,7 +574,7 @@ async function sendLargeGraphMail(
     headers: { ...auth, "content-type": "application/json" },
     body: JSON.stringify({
       subject: message.subject,
-      body: { contentType: "Text", content: message.body },
+      body: { contentType: message.html ? "HTML" : "Text", content: message.body },
       toRecipients: recipients(message),
     }),
     signal: AbortSignal.timeout(15_000),

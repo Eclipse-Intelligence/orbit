@@ -10,6 +10,7 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { getOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { stageHistory } from "@/lib/crm/pipeline-history";
 import { getCompanyContext } from "@/lib/crm/relationships";
+import { timelineReads } from "@/lib/mail/tracking";
 
 export const dynamic = "force-dynamic";
 
@@ -36,9 +37,9 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
   if (!opportunity || opportunity.archivedAt) notFound();
   if (opportunity.pipelineKind === "board") redirect(opportunityHref(opportunity));
 
-  const [pipeline, context, members, mailbox, history] = await Promise.all([
+  const [pipeline, { context, reads }, members, mailbox, history] = await Promise.all([
     listPipeline(user, opportunity.pipelineId),
-    getCompanyContext(user, opportunity.companyId),
+    getCompanyContext(user, opportunity.companyId).then(async (context) => ({ context, reads: await timelineReads(user, context.timeline) })),
     listMembers(user),
     getMailbox(user),
     stageHistory(user, opportunity.id),
@@ -51,6 +52,7 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
       stages={pipeline.stages}
       stays={history.stays}
       context={context}
+      reads={reads}
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
     />
