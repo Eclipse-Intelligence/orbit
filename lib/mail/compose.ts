@@ -22,7 +22,7 @@ import {
 import { threadFiledWorkspaces } from "@/lib/mail/filing";
 import { notePreparedSent } from "@/lib/mail/prepare";
 import { addressHomesInDb } from "@/lib/mail/routing";
-import { graphReconnect } from "@/lib/mail/accounts";
+import { graphReconnect, SOURCE_SCOPES } from "@/lib/mail/accounts";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { readStatusesOn } from "@/lib/mail/tracking";
 import type { MailAddress } from "@/lib/mail/types";
@@ -90,7 +90,7 @@ type DraftRow = {
   follow_up_body: string | null;
 };
 
-type Target = { id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string; main: boolean };
+type Target = { id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string; main: boolean; scopes: string | null };
 
 function cleanList(list: unknown, label: string): MailAddress[] {
   if (!Array.isArray(list)) return [];
@@ -171,7 +171,7 @@ const DRAFT_COLUMNS = `id, source_id, provider_draft_id, mode, reply_to, thread_
 
 async function loadTarget(db: Db, actor: UserActor, messageId: string) {
   const result = await db.query<Target>(
-    `select m.id, m.source_id, m.provider_message_id, m.thread_key, s.email, s.connection_id is not null as main
+    `select m.id, m.source_id, m.provider_message_id, m.thread_key, s.email, s.connection_id is not null as main, ${SOURCE_SCOPES} as scopes
      from crm.mail_messages m join crm.mail_sources s on s.id = m.source_id
      where m.id = $1 and m.user_id = $2`,
     [messageId, actor.userId],
@@ -182,13 +182,13 @@ async function loadTarget(db: Db, actor: UserActor, messageId: string) {
 }
 
 async function loadSourceTarget(db: Db, actor: UserActor, sourceId: string): Promise<Target> {
-  const result = await db.query<{ id: string; email: string; main: boolean }>("select id, email, connection_id is not null as main from crm.mail_sources where id = $1 and user_id = $2", [
+  const result = await db.query<{ id: string; email: string; main: boolean; scopes: string | null }>(`select s.id, s.email, s.connection_id is not null as main, ${SOURCE_SCOPES} as scopes from crm.mail_sources s where s.id = $1 and s.user_id = $2`, [
     sourceId,
     actor.userId,
   ]);
   const source = result.rows[0];
   if (!source) throw new CrmError("not_found", "That account isn't connected any more. Choose another one to send from.", 404);
-  return { id: null, source_id: source.id, provider_message_id: null, thread_key: null, email: source.email, main: source.main };
+  return { id: null, source_id: source.id, provider_message_id: null, thread_key: null, email: source.email, main: source.main, scopes: source.scopes };
 }
 
 async function senderEmail(db: Db, actor: UserActor, input: DraftInput, fallback: string) {
@@ -207,7 +207,7 @@ async function signatureFor(db: Db, actor: UserActor, email: string) {
 
 function graphProblem(error: unknown, target?: Target): never {
   if (error instanceof CrmError) throw error;
-  const reconnect = graphReconnect(error, target ? { id: target.source_id, email: target.email, main: target.main } : null);
+  const reconnect = graphReconnect(error, target ? { id: target.source_id, email: target.email, main: target.main, scopes: target.scopes } : null);
   if (reconnect) throw reconnect;
   if (error instanceof GraphMailError) throw new CrmError("upstream_error", error.message, 502);
   throw new CrmError("upstream_error", error instanceof Error ? error.message.slice(0, 240) : "Outlook didn't accept the email.", 502);

@@ -57,17 +57,27 @@ export function flagReconnect(error: unknown, fallback: { sourceId?: string | nu
   const target = reconnectOf(error);
   if (!target) return false;
   const flag: ReconnectFlag = { sourceId: target.sourceId ?? fallback.sourceId ?? null, email: target.email ?? fallback.email ?? null, href: target.href };
-  if (!flag.sourceId && !flag.email) return true;
+  if (!flag.sourceId && !flag.email) return false;
   const existing = snapshot.flags.find((item) => sameAccount(item, flag));
   if (existing && (existing.href || !flag.href)) return true;
   publish({ ...snapshot, flags: [...snapshot.flags.filter((item) => item !== existing), flag] });
   return true;
 }
 
+export function addressesIn(text: string) {
+  return new Set(
+    text
+      .split(/[\s,;()]+/)
+      .map((word) => word.replace(/[.,:;!?]+$/, "").toLowerCase())
+      .filter((word) => word.includes("@")),
+  );
+}
+
 export function flagSyncProblems(problems: string[], accounts: MailNav["accounts"]) {
   const others: string[] = [];
   for (const problem of problems) {
-    const account = needsReconnecting(problem) ? accounts.find((item) => problem.includes(item.email)) : null;
+    const named = addressesIn(problem);
+    const account = needsReconnecting(problem) ? accounts.find((item) => named.has(item.email.toLowerCase())) : null;
     if (account) flagReconnect({ reconnect: { sourceId: account.id, email: account.email, href: account.reconnectHref ?? null } });
     else others.push(problem);
   }

@@ -3,9 +3,15 @@ import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { needsReconnecting, RECONNECT_NEEDED, reconnectHref, type MailboxKind, type ReconnectTarget, type RemovalImpact } from "@/lib/mail/mailboxes";
-import { reconnectProblem } from "@/lib/mail/microsoft";
+import { GraphMailError, reconnectProblem } from "@/lib/mail/microsoft";
+import { grantsMailWrite } from "@/lib/microsoft/oauth";
 
-export type ReconnectSource = { id: string; email: string; main: boolean };
+export type ReconnectSource = { id: string; email: string; main: boolean; scopes?: string | null };
+
+export const SOURCE_SCOPES = `case when s.connection_id is not null
+    then (select i.granted_scopes from crm.integration_state i where i.connection_id = s.connection_id and i.source = 'calendar')
+    else (select a.granted_scopes from crm.calendar_accounts a where a.id = s.account_id)
+  end`;
 
 export function reconnectTarget(source: ReconnectSource | null | undefined): ReconnectTarget {
   if (!source) return { sourceId: null, email: null, href: null };
@@ -18,13 +24,13 @@ export function reconnectError(message: string, source: ReconnectSource | null |
 
 export function graphReconnect(error: unknown, source: ReconnectSource | null | undefined) {
   if (error instanceof CrmError) return error.code === RECONNECT_NEEDED ? error : null;
-  const message = reconnectProblem(error, source?.email);
+  const message = reconnectProblem(error, source?.email, source ? grantsMailWrite(source.scopes) : null);
   return message ? reconnectError(message, source) : null;
 }
 
 export async function readReconnectSource(db: Db, actor: UserActor, sourceId: string): Promise<ReconnectSource | null> {
-  const result = await db.query<{ id: string; email: string; main: boolean }>(
-    "select id, email, connection_id is not null as main from crm.mail_sources where id = $1 and user_id = $2",
+  const result = await db.query<{ id: string; email: string; main: boolean; scopes: string | null }>(
+    `select s.id, s.email, s.connection_id is not null as main, ${SOURCE_SCOPES} as scopes from crm.mail_sources s where s.id = $1 and s.user_id = $2`,
     [sourceId, actor.userId],
   );
   return result.rows[0] ?? null;
@@ -32,7 +38,7 @@ export async function readReconnectSource(db: Db, actor: UserActor, sourceId: st
 
 export async function sourceReconnect(actor: UserActor, sourceId: string, error: unknown) {
   if (error instanceof CrmError) return error.code === RECONNECT_NEEDED ? error : null;
-  if (!reconnectProblem(error, null)) return null;
+  if (!(error instanceof GraphMailError && error.status === 403) && !reconnectProblem(error, null)) return null;
   const source = await withActor(actor, (db) => readReconnectSource(db, actor, sourceId)).catch(() => null);
   return graphReconnect(error, source);
 }
@@ -62,9 +68,11 @@ export async function readSourceHealth(db: Db, actor: UserActor): Promise<Source
 }
 
 export async function readRemovalImpacts(db: Db, actor: UserActor) {
-  const result = await db.query<{ account_id: string | null; connection_id: string | null; emails: number; addresses: string[] }>(
+  const result = await db.query<{ account_id: string | null; connection_id: string | null; emails: number; drafts: number; scheduled: number; addresses: string[] }>(
     `select s.account_id, s.connection_id,
        (select coalesce(sum(f.synced_count), 0)::int from crm.mail_folders f where f.source_id = s.id and f.sync_state <> 'skipped') as emails,
+       (select count(*)::int from crm.mail_drafts d where d.source_id = s.id and d.send_at is null) as drafts,
+       (select count(*)::int from crm.mail_drafts d where d.source_id = s.id and d.send_at is not null) as scheduled,
        coalesce((select array_agg(i.email order by i.created_at) from crm.send_identities i where i.source_id = s.id), '{}') as addresses
      from crm.mail_sources s where s.user_id = $1`,
     [actor.userId],
@@ -72,7 +80,7 @@ export async function readRemovalImpacts(db: Db, actor: UserActor) {
   const impacts = new Map<string, RemovalImpact>();
   for (const row of result.rows) {
     const key = row.account_id ?? row.connection_id;
-    if (key) impacts.set(key, { emails: row.emails, addresses: row.addresses });
+    if (key) impacts.set(key, { emails: row.emails, drafts: row.drafts, scheduled: row.scheduled, addresses: row.addresses });
   }
   return impacts;
 }
@@ -140,7 +148,7 @@ export async function listMailboxes(actor: UserActor): Promise<Mailbox[]> {
         problem,
         lastSyncedAt: iso(row.source_synced),
         reconnectHref: reconnectHref(kind, row.email),
-        removes: kind === "account" ? (impacts.get(row.id) ?? { emails: 0, addresses: [] }) : null,
+        removes: kind === "account" ? (impacts.get(row.id) ?? { emails: 0, drafts: 0, scheduled: 0, addresses: [] }) : null,
       };
     };
     return [...main.rows.map(toMailbox("main")), ...accounts.rows.map(toMailbox("account"))];

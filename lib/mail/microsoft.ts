@@ -88,18 +88,29 @@ const SETTINGS = "Settings › Email";
 const ADMIN_CONSENT = /AADSTS(50020|700016|65001|90094|50194|90008|500011)\b|consent_required|admin (approval|consent)|need admin|unauthorized_client/i;
 const SIGNED_OUT = /invalid_grant|interaction_required|AADSTS(70008|50173|700082|50076|50079|50078|54005)\b|token (has )?expired|expired (refresh |access )?token|token (was |has been )?revoked|rejected the mailbox connection/i;
 const UNREADABLE = /could not read the saved Microsoft connection/i;
+const APP_CONFIG = /invalid_client|AADSTS7000222|AADSTS7000215|Microsoft app needs attention/i;
+const AUTH_DENIED = /InvalidAuthenticationToken|Authorization_RequestDenied|AuthenticationError|InsufficientScope|insufficient privileges|interaction_required|\bAADSTS\d+/i;
+
+export function appNeedsAttention(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return APP_CONFIG.test(`${"detail" in error && typeof error.detail === "string" ? error.detail : ""} ${error.message}`);
+}
 
 export function disconnectedMessage(email: string) {
   return `Reconnect ${email} in ${SETTINGS}. It isn't connected to Orbit any more.`;
 }
 
-export function reconnectProblem(error: unknown, email: string | null | undefined): string | null {
+export function reconnectProblem(error: unknown, email: string | null | undefined, mailScope: boolean | null = null): string | null {
   const account = email?.trim() || "the mailbox";
+  if (appNeedsAttention(error)) return null;
   if (error instanceof GraphMailError) {
     if (error.status === 401) return `Reconnect ${account} in ${SETTINGS}. Microsoft has signed Orbit out of it.`;
     if (error.status !== 403) return null;
     if (ADMIN_CONSENT.test(error.code)) return `Ask your Microsoft admin to approve Orbit for ${account}, then reconnect it in ${SETTINGS}.`;
-    return `Reconnect ${account} in ${SETTINGS} and allow every permission Microsoft asks for. Orbit doesn't have access to its mail.`;
+    if (AUTH_DENIED.test(error.code) || mailScope === false) {
+      return `Reconnect ${account} in ${SETTINGS} and allow every permission Microsoft asks for. Orbit doesn't have access to its mail.`;
+    }
+    return null;
   }
   if (!(error instanceof Error)) return null;
   const detail = `${"detail" in error && typeof error.detail === "string" ? error.detail : ""} ${error.message}`;
@@ -164,7 +175,7 @@ async function graphJson<T>(
   }
   if (response.status === 403) {
     throw new GraphMailError(
-      write ? "Microsoft hasn't allowed Orbit to change this mailbox. Connect it again." : "Microsoft hasn't allowed Orbit to read this mailbox. Connect it again.",
+      write ? "Outlook refused that change (access denied)." : "Outlook didn't let Orbit read that (access denied).",
       403,
       `${code} ${body.error?.message ?? ""}`.trim(),
     );

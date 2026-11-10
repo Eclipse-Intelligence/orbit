@@ -198,6 +198,12 @@ export function grantsMailSend(scope: string | null | undefined) {
   return scopes.includes("mail.send");
 }
 
+export function grantsMailWrite(scope: string | null | undefined) {
+  const scopes = grantedScopes(scope);
+  if (!scopes) return null;
+  return scopes.includes("mail.readwrite");
+}
+
 export function grantsCalendarWrite(scope: string | null | undefined) {
   const scopes = grantedScopes(scope);
   if (!scopes) return null;
@@ -206,6 +212,7 @@ export function grantsCalendarWrite(scope: string | null | undefined) {
 
 export function consentProblem(message: string | null | undefined) {
   const text = message ?? "";
+  if (appConfigProblem(text)) return APP_NEEDS_ATTENTION;
   if (/AADSTS65004|\b(user_)?cancel(led)?\b/i.test(text)) return SIGN_IN_CANCELLED;
   if (
     /AADSTS(50020|700016|65001|90094|50194|90008|500011)\b|consent_required|admin (approval|consent)|need admin|not enabled for consumers|unauthorized_client/i.test(
@@ -308,25 +315,19 @@ function tokenFrom(
   };
 }
 
-export async function fetchMicrosoftProfile(
-  accessToken: string,
-  fetchImpl: typeof fetch = fetch,
-) {
-  return (await fetchMicrosoftIdentity(accessToken, fetchImpl)).email;
-}
-
 export async function fetchMicrosoftIdentity(
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
 ) {
   const response = await fetchImpl(
-    "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName",
+    "https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName,displayName",
     {
       headers: { authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(15000),
     },
   );
   const body = (await response.json().catch(() => ({}))) as {
+    id?: string | null;
     mail?: string | null;
     userPrincipalName?: string | null;
     displayName?: string | null;
@@ -341,6 +342,8 @@ export async function fetchMicrosoftIdentity(
   }
   return {
     email: body.mail || body.userPrincipalName || "",
+    id: typeof body.id === "string" && body.id.trim() ? body.id.trim().slice(0, 100) : null,
+    aliases: [body.mail, body.userPrincipalName].filter((item): item is string => typeof item === "string" && item.trim() !== ""),
     displayName: body.displayName?.replace(/\s+/g, " ").trim().slice(0, 200) || null,
   };
 }
@@ -607,8 +610,15 @@ async function graphError(response: Response) {
   return body.error?.message || "Microsoft could not list the inbox.";
 }
 
+export const APP_NEEDS_ATTENTION = "Orbit's Microsoft app needs attention. Tell Mark.";
+
+export function appConfigProblem(message: string | null | undefined) {
+  return /invalid_client|AADSTS7000222|AADSTS7000215/i.test(message ?? "");
+}
+
 export function sanitizeMicrosoftError(message: string) {
   const compact = message.replace(/\s+/g, " ").trim();
+  if (appConfigProblem(compact)) return APP_NEEDS_ATTENTION;
   if (/invalid_grant|consent|AADSTS70008|expired/i.test(compact)) {
     return "Microsoft rejected the mailbox connection. Connect it again.";
   }

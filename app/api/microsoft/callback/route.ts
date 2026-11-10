@@ -2,27 +2,14 @@ import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { sessionCookieOptions } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
-import { resetCalendarSync, syncCalendar } from "@/lib/crm/calendar";
-import { calendarConnectError, connectCalendarAccount } from "@/lib/crm/calendar-accounts";
-import { CrmError } from "@/lib/crm/errors";
-import { saveMailbox, syncMailbox } from "@/lib/crm/inbox";
-import {
-  exchangeAuthorizationCode,
-  fetchMicrosoftProfile,
-  originFrom,
-  readMicrosoftState,
-  sanitizeMicrosoftError,
-} from "@/lib/microsoft/oauth";
+import { syncCalendar } from "@/lib/crm/calendar";
+import { finishMicrosoftConnect } from "@/lib/microsoft/connect-flow";
+import { originFrom, readMicrosoftState } from "@/lib/microsoft/oauth";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export const dynamic = "force-dynamic";
 
 const STATE_COOKIE = "crm_ms_oauth";
-
-function addOffer(error: unknown) {
-  const add = error instanceof CrmError ? error.details?.add : null;
-  return typeof add === "string" && add ? add : null;
-}
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -35,14 +22,14 @@ export async function GET(request: Request) {
   const toEmail = state ? state.back === "email" : !forCalendar;
   const target = new URL(toEmail ? SETTINGS_PATHS.email : SETTINGS_PATHS.calendars, origin);
 
-  function finish(error?: string, connected?: string, add?: string | null) {
+  function finish(outcome: { error?: string; connected?: string | null; add?: string | null }) {
     if (!toEmail) {
-      if (error) target.searchParams.set("calendar_error", error);
-      else target.searchParams.set("calendar_connected", connected ?? "1");
-    } else if (error) {
-      target.searchParams.set("error", error);
-      if (add) target.searchParams.set("add", add);
-    } else if (connected) target.searchParams.set("info", `Connected ${connected}.`);
+      if (outcome.error) target.searchParams.set("calendar_error", outcome.error);
+      else target.searchParams.set("calendar_connected", outcome.connected ?? "1");
+    } else if (outcome.error) {
+      target.searchParams.set("error", outcome.error);
+      if (outcome.add) target.searchParams.set("add", outcome.add);
+    } else if (outcome.connected) target.searchParams.set("info", `Connected ${outcome.connected}.`);
     else target.searchParams.set("connected", "1");
     const response = NextResponse.redirect(target);
     response.cookies.set(STATE_COOKIE, "", sessionCookieOptions(0));
@@ -50,101 +37,25 @@ export async function GET(request: Request) {
   }
 
   if (!state || !returned || returned !== responseState) {
-    return finish(
-      forCalendar
+    return finish({
+      error: forCalendar
         ? "The Microsoft connection expired. Start it again from Settings."
         : "The Microsoft connection expired. Start it again from Settings › Email.",
-    );
+    });
   }
   const user = await getUserActor();
-  if (
-    !user ||
-    user.userId !== state.userId ||
-    user.workspaceId !== state.workspaceId
-  ) {
-    return finish("Sign in to the same workspace before connecting Microsoft.");
+  if (!user || user.userId !== state.userId || user.workspaceId !== state.workspaceId) {
+    return finish({ error: "Sign in to the same workspace before connecting Microsoft." });
   }
-  const providerError = [
-    url.searchParams.get("error"),
-    url.searchParams.get("error_subcode"),
-    url.searchParams.get("error_description"),
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const code = url.searchParams.get("code");
-
-  if (forCalendar) {
-    if (providerError) return finish(calendarConnectError(providerError));
-    if (!code) return finish("Microsoft did not return a connection code.");
-    let account: Awaited<ReturnType<typeof connectCalendarAccount>>;
-    try {
-      account = await connectCalendarAccount(user, {
-        origin,
-        code,
-        purpose: state.purpose === "send_account" ? "send_account" : "calendar_account",
-        expected: state.hint,
-      });
-    } catch (error) {
-      return finish(
-        error instanceof CrmError
-          ? error.message
-          : calendarConnectError(error instanceof Error ? error.message : null),
-        undefined,
-        addOffer(error),
-      );
-    }
-    after(async () => {
-      try {
-        const result = await syncCalendar(user, {
-          force: true,
-          accountId: account.id,
-        });
-        if (result.error)
-          console.error("Calendar account sync failed", result.error);
-      } catch (error) {
-        console.error("Calendar account sync failed", error);
-      }
-    });
-    return finish(undefined, account.email);
-  }
-
-  if (providerError)
-    return finish(
-      sanitizeMicrosoftError(
-        url.searchParams.get("error_description") ||
-          url.searchParams.get("error") ||
-          providerError,
-      ),
-    );
-  if (!code) return finish("Microsoft did not return a connection code.");
-
-  try {
-    const token = await exchangeAuthorizationCode(origin, code);
-    const email = await fetchMicrosoftProfile(token.accessToken);
-    await saveMailbox(user, {
-      email,
-      refreshToken: token.refreshToken,
-      accessToken: token.accessToken,
-      expiresAt: token.expiresAt,
-      expected: state.hint,
-    });
-    await resetCalendarSync(user, token.scope);
-    await syncMailbox(user);
-  } catch (error) {
-    if (error instanceof CrmError) return finish(error.message, undefined, addOffer(error));
-    return finish(
-      sanitizeMicrosoftError(
-        error instanceof Error ? error.message : "Could not connect Microsoft.",
-      ),
-    );
-  }
+  const outcome = await finishMicrosoftConnect(user, state, url.searchParams, origin);
+  if (outcome.error) return finish(outcome);
   after(async () => {
     try {
-      const result = await syncCalendar(user, { force: true });
+      const result = await syncCalendar(user, outcome.accountId ? { force: true, accountId: outcome.accountId } : { force: true });
       if (result.error) console.error("Calendar sync failed", result.error);
     } catch (error) {
       console.error("Calendar sync failed", error);
     }
   });
-  return finish();
+  return finish(outcome);
 }

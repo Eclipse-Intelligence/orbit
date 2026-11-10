@@ -1,16 +1,13 @@
 import { NextResponse } from "next/server";
 import { sessionCookieOptions } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
-import { getMailbox } from "@/lib/crm/inbox";
-import { canonicalEmail } from "@/lib/crm/normalize";
+import { startMicrosoftConnect } from "@/lib/microsoft/connect-flow";
 import {
-  microsoftAuthorizationUrl,
   microsoftConfigured,
   microsoftPurpose,
   microsoftRedirectOrigin,
   microsoftReturn,
   originFrom,
-  signMicrosoftState,
   type MicrosoftPurpose,
   type MicrosoftReturn,
 } from "@/lib/microsoft/oauth";
@@ -48,10 +45,8 @@ export async function GET(request: Request) {
     );
     return NextResponse.redirect(back);
   }
-  const main = purpose === "mailbox" ? await getMailbox(user) : null;
-  const hint = canonicalEmail(main?.email ?? url.searchParams.get("hint") ?? "") || null;
-  const state = signMicrosoftState(user.userId, user.workspaceId, Date.now(), purpose, { hint, back: returnTo });
-  const response = NextResponse.redirect(microsoftAuthorizationUrl(origin, state, { purpose, loginHint: hint }));
+  const { state, url: authorize } = await startMicrosoftConnect(user, url.searchParams, origin);
+  const response = NextResponse.redirect(authorize);
   response.cookies.set(STATE_COOKIE, state, sessionCookieOptions(10 * 60));
   return response;
 }

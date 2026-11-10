@@ -28,7 +28,7 @@ import { routeArrivedMail } from "@/lib/mail/subscriptions";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
 import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
-import type { MicrosoftToken } from "@/lib/microsoft/oauth";
+import { grantsMailWrite, type MicrosoftToken } from "@/lib/microsoft/oauth";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const LOCK_GRACE_SECONDS = 60;
@@ -622,7 +622,8 @@ export async function syncMail(
         }
       }
     } catch (error) {
-      const reconnect = reconnectProblem(error, source.email);
+      const scopes = error instanceof GraphMailError && error.status === 403 ? (await withActor(actor, (db) => readReconnectSource(db, actor, source.id)).catch(() => null))?.scopes : null;
+      const reconnect = reconnectProblem(error, source.email, grantsMailWrite(scopes));
       lastError = reconnect ?? (error instanceof GraphMailError || error instanceof Error ? error.message.slice(0, 500) : "Mail sync failed.");
       report.errors.push(reconnect ?? `${source.email}: ${lastError}`);
       if (reconnect) report.reconnect.push(reconnect);

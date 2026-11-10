@@ -2,7 +2,7 @@ import type { ComposeAccount } from "@/lib/mail/view";
 
 export type MailboxKind = "main" | "account";
 
-export type RemovalImpact = { emails: number; addresses: string[] };
+export type RemovalImpact = { emails: number; drafts: number; scheduled: number; addresses: string[] };
 
 export type ReconnectTarget = { sourceId: string | null; email: string | null; href: string | null };
 
@@ -41,11 +41,14 @@ export function removalText(impact: RemovalImpact | null, options: { calendars?:
   const parts: string[] = [];
   if (impact && impact.emails > 0) parts.push(`its copy of ${count(impact.emails)} ${impact.emails === 1 ? "email" : "emails"}`);
   else if (impact) parts.push("its copy of this mailbox");
+  if (impact && impact.drafts > 0) parts.push(`${count(impact.drafts)} ${impact.drafts === 1 ? "draft" : "drafts"}`);
+  if (impact && impact.scheduled > 0) parts.push(`${count(impact.scheduled)} scheduled ${impact.scheduled === 1 ? "email" : "emails"}`);
   if (options.calendars !== false) parts.push("its calendars");
   if (impact && impact.addresses.length > 0) {
     parts.push(`${impact.addresses.length === 1 ? "the sending address" : "the sending addresses"} ${list(impact.addresses)}`);
   }
-  return `Orbit deletes ${list(parts)}. Nothing changes in Outlook.`;
+  const unsent = impact && impact.scheduled > 0 ? ` ${impact.scheduled === 1 ? "The scheduled email won't be sent." : "The scheduled emails won't be sent."}` : "";
+  return `Orbit deletes ${list(parts)}.${unsent} Nothing changes in Outlook.`;
 }
 
 export function fromFallback(accounts: ComposeAccount[], sourceId: string | null) {
