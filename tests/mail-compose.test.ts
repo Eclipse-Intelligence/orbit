@@ -8,7 +8,8 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { DRAFT_GONE, deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import { ALREADY_SENDING, DRAFT_GONE, REPLACED_SENT, deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import type { CrmError } from "@/lib/crm/errors";
 import { ignoreUnknownMail, setThreadFiling } from "@/lib/mail/filing";
 import { composeEmailHtml, imageMarkers, trackingIdIn } from "@/lib/mail/html";
 import { attachToDraft } from "@/lib/microsoft/oauth";
@@ -359,21 +360,96 @@ describe("mail replies and read statuses", () => {
     state.drafts = [];
   });
 
-  it("sends a draft made outside Orbit once, and refuses a second send of it from another composer", async () => {
-    state.drafts = [message("outside-3", { isDraft: true, subject: "Re: Renewal pricing", from: { emailAddress: { address: "mark@eclipse.test" } }, body: { contentType: "text", content: "Sounds good." } })];
+  const outsideDraft = async (id: string) => {
+    state.drafts = [message(id, { isDraft: true, subject: "Re: Renewal pricing", from: { emailAddress: { address: "mark@eclipse.test" } }, body: { contentType: "text", content: "Sounds good." } })];
     await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook(state).fetchImpl });
-    const outside = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'outside-3'")).rows[0].id;
-    const input = readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Sounds good.", replaces: outside, sendKey: randomUUID() });
-    const first = outlook(state);
-    await sendMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: first.fetchImpl });
-    assert.equal(first.calls.filter((call) => call.url.endsWith("/send")).length, 1);
-    const second = outlook(state);
-    await assert.rejects(
-      () => sendMailDraft(owner, { ...input, sendKey: randomUUID() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: second.fetchImpl }),
-      { message: DRAFT_GONE },
-    );
-    assert.deepEqual(second.calls, []);
     state.drafts = [];
+    return (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = $1", [id])).rows[0].id;
+  };
+  const sendsIn = (calls: Call[]) => calls.filter((call) => call.method === "POST" && call.url.endsWith("/send")).length;
+  const replacing = (outside: string) => readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Sounds good.", replaces: outside, sendKey: randomUUID() });
+  const failing = (box: ReturnType<typeof outlook>, method: string, status: number): typeof fetch => async (input, init) => {
+    if ((init?.method ?? "GET") === method) {
+      box.calls.push({ method, url: String(input), body: null });
+      return Response.json({ error: { code: "ServiceUnavailable", message: "Try again later." } }, { status });
+    }
+    return box.fetchImpl(input, init);
+  };
+  const sendOptions = (fetchImpl: typeof fetch) => ({ storedFiles: "replace" as const, origin: ORIGIN, fetchImpl });
+
+  it("sends a draft made outside Orbit once, and refuses a second send of it from another composer", async () => {
+    const outside = await outsideDraft("outside-3");
+    const input = replacing(outside);
+    const first = outlook(state);
+    await sendMailDraft(owner, input, sendOptions(first.fetchImpl));
+    assert.equal(sendsIn(first.calls), 1);
+    const second = outlook(state);
+    await assert.rejects(() => sendMailDraft(owner, { ...input, sendKey: randomUUID() }, sendOptions(second.fetchImpl)), { message: REPLACED_SENT });
+    assert.equal(sendsIn(second.calls), 0);
+  });
+
+  it("retries an Outlook draft whose first send failed after Orbit took it over, and sends it once", async () => {
+    const outside = await outsideDraft("outside-retry");
+    const input = replacing(outside);
+    const broken = outlook(state);
+    await assert.rejects(() => sendMailDraft(owner, input, sendOptions(failing(broken, "PATCH", 503))), (error: CrmError) => {
+      assert.equal(error.details?.maybeSent, undefined);
+      assert.ok(error.details?.draftId);
+      return true;
+    });
+    assert.equal(sendsIn(broken.calls), 0);
+    const retry = outlook(state);
+    await sendMailDraft(owner, { ...input, sendKey: randomUUID() }, sendOptions(retry.fetchImpl));
+    assert.equal(sendsIn(retry.calls), 1);
+    assert.equal(retry.calls.filter((call) => /createReply/.test(call.url)).length, 0);
+    const again = outlook(state);
+    await assert.rejects(() => sendMailDraft(owner, { ...input, sendKey: randomUUID() }, sendOptions(again.fetchImpl)), { message: REPLACED_SENT });
+    assert.equal(sendsIn(again.calls), 0);
+  });
+
+  it("sends an Outlook draft once when it was deleted in Outlook before Send", async () => {
+    const outside = await outsideDraft("outside-deleted");
+    await getAdminPool().query("delete from crm.mail_messages where id = $1", [outside]);
+    const box = outlook(state);
+    await sendMailDraft(owner, replacing(outside), sendOptions(box.fetchImpl));
+    assert.equal(sendsIn(box.calls), 1);
+  });
+
+  it("sends an Outlook draft once from two tabs, whether they send together or one saved first", async () => {
+    const outside = await outsideDraft("outside-tabs");
+    const box = outlook(state);
+    const results = await Promise.allSettled([sendMailDraft(owner, replacing(outside), sendOptions(box.fetchImpl)), sendMailDraft(owner, replacing(outside), sendOptions(box.fetchImpl))]);
+    assert.equal(sendsIn(box.calls), 1);
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    for (const result of results) if (result.status === "rejected") assert.ok([ALREADY_SENDING, REPLACED_SENT].includes(result.reason.message));
+
+    const saved = await outsideDraft("outside-saved");
+    const editing = outlook(state);
+    const draft = await saveMailDraft(owner, replacing(saved), sendOptions(editing.fetchImpl));
+    const other = outlook(state);
+    await sendMailDraft(owner, replacing(saved), sendOptions(other.fetchImpl));
+    assert.equal(sendsIn(other.calls), 1);
+    assert.equal(other.calls.filter((call) => /createReply/.test(call.url)).length, 0);
+    await assert.rejects(() => sendMailDraft(owner, { ...replacing(saved), id: draft.id }, sendOptions(outlook(state).fetchImpl)), { message: DRAFT_GONE });
+  });
+
+  it("never sends an Outlook draft again when Outlook wouldn't delete it", async () => {
+    const outside = await outsideDraft("outside-stuck");
+    const box = outlook(state);
+    const logged = console.error;
+    const problems: unknown[] = [];
+    console.error = (...args: unknown[]) => void problems.push(args[0]);
+    try {
+      await sendMailDraft(owner, replacing(outside), sendOptions(failing(box, "DELETE", 500)));
+      assert.equal(sendsIn(box.calls), 1);
+      assert.ok(problems.includes("Outlook didn't delete the draft Orbit replaced"));
+      assert.equal((await getAdminPool().query("select 1 from crm.mail_messages where id = $1", [outside])).rowCount, 1);
+      const again = outlook(state);
+      await assert.rejects(() => sendMailDraft(owner, replacing(outside), sendOptions(again.fetchImpl)), { message: REPLACED_SENT });
+      assert.equal(sendsIn(again.calls), 0);
+    } finally {
+      console.error = logged;
+    }
   });
 
   it("leaves read images out when read statuses are off", async () => {

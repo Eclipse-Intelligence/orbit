@@ -52,6 +52,8 @@ export type SendPayload = {
 
 export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null; replaces?: string | null };
 
+export type SendTracker = () => { undone: () => void; delivered: () => void };
+
 export type ComposerStart = {
   mode: DraftMode;
   messageId: string | null;
@@ -90,6 +92,8 @@ export default function MailComposer({
   onDelivered,
   onUndone,
   onReopen,
+  onAlreadySending,
+  track,
   onScheduled,
   onDiscard,
   onHeld,
@@ -106,10 +110,12 @@ export default function MailComposer({
   onDelivered?: () => void;
   onUndone?: () => void;
   onReopen?: (draft: ComposerDraft) => boolean;
+  onAlreadySending?: () => void;
+  track?: SendTracker;
   onScheduled?: () => void;
   onDiscard?: () => void;
 }) {
-  const { queueSend, scheduleSend, pickLater } = useComposer();
+  const { queueSend, scheduleSend, pickLater, showToast } = useComposer();
   const [aiOpen, setAiOpen] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
@@ -294,6 +300,7 @@ export default function MailComposer({
         sendAt: null,
         sendError: null,
         identityId: current.identityId,
+        replaces: current.replaces,
         attachments: heldExtras.current.files,
         remindHours: current.remindHours,
         followUpDays: current.followUpDays,
@@ -407,22 +414,28 @@ export default function MailComposer({
   function send(event?: FormEvent, force = false) {
     event?.preventDefault();
     if (queued.current || !ready()) return;
-    queued.current = true;
     if (draftQueued(draftId.current, start.replaces)) {
       dirty.current = false;
-      onClose();
+      showToast({ message: "This email is already sending. Undo it to make changes." });
+      (onAlreadySending ?? onClose)();
       return;
     }
+    queued.current = true;
     sendKey.current ??= newSendKey();
     const handed = handOver(force);
     const release = holdQueuedDraft(draftId.current, handed, start.replaces ?? null);
+    const tracked = track?.();
     queueSend(handed, {
-      onDelivered,
+      onDelivered: () => {
+        onDelivered?.();
+        tracked?.delivered();
+      },
       onReopen,
-      onReleased: () => void release(),
+      track,
       onUndone: () => {
         void release();
         onUndone?.();
+        tracked?.undone();
       },
     });
     onSent(body, [...to, ...cc]);

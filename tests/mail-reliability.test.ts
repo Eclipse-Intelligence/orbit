@@ -556,6 +556,20 @@ describe("send readiness and the Mail cache", () => {
     assert.deepEqual(cachedThread("t-twice")?.messages.map((message) => message.id), ["m-outside", "m-kept"]);
   });
 
+  it("hides a draft again when its Undo card is sent, and stops the reader's copy sending it twice", async () => {
+    const detail = { key: "t-card", drafts: [{ id: "d-card" }], messages: [] } as unknown as ThreadDetail;
+    storeThread(detail);
+    const undo = holdQueuedDraft("d-card", Promise.resolve({ id: "d-card" }));
+    globalThis.fetch = (async () => Response.json(detail)) as typeof fetch;
+    await undo();
+    for (let wait = 0; wait < 10 && !cachedThread("t-card"); wait += 1) await new Promise((done) => setImmediate(done));
+    assert.equal(draftQueued("d-card"), false);
+    assert.deepEqual(cachedThread("t-card")?.drafts.map((draft) => draft.id), ["d-card"]);
+    holdQueuedDraft("d-card", Promise.resolve({ id: "d-card" }));
+    assert.equal(draftQueued("d-card"), true);
+    assert.deepEqual(cachedThread("t-card")?.drafts, []);
+  });
+
   it("keeps a draft being sent hidden when a conversation load lands afterwards", async () => {
     const detail = { key: "t-late", drafts: [{ id: "d-late" }, { id: "d-kept" }], messages: [] } as unknown as ThreadDetail;
     let answer: (response: Response) => void = () => undefined;

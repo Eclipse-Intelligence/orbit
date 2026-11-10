@@ -9,7 +9,7 @@ import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
 import { cancelReminder, loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
-import type { ComposerDraft, ComposerStart } from "@/components/mail/mail-composer";
+import type { ComposerDraft, ComposerStart, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
 import { useComposer } from "@/components/mail/compose-dock";
 import Button from "@/components/_ui/button";
@@ -558,7 +558,7 @@ export default function ThreadReader({
   onBack,
   onSent,
   onSending,
-  onSendUndone,
+  onLeave,
   onNext,
   onPrevious,
   previous,
@@ -587,8 +587,8 @@ export default function ThreadReader({
   onAction: (action: ReaderAction) => void;
   onBack: () => void;
   onSent: () => void;
-  onSending: (draftOnly: boolean) => void;
-  onSendUndone: () => void;
+  onSending: (draftOnly: boolean, others: boolean) => ReturnType<SendTracker>;
+  onLeave: () => void;
   onNext: (swiped?: boolean) => void;
 }) {
   const surface = useRef<HTMLDivElement>(null);
@@ -799,6 +799,13 @@ export default function ThreadReader({
 
   function hideSentDraft(id: string | null | undefined) {
     if (id) setRemovedDrafts((existing) => new Set(existing).add(id));
+  }
+
+  function draftsLeft(sending: { draftId?: string | null; replaces?: string | null }) {
+    if (!detail) return false;
+    const orbit = detail.drafts.some((draft) => draft.id !== sending.draftId);
+    const outside = detail.messages.some((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id) && message.id !== sending.replaces);
+    return orbit || outside;
   }
 
   function reopenSent(draft: ComposerDraft) {
@@ -1120,13 +1127,11 @@ export default function ThreadReader({
                     setEcho({ body, to, count: detail.messages.length });
                     hideSentDraft(active.replaces);
                     closeComposer();
-                    onSending(false);
                   }}
-                  onDelivered={onSent}
+                  track={() => onSending(false, draftsLeft({ draftId: active.draft?.id, replaces: active.replaces }))}
                   onUndone={() => {
                     setEcho(null);
                     if (active.replaces) restoreDraft(active.replaces);
-                    onSendUndone();
                   }}
                   onReopen={reopenSent}
                 />
@@ -1148,9 +1153,9 @@ export default function ThreadReader({
                     passive
                     accounts={accounts}
                     onClose={onBack}
-                    onSent={() => onSending(true)}
-                    onDelivered={onSent}
-                    onUndone={onSendUndone}
+                    onAlreadySending={onLeave}
+                    onSent={() => undefined}
+                    track={() => onSending(true, draftsLeft({ draftId: newDraft.id }))}
                   />
                 </div>
               ) : (
