@@ -61,7 +61,7 @@ export default function ConnectChromeForm({
         <h2>{done === "approved" ? "Connected" : "Cancelled"}</h2>
         <p className="text-subtle">
           {done === "approved"
-            ? "Go back to LinkedIn. The extension finishes connecting by itself, and you can close this tab."
+            ? "Go back to LinkedIn. You can close this tab."
             : "Nothing was connected. You can close this tab."}
         </p>
       </div>

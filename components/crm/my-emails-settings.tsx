@@ -32,7 +32,7 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
       const result = await saveOtherEmailsAction(next);
       if (result.error || !result.emails) {
         setDrafts(previous);
-        setError(result.error ?? "Could not save your email addresses.");
+        setError(result.error ?? "Couldn't save your email addresses.");
         return false;
       }
       setDrafts(result.emails.otherEmails);
@@ -41,7 +41,7 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
       return true;
     } catch (problem) {
       setDrafts(previous);
-      if (!reloadIfStaleDeploy(problem)) setError("Could not save your email addresses. Try again.");
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't save your email addresses. Try again.");
       return false;
     } finally {
       setPending(false);
@@ -68,8 +68,8 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
   return (
     <SettingsCard
       id="my-emails"
-      title="Other addresses that are you"
-      description="Old or forwarding addresses. Mail from them is treated as yours, and they're never filed as contacts or companies."
+      title="Your other addresses"
+      description="Mail from these is treated as yours and never filed as a contact."
     >
       <ul className="flex flex-col">
         <li className="border-border flex items-center justify-between gap-3 border-b py-2">

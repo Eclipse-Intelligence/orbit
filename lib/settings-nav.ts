@@ -63,12 +63,10 @@ export const WORKSPACE_PAGES: SettingsPage[] = [
 
 const SINGLE_PAGES: SettingsPage[] = [
   "general",
-  "aboutYou",
   "email",
   "calendars",
   "bookingPage",
   "connections",
-  "memory",
   "apiTokens",
   "brand",
   "knowledge",
@@ -87,7 +85,6 @@ export type SettingsNavItem = { page: SettingsPage; href: string; label: string 
 export type SettingsNavGroup = {
   kind: "you" | "workspace" | "all";
   heading: string | null;
-  caption: string | null;
   items: SettingsNavItem[];
 };
 
@@ -96,10 +93,10 @@ function items(pages: SettingsPage[]): SettingsNavItem[] {
 }
 
 export function settingsNav(workspace: { name: string; multi: boolean }): SettingsNavGroup[] {
-  if (!workspace.multi) return [{ kind: "all", heading: null, caption: null, items: items(SINGLE_PAGES) }];
+  if (!workspace.multi) return [{ kind: "all", heading: null, items: items(SINGLE_PAGES) }];
   return [
-    { kind: "you", heading: "You", caption: "The same in every workspace", items: items(YOU_PAGES) },
-    { kind: "workspace", heading: workspace.name, caption: `Only in ${workspace.name}`, items: items(WORKSPACE_PAGES) },
+    { kind: "you", heading: "You", items: items(YOU_PAGES) },
+    { kind: "workspace", heading: workspace.name, items: items(WORKSPACE_PAGES) },
   ];
 }
 
@@ -195,6 +192,7 @@ export function settingsAnchorRedirect(pathname: string, search: string, hash: s
 const MOVED_PAGES: Record<string, string> = {
   "/settings/integrations": SETTINGS_PATHS.connections,
   "/settings/api": SETTINGS_PATHS.apiTokens,
+  "/settings/brand/playbook": SETTINGS_PATHS.brand,
 };
 
 export function settingsRedirect(search: URLSearchParams) {

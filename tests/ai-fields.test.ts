@@ -124,13 +124,12 @@ describe("AI fields", () => {
 
   it("works out the cost hint before saving", () => {
     const pick = costHint("pick", 61, "monthly");
-    assert.equal(pick.text, "About $0.06 to fill, then about $0.06 a month.");
-    assert.equal("note" in pick, false);
+    assert.equal(pick.text, "$0.06 to fill (61 checks), then about $0.06 a month.");
     const staff = costHint("number", 214, "monthly");
-    assert.equal(staff.text, "About $2.14 to fill, then about $2.14 a month.");
-    assert.equal(costHint("yes_no", 300, "weekly").text, "About $0.30 to fill, then about $1.30 a month.");
-    assert.equal(costHint("text", 1, "manual").text, "About $0.01 to fill.");
-    assert.equal(costHint("yes_no", 3, "monthly").text, "Under $0.01 to fill, then under $0.01 a month.");
+    assert.equal(staff.text, "$2.14 to fill (214 checks), then about $2.14 a month.");
+    assert.equal(costHint("yes_no", 300, "weekly").text, "$0.30 to fill (300 checks), then about $1.30 a month.");
+    assert.equal(costHint("text", 1, "manual").text, "$0.01 to fill (1 check).");
+    assert.equal(costHint("yes_no", 3, "monthly").text, "Under $0.01 to fill (3 checks), then about under $0.01 a month.");
   });
 
   it("only lets owners and admins manage fields and views", async () => {

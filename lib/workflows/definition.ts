@@ -393,7 +393,7 @@ export const STEP_LABELS: Record<StepType, string> = {
   find_records: "Find records",
   upsert_record: "Find or create record",
   webhook: "Send to a webhook",
-  create_proposal: "Create proposal",
+  create_proposal: "New proposal",
 };
 
 export const STEP_HINTS: Record<StepType, string> = {

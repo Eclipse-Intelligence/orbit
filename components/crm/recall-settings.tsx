@@ -49,8 +49,8 @@ export default function RecallKey({ connected, children }: { connected: boolean;
             <Input
               type="password"
               autoComplete="off"
-              aria-label="Your Recall API key"
-              placeholder="Your Recall API key"
+              aria-label="Recall API key"
+              placeholder="Recall API key"
               value={key}
               onChange={(event) => setKey(event.target.value)}
               className="sm:flex-1"
@@ -68,7 +68,7 @@ export default function RecallKey({ connected, children }: { connected: boolean;
       )}
       {!connected && (
         <p className="caption-style text-subtle leading-[1.4]">
-          Each person connects their own Recall. Create a key in Recall under Settings, API &amp; MCP. Only you can see it.
+          Create a key in Recall under Settings, API &amp; MCP. Only you can see it.
         </p>
       )}
     </div>

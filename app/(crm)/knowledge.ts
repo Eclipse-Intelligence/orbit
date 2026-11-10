@@ -28,7 +28,7 @@ function failure(error: unknown, fallback: string) {
 
 export async function listKnowledgeAction(target: Target): Promise<{ items?: KnowledgeItem[]; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to see Knowledge." };
+  if (!user) return { error: "Sign in again." };
   try {
     const items = await listKnowledge(user, targetFrom(target));
     resumeStale(user, items);
@@ -43,7 +43,7 @@ export async function prepareKnowledgeUploadAction(
   file: { name: string; size: number; contentType: string },
 ): Promise<{ item?: KnowledgeItem; uploadUrl?: string; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to upload." };
+  if (!user) return { error: "Sign in again." };
   try {
     return await prepareKnowledgeUpload(user, targetFrom(target), file);
   } catch (error) {
@@ -53,7 +53,7 @@ export async function prepareKnowledgeUploadAction(
 
 export async function finishKnowledgeUploadAction(id: string): Promise<{ item?: KnowledgeItem; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to upload." };
+  if (!user) return { error: "Sign in again." };
   try {
     const row = await getKnowledgeItem(user, id);
     scheduleIndexing(user, [row.id]);
@@ -65,7 +65,7 @@ export async function finishKnowledgeUploadAction(id: string): Promise<{ item?: 
 
 export async function addKnowledgeLinkAction(target: Target, url: string): Promise<{ item?: KnowledgeItem; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to add links." };
+  if (!user) return { error: "Sign in again." };
   try {
     const item = await addKnowledgeLink(user, targetFrom(target), { url });
     scheduleIndexing(user, [item.id]);
@@ -77,7 +77,7 @@ export async function addKnowledgeLinkAction(target: Target, url: string): Promi
 
 export async function retryKnowledgeAction(id: string): Promise<{ error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to retry." };
+  if (!user) return { error: "Sign in again." };
   try {
     const row = await getKnowledgeItem(user, id);
     scheduleIndexing(user, [row.id], { force: row.status === "ready" });
@@ -89,7 +89,7 @@ export async function retryKnowledgeAction(id: string): Promise<{ error?: string
 
 export async function renameKnowledgeAction(id: string, title: string): Promise<{ item?: KnowledgeItem; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to rename." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { item: await renameKnowledge(user, id, title) };
   } catch (error) {
@@ -99,7 +99,7 @@ export async function renameKnowledgeAction(id: string, title: string): Promise<
 
 export async function removeKnowledgeAction(id: string): Promise<{ error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to remove." };
+  if (!user) return { error: "Sign in again." };
   try {
     await archiveKnowledge(user, id);
     return {};
@@ -110,7 +110,7 @@ export async function removeKnowledgeAction(id: string): Promise<{ error?: strin
 
 export async function addAttachmentToKnowledgeAction(messageId: string, attachmentId: string, target: Target): Promise<{ added?: boolean; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to add to Knowledge." };
+  if (!user) return { error: "Sign in again." };
   try {
     const { item, created } = await addMailAttachmentToKnowledge(user, messageId, attachmentId, targetFrom(target));
     if (created) scheduleIndexing(user, [item.id]);
@@ -122,7 +122,7 @@ export async function addAttachmentToKnowledgeAction(messageId: string, attachme
 
 export async function mapSiteAction(url: string): Promise<{ map?: SiteMap; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to map a site." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { map: await mapSite(url, { deadline: Date.now() + 90_000 }) };
   } catch (error) {
@@ -132,7 +132,7 @@ export async function mapSiteAction(url: string): Promise<{ map?: SiteMap; error
 
 export async function addKnowledgePagesAction(target: Target, urls: string[]): Promise<{ items?: KnowledgeItem[]; added?: number; skipped?: number; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to add pages." };
+  if (!user) return { error: "Sign in again." };
   try {
     const parsed = targetFrom(target);
     const { ids, skipped } = await addKnowledgePages(user, parsed, urls);
@@ -145,14 +145,14 @@ export async function addKnowledgePagesAction(target: Target, urls: string[]): P
 
 export async function retryKnowledgeItemsAction(ids: string[]): Promise<{ error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to retry." };
+  if (!user) return { error: "Sign in again." };
   scheduleIndexing(user, ids.slice(0, PAGES_ADD_MAX));
   return {};
 }
 
 export async function removeKnowledgeItemsAction(ids: string[]): Promise<{ error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to remove." };
+  if (!user) return { error: "Sign in again." };
   try {
     for (const id of ids.slice(0, PAGES_ADD_MAX)) await archiveKnowledge(user, id);
     return {};

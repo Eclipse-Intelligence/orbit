@@ -28,13 +28,13 @@ export default function ProposalsCard({
       action={
         company ? (
           <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
-            Create proposal
+            New proposal
           </Button>
         ) : null
       }
     >
       {documents.length === 0 ? (
-        <p className="caption-style text-subtle">{company ? "None yet." : "Link this contact to a company to send them a proposal."}</p>
+        <p className="caption-style text-subtle">{company ? "No proposals" : "Link this contact to a company first."}</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {documents.slice(0, 6).map((item) => {

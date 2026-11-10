@@ -4295,7 +4295,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_proposals",
     label: "Looking at proposals",
     description:
-      "List proposals and NDAs, newest first, with status (draft, sent, viewed, client_signed, completed, declined, withdrawn or expired), value, views and links. Filter by company, contact, status (or open for anything waiting on a signature) or search.",
+      "List proposals and NDAs, newest first, with status (draft, sent, viewed (shown as Opened), client_signed, completed, declined, withdrawn or expired), value, views and links. Filter by company, contact, status (or open for anything waiting on a signature) or search.",
     parameters: {
       type: "object",
       properties: {
@@ -4304,7 +4304,7 @@ const TOOL_LIST: AssistantTool[] = [
         status: {
           type: "string",
           enum: ["all", "draft", "open", "sent", "viewed", "client_signed", "completed", "declined", "withdrawn", "expired"],
-          description: "Only this status. open means anything waiting on a signature. Defaults to all.",
+          description: "Only this status. viewed is shown as Opened. open means anything waiting on a signature. Defaults to all.",
         },
         kind: { type: "string", enum: ["proposal", "nda"], description: "Only proposals or only NDAs." },
         search: { type: "string", description: "One phrase, matched as written against the title, company or contact, for example \"Acme\"." },
@@ -4383,7 +4383,7 @@ const TOOL_LIST: AssistantTool[] = [
       required: ["templateId", "companyId", "contactId"],
     },
     describe: (args, name) => ({
-      title: `Create proposal${str(args.title) ? `: ${str(args.title)}` : ""}`,
+      title: `New proposal${str(args.title) ? `: ${str(args.title)}` : ""}`,
       lines: [
         `For ${name(args.contactId)} at ${name(args.companyId)}`,
         `Template: ${name(args.templateId)}`,

@@ -6,12 +6,12 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 
 export default function ShortcutSettings() {
-  const { singleKeys, setSingleKeys, run, mac } = useShortcuts();
+  const { singleKeys, setSingleKeys, run } = useShortcuts();
   return (
     <SettingsCard
       id="shortcuts"
       title="Keyboard shortcuts"
-      description={`Press ${mac ? "⌘/" : "Ctrl+/"} for the command palette and ? for every shortcut. Saved for this browser.`}
+      description="Saved for this browser."
       action={
         <Button variant="secondary" size="sm" onClick={() => run("help")}>
           Show shortcuts
@@ -22,8 +22,7 @@ export default function ShortcutSettings() {
         <span className="flex min-w-0 flex-col">
           <span className="text-[14px] leading-5">Single-key shortcuts</span>
           <span className="caption-style text-subtle">
-            Letters such as E to edit, J and K to move, and G then a letter to jump. Shortcuts with{" "}
-            {mac ? "⌘" : "Ctrl"} always work.
+            Such as E to edit, J and K to move.
           </span>
         </span>
         <Switch checked={singleKeys} onChange={setSingleKeys} label="Single-key shortcuts" />

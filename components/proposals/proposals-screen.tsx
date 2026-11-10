@@ -4,6 +4,7 @@ import { useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import SectionHeader from "@/components/crm/section-header";
@@ -20,6 +21,12 @@ import { cn, GENERIC_ERROR } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 type Tab = "proposals" | "templates" | "products";
+
+const TEMPLATE_STARTERS = [
+  ["proposal", "Proposal"],
+  ["mutual-nda", "Mutual NDA"],
+  ["one-way-nda", "One-way NDA"],
+] as const;
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -43,7 +50,7 @@ function matches(filter: string, item: DocumentSummary) {
 
 function activity(item: DocumentSummary) {
   if (item.status === "completed" && item.completedAt) return `Signed ${relativeWhen(item.completedAt).toLowerCase()}`;
-  if (item.lastViewedAt) return `Viewed ${relativeWhen(item.lastViewedAt).toLowerCase()}${item.viewCount > 1 ? `, ${item.viewCount} times` : ""}`;
+  if (item.lastViewedAt) return `Opened ${relativeWhen(item.lastViewedAt).toLowerCase()}${item.viewCount > 1 ? `, ${item.viewCount} times` : ""}`;
   if (item.sentAt) return `Sent ${relativeWhen(item.sentAt).toLowerCase()}`;
   return `Edited ${relativeWhen(item.updatedAt).toLowerCase()}`;
 }
@@ -86,15 +93,22 @@ export default function ProposalsScreen({
       <Button variant="primary" size="sm" data-shortcut="add-record" onClick={() => setCreating(true)}>
         New proposal
       </Button>
-    ) : tab === "products" ? (
-      <Button variant="primary" size="sm" data-shortcut="add-record" onClick={() => document.getElementById("product-new-name")?.focus()}>
-        New product
-      </Button>
-    ) : (
-      <Button variant="primary" size="sm" data-shortcut="add-record" disabled={busy !== null} onClick={() => void newTemplate("proposal")}>
-        New template
-      </Button>
-    );
+    ) : tab === "templates" ? (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="primary" size="sm" data-shortcut="add-record" disabled={busy !== null}>
+            {busy ? "Creating…" : "New template"}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          {TEMPLATE_STARTERS.map(([key, label]) => (
+            <DropdownMenuItem key={key} onSelect={() => void newTemplate(key)}>
+              {label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ) : undefined;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -133,7 +147,7 @@ export default function ProposalsScreen({
               </div>
               {shown.length === 0 ? (
                 <p className="caption-style text-subtle">
-                  {documents.length === 0 ? "No proposals yet. Create one here, or from a company or contact." : "Nothing matches this filter."}
+                  {documents.length === 0 ? "No proposals" : "No matches"}
                 </p>
               ) : (
                 <ul className="border-border flex flex-col rounded-xl border">
@@ -162,23 +176,8 @@ export default function ProposalsScreen({
 
           {tab === "templates" && (
             <>
-              <p className="caption-style text-subtle max-w-[46em] leading-[1.45]">
-                Templates are designed once and filled in for each client. Only active templates can be used to create and send. Start from one of these, then edit the wording,
-                sections and colour.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {[
-                  ["proposal", "New proposal template"],
-                  ["mutual-nda", "New mutual NDA"],
-                  ["one-way-nda", "New one-way NDA"],
-                ].map(([key, label]) => (
-                  <Button key={key} variant="secondary" size="sm" disabled={busy !== null} onClick={() => void newTemplate(key)}>
-                    {busy === key ? "Creating…" : label}
-                  </Button>
-                ))}
-              </div>
               {templates.length === 0 ? (
-                <p className="caption-style text-subtle">No templates yet.</p>
+                <p className="caption-style text-subtle">No templates</p>
               ) : (
                 <ul className="border-border flex flex-col rounded-xl border">
                   {templates.map((item) => (
@@ -201,9 +200,6 @@ export default function ProposalsScreen({
 
           {tab === "products" && (
             <div className="flex flex-col gap-3">
-              <p className="caption-style text-subtle leading-[1.45]">
-                Choosing a product on a proposal fills in its name, description and price. Changing it later doesn&apos;t change proposals already sent.
-              </p>
               <ul aria-label="Products" className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
                 <li>
                   <ProductEditor onDone={() => router.refresh()} />
@@ -332,7 +328,9 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
           maxLength={120}
           autoFocus={!adding}
           autoComplete="off"
-          placeholder={adding ? "Add a product, such as Starter package" : "Product name"}
+          placeholder={adding ? "Add a product" : "Product name"}
+          data-shortcut={adding ? "add-record" : undefined}
+          onClick={(event) => event.currentTarget.focus()}
           onFocus={() => setOpen(true)}
           onChange={() => setAdded(null)}
           className="placeholder:text-subtle text-foreground focus-visible:ring-ring/60 -mx-1.5 h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-[14px] outline-none focus-visible:ring-2"
@@ -349,7 +347,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
             defaultValue={product?.description ?? ""}
             maxLength={4000}
             rows={2}
-            placeholder="Description, shown on the proposal (optional)"
+            placeholder="Description (shown to the client)"
             className="placeholder:text-subtle bg-secondary text-foreground focus-visible:ring-ring/60 min-h-14 w-full resize-y rounded-lg px-3 py-2 text-[14px] leading-5 shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2"
           />
           <div className="flex flex-wrap items-center gap-2">
@@ -394,7 +392,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
       )}
       {added && !error && (
         <p role="status" className="caption-style text-soft pl-6">
-          Added {added}. Add another, or press Esc to close.
+          Added {added}
         </p>
       )}
     </form>

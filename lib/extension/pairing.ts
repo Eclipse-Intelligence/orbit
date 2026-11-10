@@ -80,7 +80,7 @@ export async function decidePairing(
   const status = result.rows[0]?.status;
   if (status === "no_workspaces") throw new CrmError("invalid_input", "Choose a workspace you're a member of.", 400, { field: "workspaceIds" });
   if (status !== "approved" && status !== "declined") {
-    throw new CrmError("expired", "That code isn't valid, has expired or was already used. Check the code in the Orbit panel, or press Connect there again.", 410);
+    throw new CrmError("expired", "That code isn't valid. Check it in the Orbit panel, or press Connect there again.", 410);
   }
   return status;
 }

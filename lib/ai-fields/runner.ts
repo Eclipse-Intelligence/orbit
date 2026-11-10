@@ -609,7 +609,7 @@ export function checkNowMessage(report: AiFieldsReport, viewer?: Actor): { ok: t
   if (report.skipped === "No PARALLEL_API_KEY.") return { error: webChecksNotSetUp(viewer) };
   if (report.skipped === "Monthly limit reached.") return { error: `Monthly limit of $${MONTHLY_LIMIT_USD} reached.` };
   if (report.error) return { error: report.error };
-  if (report.started > 0) return { ok: true, message: "Checking" };
+  if (report.started > 0) return { ok: true, message: "Checking…" };
   if (report.checked > 0) return { ok: true, message: "Checked." };
   if (report.failed > 0) return { error: "Web check failed. Try again." };
   return { ok: true, message: "Nothing to check" };

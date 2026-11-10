@@ -8,7 +8,7 @@ export async function signedIn() {
 
 export async function guardPublic(request: Request, key: string, limit: number, options: { clientOnly?: boolean } = {}) {
   if (options.clientOnly && (await signedIn())) {
-    return { error: Response.json({ error: "You're signed in to Orbit, so this can't be done as the client. Open the link in a private window to try it." }, { status: 403 }) };
+    return { error: Response.json({ error: "You're signed in to Orbit. Open the link in a private window to act as the client." }, { status: 403 }) };
   }
   const ip = clientIp(request.headers);
   const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`proposal-${key}:${ip}`, limit, 600]);

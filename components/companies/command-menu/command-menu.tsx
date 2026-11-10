@@ -16,7 +16,7 @@ import { shortcutTarget, useShortcuts } from "@/components/shortcuts/shortcuts-p
 import { searchWorkspaceAction } from "@/app/(crm)/search";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Opportunity } from "@/lib/crm/types";
-import { SHORTCUTS, paletteMatches, shortcutKeys, type ShortcutDef, type ShortcutGroup } from "@/lib/shortcuts";
+import { MULTI_WORKSPACE_SHORTCUTS, SHORTCUTS, paletteMatches, shortcutKeys, type ShortcutDef, type ShortcutGroup } from "@/lib/shortcuts";
 import DocsPaletteGroups, { type PaletteRecord } from "@/components/docs/docs-palette";
 import { useDocsNavigate } from "@/components/docs/use-docs";
 import { isDocsPath, pageHref } from "@/lib/docs/routes";
@@ -48,7 +48,7 @@ function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
   );
 }
 
-export default function CommandMenu() {
+export default function CommandMenu({ multi }: { multi: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const navigateDocs = useDocsNavigate();
@@ -124,7 +124,7 @@ export default function CommandMenu() {
   );
   const createCommands = commands.filter((def) => def.group === "Create" && paletteMatches(def, query) && shownByDocs(def));
   const goCommands = commands.filter((def) => def.group === "Go to" && paletteMatches(def, query));
-  const settingsCommands = trimmed ? commands.filter((def) => def.group === "Settings" && def.href && paletteMatches(def, query)) : [];
+  const settingsCommands = trimmed ? commands.filter((def) => def.group === "Settings" && def.href && (multi || !MULTI_WORKSPACE_SHORTCUTS.has(def.id)) && paletteMatches(def, query)) : [];
 
   const topRecord: PaletteRecord | null = results
     ? results.companies[0]

@@ -104,7 +104,7 @@ export function readCaptureAction(body: unknown): CaptureAction {
 export async function captureActor(signedIn: UserActor, workspaceId: unknown) {
   if (workspaceId === undefined || workspaceId === null || workspaceId === signedIn.workspaceId) return signedIn;
   const found = typeof workspaceId === "string" && isUuid(workspaceId) ? (await workspaceActors(signedIn)).find((item) => item.workspaceId === workspaceId) : undefined;
-  if (!found) throw new CrmError("conflict", "You're no longer in that workspace, so this change wasn't made. Reload Capture.", 409);
+  if (!found) throw new CrmError("conflict", "You're no longer in that workspace. Reload Capture.", 409);
   return found;
 }
 

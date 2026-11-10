@@ -41,7 +41,7 @@ type LoadError = { id: string; message: string; signIn: boolean };
 
 function loadErrorOf(id: string, error: unknown): LoadError {
   const signIn = error instanceof DocsError && (error.code === "401" || error.code === "unauthorized");
-  const text = error instanceof Error && error.message ? error.message : "Docs didn't respond. Try again in a moment.";
+  const text = error instanceof Error && error.message ? error.message : "Docs didn't respond.";
   return { id, message: text, signIn };
 }
 
@@ -446,7 +446,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
     );
 
   const newNoteButton = (
-    <Button variant="primary" shortcut={["C", "N"]} onClick={() => void newNote()} aria-label="New note" title="New note (C then N)" className="max-sm:size-[30px] max-sm:p-0">
+    <Button variant="primary" shortcut={["C", "N"]} onClick={() => void newNote()} aria-label="New note" className="max-sm:size-[30px] max-sm:p-0">
       <PlusIcon aria-hidden className="size-3 sm:hidden" />
       <span className="max-sm:sr-only">New note</span>
     </Button>
@@ -522,14 +522,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
                   <LoadFailure failure={listError} what="This list didn't load" onRetry={retryList} />
                 </div>
               ) : ids.length === 0 ? (
-                <div className="flex flex-col items-start gap-3 px-3 py-4">
-                  <p className="text-subtle">{list.kind === "search" ? `Nothing matches “${list.query}”.` : "No notes here yet."}</p>
-                  {list.kind !== "search" && (
-                    <Button variant="secondary" size="sm" onClick={() => void newNote()}>
-                      New note
-                    </Button>
-                  )}
-                </div>
+                <p className="text-subtle px-3 py-4">{list.kind === "search" ? "No matches" : "No notes"}</p>
               ) : (
                 <RowList label={title} onMove={onMove}>
                   {listSummaries.map((summary, index) => {
@@ -580,7 +573,6 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
             missing={Boolean(shownId) && missing === shownId && !page}
             empty={!shownId && !dailyDate}
             firstRun={list.kind === "all" && ids.length === 0 && (listLoaded || fallbackIds !== null)}
-            onNewNote={() => void newNote()}
             hiddenOnPhone={level !== "note"}
           />
         )}

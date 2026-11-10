@@ -15,7 +15,6 @@ import type { Template } from "@/lib/proposals/catalogue";
 import {
   consentText,
   fieldValues,
-  KIND_LABELS,
   LOGO_MAX_LENGTH,
   renderBlocks,
   totalsOf,
@@ -63,7 +62,7 @@ function LogoField({ logo, company, onChange }: { logo: string | null; company: 
     try {
       const png = await logoPng(file);
       if (png.length > LOGO_MAX_LENGTH) {
-        setError("That logo is too detailed to use. Try a simpler or smaller image.");
+        setError("That logo is too large. Use a simpler or smaller image.");
         return;
       }
       onChange(png);
@@ -79,7 +78,7 @@ function LogoField({ logo, company, onChange }: { logo: string | null; company: 
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <span className="flex h-14 w-44 items-center rounded-lg bg-white px-3 shadow-[0_0_0_1px_var(--input)]">
-          {logo ? <ProposalLogo src={logo} company={company} className="h-9 w-full" /> : <span className="caption-style text-[#6b6b6b]">No logo yet</span>}
+          {logo ? <ProposalLogo src={logo} company={company} className="h-9 w-full" /> : <span className="caption-style text-[#6b6b6b]">No logo</span>}
         </span>
         <input
           ref={input}
@@ -98,7 +97,7 @@ function LogoField({ logo, company, onChange }: { logo: string | null; company: 
           </Button>
         )}
       </div>
-      <p className="caption-style text-subtle leading-[1.4]">Shown at the top of the client&apos;s page and the PDF. A PNG or SVG made for a white background works best.</p>
+      <p className="caption-style text-subtle leading-[1.4]">Use a PNG or SVG made for a white background.</p>
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
@@ -159,7 +158,7 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
         return false;
       }
       setStatus(result.data.status);
-      setMessage({ text: nextStatus === "active" ? `Saved and active. It can now be used for ${template.kind === "nda" ? "NDAs" : "proposals"}.` : "Saved.", tone: "status" });
+      setMessage({ text: nextStatus === "active" ? "Saved and active" : "Saved", tone: "status" });
       router.refresh();
       return true;
     } catch (problem) {
@@ -261,17 +260,13 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
               </div>
             </div>
             <LogoField logo={logo} company={viewer.workspaceName} onChange={setLogo} />
-            <p className="caption-style text-subtle">
-              {KIND_LABELS[template.kind]} template. Only active templates can be used to create and send.
-              {template.kind === "nda" ? " Have a solicitor check the wording before you rely on it." : ""}
-            </p>
+            {template.kind === "nda" && <p className="caption-style text-subtle">Have a solicitor check this wording.</p>}
             <BlockEditor blocks={blocks} onChange={setBlocks} kind={template.kind} knowledge={knowledge} />
           </div>
         </div>
         <div className={cn("min-h-0 overflow-y-auto", view === "edit" && "hidden lg:block")}>
           <div className="paper min-h-full px-5 pt-10 pb-28 sm:px-10">
             <div className="mx-auto max-w-[44em]">
-              <p className="caption-style text-subtle pb-6">Preview with sample details</p>
               <ProposalSite content={preview} compact extras={{ preview: true }} />
             </div>
           </div>

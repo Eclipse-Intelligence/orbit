@@ -6,7 +6,6 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getHomeActor, getUserActor } from "@/lib/auth/user";
 import { discardAttachments, prepareAttachment, type PreparedAttachment } from "@/lib/crm/email-attachments";
-import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
@@ -64,14 +63,6 @@ export async function syncCallsAction() {
   redirect(SETTINGS_PATHS.connections);
 }
 
-export async function syncCalendarAction() {
-  const user = await requireHomeUser();
-  const result = await syncCalendar(user, { force: true });
-  refreshRecords();
-  if (result.error) settingsWith(SETTINGS_PATHS.email, "error", result.error);
-  redirect(SETTINGS_PATHS.email);
-}
-
 export async function syncGranolaAction() {
   const user = await requireUser();
   let error: string | undefined;
@@ -114,7 +105,7 @@ type ConversationActionState = { error?: string; ok?: boolean };
 
 export async function closeFollowUpAction(id: string, state: "used" | "dismissed"): Promise<ConversationActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to change follow-ups." };
+  if (!user) return { error: "Sign in again." };
   try {
     await closeFollowUp(user, id, state === "used" ? "used" : "dismissed");
   } catch (error) {
@@ -126,7 +117,7 @@ export async function closeFollowUpAction(id: string, state: "used" | "dismissed
 
 export async function prepareAttachmentAction(file: { name: string; size: number; contentType: string }): Promise<{ attachment?: PreparedAttachment; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to attach files." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { attachment: await prepareAttachment(user, file) };
   } catch (error) {
@@ -136,7 +127,7 @@ export async function prepareAttachmentAction(file: { name: string; size: number
 
 export async function saveSignatureAction(senderEmail: string, body: string): Promise<{ signature?: string | null; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to change your signature." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { signature: await saveSignature(user, senderEmail, body) };
   } catch (error) {
@@ -168,7 +159,7 @@ export async function sendContactEmailAction(
   },
 ) {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to send mail." };
+  if (!user) return { error: "Sign in again." };
   let warning: string | null;
   try {
     ({ warning } = await sendContactEmail(user, contactId, email));

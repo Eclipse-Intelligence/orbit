@@ -103,7 +103,7 @@ export default function StepsPanel({
           </Button>
         )}
       </div>
-      <p className="caption-style text-subtle">Live on the client&apos;s page. You get an alert when they tick one off.</p>
+      <p className="caption-style text-subtle">Shown on the client&apos;s page.</p>
       {steps.length > 0 && (
         <ol className="flex flex-col">
           {steps.map((step, index) => (
@@ -153,7 +153,7 @@ export default function StepsPanel({
           </label>
           <Input id={dueId} type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
           <Button variant="secondary" size="sm" type="submit" disabled={busy !== null || !title.trim()} className="h-9">
-            {busy === "add" ? "Adding" : "Add"}
+            {busy === "add" ? "Adding…" : "Add"}
           </Button>
         </div>
       </form>

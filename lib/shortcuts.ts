@@ -51,14 +51,17 @@ const NAV: [string, string, string, string?][] = [
   ["s", "Settings", "/settings/general", "preferences"],
 ];
 
+export const MULTI_WORKSPACE_SHORTCUTS = new Set(["settings-about-you", "settings-memory"]);
+
 const SETTINGS_SECTIONS: [string, string, string][] = [
-  ["General", "/settings/general", "account password linkedin how you write notifications meeting link shortcuts"],
+  ["General", "/settings/general", "account password role about linkedin how you write notifications meeting link shortcuts"],
   ["Email", "/settings/email", "microsoft mailbox outlook addresses sending signatures prepared replies read statuses workspace"],
   ["Calendars", "/settings/calendars", "outlook ics gmail accounts allow sending"],
   ["Connections", "/settings/connections", "granola readwise recall teams calls linkedin capture ai accounts chatgpt claude orbit agent"],
   ["Memory", "/settings/memory", "notes learned about you"],
   ["API tokens", "/settings/api-tokens", "personal tokens mcp claude iphone shortcut"],
   ["About you", "/settings/about-you", "role about"],
+  ["Learning", "/settings/learning", "notes memory"],
   ["Email templates", "/settings/email-templates", "email templates"],
   ["Booking page", "/settings/booking-page", "booking scheduling"],
   ["Tools", "/settings/tools", "clickup linear enrichment agent mailbox webhooks agents"],
@@ -192,10 +195,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "inbox-sync", label: "Sync Microsoft mail", group: "Settings", combos: [{ key: "s" }], target: "sync", palette: true },
   { id: "capture-approve", label: "Approve, or add as a contact", group: "Capture", combos: [{ key: "a" }], rowKey: "a" },
   { id: "capture-reply", label: "Reply, or reject an approval", group: "Capture", combos: [{ key: "r" }], rowKey: "r" },
-  { id: "capture-done", label: "Done or Not needed", group: "Capture", combos: [{ key: "e" }], rowKey: "e" },
+  { id: "capture-done", label: "Done, or dismiss a follow-up", group: "Capture", combos: [{ key: "e" }], rowKey: "e" },
   { id: "capture-snooze", label: "Snooze", group: "Capture", combos: [{ key: "h" }], rowKey: "h" },
   { id: "inbox-file", label: "File to…", group: "Capture", combos: [{ key: "f" }], rowKey: "f" },
-  { id: "inbox-ignore", label: "Ignore or hide", group: "Capture", combos: [{ key: "i" }], rowKey: "i" },
+  { id: "inbox-ignore", label: "Dismiss from To file", group: "Capture", combos: [{ key: "i" }], rowKey: "i" },
   { id: "capture-undo", label: "Undo the last change", group: "Capture", combos: [{ key: "z" }] },
   ...[1, 2, 3, 4, 5, 6].map((index) => ({
     id: `capture-filter-${index}`,

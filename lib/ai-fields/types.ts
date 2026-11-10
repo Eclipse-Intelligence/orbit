@@ -129,10 +129,9 @@ export function costHint(kind: AiFieldKind, companies: number, refresh: AiFieldR
   const count = Math.max(0, Math.round(companies));
   const fill = count * unit;
   const monthly = refresh === "manual" ? 0 : refresh === "weekly" ? fill * WEEKS_A_MONTH : fill;
-  const about = (amount: number) => (amount > 0 && amount < 0.01 ? "under $0.01" : `about ${money(amount)}`);
-  const filling = about(fill);
-  const checks = `${filling[0].toUpperCase()}${filling.slice(1)} to fill`;
-  const text = refresh === "manual" ? `${checks}.` : `${checks}, then ${about(monthly)} a month.`;
+  const cost = money(fill);
+  const filled = `${cost[0].toUpperCase()}${cost.slice(1)} to fill (${count.toLocaleString("en-GB")} ${count === 1 ? "check" : "checks"})`;
+  const text = refresh === "manual" ? `${filled}.` : `${filled}, then about ${money(monthly)} a month.`;
   return { fill, monthly, text };
 }
 

@@ -165,7 +165,6 @@ export default function JotLine({ page }: { page: Page }) {
         </span>
         <div ref={host} className="col-start-2 min-w-0" />
       </div>
-      <p className="caption-style text-subtle mt-6 pl-[4.75rem]">Saved when you leave the line. Enter starts another entry. Daily notes are always private.</p>
       {view && trigger && !phone && <NotePicker ref={picker} view={view} trigger={trigger} page={page} onClose={close} />}
       {view && phone && focused && (
         <PhoneToolbar view={view} entry>

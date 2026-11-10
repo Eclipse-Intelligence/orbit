@@ -69,11 +69,11 @@ function BacklinkCard({ context, linked, now }: { context: LinkContext; linked: 
         <span className="caption-style text-subtle flex items-center gap-1.5">
           {context.kind === "daily" ? (
             <>
-              <LockIcon aria-hidden className="size-3" /> Daily note, only you see this
+              <LockIcon aria-hidden className="size-3" /> Daily note, only you
             </>
           ) : (
             <>
-              {context.folderName ?? "No folder"} <span aria-hidden>·</span> {whenLabel(context.updatedAt, now)}
+              {context.folderName ?? "Top level"} <span aria-hidden>·</span> {whenLabel(context.updatedAt, now)}
             </>
           )}
         </span>
@@ -172,10 +172,10 @@ export default function NoteRail({ page }: { page: Page }) {
       <RailSection title="Backlinks" count={links?.linked.length}>
         {links === null ? (
           <p role="status" className="caption-style text-subtle">
-            Loading
+            Loading…
           </p>
         ) : links.linked.length === 0 ? (
-          <p className="caption-style text-subtle">No notes link here yet. Type [[ in any note to link one.</p>
+          <p className="caption-style text-subtle">No backlinks</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {links.linked.map((context) => (

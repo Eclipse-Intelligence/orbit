@@ -56,7 +56,6 @@ export default async function ActivityLogPage({
   return (
     <SettingsPage
       title="Activity log"
-      description="Calls, emails, meetings and notes logged by each person."
       action={<RecordTransfer resource="activities" />}
       wide
     >

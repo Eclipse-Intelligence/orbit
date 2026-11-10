@@ -39,6 +39,7 @@ import { CAPTURE_SECTIONS, NO_CAPTURE_COUNTS, useCompaniesStore, type CaptureCou
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 
 const UNDO_MS = 6_000;
+const FILING_MS = 30_000;
 const SETTLE_MS = 250;
 const OFFLINE = "That didn't save. Check your connection and try again.";
 
@@ -336,18 +337,22 @@ export default function CaptureScreen({
     const contactId = outcome.contactId;
     const name = outcome.contactName?.trim() || "the contact";
     showToast({
-      message: action.kind === "person-create" ? `${name} is now a contact.` : `Filed to ${name}.`,
+      message: action.kind === "person-create" ? `${name} is now a contact` : `Filed to ${name}`,
       action: { label: "Open", run: () => router.push(contactHref(contactId)) },
     });
   }
 
   function commit(item: Pending, keepalive: boolean) {
+    dismissToast(item.toast);
+    const filing = FILED.has(item.action.kind) && mounted.current ? showToast({ message: "Filing…", duration: FILING_MS }) : null;
     post(item.action, workspaceId, keepalive)
       .then((outcome) => {
+        if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
         router.refresh();
       })
       .catch((error: Error) => {
+        if (filing !== null) dismissToast(filing);
         if (!mounted.current) {
           setCaptureCleared(NO_CAPTURE_COUNTS);
           return;
@@ -420,13 +425,12 @@ export default function CaptureScreen({
     moveFocusFrom(id);
     if (swiped) hide(id);
     else leave(id);
-    const remaining = total - 1;
     const item: Pending = {
       id,
       action,
       timer: 0,
       toast: showToast({
-        message: remaining > 0 ? `${verb}. ${remaining} left.` : `${verb}. Nothing left.`,
+        message: verb,
         duration: UNDO_MS,
         action: { label: "Undo", run: () => void undo() },
       }),
@@ -456,7 +460,7 @@ export default function CaptureScreen({
             >
               <span>{alert}</span>
               <Button variant="link" size="none" href={`${SETTINGS_PATHS.email}#microsoft`} className="caption-style">
-                Open Email settings
+                Email settings
               </Button>
             </p>
           )}
@@ -506,7 +510,7 @@ export default function CaptureScreen({
                       </h2>
                       {unread.has(id) && (
                         <p role="alert" className="caption-style text-warning leading-[1.4]">
-                          {LABELS[id]} couldn&apos;t be read. Reload to try again.
+                          {LABELS[id]} didn&apos;t load. Reload.
                         </p>
                       )}
                       {id === "toFile" && counts.toFile > leftToFile && leftToFile > 0 && (

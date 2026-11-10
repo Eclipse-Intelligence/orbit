@@ -16,11 +16,7 @@ export default function ApiSettings({
   scopes: string[];
 }) {
   return (
-    <SettingsCard
-      id="agents"
-      title="Agents"
-      description="Agents use a token to read and update Orbit over REST or MCP. Each token is limited to the scopes it was issued with."
-    >
+    <SettingsCard id="agents" title="Agents">
       <dl className="flex flex-col">
         <div className="border-border flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b pb-3">
           <dt className="caption-style text-subtle">REST API</dt>
@@ -35,10 +31,7 @@ export default function ApiSettings({
           </dd>
         </div>
       </dl>
-      <SettingsDisclosure
-        title="Issue and revoke tokens"
-        summary="Tokens are created from the command line and shown once."
-      >
+      <SettingsDisclosure title="Agent tokens">
         <p className="caption-style text-subtle leading-[1.4]">
           Run this where Orbit&apos;s database variables are set:
         </p>
@@ -50,29 +43,18 @@ export default function ApiSettings({
           make 120 requests a minute. To revoke one, set <Code>revoked_at</Code>{" "}
           on its row in <Code>crm.agent_credentials</Code>.
         </p>
-      </SettingsDisclosure>
-      <SettingsDisclosure
-        title="Scopes"
-        summary={`${scopes.length} scopes. admin includes all of them.`}
-      >
-        <ul className="flex flex-wrap gap-1.5">
+        <p id="agent-scopes" className="caption-style text-subtle">
+          Scopes
+        </p>
+        <ul aria-labelledby="agent-scopes" className="flex flex-wrap gap-1.5">
           {scopes.map((scope) => (
             <li key={scope}>
               <Code>{scope}</Code>
             </li>
           ))}
         </ul>
-      </SettingsDisclosure>
-      <SettingsDisclosure
-        title="Filing email and meetings"
-        summary="How agents add conversations to a contact."
-      >
         <p className="caption-style text-subtle leading-[1.4]">
-          Agents file emails and meetings with record_email and record_meeting.
-          Orbit matches the person by email and the company by domain, then
-          suggests a follow-up task when the company has no open task. To file
-          Outlook mail automatically and send from a contact, connect Microsoft
-          in Settings › Email.
+          <Code>admin</Code> includes all of them.
         </p>
       </SettingsDisclosure>
     </SettingsCard>

@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
@@ -32,11 +32,11 @@ import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
-const TYPES: { value: AiFieldKind; label: string; hint: string }[] = [
-  { value: "yes_no", label: "Yes or no", hint: "Yes, No or Unknown" },
-  { value: "number", label: "Number", hint: "Such as staff" },
-  { value: "text", label: "Short text", hint: "A few words" },
-  { value: "pick", label: "Pick from list", hint: "One of your options" },
+const TYPES: { value: AiFieldKind; label: string }[] = [
+  { value: "yes_no", label: "Yes or no" },
+  { value: "number", label: "Number" },
+  { value: "text", label: "Short text" },
+  { value: "pick", label: "Pick from list" },
 ];
 
 type Counts = { all: number; fit: number; views: Record<string, number> };
@@ -88,14 +88,13 @@ export function editHint(
   const amount = impact.web * (usesDecisions(next.kind) ? DECISION_COST : TASK_COST);
   const cost = amount > 0 && amount < 0.01 ? money(amount) : `about ${money(amount)}`;
   const web = plural(impact.web, "web answer", "web answers");
-  const kept = impact.manual > 0 ? ` Your ${plural(impact.manual, "hand-set answer is", "hand-set answers are")} kept if ${impact.manual === 1 ? "it still fits" : "they still fit"}.` : "";
+  const kept = impact.manual === 0 ? "" : impact.manual === 1 ? " The hand-set answer is kept if it still fits." : " Hand-set answers are kept if they still fit.";
   if (typeChanged || optionsChanged) {
-    const what = typeChanged ? "the answer type" : field.multiple !== next.multiple ? "whether more than one is allowed" : "the options";
     if (impact.web === 0 && impact.manual === 0) return null;
-    const checks = impact.web > 0 ? `clears ${web} and checks them again (${cost}).` : "checks its companies again.";
-    return `Changing ${what} ${checks}${kept}`;
+    const checks = impact.web > 0 ? `Clears ${web} and rechecks them (${cost}).` : "Rechecks its companies.";
+    return `${checks}${kept}`;
   }
-  if (questionChanged && impact.web > 0) return `Changing the question checks the ${web} again (${cost}). Hand-set answers stay as they are.`;
+  if (questionChanged && impact.web > 0) return `Rechecks ${web} (${cost}). Hand-set answers stay as they are.`;
   return null;
 }
 
@@ -228,7 +227,6 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
     >
       <DialogHeader>
         <DialogTitle>{field ? "Edit AI field" : "Add AI field"}</DialogTitle>
-        <DialogDescription>Answered for each company from the web, with sources.</DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-5 px-5 py-5 sm:px-6">
         <Field label="Question" htmlFor={ids.question} error={fieldError("question")}>
@@ -254,10 +252,7 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
                 )}
               >
                 <Radio name="answer" value={item.value} checked={item.value === kind} onChange={() => setKind(item.value)} className="mt-0.5" />
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="ui-style text-foreground">{item.label}</span>
-                  <span className="caption-style text-subtle">{item.hint}</span>
-                </span>
+                <span className="ui-style text-foreground min-w-0">{item.label}</span>
               </label>
             ))}
           </div>
@@ -365,7 +360,6 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
               </button>
             ))}
           </span>
-          <span className="caption-style text-subtle">New companies are checked when they&apos;re added.</span>
         </fieldset>
         <div role="status" className="flex flex-col gap-1 rounded-lg bg-white/[0.04] px-3 py-2.5">
           {changeHint && <span className="ui-style text-foreground">{changeHint}</span>}
@@ -397,7 +391,7 @@ export default function AiFieldDialog({ open, onOpenChange, field, views, onSave
   const router = useRouter();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[560px]">
+      <DialogContent className="max-w-[560px]" aria-describedby={undefined}>
         <FieldForm
           key={field?.id ?? "new"}
           field={field ?? null}

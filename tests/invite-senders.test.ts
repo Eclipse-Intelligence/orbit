@@ -1008,7 +1008,7 @@ describe("choosing who sends an invite", () => {
     assert.deepEqual((graphWrites(calls)[1].body as { location: unknown }).location, { displayName: "https://whereby.com/mark" });
     await rejects(() => createInvite(ridgeon, personalEvent({ attendees: [{ email: MAIN }] }), { fetchImpl: graph([]), now: NOW }), {
       field: "attendees",
-      message: /someone other than yourself/,
+      message: /already the organiser/,
     });
   });
 

@@ -38,7 +38,7 @@ export default function SidebarBoards({
     const result = await createBoardAction(name);
     setPending(false);
     if (!result.board) {
-      setError(result.error ?? "Could not create the board.");
+      setError(result.error ?? "Couldn't create the board. Try again.");
       return;
     }
     setNaming(false);
