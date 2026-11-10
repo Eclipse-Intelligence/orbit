@@ -71,7 +71,7 @@ export default function MeetingLinkSettings({ meetingLink }: { meetingLink: stri
               setMessage(null);
             }}
           />
-          <Button variant="secondary" size="sm" type="submit" disabled={pending || !dirty}>
+          <Button variant="secondary" size="sm" type="submit" disabled={pending || !dirty} aria-label={pending ? undefined : "Save meeting link"}>
             {pending ? "Saving…" : "Save"}
           </Button>
         </div>

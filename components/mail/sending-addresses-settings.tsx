@@ -194,7 +194,7 @@ export default function SendingAddressesSettings({
                   <input name="imapPort" inputMode="numeric" defaultValue="993" className={field} />
                 </label>
                 <label className="col-span-2 flex flex-col gap-1">
-                  <span className="caption-style text-subtle">Username (optional)</span>
+                  <span className="caption-style text-subtle">Username (if it isn&apos;t the email address)</span>
                   <input name="username" autoComplete="off" className={field} />
                 </label>
               </div>

@@ -67,7 +67,7 @@ function toIdentity(row: IdentityRow): SendIdentity {
 
 function host(value: unknown, label: string) {
   const text = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(text) || text.length > 255) throw new CrmError("invalid_input", `Enter the ${label} server name, for example smtp.example.com.`, 400);
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(text) || text.length > 255) throw new CrmError("invalid_input", `Enter the ${label} server name, for example ${label.toLowerCase()}.example.com.`, 400);
   return text;
 }
 
@@ -153,9 +153,9 @@ export async function saveIdentity(
   const sourceId = typeof input.sourceId === "string" && isUuid(input.sourceId) ? input.sourceId : null;
   if (!sourceId) throw new CrmError("invalid_input", "Choose the mailbox that receives this address's mail.", 400, { field: "sourceId" });
   const neo = input.provider === "neo";
-  const smtpHost = neo ? NEO.smtpHost : host(input.smtpHost, "outgoing (SMTP)");
+  const smtpHost = neo ? NEO.smtpHost : host(input.smtpHost, "SMTP");
   const smtpPort = neo ? NEO.smtpPort : port(input.smtpPort, 465);
-  const imapHost = neo ? NEO.imapHost : input.imapHost ? host(input.imapHost, "incoming (IMAP)") : null;
+  const imapHost = neo ? NEO.imapHost : input.imapHost ? host(input.imapHost, "IMAP") : null;
   const imapPort = neo ? NEO.imapPort : imapHost ? port(input.imapPort, 993) : null;
   const username = typeof input.username === "string" && input.username.trim() ? input.username.trim().slice(0, 320) : email;
   const displayName = typeof input.displayName === "string" && input.displayName.trim() ? input.displayName.trim().slice(0, 200) : actor.fullName;

@@ -18,9 +18,11 @@ export default function CrmChrome({
   viewer,
   notifications,
   brief = null,
+  multi,
   children,
 }: {
   viewer: Viewer;
+  multi: boolean;
   notifications?: Notification[];
   brief?: UnreadBrief | null;
   children: ReactNode;
@@ -32,7 +34,7 @@ export default function CrmChrome({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {children}
           <Profile viewer={viewer} />
-          <CommandMenu />
+          <CommandMenu multi={multi} />
           <QuickAdd viewerId={viewer.id} />
           <TaskReminders />
           <ShortcutsHelp />

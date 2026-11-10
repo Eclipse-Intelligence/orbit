@@ -11,6 +11,7 @@ export default function ShortcutSettings() {
     <SettingsCard
       id="shortcuts"
       title="Keyboard shortcuts"
+      description="Saved for this browser."
       action={
         <Button variant="secondary" size="sm" onClick={() => run("help")}>
           Show shortcuts

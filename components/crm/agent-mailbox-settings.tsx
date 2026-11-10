@@ -74,7 +74,10 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
     setNextKey((key) => key + 1);
   }
 
-  const last = view.lastMessage && FAILED.has(view.lastMessage.status) ? view.lastMessage : null;
+  const lastHeld = view.lastMessage
+    ? view.held.some((item) => item.receivedAt === view.lastMessage?.receivedAt && (item.subject ?? "") === (view.lastMessage?.subject ?? ""))
+    : false;
+  const last = view.lastMessage && FAILED.has(view.lastMessage.status) && !lastHeld ? view.lastMessage : null;
   const description = (
     <span className="flex flex-col gap-1.5">
       <span>Email Orbit to give it work.</span>
@@ -219,7 +222,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
         >
           <div className="flex flex-col gap-1">
             <h4 className="text-foreground leading-5">Who can give it work</h4>
-            <p className="caption-style text-subtle">Mail from these addresses runs as the person beside it. Other mail is ignored.</p>
+            <p className="caption-style text-subtle">Mail from these addresses runs as the person beside it. Other mail is kept but never acted on.</p>
           </div>
           {senders.length === 0 && <p className="caption-style text-subtle">Nobody yet.</p>}
           <ul className="flex flex-col gap-4 sm:gap-2">
@@ -281,6 +284,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           </div>
         </form>
       )}
+      {!view.setUp && <p className="caption-style text-subtle">After setup, mail from your own addresses runs as you.</p>}
     </SettingsCard>
   );
 }

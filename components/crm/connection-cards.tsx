@@ -302,7 +302,7 @@ export function TeamsCallsSettings({
         </div>
       ) : (
         <Status tone="off">
-          {configured ? "Connect Microsoft in Email to log Teams calls" : "Needs the Microsoft app set up on this server"}
+          {configured ? "Connect Microsoft in Settings › Email to log Teams calls" : "Needs the Microsoft app set up on this server"}
         </Status>
       )}
       {live && configured && transcripts && (
@@ -377,7 +377,7 @@ export function ReadwiseSettings({ readwise, workspaces }: { readwise: ReadwiseS
 
 export function RecallSettings({ recall }: { recall: RecallStatus }) {
   return (
-    <SettingsCard id="recall" title="Recall">
+    <SettingsCard id="recall" title="Recall" description="Nothing is copied into Orbit.">
       <RecallKey connected={recall.connected}>
         <Status tone={recall.connected ? "on" : "off"}>
           {recall.connected ? `Connected${recall.hint ? ` · key ending ${recall.hint}` : ""}` : "Not connected"}
@@ -413,7 +413,7 @@ export function LinearSettings({
           </>
         ) : (
           <Status tone="off">
-            Set LINEAR_API_KEY in the server environment, then redeploy.
+            Set LINEAR_API_KEY (a personal API key from Linear) in the server environment, then redeploy.
           </Status>
         )}
       </LinearWorkspace>

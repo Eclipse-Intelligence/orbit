@@ -19,14 +19,12 @@ function isActive(pathname: string, href: string) {
 function GroupHeading({ group, workspace, phone }: { group: SettingsNavGroup; workspace: { id: string; name: string }; phone?: boolean }) {
   if (!group.heading) return null;
   return (
-    <div className={cn("flex flex-col gap-1", phone ? "px-1 pt-2 pb-1" : "px-2 pb-1")}>
-      <h2 className="eyebrow-style text-subtle flex min-w-0 items-center gap-1.5 text-[11px]">
-        {group.kind === "workspace" && (
-          <WorkspaceTile id={workspace.id} name={workspace.name} className="size-3.5 rounded-[4px] text-[8px] tracking-normal" />
-        )}
-        <span className="truncate">{group.heading}</span>
-      </h2>
-    </div>
+    <h2 className={cn("eyebrow-style text-subtle flex min-w-0 items-center gap-1.5 text-[11px]", phone ? "px-1 pt-2 pb-1" : "px-2 pb-1")}>
+      {group.kind === "workspace" && (
+        <WorkspaceTile id={workspace.id} name={workspace.name} className="size-3.5 rounded-[4px] text-[8px] tracking-normal" />
+      )}
+      <span className="truncate">{group.heading}</span>
+    </h2>
   );
 }
 

@@ -175,7 +175,7 @@ function ImagePicker({
     setPending(false);
     if (!response?.ok) {
       const payload = (await response?.json().catch(() => null)) as { error?: { message?: string } } | null;
-      setError(payload?.error?.message ?? "Could not upload the image.");
+      setError(payload?.error?.message ?? "Couldn't upload the image.");
       return;
     }
     onChanged();
@@ -187,7 +187,7 @@ function ImagePicker({
     const response = await fetch(`/api/booking-page/image?kind=${kind}`, { method: "DELETE" }).catch(() => null);
     setPending(false);
     if (!response?.ok) {
-      setError("Could not remove the image.");
+      setError("Couldn't remove the image.");
       return;
     }
     onChanged();
@@ -216,12 +216,13 @@ function ImagePicker({
               variant="secondary"
               size="sm"
               disabled={disabled || pending}
+              aria-label={pending ? undefined : `${has ? "Replace" : "Upload"} ${title.toLowerCase()}`}
               onClick={() => input.current?.click()}
             >
               {pending ? "Saving…" : has ? "Replace" : "Upload"}
             </Button>
             {has && (
-              <Button variant="ghost" size="sm" disabled={disabled || pending} onClick={remove}>
+              <Button variant="ghost" size="sm" disabled={disabled || pending} aria-label={`Remove ${title.toLowerCase()}`} onClick={remove}>
                 Remove
               </Button>
             )}

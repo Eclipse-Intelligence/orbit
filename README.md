@@ -71,8 +71,8 @@ Settings has one page per area. If you are in more than one workspace, the pages
 
 | Group | Page | Path | What it holds |
 | --- | --- | --- | --- |
-| You | General | `/settings/general` | Your account, You (LinkedIn, how you write, what you care about), notifications, the meeting link for invites, keyboard shortcuts (saved for this browser) |
-| You | Email | `/settings/email` | Microsoft 365 mail (and Reconnect when the calendar permission is missing), a Workspace choice for each address (more than one workspace only), domain rules, sending addresses, other addresses that are you, signatures, prepared replies and reminders, read statuses |
+| You | General | `/settings/general` | Your account, You (LinkedIn, how you write, what you care about; with one workspace, About you with your role and about as well), notifications, the meeting link for invites, keyboard shortcuts (saved for this browser) |
+| You | Email | `/settings/email` | Microsoft 365 mail (and Reconnect when the calendar permission is missing), a Workspace choice for each address (more than one workspace only), domain rules, sending addresses, your other addresses, signatures, prepared replies and reminders, read statuses |
 | You | Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM, Add mail for extra Microsoft accounts |
 | You | Connections | `/settings/connections` | Teams calls and transcripts, Granola, Readwise Reader, Recall, LinkedIn capture, AI accounts and Orbit Agent |
 | You | Memory | `/settings/memory` | What Orbit has learned about you, from every workspace (more than one workspace only) |
@@ -177,7 +177,7 @@ Type a question in the Mail search box (anything ending in a question mark, or s
 
 ### Sending from other addresses
 
-Settings › Email › Sending addresses adds an address that isn't a Microsoft account, such as Neo, so Orbit can send as it. Choose Neo (or Other and give the SMTP server, and optionally an IMAP server), enter the address, the name people see and its password, and pick the connected mailbox its mail already arrives in (for example by forwarding). Orbit checks the login before saving and keeps the password encrypted. The address then appears in From, has its own signature, and a reply to an email that was sent to it uses it automatically. Orbit writes the email as an Outlook draft in that mailbox as usual, then sends it through the address's own mail server, keeps a copy in the mailbox's Sent Items and in the provider's Sent folder, and logs it on the contact. Read statuses, Undo send, Send later and AI writing all work with it.
+Settings › Email › Sending addresses adds an address that isn't a Microsoft account, such as Neo, so Orbit can send as it. Choose Neo (or Other and give the SMTP server, and optionally an IMAP server), enter the address, the display name and its password, and pick the connected mailbox its mail already arrives in (for example by forwarding). Orbit checks the login before saving and keeps the password encrypted. The address then appears in From, has its own signature, and a reply to an email that was sent to it uses it automatically. Orbit writes the email as an Outlook draft in that mailbox as usual, then sends it through the address's own mail server, keeps a copy in the mailbox's Sent Items and in the provider's Sent folder, and logs it on the contact. Read statuses, Undo send, Send later and AI writing all work with it.
 
 ### Prepared replies and automatic reminders
 

@@ -11,14 +11,16 @@ export const maxDuration = 120;
 export default async function AboutYouSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [about, workspaces] = await Promise.all([getPersonalContext(user), getWorkspaceChoices()]);
+  const workspaces = await getWorkspaceChoices();
   if (workspaces.length <= 1) redirect(`${SETTINGS_PATHS.general}#you`);
+  const about = await getPersonalContext(user);
   return (
     <SettingsPage title="About you">
       <AboutYouSettings
         about={{ jobTitle: about.jobTitle, about: about.about }}
         linkedinUrl={about.linkedinUrl}
         website={about.website}
+        workspaceName={user.workspaceName}
       />
     </SettingsPage>
   );
