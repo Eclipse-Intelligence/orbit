@@ -21,7 +21,8 @@ import {
 import { processDueMail, REMINDER_ATTEMPTS } from "@/lib/mail/due";
 import { GraphMailError, reconnectProblem, sendOutcomeUnknown } from "@/lib/mail/microsoft";
 import { attachmentBlock } from "@/lib/mail/send-ready";
-import { mailSourceToken, syncMail, SYNC_PAUSED, SYNC_RETRYING, syncProblems } from "@/lib/mail/sync";
+import { mailSourceToken, syncMail, SYNC_PAUSED, syncProblems } from "@/lib/mail/sync";
+import { SYNC_RETRYING } from "@/lib/mail/view";
 import { saveIdentity } from "@/lib/mail/identities";
 import { CrmError } from "@/lib/crm/errors";
 import { mailNav } from "@/lib/mail/threads";
@@ -245,7 +246,7 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     const dropped = Object.assign(new Error("socket hang up"), { code: "ECONNRESET", command: "DATA" });
     await assert.rejects(
       () => sendMailDraft(owner, sending, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl, smtp: async () => Promise.reject(dropped), saveSent: async () => undefined }),
-      /didn't confirm the email was sent/,
+      /didn't confirm the send/,
     );
     assert.ok((await draftRow(draft.id))?.send_attempted_at);
     await getAdminPool().query("update crm.mail_drafts set send_attempted_at = now() - interval '5 minutes' where id = $1", [draft.id]);
@@ -377,9 +378,9 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     await scheduleMailDraft(owner, { ...input, id: draft.id, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl });
     await getAdminPool().query("update crm.mail_drafts set send_at = now() - interval '1 minute' where id = $1", [draft.id]);
     assert.equal((await claimDueDrafts(owner, 1))[0].id, draft.id);
-    await assert.rejects(() => unscheduleMailDraft(owner, draft.id), /isn't waiting to send/);
+    await assert.rejects(() => unscheduleMailDraft(owner, draft.id), /no longer scheduled/);
     await getAdminPool().query("delete from crm.mail_drafts where id = $1", [draft.id]);
-    await assert.rejects(() => unscheduleMailDraft(owner, draft.id), /isn't in Orbit Mail any more/);
+    await assert.rejects(() => unscheduleMailDraft(owner, draft.id), /scheduled email has gone/);
   });
 
   it("stops retrying a failing reminder after a few attempts and says so", async () => {
@@ -406,11 +407,11 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     assert.deepEqual([last.state, last.attempts], ["due", REMINDER_ATTEMPTS]);
     const quiet = await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: ORIGIN });
     assert.equal(quiet.reminderErrors, 0);
-    assert.ok((await listNotifications(owner, 20)).some((note) => note.title === "Orbit couldn't bring back: Gone missing"));
+    assert.ok((await listNotifications(owner, 20)).some((note) => note.title === "Still snoozed: Gone missing"));
   });
 
   it("names the account and the fix when Microsoft refuses", async () => {
-    assert.equal(reconnectProblem(new GraphMailError("x", 401), "mark@geteclipse.co"), "Reconnect mark@geteclipse.co in Settings › Email. Microsoft has signed Orbit out of it.");
+    assert.equal(reconnectProblem(new GraphMailError("x", 401), "mark@geteclipse.co"), "Reconnect mark@geteclipse.co in Settings › Email.");
     assert.equal(reconnectProblem(new GraphMailError("x", 403, "ErrorAccessDenied"), "mark@geteclipse.co"), null);
     assert.match(reconnectProblem(new GraphMailError("x", 403, "ErrorAccessDenied"), "mark@geteclipse.co", false) ?? "", /^Reconnect mark@geteclipse.co in Settings › Email and allow every permission/);
     assert.match(reconnectProblem(new GraphMailError("x", 403, "AADSTS65001 consent_required"), "mark@geteclipse.co") ?? "", /^Ask your Microsoft admin to approve Orbit for mark@geteclipse.co/);
@@ -427,11 +428,11 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
       [owner.workspaceId, owner.userId, sourceId, folder],
     );
     await assert.rejects(() => applyMailAction(owner, { thread: threadKey, action: "read" }, refusing), {
-      message: "Reconnect mark@eclipse.test in Settings › Email. Microsoft has signed Orbit out of it.",
+      message: "Reconnect mark@eclipse.test in Settings › Email.",
     });
 
     await admin.query("update crm.mailbox_connections set status = 'disconnected' where user_id = $1", [owner.userId]);
-    await assert.rejects(() => mailSourceToken(owner, sourceId), { message: "Reconnect mark@eclipse.test in Settings › Email. It isn't connected to Orbit any more." });
+    await assert.rejects(() => mailSourceToken(owner, sourceId), { message: "Reconnect mark@eclipse.test in Settings › Email." });
     await admin.query("update crm.mailbox_connections set status = 'connected' where user_id = $1", [owner.userId]);
   });
 });
@@ -449,9 +450,9 @@ describe("send readiness and the Mail cache", () => {
 
   it("blocks Send while an attachment is uploading or after one failed", () => {
     assert.equal(attachmentBlock([{ name: "deck.pdf", status: "ready" }]), null);
-    assert.equal(attachmentBlock([{ name: "deck.pdf", status: "uploading" }]), "Wait for deck.pdf to finish uploading, or remove it.");
-    assert.equal(attachmentBlock([{ name: "a.pdf", status: "uploading" }, { name: "b.pdf", status: "uploading" }]), "Wait for 2 attachments to finish uploading, or remove them.");
-    assert.equal(attachmentBlock([{ name: "deck.pdf", status: "failed" }, { name: "b.pdf", status: "uploading" }]), "deck.pdf didn't upload. Remove it or attach it again to send.");
+    assert.equal(attachmentBlock([{ name: "deck.pdf", status: "uploading" }]), "deck.pdf is still uploading, or remove it.");
+    assert.equal(attachmentBlock([{ name: "a.pdf", status: "uploading" }, { name: "b.pdf", status: "uploading" }]), "2 attachments are still uploading, or remove them.");
+    assert.equal(attachmentBlock([{ name: "deck.pdf", status: "failed" }, { name: "b.pdf", status: "uploading" }]), "deck.pdf didn't upload. Remove or re-attach it.");
   });
 
   it("shows a refresh problem once, then again when it changes or after a while", () => {
@@ -540,7 +541,7 @@ describe("send readiness and the Mail cache", () => {
   it("shows only plain sync problems, one per account that needs reconnecting", () => {
     assert.deepEqual(syncProblems({ paused: true, errors: [], reconnect: [] }), [SYNC_PAUSED]);
     assert.deepEqual(syncProblems({ paused: false, errors: ["a@x.test: Microsoft answered 500."], reconnect: [] }), [SYNC_RETRYING]);
-    const reconnect = ["Reconnect a@x.test in Settings › Email. Microsoft has signed Orbit out of it.", "Reconnect b@x.test in Settings › Email. Microsoft has signed Orbit out of it."];
+    const reconnect = ["Reconnect a@x.test in Settings › Email.", "Reconnect b@x.test in Settings › Email."];
     assert.deepEqual(syncProblems({ paused: false, errors: [...reconnect, "c@x.test: fetch failed"], reconnect }), reconnect);
     assert.deepEqual(syncProblems({ paused: false, errors: [], reconnect: [] }), []);
     assert.equal(reconnectProblem(new Error("The sync state expired."), "a@x.test"), null);

@@ -11,6 +11,7 @@ import type {
   UnsubscribePreview,
   UnsubscribeResult,
 } from "@/lib/mail/view";
+import { SYNC_RETRYING } from "@/lib/mail/view";
 
 export type ThreadPage = { threads: ThreadSummary[]; next: ThreadCursor | null };
 export type ListQuery = { view: string; account: string | null; query: string };
@@ -34,17 +35,15 @@ export function sameList(left: ListQuery, right: ListQuery) {
   return listKey(left) === listKey(right);
 }
 
-export const OFFLINE = "Orbit couldn't reach the server. Check your connection and try again.";
+export const OFFLINE = "Can't reach the server. Check your connection.";
 
 export function statusProblem(status: number) {
-  if (status === 401) return "Your session has ended. Sign in again.";
-  if (status === 429) return "Too many requests at once. Wait a moment and try again.";
-  if (status === 504) return "Orbit's server took too long to answer. Try again.";
-  if (status >= 500) return `Orbit's server had a problem (${status}). Try again.`;
-  return `Orbit's server refused that (${status}). Try again.`;
+  if (status === 401) return "Sign in again.";
+  if (status === 429) return "Too many requests. Try again in a moment.";
+  if (status === 504) return "The server timed out. Try again.";
+  return `Server error (${status}). Try again.`;
 }
 
-export const REFRESH_RETRYING = "Mail didn't refresh. Orbit will try again shortly.";
 
 export type MailRequestError = Error & { status?: number };
 
@@ -57,7 +56,7 @@ async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function refreshFailure(error: unknown) {
-  return error instanceof Error && error.message === OFFLINE ? OFFLINE : REFRESH_RETRYING;
+  return error instanceof Error && error.message === OFFLINE ? OFFLINE : SYNC_RETRYING;
 }
 
 const PROBLEM_REPEAT_MS = 5 * 60_000;

@@ -136,7 +136,7 @@ describe("remind me, send later and follow-ups", () => {
   });
 
   it("snoozes a conversation into a Snoozed folder in Outlook", async () => {
-    await assert.rejects(() => applyMailAction(owner, { thread, action: "snooze", view: { role: "inbox" }, until: new Date(Date.now() + 10_000).toISOString() }, outlook(state).fetchImpl), /at least a minute/);
+    await assert.rejects(() => applyMailAction(owner, { thread, action: "snooze", view: { role: "inbox" }, until: new Date(Date.now() + 10_000).toISOString() }, outlook(state).fetchImpl), /future time within a year/);
     const { fetchImpl, calls } = outlook(state);
     const until = new Date(Date.now() + 3_600_000).toISOString();
     const result = await applyMailAction(owner, { thread, action: "snooze", view: { role: "inbox" }, until }, fetchImpl);
@@ -215,7 +215,7 @@ describe("remind me, send later and follow-ups", () => {
   it("sends a scheduled email when it is due and reports a failure", async () => {
     const sourceId = (await mailNav(owner)).accounts[0].id;
     const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Monday plan", body: "See you Monday" });
-    await assert.rejects(() => scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 5_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl }), /at least a minute/);
+    await assert.rejects(() => scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 5_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl }), /future time within a year/);
     const scheduled = await scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
     assert.ok(scheduled.sendAt);
     assert.equal((await mailNav(owner)).scheduled, 1);

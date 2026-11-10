@@ -67,7 +67,8 @@ export default function ThreadFilingMenu({
     onChange(result.filing);
     const chosen = names(filing.workspaces.filter((item) => ids.includes(item.id)));
     const kept = result.kept?.length ? ` Earlier emails stay in ${result.kept.join(" and ")}.` : "";
-    onMessage({ text: rule ? `Email from @${filing.domain} now files in ${chosen}.${kept}` : `Filed in ${chosen}.${kept}`, error: false });
+    if (rule) onMessage({ text: `@${filing.domain} now files in ${chosen}.${kept}`, error: false });
+    else if (kept) onMessage({ text: kept.trim(), error: false });
   }
 
   return (
@@ -78,7 +79,6 @@ export default function ThreadFilingMenu({
             size="sm"
             disabled={busy}
             aria-label={`Filed in ${label}. Change where this email is filed`}
-            title="Change where this email is filed"
             className="data-[state=open]:text-foreground -mr-1.5 max-w-full min-w-0 gap-1.5 text-[13px] font-normal data-[state=open]:bg-white/6"
           >
             <Tiles list={filed} />
@@ -87,7 +87,7 @@ export default function ThreadFilingMenu({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[16rem]">
-          <DropdownMenuLabel>File this email in</DropdownMenuLabel>
+          <DropdownMenuLabel>File in</DropdownMenuLabel>
           {choices.map((choice) => (
             <DropdownMenuItem key={choice.key} className="max-sm:py-2.5" onSelect={() => void choose(choice.ids, false)}>
               <Tiles list={choice.tiles} />

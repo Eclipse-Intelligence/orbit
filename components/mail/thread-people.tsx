@@ -139,7 +139,6 @@ export default function ThreadPeople({ people, threadKey, filing: initialFiling 
               {elsewhere.map((place) => (
                 <span
                   key={place.id}
-                  title={`${fallbackName(person)} is a contact in ${place.name}`}
                   className="text-soft flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-white/[0.05] pr-2 pl-[3px] text-[12px] leading-none"
                 >
                   <WorkspaceTile id={place.id} name={place.name} className="size-4 rounded-full text-[9px]" />

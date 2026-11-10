@@ -25,9 +25,9 @@ async function followUpAction<T>(id: string, action: string, body?: string): Pro
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, action, body }),
   }).catch(() => null);
-  if (!response) throw new FollowUpProblem("Orbit couldn't reach the server. Try again.", false);
+  if (!response) throw new FollowUpProblem("Couldn't reach the server. Try again.", false);
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new FollowUpProblem(json.error ?? "Orbit couldn't change the follow-up. Try again.", response.status === 404 || response.status === 409);
+  if (!response.ok) throw new FollowUpProblem(json.error ?? "Couldn't change the follow-up. Try again.", response.status === 404 || response.status === 409);
   return json;
 }
 
@@ -52,7 +52,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
     try {
       await work();
     } catch (problem) {
-      setError(problem instanceof Error ? problem.message : "Orbit couldn't change the follow-up. Try again.");
+      setError(problem instanceof Error ? problem.message : "Couldn't change the follow-up. Try again.");
       if (kind === "send" && isStale(problem)) {
         showToast({ message: (problem as Error).message, tone: "alert" });
         onChanged();
@@ -129,7 +129,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <p className="text-foreground text-[14px] leading-5">
-          Follow-up goes to {names} on {followUpWhen(followUp.at)} if they haven&apos;t replied
+          Follow-up to {names} on {followUpWhen(followUp.at)} if no reply
         </p>
         {editing !== null ? (
           <>
@@ -141,7 +141,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
               value={editing}
               autoFocus
               onChange={(event) => setEditing(event.target.value)}
-              placeholder="Leave empty and Orbit writes it in your voice when it's due"
+              placeholder="Leave empty for Orbit to write it"
               rows={3}
               maxLength={20_000}
               className="field-sizing-content mt-1 max-h-60 min-h-[4.75rem] resize-none"
@@ -150,7 +150,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
         ) : body.trim() ? (
           <p className="text-soft line-clamp-2 text-[14px] leading-6">{body.replace(/\s*\n+\s*/g, " ")}</p>
         ) : (
-          <p className="caption-style text-subtle">{busy === "write" ? "Orbit is writing it…" : "Orbit will write it then, in your voice."}</p>
+          <p className="caption-style text-subtle">{busy === "write" ? "Writing…" : "Orbit writes it when due."}</p>
         )}
         {error && (
           <p role="alert" className="caption-style text-danger">
@@ -164,7 +164,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
                 {busy === "save" ? "Saving…" : "Save"}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setEditing(null)} disabled={busy !== null}>
-                Discard changes
+                Discard
               </Button>
             </>
           ) : (
@@ -175,7 +175,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
                 </Button>
               ) : (
                 <Button variant="secondary" size="sm" onClick={write} disabled={busy !== null}>
-                  {busy === "write" ? "Writing…" : "Write it now"}
+                  {busy === "write" ? "Writing…" : "Write now"}
                 </Button>
               )}
               <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy !== null}>
@@ -196,7 +196,7 @@ export function FollowUpCancelledNote({ replied }: { replied: FollowUpReplied })
   return (
     <p role="status" className="caption-style text-subtle flex items-center gap-2 px-4 py-1">
       <FollowUpIcon aria-hidden className="size-3 shrink-0" />
-      {replied.name} replied, so the follow-up was cancelled.
+      {replied.name} replied. Follow-up cancelled.
     </p>
   );
 }

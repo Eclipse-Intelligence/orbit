@@ -22,7 +22,7 @@ const FILTERS: { id: Filter; label: string; match: (sender: SubscriptionSender) 
   { id: "suggested", label: "Not opened", match: (sender) => sender.suggest },
   { id: "subscribed", label: "Subscribed", match: (sender) => sender.status === "subscribed" || sender.status === "kept" },
   { id: "unsubscribed", label: "Unsubscribed", match: (sender) => sender.status === "unsubscribed" },
-  { id: "ignored", label: "Ignored your unsubscribe", match: (sender) => sender.status === "ignored" },
+  { id: "ignored", label: "Unsubscribe ignored", match: (sender) => sender.status === "ignored" },
   { id: "blocked", label: "Blocked", match: (sender) => sender.status === "blocked" },
   { id: "research", label: "Research", match: (sender) => sender.status === "research" },
 ];
@@ -78,7 +78,6 @@ function SenderRow({
             <Tag tone={TONES[sender.status]} size="sm" className="text-[12px]">
               {SUBSCRIPTION_LABELS[sender.status]}
             </Tag>
-            {sender.status === "kept" && <span className="caption-style text-subtle">Kept</span>}
             {sender.coldPitch && <span className="caption-style text-subtle">Cold pitch</span>}
           </div>
           {name !== sender.sender && <span className="caption-style text-subtle truncate">{sender.sender}</span>}
@@ -106,7 +105,7 @@ function SenderRow({
         )}
         {sender.status !== "research" && sender.status !== "blocked" && (
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => onAction("research")} aria-label={`Keep ${name} for research`}>
-            Keep for research
+            Research
           </Button>
         )}
         {sender.status !== "blocked" && (
@@ -259,7 +258,7 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
       <div className="min-h-0 flex-1 overflow-y-auto pb-24">
         <div className="mx-auto flex w-full max-w-[60em] flex-col gap-3 pt-3">
           <div className="flex flex-col gap-3 px-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
-            <p className="caption-style text-subtle">Newsletters and bulk senders across your mailboxes, with what came in the last {days} days.</p>
+            <p className="caption-style text-subtle">Last {days} days</p>
             <Button
               variant="primary"
               size="sm"
@@ -267,7 +266,7 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
               onClick={() => setConfirmBulk(true)}
               className="h-auto self-start rounded-xl px-3 py-2 text-left leading-4 whitespace-normal sm:self-auto sm:rounded-full"
             >
-              {bulkRunning ? "Unsubscribing…" : `Unsubscribe from everything you haven't opened in ${days} days (${unopened.length})`}
+              {bulkRunning ? "Unsubscribing…" : `Unsubscribe from not opened (${unopened.length})`}
             </Button>
           </div>
           {results && <BulkResults results={results} onBlock={blockByAddress} onClose={() => setResults(null)} />}
@@ -284,7 +283,7 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
             })}
           </nav>
           {shown.length === 0 ? (
-            <p className="text-subtle px-4 py-12 text-center">{senders.length === 0 ? "No newsletters or bulk senders yet." : "Nothing here."}</p>
+            <p className="text-subtle px-4 py-12 text-center">{senders.length === 0 ? "No subscriptions" : "Nothing here."}</p>
           ) : (
             <ul className="divide-border flex flex-col divide-y">
               {shown.map((sender) => (
@@ -318,8 +317,8 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
         open={confirmBulk}
         onOpenChange={setConfirmBulk}
         title={`Unsubscribe from ${plural(unopened.length, "sender", "senders")}?`}
-        description={`You haven't opened anything from these in ${days} days. Orbit unsubscribes you and archives what they already sent. Contacts and companies you work with are left out.`}
-        confirmLabel="Unsubscribe from all"
+        description={`Not opened in ${days} days. Their existing mail is archived.`}
+        confirmLabel="Unsubscribe"
         tone="neutral"
         onConfirm={runBulk}
       >

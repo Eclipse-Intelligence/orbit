@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
-import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { Radio } from "@/components/_ui/radio";
 import { fetchUnsubscribePreview, postSenderAction, postUnsubscribe, type UnsubscribeTarget } from "@/components/mail/mail-cache";
@@ -25,14 +24,14 @@ export type UnsubscribeDone = {
 };
 
 const CHOICES: { value: ExistingMailChoice; label: string }[] = [
-  { value: "archive", label: "Archive them" },
-  { value: "trash", label: "Move them to Trash" },
-  { value: "leave", label: "Leave them" },
+  { value: "archive", label: "Archive" },
+  { value: "trash", label: "Move to Trash" },
+  { value: "leave", label: "Leave" },
 ];
 
 const RESEARCH_CHOICES: { value: ExistingMailChoice; label: string }[] = [
-  { value: "archive", label: "Move them to Research" },
-  { value: "leave", label: "Leave them" },
+  { value: "archive", label: "Move to Research" },
+  { value: "leave", label: "Leave" },
 ];
 
 function plural(count: number, one: string, many: string) {
@@ -59,7 +58,7 @@ export function unsubscribeToast(done: UnsubscribeDone): { message: string; tone
     case "unsubscribed":
       return { message: `Unsubscribed${blocked} from ${who}.${moved}${failedMove}`, tone };
     case "requested":
-      return { message: `Requested${blocked}. Orbit emailed ${who}'s unsubscribe address.${moved}${failedMove}`, tone };
+      return { message: `Unsubscribe requested from ${who}${blocked}.${moved}${failedMove}`, tone };
     case "needs_you":
       return { message: `Needs you: finish on ${who}'s page.${moved}${failedMove}`, tone, url: done.opened ? null : done.result.url };
     case "none":
@@ -70,19 +69,18 @@ export function unsubscribeToast(done: UnsubscribeDone): { message: string; tone
 }
 
 function describe(preview: UnsubscribePreview, mode: UnsubscribeMode) {
-  if (mode === "block") return "Their new mail is archived as it arrives.";
-  if (mode === "research") return "Their new mail goes to a Research folder as it arrives, where it stays readable.";
-  const block = mode === "both" ? " Their new mail is then archived as it arrives." : "";
-  const fallback = preview.mailto ? ` If that doesn't work, Orbit emails ${preview.mailto} from ${preview.account} to unsubscribe.` : "";
+  if (mode === "block") return "Their new mail is archived.";
+  if (mode === "research") return "Their new mail goes to Research.";
+  const block = mode === "both" ? " Their new mail is archived." : "";
   switch (preview.method) {
     case "one_click":
-      return `Orbit unsubscribes you through ${preview.target}.${fallback}${block}`;
+      return block.trim();
     case "mailto":
-      return `Orbit emails ${preview.mailto ?? preview.target} from ${preview.account} to unsubscribe you.${block}`;
+      return `Sends an unsubscribe email from ${preview.account}.${block}`;
     case "page":
-      return `${preview.target} needs you to finish on their page, which opens in a new tab.${block}`;
+      return `Opens their page in a new tab.${block}`;
     default:
-      return `${preview.sender} gives no way to unsubscribe. Block them to archive their mail as it arrives.`;
+      return "No unsubscribe link. Blocking archives their new mail.";
   }
 }
 
@@ -92,8 +90,10 @@ function blockOnly(preview: UnsubscribePreview | null, mode: UnsubscribeMode) {
 
 function primaryLabel(preview: UnsubscribePreview | null, mode: UnsubscribeMode) {
   if (mode === "research") return "Keep for research";
-  if (blockOnly(preview, mode)) return "Block";
-  if (mode === "both") return "Unsubscribe and block";
+  const anyway = preview?.protection ? " anyway" : "";
+  if (blockOnly(preview, mode)) return `Block${anyway}`;
+  if (mode === "both") return `Unsubscribe and block${anyway}`;
+  if (anyway) return "Unsubscribe anyway";
   if (preview?.method === "page") return "Open their page";
   return "Unsubscribe";
 }
@@ -109,10 +109,8 @@ export default function UnsubscribeDialog({
 }) {
   const [preview, setPreview] = useState<UnsubscribePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState(false);
   const [choice, setChoice] = useState<ExistingMailChoice>("archive");
   const [busy, setBusy] = useState(false);
-  const confirming = useRef(false);
   const submitButton = useRef<HTMLButtonElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const thread = request?.thread;
@@ -123,7 +121,6 @@ export default function UnsubscribeDialog({
   useEffect(() => {
     if (!open) return;
     let live = true;
-    confirming.current = false;
     fetchUnsubscribePreview({ thread, sender: wanted }, light ? "block" : undefined)
       .then((loaded) => {
         if (live) setPreview(loaded);
@@ -135,14 +132,12 @@ export default function UnsubscribeDialog({
       live = false;
       setPreview(null);
       setError(null);
-      setConfirmed(false);
       setChoice("archive");
       setBusy(false);
     };
   }, [open, thread, wanted, light]);
 
-  const asksFirst = request?.mode !== "research";
-  const ready = Boolean(preview) && (!preview?.protection || confirmed || !asksFirst);
+  const ready = Boolean(preview) && (!preview?.protection || request?.mode === "research");
   useEffect(() => {
     if (!ready) return;
     const timer = window.setTimeout(() => submitButton.current?.focus(), 50);
@@ -151,7 +146,7 @@ export default function UnsubscribeDialog({
 
   if (!request) return null;
   const mode = request.mode;
-  const askFirst = asksFirst && Boolean(preview?.protection) && !confirmed;
+  const warning = mode !== "research" ? preview?.protection?.reason : null;
   const sender = preview?.sender ?? request.sender ?? "this sender";
   const name = preview?.name?.trim() || sender;
   const title =
@@ -199,40 +194,20 @@ export default function UnsubscribeDialog({
     }
   }
 
-  if (askFirst && preview?.protection) {
-    const blocking = blockOnly(preview, mode);
-    return (
-      <ConfirmDialog
-        open
-        onOpenChange={(next) => {
-          if (next) return;
-          queueMicrotask(() => {
-            if (!confirming.current) onClose();
-          });
-        }}
-        title={blocking ? `Block ${preview.protection.name}?` : `Unsubscribe from ${preview.protection.name}?`}
-        description={`${preview.protection.reason} Orbit doesn't suggest ${blocking ? "blocking" : "unsubscribing from"} people and companies you work with. Go ahead with ${preview.sender} anyway?`}
-        confirmLabel={blocking ? "Block anyway" : "Unsubscribe anyway"}
-        tone="neutral"
-        onConfirm={() => {
-          confirming.current = true;
-          setConfirmed(true);
-        }}
-      />
-    );
-  }
-
   const existing = preview?.existing ?? { inbox: 0, total: 0 };
   const choices = mode === "research" ? RESEARCH_CHOICES : CHOICES;
   const counts: Record<ExistingMailChoice, string> = {
-    archive: existing.inbox ? plural(existing.inbox, "email in the inbox", "emails in the inbox") : "Nothing in the inbox",
-    trash: existing.total ? plural(existing.total, "email", "emails") : "Nothing to move",
+    archive: existing.inbox ? `${existing.inbox} in inbox` : "None in inbox",
+    trash: existing.total ? plural(existing.total, "email", "emails") : "None",
     leave: "",
   };
+
+  const description = preview ? describe(preview, mode) : error ? "Couldn't check this sender." : "Checking…";
 
   return (
     <Dialog open onOpenChange={(next) => !next && close()}>
       <DialogContent
+        {...(description ? {} : { "aria-describedby": undefined })}
         aria-busy={busy || (!preview && !error)}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
@@ -248,10 +223,15 @@ export default function UnsubscribeDialog({
         <form ref={formRef} tabIndex={-1} onSubmit={submit} className="outline-none">
           <DialogHeader className="pr-12">
             <DialogTitle className="break-words">{title}</DialogTitle>
-            <DialogDescription>{preview ? describe(preview, mode) : error ? "Orbit couldn't check this sender." : "Checking how to unsubscribe…"}</DialogDescription>
+            {description && <DialogDescription>{description}</DialogDescription>}
+            {warning && (
+              <p role="status" className="caption-style text-warning">
+                {warning}
+              </p>
+            )}
           </DialogHeader>
           <fieldset className="flex flex-col gap-1 px-6 py-4" disabled={!preview || busy}>
-            <legend className="ui-style text-soft mb-2 pt-4">Mail already received from {sender}</legend>
+            <legend className="ui-style text-soft mb-2 pt-4">Existing mail</legend>
             {choices.map((item) => (
               <label key={item.value} className="ui-style -mx-2 flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 hover:bg-white/[0.03]">
                 <Radio name="existing" value={item.value} checked={choice === item.value} onChange={() => setChoice(item.value)} />

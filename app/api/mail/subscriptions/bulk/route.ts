@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   const existing = EXISTING_CHOICES.find((choice) => choice === body.existing) ?? "archive";
   return mailResponse(async (actor) => {
     if (!(await withinLimit(actor.userId, "unsubscribe-bulk", PER_MINUTE, 60))) {
-      throw new CrmError("rate_limited", "Orbit is already unsubscribing in bulk. Wait a minute and try again.", 429);
+      throw new CrmError("rate_limited", "Already unsubscribing. Try again in a minute.", 429);
     }
     return { results: await unsubscribeMany(actor, senders, { existing }, { deadline: Date.now() + UNSUBSCRIBE_MS, defer: inBackground }) };
   });

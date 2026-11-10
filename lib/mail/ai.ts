@@ -398,7 +398,7 @@ export async function askMail(
     if (seen.size === 0) await run(null, null, null);
     return [...seen.values()].sort((a, b) => b.rank - a.rank).slice(0, 12);
   });
-  if (found.length === 0) return { answer: "I couldn't find any emails about that. Try different words, or a name.", sources: [] };
+  if (found.length === 0) return { answer: "No emails found. Try different words or a name.", sources: [] };
   const numbered = found
     .map(
       (row, index) =>

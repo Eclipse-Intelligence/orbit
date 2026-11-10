@@ -28,6 +28,7 @@ import { routeArrivedMail } from "@/lib/mail/subscriptions";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
 import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
+import { SYNC_RETRYING } from "@/lib/mail/view";
 import { grantsMailWrite, type MicrosoftToken } from "@/lib/microsoft/oauth";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
@@ -101,7 +102,6 @@ async function storageFull(db: Db) {
 export const MAIL_HARD_STOP =
   "Mail sync is paused because the database is nearly full. Upgrade Supabase to Pro and raise MAIL_STORAGE_LIMIT_MB to keep syncing.";
 export const SYNC_PAUSED = "Mail sync is paused because storage is full.";
-export const SYNC_RETRYING = "Mail didn't refresh. Orbit will try again shortly.";
 
 export function syncProblems(report: Pick<MailSyncReport, "paused" | "errors" | "reconnect">) {
   if (report.paused) return [SYNC_PAUSED];
