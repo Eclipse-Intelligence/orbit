@@ -57,7 +57,7 @@ export default function CalendarAgenda({
       {list.length === 0 ? (
         <div className="flex flex-col items-center gap-3 py-6">
           <p className="caption-style text-subtle text-center">
-            Nothing on this day.
+            No events
           </p>
           {onNew && date >= today && (
             <Button variant="secondary" size="sm" onClick={onNew}>

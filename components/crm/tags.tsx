@@ -94,7 +94,6 @@ export function TagChip({
     return (
       <Link
         href={href}
-        title={`Show everything tagged ${name}`}
         className={cn(classes, "hover:brightness-125")}
       >
         {label}
@@ -194,7 +193,9 @@ export function TagOptions({
             ? `Keep each tag to ${TAG_MAX_LENGTH} characters.`
             : exclude.includes(typed)
               ? "Already tagged."
-              : "Type a name for the tag."}
+              : typed
+                ? "No matches"
+                : "Type a name for the tag."}
         </CommandEmpty>
         {hasAdd && (
           <CommandGroup heading={onRemove ? "Add tag" : undefined}>

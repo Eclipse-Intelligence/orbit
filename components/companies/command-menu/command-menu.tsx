@@ -77,7 +77,9 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
         ).map((def) => def.id),
       );
       const add = shortcutTarget("add-record");
-      const text = add?.textContent?.trim();
+      const shown = add?.cloneNode(true) as HTMLElement | undefined;
+      shown?.querySelectorAll("[aria-hidden]").forEach((node) => node.remove());
+      const text = shown?.textContent?.trim();
       setLabels(text && add?.tagName !== "INPUT" ? { "add-record": text } : {});
     }, 0);
     return () => window.clearTimeout(timer);
@@ -176,7 +178,7 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
         <CommandInput
           value={query}
           onValueChange={setQuery}
-          placeholder={listMode ? `Search ${listSearch?.noun}…` : docs ? "Open a note, or type to create one" : "Type a command or search…"}
+          placeholder={listMode ? `Search ${listSearch?.noun}…` : docs ? "Open or create a note" : "Type a command or search…"}
           trailing={
             docs ? (
               <span aria-hidden className="caption-style text-faint flex items-center gap-1.5">
@@ -198,7 +200,7 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
                     Show {listSearch.noun} matching “{trimmed}”
                   </span>
                 ) : (
-                  <span>{listSearch.value ? "Clear the search" : `Show all ${listSearch.noun}`}</span>
+                  <span>{listSearch.value ? "Clear search" : `Show all ${listSearch.noun}`}</span>
                 )}
                 <span className="ml-auto flex shrink-0 items-center">
                   <Kbd aria-hidden>Enter</Kbd>
@@ -216,10 +218,10 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
               ))}
             </CommandGroup>
           )}
-          {trimmed && searching && <p className="caption-style text-subtle px-4 py-3">Searching records…</p>}
+          {trimmed && searching && <p className="caption-style text-subtle px-4 py-3">Searching…</p>}
           {!searching && results?.failed && (
             <p role="alert" className="caption-style text-danger px-4 py-3">
-              Search is unavailable right now. Try again in a moment.
+              Search failed. Try again.
             </p>
           )}
           {results && results.companies.length > 0 && (
@@ -239,7 +241,7 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
             </CommandGroup>
           )}
           {results && results.contacts.length > 0 && (
-            <CommandGroup heading="People">
+            <CommandGroup heading="Contacts">
               {results.contacts.map((contact) => (
                 <CommandItem
                   key={contact.id}
@@ -319,28 +321,15 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
           )}
           {nothing && <p className="caption-style text-subtle px-4 py-6">Nothing matches “{trimmed}”</p>}
         </CommandList>
-        <CommandFooter>
-          <span className="flex items-center gap-1.5">
-            <Kbd>↑</Kbd>
-            <Kbd>↓</Kbd>
-            Navigate
-          </span>
-          <span className="flex items-center gap-1.5">
-            <Kbd>Enter</Kbd>
-            {docs ? "Open" : "Run"}
-          </span>
-          {docs && (
+        {docs && (
+          <CommandFooter>
             <span className="flex items-center gap-1.5">
               <Kbd>⌘</Kbd>
               <Kbd>Enter</Kbd>
               Create
             </span>
-          )}
-          <span className="ml-auto flex items-center gap-1.5">
-            <Kbd>Esc</Kbd>
-            Close
-          </span>
-        </CommandFooter>
+          </CommandFooter>
+        )}
       </Command>
     </CommandDialog>
   );

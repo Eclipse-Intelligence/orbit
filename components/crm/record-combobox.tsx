@@ -108,7 +108,7 @@ export default function RecordCombobox({
         : await addContactInlineAction({ name: choice.create, companyId }).then((done) => ({ record: done.contact, error: done.error }));
     setCreating(false);
     if (!result.record) {
-      setError(result.error ?? "That did not work. Try again.");
+      setError(result.error ?? "That didn't work. Try again.");
       return;
     }
     setText("");
@@ -214,7 +214,7 @@ export default function RecordCombobox({
         <ul id={listId} role="listbox" aria-label={label} className="max-h-72 overflow-y-auto">
           {choices.length === 0 && (
             <li className="caption-style text-subtle px-2.5 py-4 text-center">
-              {kind === "contact" && companyId ? `No one at ${companyName ?? "this company"} matches.` : "No matches."}
+              No matches
             </li>
           )}
           {choices.map((choice, index) => (
@@ -245,7 +245,7 @@ export default function RecordCombobox({
                     </span>
                     <span className="text-foreground min-w-0 flex-1 truncate text-[13.5px] leading-5">
                       {kind === "company"
-                        ? `Add “${choice.create}” as a new company`
+                        ? `Add “${choice.create}”`
                         : `Add “${choice.create}” at ${companyName ?? "this company"}`}
                     </span>
                   </>

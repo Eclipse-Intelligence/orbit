@@ -51,36 +51,17 @@ export default function RelationshipPanel({
         <RelationshipSource relationship={relationship} viewerId={viewerId} />
         <RelationshipError error={picker.error} />
         <p className="caption-style text-soft">
-          {context.relationshipStatus === "quiet"
-            ? "Quiet relationship"
-            : context.relationshipStatus === "needs_action"
-              ? "Needs a task"
-              : context.relationshipStatus === "new"
-                ? "New relationship"
-                : "Active relationship"}
-        </p>
-        <p className="caption-style text-soft">
           {last
             ? `Last interaction ${relativeWhen(last.occurredAt)}${last.title ? `: ${last.title}` : ""}`
-            : "No contact"}
+            : "No interactions"}
         </p>
-        <p className="caption-style text-subtle">
-          {context.openTaskCount > 0
-            ? `${context.openTaskCount} open task${context.openTaskCount === 1 ? "" : "s"}`
-            : "No open tasks."}
-        </p>
-        <TaskPad
-          clickup={clickup}
-          company={{ id: companyId, name: context.company.name }}
-          placeholder="Add a task, e.g. Send the proposal Friday 10am"
-        />
       </DetailSection>
 
       <CompanyContacts companyId={companyId} contacts={context.contacts} findEmail={findEmail} />
 
       <DetailSection title="Opportunities">
         {deals.length === 0 ? (
-          <p className="caption-style text-subtle">No opportunities.</p>
+          <p className="caption-style text-subtle">No opportunities</p>
         ) : (
           <ul className="flex flex-col gap-3">
             {deals.map((opportunity) => (
@@ -130,15 +111,16 @@ export default function RelationshipPanel({
       )}
 
       <DetailSection title="Tasks" className="shadow-none">
+        <TaskPad clickup={clickup} company={{ id: companyId, name: context.company.name }} />
         {context.tasks.length === 0 ? (
-          <p className="caption-style text-subtle">No open tasks.</p>
+          <p className="caption-style text-subtle">No tasks</p>
         ) : (
           <ul className="flex flex-col gap-3">
             {context.tasks.map((task) => (
               <li key={task.id} className="flex flex-col gap-1">
                 <span className="text-[14px] leading-5">{task.title}</span>
-                <span className="caption-style text-subtle flex flex-wrap items-center gap-2">
-                  {task.dueAt ? `Due ${formatWhen(task.dueAt)}` : "No due date"}
+                <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
+                  {task.dueAt && `Due ${formatWhen(task.dueAt)}`}
                   <ClickUpBadge task={task} />
                 </span>
               </li>

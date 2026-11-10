@@ -132,7 +132,7 @@ export default function CallInsightPanel({
           id={fieldId}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Paste the call transcript or the .vtt file text"
+          placeholder="Paste the transcript or .vtt text"
           disabled={summarising}
           className={cn(textareaClass, "min-h-28")}
         />
@@ -182,7 +182,7 @@ export default function CallInsightPanel({
         <div className="flex flex-col gap-2">
           <p role="alert" className="caption-style text-danger">
             {stalled
-              ? "The summary stopped before it finished."
+              ? "Summary didn't finish."
               : (insight.error ?? "Couldn't summarise the call. Try again.")}
           </p>
           <Button
@@ -223,7 +223,7 @@ export default function CallInsightPanel({
       )}
       {insight.status === "ready" && shown.length > 0 && (
         <div className="flex flex-col gap-2">
-          <span className="caption-style text-subtle">Tasks from this conversation</span>
+          <span className="caption-style text-subtle">Suggested tasks</span>
           <ul className="flex flex-col gap-3">
             {shown.map((item) => {
               const meta = itemMeta(item);
@@ -246,7 +246,7 @@ export default function CallInsightPanel({
                           )
                         }
                       >
-                        {pending === `accept:${item.id}` ? "Adding…" : "Add as task"}
+                        {pending === `accept:${item.id}` ? "Adding…" : "Add task"}
                       </Button>
                       <Button
                         variant="ghost"
