@@ -259,7 +259,6 @@ export default function EmailFrame({
   const [nonce] = useState(randomNonce);
   const [height, setHeight] = useState(rich ? 320 : 80);
   const [measured, setMeasured] = useState(false);
-  const [settled, setSettled] = useState(false);
   const [gaveUp, setGaveUp] = useState(false);
   const [quoted, setQuoted] = useState(false);
   const [showQuotes, setShowQuotes] = useState(false);
@@ -282,12 +281,6 @@ export default function EmailFrame({
       window.clearTimeout(giveUp);
     };
   }, [source, ask]);
-
-  useEffect(() => {
-    if (!measured || settled) return;
-    const frameRequest = window.requestAnimationFrame(() => setSettled(true));
-    return () => window.cancelAnimationFrame(frameRequest);
-  }, [measured, settled]);
 
   useEffect(() => {
     const proxy = document.createElement("div");
@@ -339,12 +332,7 @@ export default function EmailFrame({
           ask();
         }}
         aria-busy={!measured && !gaveUp}
-        className={cn(
-          "ease-power3-out block w-full border-0 transition-opacity duration-200 motion-reduce:transition-none",
-          settled && "transition-[opacity,height]",
-          measured || gaveUp ? "opacity-100" : "opacity-0",
-          rich && "rounded-xl bg-white",
-        )}
+        className={cn("block w-full border-0", rich && "rounded-xl bg-white")}
         style={{ height: measured || !gaveUp ? height : "min(70dvh, 40rem)" }}
       />
       {quoted && <QuoteToggle shown={showQuotes} onToggle={toggleQuotes} />}
