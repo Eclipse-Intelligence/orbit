@@ -1,3 +1,5 @@
+import { ShownError, notSetUp } from "@/lib/crm/errors";
+import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 import { withActor } from "@/lib/crm/context";
 import type { Actor } from "@/lib/crm/types";
 
@@ -17,7 +19,7 @@ export type MindcaseAgent = keyof typeof MINDCASE_PRICES;
 type Row = Record<string, unknown>;
 type RunReply = { job_id?: string; status?: string; data?: Row[]; error?: string; detail?: string };
 
-export class MindcaseError extends Error {}
+export class MindcaseError extends ShownError {}
 
 export function mindcaseConfigured() {
   return Boolean(process.env.MINDCASE_API_KEY?.trim());
@@ -49,15 +51,23 @@ async function recordUsage(actor: Actor, agent: MindcaseAgent, rows: number, sou
 }
 
 async function call(path: string, init: RequestInit, fetchImpl: typeof fetch): Promise<RunReply> {
-  const response = await fetchImpl(`${API}${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${process.env.MINDCASE_API_KEY!.trim()}`, "content-type": "application/json", ...(init.headers ?? {}) },
-    signal: AbortSignal.timeout(65_000),
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(`${API}${path}`, {
+      ...init,
+      headers: { authorization: `Bearer ${process.env.MINDCASE_API_KEY!.trim()}`, "content-type": "application/json", ...(init.headers ?? {}) },
+      signal: AbortSignal.timeout(65_000),
+    });
+  } catch (error) {
+    logUpstream("Mindcase", null, error);
+    throw new MindcaseError(unreachable("Mindcase"));
+  }
   const body = (await response.json().catch(() => ({}))) as RunReply;
   if (response.status === 402) throw new MindcaseError("The Mindcase wallet is empty. Top it up at mindcase.co.");
-  if (response.status === 401) throw new MindcaseError("The Mindcase key isn't valid. Check MINDCASE_API_KEY.");
-  if (!response.ok) throw new MindcaseError(`Mindcase answered ${response.status}${body.detail || body.error ? `: ${String(body.detail ?? body.error).slice(0, 200)}` : ""}.`);
+  if (!response.ok) {
+    logUpstream("Mindcase", response.status, body.detail ?? body.error ?? null);
+    throw new MindcaseError(upstreamMessage("Mindcase", response.status));
+  }
   return body;
 }
 
@@ -67,11 +77,12 @@ export async function runMindcase(
   params: Record<string, unknown>,
   options: { source: string; expectedRows: number; fetchImpl?: typeof fetch; deadline?: number },
 ): Promise<Row[]> {
-  if (!mindcaseConfigured()) throw new MindcaseError("Mindcase isn't set up. Add MINDCASE_API_KEY.");
+  if (!mindcaseConfigured()) throw new MindcaseError(notSetUp("Mindcase", "MINDCASE_API_KEY", actor));
   const limit = monthlyLimitUsd();
   const spent = await spentThisMonth(actor);
   if (spent + options.expectedRows * MINDCASE_PRICES[agent] > limit) {
-    throw new MindcaseError(`This month's Mindcase spend ($${spent.toFixed(2)}) has reached the $${limit} limit. Raise MINDCASE_MONTHLY_LIMIT_USD to allow more.`);
+    const owner = actor.type === "user" && actor.role === "owner";
+    throw new MindcaseError(`Mindcase monthly limit of $${limit} reached.${owner ? " Raise MINDCASE_MONTHLY_LIMIT_USD." : ""}`);
   }
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + 90_000;
@@ -82,7 +93,10 @@ export async function runMindcase(
     reply = await call(`/jobs/${encodeURIComponent(reply.job_id)}/results`, { method: "GET" }, fetchImpl);
   }
   if (reply.status === "rejected_balance") throw new MindcaseError("The Mindcase wallet is empty. Top it up at mindcase.co.");
-  if (reply.status !== "completed") throw new MindcaseError(`The Mindcase lookup ${reply.status ?? "failed"}.`);
+  if (reply.status !== "completed") {
+    logUpstream("Mindcase", null, `job ${reply.status ?? "unknown"}`);
+    throw new MindcaseError("The Mindcase lookup failed.");
+  }
   const rows = Array.isArray(reply.data) ? reply.data : [];
   await recordUsage(actor, agent, rows.length, options.source).catch(() => undefined);
   return rows;

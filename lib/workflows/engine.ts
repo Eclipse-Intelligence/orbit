@@ -528,8 +528,11 @@ const MAX_QUESTION_SIZE = 4800;
 const MAX_ABOUT_CHARS = 4000;
 const DECIDE_TIMEOUT_MS = 20_000;
 const UNKNOWN_OPTION = "unknown";
-const PARALLEL_BUSY = /rate limiting|returned 5\d\d|didn't respond/;
 const RETRY_DELAY_MS = 60_000;
+
+function parallelBusy(error: ParallelError) {
+  return error.status === 0 || error.status === 429 || (error.status ?? 0) >= 500;
+}
 
 type WebQuestion = { key: string; type: (typeof WEB_QUESTION_TYPES)[number]; question: string; options: string[] };
 
@@ -595,7 +598,7 @@ async function decideStep(ctx: Ctx, step: Step): Promise<StepResult> {
     });
   } catch (error) {
     if (error instanceof ParallelError) {
-      throw new CrmError(parallelKey() ? "upstream_error" : "invalid_input", error.message, parallelKey() ? 502 : 400, { retry: PARALLEL_BUSY.test(error.message) });
+      throw new CrmError(parallelKey() ? "upstream_error" : "invalid_input", error.message, parallelKey() ? 502 : 400, { retry: parallelBusy(error) });
     }
     throw error;
   }

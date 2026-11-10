@@ -217,7 +217,7 @@ describe("recall", () => {
   it("checks the key with a narrow read before saving it, encrypted and private to its owner", async () => {
     await assert.rejects(saveRecallKey(owner, "short", recall), /Paste the whole Recall API key/);
     await assert.rejects(saveRecallKey(owner, "pk_not_a_recall_key_123", recall), /start with sk_/);
-    await assert.rejects(saveRecallKey(owner, "sk_wrong_recall_key_0000", recall), /Recall didn't accept that key/);
+    await assert.rejects(saveRecallKey(owner, "sk_wrong_recall_key_0000", recall), /Recall rejected that key\. Create a new one in Recall\./);
     const validation = recall.requests.at(-1)!;
     assert.equal(validation.url.pathname, "/api/v1/cards");
     const span = Date.parse(validation.url.searchParams.get("date_to")!) - Date.parse(validation.url.searchParams.get("date_from")!);
@@ -368,7 +368,7 @@ describe("recall", () => {
     assert.equal(pages.order, "page");
     assert.deepEqual(pages.chunks.map((chunk) => chunk.content), ["a", "b"]);
 
-    await assert.rejects(recallRead(owner, { cardId: "card-missing" }, live()), /Recall has no card with that id/);
+    await assert.rejects(recallRead(owner, { cardId: "card-missing" }, live()), /Card not found\. Find it with recall_search first\./);
   });
 
   it("reads an article's original live in 100,000 character windows, without storing it", async () => {
@@ -433,7 +433,8 @@ describe("recall", () => {
 
   it("explains rejected keys, bad requests and rate limits, retrying once", async () => {
     await assert.rejects(recallSearch(owner, { query: "trigger 422" }, live()), (error: Error) => {
-      assert.equal(error.message, "Recall couldn't use that request: q: String should have at most 1000 characters.");
+      assert.equal(error.message, "Recall couldn't use that request. Check the filters.");
+      assert.doesNotMatch(error.message, /String should have/);
       return true;
     });
     assert.equal(recallDetail({ detail: { message: "date_from must be before or equal to date_to" } }), "date_from must be before or equal to date_to");
@@ -446,13 +447,17 @@ describe("recall", () => {
 
     count = recall.requests.length;
     recall.limit(2);
-    await assert.rejects(recallSearch(owner, { query: "answer engines" }, live()), /Recall is limiting requests right now\. Try again in a minute\./);
+    await assert.rejects(recallSearch(owner, { query: "answer engines" }, live()), /Recall is busy\. Try again in a minute\./);
     assert.equal(recall.requests.length - count, 2);
 
     recall.breakFor(1);
     assert.ok((await recallSearch(owner, {}, live())).cards.length > 0);
     recall.breakFor(2);
-    await assert.rejects(recallSearch(owner, {}, live()), /Recall had a problem on its side \(500\).*req_123/);
+    await assert.rejects(recallSearch(owner, {}, live()), (error: Error) => {
+      assert.equal(error.message, "Recall returned an error (500). Try again.");
+      assert.doesNotMatch(error.message, /req_123/);
+      return true;
+    });
 
     recall.revoke(OWNER_KEY);
     await assert.rejects(recallSearch(owner, { query: "x" }, live()), (error: Error) => error.message === RECALL_REJECTED);
@@ -480,7 +485,7 @@ describe("recall", () => {
       const before = recall.requests.length;
       for (const name of ["recall_search", "recall_read"]) {
         const refused = (await runTool(outsider, name, { query: ["x"], cardId: "card-video" })) as { error?: string };
-        assert.equal(refused.error, "Recall isn't connected. Add your Recall API key in Settings, Connections.");
+        assert.equal(refused.error, "Connect Recall in Settings › Connections.");
       }
       assert.equal(recall.requests.length, before);
     } finally {

@@ -18,7 +18,7 @@ export async function marketAgentStatus(actor: UserActor): Promise<MarketAgentSt
 
 export async function issueMarketAgentToken(actor: UserActor) {
   if (actor.role !== "owner" && actor.role !== "admin") {
-    throw new CrmError("forbidden", "Only an owner or admin can connect Grok Bot.", 403);
+    throw new CrmError("forbidden", "Only owners and admins can connect Grok Bot.", 403);
   }
   const { token, prefix, hash } = generateAgentToken();
   await query("select private.issue_market_agent($1, $2, $3, $4, $5)", [actor.workspaceId, actor.userId, MARKET_AGENT_NAME, prefix, hash]);

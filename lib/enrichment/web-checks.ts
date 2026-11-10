@@ -1,13 +1,14 @@
 import { editCompanyTags, getCompany, updateCompany } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, errorText, notFound, tooLong, tooMany } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { normalizeTag } from "@/lib/crm/normalize";
 import type { Actor, Company, Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { getEnrichmentSettings, icpHashOf } from "@/lib/enrichment/settings";
 import { fitLabel } from "@/lib/enrichment/fit";
-import { decide, parallelKey, ParallelError, type DecisionCitation, type DecisionQuestion } from "@/lib/parallel";
+import { decide, parallelKey, ParallelError, stopsParallel, type DecisionCitation, type DecisionQuestion } from "@/lib/parallel";
+import { webChecksNotSetUp } from "@/lib/ai-fields/types";
 
 export type WebCheckKind = "tag" | "signal";
 export type SignalNoteKind = "funding" | "hire" | "launch" | "signal";
@@ -67,7 +68,7 @@ function invalid(message: string, field?: string) {
 }
 
 function assertAdmin(actor: UserActor) {
-  if (actor.role !== "owner" && actor.role !== "admin") throw new CrmError("forbidden", "Only workspace owners and admins can change web checks.", 403);
+  if (actor.role !== "owner" && actor.role !== "admin") throw new CrmError("forbidden", "Only owners and admins can change web checks.", 403);
 }
 
 export function webChecksConfigured(env: Record<string, string | undefined> = process.env) {
@@ -91,9 +92,9 @@ export async function saveWebCheck(actor: UserActor, input: { id?: unknown; kind
   const kind: WebCheckKind = input.kind === "signal" ? "signal" : "tag";
   const raw = typeof input.label === "string" ? input.label.replace(/\s+/g, " ").trim() : "";
   const label = kind === "tag" ? normalizeTag(raw) : raw;
-  if (!label || label.length > 60) throw invalid(kind === "tag" ? "Give the tag a name of up to 60 characters." : "Give the signal a name of up to 60 characters.", "label");
+  if (!label || label.length > 60) throw invalid(tooLong("the name", 60), "label");
   const question = typeof input.question === "string" ? input.question.replace(/\s+/g, " ").trim() : "";
-  if (question.length < 10 || question.length > 1000) throw invalid("Write the question in 10 to 1,000 characters.", "question");
+  if (question.length < 10 || question.length > 1000) throw invalid("Enter a question of 10 to 1,000 characters.", "question");
   const noteKind = NOTE_KINDS.find((item) => item === input.noteKind) ?? "signal";
   const editing = typeof input.id === "string" && isUuid(input.id) ? input.id : null;
   return withActor(actor, async (db) => {
@@ -103,7 +104,7 @@ export async function saveWebCheck(actor: UserActor, input: { id?: unknown; kind
         : null;
       if (!editing) {
         const count = await db.query<{ total: number }>("select count(*)::int as total from crm.web_checks where workspace_id = $1 and kind = $2", [actor.workspaceId, kind]);
-        if ((count.rows[0]?.total ?? 0) >= RULES_MAX) throw invalid(`You can have up to ${RULES_MAX} ${kind === "tag" ? "tag rules" : "signals"}.`);
+        if ((count.rows[0]?.total ?? 0) >= RULES_MAX) throw invalid(tooMany(RULES_MAX, kind === "tag" ? "tag rules" : "signals"));
       }
       const result =
         editing
@@ -117,11 +118,11 @@ export async function saveWebCheck(actor: UserActor, input: { id?: unknown; kind
                values ($1, $2, $3, $4, $5, $6) returning id, kind, label, question, note_kind`,
               [actor.workspaceId, kind, label, question, noteKind, actor.userId],
             );
-      if (!result.rows[0]) throw new CrmError("not_found", "That check no longer exists.", 404);
+      if (!result.rows[0]) throw notFound("web check");
       if (result.rows[0].kind === "tag" && (!editing || before?.question !== question)) await resetChecked(db, actor.workspaceId);
       return toCheck(result.rows[0]);
     } catch (error) {
-      if ((error as { code?: string }).code === "23505") throw new CrmError("conflict", `There's already a check for ${label}.`, 409, { field: "label" });
+      if ((error as { code?: string }).code === "23505") throw new CrmError("conflict", `${label} already exists.`, 409, { field: "label" });
       throw error;
     }
   });
@@ -138,7 +139,7 @@ export async function markAllDue(actor: UserActor) {
 
 export async function removeWebCheck(actor: UserActor, id: string) {
   assertAdmin(actor);
-  if (!isUuid(id)) throw new CrmError("not_found", "That check no longer exists.", 404);
+  if (!isUuid(id)) throw notFound("web check");
   await withActor(actor, (db) => db.query("delete from crm.web_checks where id = $1 and workspace_id = $2", [id, actor.workspaceId]));
 }
 
@@ -280,14 +281,14 @@ async function saveFit(actor: Actor, companyId: string, score: number | null, ha
   );
 }
 
-export type CompanyCheck = { status: "updated" | "unchanged" | "skipped" | "failed"; message: string; tags: string[]; filled: string[] };
+export type CompanyCheck = { status: "updated" | "unchanged" | "skipped" | "failed"; message: string; tags: string[]; filled: string[]; stop?: boolean };
 
 export async function checkCompany(
   actor: Actor,
   companyId: string,
   options: { tags: boolean; gaps: boolean; icp?: IcpProfile | null; fetchImpl?: typeof fetch; env?: Record<string, string | undefined> },
 ): Promise<CompanyCheck> {
-  if (!parallelKey(options.env)) return { status: "skipped", message: "Add PARALLEL_API_KEY in Vercel to run web checks.", tags: [], filled: [] };
+  if (!parallelKey(options.env)) return { status: "skipped", message: webChecksNotSetUp(actor), tags: [], filled: [] };
   const company = await getCompany(actor, companyId);
   if (!company.domain && !company.website) return { status: "skipped", message: "Add the company's website first.", tags: [], filled: [] };
   const questions: Record<string, DecisionQuestion> = {};
@@ -327,7 +328,8 @@ export async function checkCompany(
     const state = options.icp ? { ...publicState(company), ideal_customer_profile: options.icp.text } : publicState(company);
     decision = await decide(state, questions, { fetchImpl: options.fetchImpl, env: options.env });
   } catch (error) {
-    return { status: "failed", message: error instanceof ParallelError ? error.message : "The web check failed.", tags: [], filled: [] };
+    if (!(error instanceof ParallelError)) console.error("Web check failed", error);
+    return { status: "failed", message: error instanceof ParallelError ? error.message : "Web check failed. Try again.", tags: [], filled: [], stop: stopsParallel(error) };
   }
   const tags = tagRules.filter((_, index) => {
     const answer = decision.answers[`tag_${index}`];
@@ -418,7 +420,7 @@ export async function backfillWebChecks(actor: UserActor, options: { fetchImpl?:
   assertAdmin(actor);
   const { settings, icp, values } = await dueParams(actor);
   if (!settings.webTags && !settings.webGaps && !settings.webIcp) throw invalid("Turn on tagging, filling gaps or ICP fit first.");
-  if (settings.webIcp && !settings.webTags && !settings.webGaps && !icp) throw invalid("Describe your ideal customer first.");
+  if (settings.webIcp && !settings.webTags && !settings.webGaps && !icp) throw invalid("Enter your ideal customer first.");
   const ids = await withActor(actor, async (db) => {
     const result = await db.query<{ company_id: string }>(
       `with due as (
@@ -441,11 +443,11 @@ export async function backfillWebChecks(actor: UserActor, options: { fetchImpl?:
     try {
       return { companyId: id, ...(await checkCompany(actor, id, { tags: settings.webTags, gaps: settings.webGaps, icp, ...options })) };
     } catch (error) {
-      return { companyId: id, status: "failed" as const, message: error instanceof CrmError ? error.message : "That check failed.", tags: [], filled: [] };
+      return { companyId: id, status: "failed" as const, message: errorText(error, "Web check failed. Try again."), tags: [], filled: [] };
     }
   });
   const failed = results.find((result) => result.status === "failed");
-  const limited = results.find((result) => result.status === "failed" && /rate limiting|rejected the key/i.test(result.message));
+  const limited = results.find((result) => result.status === "failed" && result.stop);
   if (limited) throw new CrmError("upstream_error", limited.message, 502);
   if (failed && results.every((result) => result.status === "failed")) throw new CrmError("upstream_error", failed.message, 502);
   return { results, remaining: await uncheckedCompanyCount(actor) };
@@ -580,7 +582,7 @@ export async function runWebSignals(actor: Actor, options: { deadline: number; f
         failed += 1;
         await release(actor, [id], 1);
         if (!(error instanceof ParallelError) && !(error instanceof CrmError)) console.error("Signal check failed", error);
-        if (error instanceof ParallelError && /key|rate/i.test(error.message)) {
+        if (error instanceof ParallelError && stopsParallel(error)) {
           await release(actor, ids.slice(position + 1), 1);
           return { checked, flagged, failed, error: error.message };
         }

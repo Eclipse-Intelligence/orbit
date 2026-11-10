@@ -4,7 +4,7 @@ import { untrustedToken } from "@/lib/assistant/untrusted";
 import { needsWebApproval, OUTSIDE_TOOLS, readTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -18,11 +18,11 @@ const WIND_DOWN = "45 seconds";
 const KEEP_FINISHED = "1 day";
 export function failureReply(message: string) {
   const reason = message.trim();
-  return `I couldn't finish that. ${/[.!?]$/.test(reason) ? reason : `${reason}.`} Say "try again" to have another go.`;
+  return `Couldn't finish: ${/[.!?]$/.test(reason) ? reason : `${reason}.`} Say "try again".`;
 }
 
-export const EXPIRED_MESSAGE = "I couldn't finish that. Orbit Agent on your Mac didn't get to it in time. Say \"try again\" to have another go.";
-export const LOST_MESSAGE = "I couldn't finish that. Orbit Agent on your Mac stopped before it finished. Check it's running, then say \"try again\".";
+export const EXPIRED_MESSAGE = "Orbit Agent on your Mac didn't respond. Say \"try again\".";
+export const LOST_MESSAGE = "Orbit Agent on your Mac stopped. Check it's running, then say \"try again\".";
 
 type ToolEvent = { type: "tool"; id: string; name: string; label: string; status: "running" | "done" };
 
@@ -126,7 +126,7 @@ export async function readCompanionJob(actor: UserActor, jobId: string): Promise
       "select status, events, result, error, draft from crm.ai_companion_jobs where id = $1 and user_id = $2",
       [jobId, actor.userId],
     );
-    if (!result.rows[0]) throw new CrmError("not_found", "That request is gone.", 404);
+    if (!result.rows[0]) throw notFound("request");
     return result.rows[0];
   });
 }
@@ -191,7 +191,7 @@ async function claim(auth: AuthenticatedCompanion): Promise<CompanionJob | null>
 }
 
 export async function companionForJob(auth: AuthenticatedCompanion, jobId: string): Promise<AuthenticatedCompanion> {
-  if (!isUuid(jobId)) throw new CrmError("not_found", "That request is gone.", 404);
+  if (!isUuid(jobId)) throw notFound("request");
   const workspaceId = await withActor(auth.actor, async (db) => {
     const result = await db.query<{ workspace_id: string }>("select workspace_id from crm.ai_companion_jobs where id = $1 and user_id = $2", [
       jobId,
@@ -199,10 +199,10 @@ export async function companionForJob(auth: AuthenticatedCompanion, jobId: strin
     ]);
     return result.rows[0]?.workspace_id ?? null;
   });
-  if (!workspaceId) throw new CrmError("not_found", "That request is gone.", 404);
+  if (!workspaceId) throw notFound("request");
   if (workspaceId === auth.actor.workspaceId) return auth;
   const actor = await actorFor(auth.actor.userId, workspaceId);
-  if (!actor) throw new CrmError("not_found", "That request is gone.", 404);
+  if (!actor) throw notFound("request");
   return { ...auth, actor };
 }
 
@@ -235,7 +235,7 @@ export async function nextCompanionJob(auth: AuthenticatedCompanion, waitMs: num
 }
 
 async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
-  if (!isUuid(jobId)) throw new CrmError("not_found", "That request is gone.", 404);
+  if (!isUuid(jobId)) throw notFound("request");
   const job = await withActor(auth.actor, async (db) => {
     const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string; switches: JobSwitches | null; email: boolean }>(
       "select status, companion_id, conversation_id, request -> 'switches' as switches, agent_mail_id is not null as email from crm.ai_companion_jobs where id = $1 and user_id = $2",
@@ -243,7 +243,7 @@ async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
     );
     return result.rows[0];
   });
-  if (!job || job.companion_id !== auth.companionId) throw new CrmError("not_found", "That request is gone.", 404);
+  if (!job || job.companion_id !== auth.companionId) throw notFound("request");
   if (job.status !== "running") throw new CrmError("conflict", "That request was cancelled.", 409);
   return job;
 }
@@ -424,8 +424,8 @@ export async function finishCompanionJob(
     return conversationId;
   } catch (error) {
     await withActor(auth.actor, async (db) => {
-      await db.query("update crm.ai_companion_jobs set status = 'failed', error = $2 where id = $1", [jobId, "Orbit couldn't save the answer."]);
-      await closeJobs(db, auth.actor, [conversationId], failureReply("Orbit couldn't save the answer."));
+      await db.query("update crm.ai_companion_jobs set status = 'failed', error = $2 where id = $1", [jobId, "Couldn't save the answer."]);
+      await closeJobs(db, auth.actor, [conversationId], failureReply("Couldn't save the answer."));
     });
     throw error;
   }

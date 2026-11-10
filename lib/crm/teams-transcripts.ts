@@ -10,7 +10,6 @@ import {
   configuredSiteOrigin,
   dropPlaceholder,
   ensureIntegration,
-  errorText,
   finishIntegration,
   getIntegrationStatus,
   importConflict,
@@ -38,6 +37,7 @@ import type { Db } from "@/lib/db/pool";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { appAccessToken } from "@/lib/microsoft/calls";
+import { MicrosoftError } from "@/lib/microsoft/oauth";
 import {
   createSubscription,
   fetchTranscript,
@@ -45,7 +45,7 @@ import {
   fetchTranscripts,
   parseTranscriptResource,
   renewSubscription,
-  sanitizeTranscriptError,
+  transcriptErrorText,
   type CallTranscript,
 } from "@/lib/microsoft/transcripts";
 
@@ -249,14 +249,14 @@ export async function settleTeamsTranscripts(owner: UserActor, now = Date.now(),
   const cutoff = new Date(now - UNFILED_AFTER_MS).toISOString();
   const plan = await withActor(owner, (db) => spreadPlan(db, owner, workspaceIds));
   for (const move of plan.moves) {
-    await moveImportToWorkspace(owner, move.importId, move.to).catch((error) => console.error("Moving a Teams transcript failed", errorText(error, "")));
+    await moveImportToWorkspace(owner, move.importId, move.to).catch((error) => console.error("Moving a Teams transcript failed", error));
   }
   const spread = [...new Set([...plan.moves, ...plan.copies].map((item) => item.importId))];
   const named = await withActor(owner, (db) => expiredByName(db, owner, actors, cutoff, spread));
   for (const filing of named) {
     if (filing.targets.includes(filing.workspaceId)) continue;
     await moveImportToWorkspace(owner, filing.importId, filing.targets[0]).catch((error) =>
-      console.error("Moving a Teams transcript failed", errorText(error, "")),
+      console.error("Moving a Teams transcript failed", error),
     );
   }
   return withActor(owner, async (db) => {
@@ -374,7 +374,7 @@ async function importOrRecord(
       options.actors,
     );
   } catch (error) {
-    const message = sanitizeTranscriptError(errorText(error, "Could not import a Teams transcript."));
+    const message = transcriptErrorText(error, "Couldn't import a Teams transcript. Try again.");
     await recordImportFailure(
       actor,
       {
@@ -466,7 +466,7 @@ export async function syncTeamsTranscripts(
           fetchImpl,
           options.deadline,
         );
-        if (!transcript) throw new Error("Microsoft no longer returns this transcript.");
+        if (!transcript) throw new MicrosoftError("Transcript not found.");
         outcome(
           await importOrRecord(
             actor,
@@ -477,7 +477,7 @@ export async function syncTeamsTranscripts(
           ),
         );
       } catch (error) {
-        const message = sanitizeTranscriptError(errorText(error, "Could not import a Teams transcript."));
+        const message = transcriptErrorText(error, "Couldn't import a Teams transcript. Try again.");
         await recordImportFailure(
           actor,
           { source: "teams", kind: "call", externalId: retry.externalId, callId: retry.callId },
@@ -505,7 +505,7 @@ export async function syncTeamsTranscripts(
     });
     return result;
   } catch (error) {
-    const message = sanitizeTranscriptError(errorText(error, "Could not sync Teams transcripts."));
+    const message = transcriptErrorText(error, "Couldn't sync Teams transcripts. Try again.");
     await withActor(actor, (db) => finishIntegration(db, key, { error: message }));
     return { ...idle, ran: true, error: message };
   }
@@ -587,9 +587,7 @@ export async function ensureTranscriptSubscription(
     });
     return { status: "created", expiresAt: at };
   } catch (error) {
-    const message = sanitizeTranscriptError(
-      errorText(error, "Could not set up instant Teams transcripts."),
-    );
+    const message = transcriptErrorText(error, "Couldn't turn on instant Teams transcripts. Try again.");
     await recordIntegrationError(actor, key, message);
     return { status: "failed", error: message };
   }
@@ -700,7 +698,7 @@ async function processTranscriptNotification(
     await recordIntegrationError(
       actor,
       teamsKey(actor, identity.connectionId),
-      sanitizeTranscriptError(errorText(error, "Could not import a Teams transcript.")),
+      transcriptErrorText(error, "Couldn't import a Teams transcript. Try again."),
     );
   }
 }

@@ -1,6 +1,6 @@
 import { withActor } from "@/lib/crm/context";
 import { companyWhere, CURRENT_FIT, FIT_JOINS, GOOD_FIT_MIN } from "@/lib/crm/company-query";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, tooLong, tooMany } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Actor, UserActor } from "@/lib/crm/types";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
@@ -95,7 +95,7 @@ export function invalid(message: string, field?: string) {
 
 export function assertFieldAdmin(actor: Actor): asserts actor is UserActor {
   if (actor.type !== "user" || (actor.role !== "owner" && actor.role !== "admin")) {
-    throw new CrmError("forbidden", "Only workspace owners and admins can change AI fields.", 403);
+    throw new CrmError("forbidden", "Only owners and admins can change AI fields.", 403);
   }
 }
 
@@ -129,8 +129,8 @@ function viewQuery(field: ScopeInput) {
 
 export function scopeProblem(field: ScopeInput) {
   if (field.scope !== "view") return null;
-  if (!field.scopeViewId || field.scopeViewParams === null) return "Its saved view was deleted. Edit the field and choose other companies.";
-  if (!viewQuery(field)) return "Its saved view has a filter Orbit can't read. Save the view again or choose other companies.";
+  if (!field.scopeViewId || field.scopeViewParams === null) return "Its saved view was deleted. Choose other companies.";
+  if (!viewQuery(field)) return "Its saved view has an invalid filter. Save the view again.";
   return null;
 }
 
@@ -175,13 +175,13 @@ function cleanOptions(value: unknown) {
     if (!option) continue;
     if (option.length > AI_FIELD_OPTION_MAX) throw invalid(`Keep each option to ${AI_FIELD_OPTION_MAX} characters.`, "options");
     if (!validOptionName(option)) throw invalid("Options can't contain | or be just a question mark.", "options");
-    if (option.toLowerCase() === "unknown") throw invalid("Unknown is added for you. Leave it out of the options.", "options");
+    if (option.toLowerCase() === "unknown") throw invalid("Remove Unknown. It's added automatically.", "options");
     if (seen.has(option.toLowerCase())) continue;
     seen.add(option.toLowerCase());
     options.push(option);
   }
-  if (options.length < 2) throw invalid("Give at least two options.", "options");
-  if (options.length > AI_FIELD_OPTIONS_MAX) throw invalid(`Give up to ${AI_FIELD_OPTIONS_MAX} options.`, "options");
+  if (options.length < 2) throw invalid("Enter at least two options.", "options");
+  if (options.length > AI_FIELD_OPTIONS_MAX) throw invalid(tooMany(AI_FIELD_OPTIONS_MAX, "options"), "options");
   return options;
 }
 
@@ -201,11 +201,11 @@ export type AiFieldInput = {
 export async function saveAiField(actor: Actor, input: AiFieldInput, link: { webCheckId?: string } = {}) {
   assertFieldAdmin(actor);
   const label = cleanText(input.label);
-  if (!label || label.length > AI_FIELD_LABEL_MAX) throw invalid(`Give the column a name of up to ${AI_FIELD_LABEL_MAX} characters.`, "label");
+  if (!label || label.length > AI_FIELD_LABEL_MAX) throw invalid(tooLong("the name", AI_FIELD_LABEL_MAX), "label");
   const question = cleanText(input.question);
-  if (question.length < 10 || question.length > 1000) throw invalid("Write the question in 10 to 1,000 characters.", "question");
+  if (question.length < 10 || question.length > 1000) throw invalid("Enter a question of 10 to 1,000 characters.", "question");
   const kind = AI_FIELD_KINDS.find((item) => item === input.kind);
-  if (!kind) throw invalid("Choose what kind of answer you want.", "kind");
+  if (!kind) throw invalid("Choose an answer type.", "kind");
   const options = kind === "pick" ? cleanOptions(input.options) : [];
   const multiple = kind === "pick" && input.multiple === true;
   const scope = AI_FIELD_SCOPES.find((item) => item === input.scope) ?? "all";
@@ -223,19 +223,19 @@ export async function saveAiField(actor: Actor, input: AiFieldInput, link: { web
       const total = [...others.rows, { kind, multiple, options }].reduce((sum, item) => sum + (item.kind === "pick" && item.multiple ? item.options.length : 1), 0);
       if (total > AI_FIELD_DECISION_QUESTIONS_MAX) {
         throw invalid(
-          `Yes or no and pick from list fields can ask up to ${AI_FIELD_DECISION_QUESTIONS_MAX} questions about a company between them, and this would make ${total}. Each option of a field that allows more than one is a question. Remove some options or fields.`,
+          `Too many yes or no and list questions (${total} of ${AI_FIELD_DECISION_QUESTIONS_MAX}). Remove some options or fields.`,
           "options",
         );
       }
     }
     if (viewId) {
       const view = await db.query("select 1 from crm.company_views where id = $1 and workspace_id = $2", [viewId, actor.workspaceId]);
-      if (!view.rows[0]) throw invalid("That view no longer exists.", "scopeViewId");
+      if (!view.rows[0]) throw invalid("View not found.", "scopeViewId");
     }
     try {
       if (editing) {
         const before = await readField(db, actor.workspaceId, editing);
-        if (!before) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+        if (!before) throw notFound("AI field");
         await db.query(
           `update crm.ai_fields set label = $3, question = $4, kind = $5, options = $6, multiple = $7, scope = $8, scope_view_id = $9, refresh = $10, fills_size = $11
            where id = $1 and workspace_id = $2`,
@@ -261,7 +261,7 @@ export async function saveAiField(actor: Actor, input: AiFieldInput, link: { web
         "select count(*)::int as total, coalesce(max(position) + 1, 0)::int as next from crm.ai_fields where workspace_id = $1",
         [actor.workspaceId],
       );
-      if ((count.rows[0]?.total ?? 0) >= AI_FIELDS_MAX) throw invalid(`You can have up to ${AI_FIELDS_MAX} AI fields.`);
+      if ((count.rows[0]?.total ?? 0) >= AI_FIELDS_MAX) throw invalid(tooMany(AI_FIELDS_MAX, "AI fields"));
       const created = await db.query<{ id: string }>(
         `insert into crm.ai_fields (workspace_id, label, question, kind, options, multiple, scope, scope_view_id, refresh, fills_size, position, web_check_id, created_by_user_id)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id`,
@@ -283,7 +283,7 @@ export async function saveAiField(actor: Actor, input: AiFieldInput, link: { web
       );
       return (await readField(db, actor.workspaceId, created.rows[0].id))!;
     } catch (error) {
-      if ((error as { code?: string }).code === "23505") throw new CrmError("conflict", `There's already a column called ${label}.`, 409, { field: "label" });
+      if ((error as { code?: string }).code === "23505") throw new CrmError("conflict", `${label} already exists.`, 409, { field: "label" });
       throw error;
     }
   });
@@ -338,16 +338,16 @@ export async function aiFieldEditImpact(actor: Actor, id: string) {
 
 export async function removeAiField(actor: Actor, id: string) {
   assertFieldAdmin(actor);
-  if (!isUuid(id)) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+  if (!isUuid(id)) throw notFound("AI field");
   await withActor(actor, (db) => db.query("delete from crm.ai_fields where id = $1 and workspace_id = $2", [id, actor.workspaceId]));
 }
 
 export async function setAiFieldPaused(actor: Actor, id: string, paused: boolean) {
   assertFieldAdmin(actor);
-  if (!isUuid(id)) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+  if (!isUuid(id)) throw notFound("AI field");
   return withActor(actor, async (db) => {
     const result = await db.query("update crm.ai_fields set paused = $3 where id = $1 and workspace_id = $2 returning id", [id, actor.workspaceId, paused]);
-    if (!result.rows[0]) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+    if (!result.rows[0]) throw notFound("AI field");
     if (!paused) {
       await db.query(
         `update crm.ai_field_answers a set next_check_at = now()
@@ -361,10 +361,10 @@ export async function setAiFieldPaused(actor: Actor, id: string, paused: boolean
 
 export async function checkFieldAgain(actor: Actor, id: string) {
   assertFieldAdmin(actor);
-  if (!isUuid(id)) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+  if (!isUuid(id)) throw notFound("AI field");
   return withActor(actor, async (db) => {
     const field = await readField(db, actor.workspaceId, id);
-    if (!field) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+    if (!field) throw notFound("AI field");
     await db.query("update crm.ai_field_answers set next_check_at = now() where field_id = $1 and workspace_id = $2 and not manual and run_id is null", [id, actor.workspaceId]);
     return field;
   });
@@ -372,13 +372,13 @@ export async function checkFieldAgain(actor: Actor, id: string) {
 
 export async function moveAiField(actor: Actor, id: string, position: number) {
   assertFieldAdmin(actor);
-  if (!isUuid(id)) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+  if (!isUuid(id)) throw notFound("AI field");
   await withActor(actor, (db) => db.query("update crm.ai_fields set position = $3 where id = $1 and workspace_id = $2", [id, actor.workspaceId, Math.max(0, Math.round(position))]));
 }
 
 export async function showRuleAsColumn(actor: Actor, webCheckId: string) {
   assertFieldAdmin(actor);
-  if (!isUuid(webCheckId)) throw new CrmError("not_found", "That tag rule no longer exists.", 404);
+  if (!isUuid(webCheckId)) throw notFound("tag rule");
   const found = await withActor(actor, async (db) => {
     const existing = await db.query<{ id: string }>("select id from crm.ai_fields where workspace_id = $1 and web_check_id = $2", [actor.workspaceId, webCheckId]);
     if (existing.rows[0]) return { existing: existing.rows[0].id, rule: null };
@@ -389,7 +389,7 @@ export async function showRuleAsColumn(actor: Actor, webCheckId: string) {
     return { existing: null, rule: rule.rows[0] ?? null };
   });
   if (found.existing) return (await withActor(actor, (db) => readField(db, actor.workspaceId, found.existing!)))!;
-  if (!found.rule) throw new CrmError("not_found", "That tag rule no longer exists.", 404);
+  if (!found.rule) throw notFound("tag rule");
   const label = found.rule.label.slice(0, AI_FIELD_LABEL_MAX);
   return saveAiField(actor, { label: `${label[0]?.toUpperCase() ?? ""}${label.slice(1)}`, question: found.rule.question, kind: "yes_no", scope: "all", refresh: "monthly" }, { webCheckId });
 }
@@ -466,8 +466,8 @@ export async function hiddenAiFields(actor: Actor) {
 }
 
 export async function setAiFieldHidden(actor: Actor, fieldId: string, hidden: boolean) {
-  if (actor.type !== "user") throw new CrmError("forbidden", "Only people can hide columns.", 403);
-  if (!isUuid(fieldId)) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+  if (actor.type !== "user") throw new CrmError("forbidden", "Only people can hide AI fields.", 403);
+  if (!isUuid(fieldId)) throw notFound("AI field");
   await withActor(actor, async (db) => {
     if (hidden) {
       await db.query(

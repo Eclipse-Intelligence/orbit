@@ -203,7 +203,7 @@ describe("assistant record tools", () => {
     const neither = (await runTool(owner, "update_company", { lifecycle: "lead" })) as { error: string };
     assert.match(neither.error, /companyId/);
     const tooMany = (await runTool(owner, "update_company", { companyIds: Array.from({ length: 101 }, () => randomUUID()), lifecycle: "lead" })) as { error: string };
-    assert.match(tooMany.error, /100 or fewer/);
+    assert.match(tooMany.error, /Up to 100 records/);
     const one = { companyId: beta, sizeCategory: "11-50" };
     assert.deepEqual(describeAction("update_company", one, await recordNames(owner, [one])), { title: "Update company: Beta Tools", lines: ["Size: 11-50"] });
     assert.equal(describeAction("update_companies", many, await recordNames(owner, [many])).title, "Update 2 companies");

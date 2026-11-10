@@ -1,10 +1,12 @@
+import { ShownError } from "@/lib/crm/errors";
+import { logUpstream, unreachable, upstreamFailure } from "@/lib/upstream";
 import { htmlToText } from "@/lib/mail/text";
 
 const BASE_URL = "https://readwise.io/api";
 const TIMEOUT_MS = 20_000;
 const MAX_WAIT_MS = 65_000;
 const NO_LIMIT = Number.MAX_SAFE_INTEGER;
-const UNREADABLE = "Readwise sent a reply Orbit couldn't read. Try again in a few minutes.";
+const UNREADABLE = unreachable("Readwise");
 
 export const READER_LOCATIONS = ["new", "later", "shortlist", "archive", "feed"] as const;
 export const READER_CATEGORIES = ["article", "email", "rss", "highlight", "note", "pdf", "epub", "tweet", "video"] as const;
@@ -51,7 +53,7 @@ export type ReaderListParams = {
 
 export type ReaderTag = { key: string; name: string };
 
-export class ReadwiseError extends Error {
+export class ReadwiseError extends ShownError {
   readonly status: number;
 
   constructor(message: string, status: number) {
@@ -87,10 +89,9 @@ function waitLabel(ms: number) {
   return seconds === 1 ? "1 second" : `${seconds} seconds`;
 }
 
-function failure(status: number) {
-  if (status === 401 || status === 403) return "Readwise didn't accept the access token. Connect Readwise Reader again in Settings.";
-  if (status === 404) return "Readwise couldn't find that.";
-  return `Readwise returned ${status}.`;
+async function failure(response: Response) {
+  if (response.status === 404) return "Not found in Readwise.";
+  return upstreamFailure("Readwise", response, { credential: "token", fix: "Reconnect it in Settings › Connections." });
 }
 
 export function readerClient(options: ReaderClientOptions) {
@@ -108,7 +109,7 @@ export function readerClient(options: ReaderClientOptions) {
 
   async function get(path: string, query?: URLSearchParams) {
     for (let attempt = 0; ; attempt += 1) {
-      if (!canRequest()) throw new ReadwiseError("Ran out of time talking to Readwise.", 0);
+      if (!canRequest()) throw new ReadwiseError(UNREADABLE, 0);
       requests += 1;
       const url = `${BASE_URL}${path}${query && [...query.keys()].length > 0 ? `?${query}` : ""}`;
       let response: Response;
@@ -118,13 +119,14 @@ export function readerClient(options: ReaderClientOptions) {
           headers: { authorization: `Token ${options.token}`, accept: "application/json" },
           signal: AbortSignal.timeout(Math.max(1_000, Math.min(TIMEOUT_MS, remaining()))),
         });
-      } catch {
-        throw new ReadwiseError("Couldn't reach Readwise.", 0);
+      } catch (error) {
+        logUpstream("Readwise", null, error);
+        throw new ReadwiseError(UNREADABLE, 0);
       }
       if (response.status !== 429) return response;
       const wait = retryAfterMs(response);
       if (attempt > 0 || wait > MAX_WAIT_MS || wait > remaining() - 3_000) {
-        throw new ReadwiseError(`Readwise is limiting requests (20 a minute). Try again in ${waitLabel(wait)}.`, 429);
+        throw new ReadwiseError(`Readwise is busy. Try again in ${waitLabel(wait)}.`, 429);
       }
       await sleep(wait);
     }
@@ -132,15 +134,21 @@ export function readerClient(options: ReaderClientOptions) {
 
   async function json(path: string, query?: URLSearchParams): Promise<Record<string, unknown>> {
     const response = await get(path, query);
-    if (!response.ok) throw new ReadwiseError(failure(response.status), response.status);
+    if (!response.ok) throw new ReadwiseError(await failure(response), response.status);
     const body: unknown = await response.json().catch(() => null);
-    if (!body || typeof body !== "object" || Array.isArray(body)) throw new ReadwiseError(UNREADABLE, 502);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      logUpstream("Readwise", response.status, "unreadable reply");
+      throw new ReadwiseError(UNREADABLE, 502);
+    }
     return body as Record<string, unknown>;
   }
 
   async function resultsPage(path: string, query: URLSearchParams) {
     const body = await json(path, query);
-    if (!Array.isArray(body.results)) throw new ReadwiseError(UNREADABLE, 502);
+    if (!Array.isArray(body.results)) {
+      logUpstream("Readwise", null, "reply had no results");
+      throw new ReadwiseError(UNREADABLE, 502);
+    }
     return {
       count: typeof body.count === "number" ? body.count : 0,
       nextPageCursor: typeof body.nextPageCursor === "string" && body.nextPageCursor ? body.nextPageCursor : null,
@@ -152,7 +160,7 @@ export function readerClient(options: ReaderClientOptions) {
     const response = await get("/v2/auth/");
     if (response.status === 204 || response.status === 200) return true;
     if (response.status === 401 || response.status === 403) return false;
-    throw new ReadwiseError(failure(response.status), response.status);
+    throw new ReadwiseError(await failure(response), response.status);
   }
 
   async function listPage(params: ReaderListParams): Promise<ReaderPage> {

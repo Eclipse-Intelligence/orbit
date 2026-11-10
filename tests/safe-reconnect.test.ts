@@ -19,6 +19,7 @@ import {
   APP_NEEDS_ATTENTION,
   MicrosoftTokenError,
   microsoftAuthorizationUrl,
+  microsoftErrorText,
   readMicrosoftState,
   sanitizeMicrosoftError,
   signMicrosoftState,
@@ -202,7 +203,7 @@ describe("reconnecting Microsoft never swaps or deletes an account", () => {
   });
 
   it("only removes an account with mail when the removal is confirmed for that account", async () => {
-    await assert.rejects(disconnectCalendarAccount(setup.owner, setup.accountId), /Confirm removing mark@markridgeon\.com first/);
+    await assert.rejects(disconnectCalendarAccount(setup.owner, setup.accountId), /Confirm removing mark@markridgeon\.com\. Its mail and sending addresses will be deleted/);
     await assert.rejects(disconnectCalendarAccount(setup.owner, setup.accountId, { email: MAIN }), /Confirm removing/);
     assert.deepEqual(await rows(setup.owner), before_);
     await disconnectCalendarAccount(setup.owner, setup.accountId, { email: EXTRA });
@@ -432,6 +433,26 @@ describe("the connect and callback flow", () => {
 });
 
 describe("what counts as needing a reconnect", () => {
+  it("never passes Microsoft's own error text through", () => {
+    const realConsoleError = console.error;
+    const logged: string[] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    try {
+      const raw = "AADSTS90002: Tenant 'f00' not found. Trace ID: 1c2d Correlation ID: 3e4f Timestamp: 2026-11-10 09:00:00Z";
+      assert.equal(sanitizeMicrosoftError(raw), "Couldn't reach Microsoft. Try again.");
+      assert.equal(sanitizeMicrosoftError("ErrorAccessDenied: Access is denied.", "Couldn't send the email. Try again."), "Couldn't send the email. Try again.");
+      assert.equal(new MicrosoftTokenError("AADSTS50126: Error validating credentials. Trace ID: 1c2d").message, "Couldn't connect Microsoft. Try again.");
+      assert.equal(sanitizeMicrosoftError("Reconnect Microsoft in Settings › Email to send attachments over 3 MB."), "Reconnect Microsoft in Settings › Email to send attachments over 3 MB.");
+      assert.ok(logged.some((line) => line.includes("AADSTS90002")));
+      assert.equal(microsoftErrorText(new Error("fetch failed"), "Couldn't sync the calendar. Try again."), "Couldn't sync the calendar. Try again.");
+      assert.equal(microsoftErrorText(new Error("invalid_grant AADSTS700082: expired")), "Microsoft rejected the mailbox connection. Connect it again.");
+    } finally {
+      console.error = realConsoleError;
+    }
+  });
+
   it("separates expired sign-ins, Orbit's own app and other refusals", () => {
     const expired = new MicrosoftTokenError("invalid_grant AADSTS700082: The refresh token has expired due to inactivity.");
     assert.match(reconnectProblem(expired, MAIN) ?? "", /^Reconnect mark@geteclipse\.co in Settings › Email\. Microsoft has signed Orbit out of it\./);

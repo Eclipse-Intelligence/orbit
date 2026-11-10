@@ -158,7 +158,7 @@ async function fromLinks(start: URL, rules: Rules, options: Options) {
         page = await text(current, options, 5_000_000);
       } catch (error) {
         if (current === start.href) {
-          problem = error instanceof WebPageError ? error.message : "Orbit couldn't open that site.";
+          problem = error instanceof WebPageError ? error.message : "Couldn't open that site.";
           const render = renderer(options);
           if (render && !/couldn't be found|Private and local/.test(problem)) {
             try {
@@ -202,7 +202,7 @@ export async function mapSite(raw: unknown, options: Options = {}): Promise<Site
   if (pages.size === 0) {
     source = "links";
     const crawled = await fromLinks(start, rules, options);
-    if (crawled.reached === 0) throw new CrmError("invalid_input", crawled.problem ?? "Orbit couldn't open that site.", 400, { field: "url" });
+    if (crawled.reached === 0) throw new CrmError("invalid_input", crawled.problem ?? "Couldn't open that site.", 400, { field: "url" });
     pages = crawled.pages;
     truncated = !crawled.complete || pages.size >= PAGES_MAX;
   }

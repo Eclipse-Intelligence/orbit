@@ -1025,7 +1025,7 @@ describe("choosing who sends an invite", () => {
     const sent: Sent[] = [];
     await rejects(() => createInvite(ridgeon, personalEvent({ from: NEO }), { fetchImpl: graph(calls), now: NOW, smtp: smtp(sent), saveSent: quiet }), {
       field: "from",
-      message: `${NEO} has no calendar. Choose a Microsoft calendar, or add a guest to send an invite from it.`,
+      message: `${NEO} has no calendar. Choose a Microsoft calendar or add a guest.`,
     });
     await rejects(() => createInvite(ridgeon, personalEvent({ from: "someone@else.test" }), { fetchImpl: graph(calls), now: NOW }), {
       code: "not_found",

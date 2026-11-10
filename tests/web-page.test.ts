@@ -69,9 +69,13 @@ describe("reading web pages", () => {
     const moved = site({ "https://old.test/": { status: 301, location: "https://acme.test/" }, "https://acme.test/": { body: ACME } });
     assert.equal((await readWebPage("https://old.test/", { fetchImpl: moved.fetchImpl, lookup: PUBLIC })).url, "https://acme.test/");
     const zip = site({ "https://acme.test/files.zip": { body: "PK", type: "application/zip" } });
-    await assert.rejects(readWebPage("https://acme.test/files.zip", { fetchImpl: zip.fetchImpl, lookup: PUBLIC }), /application\/zip file/);
+    await assert.rejects(readWebPage("https://acme.test/files.zip", { fetchImpl: zip.fetchImpl, lookup: PUBLIC }), (error: Error) => {
+      assert.equal(error.message, "That link is a file Orbit can't read.");
+      assert.doesNotMatch(error.message, /application/);
+      return true;
+    });
     const blocked = site({ "https://www.linkedin.com/in/x": { status: 403 } });
-    await assert.rejects(readWebPage("https://www.linkedin.com/in/x", { fetchImpl: blocked.fetchImpl, lookup: PUBLIC }), /answered 403, so the page is private or blocks automated reading/);
+    await assert.rejects(readWebPage("https://www.linkedin.com/in/x", { fetchImpl: blocked.fetchImpl, lookup: PUBLIC }), /www\.linkedin\.com blocked the request \(403\)\./);
   });
 });
 
@@ -98,7 +102,11 @@ describe("pages that need a browser, and documents", () => {
     assert.deepEqual(calls[1], { url: "https://shy.test/", proxies: true });
     await assert.rejects(
       readWebPage("https://shy.test/", { fetchImpl: shy.fetchImpl, lookup: PUBLIC, render: async () => { throw new Error("Browserbase answered 402"); } }),
-      /blocks automated reading\. Opening it in a browser didn't work either \(Browserbase answered 402\)/,
+      (error: Error) => {
+        assert.equal(error.message, "shy.test blocked the request (403).");
+        assert.doesNotMatch(error.message, /Browserbase/);
+        return true;
+      },
     );
 
     const { PDFDocument, StandardFonts } = await import("pdf-lib");

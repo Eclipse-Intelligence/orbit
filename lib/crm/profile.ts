@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, tooMany } from "@/lib/crm/errors";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -18,7 +18,7 @@ function mapEmails(actor: UserActor, row: ProfileRow | undefined): MyEmails {
 
 export function cleanOtherEmails(values: unknown, loginEmail: string) {
   if (!Array.isArray(values)) {
-    throw new CrmError("invalid_input", "Send a list of email addresses.", 400, { field: "otherEmails" });
+    throw new CrmError("invalid_input", "Invalid email addresses.", 400, { field: "otherEmails" });
   }
   const login = canonicalEmail(loginEmail);
   const seen = new Set<string>();
@@ -35,7 +35,7 @@ export function cleanOtherEmails(values: unknown, loginEmail: string) {
   if (seen.size > OTHER_EMAILS_LIMIT) {
     throw new CrmError(
       "invalid_input",
-      `Add up to ${OTHER_EMAILS_LIMIT} other email addresses.`,
+      tooMany(OTHER_EMAILS_LIMIT, "other email addresses"),
       400,
       { field: "otherEmails" },
     );
@@ -59,7 +59,7 @@ export async function saveOtherEmails(actor: UserActor, values: unknown): Promis
       "select email, other_emails from crm.profiles where id = $1 for update",
       [actor.userId],
     );
-    if (!current.rows[0]) throw new CrmError("not_found", "Profile not found.", 404);
+    if (!current.rows[0]) throw notFound("profile");
     const otherEmails = cleanOtherEmails(values, current.rows[0].email ?? actor.email);
     const saved = await db.query<ProfileRow>(
       "update crm.profiles set other_emails = $2::text[] where id = $1 returning email, other_emails",

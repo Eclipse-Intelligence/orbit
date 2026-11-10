@@ -334,7 +334,7 @@ describe("teams calls", () => {
     assert.equal(result.error, CALL_PERMISSION_MESSAGE);
     assert.equal(
       result.error,
-      "Grant Orbit the CallRecords.Read.All application permission with admin consent in Microsoft Entra.",
+      "Grant Orbit CallRecords.Read.All in Microsoft Entra.",
     );
     const summary = await getCallSync(owner);
     assert.equal(summary?.lastError, CALL_PERMISSION_MESSAGE);
@@ -426,6 +426,40 @@ describe("teams calls", () => {
       );
     } finally {
       delete process.env.MICROSOFT_TENANT;
+    }
+  });
+
+  it("keeps Microsoft's own error text and plain errors out of the call sync status", async () => {
+    const realConsoleError = console.error;
+    const logged: string[] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(" "));
+    };
+    try {
+      const owner = await createUser("calls-leak@example.com", "Calls Leak");
+      await connect(owner, "owner@leak-calls.test", { tid: "tenant-leak" });
+      const graphFailure: typeof fetch = async (input) => {
+        if (String(input).includes("/token")) return Response.json({ access_token: "app-token", expires_in: 3600 });
+        return Response.json(
+          { error: { code: "generalException", message: "Internal error 0x8004 at node cr-eus-07. Trace ID: 9f1c" } },
+          { status: 500 },
+        );
+      };
+      const failed = await syncCalls(owner, { fetchImpl: graphFailure, force: true });
+      assert.equal(failed.error, "Couldn't read Teams calls. Try again.");
+      assert.equal((await getCallSync(owner))?.lastError, "Couldn't read Teams calls. Try again.");
+      assert.ok(logged.some((line) => line.includes("cr-eus-07")));
+
+      const crashed = await syncCalls(owner, {
+        fetchImpl: async () => {
+          throw new TypeError("Cannot read properties of undefined (reading 'value')");
+        },
+        force: true,
+      });
+      assert.equal(crashed.error, "Couldn't sync Teams calls. Try again.");
+      assert.doesNotMatch((await getCallSync(owner))?.lastError ?? "", /properties|undefined/);
+    } finally {
+      console.error = realConsoleError;
     }
   });
 

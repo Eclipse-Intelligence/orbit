@@ -136,7 +136,7 @@ describe("pipeline history", () => {
 
     const recent = await pipelineReport(owner, { since: ago(7), now });
     assert.deepEqual([recent.won, recent.lost, recent.winRate], [0, 1, 0]);
-    await assert.rejects(pipelineReport(owner, { since: "soon" }), /Use a date like/);
+    await assert.rejects(pipelineReport(owner, { since: "soon" }), /Enter a date, such as/);
   });
 
   it("reads a since date as midnight in the app time zone", async () => {
@@ -146,7 +146,7 @@ describe("pipeline history", () => {
       assert.equal((await pipelineReport(owner, { since: "2026-07-01", now })).since, "2026-06-30T23:00:00.000Z");
       assert.equal((await pipelineReport(owner, { since: "2026-01-15", now })).since, "2026-01-15T00:00:00.000Z");
       assert.equal((await pipelineReport(owner, { since: "2026-07-01T00:00:00Z", now })).since, "2026-07-01T00:00:00.000Z");
-      await assert.rejects(pipelineReport(owner, { since: "2026-02-30", now }), /Use a date like/);
+      await assert.rejects(pipelineReport(owner, { since: "2026-02-30", now }), /Enter a date, such as/);
     } finally {
       if (configured === undefined) delete process.env.NEXT_PUBLIC_TIMEZONE;
       else process.env.NEXT_PUBLIC_TIMEZONE = configured;

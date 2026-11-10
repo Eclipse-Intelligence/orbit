@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notSetUp, tooMany } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -36,12 +36,12 @@ export async function prepareAttachment(
   input: { name: unknown; size: unknown; contentType?: unknown },
   fetchImpl: typeof fetch = fetch,
 ): Promise<PreparedAttachment> {
-  if (!storageConfigured()) throw new CrmError("invalid_input", "Attachments need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+  if (!storageConfigured()) throw new CrmError("invalid_input", notSetUp("file storage", "SUPABASE_SERVICE_ROLE_KEY", actor), 400);
   const name = cleanName(input.name);
   const size = typeof input.size === "number" && Number.isInteger(input.size) ? input.size : 0;
   if (size < 1) throw new CrmError("invalid_input", `${name} is empty.`, 400, { field: "attachments" });
   if (size > ATTACHMENT_MAX_BYTES) {
-    throw new CrmError("invalid_input", `${name} is ${megabytes(size)}. Attachments can be up to ${megabytes(ATTACHMENT_MAX_BYTES)} in total.`, 400, { field: "attachments" });
+    throw new CrmError("invalid_input", `${name} is over the ${megabytes(ATTACHMENT_MAX_BYTES)} attachment limit.`, 400, { field: "attachments" });
   }
   const row = await withActor(actor, async (db) => {
     const inserted = await db.query<{ id: string }>(
@@ -62,7 +62,7 @@ export async function prepareAttachment(
 function attachmentIds(ids: unknown) {
   const list = Array.isArray(ids) ? ids : [];
   if (list.length > ATTACHMENT_MAX_COUNT) {
-    throw new CrmError("invalid_input", `Attach up to ${ATTACHMENT_MAX_COUNT} files.`, 400, { field: "attachments" });
+    throw new CrmError("invalid_input", tooMany(ATTACHMENT_MAX_COUNT, "files"), 400, { field: "attachments" });
   }
   if (!list.every((id) => typeof id === "string" && isUuid(id))) throw new CrmError("not_found", "Attachment not found.", 404);
   return [...new Set(list as string[])];
@@ -79,7 +79,7 @@ async function attachmentRows(actor: UserActor, wanted: string[]) {
   if (rows.length !== wanted.length) throw new CrmError("not_found", "An attachment has expired. Attach it again.", 404, { field: "attachments" });
   const total = rows.reduce((sum, row) => sum + row.size, 0);
   if (total > ATTACHMENT_MAX_BYTES) {
-    throw new CrmError("invalid_input", `Attachments add up to ${megabytes(total)}. The limit is ${megabytes(ATTACHMENT_MAX_BYTES)}.`, 400, { field: "attachments" });
+    throw new CrmError("invalid_input", `Attachments are over the ${megabytes(ATTACHMENT_MAX_BYTES)} limit.`, 400, { field: "attachments" });
   }
   return wanted.map((id) => rows.find((row) => row.id === id)!);
 }
@@ -141,9 +141,9 @@ async function chatFileBytes(file: { id: string; name: string; size: number }, f
   try {
     bytes = await readObject(chatFileKey(file.id), fetchImpl);
   } catch (error) {
-    throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it to the chat again.`, 400, { field: "attachments", cause: storageFailure(error).message });
+    throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it again.`, 400, { field: "attachments", cause: storageFailure(error).message });
   }
-  if (bytes.byteLength !== file.size) throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it to the chat again.`, 400, { field: "attachments" });
+  if (bytes.byteLength !== file.size) throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it again.`, 400, { field: "attachments" });
   return bytes;
 }
 
@@ -173,27 +173,27 @@ export async function attachableFiles(actor: UserActor, ids: unknown, fetchImpl:
       }
       const chatFile = found.chat.find((row) => row.id === id);
       if (chatFile) {
-        if (!storageConfigured()) throw new CrmError("invalid_input", "Attachments need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+        if (!storageConfigured()) throw new CrmError("invalid_input", notSetUp("file storage", "SUPABASE_SERVICE_ROLE_KEY", actor), 400);
         const bytes = await chatFileBytes(chatFile, fetchImpl);
         out.push(await copyIntoAttachment(actor, { name: chatFile.name, contentType: cleanType(chatFile.content_type), bytes }, copied, fetchImpl));
         continue;
       }
       const item = found.knowledge.find((row) => row.id === id);
-      if (!item) throw new CrmError("not_found", "One of the files isn't in Knowledge, on the draft or in your chats.", 404, { field: "attachments" });
-      if (!item.file_path) throw new CrmError("invalid_input", `${item.title} is a link or text in Knowledge, not a file, so it can't be attached.`, 400, { field: "attachments" });
+      if (!item) throw new CrmError("not_found", "File not found.", 404, { field: "attachments" });
+      if (!item.file_path) throw new CrmError("invalid_input", `${item.title} isn't a file.`, 400, { field: "attachments" });
       if ((item.size_bytes ?? 0) > ATTACHMENT_MAX_BYTES) {
-        throw new CrmError("invalid_input", `${item.title} is ${megabytes(item.size_bytes ?? 0)}. Attachments can be up to ${megabytes(ATTACHMENT_MAX_BYTES)} in total.`, 400, { field: "attachments" });
+        throw new CrmError("invalid_input", `${item.title} is over the ${megabytes(ATTACHMENT_MAX_BYTES)} attachment limit.`, 400, { field: "attachments" });
       }
-      if (!storageConfigured()) throw new CrmError("invalid_input", "Attachments need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+      if (!storageConfigured()) throw new CrmError("invalid_input", notSetUp("file storage", "SUPABASE_SERVICE_ROLE_KEY", actor), 400);
       let bytes: Uint8Array;
       try {
         bytes = await readObject(item.file_path, fetchImpl, "knowledge");
       } catch (error) {
         throw new CrmError("upstream_error", `Couldn't read ${item.title} from Knowledge.`, 502, { cause: storageFailure(error).message });
       }
-      if (bytes.byteLength === 0) throw new CrmError("invalid_input", `${item.title} is an empty file in Knowledge, so it can't be attached.`, 400, { field: "attachments" });
+      if (bytes.byteLength === 0) throw new CrmError("invalid_input", `${item.title} is empty.`, 400, { field: "attachments" });
       if (bytes.byteLength > ATTACHMENT_MAX_BYTES) {
-        throw new CrmError("invalid_input", `${item.title} is ${megabytes(bytes.byteLength)}. Attachments can be up to ${megabytes(ATTACHMENT_MAX_BYTES)} in total.`, 400, { field: "attachments" });
+        throw new CrmError("invalid_input", `${item.title} is over the ${megabytes(ATTACHMENT_MAX_BYTES)} attachment limit.`, 400, { field: "attachments" });
       }
       out.push(await copyIntoAttachment(actor, { name: knowledgeFileName(item.title, item.file_path), contentType: cleanType(item.mime_type), bytes }, copied, fetchImpl));
     }

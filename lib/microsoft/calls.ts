@@ -1,9 +1,9 @@
-import { sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
+import { notSetUp, ShownError } from "@/lib/crm/errors";
+import { MICROSOFT_UNREACHABLE, MicrosoftError, microsoftErrorText, microsoftProblem } from "@/lib/microsoft/oauth";
 
-export const CALL_PERMISSION_MESSAGE =
-  "Grant Orbit the CallRecords.Read.All application permission with admin consent in Microsoft Entra.";
-const TENANT_MESSAGE =
-  "Orbit could not work out the Microsoft tenant. Set MICROSOFT_TENANT to your tenant id.";
+export const CALL_PERMISSION_MESSAGE = "Grant Orbit CallRecords.Read.All in Microsoft Entra.";
+export const TENANT_MESSAGE = "Microsoft tenant isn't set up.";
+export const APP_CREDENTIALS_REJECTED = "Microsoft rejected the app credentials.";
 const SECRET_MESSAGE =
   "Microsoft rejected the app credentials. Check MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.";
 const MAX_PAGES = 50;
@@ -52,7 +52,7 @@ export function tokenClaims(token: string | null | undefined) {
   }
 }
 
-export function sanitizeCallError(message: string) {
+export function sanitizeCallError(message: string, fallback = MICROSOFT_UNREACHABLE) {
   const compact = message.replace(/\s+/g, " ").trim();
   if (
     /Authorization_RequestDenied|Forbidden|insufficient privileges|AADSTS65001|AADSTS700016|consent/i.test(
@@ -69,7 +69,12 @@ export function sanitizeCallError(message: string) {
   if (/AADSTS90002|AADSTS900023|AADSTS90072|tenant/i.test(compact)) {
     return TENANT_MESSAGE;
   }
-  return sanitizeMicrosoftError(compact);
+  return microsoftProblem(compact, fallback);
+}
+
+export function callErrorText(error: unknown, fallback: string) {
+  if (error instanceof ShownError) return microsoftErrorText(error, fallback);
+  return sanitizeCallError(error instanceof Error ? error.message : "", fallback);
 }
 
 export async function appAccessToken(
@@ -80,7 +85,7 @@ export async function appAccessToken(
   const id = process.env.MICROSOFT_CLIENT_ID?.trim();
   const secret = process.env.MICROSOFT_CLIENT_SECRET?.trim();
   if (!id || !secret)
-    throw new Error("Add the Microsoft app credentials before syncing calls.");
+    throw new MicrosoftError(notSetUp("Microsoft", "MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET"));
   const key = `${tenantId}:${id}`;
   const cached = appTokens.get(key);
   if (cached && cached.expiresAt > now + 60_000) return cached.token;
@@ -105,13 +110,7 @@ export async function appAccessToken(
     error_description?: string;
   };
   if (!response.ok || !parsed.access_token) {
-    throw new Error(
-      sanitizeCallError(
-        parsed.error_description ||
-          parsed.error ||
-          "Microsoft did not return an app token.",
-      ),
-    );
+    throw new MicrosoftError(sanitizeCallError(parsed.error_description || parsed.error || ""));
   }
   appTokens.set(key, {
     token: parsed.access_token,
@@ -144,7 +143,7 @@ export async function fetchPstnCalls(
       headers: { authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(20000),
     });
-    if (!response.ok) throw new Error(await callError(response));
+    if (!response.ok) throw new MicrosoftError(await callError(response));
     const body = (await response.json()) as {
       value?: PstnCallRow[];
       "@odata.nextLink"?: string;
@@ -165,23 +164,15 @@ async function callError(response: Response) {
   ) {
     return withMicrosoftDetail(CALL_PERMISSION_MESSAGE, body.error);
   }
-  if (response.status === 401) {
-    return "Microsoft rejected the app token for call records. Check the Microsoft app credentials.";
-  }
-  return sanitizeCallError(
-    body.error?.message || "Microsoft could not list Teams calls.",
-  );
+  if (response.status === 401) return APP_CREDENTIALS_REJECTED;
+  return sanitizeCallError([body.error?.code, body.error?.message].filter(Boolean).join(": "), "Couldn't read Teams calls. Try again.");
 }
 
 export function withMicrosoftDetail(
   message: string,
   error: { code?: string; message?: string } | undefined,
 ) {
-  const detail = [error?.code, error?.message]
-    .filter(Boolean)
-    .join(": ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 240);
-  return detail ? `${message} Microsoft said: ${detail}` : message;
+  const detail = [error?.code, error?.message].filter(Boolean).join(": ").replace(/\s+/g, " ").trim();
+  if (detail) console.error("Microsoft refused access", detail.slice(0, 500));
+  return message;
 }

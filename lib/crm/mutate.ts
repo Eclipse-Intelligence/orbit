@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Db } from "@/lib/db/pool";
 import { actorKey } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { stableStringify } from "@/lib/crm/normalize";
 import { enqueueWebhookDeliveries } from "@/lib/crm/webhooks";
 import { enqueueWorkflowEvent } from "@/lib/workflows/events";
@@ -55,7 +55,7 @@ export async function assertOwner(
   if (result.rowCount === 0) {
     throw new CrmError(
       "invalid_input",
-      "Owner is not a member of this workspace.",
+      "Choose an owner in this workspace.",
       400,
       { field: "ownerId" },
     );
@@ -165,19 +165,11 @@ export function constraintError(
 ): never {
   if (error instanceof CrmError) throw error;
   if (isPgError(error) && error.code === "23505") {
-    throw new CrmError(duplicateCode, error.constraint ? duplicateMessage : error.message, 409);
+    const failure = pgFailure(error, { "23505": duplicateMessage });
+    throw new CrmError(duplicateCode, error.constraint ? duplicateMessage : failure?.message ?? duplicateMessage, 409);
   }
   if (isPgError(error) && (error.code === "23514" || error.code === "23503")) {
-    const line = error.message.split("\n")[0] ?? "";
-    const safe =
-      line.length > 0 &&
-      line.length <= 160 &&
-      !/select |insert |update |delete /i.test(line);
-    throw new CrmError(
-      "invalid_input",
-      safe ? line : "That relationship is not valid in this workspace.",
-      400,
-    );
+    throw pgFailure(error, { "23514": "That record isn't in this workspace.", "23503": "That record isn't in this workspace." }) ?? error;
   }
   throw error;
 }

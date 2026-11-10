@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, notFound, tooLong } from "@/lib/crm/errors";
 import {
   copyName,
   plainBody,
@@ -16,7 +16,6 @@ import {
   likePattern,
   normalizeTag,
   normalizeTags,
-  TAG_LIMIT,
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor } from "@/lib/crm/types";
@@ -58,17 +57,17 @@ function invalid(message: string, field: string): never {
   throw new CrmError("invalid_input", message, 400, { field });
 }
 
-function notFound(): never {
-  throw new CrmError("not_found", "That template no longer exists.", 404);
+function missing(): never {
+  throw notFound("template");
 }
 
 function cleanName(value: unknown) {
-  if (typeof value !== "string") invalid("Give the template a name.", "name");
+  if (typeof value !== "string") invalid("Enter a name for the template.", "name");
   const name = value.normalize("NFC").replace(/\s+/g, " ").trim();
-  if (!name) invalid("Give the template a name.", "name");
+  if (!name) invalid("Enter a name for the template.", "name");
   if (name.length > TEMPLATE_NAME_MAX) {
     invalid(
-      `Template names must be ${TEMPLATE_NAME_MAX} characters or fewer.`,
+      tooLong("the name", TEMPLATE_NAME_MAX),
       "name",
     );
   }
@@ -78,11 +77,11 @@ function cleanName(value: unknown) {
 function cleanSubject(value: unknown) {
   if (value == null) return "";
   if (typeof value !== "string")
-    invalid("The subject must be text.", "subject");
+    invalid("Invalid subject.", "subject");
   const subject = value.replace(/\s+/g, " ").trim();
   if (subject.length > TEMPLATE_SUBJECT_MAX) {
     invalid(
-      `Subjects must be ${TEMPLATE_SUBJECT_MAX} characters or fewer.`,
+      tooLong("the subject", TEMPLATE_SUBJECT_MAX),
       "subject",
     );
   }
@@ -91,7 +90,7 @@ function cleanSubject(value: unknown) {
 
 function cleanBody(value: unknown) {
   if (value == null) return "";
-  if (typeof value !== "string") invalid("The message must be text.", "body");
+  if (typeof value !== "string") invalid("Invalid message.", "body");
   const body = plainBody(value)
     .replace(/^(?:[ \t]*\n)+/, "")
     .trimEnd();
@@ -107,16 +106,9 @@ function cleanBody(value: unknown) {
 function cleanTags(value: unknown) {
   if (value == null) return [];
   if (!Array.isArray(value) || value.some((tag) => typeof tag !== "string")) {
-    invalid("Tags must be text.", "tags");
+    invalid("Invalid tags.", "tags");
   }
-  try {
-    return normalizeTags(value as string[]);
-  } catch (error) {
-    if (error instanceof CrmError && /at most/.test(error.message)) {
-      invalid(`A template can have at most ${TAG_LIMIT} tags.`, "tags");
-    }
-    throw error;
-  }
+  return normalizeTags(value as string[]);
 }
 
 function cleanTemplateWrite(input: unknown, mode: "create" | "patch") {
@@ -136,14 +128,14 @@ function cleanTemplateWrite(input: unknown, mode: "create" | "patch") {
 }
 
 function assertContent(subject: string, body: string) {
-  if (!subject && !body) invalid("Add a subject or a message.", "body");
+  if (!subject && !body) invalid("Enter a subject or a message.", "body");
 }
 
 function duplicateName(error: unknown, name: string): never {
   if (isPgError(error) && error.code === "23505") {
     throw new CrmError(
       "duplicate",
-      `A template called “${name}” already exists.`,
+      `${name} already exists.`,
       409,
       {
         field: "name",
@@ -159,7 +151,7 @@ async function readTemplate(
   id: string,
   lock = false,
 ) {
-  if (!isUuid(id)) notFound();
+  if (!isUuid(id)) missing();
   const result = await db.query<TemplateRow>(
     `select ${TEMPLATE_COLUMNS}
      from crm.email_templates
@@ -167,7 +159,7 @@ async function readTemplate(
      ${lock ? "for update" : ""}`,
     [actor.workspaceId, id],
   );
-  if (!result.rows[0]) notFound();
+  if (!result.rows[0]) missing();
   return result.rows[0];
 }
 
@@ -329,13 +321,13 @@ export async function archiveEmailTemplate(actor: UserActor, id: string, provena
 }
 
 export async function deleteEmailTemplate(actor: UserActor, id: string, provenance: Provenance) {
-  if (!isUuid(id)) notFound();
+  if (!isUuid(id)) missing();
   return withActor(actor, async (db) => {
     const result = await db.query<TemplateRow>(
       `delete from crm.email_templates where workspace_id = $1 and id = $2 returning ${TEMPLATE_COLUMNS}`,
       [actor.workspaceId, id],
     );
-    if ((result.rowCount ?? 0) === 0) notFound();
+    if ((result.rowCount ?? 0) === 0) missing();
     await recordAudit(db, actor, "email_template.deleted", "email_template", id, provenance, { before: auditFields(mapTemplate(result.rows[0])) });
     return { id };
   });

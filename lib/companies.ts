@@ -1,5 +1,6 @@
 import { DEFAULT_COMPANY_SORT, defaultCompanyOrder } from "@/lib/sorting";
 import { CrmError } from "@/lib/crm/errors";
+import { GENERIC_ERROR } from "@/lib/utils";
 import { LIFECYCLES, type AccountHealth, type BuiltInLifecycle, type CompanyListQuery, type CompanySort, type Lifecycle } from "@/lib/crm/types";
 import { appTimeZone } from "@/lib/time";
 import { displayAiValue, type AiCell, type AiField } from "@/lib/ai-fields/types";
@@ -213,7 +214,7 @@ export function actionError(error: unknown) {
         typeof error.details?.existingId === "string" ? error.details.existingId : undefined,
     };
   }
-  return { error: "Something went wrong." };
+  return { error: GENERIC_ERROR };
 }
 
 export const LIFECYCLE_MAX_LENGTH = 40;

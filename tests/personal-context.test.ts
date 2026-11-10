@@ -107,12 +107,12 @@ describe("About you", () => {
 
   it("explains bad input on the field it belongs to", async () => {
     await assert.rejects(saveYou(owner, { linkedinUrl: "linkedin.com/company/eclipse" }), (error: { message: string; details: { field: string } }) => {
-      assert.match(error.message, /LinkedIn profile link/);
+      assert.match(error.message, /LinkedIn profile, such as/);
       assert.equal(error.details.field, "linkedinUrl");
       return true;
     });
-    await assert.rejects(saveAboutYou(owner, { about: "x".repeat(3001) }), /About you can be up to 3,000 characters/);
-    assert.deepEqual(normaliseWebsite("not a site"), { ok: false, error: "Enter your website address, for example ridgeon.me." });
+    await assert.rejects(saveAboutYou(owner, { about: "x".repeat(3001) }), /Keep about you to 3,000 characters/);
+    assert.deepEqual(normaliseWebsite("not a site"), { ok: false, error: "Enter your website, such as example.com." });
     assert.equal(normaliseLinkedIn("https://uk.linkedin.com/in/mark-ridgeon/").ok, true);
   });
 
@@ -165,12 +165,39 @@ describe("About you", () => {
     assert.equal(result.draft.about, "I build Eclipse.");
     const system = (calls.find((call) => call.url.endsWith("/chat/completions"))!.body!.messages as { content: string }[])[0].content;
     assert.match(system, /Write jobTitle and about for their work at My workspace only/);
-    assert.deepEqual(result.notes, ["LinkedIn wasn't read because Mindcase isn't set up."]);
+    assert.deepEqual(result.notes, ["LinkedIn lookup isn't set up."]);
     await assert.rejects(draftPersonalContext(owner, { linkedinUrl: "", websiteUrl: "" }), /Add your LinkedIn profile or your website first/);
     await assert.rejects(
       draftPersonalContext(owner, { websiteUrl: "https://gone.test" }, { fetchImpl, lookup: PUBLIC, render: null }),
-      /Nothing could be read to draft from\. Couldn't read https:\/\/gone\.test/,
+      /Nothing to draft from\. Couldn't read https:\/\/gone\.test/,
     );
+  });
+
+  it("keeps the AI gateway's own error text and plain errors out of drafts", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const { fetchImpl: site } = world({ jobTitle: "", about: "", interests: "", writing: "" });
+      const gatewayDown: typeof fetch = async (input, init) => {
+        if (String(input).endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "upstream provider key sk-live-123 rejected" } }), { status: 400 });
+        return site(input, init);
+      };
+      await assert.rejects(draftPersonalContext(owner, { websiteUrl: "ridgeon.test" }, { fetchImpl: gatewayDown, lookup: PUBLIC, render: null }), (error: Error) => {
+        assert.equal(error.message, "Couldn't write the draft. Try again.");
+        return true;
+      });
+      const broken: typeof fetch = async () => {
+        throw new TypeError("Cannot read properties of undefined (reading 'body') at internal.ts:42");
+      };
+      await assert.rejects(draftPersonalContext(owner, { websiteUrl: "ridgeon.test" }, { fetchImpl: broken, lookup: PUBLIC, render: null }), (error: Error) => {
+        assert.match(error.message, /^Nothing to draft from\. Couldn't read https:\/\/ridgeon\.test\/?\. /);
+        assert.doesNotMatch(error.message, /Cannot read properties|internal\.ts/);
+        return true;
+      });
+    } finally {
+      console.error = realConsoleError;
+    }
   });
 
   it("moves the old shared About you and role into the home workspace when migrating, and copies workspace rows as they are", async () => {

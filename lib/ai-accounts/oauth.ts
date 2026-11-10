@@ -1,3 +1,4 @@
+import { ShownError, errorText } from "@/lib/crm/errors";
 export type AiProvider = "chatgpt";
 
 export const AI_PROVIDERS: AiProvider[] = ["chatgpt"];
@@ -12,7 +13,7 @@ export type Tokens = {
   label: string | null;
 };
 
-export class OAuthError extends Error {
+export class OAuthError extends ShownError {
   constructor(message: string) {
     super(message);
     this.name = "OAuthError";
@@ -68,8 +69,9 @@ async function post(fetchImpl: typeof fetch, url: string, init: { json?: unknown
       body: init.form ? new URLSearchParams(init.form).toString() : JSON.stringify(init.json),
       signal: signal(),
     });
-  } catch {
-    throw new OAuthError("Couldn't reach the sign-in service. Try again.");
+  } catch (error) {
+    console.error("ChatGPT sign-in request failed", error);
+    throw new OAuthError("Couldn't reach ChatGPT. Try again.");
   }
 }
 
@@ -103,11 +105,11 @@ function expiry(seconds: number | undefined) {
 }
 
 function openAiTokens(json: TokenJson, previous?: { refresh: string; accountId: string | null; label: string | null }): Tokens {
-  if (!json.access_token) throw new OAuthError("ChatGPT didn't return a sign-in token.");
+  if (!json.access_token) throw new OAuthError("ChatGPT sign-in failed. Try again.");
   const id = decodeJwt(json.id_token);
   const access = decodeJwt(json.access_token);
   const accountId = openAiClaim(id, "chatgpt_account_id") ?? openAiClaim(access, "chatgpt_account_id") ?? previous?.accountId ?? null;
-  if (!accountId) throw new OAuthError("That ChatGPT sign-in has no ChatGPT account attached.");
+  if (!accountId) throw new OAuthError("No ChatGPT account on that sign-in.");
   return {
     access: json.access_token,
     refresh: json.refresh_token ?? previous?.refresh ?? "",
@@ -120,12 +122,12 @@ function openAiTokens(json: TokenJson, previous?: { refresh: string; accountId: 
 export async function startDeviceLogin(fetchImpl: typeof fetch = fetch): Promise<DevicePending> {
   const response = await post(fetchImpl, OPENAI_DEVICE_CODE_URL, { json: { client_id: OPENAI_CLIENT_ID, originator: ORIGINATOR } });
   if (!response.ok) {
-    const detail = await reason(response);
-    throw new OAuthError(`ChatGPT sign-in couldn't start (${response.status}${detail ? `: ${detail}` : ""}).`);
+    console.error("ChatGPT sign-in couldn't start", response.status, await reason(response));
+    throw new OAuthError("ChatGPT sign-in failed. Try again.");
   }
   const body = (await response.json()) as { device_auth_id?: string; user_code?: string; usercode?: string; interval?: string | number };
   const userCode = body.user_code ?? body.usercode;
-  if (!body.device_auth_id || !userCode) throw new OAuthError("ChatGPT sign-in returned an incomplete code.");
+  if (!body.device_auth_id || !userCode) throw new OAuthError("ChatGPT sign-in failed. Try again.");
   const interval = typeof body.interval === "number" ? body.interval : Number.parseInt(body.interval ?? "", 10) || 5;
   return {
     kind: "device",
@@ -145,11 +147,11 @@ export async function pollDeviceLogin(pending: DevicePending, fetchImpl: typeof 
   });
   if (response.status === 403 || response.status === 404) return { status: "pending" };
   if (!response.ok) {
-    const detail = await reason(response);
-    return { status: "failed", error: `ChatGPT sign-in failed (${response.status}${detail ? `: ${detail}` : ""}).` };
+    console.error("ChatGPT sign-in failed", response.status, await reason(response));
+    return { status: "failed", error: "ChatGPT sign-in failed. Try again." };
   }
   const body = (await response.json()) as { authorization_code?: string; code_verifier?: string };
-  if (!body.authorization_code || !body.code_verifier) return { status: "failed", error: "ChatGPT sign-in returned an incomplete answer." };
+  if (!body.authorization_code || !body.code_verifier) return { status: "failed", error: "ChatGPT sign-in failed. Try again." };
   const exchange = await post(fetchImpl, OPENAI_TOKEN_URL, {
     form: {
       grant_type: "authorization_code",
@@ -160,13 +162,13 @@ export async function pollDeviceLogin(pending: DevicePending, fetchImpl: typeof 
     },
   });
   if (!exchange.ok) {
-    const detail = await reason(exchange);
-    return { status: "failed", error: `ChatGPT sign-in failed (${exchange.status}${detail ? `: ${detail}` : ""}).` };
+    console.error("ChatGPT sign-in failed", exchange.status, await reason(exchange));
+    return { status: "failed", error: "ChatGPT sign-in failed. Try again." };
   }
   try {
     return { status: "complete", tokens: openAiTokens((await exchange.json()) as TokenJson) };
   } catch (error) {
-    return { status: "failed", error: error instanceof OAuthError ? error.message : "ChatGPT sign-in failed." };
+    return { status: "failed", error: errorText(error, "ChatGPT sign-in failed. Try again.") };
   }
 }
 
@@ -175,15 +177,13 @@ export async function refreshTokens(
   current: { refresh: string; accountId: string | null; label: string | null },
   fetchImpl: typeof fetch = fetch,
 ): Promise<Tokens> {
-  if (!current.refresh) throw new OAuthError(`Your ${PROVIDER_NAMES[provider]} sign-in has expired. Reconnect it in Settings.`);
+  if (!current.refresh) throw new OAuthError(`Reconnect ${PROVIDER_NAMES[provider]} in Settings › Connections.`);
   const response = await post(fetchImpl, OPENAI_TOKEN_URL, {
     form: { grant_type: "refresh_token", refresh_token: current.refresh, client_id: OPENAI_CLIENT_ID },
   });
   if (!response.ok) {
-    const detail = await reason(response);
-    throw new OAuthError(
-      `Your ${PROVIDER_NAMES[provider]} sign-in has expired (${response.status}${detail ? `: ${detail}` : ""}). Reconnect it in Settings.`,
-    );
+    console.error(`${PROVIDER_NAMES[provider]} sign-in renewal failed`, response.status, await reason(response));
+    throw new OAuthError(`Reconnect ${PROVIDER_NAMES[provider]} in Settings › Connections.`);
   }
   const json = (await response.json()) as TokenJson;
   return openAiTokens(json, current);

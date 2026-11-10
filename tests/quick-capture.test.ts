@@ -57,7 +57,7 @@ describe("quick capture from an iPhone Shortcut", () => {
     assert.match(await added.text(), /^Added to today's note at \d{2}:\d{2}\.$/);
     const missing = await POST(request({ text: "Hi" }, ""));
     assert.equal(missing.status, 401);
-    assert.match(await missing.text(), /personal token/);
+    assert.match(await missing.text(), /Orbit token as a Bearer token/);
     const wrong = await POST(request({ text: "Hi" }, "Bearer orbit_nope_nope"));
     assert.equal(wrong.status, 401);
     const empty = await POST(request("", `Bearer ${token}`, "text/plain"));

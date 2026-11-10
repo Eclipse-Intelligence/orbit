@@ -1,6 +1,6 @@
 import { archiveCompany, unarchiveCompany } from "@/lib/crm/companies";
 import { archiveContact, unarchiveContact } from "@/lib/crm/contacts";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, tooMany } from "@/lib/crm/errors";
 import { assertScope, type Scope } from "@/lib/crm/scopes";
 import type { Actor } from "@/lib/crm/types";
 
@@ -10,18 +10,14 @@ export type BulkOutcome = { id: string; ok: true } | { id: string; ok: false; er
 
 export function bulkIds(ids: unknown) {
   if (!Array.isArray(ids) || ids.length === 0) {
-    throw new CrmError("invalid_input", "Select at least one record.", 400);
+    throw new CrmError("invalid_input", "Choose at least one record.", 400);
   }
   if (ids.some((id) => typeof id !== "string")) {
-    throw new CrmError("invalid_input", "Record ids must be strings.", 400);
+    throw new CrmError("invalid_input", "Invalid record ids.", 400);
   }
   const unique = [...new Set(ids as string[])];
   if (unique.length > BULK_LIMIT) {
-    throw new CrmError(
-      "invalid_input",
-      `Select ${BULK_LIMIT} or fewer records at a time.`,
-      400,
-    );
+    throw new CrmError("invalid_input", tooMany(BULK_LIMIT, "records at a time"), 400);
   }
   return unique;
 }

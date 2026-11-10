@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
 import { createActivityInDb } from "@/lib/crm/activities";
-import { CrmError, itemFailure } from "@/lib/crm/errors";
+import { CrmError, itemFailure, tooMany } from "@/lib/crm/errors";
 import {
   recordAudit,
   replayOrRun,
@@ -38,7 +38,7 @@ export async function ingestLead(
   if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
     throw new CrmError(
       "invalid_input",
-      "A lead needs a company, contact, note, opportunity, or task.",
+      "A lead needs a company, contact, note, opportunity or task.",
       400,
     );
   }
@@ -64,7 +64,7 @@ async function ingestLeadInDb(
   if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
     throw new CrmError(
       "invalid_input",
-      "A lead needs a company, contact, note, opportunity, or task.",
+      "A lead needs a company, contact, note, opportunity or task.",
       400,
     );
   }
@@ -99,7 +99,7 @@ async function ingestLeadInDb(
         ) {
           throw new CrmError(
             "invalid_input",
-            "Contact company does not match the lead company.",
+            "The contact's company doesn't match the lead's.",
             400,
             { field: "companyId" },
           );
@@ -213,10 +213,10 @@ export async function bulkIngestLeads(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ results: { index: number; status: "created" | "error"; lead?: LeadResult; error?: { code: string; message: string } }[] }>> {
   if (!Array.isArray(items) || items.length === 0) {
-    throw new CrmError("invalid_input", "Provide at least one lead.", 400);
+    throw new CrmError("invalid_input", "Enter at least one lead.", 400);
   }
   if (items.length > 50) {
-    throw new CrmError("invalid_input", "Submit at most 50 leads at a time.", 400);
+    throw new CrmError("invalid_input", tooMany(50, "leads at a time"), 400);
   }
   for (const item of items) assertLeadScopes(actor, item);
   const provenance = options.provenance ?? { operation: "bulk_ingest_leads" };

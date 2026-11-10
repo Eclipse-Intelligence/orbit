@@ -1,5 +1,5 @@
 import type { Db } from "@/lib/db/pool";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 
 type LinkRefs = {
   companyId: string | null;
@@ -13,7 +13,7 @@ export async function requireCompany(db: Db, workspaceId: string, companyId: str
     [companyId, workspaceId],
   );
   const row = result.rows[0];
-  if (!row) throw new CrmError("not_found", "Company not found.", 404);
+  if (!row) throw notFound("company");
   return row;
 }
 
@@ -45,7 +45,7 @@ export async function resolveLinks(
       "select company_id from crm.contacts where id = $1 and workspace_id = $2",
       [contactId, workspaceId],
     );
-    if (!result.rows[0]) throw new CrmError("not_found", "Contact not found.", 404);
+    if (!result.rows[0]) throw notFound("contact");
     contactCompany = result.rows[0].company_id;
   }
 
@@ -55,7 +55,7 @@ export async function resolveLinks(
       "select company_id from crm.opportunities where id = $1 and workspace_id = $2",
       [opportunityId, workspaceId],
     );
-    if (!result.rows[0]) throw new CrmError("not_found", "Opportunity not found.", 404);
+    if (!result.rows[0]) throw notFound("opportunity");
     opportunityCompany = result.rows[0].company_id;
   }
 

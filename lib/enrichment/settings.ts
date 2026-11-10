@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { PROVIDERS, providerKey, type ContactField, type ProviderId } from "@/lib/enrichment/providers";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, tooLong } from "@/lib/crm/errors";
 import type { Actor, UserActor } from "@/lib/crm/types";
 
 const DEFAULT_EMAIL_ORDER: ProviderId[] = ["context", "hunter", "enrow", "icypeas"];
@@ -82,15 +82,15 @@ export function icpHashOf(text: string) {
 
 function cleanIcpText(value: unknown) {
   if (value === null) return null;
-  if (typeof value !== "string") throw new CrmError("invalid_input", "Describe the ideal customer in text.", 400, { field: "icpText" });
+  if (typeof value !== "string") throw new CrmError("invalid_input", "Enter the ideal customer as text.", 400, { field: "icpText" });
   const text = value.replace(/\r\n?/g, "\n").trim();
-  if (text.length > 20_000) throw new CrmError("invalid_input", "Keep the ideal customer under 20,000 characters.", 400, { field: "icpText" });
+  if (text.length > 20_000) throw new CrmError("invalid_input", tooLong("the ideal customer", 20_000), 400, { field: "icpText" });
   return text || null;
 }
 
 export async function saveEnrichmentSettings(actor: UserActor, input: Partial<EnrichmentSettings>) {
   if (actor.role !== "owner" && actor.role !== "admin") {
-    throw new CrmError("forbidden", "Only workspace owners and admins can change enrichment settings.", 403);
+    throw new CrmError("forbidden", "Only owners and admins can change enrichment settings.", 403);
   }
   const current = await getEnrichmentSettings(actor);
   const next: EnrichmentSettings = {

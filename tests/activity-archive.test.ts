@@ -112,7 +112,7 @@ describe("archiving activities", () => {
     const theirs = (await createActivity(colleague, { type: "note", body: "Sam's note", companyId: acme })).body.activity;
 
     await assert.rejects(archiveActivity(colleague, mine.id, WEB), (error: unknown) => {
-      return error instanceof CrmError && error.status === 403 && /Only the person who logged this activity/.test(error.message);
+      return error instanceof CrmError && error.status === 403 && /Only its author, owners and admins can delete this/.test(error.message);
     });
     assert.equal((await listActivities(owner, { companyId: acme })).data.some((activity) => activity.id === mine.id), true);
 

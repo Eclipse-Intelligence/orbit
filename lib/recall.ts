@@ -1,4 +1,5 @@
 import { CrmError } from "@/lib/crm/errors";
+import { logUpstream, unreachable } from "@/lib/upstream";
 
 export const RECALL_BASE_URL = "https://backend.getrecall.ai/api/v1";
 export const RECALL_TAG_PATHS = ["/tags", "/tags/", "/cards/tags"] as const;
@@ -7,9 +8,8 @@ export const RECALL_MAX_TAGS = 50;
 const TIMEOUT_MS = 20_000;
 const RETRY_WAIT_MS = 1_500;
 const MAX_RETRY_WAIT_MS = 10_000;
-const UNREADABLE = "Recall sent a reply Orbit couldn't read. Try again in a few minutes.";
-export const RECALL_REJECTED =
-  "Recall rejected the key. It may have expired or been revoked. Create a new key in Recall (Settings, API & MCP) and connect it again in Orbit's Settings, Connections.";
+const UNREADABLE = unreachable("Recall");
+export const RECALL_REJECTED = "Recall rejected the key. Add a new one in Settings › Connections.";
 
 export type RecallChunk = { chunk_id?: string; content?: string; source?: string; timestamps?: string[] };
 
@@ -147,7 +147,7 @@ export function recallClient(options: RecallClientOptions) {
   }
 
   async function once(url: string) {
-    if (remaining() < 2_000) throw new CrmError("upstream_error", "Ran out of time talking to Recall. Try a narrower request.", 504);
+    if (remaining() < 2_000) throw new CrmError("upstream_error", "Recall took too long. Narrow the request.", 504);
     requests += 1;
     try {
       return await fetchImpl(url, {
@@ -155,8 +155,9 @@ export function recallClient(options: RecallClientOptions) {
         headers: { authorization: `Bearer ${options.apiKey}`, accept: "application/json" },
         signal: AbortSignal.timeout(Math.max(1_000, Math.min(TIMEOUT_MS, remaining()))),
       });
-    } catch {
-      throw new CrmError("upstream_error", "Couldn't reach Recall. Try again in a minute.", 502);
+    } catch (error) {
+      logUpstream("Recall", null, error);
+      throw new CrmError("upstream_error", unreachable("Recall"), 502);
     }
   }
 
@@ -173,26 +174,22 @@ export function recallClient(options: RecallClientOptions) {
 
   async function failure(response: Response, notFound: string): Promise<never> {
     const body: unknown = await response.json().catch(() => null);
-    const detail = recallDetail(body)?.slice(0, 300) ?? null;
+    logUpstream("Recall", response.status, { detail: recallDetail(body)?.slice(0, 300) ?? null, requestId: requestId(body) });
     if (response.status === 401 || response.status === 403) throw new CrmError("upstream_unauthorized", RECALL_REJECTED, 400);
-    if (response.status === 422) {
-      throw new CrmError("invalid_input", detail ? `Recall couldn't use that request: ${detail.replace(/\.$/, "")}.` : "Recall couldn't use that request. Check the filters.", 400);
-    }
+    if (response.status === 422) throw new CrmError("invalid_input", "Recall couldn't use that request. Check the filters.", 400);
     if (response.status === 404) throw new CrmError("not_found", notFound, 404);
-    if (response.status === 429) throw new CrmError("upstream_error", "Recall is limiting requests right now. Try again in a minute.", 429);
-    const id = requestId(body);
-    throw new CrmError(
-      "upstream_error",
-      `Recall had a problem on its side (${response.status}). Try again in a few minutes.${id ? ` If it keeps happening, give Recall the request id ${id}.` : ""}`,
-      502,
-    );
+    if (response.status === 429) throw new CrmError("upstream_error", "Recall is busy. Try again in a minute.", 429);
+    throw new CrmError("upstream_error", `Recall returned an error (${response.status}). Try again.`, 502);
   }
 
   async function json(path: string, query: URLSearchParams | undefined, notFound = "Recall couldn't find that.") {
     const response = await send(path, query);
     if (!response.ok) return failure(response, notFound);
     const body = record(await response.json().catch(() => null));
-    if (!body) throw new CrmError("upstream_error", UNREADABLE, 502);
+    if (!body) {
+      logUpstream("Recall", response.status, "unreadable reply");
+      throw new CrmError("upstream_error", UNREADABLE, 502);
+    }
     return body;
   }
 
@@ -225,7 +222,7 @@ export function recallClient(options: RecallClientOptions) {
     const query = new URLSearchParams();
     if (params.focusQuery) query.set("focus_query", params.focusQuery);
     if (params.maxChunks) query.set("max_chunks", String(Math.min(RECALL_MAX_CHUNKS, Math.max(1, Math.trunc(params.maxChunks)))));
-    const body = await json(`/cards/${encodeURIComponent(cardId)}`, query, "Recall has no card with that id. Find it with recall_search first.");
+    const body = await json(`/cards/${encodeURIComponent(cardId)}`, query, "Card not found. Find it with recall_search first.");
     return {
       card_id: typeof body.card_id === "string" ? body.card_id : cardId,
       title: optional(body.title) ?? null,
@@ -277,7 +274,7 @@ export function recallClient(options: RecallClientOptions) {
 
   async function listTags(path: string) {
     const response = await send(path);
-    if (!response.ok) return failure(response, "Recall's tag list has moved. Orbit will check again within a day.");
+    if (!response.ok) return failure(response, "Couldn't read Recall's tags. Orbit will retry.");
     const tags = recallTags(await response.json().catch(() => null));
     if (!tags) throw new CrmError("upstream_error", UNREADABLE, 502);
     return tags;

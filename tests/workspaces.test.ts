@@ -8,7 +8,7 @@ import { listCalendarItems } from "@/lib/crm/calendars";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { backgroundTargets } from "@/lib/crm/conversations";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, pgFailure } from "@/lib/crm/errors";
 import { listPipeline } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { acceptInvite, createInvite, removeMember } from "@/lib/crm/team";
@@ -41,6 +41,23 @@ describe("workspaces", () => {
   after(async () => {
     await getPool().end();
     await getAdminPool().end();
+  });
+
+  it("shows database text such as 'forbidden' as a fixed sentence, and passes through text written for people", async () => {
+    const admin = getAdminPool();
+    const raise = (text: string, code: string) =>
+      admin.query(`do $$ begin raise exception '${text}' using errcode = '${code}'; end $$`).then(() => null, (error: unknown) => error);
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const forbidden = pgFailure(await raise("forbidden", "42501"));
+      assert.equal(forbidden?.code, "forbidden");
+      assert.equal(forbidden?.message, "You don't have permission to do that.");
+      assert.equal(pgFailure(await raise("user required", "22023"))?.message, "That isn't valid.");
+      assert.equal(pgFailure(await raise("Only workspace owners can create a workspace.", "42501"))?.message, "Only workspace owners can create a workspace.");
+    } finally {
+      console.error = realConsoleError;
+    }
   });
 
   it("lets only owners create a workspace, which comes ready to use", async () => {

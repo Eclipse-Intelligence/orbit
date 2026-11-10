@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, notSetUp, tooMany } from "@/lib/crm/errors";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -99,7 +99,7 @@ export function isStale(item: Pick<KnowledgeItem, "status" | "updatedAt" | "kind
 
 function cleanTitle(value: unknown, fallback = "") {
   const title = (typeof value === "string" ? value : fallback).replace(/[\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
-  if (!title) throw new CrmError("invalid_input", "Give it a name.", 400, { field: "title" });
+  if (!title) throw new CrmError("invalid_input", "Enter a name.", 400, { field: "title" });
   return title;
 }
 
@@ -121,9 +121,9 @@ export function cleanUrl(value: unknown) {
   try {
     url = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`);
   } catch {
-    throw new CrmError("invalid_input", "That isn't a link Orbit can open.", 400, { field: "url" });
+    throw new CrmError("invalid_input", "Enter a valid link.", 400, { field: "url" });
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new CrmError("invalid_input", "Links need to start with https.", 400, { field: "url" });
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new CrmError("invalid_input", "Use an https link.", 400, { field: "url" });
   url.hash = "";
   return url.href.slice(0, 2000);
 }
@@ -143,9 +143,9 @@ function megabytes(bytes: number) {
 }
 
 async function assertCompany(db: Db, workspaceId: string, companyId: string) {
-  if (!isUuid(companyId)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(companyId)) throw notFound("company");
   const found = await db.query("select 1 from crm.companies where id = $1 and workspace_id = $2 and archived_at is null", [companyId, workspaceId]);
-  if (found.rowCount === 0) throw new CrmError("not_found", "Company not found.", 404);
+  if (found.rowCount === 0) throw notFound("company");
 }
 
 function targetColumns(target: KnowledgeTarget) {
@@ -221,7 +221,7 @@ export async function prepareKnowledgeUpload(
   input: { name: unknown; size: unknown; contentType?: unknown },
   fetchImpl: typeof fetch = fetch,
 ): Promise<PreparedKnowledgeUpload> {
-  if (!storageConfigured()) throw new CrmError("invalid_input", "Uploads need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+  if (!storageConfigured()) throw new CrmError("invalid_input", notSetUp("file storage", "SUPABASE_SERVICE_ROLE_KEY", actor), 400);
   const name = cleanFileName(input.name);
   const size = typeof input.size === "number" && Number.isInteger(input.size) ? input.size : 0;
   if (size < 1) throw new CrmError("invalid_input", `${name} is empty.`, 400, { field: "file" });
@@ -237,7 +237,7 @@ export async function prepareKnowledgeUpload(
     await db.query("update crm.knowledge_items set file_path = $2 where id = $1", [id, path]);
     return readItem(db, actor.workspaceId, id);
   });
-  if (!row) throw new CrmError("not_found", "That upload couldn't start.", 404);
+  if (!row) throw new CrmError("not_found", "Couldn't start the upload. Try again.", 404);
   try {
     return { item: mapItem(row), uploadUrl: await signedUploadUrl(row.file_path!, fetchImpl, "knowledge") };
   } catch (error) {
@@ -253,7 +253,7 @@ export async function addKnowledgeFile(
   provenance: Provenance,
   fetchImpl: typeof fetch = fetch,
 ) {
-  if (!storageConfigured()) throw new CrmError("invalid_input", "Uploads need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+  if (!storageConfigured()) throw new CrmError("invalid_input", notSetUp("file storage", "SUPABASE_SERVICE_ROLE_KEY", actor), 400);
   const name = cleanFileName(input.name);
   if (input.bytes.byteLength === 0) throw new CrmError("invalid_input", `${name} is empty.`, 400, { field: "file" });
   if (input.bytes.byteLength > KNOWLEDGE_MAX_BYTES) throw new CrmError("invalid_input", `${name} is over ${megabytes(KNOWLEDGE_MAX_BYTES)}.`, 400, { field: "file" });
@@ -302,7 +302,7 @@ export function placeholderTitles(url: string) {
 export async function addKnowledgePages(actor: UserActor, target: KnowledgeTarget, urls: unknown) {
   const list = Array.isArray(urls) ? urls : [];
   if (list.length === 0) throw new CrmError("invalid_input", "Choose at least one page.", 400, { field: "urls" });
-  if (list.length > PAGES_ADD_MAX) throw new CrmError("invalid_input", `Choose up to ${PAGES_ADD_MAX.toLocaleString("en-GB")} pages at a time.`, 400, { field: "urls" });
+  if (list.length > PAGES_ADD_MAX) throw new CrmError("invalid_input", tooMany(PAGES_ADD_MAX, "pages at a time"), 400, { field: "urls" });
   const clean = [...new Set(list.map((url) => cleanUrl(url)))];
   return withActor(actor, async (db) => {
     const { scope, companyId } = targetColumns(target);
@@ -340,7 +340,7 @@ export async function addKnowledgeLink(actor: UserActor, target: KnowledgeTarget
        limit 1`,
       [actor.workspaceId, url, scope, companyId],
     );
-    if (duplicate.rows[0]) throw new CrmError("conflict", "That link is already here.", 409, { field: "url" });
+    if (duplicate.rows[0]) throw new CrmError("conflict", "That link is already in Knowledge.", 409, { field: "url" });
     const { id } = await insertItem(db, actor, { target, kind, title, status: "pending", sourceUrl: url }, { operation: "add_knowledge_link", sourceUrl: url });
     return mapItem((await readItem(db, actor.workspaceId, id))!);
   });
@@ -378,7 +378,7 @@ export async function addKnowledgeText(
 export async function getKnowledgeItem(actor: UserActor, id: string) {
   return withActor(actor, async (db) => {
     const row = await readItem(db, actor.workspaceId, id);
-    if (!row) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
+    if (!row) throw notFound("item");
     return row;
   });
 }
@@ -408,7 +408,7 @@ export async function renameKnowledge(actor: UserActor, id: string, title: unkno
   const next = cleanTitle(title);
   return withActor(actor, async (db) => {
     const row = await readItem(db, actor.workspaceId, id);
-    if (!row) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
+    if (!row) throw notFound("item");
     if (row.title === next) return mapItem(row);
     await db.query("update crm.knowledge_items set title = $2 where id = $1", [id, next]);
     await recordAudit(db, actor, "knowledge.updated", "knowledge", id, { operation: "rename_knowledge" }, { before: { title: row.title }, after: { title: next } });
@@ -419,7 +419,7 @@ export async function renameKnowledge(actor: UserActor, id: string, title: unkno
 export async function archiveKnowledge(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch, provenance: Provenance = { operation: "remove_knowledge" }) {
   const row = await withActor(actor, async (db) => {
     const current = await readItem(db, actor.workspaceId, id);
-    if (!current) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
+    if (!current) throw notFound("item");
     await db.query("update crm.knowledge_items set archived_at = now(), content = null, chunk_count = 0 where id = $1", [id]);
     await db.query("delete from crm.knowledge_chunks where item_id = $1", [id]);
     await recordAudit(db, actor, "knowledge.removed", "knowledge", id, provenance, {
@@ -434,7 +434,7 @@ export async function archiveKnowledge(actor: UserActor, id: string, fetchImpl: 
 
 export async function readKnowledge(actor: UserActor, id: string, offset = 0) {
   return withActor(actor, async (db) => {
-    if (!isUuid(id)) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
+    if (!isUuid(id)) throw notFound("item");
     const result = await db.query<ItemRow & { window: string | null; window_length: number | null }>(
       `select ${ITEM_COLUMNS}, substr(i.content, $3 + 1, $4) as window, char_length(substr(i.content, $3 + 1, $4)) as window_length
        from ${ITEM_FROM}
@@ -442,7 +442,7 @@ export async function readKnowledge(actor: UserActor, id: string, offset = 0) {
       [id, actor.workspaceId, Math.max(0, Math.floor(offset)), READ_WINDOW],
     );
     const row = result.rows[0];
-    if (!row) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
+    if (!row) throw notFound("item");
     const start = Math.max(0, Math.floor(offset));
     const text = row.window ?? "";
     const end = start + (row.window_length ?? 0);

@@ -21,7 +21,7 @@ function scopeFor(kind: TagKind) {
 
 function requestedTags(tags: unknown) {
   if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string")) {
-    throw new CrmError("invalid_input", "Tags must be text.", 400, { field: "tags" });
+    throw new CrmError("invalid_input", "Invalid tags.", 400, { field: "tags" });
   }
   const wanted = normalizeTags(tags as string[]);
   if (wanted.length === 0) {

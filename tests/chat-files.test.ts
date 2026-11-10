@@ -190,7 +190,7 @@ describe("chat files", () => {
     const read = (await withFetch(env.fetchImpl, () => runTool(other, "read_chat_file", { fileId: id }))) as { error: string };
     assert.match(read.error, /That file isn't in your chats/);
     const email = (await withFetch(env.fetchImpl, () => runTool(other, "send_email", { to: ["x@acme.test"], subject: "Hi", body: "Hi", attachmentIds: [id] }))) as { error: string };
-    assert.match(email.error, /isn't in Knowledge, on the draft or in your chats/);
+    assert.equal(email.error, "File not found.");
     const filed = (await withFetch(env.fetchImpl, () => runTool(other, "add_to_knowledge", { chatFileId: id, eclipse: true }))) as { error: string };
     assert.match(filed.error, /That file isn't in your chats/);
     await assert.rejects(sendWith(other, "Read this", [id]), /A file has expired/);

@@ -79,7 +79,7 @@ describe("assistant board and workflow tools", () => {
     const moved = (await runTool(owner, "move_card", { cardId: card.id, stageId: established.id })) as { card: { stageId: string } };
     assert.equal(moved.card.stageId, established.id);
     const blocked = (await runTool(owner, "set_board_stages", { boardId, stages: [{ id: kickoff.id, name: "Kickoff" }] })) as { error: string };
-    assert.match(blocked.error, /Move cards off a stage/);
+    assert.match(blocked.error, /Empty the stage before removing it/);
 
     await runTool(owner, "remove_from_board", { cardId: card.id });
     assert.equal((await listOpportunities(owner, { pipelineId: boardId })).data.length, 0);

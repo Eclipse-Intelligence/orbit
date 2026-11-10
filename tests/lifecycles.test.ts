@@ -32,7 +32,7 @@ describe("lifecycles", () => {
     assert.equal(plain.lifecycle, "lead");
     const personal = await updateCompany(owner, plain.id, { lifecycle: "Personal" });
     assert.equal(personal.body.company.lifecycle, "Personal");
-    await assert.rejects(updateCompany(owner, plain.id, { lifecycle: "   " }), /Give the lifecycle a name/);
+    await assert.rejects(updateCompany(owner, plain.id, { lifecycle: "   " }), /Enter a lifecycle name/);
 
     const listed = await listLifecycles(owner);
     assert.deepEqual(
@@ -59,8 +59,8 @@ describe("lifecycles", () => {
     assert.deepEqual(await renameLifecycle(owner, "Consultant", "Advisor"), { companies: 2 });
     assert.deepEqual(await renameLifecycle(owner, "Advisor", "advisor"), { companies: 2 });
     assert.equal((await listCompanies(owner, { lifecycle: "advisor" })).data.length, 2);
-    await assert.rejects(renameLifecycle(owner, "Lead", "Cold"), /built in/);
-    await assert.rejects(deleteLifecycle(owner, "customer"), /built in/);
+    await assert.rejects(renameLifecycle(owner, "Lead", "Cold"), /Built-in lifecycles can't be renamed/);
+    await assert.rejects(deleteLifecycle(owner, "customer"), /Built-in lifecycles can't be deleted/);
 
     assert.deepEqual(await renameLifecycle(owner, "Personal", "advisor"), { companies: 1 });
     assert.equal((await listCompanies(owner, { lifecycle: "advisor" })).data.length, 3);

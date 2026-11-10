@@ -36,7 +36,7 @@ export async function assertLinearHere(actor: UserActor) {
 }
 
 function requireAdmin(actor: UserActor) {
-  if (!isAdmin(actor)) throw new CrmError("forbidden", "Only workspace owners and admins can change where Linear is connected.", 403);
+  if (!isAdmin(actor)) throw new CrmError("forbidden", "Only owners and admins can change where Linear is connected.", 403);
 }
 
 export async function connectLinear(actor: UserActor, provenance?: Provenance) {

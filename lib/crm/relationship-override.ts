@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { cleanText } from "@/lib/crm/normalize";
 import { isRelationshipLabel, type RelationshipLabel, type RelationshipOverride } from "@/lib/crm/relationship-score";
@@ -46,12 +46,12 @@ export function isRelationshipTarget(value: unknown): value is RelationshipTarge
 
 function assertTarget(target: unknown): asserts target is RelationshipTarget {
   if (!isRelationshipTarget(target)) {
-    throw new CrmError("invalid_input", "Choose a company or a person to set the relationship on.", 400, { field: "target" });
+    throw new CrmError("invalid_input", "Choose a company or contact.", 400, { field: "target" });
   }
 }
 
-function notFound(target: RelationshipTarget) {
-  return new CrmError("not_found", target === "company" ? "Company not found." : "Contact not found.", 404);
+function targetNotFound(target: RelationshipTarget) {
+  return notFound(target === "company" ? "company" : "contact");
 }
 
 export async function readRelationshipOverrides(db: Db, workspaceId: string, target: RelationshipTarget, ids: string[]) {
@@ -94,13 +94,13 @@ export async function setRelationshipOverrideInDb(
   const current = (
     await db.query<OverrideRow>(`${overrideSql(target)} where r.id = $1 and r.workspace_id = $2 for update of r`, [id, actor.workspaceId])
   ).rows[0];
-  if (!current) throw notFound(target);
+  if (!current) throw targetNotFound(target);
   if (current.archived_at) {
     throw new CrmError(
       "archived",
       target === "company"
-        ? "This company is archived. Restore it before changing the relationship."
-        : "This person is archived. Restore them before changing the relationship.",
+        ? "Restore this company first."
+        : "Restore this contact first.",
       409,
     );
   }
@@ -119,7 +119,7 @@ export async function setRelationshipOverrideInDb(
     [id, actor.workspaceId, input.label, reason, actor.type === "user" ? actor.userId : null],
   );
   const saved = (await db.query<OverrideRow>(`${overrideSql(target)} where r.id = $1`, [id])).rows[0];
-  if (!saved) throw notFound(target);
+  if (!saved) throw targetNotFound(target);
   await recordAudit(db, actor, `${target}.updated`, target, id, provenance, {
     fields,
     before: { relationshipOverride: current.relationship_override, relationshipOverrideReason: current.relationship_override_reason },
@@ -137,6 +137,6 @@ export async function setRelationshipOverride(
 ) {
   assertTarget(target);
   assertScope(actor.scopes, target === "company" ? "companies:write" : "contacts:write");
-  if (!isUuid(id)) throw notFound(target);
+  if (!isUuid(id)) throw targetNotFound(target);
   return withActor(actor, (db) => setRelationshipOverrideInDb(db, actor, target, id, input, provenance));
 }

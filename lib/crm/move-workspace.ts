@@ -3,7 +3,7 @@ import { query } from "@/lib/db/pool";
 import { readCompanyInDb } from "@/lib/crm/companies";
 import { readContactInDb } from "@/lib/crm/contacts";
 import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, pgFailure, tooMany } from "@/lib/crm/errors";
 import { fillCompanyGaps, fillContactGaps, type GapFill } from "@/lib/crm/merge";
 import { isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { readOpportunityInDb } from "@/lib/crm/opportunities";
@@ -13,7 +13,7 @@ import { workspaceActors, type WorkspaceRef } from "@/lib/crm/workspaces";
 
 export const MOVE_LIMIT = 100;
 
-export const MOVE_TOO_LONG = "That took too long. Move fewer records at a time.";
+export const MOVE_TOO_LONG = "Timed out. Move fewer records.";
 
 const MOVE_TIMEOUT = "60s";
 
@@ -152,15 +152,15 @@ function idList(value: unknown, label: string) {
 
 function optionalId(value: unknown, field: string) {
   if (value === undefined || value === null || value === "") return null;
-  if (typeof value !== "string" || !isUuid(value.trim())) throw new CrmError("invalid_input", "Pick a board and stage from the list.", 400, { field });
+  if (typeof value !== "string" || !isUuid(value.trim())) throw new CrmError("invalid_input", "Choose a board and stage.", 400, { field });
   return value.trim();
 }
 
 function moveInput(request: MoveRequest): MoveInput {
   const companyIds = idList(request.companyIds, "Companies");
-  const contactIds = idList(request.contactIds, "People");
-  if (companyIds.length + contactIds.length === 0) throw new CrmError("invalid_input", "Pick a company or contact to move.", 400);
-  if (companyIds.length + contactIds.length > MOVE_LIMIT) throw new CrmError("invalid_input", `Move up to ${MOVE_LIMIT} records at a time.`, 400);
+  const contactIds = idList(request.contactIds, "Contacts");
+  if (companyIds.length + contactIds.length === 0) throw new CrmError("invalid_input", "Choose a company or contact.", 400);
+  if (companyIds.length + contactIds.length > MOVE_LIMIT) throw new CrmError("invalid_input", tooMany(MOVE_LIMIT, "records at a time"), 400);
   return {
     companyIds,
     contactIds,
@@ -200,7 +200,7 @@ function canMoveOut(actor: UserActor) {
 }
 
 export function moveNeedsAdmin(workspaceName: string) {
-  return `Only an owner or admin of ${workspaceName} can move records out of it. You can copy them instead.`;
+  return `Only owners and admins can move records out of ${workspaceName}. Copy them instead.`;
 }
 
 async function moveActors(actor: Actor, workspace: unknown, options: { moving: boolean }) {
@@ -208,17 +208,17 @@ async function moveActors(actor: Actor, workspace: unknown, options: { moving: b
   const actors = await workspaceActors(actor);
   if (actors.length < 2) throw new CrmError("forbidden", "You're only in one workspace.", 403);
   const wanted = typeof workspace === "string" ? workspace.trim() : "";
-  if (!wanted) throw new CrmError("invalid_input", "Pick a workspace.", 400, { field: "workspaceId" });
+  if (!wanted) throw new CrmError("invalid_input", "Choose a workspace.", 400, { field: "workspaceId" });
   const target = findWorkspace(actors, wanted);
   if (!target) {
     throw new CrmError(
       "forbidden",
-      `You're not in a workspace called ${wanted.slice(0, 80)}. Your workspaces are ${actors.map((item) => item.workspaceName).join(", ")}.`,
+      `No workspace called ${wanted.slice(0, 80)}. Yours: ${actors.map((item) => item.workspaceName).join(", ")}.`,
       403,
       { field: "workspaceId" },
     );
   }
-  if (target.workspaceId === actor.workspaceId) throw new CrmError("invalid_input", "Pick another workspace.", 400, { field: "workspaceId" });
+  if (target.workspaceId === actor.workspaceId) throw new CrmError("invalid_input", "Choose another workspace.", 400, { field: "workspaceId" });
   for (const scope of MOVE_SCOPES) {
     assertScope(actor.scopes, scope);
     assertScope(target.scopes, scope);
@@ -231,19 +231,13 @@ async function moveActors(actor: Actor, workspace: unknown, options: { moving: b
 export function moveFailure(error: unknown, targetName: string): never {
   if (error instanceof CrmError) throw error;
   if (isPgError(error)) {
-    if (error.code === "P0002") throw new CrmError("not_found", error.message, 404);
-    if (error.code === "22023") throw new CrmError("invalid_input", error.message, 400);
-    if (error.code === "42501") throw new CrmError("forbidden", error.message, 403);
     if (error.code === "57014" || error.code === "40P01") throw new CrmError("timeout", MOVE_TOO_LONG, 503);
     if (error.code === "23505") {
-      throw new CrmError(
-        "conflict",
-        `${targetName} already has a record with the same domain, email, LinkedIn or name that Orbit didn't match. Merge or archive it in ${targetName}, then try again.`,
-        409,
-      );
+      console.error("Move clashed with an existing record", error.message);
+      throw new CrmError("conflict", `${targetName} already has a matching record. Merge or archive it there first.`, 409);
     }
   }
-  throw error;
+  throw pgFailure(error, { P0002: "Record not found." }) ?? error;
 }
 
 async function runPlan(db: Db | null, source: UserActor, target: UserActor, input: MoveInput, dryRun: boolean) {
@@ -494,7 +488,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
     },
     async (db) => {
       const done = plan as Plan | null;
-      if (!done) throw new CrmError("internal_error", "The move didn't run.", 500);
+      if (!done) throw new CrmError("internal_error", "Couldn't move the records. Try again.", 500);
       const fills = new Map<string, GapFill>();
       const fromSource = done.copy ? { fromWorkspaceId: source.workspaceId } : {};
       for (const company of done.companies) {

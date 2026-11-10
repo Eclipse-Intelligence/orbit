@@ -39,7 +39,7 @@ export async function addMailAttachmentToKnowledge(
   const text = /\.(vtt|srt)$/i.test(item.name)
     ? transcriptText(new TextDecoder("utf-8", { fatal: false }).decode(bytes), item.name.toLowerCase().endsWith(".vtt") ? "text/vtt" : "application/srt")
     : await readAttachmentText(bytes, item.name, item.contentType, CONTENT_MAX).catch(() => null);
-  if (!text?.trim()) throw new CrmError("invalid_input", `Orbit can't read text from ${item.name}.`, 400);
+  if (!text?.trim()) throw new CrmError("invalid_input", `Can't read text from ${item.name}.`, 400);
   const place = "companyId" in target ? target.companyId : "eclipse";
   const sourceRef = `attachment:${createHash("sha256").update(`${messageId}\n${attachmentId}`).digest("hex").slice(0, 40)}:${place}`;
   return addKnowledgeText(

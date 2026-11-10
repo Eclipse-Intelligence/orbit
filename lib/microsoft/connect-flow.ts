@@ -1,5 +1,5 @@
 import { resetCalendarSync } from "@/lib/crm/calendar";
-import { calendarConnectError, connectCalendarAccount } from "@/lib/crm/calendar-accounts";
+import { calendarConnectError, calendarConnectFailure, connectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { CrmError } from "@/lib/crm/errors";
 import { getMailbox, saveMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -8,9 +8,11 @@ import {
   exchangeAuthorizationCode,
   fetchMicrosoftIdentity,
   microsoftAuthorizationUrl,
+  MICROSOFT_CONNECT_FAILED,
+  microsoftErrorText,
+  microsoftProblem,
   microsoftPurpose,
   microsoftReturn,
-  sanitizeMicrosoftError,
   signMicrosoftState,
   type MicrosoftPurpose,
   type MicrosoftReturn,
@@ -50,19 +52,19 @@ export async function finishMicrosoftConnect(
   const code = params.get("code");
   if (state.purpose !== "mailbox") {
     if (providerError) return { error: calendarConnectError(providerError) };
-    if (!code) return { error: "Microsoft did not return a connection code." };
+    if (!code) return { error: MICROSOFT_CONNECT_FAILED };
     try {
       const account = await connectCalendarAccount(user, { origin, code, purpose: state.purpose, expected: state.hint }, fetchImpl);
       return { connected: account.email, accountId: account.id };
     } catch (error) {
       return {
-        error: error instanceof CrmError ? error.message : calendarConnectError(error instanceof Error ? error.message : null),
+        error: error instanceof CrmError ? error.message : calendarConnectFailure(error),
         add: addOffer(error),
       };
     }
   }
-  if (providerError) return { error: sanitizeMicrosoftError(params.get("error_description") || params.get("error") || providerError) };
-  if (!code) return { error: "Microsoft did not return a connection code." };
+  if (providerError) return { error: microsoftProblem(params.get("error_description") || params.get("error") || providerError, MICROSOFT_CONNECT_FAILED) };
+  if (!code) return { error: MICROSOFT_CONNECT_FAILED };
   try {
     const token = await exchangeAuthorizationCode(origin, code, fetchImpl);
     const identity = await fetchMicrosoftIdentity(token.accessToken, fetchImpl);
@@ -81,6 +83,6 @@ export async function finishMicrosoftConnect(
     return {};
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, add: addOffer(error) };
-    return { error: sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not connect Microsoft.") };
+    return { error: microsoftErrorText(error, MICROSOFT_CONNECT_FAILED) };
   }
 }

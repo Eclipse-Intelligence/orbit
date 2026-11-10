@@ -83,7 +83,7 @@ describe("task reminders", () => {
     assert.equal(created.remindMinutes, 60);
     await assert.rejects(
       createTask(owner, { title: "Odd reminder", companyId, dueAt: due, remindMinutes: 7 }),
-      /Pick a reminder from the list/,
+      /Choose a reminder\./,
     );
     const cleared = (await updateTask(owner, created.id, { remindMinutes: null })).body.task;
     assert.equal(cleared.remindMinutes, null);

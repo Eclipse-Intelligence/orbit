@@ -1,3 +1,4 @@
+import { errorText, notSetUp, ShownError, writtenForPeople } from "@/lib/crm/errors";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { appSecret } from "@/lib/auth/config";
 
@@ -5,8 +6,13 @@ export const MICROSOFT_SCOPES = "offline_access Mail.ReadWrite Mail.Send User.Re
 export const CALENDAR_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read";
 export const SEND_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.ReadWrite Mail.Send Mail.ReadWrite";
 export const ORGANISATION_BLOCKED =
-  "This Microsoft account's organisation doesn't allow Orbit yet. In Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
-export const SIGN_IN_CANCELLED = "Microsoft sign-in was cancelled. Try again when you're ready.";
+  "This Microsoft organisation hasn't approved Orbit. Allow other organisations in Entra, or ask their admin to consent.";
+export const SIGN_IN_CANCELLED = "Microsoft sign-in cancelled.";
+export const MICROSOFT_UNREACHABLE = "Couldn't reach Microsoft. Try again.";
+export const MICROSOFT_CONNECT_FAILED = "Couldn't connect Microsoft. Try again.";
+export const MICROSOFT_REJECTED = "Microsoft rejected the mailbox connection. Connect it again.";
+
+export class MicrosoftError extends ShownError {}
 
 export type MicrosoftPurpose = "mailbox" | "calendar_account" | "send_account";
 
@@ -36,7 +42,7 @@ function microsoftCredentials() {
   const id = process.env.MICROSOFT_CLIENT_ID?.trim();
   const secret = process.env.MICROSOFT_CLIENT_SECRET?.trim();
   if (!id || !secret)
-    throw new Error("Add the Microsoft app credentials before connecting.");
+    throw new MicrosoftError(notSetUp("Microsoft", "MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET"));
   return { id, secret };
 }
 
@@ -247,19 +253,15 @@ async function tokenRequest(body: URLSearchParams, fetchImpl: typeof fetch) {
   );
   const parsed = (await response.json().catch(() => ({}))) as TokenResponse;
   if (!response.ok || !parsed.access_token) {
-    const reason =
-      parsed.error_description ||
-      parsed.error ||
-      "Microsoft did not return a token.";
-    throw new MicrosoftTokenError(reason);
+    throw new MicrosoftTokenError(parsed.error_description || parsed.error || "");
   }
   return parsed;
 }
 
-export class MicrosoftTokenError extends Error {
+export class MicrosoftTokenError extends ShownError {
   readonly detail: string;
   constructor(detail: string) {
-    super(sanitizeMicrosoftError(detail));
+    super(microsoftProblem(detail, MICROSOFT_CONNECT_FAILED));
     this.name = "MicrosoftTokenError";
     this.detail = detail;
   }
@@ -282,7 +284,7 @@ export async function exchangeAuthorizationCode(
   });
   const parsed = await tokenRequest(body, fetchImpl);
   if (!parsed.refresh_token)
-    throw new Error("Microsoft did not return a refresh token.");
+    throw new MicrosoftError(MICROSOFT_CONNECT_FAILED);
   return tokenFrom(parsed.refresh_token, parsed);
 }
 
@@ -334,11 +336,7 @@ export async function fetchMicrosoftIdentity(
     error?: { message?: string };
   };
   if (!response.ok) {
-    throw new Error(
-      sanitizeMicrosoftError(
-        body.error?.message || "Could not read the Microsoft account.",
-      ),
-    );
+    throw new MicrosoftError(microsoftProblem(body.error?.message, "Couldn't read the Microsoft account. Try again."));
   }
   return {
     email: body.mail || body.userPrincipalName || "",
@@ -396,7 +394,7 @@ export async function fetchInboxMessages(
       continue;
     }
     if (!response.ok) {
-      throw new Error(sanitizeMicrosoftError(await graphError(response)));
+      throw new MicrosoftError(await graphError(response, "Couldn't read the inbox. Try again."));
     }
     const body = (await response.json()) as {
       value?: GraphInboxMessage[];
@@ -442,7 +440,7 @@ export type MailAttachment = { name: string; contentType: string; bytes: Uint8Ar
 const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
 const UPLOAD_CHUNK = 320 * 1024 * 10;
 export const LARGE_ATTACHMENT_RECONNECT =
-  "Attachments over 3 MB need permission to create drafts. Reconnect Microsoft in Settings › Email, then send again.";
+  "Reconnect Microsoft in Settings › Email to send attachments over 3 MB.";
 
 function recipients(message: { to: string; toName?: string | null }) {
   return [{ emailAddress: { address: message.to, ...(message.toName ? { name: message.toName } : {}) } }];
@@ -453,11 +451,9 @@ function base64(bytes: Uint8Array) {
 }
 
 async function sendFailure(response: Response) {
-  const detail = await graphError(response);
-  if (response.status === 403) {
-    return new Error("Microsoft has not allowed sending yet. Add Mail.Send, then disconnect and connect the mailbox again.");
-  }
-  return new Error(sanitizeMicrosoftError(detail));
+  const message = await graphError(response, "Couldn't send the email. Try again.");
+  if (response.status === 403) return new MicrosoftError("Microsoft hasn't allowed sending. Reconnect the mailbox.");
+  return new MicrosoftError(message);
 }
 
 export async function sendGraphMail(
@@ -547,7 +543,10 @@ export async function attachToDraft(
         body: chunk,
         signal: AbortSignal.timeout(60_000),
       });
-      if (!put.ok) throw new Error(`Microsoft stopped the upload of ${item.name}.`);
+      if (!put.ok) {
+        logMicrosoft("Attachment upload", await put.text().catch(() => ""));
+        throw new MicrosoftError(`Couldn't upload ${item.name}. Try again.`);
+      }
     }
   }
 }
@@ -569,7 +568,7 @@ async function sendLargeGraphMail(
     }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (created.status === 403) throw new Error(LARGE_ATTACHMENT_RECONNECT);
+  if (created.status === 403) throw new MicrosoftError(LARGE_ATTACHMENT_RECONNECT);
   if (!created.ok) throw await sendFailure(created);
   const draft = (await created.json()) as { id: string };
   const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.id)}`;
@@ -597,7 +596,7 @@ async function graphGet(
   });
 }
 
-async function graphError(response: Response) {
+async function graphError(response: Response, fallback: string) {
   const body = (await response.json().catch(() => ({}))) as {
     error?: { message?: string; code?: string };
   };
@@ -605,22 +604,47 @@ async function graphError(response: Response) {
     response.status === 401 ||
     body.error?.code === "InvalidAuthenticationToken"
   ) {
-    return "Microsoft rejected the mailbox connection. Connect it again.";
+    return MICROSOFT_REJECTED;
   }
-  return body.error?.message || "Microsoft could not list the inbox.";
+  return microsoftProblem([body.error?.code, body.error?.message].filter(Boolean).join(": "), fallback);
 }
 
-export const APP_NEEDS_ATTENTION = "Orbit's Microsoft app needs attention. Tell Mark.";
+export const APP_NEEDS_ATTENTION = "Orbit's Microsoft app needs attention. Tell the workspace owner.";
 
 export function appConfigProblem(message: string | null | undefined) {
   return /invalid_client|AADSTS7000222|AADSTS7000215/i.test(message ?? "");
 }
 
-export function sanitizeMicrosoftError(message: string) {
-  const compact = message.replace(/\s+/g, " ").trim();
-  if (appConfigProblem(compact)) return APP_NEEDS_ATTENTION;
-  if (/invalid_grant|consent|AADSTS70008|expired/i.test(compact)) {
-    return "Microsoft rejected the mailbox connection. Connect it again.";
-  }
-  return compact.slice(0, 240) || "Could not reach Microsoft.";
+const SIGNED_OUT = /invalid_grant|consent|AADSTS70008|expired/i;
+const PROVIDER_TEXT = /AADSTS\d|Trace ID|Correlation ID|Timestamp:|^[A-Za-z]+: |\b[A-Z][a-z]+(_[A-Za-z]+)+\b|\b(Error|Invalid|Access|Request|Mailbox|Item|Quota|Authentication)[A-Z]\w*/;
+
+function compact(message: string | null | undefined) {
+  return (message ?? "").replace(/\s+/g, " ").trim();
+}
+
+function logMicrosoft(label: string, detail: string) {
+  if (detail) console.error(`${label} failed at Microsoft`, compact(detail).slice(0, 500));
+}
+
+export function microsoftProblem(detail: string | null | undefined, fallback = MICROSOFT_UNREACHABLE) {
+  const text = compact(detail);
+  if (appConfigProblem(text)) return APP_NEEDS_ATTENTION;
+  if (SIGNED_OUT.test(text)) return MICROSOFT_REJECTED;
+  logMicrosoft("Request", text);
+  return fallback;
+}
+
+export function sanitizeMicrosoftError(message: string, fallback = MICROSOFT_UNREACHABLE) {
+  const text = compact(message);
+  if (appConfigProblem(text) || SIGNED_OUT.test(text)) return microsoftProblem(text, fallback);
+  if (writtenForPeople(text) && !PROVIDER_TEXT.test(text)) return text;
+  return microsoftProblem(text, fallback);
+}
+
+export function microsoftErrorText(error: unknown, fallback = MICROSOFT_UNREACHABLE) {
+  const raw = error instanceof Error ? compact(`${"detail" in error && typeof error.detail === "string" ? error.detail : ""} ${error.message}`) : "";
+  if (appConfigProblem(raw)) return APP_NEEDS_ATTENTION;
+  if (error instanceof ShownError) return errorText(error, fallback);
+  if (SIGNED_OUT.test(raw)) return MICROSOFT_REJECTED;
+  return errorText(error, fallback);
 }

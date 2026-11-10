@@ -190,7 +190,7 @@ export async function syncTargets(options: { fetchImpl?: typeof fetch } = {}) {
         targets,
       );
     } catch (error) {
-      granolaError = errorText(error, "Could not reach Granola.");
+      granolaError = errorText(error, "Couldn't reach Granola. Try again.");
     }
   }
   const keyedRows = (

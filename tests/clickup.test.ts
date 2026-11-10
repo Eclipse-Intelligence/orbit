@@ -394,7 +394,7 @@ describe("clickup client", () => {
       sleep: async () => assert.fail("should not sleep past the deadline"),
       deadline: Date.now() + 2_500,
     });
-    await assert.rejects(short.getUser(), /rate limiting/);
+    await assert.rejects(short.getUser(), /ClickUp is busy\. Orbit will retry\./);
   });
 });
 
@@ -661,11 +661,12 @@ describe("clickup sync", () => {
   it("records a failed push without blocking the Orbit task and retries it", async () => {
     fake.failCreate = 1;
     const created = await createTaskWithClickUp(owner, { title: "Flaky push", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
-    assert.match(created.clickupError ?? "", /ClickUp returned 500/);
+    assert.equal(created.clickupError, "Couldn't reach ClickUp. Try again.");
     const failed = await taskRow(created.task.id);
     assert.equal(failed.clickup_task_id, null);
     assert.equal(failed.clickup_list_id, RELATIONSHIPS);
-    assert.match(failed.clickup_error ?? "", /500/);
+    assert.equal(failed.clickup_error, "Couldn't reach ClickUp. Try again.");
+    assert.doesNotMatch(failed.clickup_error ?? "", /Internal error|ITEM_500/);
     assert.equal((await getTask(owner, created.task.id)).clickupError, failed.clickup_error);
     const retried = await syncClickUp({ actor: owner, force: true, fetchImpl });
     assert.equal(retried.pushed, 1);

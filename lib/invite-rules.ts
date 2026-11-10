@@ -1,6 +1,7 @@
 import { dateKey, shiftDateKey, weekday } from "@/lib/calendar-view";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { appTimeZone, zonedParts } from "@/lib/time";
+import { tooLong } from "@/lib/crm/errors";
 
 export const INVITE_DURATIONS = [15, 30, 45, 60, 90] as const;
 export const INVITE_DEFAULT_DURATION = 30;
@@ -19,7 +20,7 @@ export function checkMeetingLink(value: string): MeetingLinkCheck {
   const trimmed = value.trim();
   if (!trimmed) return { ok: true, link: null };
   if (trimmed.length > MEETING_LINK_MAX) {
-    return { ok: false, error: `Keep the link under ${MEETING_LINK_MAX} characters.` };
+    return { ok: false, error: tooLong("the link", MEETING_LINK_MAX) };
   }
   let url: URL;
   try {
@@ -27,11 +28,11 @@ export function checkMeetingLink(value: string): MeetingLinkCheck {
   } catch {
     return { ok: false, error: "Enter the full link, starting with https://." };
   }
-  if (url.protocol !== "https:") return { ok: false, error: "Use a secure link that starts with https://." };
-  if (url.username || url.password) return { ok: false, error: "Remove the sign-in details from the link." };
+  if (url.protocol !== "https:") return { ok: false, error: "Use an https link." };
+  if (url.username || url.password) return { ok: false, error: "Remove the username and password from the link." };
   if (!url.hostname.includes(".")) return { ok: false, error: "Enter the full link, starting with https://." };
   if (url.href.length > MEETING_LINK_MAX) {
-    return { ok: false, error: `Keep the link under ${MEETING_LINK_MAX} characters.` };
+    return { ok: false, error: tooLong("the link", MEETING_LINK_MAX) };
   }
   return { ok: true, link: url.href };
 }

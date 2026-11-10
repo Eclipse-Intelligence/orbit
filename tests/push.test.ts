@@ -91,7 +91,7 @@ describe("notifications", () => {
   });
 
   it("checks a device before saving it", async () => {
-    await assert.rejects(() => savePushSubscription(owner, { endpoint: "http://insecure", keys: { p256dh: "x", auth: "y" } }, null), /couldn't set up/);
+    await assert.rejects(() => savePushSubscription(owner, { endpoint: "http://insecure", keys: { p256dh: "x", auth: "y" } }, null), /Couldn't set up notifications/);
   });
 
   it("only accepts and sends to the known push services", async () => {
@@ -123,7 +123,7 @@ describe("notifications", () => {
     }
     await assert.rejects(
       () => savePushSubscription(owner, { endpoint: "https://127.0.0.1:6379/", keys: { p256dh: "x", auth: "y" } }, null),
-      /push service isn't one Orbit sends to/,
+      /can't get notifications/,
     );
     await getAdminPool().query(
       `insert into crm.push_subscriptions (workspace_id, user_id, endpoint, p256dh, auth)
@@ -134,7 +134,7 @@ describe("notifications", () => {
     const result = await pushToUser(owner, { title: "Orbit", body: "Test", url: "/mail" }, { send: probe.send, endpoint: "https://internal.test:8080/probe" });
     assert.equal(probe.sent.length, 0);
     assert.equal(result.sent, 0);
-    assert.match(result.failures[0].reason, /isn't one Orbit sends to/);
+    assert.match(result.failures[0].reason, /can't get notifications/);
     await getAdminPool().query("delete from crm.push_subscriptions where endpoint = 'https://internal.test:8080/probe'");
   });
 

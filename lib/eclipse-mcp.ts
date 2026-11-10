@@ -1,3 +1,5 @@
+import { ShownError, notSetUp } from "@/lib/crm/errors";
+import { logUpstream, upstreamMessage } from "@/lib/upstream";
 import { randomUUID } from "node:crypto";
 
 const DEFAULT_URL = "https://app.geteclipse.co/api/mcp";
@@ -6,7 +8,7 @@ const RESULT_MAX = 200_000;
 
 export type EclipseTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 
-export class EclipseMcpError extends Error {}
+export class EclipseMcpError extends ShownError {}
 
 let listed: { at: number; tools: EclipseTool[] } | null = null;
 let clientList: { at: number; clients: EclipseClient[] } | null = null;
@@ -30,7 +32,7 @@ export function clearEclipseToolCache() {
 }
 
 async function rpc(method: string, params: Record<string, unknown>, fetchImpl: typeof fetch) {
-  if (!eclipseMcpConfigured()) throw new EclipseMcpError("Eclipse isn't connected. Add ECLIPSE_MCP_TOKEN in Vercel.");
+  if (!eclipseMcpConfigured()) throw new EclipseMcpError(notSetUp("Eclipse", "ECLIPSE_MCP_TOKEN"));
   const response = await fetchImpl(process.env.ECLIPSE_MCP_URL?.trim() || DEFAULT_URL, {
     method: "POST",
     headers: {
@@ -42,8 +44,10 @@ async function rpc(method: string, params: Record<string, unknown>, fetchImpl: t
     signal: AbortSignal.timeout(60_000),
   });
   const text = await response.text();
-  if (response.status === 401 || response.status === 403) throw new EclipseMcpError("Eclipse refused the token. Check ECLIPSE_MCP_TOKEN.");
-  if (!response.ok) throw new EclipseMcpError(`Eclipse answered ${response.status}.`);
+  if (!response.ok) {
+    logUpstream("Eclipse", response.status, text);
+    throw new EclipseMcpError(upstreamMessage("Eclipse", response.status, { credential: "token" }));
+  }
   const json = text.trim().startsWith("{")
     ? text
     : text

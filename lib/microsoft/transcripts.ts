@@ -1,10 +1,9 @@
-import { sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
-import { withMicrosoftDetail } from "@/lib/microsoft/calls";
+import { ShownError } from "@/lib/crm/errors";
+import { MICROSOFT_UNREACHABLE, microsoftErrorText, microsoftProblem } from "@/lib/microsoft/oauth";
+import { APP_CREDENTIALS_REJECTED, withMicrosoftDetail } from "@/lib/microsoft/calls";
 
-const TRANSCRIPT_PERMISSION_MESSAGE =
-  "Grant Orbit the CallTranscripts.Read.All application permission with admin consent in Microsoft Entra.";
-export const TRANSCRIPTS_DISABLED_MESSAGE =
-  "Your Microsoft 365 admin has turned off API access to Teams transcripts.";
+const TRANSCRIPT_PERMISSION_MESSAGE = "Grant Orbit CallTranscripts.Read.All in Microsoft Entra.";
+export const TRANSCRIPTS_DISABLED_MESSAGE = "Your Microsoft admin has turned off API access to Teams transcripts.";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
@@ -30,7 +29,7 @@ type GraphSubscription = {
   resource?: string;
 };
 
-class GraphError extends Error {
+class GraphError extends ShownError {
   readonly status: number;
 
   constructor(message: string, status: number) {
@@ -61,14 +60,19 @@ function transcriptResource(userId: string) {
   return `users/${userId}/adhocCalls/getAllTranscripts`;
 }
 
-export function sanitizeTranscriptError(message: string) {
+export function sanitizeTranscriptError(message: string, fallback = MICROSOFT_UNREACHABLE) {
   const compact = message.replace(/\s+/g, " ").trim();
-  if (compact.startsWith(TRANSCRIPT_PERMISSION_MESSAGE)) return compact.slice(0, 500);
+  if (compact === TRANSCRIPT_PERMISSION_MESSAGE) return compact;
   if (/GraphAccessToTranscriptsDisabled/i.test(compact)) return TRANSCRIPTS_DISABLED_MESSAGE;
   if (/Authorization_RequestDenied|Forbidden|insufficient privileges|CallTranscripts\.Read/i.test(compact)) {
     return TRANSCRIPT_PERMISSION_MESSAGE;
   }
-  return sanitizeMicrosoftError(compact);
+  return microsoftProblem(compact, fallback);
+}
+
+export function transcriptErrorText(error: unknown, fallback: string) {
+  if (error instanceof ShownError) return microsoftErrorText(error, fallback);
+  return sanitizeTranscriptError(error instanceof Error ? error.message : "", fallback);
 }
 
 async function graphError(response: Response, fallback: string) {
@@ -99,12 +103,9 @@ async function graphError(response: Response, fallback: string) {
     );
   }
   if (response.status === 401) {
-    return new GraphError(
-      "Microsoft rejected the app token for Teams transcripts. Check the Microsoft app credentials.",
-      401,
-    );
+    return new GraphError(APP_CREDENTIALS_REJECTED, 401);
   }
-  return new GraphError(sanitizeTranscriptError(body.error?.message || fallback), response.status);
+  return new GraphError(sanitizeTranscriptError(codes.trim(), fallback), response.status);
 }
 
 export async function fetchTranscripts(
@@ -128,7 +129,7 @@ export async function fetchTranscripts(
       headers: { authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(timeout(deadline)),
     });
-    if (!response.ok) throw await graphError(response, "Microsoft could not list Teams transcripts.");
+    if (!response.ok) throw await graphError(response, "Couldn't read Teams transcripts. Try again.");
     const body = (await response.json()) as {
       value?: CallTranscript[];
       "@odata.nextLink"?: string;
@@ -154,7 +155,7 @@ export async function fetchTranscript(
     },
   );
   if (response.status === 404) return null;
-  if (!response.ok) throw await graphError(response, "Microsoft could not read the Teams transcript.");
+  if (!response.ok) throw await graphError(response, "Couldn't read the Teams transcript. Try again.");
   return (await response.json()) as CallTranscript;
 }
 
@@ -178,12 +179,12 @@ export async function fetchTranscriptContent(
   deadline?: number,
 ) {
   const url = transcriptContentUrl(userId, transcript);
-  if (!url) throw new GraphError("Microsoft did not say where the transcript content is.", 400);
+  if (!url) throw new GraphError("Couldn't read the transcript.", 400);
   const response = await fetchImpl(url, {
     headers: { authorization: `Bearer ${accessToken}`, accept: "text/vtt" },
     signal: AbortSignal.timeout(timeout(deadline)),
   });
-  if (!response.ok) throw await graphError(response, "Microsoft could not download the Teams transcript.");
+  if (!response.ok) throw await graphError(response, "Couldn't download the Teams transcript. Try again.");
   return response.text();
 }
 
@@ -212,7 +213,7 @@ export async function createSubscription(
     }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-  if (!response.ok) throw await graphError(response, "Microsoft could not create the transcript subscription.");
+  if (!response.ok) throw await graphError(response, "Couldn't turn on instant Teams transcripts. Try again.");
   return (await response.json()) as GraphSubscription;
 }
 
@@ -229,7 +230,7 @@ export async function renewSubscription(
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (response.status === 404) return null;
-  if (!response.ok) throw await graphError(response, "Microsoft could not renew the transcript subscription.");
+  if (!response.ok) throw await graphError(response, "Couldn't renew instant Teams transcripts. Try again.");
   return (await response.json()) as GraphSubscription;
 }
 

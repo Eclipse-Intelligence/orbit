@@ -313,7 +313,7 @@ describe("invite rules", () => {
     assert.throws(() => cleanMeetingLink("http://whereby.com/eclipse"), /https/);
     assert.throws(() => cleanMeetingLink("javascript:alert(1)"), /https/);
     assert.throws(() => cleanMeetingLink("whereby.com/eclipse"), /https/);
-    assert.throws(() => cleanMeetingLink("https://user:pass@whereby.com/x"), /sign-in details/);
+    assert.throws(() => cleanMeetingLink("https://user:pass@whereby.com/x"), /Remove the username and password from the link/);
     assert.throws(() => cleanMeetingLink(`https://whereby.com/${"a".repeat(490)}`), /500 characters/);
     assert.throws(() => cleanMeetingLink(42), /https/);
   });
@@ -613,7 +613,7 @@ describe("sending invites", () => {
           }),
           now: NOW,
         }),
-      { code: "rate_limited", message: "Microsoft is limiting requests right now. Try again in 30 seconds." },
+      { code: "rate_limited", message: "Microsoft is busy. Try again in 30 seconds." },
     );
     const rows = await getAdminPool().query("select 1 from crm.calendar_events where user_id = $1", [owner.userId]);
     assert.equal(rows.rows.length, 0);
@@ -757,7 +757,7 @@ describe("cancelling invites", () => {
           }),
           now: NOW,
         }),
-      { message: "Only the organiser can cancel this meeting. Decline it in Outlook instead." },
+      { message: "Only the organiser can cancel. Decline it instead." },
     );
     await rejects(() => cancelInvite(owner, "not-a-uuid", "", { fetchImpl: graph([]), now: NOW }), { code: "not_found" });
   });
@@ -1261,7 +1261,7 @@ describe("answering invites", () => {
           }),
           now: NOW,
         }),
-      { code: "invalid_input", message: /isn't taking new time proposals/ },
+      { code: "invalid_input", message: /isn't accepting new times/ },
     );
   });
 

@@ -2,7 +2,7 @@ import { getCompany } from "@/lib/crm/companies";
 import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
 import { getContact, updateContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, errorText, tooMany } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalLinkedin } from "@/lib/crm/normalize";
 import type { Contact, ContactWrite, UserActor } from "@/lib/crm/types";
@@ -230,8 +230,8 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
 
 export async function enrichContacts(actor: UserActor, ids: unknown, field: ContactField, options: Options = {}) {
   const list = Array.isArray(ids) ? [...new Set(ids.filter((id): id is string => typeof id === "string" && isUuid(id)))] : [];
-  if (list.length === 0) throw new CrmError("invalid_input", "Select at least one person.", 400);
-  if (list.length > BULK_MAX) throw new CrmError("invalid_input", `Send up to ${BULK_MAX} people at a time.`, 400);
+  if (list.length === 0) throw new CrmError("invalid_input", "Choose at least one contact.", 400);
+  if (list.length > BULK_MAX) throw new CrmError("invalid_input", tooMany(BULK_MAX, "contacts at a time"), 400);
   const results: ContactEnrichment[] = [];
   let next = 0;
   async function worker() {
@@ -241,7 +241,7 @@ export async function enrichContacts(actor: UserActor, ids: unknown, field: Cont
         results.push(await enrichContact(actor, id, field, options));
       } catch (error) {
         results.push({
-          ...skipped(id, field, error instanceof CrmError ? error.message : "That lookup failed."),
+          ...skipped(id, field, errorText(error, "That lookup failed.")),
           status: "failed",
         });
       }

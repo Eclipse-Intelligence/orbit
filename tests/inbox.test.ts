@@ -321,7 +321,7 @@ describe("microsoft inbox", () => {
           },
           fetchImpl,
         ),
-      /Mail\.Send/,
+      /Microsoft hasn't allowed sending\. Reconnect the mailbox\./,
     );
   });
 

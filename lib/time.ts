@@ -112,7 +112,7 @@ const ZONE_OFFSETS: Record<string, number> = {
 const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 
-const FORMAT_HINT = "Enter a valid date and time, such as 2026-11-07 14:30, 07/11/2026 or 7 Nov 2026.";
+const FORMAT_HINT = "Enter a date and time, such as 7 Nov 2026 14:30.";
 
 export type DateTimeReading = { ok: true; date: Date; dateOnly: boolean } | { ok: false; error: string };
 
@@ -125,7 +125,7 @@ function monthNumber(word: string) {
 }
 
 function wallFrom(year: string, month: number, day: string, hour?: string, minute?: string, second?: string): Wall | string {
-  if (year.length !== 4) return "Write the year in full, such as 2026.";
+  if (year.length !== 4) return "Enter the year in full, such as 2026.";
   return {
     year: Number(year),
     month,
@@ -224,13 +224,13 @@ function readInstant(value: string, timeZone: string, strict: boolean): DateTime
   const date = zonedTimeToDate(wall, timeZone);
   if (strict && !wall.dateOnly) {
     if (!sameWall(date, wall, timeZone)) {
-      return { ok: false, error: `${wallLabel(wall)} doesn't exist in ${zoneLabel(timeZone)} because the clocks go forward. Pick another time.` };
+      return { ok: false, error: `${wallLabel(wall)} is skipped when the clocks go forward. Choose another time.` };
     }
     const hour = 3_600_000;
     if ([date.getTime() - hour, date.getTime() + hour].some((at) => sameWall(new Date(at), wall, timeZone))) {
       return {
         ok: false,
-        error: `${wallLabel(wall)} happens twice in ${zoneLabel(timeZone)} because the clocks go back. Add the offset, such as +01:00 or Z.`,
+        error: `${wallLabel(wall)} happens twice when the clocks go back. Add an offset, such as +01:00.`,
       };
     }
   }

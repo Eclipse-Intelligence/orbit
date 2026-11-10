@@ -170,7 +170,7 @@ describe("knowledge", () => {
     const link = await addKnowledgeLink(owner, { eclipse: true }, { url: "eclipse.test/pricing" });
     assert.equal(link.title, "eclipse.test");
     assert.equal(link.scope, "eclipse");
-    await assert.rejects(addKnowledgeLink(owner, { eclipse: true }, { url: "https://eclipse.test/pricing" }), /already here/);
+    await assert.rejects(addKnowledgeLink(owner, { eclipse: true }, { url: "https://eclipse.test/pricing" }), /already in Knowledge/);
     await indexKnowledgeItem(owner, link.id, {
       fetchImpl,
       readPage: async () => ({ title: "Eclipse pricing", text: "Eclipse charges a monthly retainer for content and visibility work." }),
@@ -193,7 +193,7 @@ describe("knowledge", () => {
       },
     });
     assert.equal(outcome?.status, "failed");
-    assert.equal((await listKnowledge(owner, { companyId: acme })).find((item) => item.id === failed.id)?.error, "That page couldn't be read.");
+    assert.equal((await listKnowledge(owner, { companyId: acme })).find((item) => item.id === failed.id)?.error, "Couldn't read that page.");
   });
 
   it("reads long items in windows, renames, removes, and hides them from other workspaces", async () => {
@@ -216,7 +216,7 @@ describe("knowledge", () => {
     assert.equal((await renameKnowledge(owner, item.id, "Kick-off call with Globex")).title, "Kick-off call with Globex");
 
     assert.deepEqual(await listKnowledge(outsider, "all"), []);
-    await assert.rejects(readKnowledge(outsider, item.id), /isn't in Knowledge/);
+    await assert.rejects(readKnowledge(outsider, item.id), /Item not found/);
     assert.equal((await searchKnowledge(outsider, { query: "onboarding milestones" }, { fetchImpl })).hits.length, 0);
     await assert.rejects(addKnowledgeLink(outsider, { companyId: acme }, { url: "https://x.test" }), /Company not found/);
 
@@ -251,7 +251,7 @@ describe("knowledge", () => {
       const company = (await runTool(owner, "get_company", { companyId: acme })) as { knowledge: { title: string; summary: string | null }[] };
       assert.ok(company.knowledge.some((item) => item.title === "Acme rollout deck" && item.summary === "A deck about Acme's rollout."));
       const missing = (await runTool(owner, "read_knowledge", { itemId: "00000000-0000-4000-8000-000000000000" })) as { error: string };
-      assert.equal(missing.error, "That item isn't in Knowledge.");
+      assert.equal(missing.error, "Item not found.");
     } finally {
       globalThis.fetch = original;
     }

@@ -22,7 +22,7 @@ export const ACTIVITY_FIELD_LABELS: Record<ActivityEditField, string> = {
   body: "Text",
   occurredAt: "When",
   companyId: "Company",
-  contactId: "Person",
+  contactId: "Contact",
   opportunityId: "Opportunity",
 };
 
@@ -39,8 +39,8 @@ const EDITABLE: Record<ActivityOrigin, readonly ActivityEditField[]> = {
 };
 
 export const ORIGIN_LIMITS: Record<Exclude<ActivityOrigin, "logged">, string> = {
-  mail: "This email was filed from Mail, so only its company and opportunity can change.",
-  conversation: "This call or meeting came from Teams, Granola or a transcript, so only its title, company, person and opportunity can change.",
+  mail: "Filed from Mail: only company and opportunity can change.",
+  conversation: "Imported call: only title, company, contact and opportunity can change.",
 };
 
 export function activityOrigin(activity: Pick<Activity, "type" | "metadata">, hasTranscript = false): ActivityOrigin {

@@ -12,7 +12,7 @@ import { ACTIVITY_FIELD_LABELS, type ActivityEdit } from "@/lib/crm/activity-edi
 import { archiveCompanyInDb, readCompanyInDb, unarchiveCompanyInDb, updateCompanyInDb } from "@/lib/crm/companies";
 import { archiveContactInDb, readContactInDb, unarchiveContactInDb, updateContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFoundMessage } from "@/lib/crm/errors";
 import { iso, isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { stableStringify } from "@/lib/crm/normalize";
 import { archiveOpportunityInDb, readOpportunityInDb, unarchiveOpportunityInDb, updateOpportunityInDb } from "@/lib/crm/opportunities";
@@ -30,7 +30,7 @@ type RecordType = Exclude<EntityType, "activity">;
 
 const NOUNS: Record<EntityType, string> = {
   company: "company",
-  contact: "person",
+  contact: "contact",
   opportunity: "opportunity",
   task: "task",
   activity: "activity",
@@ -224,7 +224,7 @@ function shownValue(field: string, value: unknown, names: Map<string, string>) {
   return clip(String(value));
 }
 
-const MERGE_REASON = "A merge can't be undone, so Orbit won't reverse any part of it.";
+const MERGE_REASON = "Merges can't be undone.";
 
 function mergedInto(changes: Record<string, unknown> | null) {
   const target = changes?.mergedInto;
@@ -340,8 +340,8 @@ function fieldList(changes: Record<string, unknown> | null) {
   return { fields: unique, before, after };
 }
 
-function changedSince(label: string, value: unknown, field: string, names: Map<string, string>) {
-  return `This can't be undone because it has changed again since: ${label} is now ${shownValue(field, value, names)}.`;
+function changedSince(label: string) {
+  return `Can't undo: ${label} has changed since.`;
 }
 
 function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, before: Record<string, unknown>, fields: string[], provenance: Provenance) {
@@ -441,7 +441,7 @@ async function describeEvent(
   }
   if (!entity || event.event_type.endsWith(".merged")) {
     const name = eventName(event, entity);
-    return { entityName: name, summary: `${event.event_type.replace(/[._]/g, " ")}: ${name}`, plan: { ok: false, reason: "Orbit can't undo this kind of change." } };
+    return { entityName: name, summary: `${event.event_type.replace(/[._]/g, " ")}: ${name}`, plan: { ok: false, reason: "This change can't be undone." } };
   }
   const noun = NOUNS[entity];
   const plain = (reason: string): Described => ({ entityName: `this ${noun}`, summary: `A change to this ${noun}`, plan: { ok: false, reason } });
@@ -458,7 +458,7 @@ async function describeEvent(
   const before = record(changes?.before);
   const after = record(changes?.after);
   if (event.event_type === "contact.updated" && record(changes?.companyMovedTo)) {
-    return refuse(`Took ${entityName} off their company`, "This can't be undone because the company moved to another workspace.");
+    return refuse(`Took ${entityName} off their company`, "Can't undo: the company moved workspace.");
   }
   const updateEntity = UPDATE_EVENTS[event.event_type];
   const fields = updateEntity ? fieldList(changes) : null;
@@ -468,9 +468,9 @@ async function describeEvent(
   let run: (() => Promise<unknown>) | null = null;
 
   if (updateEntity && fields && fields.fields.length === 1 && fields.fields[0] === "archivedAt") {
-    summary = entity === "activity" ? `Brought back ${entityName}` : `Restored ${noun} ${entityName} from the archive`;
+    summary = entity === "activity" ? `Restored ${entityName}` : `Restored ${noun} ${entityName} from the archive`;
     restores = entity === "activity" ? `Deletes ${entityName} again.` : `Archives ${entityName} again.`;
-    if (current && current.archivedAt) check = `This can't be undone because ${entityName} is ${entity === "activity" ? "deleted" : "archived"} again.`;
+    if (current && current.archivedAt) check = `Can't undo: ${entityName} is ${entity === "activity" ? "deleted" : "archived"}.`;
     run = archiveRun(db, actor, entity, event.entity_id, provenance);
   } else if (updateEntity === "activity" && fields && fields.fields.every((field) => field in FIELDS.activity)) {
     const labels = FIELDS.activity;
@@ -481,8 +481,8 @@ async function describeEvent(
     restores = `Puts back ${fields.fields.map((field) => `${labels[field]}: ${shownValue(field, fields.before[field], names)}`).join("; ")}.`;
     if (current) {
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
-      if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
-      else if (current.archivedAt) check = `This can't be undone while ${entityName} is deleted.`;
+      if (moved) check = changedSince(labels[moved]);
+      else if (current.archivedAt) check = `Can't undo: ${entityName} is deleted.`;
     }
     run = restoreActivityFields(db, actor, event.entity_id, fields.before, fields.fields, changes, provenance);
   } else if (updateEntity && updateEntity !== "activity" && fields && fields.fields.every((field) => field in FIELDS[updateEntity])) {
@@ -501,41 +501,41 @@ async function describeEvent(
     }
     if (current) {
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
-      if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
-      else if (current.archivedAt) check = `This can't be undone while ${entityName} is archived.`;
+      if (moved) check = changedSince(labels[moved]);
+      else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
     }
     run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance);
   } else if (updateEntity) {
-    return refuse(`Changed ${noun} ${entityName}`, "This change isn't in a shape Orbit can safely reverse.");
+    return refuse(`Changed ${noun} ${entityName}`, "This change can't be undone.");
   } else if (event.event_type === "opportunity.stage_changed" && before && after && typeof before.stageId === "string") {
     const from = typeof before.stageName === "string" ? before.stageName : "the earlier stage";
     const to = typeof after.stageName === "string" ? after.stageName : "a new stage";
     summary = `Moved opportunity ${entityName} from ${from} to ${to}`;
     restores = `Moves ${entityName} back to ${from}.`;
     if (current && (current.values.stageId !== after.stageId || current.values.status !== after.status)) {
-      check = `This can't be undone because ${entityName} has moved stage again since.`;
+      check = `Can't undo: ${entityName} has moved stage since.`;
     } else if (current?.archivedAt) {
-      check = `This can't be undone while ${entityName} is archived.`;
+      check = `Can't undo: ${entityName} is archived.`;
     }
     const stageId = before.stageId;
     run = () => updateOpportunityInDb(db, actor, event.entity_id, { stageId }, provenance, { wonEffects: false });
   } else if (event.event_type === `${entity}.archived` && before && after && before.archivedAt === null && typeof after.archivedAt === "string") {
     summary = entity === "activity" ? `Deleted ${entityName}` : `Archived ${noun} ${entityName}`;
-    restores = entity === "activity" ? `Brings back ${entityName}.` : `Restores ${noun} ${entityName} from the archive.`;
-    if (current && !current.archivedAt) check = `This can't be undone because ${entityName} has been restored already.`;
-    else if (current && !same(current.archivedAt, iso(after.archivedAt))) check = `This can't be undone because ${entityName} has changed again since.`;
+    restores = entity === "activity" ? `Restores ${entityName}.` : `Restores ${noun} ${entityName} from the archive.`;
+    if (current && !current.archivedAt) check = `Can't undo: ${entityName} is already restored.`;
+    else if (current && !same(current.archivedAt, iso(after.archivedAt))) check = `Can't undo: ${entityName} has changed since.`;
     run = unarchiveRun(db, actor, entity, event.entity_id, provenance, changes);
   } else if (event.event_type === `${entity}.created`) {
     summary = entity === "activity" ? `Logged ${entityName}` : `Created ${noun} ${entityName}`;
     restores = entity === "activity" ? `Deletes ${entityName}.` : `Archives ${noun} ${entityName}.`;
-    if (current?.archivedAt) check = `This can't be undone because ${entityName} is already ${entity === "activity" ? "deleted" : "archived"}.`;
+    if (current?.archivedAt) check = `Can't undo: ${entityName} is already ${entity === "activity" ? "deleted" : "archived"}.`;
     run = archiveRun(db, actor, entity, event.entity_id, provenance);
   } else {
-    return refuse(fallback, "Orbit can't undo this kind of change.");
+    return refuse(fallback, "This change can't be undone.");
   }
 
   if (undone) return refuse(summary, "This change has already been undone.");
-  if (!current) return refuse(summary, `That ${noun} no longer exists.`);
+  if (!current) return refuse(summary, notFoundMessage(noun));
   if (!hasScope(actor.scopes, SCOPES[entity])) return refuse(summary, `You don't have permission to change this ${noun}.`);
   if (check) return refuse(summary, check);
   return { entityName, summary, plan: { ok: true, restores, run } };

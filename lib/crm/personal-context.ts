@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, errorText, tooLong } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { completeJson, LlmError } from "@/lib/llm";
-import { mindcaseConfigured, MindcaseError } from "@/lib/mindcase";
+import { mindcaseConfigured } from "@/lib/mindcase";
 import { normaliseLinkedIn, normaliseWebsite, PERSONAL_LIMITS, type AboutYouInput, type YouInput } from "@/lib/personal-context-rules";
 import { socialLookup } from "@/lib/social-lookup";
 import { readWebPage, type Lookup, type WebPage } from "@/lib/web-page";
@@ -58,14 +58,14 @@ function text(input: Record<string, unknown>, key: keyof typeof PERSONAL_LIMITS 
   }
   const trimmed = (value ?? "").trim().replace(/\r\n/g, "\n");
   if (trimmed.length > PERSONAL_LIMITS[key]) {
-    throw new CrmError("invalid_input", `${label} can be up to ${PERSONAL_LIMITS[key].toLocaleString("en-GB")} characters.`, 400, { field: key });
+    throw new CrmError("invalid_input", tooLong(`${label.charAt(0).toLowerCase()}${label.slice(1)}`, PERSONAL_LIMITS[key]), 400, { field: key });
   }
   return trimmed || null;
 }
 
 function link(value: unknown, field: "linkedinUrl" | "websiteUrl") {
   if (value !== undefined && value !== null && typeof value !== "string") {
-    throw new CrmError("invalid_input", "Links must be text.", 400, { field });
+    throw new CrmError("invalid_input", "Invalid link.", 400, { field });
   }
   const checked = field === "linkedinUrl" ? normaliseLinkedIn(value ?? "") : normaliseWebsite(value ?? "");
   if (!checked.ok) throw new CrmError("invalid_input", checked.error, 400, { field });
@@ -210,13 +210,13 @@ export async function draftPersonalContext(
         sources.push(page.url);
       }
     } catch (error) {
-      notes.push(`Couldn't read ${website}: ${error instanceof Error ? error.message : "the page didn't load"}`);
+      notes.push(`Couldn't read ${website}. ${errorText(error, "Try again.")}`);
     }
   }
 
   if (linkedin) {
     if (!mindcaseConfigured()) {
-      notes.push("LinkedIn wasn't read because Mindcase isn't set up.");
+      notes.push("LinkedIn lookup isn't set up.");
     } else {
       const run = { fetchImpl: options.fetchImpl, source: "about-you" };
       const [profile, posts] = await Promise.allSettled([
@@ -227,20 +227,20 @@ export async function draftPersonalContext(
         material.push(`Their LinkedIn profile:\n${JSON.stringify(profile.value.profile)}`);
         sources.push(linkedin);
       } else {
-        notes.push(`Couldn't read the LinkedIn profile${profile.status === "rejected" && profile.reason instanceof MindcaseError ? `: ${profile.reason.message}` : "."}`);
+        notes.push(`Couldn't read the LinkedIn profile.${profile.status === "rejected" ? ` ${errorText(profile.reason, "Try again.")}` : ""}`);
       }
       const recent = posts.status === "fulfilled" && "posts" in posts.value ? (posts.value.posts ?? []) : [];
       if (recent.length) {
         material.push(`Their recent LinkedIn posts:\n${recent.map((post) => `"""\n${post.text ?? ""}\n"""`).join("\n")}`);
         if (!sources.includes(linkedin)) sources.push(linkedin);
       } else {
-        notes.push("No recent LinkedIn posts came back.");
+        notes.push("No recent LinkedIn posts.");
       }
     }
   }
 
   if (!material.length) {
-    throw new CrmError("unavailable", `Nothing could be read to draft from. ${notes.join(" ")}`.trim(), 502);
+    throw new CrmError("unavailable", `Nothing to draft from. ${notes.join(" ")}`.trim(), 502);
   }
 
   const name = actor.fullName || actor.email;
@@ -278,7 +278,10 @@ export async function draftPersonalContext(
       notes,
     };
   } catch (error) {
-    if (error instanceof LlmError) throw new CrmError("unavailable", `The draft couldn't be written: ${error.message}`, 502);
+    if (error instanceof LlmError) {
+      console.error("Drafting About you failed", error.message);
+      throw new CrmError("unavailable", "Couldn't write the draft. Try again.", 502);
+    }
     throw error;
   }
 }

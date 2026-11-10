@@ -115,7 +115,7 @@ describe("knowledge media", () => {
       if (url === "https://api.supadata.ai/v1/transcript/job-1") return Response.json({ status: "completed", content: [{ text: "Welcome to the keynote.", offset: 1000 }] });
       return null;
     };
-    await assert.rejects(readYouTube("https://youtu.be/dQw4w9WgXcQ", { ...fake(handler), lookup }), /Set SUPADATA_API_KEY/);
+    await assert.rejects(readYouTube("https://youtu.be/dQw4w9WgXcQ", { ...fake(handler), lookup }), /No captions available/);
     process.env.SUPADATA_API_KEY = "supa";
     const result = await readYouTube("https://youtu.be/dQw4w9WgXcQ", { ...fake(handler), lookup });
     assert.equal(result.title, "How Acme sells");
@@ -172,7 +172,7 @@ describe("knowledge media", () => {
     assert.equal(result.title, "Episode 42");
     assert.deepEqual(uploads, [9 * 1024 * 1024 + 100, 3 * 1024 * 1024 - 100]);
     assert.equal(result.text, "Transcript:\nPart one.\n\nPart two.");
-    await assert.rejects(readPodcast("https://open.spotify.com/episode/abc", { fetchImpl, lookup }), /Spotify doesn't share episode audio/);
+    await assert.rejects(readPodcast("https://open.spotify.com/episode/abc", { fetchImpl, lookup }), /Spotify links don't work/);
   });
 
   it("spots episode pages and feeds among plain links", async () => {
@@ -192,7 +192,7 @@ describe("knowledge media", () => {
     const { fetchImpl, calls } = fake(() => null);
     const audio = new Uint8Array(60 * 1024 * 1024);
     audio.set([0x49, 0x44, 0x33]);
-    await assert.rejects(transcribeBytes(audio, "long.mp3", "audio/mpeg", { fetchImpl, deadline: Date.now() + 60_000 }), /too long to transcribe here/);
+    await assert.rejects(transcribeBytes(audio, "long.mp3", "audio/mpeg", { fetchImpl, deadline: Date.now() + 60_000 }), /Audio too long/);
     assert.equal(calls.length, 0);
   });
 });

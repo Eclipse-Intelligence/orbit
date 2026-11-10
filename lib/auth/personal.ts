@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { memberActor } from "@/lib/crm/conversations";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, tooMany } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { hashToken } from "@/lib/crm/tokens";
 import { consumeRateLimitFor } from "@/lib/auth/rate-limit";
@@ -44,12 +44,12 @@ export async function listPersonalTokens(actor: UserActor) {
 
 export async function createPersonalToken(actor: UserActor, rawName: unknown) {
   const name = typeof rawName === "string" ? rawName.replace(/\s+/g, " ").trim().slice(0, 80) : "";
-  if (!name) throw new CrmError("invalid_input", "Give the token a name, such as Claude.", 400, { field: "name" });
+  if (!name) throw new CrmError("invalid_input", "Enter a name for the token.", 400, { field: "name" });
   const prefix = `${PERSONAL_PREFIX}${randomBytes(4).toString("hex")}`;
   const token = `${prefix}_${randomBytes(32).toString("base64url")}`;
   const created = await withActor(actor, async (db) => {
     const count = await db.query<{ count: number }>("select count(*)::int as count from crm.personal_tokens where user_id = $1 and revoked_at is null", [actor.userId]);
-    if ((count.rows[0]?.count ?? 0) >= TOKENS_MAX) throw new CrmError("invalid_input", `You can have up to ${TOKENS_MAX} tokens. Revoke one first.`, 400);
+    if ((count.rows[0]?.count ?? 0) >= TOKENS_MAX) throw new CrmError("invalid_input", `${tooMany(TOKENS_MAX, "tokens")} Revoke one first.`, 400);
     const result = await db.query<TokenRow>(
       `insert into crm.personal_tokens (workspace_id, user_id, name, prefix, token_hash) values ($1, $2, $3, $4, $5)
        returning ${TOKEN_COLUMNS}`,
@@ -61,7 +61,7 @@ export async function createPersonalToken(actor: UserActor, rawName: unknown) {
 }
 
 export async function revokePersonalToken(actor: UserActor, id: string) {
-  if (!isUuid(id)) throw new CrmError("not_found", "Token not found.", 404);
+  if (!isUuid(id)) throw notFound("token");
   await withActor(actor, (db) =>
     db.query("update crm.personal_tokens set revoked_at = now() where id = $1 and user_id = $2 and revoked_at is null", [id, actor.userId]),
   );

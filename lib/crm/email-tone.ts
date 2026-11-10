@@ -3,6 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import type { Actor } from "@/lib/crm/types";
 import { completeJson } from "@/lib/llm";
 import { visibleText } from "@/lib/mail/format";
+import { errorText } from "@/lib/crm/errors";
 
 const BATCH = 12;
 const WINDOW_DAYS = 120;
@@ -60,7 +61,7 @@ export async function classifyEmailTones(actor: Actor, options: { deadline?: num
     deadline: options.deadline,
     fetchImpl: options.fetchImpl,
   }).catch(async (error: unknown) => {
-    await recordFailures(actor, pending, error instanceof Error ? error.message : "The tone check failed.");
+    await recordFailures(actor, pending, errorText(error, "The tone check failed."));
     throw error;
   });
   let classified = 0;
@@ -80,7 +81,7 @@ export async function classifyEmailTones(actor: Actor, options: { deadline?: num
     if (done.size) await db.query("delete from crm.activity_tone_failures where activity_id = any($1::uuid[])", [[...done]]);
   });
   const skipped = pending.filter((email) => !done.has(email.id));
-  if (skipped.length) await recordFailures(actor, skipped, "The model left this email out of its answer.");
+  if (skipped.length) await recordFailures(actor, skipped, "The AI skipped this email.");
   return { classified };
 }
 

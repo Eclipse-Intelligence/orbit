@@ -14,7 +14,8 @@ import {
   type IntegrationKey,
 } from "@/lib/crm/conversations";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notSetUp, tooMany } from "@/lib/crm/errors";
+import { unreachable } from "@/lib/upstream";
 import { contactHref, companyHref } from "@/lib/crm/hrefs";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
@@ -60,8 +61,9 @@ const MAX_HISTORY_ITEMS = 50;
 const LINK_FIELD_NAMES = ["orbit", "crm"];
 const LINK_FIELD_TYPES = ["short_text", "text", "url", "email"];
 
-const CLICKUP_NOT_CONFIGURED =
-  "Set CLICKUP_API_TOKEN to sync tasks with ClickUp.";
+function clickupNotSetUp(actor: UserActor) {
+  return notSetUp("ClickUp", "CLICKUP_API_TOKEN", actor);
+}
 const CLICKUP_NOT_SET_UP = "Choose a ClickUp workspace and lists in Settings › Tools first.";
 
 type ClickUpSyncResult = {
@@ -550,7 +552,7 @@ async function createRemote(s: Session, taskId: string) {
     });
     return "pushed" as const;
   } catch (error) {
-    await recordTaskError(s.actor, row.id, errorText(error, "Could not create the ClickUp task."));
+    await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."));
     throw error;
   }
 }
@@ -584,7 +586,7 @@ async function updateRemote(s: Session, row: SyncRow) {
     );
     return "pushed" as const;
   } catch (error) {
-    await recordTaskError(s.actor, row.id, errorText(error, "Could not update the ClickUp task."));
+    await recordTaskError(s.actor, row.id, errorText(error, "Couldn't update the ClickUp task."));
     throw error;
   }
 }
@@ -842,7 +844,7 @@ export async function syncClickUp(
 ): Promise<ClickUpSyncResult> {
   const options = { ...input, deadline: input.deadline ?? Date.now() + WEBHOOK_BUDGET_MS };
   const token = clickupToken();
-  if (!token) return { ...idle(), error: CLICKUP_NOT_CONFIGURED };
+  if (!token) return { ...idle(), error: clickupNotSetUp(input.actor) };
   const actor = options.actor;
   const state = await getClickUpState(actor);
   if (!state?.teamId) return idle();
@@ -883,7 +885,7 @@ export async function syncClickUp(
             else if (outcome === "updated") result.updated += 1;
             else if (outcome === "archived") result.archived += 1;
           } catch (error) {
-            fail(error, "Could not sync a ClickUp task.");
+            fail(error, "Couldn't sync a ClickUp task.");
           }
         }
         if (body.lastPage || !complete) break;
@@ -899,7 +901,7 @@ export async function syncClickUp(
         if (outcome === "pushed") result.pushed += 1;
         else if (outcome === "archived") result.archived += 1;
       } catch (error) {
-        fail(error, "Could not update ClickUp.");
+        fail(error, "Couldn't update ClickUp.");
       }
     }
     for (const row of await staleLinks(actor)) {
@@ -917,7 +919,7 @@ export async function syncClickUp(
           db.query("update crm.tasks set clickup_synced_at = now() where id = $1", [row.id]),
         );
       } catch (error) {
-        fail(error, "Could not check a ClickUp task.");
+        fail(error, "Couldn't check a ClickUp task.");
       }
     }
     await withActor(actor, (db) =>
@@ -927,14 +929,14 @@ export async function syncClickUp(
     if (firstError) result.error = firstError;
     return result;
   } catch (error) {
-    const message = errorText(error, "Could not sync ClickUp.");
+    const message = errorText(error, "Couldn't sync ClickUp.");
     await withActor(actor, (db) => finishIntegration(db, key, { error: message }));
     return { ...result, error: message };
   }
 }
 
 export async function syncClickUpFor(actor: UserActor, options: ClickUpOptions = {}) {
-  if (!clickupToken()) throw new CrmError("invalid_input", CLICKUP_NOT_CONFIGURED, 400);
+  if (!clickupToken()) throw new CrmError("invalid_input", clickupNotSetUp(actor), 400);
   const state = await getClickUpState(actor);
   if (!state?.teamId) throw new CrmError("invalid_input", CLICKUP_NOT_SET_UP, 400);
   return syncClickUp({ ...options, actor, force: true });
@@ -962,7 +964,7 @@ export async function pushClickUpTask(signedIn: UserActor, taskId: string, optio
   try {
     return await pushRow(s, taskId);
   } catch (error) {
-    console.error("ClickUp push failed", errorText(error, "Could not update ClickUp."));
+    console.error("ClickUp push failed", error);
     return "failed" as const;
   }
 }
@@ -1033,7 +1035,7 @@ export async function createTaskWithClickUp(
     const row = await withActor(actor, (db) =>
       db.query<{ clickup_error: string | null }>("select clickup_error from crm.tasks where id = $1", [task.id]),
     );
-    return { task: { ...task, clickupListId: listId }, clickupError: row.rows[0]?.clickup_error ?? "Could not reach ClickUp." };
+    return { task: { ...task, clickupListId: listId }, clickupError: row.rows[0]?.clickup_error ?? unreachable("ClickUp") };
   }
   return { task: { ...task, clickupListId: listId }, clickupError: null };
 }
@@ -1083,7 +1085,7 @@ export async function getClickUpSettings(
       }
     }
   } catch (error) {
-    view.error = error instanceof ClickUpError ? error.message : "Could not reach ClickUp.";
+    view.error = errorText(error, unreachable("ClickUp"));
   }
   return view;
 }
@@ -1117,7 +1119,7 @@ export async function sharedLists(
 export function sharedWarning(shared: ClickUpSharedList[]) {
   if (shared.length === 0) return null;
   const parts = shared.map((item) => `${item.workspaceName} also uses ${item.listNames.join(", ")}`);
-  return `${parts.join(". ")}. Tasks in a list both workspaces watch sync into both.`;
+  return `${parts.join(". ")}. Shared lists sync into both.`;
 }
 
 function webhookScope(lists: ClickUpListChoice[], ids: string[]) {
@@ -1139,7 +1141,7 @@ export async function saveClickUpSettings(
 ) {
   assertScope(actor.scopes, "admin");
   const token = clickupToken();
-  if (!token) throw new CrmError("invalid_input", CLICKUP_NOT_CONFIGURED, 400);
+  if (!token) throw new CrmError("invalid_input", clickupNotSetUp(actor), 400);
   const api = client(token, options);
   let teams: ClickUpTeam[];
   let lists: ClickUpListChoice[];
@@ -1154,12 +1156,12 @@ export async function saveClickUpSettings(
     lists = await api.hierarchy(input.teamId, true);
   } catch (error) {
     if (error instanceof CrmError) throw error;
-    throw new CrmError("upstream_error", error instanceof ClickUpError ? error.message : "Could not reach ClickUp.", 502);
+    throw new CrmError("upstream_error", errorText(error, unreachable("ClickUp")), 502);
   }
   const ids = new Set(lists.map((list) => list.id));
   const watched = [...new Set(input.watchedListIds.filter(Boolean))];
   if (watched.length > MAX_POLL_LISTS) {
-    throw new CrmError("invalid_input", "Choose at most 100 lists to watch.", 400, { field: "watchedListIds" });
+    throw new CrmError("invalid_input", tooMany(MAX_POLL_LISTS, "lists"), 400, { field: "watchedListIds" });
   }
   if (watched.some((id) => !ids.has(id))) {
     throw new CrmError("invalid_input", "Choose lists from the selected ClickUp workspace.", 400, {
@@ -1192,12 +1194,13 @@ export async function saveClickUpSettings(
     if (teamChanged) {
       await api.deleteWebhook(before.webhookId).catch(() => false);
       await clearWebhook(actor);
-      warning = "Instant ClickUp sync was turned off because the workspace changed.";
+      warning = "Instant sync turned off: the ClickUp workspace changed.";
     } else if (desired !== before.webhookScope) {
       try {
         await enableClickUpWebhook(actor, options.origin ?? "", { ...options, replace: true });
       } catch (error) {
-        warning = `Saved, but instant sync could not follow the new lists: ${errorText(error, "Could not reach ClickUp.")}`;
+        console.error("ClickUp instant sync couldn't follow the new lists", error);
+        warning = "Saved, but instant sync couldn't update. Turn it off and on again.";
       }
     }
   }
@@ -1222,15 +1225,15 @@ export async function enableClickUpWebhook(
 ): Promise<{ enabled: boolean; message: string }> {
   assertScope(actor.scopes, "admin");
   const token = clickupToken();
-  if (!token) throw new CrmError("invalid_input", CLICKUP_NOT_CONFIGURED, 400);
+  if (!token) throw new CrmError("invalid_input", clickupNotSetUp(actor), 400);
   const state = await getClickUpState(actor);
   if (!state?.teamId) throw new CrmError("invalid_input", CLICKUP_NOT_SET_UP, 400);
   if (state.webhookId && state.webhookSecret && !options.replace) {
-    return { enabled: true, message: "Instant ClickUp sync is already on." };
+    return { enabled: true, message: "Instant sync on" };
   }
   const site = configuredSiteOrigin() ?? origin;
   if (!/^https:\/\//.test(site)) {
-    throw new CrmError("invalid_input", "Set SITE_URL to the https address of Orbit before turning on instant sync.", 400);
+    throw new CrmError("invalid_input", "Set SITE_URL to Orbit's https address first.", 400);
   }
   const endpoint = `${site}/api/clickup/webhook?workspace=${actor.workspaceId}`;
   const api = client(token, options);
@@ -1248,9 +1251,12 @@ export async function enableClickUpWebhook(
       ...(kind === "list" ? { list_id: Number(id) } : {}),
     });
   } catch (error) {
-    throw new CrmError("upstream_error", error instanceof ClickUpError ? error.message : "Could not reach ClickUp.", 502);
+    throw new CrmError("upstream_error", errorText(error, unreachable("ClickUp")), 502);
   }
-  if (!created.secret) throw new CrmError("upstream_error", "ClickUp did not return a webhook secret.", 502);
+  if (!created.secret) {
+    console.error("ClickUp returned no webhook secret");
+    throw new CrmError("upstream_error", "Couldn't turn on instant sync. Try again.", 502);
+  }
   const secret = created.secret;
   await withActor(actor, async (db) => {
     await ensureIntegration(db, clickupKey(actor));
@@ -1261,7 +1267,7 @@ export async function enableClickUpWebhook(
       [actor.workspaceId, created.id.slice(0, 200), encryptSecret(secret), scope, actor.userId],
     );
   });
-  return { enabled: true, message: "Instant ClickUp sync is on." };
+  return { enabled: true, message: "Instant sync on" };
 }
 
 export async function disableClickUpWebhook(actor: UserActor, options: ClickUpOptions = {}) {
@@ -1272,11 +1278,11 @@ export async function disableClickUpWebhook(actor: UserActor, options: ClickUpOp
     try {
       await client(token, options).deleteWebhook(state.webhookId);
     } catch (error) {
-      throw new CrmError("upstream_error", error instanceof ClickUpError ? error.message : "Could not reach ClickUp.", 502);
+      throw new CrmError("upstream_error", errorText(error, unreachable("ClickUp")), 502);
     }
   }
   await clearWebhook(actor);
-  return { message: "Instant ClickUp sync is off. Orbit checks ClickUp every 10 minutes." };
+  return { message: "Instant sync off" };
 }
 
 type WebhookTarget = {
@@ -1389,7 +1395,7 @@ export async function processClickUpEvent(actor: UserActor, event: ClickUpEvent,
     if (!remote) return linked ? archiveDeleted(s, linked) : "ignored";
     return await pullRemote(s, remote, watchedSet(state));
   } catch (error) {
-    const message = errorText(error, "Could not sync a ClickUp task.");
+    const message = errorText(error, "Couldn't sync a ClickUp task.");
     await withActor(actor, (db) => finishIntegration(db, clickupKey(actor), { error: message }));
     return "failed";
   }

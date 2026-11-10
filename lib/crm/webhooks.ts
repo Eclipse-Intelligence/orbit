@@ -3,7 +3,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { Db } from "@/lib/db/pool";
 import { getAdminPool } from "@/lib/db/pool";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, ShownError, notFound, errorText } from "@/lib/crm/errors";
 import { assertScope } from "@/lib/crm/scopes";
 import { markWebhooksQueued } from "@/lib/crm/webhook-queue";
 import type { Actor } from "@/lib/crm/types";
@@ -95,9 +95,9 @@ export type WebhookLookup = (hostname: string) => Promise<string[]>;
 
 export type WebhookNetwork = { lookup?: WebhookLookup; fetchImpl?: typeof fetch };
 
-export class WebhookTargetError extends Error {}
+export class WebhookTargetError extends ShownError {}
 
-export class WebhookLookupError extends Error {}
+export class WebhookLookupError extends ShownError {}
 
 const NOT_FOUND_CODES = new Set(["ENOTFOUND", "ENODATA"]);
 
@@ -110,7 +110,7 @@ async function systemLookup(hostname: string) {
 }
 
 function privateTarget(host: string) {
-  return new WebhookTargetError(`${host} is a private or local address. Webhooks only go to public addresses.`);
+  return new WebhookTargetError(`${host} isn't a public address.`);
 }
 
 export async function assertPublicWebhookTarget(url: URL, lookup: WebhookLookup = systemLookup) {
@@ -126,11 +126,11 @@ export async function assertPublicWebhookTarget(url: URL, lookup: WebhookLookup 
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code;
     if (typeof code === "string" && NOT_FOUND_CODES.has(code)) {
-      throw new WebhookTargetError(`${host} couldn't be found. Check the webhook URL.`);
+      throw new WebhookTargetError(`${host} not found. Check the URL.`);
     }
-    throw new WebhookLookupError(`${host} couldn't be looked up just now. Try again in a minute.`);
+    throw new WebhookLookupError(`Couldn't look up ${host}. Try again.`);
   }
-  if (addresses.length === 0) throw new WebhookTargetError(`${host} couldn't be found. Check the webhook URL.`);
+  if (addresses.length === 0) throw new WebhookTargetError(`${host} not found. Check the URL.`);
   if (addresses.some(privateAddress)) throw privateTarget(host);
 }
 
@@ -142,11 +142,11 @@ async function assertWebhookUrl(value: string, lookup?: WebhookLookup) {
     throw new CrmError("invalid_input", "Enter a valid webhook URL.", 400, { field: "url" });
   }
   if (url.username || url.password) {
-    throw new CrmError("invalid_input", "Webhook URLs can't include a username or password.", 400, { field: "url" });
+    throw new CrmError("invalid_input", "Remove the username and password from the URL.", 400, { field: "url" });
   }
   const unrestricted = privateWebhookTargetsAllowed();
   if (url.protocol !== "https:" && !(url.protocol === "http:" && unrestricted)) {
-    throw new CrmError("invalid_input", "Webhook URLs use https.", 400, { field: "url" });
+    throw new CrmError("invalid_input", "Use an https URL.", 400, { field: "url" });
   }
   if (!unrestricted) {
     try {
@@ -167,7 +167,7 @@ function deliveryError(error: unknown) {
       return { message: current.message, final: true };
     }
   }
-  return { message: error instanceof Error ? error.message : "Delivery failed", final: false };
+  return { message: errorText(error, "Couldn't reach the endpoint."), final: false };
 }
 
 export async function enqueueWebhookDeliveries(
@@ -256,7 +256,7 @@ export async function listWebhooks(actor: Actor): Promise<WebhookEndpoint[]> {
 
 export async function archiveWebhook(actor: Actor, id: string) {
   assertScope(actor.scopes, "admin");
-  if (!isUuid(id)) throw new CrmError("not_found", "Webhook not found.", 404);
+  if (!isUuid(id)) throw notFound("webhook");
   const { withActor } = await import("@/lib/crm/context");
   await withActor(actor, async (db) => {
     const updated = await db.query(
@@ -265,7 +265,7 @@ export async function archiveWebhook(actor: Actor, id: string) {
        where id = $1 and workspace_id = $2 and archived_at is null`,
       [id, actor.workspaceId],
     );
-    if (updated.rowCount === 0) throw new CrmError("not_found", "Webhook not found.", 404);
+    if (updated.rowCount === 0) throw notFound("webhook");
   });
 }
 
@@ -377,7 +377,7 @@ export async function deliverDueWebhooks(limit = 20, network: WebhookNetwork = {
         await markAttempt(
           row,
           response.status,
-          `The endpoint answered with a redirect (HTTP ${response.status}). Webhooks don't follow redirects, so use the final URL.`,
+          `Redirected (HTTP ${response.status}). Use the final URL.`,
         );
         continue;
       }

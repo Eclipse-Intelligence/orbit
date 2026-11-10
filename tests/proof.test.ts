@@ -63,7 +63,7 @@ describe("proof list", () => {
     assert.equal(entry.reviewOn, "2027-03-01");
     assert.deepEqual((await listProof(owner)).map((item) => item.id), [entry.id]);
     assert.deepEqual(await listProof(outsider), []);
-    await assert.rejects(updateProof(outsider, entry.id, NORTHWIND, WEB), code("not_found", /no longer exists/));
+    await assert.rejects(updateProof(outsider, entry.id, NORTHWIND, WEB), code("not_found", /Proof entry not found/));
     const edited = await updateProof(owner, entry.id, { ...NORTHWIND, permission: "described", reviewOn: null }, WEB);
     assert.equal(edited.permission, "described");
     assert.equal(edited.reviewOn, null);
@@ -75,7 +75,7 @@ describe("proof list", () => {
 
   it("asks for the client, the result, the naming and a description for described only proof", async () => {
     await assert.rejects(createProof(owner, { ...NORTHWIND, client: " " }, WEB), code("invalid_input", /client's name/));
-    await assert.rejects(createProof(owner, { ...NORTHWIND, result: "" }, WEB), code("invalid_input", /Add the result/));
+    await assert.rejects(createProof(owner, { ...NORTHWIND, result: "" }, WEB), code("invalid_input", /Enter the result/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "maybe" }, WEB), code("invalid_input", /whether they can be named/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "described", description: "" }, WEB), code("invalid_input", /doesn't identify them/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, reviewOn: "next week" }, WEB), code("invalid_input", /review date/));
@@ -87,7 +87,7 @@ describe("proof list", () => {
     assert.equal(consulting.product, "Positioning sprint");
     const none = await createProof(owner, { ...NORTHWIND, client: "Quiet", product: undefined }, WEB);
     assert.equal(none.product, "");
-    await assert.rejects(createProof(owner, { ...NORTHWIND, product: "x".repeat(81) }, WEB), code("invalid_input", /The product must be 80 characters or fewer/));
+    await assert.rejects(createProof(owner, { ...NORTHWIND, product: "x".repeat(81) }, WEB), code("invalid_input", /Keep the product to 80 characters/));
     await assert.rejects(queryAsUser(owner.userId, "update crm.proof_entries set product = $1 where id = $2", ["y".repeat(81), consulting.id]), /proof_entries_product_length/);
     assert.deepEqual(productSuggestions([{ product: "Eclipse" }, { product: "Cntent" }, { product: "eclipse" }, { product: "" }], "Eclipse"), ["Eclipse", "Cntent"]);
     assert.deepEqual(productSuggestions([{ product: "Positioning sprint" }], "Mark Ridgeon"), ["Positioning sprint", "Mark Ridgeon"]);

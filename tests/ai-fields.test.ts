@@ -124,14 +124,13 @@ describe("AI fields", () => {
 
   it("works out the cost hint before saving", () => {
     const pick = costHint("pick", 61, "monthly");
-    assert.equal(pick.text, "About 61 web checks to fill it, $0.06, then about $0.06 a month.");
-    assert.match(pick.note, /share one check/);
+    assert.equal(pick.text, "About $0.06 to fill, then about $0.06 a month.");
+    assert.equal("note" in pick, false);
     const staff = costHint("number", 214, "monthly");
-    assert.equal(staff.text, "About 214 web checks to fill it, $2.14, then about $2.14 a month.");
-    assert.match(staff.note, /\$0\.01 a company/);
-    assert.equal(costHint("yes_no", 300, "weekly").text, "About 300 web checks to fill it, $0.30, then about $1.30 a month.");
-    assert.equal(costHint("text", 1, "manual").text, "About 1 web check to fill it, $0.01, then only when you ask.");
-    assert.equal(costHint("yes_no", 3, "monthly").text, "About 3 web checks to fill it, under $0.01, then about under $0.01 a month.");
+    assert.equal(staff.text, "About $2.14 to fill, then about $2.14 a month.");
+    assert.equal(costHint("yes_no", 300, "weekly").text, "About $0.30 to fill, then about $1.30 a month.");
+    assert.equal(costHint("text", 1, "manual").text, "About $0.01 to fill.");
+    assert.equal(costHint("yes_no", 3, "monthly").text, "Under $0.01 to fill, then under $0.01 a month.");
   });
 
   it("only lets owners and admins manage fields and views", async () => {
@@ -141,7 +140,7 @@ describe("AI fields", () => {
     await assert.rejects(saveAiField(owner, { label: "Agency type", question: "Which type of agency is this?", kind: "pick", options: ["SEO"] }), /two options/);
     await assert.rejects(saveAiField(owner, { label: "Agency type", question: "Which type of agency is this?", kind: "pick", options: ["SEO", "PR|Comms"] }), /\|/);
     const field = await saveAiField(owner, { label: "Sells GEO", question: "Does this agency sell GEO or AI search visibility work to its clients?", kind: "yes_no" });
-    await assert.rejects(saveAiField(owner, { label: "sells geo", question: "Does it sell GEO work at all?", kind: "yes_no" }), /already a column called/);
+    await assert.rejects(saveAiField(owner, { label: "sells geo", question: "Does it sell GEO work at all?", kind: "yes_no" }), /sells geo already exists\./);
     await assert.rejects(removeAiField(member, field.id), forbidden);
     await assert.rejects(setAiFieldPaused(member, field.id, true), forbidden);
     await assert.rejects(setManualAnswer(member, field.id, northlight, "yes"), forbidden);
@@ -484,7 +483,7 @@ describe("AI fields", () => {
     const stats = await aiFieldStats(owner);
     const fitStats = stats.find((item) => item.fieldId === fit.id)!;
     assert.deepEqual([fitStats.total, fitStats.answered], [1, 1]);
-    await assert.rejects(deleteCompanyView(owner, prospects.id), /View thing checks the companies in this view/);
+    await assert.rejects(deleteCompanyView(owner, prospects.id), /View thing uses this view/);
     await removeAiField(owner, fit.id);
     await removeAiField(owner, view.id);
     await saveEnrichmentSettings(owner, { webIcp: false });
@@ -549,8 +548,8 @@ describe("AI fields", () => {
   it("shares saved views with the workspace and only lets owners and admins change them", async () => {
     const view = await createCompanyView(owner, { name: "GEO prospects", params: `lifecycle=prospect&${aiParamKey("3f0e2c1a-0000-4000-8000-000000000000")}=is:yes&view=abc` });
     assert.ok(!view.params.includes("view="));
-    await assert.rejects(createCompanyView(owner, { name: "geo prospects", params: "" }), /already a view called/);
-    await assert.rejects(createCompanyView(owner, { name: "All companies", params: "" }), /already a view/);
+    await assert.rejects(createCompanyView(owner, { name: "geo prospects", params: "" }), /geo prospects already exists/);
+    await assert.rejects(createCompanyView(owner, { name: "All companies", params: "" }), /Choose another name/);
     const seen = await listCompanyViews(member);
     assert.ok(seen.some((item) => item.id === view.id));
     await assert.rejects(updateCompanyView(member, view.id, { name: "Mine" }), forbidden);
@@ -702,7 +701,7 @@ describe("AI fields: edits, costs and failures", () => {
   });
 
   it("checks saved view filters when saving and treats an unreadable view as no companies", async () => {
-    await assert.rejects(createCompanyView(owner, { name: "Broken", params: "owner=not-a-person" }), /filter Orbit can't read/);
+    await assert.rejects(createCompanyView(owner, { name: "Broken", params: "owner=not-a-person" }), /invalid filter/);
     const view = await createCompanyView(owner, { name: "Prospects", params: "lifecycle=prospect" });
     const field = await saveAiField(owner, { label: "Hiring", question: "Is this company hiring right now?", kind: "yes_no", scope: "view", scopeViewId: view.id });
     await getAdminPool().query("update crm.company_views set params = 'owner=not-a-person' where id = $1", [view.id]);
@@ -712,7 +711,7 @@ describe("AI fields: edits, costs and failures", () => {
     const report = await runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV });
     assert.equal(report.error, undefined);
     assert.equal(decisionsSent(api).length, 0);
-    assert.match((await listAiFields(owner))[0].lastError ?? "", /saved view has a filter/);
+    assert.match((await listAiFields(owner))[0].lastError ?? "", /saved view has an invalid filter/);
     await removeAiField(owner, field.id);
     await deleteCompanyView(owner, view.id);
   });
@@ -795,7 +794,7 @@ describe("AI fields: edits, costs and failures", () => {
     await getAdminPool().query("update crm.ai_field_answers set next_check_at = now() - interval '1 minute' where field_id = $1", [field.id]);
     const limited = fakeParallel({ decide: () => new Response("slow down", { status: 429 }) });
     const slow = await runAiFields(owner, { deadline: SOON(), fetchImpl: limited.fetchImpl, env: ENV });
-    assert.equal(slow.error, "Parallel is rate limiting. Try again shortly.");
+    assert.equal(slow.error, "Parallel is busy. Try again in a minute.");
     assert.equal(decisionsSent(limited).length, 2);
 
     await getAdminPool().query("update crm.ai_field_answers set next_check_at = now() - interval '1 minute' where field_id = $1", [field.id]);
@@ -804,7 +803,7 @@ describe("AI fields: edits, costs and failures", () => {
     assert.equal(failed.error, undefined);
     assert.equal(failed.failed, 3);
     assert.equal(decisionsSent(broken).length, 6);
-    assert.equal((await listAiFields(owner))[0].lastError, "Parallel returned 500.");
+    assert.equal((await listAiFields(owner))[0].lastError, "Couldn't reach Parallel. Try again.");
 
     await getAdminPool().query("update crm.ai_field_answers set next_check_at = now() - interval '1 minute' where field_id = $1", [field.id]);
     await runAiFields(owner, { deadline: SOON(), fetchImpl: fakeParallel({ decide: yesToAll }).fetchImpl, env: ENV });
@@ -814,10 +813,10 @@ describe("AI fields: edits, costs and failures", () => {
     await markCompanyDue(owner, alpha);
     const capped = await runAiFields(owner, { deadline: SOON(), companyId: alpha, fetchImpl: broken.fetchImpl, env: ENV });
     const capMessage = checkNowMessage(capped);
-    assert.ok("error" in capMessage && /reached \$100/.test(capMessage.error));
+    assert.ok("error" in capMessage && /limit of \$100 reached/.test(capMessage.error));
     await getAdminPool().query("delete from crm.ai_field_spend where workspace_id = $1", [owner.workspaceId]);
     const nothing = await runAiFields(owner, { deadline: SOON(), companyId: alpha, fieldIds: ["3f0e2c1a-0000-4000-8000-000000000000"], fetchImpl: broken.fetchImpl, env: ENV });
-    assert.deepEqual(checkNowMessage(nothing), { ok: true, message: "Nothing to check. Answers set by hand and companies outside a field's companies aren't checked." });
+    assert.deepEqual(checkNowMessage(nothing), { ok: true, message: "Nothing to check" });
     await removeAll();
   });
 
@@ -840,7 +839,7 @@ describe("AI fields: edits, costs and failures", () => {
     }
     await assert.rejects(
       saveAiField(owner, { label: "Many 7", question: "Which of these services does it offer, list 7?", kind: "pick", options, multiple: true }),
-      /up to 200 questions/,
+      /questions \(210 of 200\)/,
     );
     await removeAll();
   });

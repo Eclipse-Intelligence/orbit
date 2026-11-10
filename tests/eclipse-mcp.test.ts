@@ -148,7 +148,7 @@ describe("Eclipse MCP", () => {
     assert.match(long.result, /Cut at 200000 characters/);
     delete process.env.ECLIPSE_MCP_TOKEN;
     clearEclipseToolCache();
-    await assert.rejects(findEclipseTools("clients", { fetchImpl }), /Add ECLIPSE_MCP_TOKEN/);
+    await assert.rejects(findEclipseTools("clients", { fetchImpl }), /Eclipse isn't set up\./);
   });
 
   it("keeps the arguments when they come as JSON text, through the Orbit Agent's validator too", async () => {

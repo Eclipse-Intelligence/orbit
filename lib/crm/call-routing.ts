@@ -1,6 +1,6 @@
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { internalAddresses, type Participant } from "@/lib/crm/conversations";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { matchParties, type PartyMatch } from "@/lib/crm/inbox";
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
@@ -191,7 +191,7 @@ export async function moveImportToWorkspace(owner: UserActor, importId: string, 
     return result.rows[0]?.id ?? importId;
   } catch (error) {
     if (isPgError(error)) {
-      if (error.code === "P0002") throw new CrmError("not_found", "Conversation not found.", 404);
+      if (error.code === "P0002") throw notFound("conversation");
       if (error.code === "55000") throw new CrmError("conflict", "This conversation is already filed or ignored.", 409);
       if (error.code === "23505") throw new CrmError("conflict", "A colleague already has this conversation in that workspace.", 409, { field: "workspaceId" });
       if (error.code === "42501") throw new CrmError("forbidden", "Choose a workspace you're in.", 403, { field: "workspaceId" });
@@ -202,7 +202,7 @@ export async function moveImportToWorkspace(owner: UserActor, importId: string, 
 
 export async function moveImport(actor: UserActor, importId: string, workspaceId: string) {
   assertScope(actor.scopes, "activities:write");
-  if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
+  if (!isUuid(importId)) throw notFound("conversation");
   actorIn(await workspaceActors(actor), workspaceId);
   const owned = await withActor(actor, (db) =>
     db.query(
@@ -210,6 +210,6 @@ export async function moveImport(actor: UserActor, importId: string, workspaceId
       [importId, actor.workspaceId, actor.userId],
     ),
   );
-  if (!owned.rowCount) throw new CrmError("not_found", "Conversation not found.", 404);
+  if (!owned.rowCount) throw notFound("conversation");
   return moveImportToWorkspace(actor, importId, workspaceId);
 }

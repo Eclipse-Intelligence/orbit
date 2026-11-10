@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { opportunityHref } from "@/lib/crm/hrefs";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
@@ -139,7 +139,7 @@ function rate(part: number, whole: number) {
 function parseSince(value: Date | string | null | undefined, now: Date) {
   if (value === undefined || value === null || value === "") return new Date(now.getTime() - REPORT_DAYS * DAY_MS);
   const date = value instanceof Date ? value : parseDateTime(value, appTimeZone());
-  if (!date || Number.isNaN(date.getTime())) throw new CrmError("invalid_input", "Use a date like 2026-09-01.", 400, { field: "since" });
+  if (!date || Number.isNaN(date.getTime())) throw new CrmError("invalid_input", "Enter a date, such as 2026-11-03.", 400, { field: "since" });
   return date;
 }
 
@@ -217,7 +217,7 @@ function buildStays(
 
 export async function stageHistory(actor: Actor, opportunityId: string, now = new Date()): Promise<StageHistory> {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(opportunityId)) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!isUuid(opportunityId)) throw notFound("opportunity");
   return withActor(actor, async (db) => {
     const deal = (
       await db.query<{
@@ -247,7 +247,7 @@ export async function stageHistory(actor: Actor, opportunityId: string, now = ne
         [opportunityId, actor.workspaceId],
       )
     ).rows[0];
-    if (!deal) throw new CrmError("not_found", "Opportunity not found.", 404);
+    if (!deal) throw notFound("opportunity");
     const names = new Map<string, string>();
     if (deal.pipeline_id) {
       const stages = await db.query<{ id: string; name: string }>("select id, name from crm.pipeline_stages where pipeline_id = $1", [deal.pipeline_id]);
@@ -315,7 +315,7 @@ export async function stalledDealsInDb(db: Db, actor: Actor, options: StalledOpt
   const now = options.now ?? new Date();
   const quietDays = Math.min(3650, Math.max(1, Math.trunc(options.days ?? STALLED_DAYS)));
   const limit = Math.min(1000, Math.max(1, Math.trunc(options.limit ?? 50)));
-  if (options.pipelineId && !isUuid(options.pipelineId)) throw new CrmError("not_found", "Board not found.", 404);
+  if (options.pipelineId && !isUuid(options.pipelineId)) throw notFound("board");
   const stageIds = options.stageIds?.length ? options.stageIds.filter(isUuid) : null;
   if (options.stageIds?.length && !stageIds?.length) return [];
   const result = await db.query<StalledRow>(
@@ -405,7 +405,7 @@ export async function pipelineReport(
   const now = options.now ?? new Date();
   const since = parseSince(options.since, now);
   const stalledDays = Math.min(3650, Math.max(1, Math.trunc(options.stalledDays ?? STALLED_DAYS)));
-  if (options.pipelineId && !isUuid(options.pipelineId)) throw new CrmError("not_found", "Board not found.", 404);
+  if (options.pipelineId && !isUuid(options.pipelineId)) throw notFound("board");
   return withActor(actor, async (db) => {
     const pipeline = (
       await db.query<{ id: string; name: string; kind: BoardKind }>(
@@ -416,7 +416,7 @@ export async function pipelineReport(
       )
     ).rows[0];
     if (!pipeline) {
-      if (options.pipelineId) throw new CrmError("not_found", "Board not found.", 404);
+      if (options.pipelineId) throw notFound("board");
       throw new CrmError("invalid_input", "This workspace has no pipeline.", 400);
     }
     const stageRows = (

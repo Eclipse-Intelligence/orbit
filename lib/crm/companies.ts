@@ -3,7 +3,7 @@ import { after } from "next/server";
 
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError, itemFailure } from "@/lib/crm/errors";
+import { CrmError, isPgError, itemFailure, notFound, tooMany } from "@/lib/crm/errors";
 import {
   assertOwner,
   iso,
@@ -300,7 +300,7 @@ async function insertCompany(
       ],
     );
     const company = await readCompany(db, actor.workspaceId, inserted.rows[0].id);
-    if (!company) throw new CrmError("internal_error", "Company was not saved.", 500);
+    if (!company) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     await recordAudit(db, actor, "company.created", "company", company.id, provenance, {
       after: company,
     });
@@ -430,7 +430,7 @@ async function writeChanges(
   }
 
   const company = await readCompany(db, actor.workspaceId, current.id);
-  if (!company) throw new CrmError("not_found", "Company not found.", 404);
+  if (!company) throw notFound("company");
   const before: Record<string, unknown> = {};
   const after: Record<string, unknown> = {};
   for (const field of change.fields) {
@@ -626,10 +626,10 @@ export async function listMembers(actor: Actor): Promise<Member[]> {
 
 export async function getCompany(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(id)) throw notFound("company");
   return withActor(actor, async (db) => {
     const company = await readCompany(db, actor.workspaceId, id);
-    if (!company) throw new CrmError("not_found", "Company not found.", 404);
+    if (!company) throw notFound("company");
     return company;
   });
 }
@@ -699,7 +699,7 @@ export async function updateCompany(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ company: Company }>> {
   assertScope(actor.scopes, "companies:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(id)) throw notFound("company");
   const write = normalizeCompanyWrite(input, "patch");
   const provenance = options.provenance ?? { operation: "update_company" };
   const hash = requestHash("update_company", { id, write, provenance });
@@ -707,7 +707,7 @@ export async function updateCompany(
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await lockCompanies(db, actor.workspaceId);
       const current = await readCompany(db, actor.workspaceId, id);
-      if (!current) throw new CrmError("not_found", "Company not found.", 404);
+      if (!current) throw notFound("company");
       const updated = await applyUpdate(
         db,
         actor,
@@ -726,7 +726,7 @@ export async function updateCompany(
 
 export async function setCompanyLifecycleInDb(db: Db, actor: Actor, id: string, lifecycle: string, provenance: Provenance, exact = false) {
   const current = await readCompany(db, actor.workspaceId, id);
-  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  if (!current) throw notFound("company");
   return writeChanges(db, actor, current, normalizeCompanyWrite({ lifecycle }, "patch"), provenance, "company.updated", exact);
 }
 
@@ -738,7 +738,7 @@ export async function editCompanyTagsInDb(
   provenance: Provenance,
 ) {
   const current = await readCompany(db, actor.workspaceId, id);
-  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  if (!current) throw notFound("company");
   const write = normalizeCompanyWrite({ tags: edit(current.tags) }, "patch");
   return writeChanges(db, actor, current, write, provenance, "company.updated");
 }
@@ -750,7 +750,7 @@ export async function editCompanyTags(
   provenance: Provenance,
 ) {
   assertScope(actor.scopes, "companies:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(id)) throw notFound("company");
   return withActor(actor, async (db) => {
     await lockCompanies(db, actor.workspaceId);
     const updated = await editCompanyTagsInDb(db, actor, id, edit, provenance);
@@ -764,7 +764,7 @@ export async function archiveCompany(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ company: Company }>> {
   assertScope(actor.scopes, "companies:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(id)) throw notFound("company");
   const provenance = options.provenance ?? { operation: "archive_company" };
   const hash = requestHash("archive_company", { id, provenance });
   return withActor(actor, (db) =>
@@ -775,14 +775,14 @@ export async function archiveCompany(
 export async function archiveCompanyInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   await lockCompanies(db, actor.workspaceId);
   const current = await readCompany(db, actor.workspaceId, id);
-  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  if (!current) throw notFound("company");
   if (current.archivedAt) return { company: current };
   await db.query(
     "update crm.companies set archived_at = now() where id = $1 and workspace_id = $2",
     [id, actor.workspaceId],
   );
   const company = await readCompany(db, actor.workspaceId, id);
-  if (!company) throw new CrmError("not_found", "Company not found.", 404);
+  if (!company) throw notFound("company");
   await recordAudit(db, actor, "company.archived", "company", company.id, provenance, {
     before: { archivedAt: null },
     after: { archivedAt: company.archivedAt },
@@ -796,7 +796,7 @@ export async function unarchiveCompany(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ company: Company }>> {
   assertScope(actor.scopes, "companies:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(id)) throw notFound("company");
   const provenance = options.provenance ?? { operation: "unarchive_company" };
   const hash = requestHash("unarchive_company", { id, provenance });
   return withActor(actor, (db) =>
@@ -807,7 +807,7 @@ export async function unarchiveCompany(
 export async function unarchiveCompanyInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   await lockCompanies(db, actor.workspaceId);
   const current = await readCompany(db, actor.workspaceId, id);
-  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  if (!current) throw notFound("company");
   if (!current.archivedAt) return { company: current };
   try {
     await db.query(
@@ -825,7 +825,7 @@ export async function unarchiveCompanyInDb(db: Db, actor: Actor, id: string, pro
     throw error;
   }
   const company = await readCompany(db, actor.workspaceId, id);
-  if (!company) throw new CrmError("not_found", "Company not found.", 404);
+  if (!company) throw notFound("company");
   await recordAudit(db, actor, "company.updated", "company", company.id, provenance, {
     fields: ["archivedAt"],
     before: { archivedAt: current.archivedAt },
@@ -837,7 +837,7 @@ export async function unarchiveCompanyInDb(db: Db, actor: Actor, id: string, pro
 export async function updateCompanyInDb(db: Db, actor: Actor, id: string, input: CompanyWrite, provenance: Provenance) {
   await lockCompanies(db, actor.workspaceId);
   const current = await readCompany(db, actor.workspaceId, id);
-  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  if (!current) throw notFound("company");
   return applyUpdate(db, actor, current, normalizeCompanyWrite(input, "patch"), provenance, "company.updated");
 }
 
@@ -863,14 +863,10 @@ export async function bulkUpsertCompanies(
 ): Promise<MutationOutcome<{ results: BulkItemResult[] }>> {
   assertScope(actor.scopes, "companies:write");
   if (!Array.isArray(items) || items.length === 0) {
-    throw new CrmError("invalid_input", "Provide at least one company.", 400);
+    throw new CrmError("invalid_input", "Enter at least one company.", 400);
   }
   if (items.length > 50) {
-    throw new CrmError(
-      "invalid_input",
-      "Submit at most 50 companies at a time.",
-      400,
-    );
+    throw new CrmError("invalid_input", tooMany(50, "companies at a time"), 400);
   }
   const provenance = options.provenance ?? { operation: "bulk_upsert_companies" };
   const hash = requestHash("bulk_upsert_companies", { items, provenance });

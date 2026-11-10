@@ -23,7 +23,7 @@ export function clearEclipseSourceCache() {
 
 async function fetchText(url: string, fetchImpl: Fetcher) {
   const response = await fetchImpl(url, { headers: { accept: "text/html,text/markdown,text/plain,application/xml" }, redirect: "follow", signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!response.ok) throw new Error(`${url} answered ${response.status}.`);
+  if (!response.ok) throw new Error(`${url} returned an error (${response.status}).`);
   return response.text();
 }
 

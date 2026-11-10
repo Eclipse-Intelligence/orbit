@@ -97,9 +97,9 @@ describe("my email addresses", () => {
       ["mark@ridgeon.me", "marky@gmail.com"],
     );
     assert.throws(() => cleanOtherEmails(["not an email"], "mark@geteclipse.co"), /isn't a valid email/);
-    assert.throws(() => cleanOtherEmails("mark@ridgeon.me", "mark@geteclipse.co"), /list of email/);
+    assert.throws(() => cleanOtherEmails("mark@ridgeon.me", "mark@geteclipse.co"), /Invalid email addresses/);
     const many = Array.from({ length: 21 }, (_, index) => `me${index}@example.com`);
-    assert.throws(() => cleanOtherEmails(many, "mark@geteclipse.co"), /up to 20/);
+    assert.throws(() => cleanOtherEmails(many, "mark@geteclipse.co"), /Up to 20/);
     assert.equal(cleanOtherEmails([...many.slice(0, 20), "mark@geteclipse.co"], "mark@geteclipse.co").length, 20);
   });
 
@@ -305,14 +305,14 @@ describe("create and file from an attendee", () => {
       { name: "Personal", email: "founder.personal@gmail.com" },
     ]);
     await assert.rejects(createContactAndFile(owner, meeting, "stranger@newco.io", { summarise: false }), /wasn't in this conversation/);
-    await assert.rejects(createContactAndFile(owner, meeting, "founder@ridgeon.me", { summarise: false }), /belongs to you/);
+    await assert.rejects(createContactAndFile(owner, meeting, "founder@ridgeon.me", { summarise: false }), /your own or a colleague.s address/);
     await assert.rejects(
       createContactAndFile(owner, meeting, "colleague@orbit-attendees.test", { summarise: false }),
-      /belongs to you/,
+      /your own or a colleague.s address/,
     );
     await assert.rejects(
       createContactAndFile(owner, meeting, "founder.personal@gmail.com", { summarise: false }),
-      /belongs to you/,
+      /your own or a colleague.s address/,
     );
     await assert.rejects(createContactAndFile(owner, meeting, "not-an-email", { summarise: false }), /valid email/);
     assert.deepEqual(await contactsByEmail(owner.workspaceId, "founder@ridgeon.me"), []);

@@ -65,7 +65,7 @@ describe("tag normalisation", () => {
     assert.throws(() => normalizeTags(["x".repeat(41)]), /40 characters/);
     const twenty = Array.from({ length: 20 }, (_, index) => `tag ${index}`);
     assert.equal(normalizeTags([...twenty, "TAG 0"]).length, 20);
-    assert.throws(() => normalizeTags([...twenty, "one more"]), /at most 20 tags/);
+    assert.throws(() => normalizeTags([...twenty, "one more"]), /Up to 20 tags/);
     assert.throws(() => normalizeTags(["a;b"]), /semicolon/);
   });
 
@@ -149,7 +149,7 @@ describe("tags on records", () => {
       added.map((item) => item.ok),
       [true, false],
     );
-    assert.match(added[1].ok ? "" : added[1].error, /at most 20 tags/);
+    assert.match(added[1].ok ? "" : added[1].error, /Up to 20 tags/);
     assert.deepEqual((await getContact(owner, ada.id)).tags, ["existing", "recruit"]);
 
     const again = await addTags(owner, "contact", [ada.id], ["recruit"]);
@@ -167,7 +167,7 @@ describe("tags on records", () => {
     await assert.rejects(() => addTags(owner, "contact", [ada.id], ["  "]), /Enter a tag/);
     await assert.rejects(
       () => addTags(owner, "contact", Array.from({ length: 101 }, (_, index) => `id-${index}`), ["x"]),
-      /100 or fewer/,
+      /Up to 100 records/,
     );
     const missing = await addTags(owner, "contact", ["not-a-uuid"], ["x"]);
     assert.equal(missing[0].ok, false);

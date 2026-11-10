@@ -1,4 +1,5 @@
 import { CrmError, isPgDataError } from "@/lib/crm/errors";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 export async function readJson(request: Request) {
   const text = await request.text();
@@ -14,7 +15,7 @@ export function idempotencyKey(request: Request) {
   const key = request.headers.get("idempotency-key")?.trim();
   if (!key) return null;
   if (key.length > 200 || !/^[\x21-\x7E]+$/.test(key)) {
-    throw new CrmError("invalid_input", "Idempotency-Key is invalid.", 400);
+    throw new CrmError("invalid_input", "Invalid Idempotency-Key.", 400);
   }
   return key;
 }
@@ -43,7 +44,7 @@ export function errorResponse(error: unknown) {
   }
   console.error(process.env.NODE_ENV === "production" ? "request_failed" : error);
   return Response.json(
-    { error: { code: "internal_error", message: "Something went wrong." } },
+    { error: { code: "internal_error", message: GENERIC_ERROR } },
     { status: 500 },
   );
 }

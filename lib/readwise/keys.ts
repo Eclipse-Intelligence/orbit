@@ -4,8 +4,9 @@ import type { UserActor } from "@/lib/crm/types";
 import { homeWorkspaceId, workspaceActors } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { ReadwiseError, validateReadwiseToken } from "@/lib/readwise";
+import { unreachable } from "@/lib/upstream";
 
-export const READWISE_NOT_CONNECTED = "Readwise Reader isn't connected. Add your access token in Settings, Connections.";
+export const READWISE_NOT_CONNECTED = "Connect Readwise Reader in Settings › Connections.";
 
 export type ReadwiseStatus = {
   connected: boolean;
@@ -79,11 +80,11 @@ export async function saveReadwiseToken(actor: UserActor, token: string, options
   try {
     valid = await validateReadwiseToken(trimmed, options.fetchImpl);
   } catch (error) {
-    const reason = error instanceof ReadwiseError ? error.message : "";
-    throw new CrmError("invalid_input", `Couldn't reach Readwise to check the token. ${reason}`.trim(), 400, { field: "token" });
+    if (!(error instanceof ReadwiseError)) console.error("Checking a Readwise token failed", error);
+    throw new CrmError("invalid_input", unreachable("Readwise"), 400, { field: "token" });
   }
   if (!valid) {
-    throw new CrmError("invalid_input", "Readwise didn't accept that token. Copy it again from readwise.io/access_token.", 400, { field: "token" });
+    throw new CrmError("invalid_input", "Readwise rejected that token. Copy it again from readwise.io/access_token.", 400, { field: "token" });
   }
   const home = await homeWorkspaceId(actor);
   await withActor(actor, (db) =>

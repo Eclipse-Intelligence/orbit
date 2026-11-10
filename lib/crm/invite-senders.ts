@@ -2,7 +2,7 @@ import type { Db } from "@/lib/db/pool";
 import { DEFAULT_CALENDAR_PLACEHOLDER, readGrantedScopes, storeGrantedScopes } from "@/lib/crm/calendar";
 import { storeAccountToken } from "@/lib/crm/calendar-accounts";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { currentToken, readStored, storeToken, type StoredTokens } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
@@ -13,7 +13,7 @@ import { grantsCalendarWrite, microsoftConfigured, refreshMicrosoftToken, type M
 
 export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Email to send invites.";
 export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
-export const CALENDAR_NOT_CONNECTED = "Connect Microsoft in Settings › Email to add events to your calendar.";
+export const CALENDAR_NOT_CONNECTED = "Connect Microsoft in Settings › Email to add meetings to your calendar.";
 
 export type InviteSenderOption = {
   address: string;
@@ -81,7 +81,7 @@ export function allowInvitesProblem(email: string) {
 }
 
 export function chooseHoldProblem(email: string) {
-  return `Choose a calendar for invite holds from ${email} in Settings › Email.`;
+  return `Choose a hold calendar for ${email} in Settings › Email.`;
 }
 
 function reconnectAccountProblem(email: string) {
@@ -226,7 +226,7 @@ export async function readInviteSenders(db: Db, actor: UserActor): Promise<Invit
       : needsWrite
         ? allowInvitesProblem(address)
         : !calendar
-          ? `${address} has no calendar Orbit can add meetings to. Check it in Settings › Calendars.`
+          ? `${address} has no writable calendar. Check it in Settings › Calendars.`
           : null;
     push({
       address,
@@ -250,7 +250,7 @@ export async function readInviteSenders(db: Db, actor: UserActor): Promise<Invit
       : hold
         ? null
         : holds.length === 0
-          ? `Orbit needs a Microsoft calendar to hold the time for invites from ${address}. Connect one in Settings › Calendars.`
+          ? `Connect a Microsoft calendar in Settings › Calendars to send invites from ${address}.`
           : chooseHoldProblem(address);
     push({
       address,
@@ -329,17 +329,17 @@ export async function listHoldCalendars(actor: UserActor): Promise<HoldCalendar[
 }
 
 export async function setHoldCalendar(actor: UserActor, identityId: string, calendarId: string | null) {
-  if (!isUuid(identityId)) throw new CrmError("not_found", "That sending address isn't set up any more.", 404);
+  if (!isUuid(identityId)) throw notFound("sending address");
   if (calendarId !== null) {
     const options = await listHoldCalendars(actor);
     if (!options.some((option) => option.id === calendarId)) {
-      throw new CrmError("invalid_input", "Choose a Microsoft calendar Orbit can add events to.", 400, { field: "holdCalendarId" });
+      throw new CrmError("invalid_input", "Choose a Microsoft calendar.", 400, { field: "holdCalendarId" });
     }
   }
   const updated = await withActor(actor, (db) =>
     db.query("update crm.send_identities set hold_calendar_id = $3 where id = $1 and user_id = $2", [identityId, actor.userId, calendarId]),
   );
-  if (!updated.rowCount) throw new CrmError("not_found", "That sending address isn't set up any more.", 404);
+  if (!updated.rowCount) throw notFound("sending address");
 }
 
 export async function homedInviteAddress(db: Db, actor: UserActor, senders: Pick<InviteSenderOption, "address">[], workspaceId: string) {
@@ -411,8 +411,8 @@ export function pickPersonalCalendar(senders: InviteSenderCandidate[], from: unk
     throw new CrmError(
       smtp ? "invalid_input" : "not_found",
       smtp
-        ? `${wanted} has no calendar. Choose a Microsoft calendar, or add a guest to send an invite from it.`
-        : `${wanted} isn't one of your Microsoft calendars. Choose another calendar.`,
+        ? `${wanted} has no calendar. Choose a Microsoft calendar or add a guest.`
+        : `${wanted} isn't one of your calendars.`,
       smtp ? 400 : 404,
       { field: "from" },
     );

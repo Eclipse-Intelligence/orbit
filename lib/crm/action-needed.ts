@@ -1,7 +1,7 @@
 import { cache } from "react";
 import type { CaptureSection } from "@/lib/crm/capture-format";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { onWorkingDay } from "@/lib/crm/task-snooze";
@@ -264,7 +264,7 @@ export async function listWaitingOnOthers(actor: UserActor, now = new Date()): P
 }
 
 export async function snoozeTask(actor: UserActor, id: string, dueAt: string, now = Date.now()) {
-  if (!isUuid(id)) throw new CrmError("not_found", "Task not found.", 404);
+  if (!isUuid(id)) throw notFound("task");
   const chosen = new Date(dueAt);
   if (Number.isNaN(chosen.getTime()) || chosen.getTime() < now + SNOOZE_MIN_MS || chosen.getTime() > now + SNOOZE_MAX_MS) {
     throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "until" });

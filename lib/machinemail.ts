@@ -1,3 +1,5 @@
+import { ShownError, notSetUp } from "@/lib/crm/errors";
+import { logUpstream, unreachable, upstreamFailure } from "@/lib/upstream";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const MACHINE_MAIL_API = "https://api.machinemail.dev/v0";
@@ -12,7 +14,7 @@ export const AGENT_EVENTS = [
 
 const ATTACHMENT_LIMIT_BYTES = 30 * 1024 * 1024;
 
-export class MachineMailError extends Error {
+export class MachineMailError extends ShownError {
   readonly status: number;
 
   constructor(message: string, status: number) {
@@ -36,7 +38,7 @@ export function machineMailConfigured() {
 
 function requireKey() {
   const key = machineMailKey();
-  if (!key) throw new MachineMailError("Set MACHINE_MAIL_API_KEY on the server first.", 503);
+  if (!key) throw new MachineMailError(notSetUp("MachineMail", "MACHINE_MAIL_API_KEY"), 503);
   return key;
 }
 
@@ -45,13 +47,7 @@ function path(value: string) {
 }
 
 async function readError(response: Response) {
-  const text = await response.text().catch(() => "");
-  try {
-    const body = JSON.parse(text) as { error?: { message?: unknown } | string; message?: unknown };
-    const message = typeof body.error === "string" ? body.error : typeof body.error?.message === "string" ? body.error.message : typeof body.message === "string" ? body.message : "";
-    if (message) return message.slice(0, 300);
-  } catch {}
-  return `MachineMail answered ${response.status}.`;
+  return upstreamFailure("MachineMail", response);
 }
 
 async function call<T>(route: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}, fetchImpl: typeof fetch = fetch): Promise<{ status: number; body: T }> {
@@ -64,15 +60,17 @@ async function call<T>(route: string, init: { method?: string; body?: unknown; t
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
       signal: AbortSignal.timeout(init.timeoutMs ?? 20_000),
     });
-  } catch {
-    throw new MachineMailError("Couldn't reach MachineMail.", 0);
+  } catch (error) {
+    logUpstream("MachineMail", null, error);
+    throw new MachineMailError(unreachable("MachineMail"), 0);
   }
   if (!response.ok) throw new MachineMailError(await readError(response), response.status);
   const text = await response.text();
   try {
     return { status: response.status, body: (text ? JSON.parse(text) : {}) as T };
   } catch {
-    throw new MachineMailError("MachineMail sent back something Orbit couldn't read.", 502);
+    logUpstream("MachineMail", response.status, "unreadable reply");
+    throw new MachineMailError(unreachable("MachineMail"), 502);
   }
 }
 
@@ -100,7 +98,7 @@ export async function ensureInbox(address: string, displayName: string, fetchImp
     return { inbox: found.body, created: false };
   } catch (error) {
     if (error instanceof MachineMailError && error.status === 404) {
-      throw new MachineMailError(`${address} is taken by another MachineMail organisation. Choose another address.`, 409);
+      throw new MachineMailError(`${address} is taken. Choose another address.`, 409);
     }
     throw error;
   }
@@ -189,8 +187,9 @@ export async function downloadAttachment(inbox: string, messageId: string, attac
       headers: { authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(60_000),
     });
-  } catch {
-    throw new MachineMailError("Couldn't reach MachineMail.", 0);
+  } catch (error) {
+    logUpstream("MachineMail", null, error);
+    throw new MachineMailError(unreachable("MachineMail"), 0);
   }
   if (!response.ok) throw new MachineMailError(await readError(response), response.status);
   const limit = Math.min(maxBytes, ATTACHMENT_LIMIT_BYTES);

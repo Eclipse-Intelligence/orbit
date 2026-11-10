@@ -1,6 +1,6 @@
 import { getContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
@@ -101,7 +101,7 @@ export async function latestEmailCheck(actor: UserActor, email: string | null | 
 
 async function contactFor(actor: UserActor, email: string, contactId: string | null | undefined) {
   if (contactId) {
-    if (!isUuid(contactId)) throw new CrmError("not_found", "Contact not found.", 404);
+    if (!isUuid(contactId)) throw notFound("contact");
     const contact = await getContact(actor, contactId);
     if (!contact.email) throw new CrmError("invalid_input", `${contact.name} has no email address.`, 400, { field: "email" });
     if (canonicalEmail(contact.email) !== email) {
@@ -135,7 +135,7 @@ export async function verifyEmail(actor: UserActor, email: unknown, options: Ema
   }
   if (configuredVerifiers(env).length === 0) throw new CrmError("not_configured", NO_EMAIL_CHECKER, 400);
   if (!(await enrichmentAllowed(actor.userId, 1))) {
-    throw new CrmError("rate_limited", "That's a lot of lookups this hour. Try again later.", 429);
+    throw new CrmError("rate_limited", "Hourly lookup limit reached. Try again later.", 429);
   }
   const deadline = Math.min(options.deadline ?? Infinity, Date.now() + CHECK_BUDGET_MS);
   const result = await verifyWith(address, { env, fetchImpl: options.fetchImpl ?? fetch, deadline, pollMs: options.pollMs });
@@ -160,7 +160,7 @@ export async function verifyEmail(actor: UserActor, email: unknown, options: Ema
 }
 
 export async function verifyContactEmail(actor: UserActor, contactId: string, options: Omit<EmailCheckOptions, "contactId"> = {}) {
-  if (!isUuid(contactId)) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!isUuid(contactId)) throw notFound("contact");
   const contact = await getContact(actor, contactId);
   if (!contact.email) throw new CrmError("invalid_input", `${contact.name} has no email address.`, 400, { field: "email" });
   return verifyEmail(actor, contact.email, { ...options, contactId });

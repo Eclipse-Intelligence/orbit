@@ -447,7 +447,7 @@ describe("moving records to another workspace", () => {
     const stays = await company(eclipse, "Stays Put", { domain: "stays-move.test" });
     await assert.rejects(
       moveRecordsToWorkspace(eclipse, { companyIds: [stays.id], workspaceId: outsider.workspaceId }, PROVENANCE),
-      refused("forbidden", /not in a workspace/),
+      refused("forbidden", /No workspace called/),
     );
     await assert.rejects(
       previewMoveToWorkspace(eclipse, { companyIds: [stays.id], workspaceId: outsider.workspaceId }),
@@ -646,7 +646,7 @@ describe("moving records to another workspace", () => {
     assert.equal(preview.canMove, false);
     await assert.rejects(
       moveRecordsToWorkspace(member, { companyIds: [theirs.id], workspaceId: ridgeon.workspaceId }, PROVENANCE),
-      refused("forbidden", /Only an owner or admin of Eclipse can move records out of it\. You can copy them instead\./),
+      refused("forbidden", /Only owners and admins can move records out of Eclipse\. Copy them instead\./),
     );
     await assert.rejects(
       getAdminPool().query("select private.move_records_to_workspace($1, $2, $3, $4::jsonb)", [
@@ -1131,8 +1131,14 @@ describe("moving records to another workspace", () => {
 
   it("turns timeouts, deadlocks and missed matches into messages a person can act on", () => {
     for (const code of ["57014", "40P01"]) {
-      assert.throws(() => moveFailure({ code, message: "x" }, "Mark Ridgeon"), refused("timeout", /Move fewer records at a time/));
+      assert.throws(() => moveFailure({ code, message: "x" }, "Mark Ridgeon"), refused("timeout", /Move fewer records/));
     }
-    assert.throws(() => moveFailure({ code: "23505", message: "x" }, "Mark Ridgeon"), refused("conflict", /Mark Ridgeon already has a record/));
+    assert.throws(() => moveFailure({ code: "23505", message: "x" }, "Mark Ridgeon"), refused("conflict", /Mark Ridgeon already has a matching record/));
+  });
+
+  it("passes database text through only when it was written for people", () => {
+    assert.throws(() => moveFailure({ code: "42501", message: "forbidden" }, "Mark Ridgeon"), refused("forbidden", /^You don't have permission to do that\.$/));
+    assert.throws(() => moveFailure({ code: "22023", message: "user required" }, "Mark Ridgeon"), refused("invalid_input", /^That isn't valid\.$/));
+    assert.throws(() => moveFailure({ code: "22023", message: "Pick another workspace." }, "Mark Ridgeon"), refused("invalid_input", /^Pick another workspace\.$/));
   });
 });

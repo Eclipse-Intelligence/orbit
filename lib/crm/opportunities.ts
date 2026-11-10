@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { requireCompany } from "@/lib/crm/links";
 import {
   actorIds,
@@ -212,7 +212,7 @@ function prepareOpportunity(
   if (input.value !== undefined) next.value = money(input.value);
   if (input.currency !== undefined) {
     if (!input.currency || !/^[A-Za-z]{3}$/.test(input.currency.trim())) {
-      throw new CrmError("invalid_input", "Use a three-letter currency code.", 400, {
+      throw new CrmError("invalid_input", "Enter a three-letter currency code.", 400, {
         field: "currency",
       });
     }
@@ -221,7 +221,7 @@ function prepareOpportunity(
   if (input.probability !== undefined) {
     if (input.probability === null) next.probability = null;
     else if (!Number.isInteger(input.probability) || input.probability < 0 || input.probability > 100) {
-      throw new CrmError("invalid_input", "Probability must be a whole number from 0 to 100.", 400, {
+      throw new CrmError("invalid_input", "Enter a probability from 0 to 100.", 400, {
         field: "probability",
       });
     } else next.probability = input.probability;
@@ -230,7 +230,7 @@ function prepareOpportunity(
     if (input.expectedCloseDate === null || input.expectedCloseDate.trim() === "") {
       next.expectedCloseDate = null;
     } else if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expectedCloseDate.trim())) {
-      throw new CrmError("invalid_input", "Use a close date like 2026-10-05.", 400, {
+      throw new CrmError("invalid_input", "Enter a close date, such as 2026-11-03.", 400, {
         field: "expectedCloseDate",
       });
     } else next.expectedCloseDate = input.expectedCloseDate.trim();
@@ -247,7 +247,7 @@ async function readOpportunity(db: Db, id: string) {
 }
 
 async function loadStages(db: Db, workspaceId: string, pipelineId: string | null = null) {
-  if (pipelineId && !isUuid(pipelineId)) throw new CrmError("not_found", "Board not found.", 404);
+  if (pipelineId && !isUuid(pipelineId)) throw notFound("board");
   const result = await db.query<StageRow>(
     `select s.id, s.pipeline_id, s.name, s.position, s.probability, s.is_won, s.is_lost, p.kind
      from crm.pipeline_stages s
@@ -258,20 +258,20 @@ async function loadStages(db: Db, workspaceId: string, pipelineId: string | null
     [workspaceId, pipelineId],
   );
   if (result.rows.length === 0) {
-    if (pipelineId) throw new CrmError("not_found", "Board not found.", 404);
+    if (pipelineId) throw notFound("board");
     throw new CrmError("invalid_input", "This workspace has no pipeline.", 400);
   }
   return result.rows;
 }
 
 async function stagePipeline(db: Db, workspaceId: string, stageId: string) {
-  if (!isUuid(stageId)) throw new CrmError("not_found", "Stage not found.", 404);
+  if (!isUuid(stageId)) throw notFound("stage");
   const result = await db.query<{ pipeline_id: string }>(
     "select pipeline_id from crm.pipeline_stages where id = $1 and workspace_id = $2",
     [stageId, workspaceId],
   );
   const row = result.rows[0];
-  if (!row) throw new CrmError("not_found", "Stage not found.", 404);
+  if (!row) throw notFound("stage");
   return row.pipeline_id;
 }
 
@@ -354,11 +354,11 @@ async function assertContactCompany(
     [contactId, workspaceId, companyId],
   );
   const row = result.rows[0];
-  if (!row) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!row) throw notFound("contact");
   if (row.company_id !== companyId) {
     throw new CrmError(
       "invalid_input",
-      `${row.name ?? "That contact"} doesn't work at ${row.company_name ?? "this company"}. Choose one of its contacts.`,
+      `${row.name ?? "That contact"} isn't at ${row.company_name ?? "this company"}.`,
       400,
       { field: "primaryContactId" },
     );
@@ -368,9 +368,9 @@ async function assertContactCompany(
 function pickStage(stages: StageRow[], status: OpportunityStatus | undefined, stageId?: string | null) {
   if (stageId) {
     const stage = stages.find((item) => item.id === stageId);
-    if (!stage) throw new CrmError("not_found", "Stage not found.", 404);
+    if (!stage) throw notFound("stage");
     if (status && statusFor(stage) !== status) {
-      throw new CrmError("invalid_input", "Status does not match that stage.", 400, {
+      throw new CrmError("invalid_input", "Status doesn't match that stage.", 400, {
         field: "status",
       });
     }
@@ -439,7 +439,7 @@ async function insertOpportunity(
       ],
     );
     const saved = await readOpportunity(db, inserted.rows[0].id);
-    if (!saved) throw new CrmError("internal_error", "Opportunity was not saved.", 500);
+    if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     const opportunity = mapOpportunity(saved);
     await recordAudit(
       db,
@@ -518,7 +518,7 @@ async function applyOpportunity(
     constraintError(error, "duplicate_opportunity", "A matching opportunity already exists.");
   }
   const saved = await readOpportunity(db, current.id);
-  if (!saved) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!saved) throw notFound("opportunity");
   const opportunity = mapOpportunity(saved);
   const diff = changedFields(
     before as unknown as Record<string, unknown>,
@@ -652,10 +652,10 @@ export async function listOpportunities(actor: Actor, query: OpportunityListQuer
 
 export async function getOpportunity(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(id)) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!isUuid(id)) throw notFound("opportunity");
   return withActor(actor, async (db) => {
     const row = await readOpportunity(db, id);
-    if (!row) throw new CrmError("not_found", "Opportunity not found.", 404);
+    if (!row) throw notFound("opportunity");
     return mapOpportunity(row);
   });
 }
@@ -682,14 +682,14 @@ export async function updateOpportunity(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ opportunity: Opportunity }>> {
   assertScope(actor.scopes, "opportunities:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!isUuid(id)) throw notFound("opportunity");
   const provenance = options.provenance ?? { operation: "update_opportunity" };
   const hash = requestHash("update_opportunity", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await lockNamespace(db, actor.workspaceId, "opportunities");
       const current = await readOpportunity(db, id);
-      if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
+      if (!current) throw notFound("opportunity");
       const write = prepareOpportunity(input, "patch");
       const updated = await applyOpportunity(db, actor, current, write, provenance);
       return { opportunity: updated.opportunity };
@@ -703,7 +703,7 @@ export async function archiveOpportunity(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ opportunity: Opportunity }>> {
   assertScope(actor.scopes, "opportunities:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!isUuid(id)) throw notFound("opportunity");
   const provenance = options.provenance ?? { operation: "archive_opportunity" };
   const hash = requestHash("archive_opportunity", { id, provenance });
   return withActor(actor, (db) =>
@@ -713,11 +713,11 @@ export async function archiveOpportunity(
 
 export async function archiveOpportunityInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   const current = await readOpportunity(db, id);
-  if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!current) throw notFound("opportunity");
   if (current.archived_at) return { opportunity: mapOpportunity(current) };
   await db.query("update crm.opportunities set archived_at = now() where id = $1", [id]);
   const saved = await readOpportunity(db, id);
-  if (!saved) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!saved) throw notFound("opportunity");
   const opportunity = mapOpportunity(saved);
   await recordAudit(
     db,
@@ -734,7 +734,7 @@ export async function archiveOpportunityInDb(db: Db, actor: Actor, id: string, p
 export async function unarchiveOpportunityInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   await lockNamespace(db, actor.workspaceId, "opportunities");
   const current = await readOpportunity(db, id);
-  if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!current) throw notFound("opportunity");
   if (!current.archived_at) return { opportunity: mapOpportunity(current) };
   if (current.pipeline_kind === "board" && current.pipeline_id) {
     await assertBoardFree(db, current.pipeline_id, current.company_id, current.id);
@@ -745,7 +745,7 @@ export async function unarchiveOpportunityInDb(db: Db, actor: Actor, id: string,
     constraintError(error, "duplicate_opportunity", "A matching opportunity already exists.");
   }
   const saved = await readOpportunity(db, id);
-  if (!saved) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!saved) throw notFound("opportunity");
   const opportunity = mapOpportunity(saved);
   await recordAudit(db, actor, "opportunity.updated", "opportunity", opportunity.id, provenance, {
     fields: ["archivedAt"],
@@ -770,7 +770,7 @@ export async function updateOpportunityInDb(
 ) {
   await lockNamespace(db, actor.workspaceId, "opportunities");
   const current = await readOpportunity(db, id);
-  if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!current) throw notFound("opportunity");
   return applyOpportunity(db, actor, current, prepareOpportunity(input, "patch"), provenance, options);
 }
 
@@ -790,7 +790,7 @@ export async function applyStageStatusesInDb(db: Db, actor: Actor, pipelineId: s
   if (pending.rows.length > STAGE_STATUS_CHANGE_LIMIT) {
     throw new CrmError(
       "invalid_input",
-      `This change would move more than ${STAGE_STATUS_CHANGE_LIMIT} deals between open, won and lost at once. Move some of them to another stage first, then save again.`,
+      `More than ${STAGE_STATUS_CHANGE_LIMIT} opportunities would change status. Move some to another stage first.`,
       400,
     );
   }

@@ -173,14 +173,14 @@ describe("workflow web checks", () => {
     assert.equal(missing.status, "failed");
     assert.equal(unused.sent.length, 0);
     const missingRun = await getRunSteps(owner, missing.runId);
-    assert.equal(missingRun.run.error, "decide_1: Add PARALLEL_API_KEY in Vercel to run web checks.");
-    assert.equal(missingRun.steps[0].error, "Add PARALLEL_API_KEY in Vercel to run web checks.");
+    assert.equal(missingRun.run.error, "decide_1: Web checks aren't set up.");
+    assert.equal(missingRun.steps[0].error, "Web checks aren't set up.");
 
     process.env.PARALLEL_API_KEY = "test-parallel-key";
     const broken = parallel(() => new Response("down", { status: 500 }));
     const failed = await startRun(owner, id, { test: true, record: { type: "contact", id: andrewId }, fetchImpl: broken.fetchImpl });
     assert.equal(failed.status, "failed");
-    assert.equal((await getRunSteps(owner, failed.runId)).run.error, "decide_1: Parallel returned 500.");
+    assert.equal((await getRunSteps(owner, failed.runId)).run.error, "decide_1: Couldn't reach Parallel. Try again.");
   });
 
   it("rejects a bad key, a taken key or a wrong option count when the workflow is saved", async () => {
@@ -309,7 +309,7 @@ describe("workflow web checks", () => {
     const waiting = await getRunSteps(owner, first.runId);
     assert.equal(waiting.run.waitingFor, "delay");
     assert.equal(waiting.steps[0].status, "waiting");
-    assert.equal((waiting.steps[0].output as { retrying: string }).retrying, "Parallel is rate limiting. Try again shortly.");
+    assert.equal((waiting.steps[0].output as { retrying: string }).retrying, "Parallel is busy. Try again in a minute.");
     const resumeAt = (await getAdminPool().query<{ resume_at: Date }>("select resume_at from crm.workflow_runs where id = $1", [first.runId])).rows[0].resume_at;
     assert.ok(resumeAt.getTime() > Date.now() + 50_000);
 
@@ -327,6 +327,6 @@ describe("workflow web checks", () => {
     await runWorkflowTick({ fetchImpl: down.fetchImpl, budgetMs: 30_000 });
     const gaveUp = await getRunSteps(owner, second.runId);
     assert.equal(gaveUp.run.status, "failed");
-    assert.equal(gaveUp.run.error, "decide_1: Parallel returned 503.");
+    assert.equal(gaveUp.run.error, "decide_1: Couldn't reach Parallel. Try again.");
   });
 });

@@ -1,7 +1,7 @@
 import { createCompany, findByLinkedin, getCompany, updateCompany } from "@/lib/crm/companies";
 import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, errorText, tooMany, notSetUp } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalCompanyLinkedin, canonicalDomain, canonicalImageUrl } from "@/lib/crm/normalize";
 import type { Actor, BrandLink, Company, CompanyBrand, CompanyWrite, UserActor } from "@/lib/crm/types";
@@ -212,7 +212,7 @@ async function recordLookup(actor: Actor, companyId: string, status: "found" | "
 export async function enrichCompany(actor: Actor, companyId: string, options: Options = {}): Promise<CompanyEnrichment> {
   const env = options.env ?? process.env;
   const key = providerKey("context", env);
-  if (!key) return { status: "skipped", message: "Add CONTEXT_DEV_API_KEY to enrich companies.", fields: [] };
+  if (!key) return { status: "skipped", message: notSetUp("enrichment", "CONTEXT_DEV_API_KEY", actor), fields: [] };
   const company = await getCompany(actor, companyId);
   const domain = company.domain ?? (company.website ? canonicalDomain(company.website) : null);
   if (!domain) return { status: "skipped", message: "Add the company's website or domain first.", fields: [] };
@@ -238,7 +238,7 @@ export async function enrichCompany(actor: Actor, companyId: string, options: Op
     try {
       await updateCompany(actor, companyId, write, { provenance: { operation: "enrich_company", source: "context.dev" } });
     } catch (error) {
-      const message = error instanceof CrmError ? error.message : "Couldn't save the company details.";
+      const message = errorText(error, "Couldn't save the company details.");
       await recordLookup(actor, companyId, "failed", message);
       return { status: "failed", message, fields: [] };
     }
@@ -257,7 +257,7 @@ export async function enrichCompany(actor: Actor, companyId: string, options: Op
           .join(", ") + " from context.dev.",
         fields,
       }
-    : { status: "unchanged", message: "Nothing new to add. Every field context.dev knows is already filled in.", fields };
+    : { status: "unchanged", message: "Nothing new to add", fields };
 }
 
 async function inBatches<T, R>(items: T[], run: (item: T) => Promise<R>) {
@@ -277,14 +277,14 @@ async function safeEnrich(actor: Actor, id: string, options: Options): Promise<C
   try {
     return { companyId: id, ...(await enrichCompany(actor, id, options)) };
   } catch (error) {
-    return { companyId: id, status: "failed", message: error instanceof CrmError ? error.message : "That lookup failed.", fields: [] };
+    return { companyId: id, status: "failed", message: errorText(error, "That lookup failed."), fields: [] };
   }
 }
 
 export async function enrichCompanies(actor: Actor, ids: unknown, options: Options = {}) {
   const list = Array.isArray(ids) ? [...new Set(ids.filter((id): id is string => typeof id === "string" && isUuid(id)))] : [];
-  if (list.length === 0) throw new CrmError("invalid_input", "Select at least one company.", 400);
-  if (list.length > BULK_MAX) throw new CrmError("invalid_input", `Send up to ${BULK_MAX} companies at a time.`, 400);
+  if (list.length === 0) throw new CrmError("invalid_input", "Choose at least one company.", 400);
+  if (list.length > BULK_MAX) throw new CrmError("invalid_input", tooMany(BULK_MAX, "companies at a time"), 400);
   return inBatches(list, (id) => safeEnrich(actor, id, options));
 }
 
@@ -354,7 +354,7 @@ export async function suggestCompanyForEmail(actor: UserActor, email: unknown, o
 }
 
 export async function createSuggestedCompany(actor: UserActor, name: unknown, domain: unknown, options: Options = {}) {
-  if (typeof name !== "string" || typeof domain !== "string") throw new CrmError("invalid_input", "Pick a company.", 400);
+  if (typeof name !== "string" || typeof domain !== "string") throw new CrmError("invalid_input", "Choose a company.", 400);
   const created = await createCompany(actor, { name, domain, source: "context.dev" }, { provenance: { operation: "create_company", source: "contact_email" } });
   const company = created.body.company;
   const settings = await getEnrichmentSettings(actor);

@@ -1,3 +1,4 @@
+import { ShownError } from "@/lib/crm/errors";
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
@@ -12,7 +13,7 @@ import { readWebPage, WebPageError, type Lookup } from "@/lib/web-page";
 export const CONTENT_MAX = CONTENT_LIMIT;
 const SUMMARY_INPUT = 24_000;
 
-export class KnowledgeReadError extends Error {}
+export class KnowledgeReadError extends ShownError {}
 
 export type Extracted = { text: string; title?: string | null; kind?: KnowledgeKind };
 
@@ -46,7 +47,7 @@ async function readFile(row: ItemRow, options: IndexOptions): Promise<Extracted>
   const text = await fileText(bytes, name, row.mime_type);
   if (!text) {
     throw new KnowledgeReadError(
-      isSubtitles(name) ? "That subtitle file has no text." : "Orbit can't read text from this file. PDF, Word, PowerPoint, Excel, text, HTML and audio files work.",
+      isSubtitles(name) ? "That subtitle file has no text." : "Can't read this file type. Use PDF, Word, PowerPoint, Excel, text, HTML or audio.",
     );
   }
   return { text };
@@ -100,11 +101,11 @@ async function readLink(row: ItemRow, options: IndexOptions): Promise<Extracted>
   const read = options.readPage ?? ((url: string) => readWebPage(url, { textMax: CONTENT_MAX }));
   try {
     const page = await read(row.source_url);
-    if (!page.text.trim()) throw new KnowledgeReadError("That page has no text Orbit can read.");
+    if (!page.text.trim()) throw new KnowledgeReadError("That page has no readable text.");
     return { text: page.text, title: page.title };
   } catch (error) {
     if (error instanceof KnowledgeReadError) throw error;
-    throw new KnowledgeReadError(error instanceof WebPageError ? error.message : "That page couldn't be read.");
+    throw new KnowledgeReadError(error instanceof WebPageError ? error.message : "Couldn't read that page.");
   }
 }
 
@@ -134,8 +135,9 @@ async function summarise(title: string, text: string, options: IndexOptions) {
 
 function failureMessage(error: unknown) {
   if (error instanceof KnowledgeReadError) return error.message;
-  if (error instanceof LlmError) return "Couldn't index it just now. Try again.";
-  return "Something went wrong reading it. Try again.";
+  if (error instanceof LlmError) return "Couldn't index it. Try again.";
+  console.error("Knowledge indexing failed", error);
+  return "Couldn't read it. Try again.";
 }
 
 async function claim(actor: UserActor, id: string, force: boolean) {
@@ -164,7 +166,7 @@ export async function indexKnowledgeItem(actor: UserActor, id: string, options: 
     let kind = row.kind;
     if (!text || (row.kind !== "transcript" && row.kind !== "attachment" && row.kind !== "reader" && options.force)) {
       const extract = options.extractors?.[row.kind] ?? EXTRACTORS[row.kind];
-      if (!extract) throw new KnowledgeReadError("Orbit can't read this kind of item yet.");
+      if (!extract) throw new KnowledgeReadError("Can't read this kind of item.");
       const extracted = await extract(row, options);
       text = extracted.text.trim().slice(0, CONTENT_MAX);
       kind = extracted.kind ?? kind;

@@ -6,7 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { assertPublicHost, FeedError, feedHost, feedUrlHash, normalizeFeedUrl, type Lookup } from "@/lib/ical/fetch";
 
-export const FEED_DUPLICATE = "That calendar link is already added.";
+export const FEED_DUPLICATE = "A matching calendar link already exists.";
 
 function feedLabel(value: string | null | undefined) {
   const trimmed = value?.replace(/\s+/g, " ").trim() ?? "";

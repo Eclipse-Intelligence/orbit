@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 
@@ -152,7 +152,7 @@ export type MemoryDraft = {
 function cleanDraft(draft: MemoryDraft) {
   const title = clip(draft.title, MEMORY_LIMITS.title);
   const body = typeof draft.body === "string" ? draft.body.trim().slice(0, MEMORY_LIMITS.body) : "";
-  if (!title || !body) throw new CrmError("invalid_input", "A memory needs a title and some text.", 400, { field: !title ? "title" : "body" });
+  if (!title || !body) throw new CrmError("invalid_input", "Enter a title and some text.", 400, { field: !title ? "title" : "body" });
   const kind = clip(draft.kind, MEMORY_LIMITS.kind).toLowerCase().replace(/[^a-z_ ]/g, "").replace(/\s+/g, "_") || "note";
   const confidence: Confidence = draft.confidence === "low" || draft.confidence === "high" ? draft.confidence : "medium";
   return { title, body, kind, confidence, sources: cleanSources(draft.sources), companyId: draft.companyId ?? null, pinned: draft.pinned === true, allWorkspaces: draft.allWorkspaces === true };
@@ -194,11 +194,11 @@ export async function reviseMemory(
   patch: { title?: string; body?: string; confidence?: Confidence; sources?: unknown; pinned?: boolean; allWorkspaces?: boolean; source?: NoteOrigin },
 ) {
   const current = await db.query<Row>(`select ${COLUMNS} from crm.memories where id = $1 and archived_at is null`, [id]);
-  if (!current.rows[0]) throw new CrmError("not_found", "That memory doesn't exist or was forgotten.", 404);
+  if (!current.rows[0]) throw notFound("memory");
   const row = mapMemory(current.rows[0]);
   const title = patch.title === undefined ? row.title : clip(patch.title, MEMORY_LIMITS.title);
   const body = patch.body === undefined ? row.body : patch.body.trim().slice(0, MEMORY_LIMITS.body);
-  if (!title || !body) throw new CrmError("invalid_input", "A memory needs a title and some text.", 400);
+  if (!title || !body) throw new CrmError("invalid_input", "Enter a title and some text.", 400);
   const sources = patch.sources === undefined ? row.sources : [...cleanSources(patch.sources), ...row.sources].slice(0, MEMORY_LIMITS.sources);
   const allWorkspaces = row.scope === "personal" ? (patch.allWorkspaces ?? row.allWorkspaces) : null;
   const result = await db.query<Row>(
@@ -291,7 +291,7 @@ export async function rememberNote(
   source: NoteOrigin = origin === "manual" ? "manual" : "chat",
 ) {
   const body = typeof input.body === "string" ? input.body.trim() : "";
-  if (!body) throw new CrmError("invalid_input", "Say what to remember.", 400, { field: "body" });
+  if (!body) throw new CrmError("invalid_input", "Enter what to remember.", 400, { field: "body" });
   const words = body.split(/\s+/);
   const title = typeof input.title === "string" && input.title.trim() ? input.title : words.length > 10 ? `${words.slice(0, 10).join(" ")}…` : body;
   const kind = typeof input.kind === "string" ? input.kind : "note";
@@ -322,7 +322,7 @@ export async function updateMemory(actor: UserActor, id: string, patch: { title?
 export async function forgetMemory(actor: UserActor, id: string) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ title: string }>("update crm.memories set archived_at = now() where id = $1 and archived_at is null returning title", [id]);
-    if (!result.rows[0]) throw new CrmError("not_found", "That memory doesn't exist or was already forgotten.", 404);
+    if (!result.rows[0]) throw notFound("memory");
     return { forgotten: result.rows[0].title };
   });
 }
@@ -375,7 +375,7 @@ Orbit learns every night from the user's conversations, edits and decisions, fro
 
 export async function recall(actor: UserActor, query: string, limit = 12) {
   const text = query.trim();
-  if (!text) throw new CrmError("invalid_input", "Say what to look for.", 400, { field: "query" });
+  if (!text) throw new CrmError("invalid_input", "Enter what to look for.", 400, { field: "query" });
   const [memories, notes] = await Promise.all([
     listMemories(actor, { query: text, limit }),
     withActor(actor, async (db) =>

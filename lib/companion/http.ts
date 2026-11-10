@@ -6,7 +6,7 @@ import { query } from "@/lib/db/pool";
 
 async function allow(key: string, limit: number, windowSeconds: number) {
   const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [key, limit, windowSeconds]);
-  if (!result.rows[0]?.allowed) throw new CrmError("rate_limited", "Too many requests from Orbit Agent. Wait a minute.", 429);
+  if (!result.rows[0]?.allowed) throw new CrmError("rate_limited", "Too many requests. Try again in a minute.", 429);
 }
 
 export async function requireCompanion(request: Request) {

@@ -165,7 +165,7 @@ export async function checkCompanyAgainAction(companyId: string, fieldIds?: stri
     const report = await checkCompanyNow(user, companyId, { fieldIds });
     revalidatePath("/");
     revalidatePath(companyHref(companyId));
-    return checkNowMessage(report);
+    return checkNowMessage(report, user);
   } catch (error) {
     return failure(error, "Couldn't check again. Try again.");
   }

@@ -45,7 +45,7 @@ export async function searchKnowledge(
   options: { fetchImpl?: typeof fetch } = {},
 ): Promise<{ hits: KnowledgeHit[]; mode: "hybrid" | "keyword" }> {
   const query = input.query.trim().slice(0, 500);
-  if (!query) throw new CrmError("invalid_input", "Say what to look for.", 400, { field: "query" });
+  if (!query) throw new CrmError("invalid_input", "Enter what to look for.", 400, { field: "query" });
   const scope: KnowledgeScope = input.scope ?? (input.companyId ? "company" : "all");
   if (scope === "company" && (!input.companyId || !isUuid(input.companyId))) throw new CrmError("invalid_input", "Choose a company to search.", 400, { field: "companyId" });
   const limit = Math.min(LIMIT_MAX, Math.max(1, input.limit ?? 10));

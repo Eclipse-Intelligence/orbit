@@ -1,5 +1,5 @@
 import { authenticatePersonal, consumePersonalRateLimit, isPersonalToken } from "@/lib/auth/personal";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, tooLong } from "@/lib/crm/errors";
 import { createTask } from "@/lib/crm/tasks";
 import { localTime } from "@/lib/docs/daily";
 import { appendToDailyNote } from "@/lib/docs/daily-notes";
@@ -14,8 +14,8 @@ const DAILY_WORDS = new Set(["daily", "note", "daily note", "journal", "jot", ""
 export function readQuickCapture(input: unknown): QuickCapture {
   const source = typeof input === "string" ? { text: input } : input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const text = typeof source.text === "string" ? source.text.replace(/\r\n?/g, "\n").trim() : "";
-  if (!text) throw new CrmError("invalid_input", "Nothing to add. Type or say something first.", 400, { field: "text" });
-  if (text.length > QUICK_TEXT_MAX) throw new CrmError("invalid_input", `That's too long to add in one go (${QUICK_TEXT_MAX.toLocaleString("en-GB")} characters at most).`, 400, { field: "text" });
+  if (!text) throw new CrmError("invalid_input", "Nothing to add", 400, { field: "text" });
+  if (text.length > QUICK_TEXT_MAX) throw new CrmError("invalid_input", tooLong("it", QUICK_TEXT_MAX), 400, { field: "text" });
   const target = typeof source.to === "string" ? source.to.trim().toLowerCase() : "";
   if (TASK_WORDS.has(target)) return { to: "task", text };
   if (DAILY_WORDS.has(target)) return { to: "daily", text };
@@ -24,7 +24,7 @@ export function readQuickCapture(input: unknown): QuickCapture {
 
 export async function quickActor(request: Request) {
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? "";
-  if (!isPersonalToken(bearer)) throw new CrmError("unauthorized", "Add your Orbit personal token as the Authorization header (Bearer orbit_…). Create one in Settings, API tokens.", 401);
+  if (!isPersonalToken(bearer)) throw new CrmError("unauthorized", "Send your Orbit token as a Bearer token. Create one in Settings › API tokens.", 401);
   const found = await authenticatePersonal(bearer);
   await consumePersonalRateLimit(found.tokenId);
   return found.actor;

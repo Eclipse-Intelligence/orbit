@@ -246,7 +246,7 @@ describe("assistant safety and limits", () => {
     const conversationId = (events.find((event) => event.type === "conversation") as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
     const saved = await getConversation(owner, conversationId);
     assert.deepEqual(saved.messages.map((message) => message.role), ["user", "assistant"]);
-    assert.match(saved.messages[1].content, /^I couldn't finish that\. The LLM gateway returned 400/);
+    assert.match(saved.messages[1].content, /^Couldn't finish: The LLM gateway returned 400/);
   });
 
   it("runs an approved email once even when it is approved twice at the same moment", async () => {

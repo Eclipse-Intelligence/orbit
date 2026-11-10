@@ -265,7 +265,7 @@ Accounts outside the Entra app's own tenant only work when the app allows them:
 2. Keep `MICROSOFT_TENANT` unset or `common` so other tenants and personal accounts can sign in. A single tenant id there limits every connection to that tenant.
 3. If the other organisation blocks user consent, its admin has to consent to Orbit in that tenant first.
 
-Until then the connection ends with "This Microsoft account's organisation doesn't allow Orbit yet", and nothing is saved. Connecting the main mailbox's own address as an extra account is refused.
+Until then the connection ends with "This Microsoft organisation hasn't approved Orbit", and nothing is saved. Connecting the main mailbox's own address as an extra account is refused.
 
 ### Google Calendar, iCloud and other calendars by link
 

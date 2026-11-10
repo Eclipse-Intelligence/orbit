@@ -1,3 +1,5 @@
+import { ShownError } from "@/lib/crm/errors";
+import { upstreamFailure } from "@/lib/upstream";
 const API = "https://api.browserbase.com/v1";
 const SESSION_SECONDS = 120;
 const LOAD_MS = 25_000;
@@ -6,7 +8,7 @@ const SETTLE_MS = 6_000;
 export type RenderedPage = { html: string; url: string };
 export type Renderer = (url: string, options: { proxies: boolean }) => Promise<RenderedPage>;
 
-export class BrowserbaseError extends Error {}
+export class BrowserbaseError extends ShownError {}
 
 export function browserbaseConfigured() {
   return Boolean(process.env.BROWSERBASE_API_KEY?.trim());
@@ -19,10 +21,7 @@ async function api(path: string, body: unknown, fetchImpl: typeof fetch) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new BrowserbaseError(`Browserbase answered ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
-  }
+  if (!response.ok) throw new BrowserbaseError(await upstreamFailure("Browserbase", response));
   return response.json() as Promise<{ id: string; connectUrl: string }>;
 }
 

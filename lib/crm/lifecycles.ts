@@ -53,7 +53,7 @@ export async function renameLifecycle(actor: Actor, from: unknown, to: unknown) 
   assertScope(actor.scopes, "companies:write");
   const source = customName(from, "Choose a lifecycle to rename.");
   if (builtInLifecycle(source)) {
-    throw new CrmError("invalid_input", "Lead, Prospect, Customer and Churned are built in and keep their names.", 400, { field: "name" });
+    throw new CrmError("invalid_input", "Built-in lifecycles can't be renamed.", 400, { field: "name" });
   }
   const target = customName(to, "Enter a new name.");
   if (target === source) return { companies: 0 };
@@ -64,7 +64,7 @@ export async function deleteLifecycle(actor: Actor, name: unknown) {
   assertScope(actor.scopes, "companies:write");
   const target = customName(name, "Choose a lifecycle to delete.");
   if (builtInLifecycle(target)) {
-    throw new CrmError("invalid_input", "Lead, Prospect, Customer and Churned are built in and can't be deleted.", 400, { field: "name" });
+    throw new CrmError("invalid_input", "Built-in lifecycles can't be deleted.", 400, { field: "name" });
   }
   return moveCompanies(actor, target, "lead", "delete_lifecycle");
 }

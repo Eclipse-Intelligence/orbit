@@ -1,6 +1,6 @@
 import { getCompany, updateCompany } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, tooLong } from "@/lib/crm/errors";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -71,10 +71,10 @@ export async function getCompanyAnswers(actor: Actor, companyId: string) {
 }
 
 export async function getAnswer(actor: Actor, fieldId: string, companyId: string) {
-  if (!isUuid(fieldId) || !isUuid(companyId)) throw new CrmError("not_found", "That answer no longer exists.", 404);
+  if (!isUuid(fieldId) || !isUuid(companyId)) throw notFound("answer");
   return withActor(actor, async (db) => {
     const field = await readField(db, actor.workspaceId, fieldId);
-    if (!field) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+    if (!field) throw notFound("AI field");
     const [scopes, rows] = await Promise.all([
       scopeMembership(db, actor.workspaceId, [field], [companyId]),
       db.query<AnswerRow>(`${ANSWER_SQL} where a.workspace_id = $1 and a.company_id = $2 and a.field_id = $3`, [actor.workspaceId, companyId, fieldId]),
@@ -102,12 +102,12 @@ export function cleanManualValue(field: Pick<StoredField, "kind" | "options" | "
   if (field.kind === "text") {
     const text = String(value).replace(/\s+/g, " ").trim();
     if (!text) return unknown;
-    if (text.length > 300) throw new CrmError("invalid_input", "Keep the answer under 300 characters.", 400, { field: "value" });
+    if (text.length > 300) throw new CrmError("invalid_input", tooLong("the answer", 300), 400, { field: "value" });
     return { ...unknown, state: "answered", text };
   }
   const picked = (Array.isArray(value) ? value : [value]).map((item) => String(item).trim().toLowerCase()).filter(Boolean);
   const options = field.options.filter((option) => picked.includes(option.toLowerCase()));
-  if (picked.length > 0 && options.length !== new Set(picked).size) throw new CrmError("invalid_input", "Choose from the field's options.", 400, { field: "value" });
+  if (picked.length > 0 && options.length !== new Set(picked).size) throw new CrmError("invalid_input", "Choose from the AI field's options.", 400, { field: "value" });
   if (options.length === 0) return unknown;
   if (!field.multiple && options.length > 1) throw new CrmError("invalid_input", "Choose one option.", 400, { field: "value" });
   return { ...unknown, state: "answered", options };
@@ -120,12 +120,12 @@ function storedFromRow(row: AnswerRow | undefined): StoredValue {
 
 export async function setManualAnswer(actor: Actor, fieldId: string, companyId: string, value: unknown) {
   assertFieldAdmin(actor);
-  if (!isUuid(fieldId) || !isUuid(companyId)) throw new CrmError("not_found", "That company or field no longer exists.", 404);
+  if (!isUuid(fieldId) || !isUuid(companyId)) throw notFound("company or AI field");
   const { field, saved } = await withActor(actor, async (db) => {
     const field = await readField(db, actor.workspaceId, fieldId);
-    if (!field) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+    if (!field) throw notFound("AI field");
     const company = await db.query("select 1 from crm.companies where id = $1 and workspace_id = $2 and archived_at is null", [companyId, actor.workspaceId]);
-    if (!company.rows[0]) throw new CrmError("not_found", "Company not found.", 404);
+    if (!company.rows[0]) throw notFound("company");
     const next = cleanManualValue(field, value);
     const current = (await db.query<AnswerRow>(`${ANSWER_SQL} where a.field_id = $1 and a.company_id = $2 for update of a`, [fieldId, companyId])).rows[0];
     const web =
@@ -164,10 +164,10 @@ export async function setManualAnswer(actor: Actor, fieldId: string, companyId: 
 
 export async function revertToWebAnswer(actor: Actor, fieldId: string, companyId: string) {
   assertFieldAdmin(actor);
-  if (!isUuid(fieldId) || !isUuid(companyId)) throw new CrmError("not_found", "That company or field no longer exists.", 404);
+  if (!isUuid(fieldId) || !isUuid(companyId)) throw notFound("company or AI field");
   await withActor(actor, async (db) => {
     const field = await readField(db, actor.workspaceId, fieldId);
-    if (!field) throw new CrmError("not_found", "That AI field no longer exists.", 404);
+    if (!field) throw notFound("AI field");
     const current = (await db.query<AnswerRow>(`${ANSWER_SQL} where a.field_id = $1 and a.company_id = $2 and a.workspace_id = $3 for update of a`, [fieldId, companyId, actor.workspaceId])).rows[0];
     if (!current?.manual) return;
     const web = current.web_answer as Record<string, unknown> | null;
@@ -220,7 +220,7 @@ export async function revertToWebAnswer(actor: Actor, fieldId: string, companyId
 
 export async function markCompanyDue(actor: Actor, companyId: string, fieldIds?: string[]) {
   assertFieldAdmin(actor);
-  if (!isUuid(companyId)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(companyId)) throw notFound("company");
   const ids = (fieldIds ?? []).filter(isUuid);
   await withActor(actor, (db) =>
     db.query(

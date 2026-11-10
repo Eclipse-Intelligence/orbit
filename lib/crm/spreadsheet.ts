@@ -5,7 +5,7 @@ import { listActivities } from "@/lib/crm/activities";
 import { listContacts } from "@/lib/crm/contacts";
 import { listOpportunities } from "@/lib/crm/opportunities";
 import { listTasks } from "@/lib/crm/tasks";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, tooMany } from "@/lib/crm/errors";
 import { canonicalDomain, parseTagList } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Activity, Company, CompanyWrite, Contact, Opportunity, Task } from "@/lib/crm/types";
@@ -93,13 +93,13 @@ export async function importCompaniesCsv(actor: Actor, csv: string): Promise<Imp
   const items: CompanyWrite[] = [];
   const itemRows: number[] = [];
   const errors: ImportResult["errors"] = [];
-  if (rows.length > 51) errors.push({ row: 52, message: "Only the first 50 rows are imported at a time." });
+  if (rows.length > 51) errors.push({ row: 52, message: tooMany(50, "rows at a time") });
   for (let index = 1; index < rows.length && index <= 50; index += 1) {
     const row = rows[index];
     const name = columnValue(row, nameAt);
     const domain = columnValue(row, domainAt);
     if (!name && !domain) {
-      errors.push({ row: index + 1, message: "A company needs a name or a domain." });
+      errors.push({ row: index + 1, message: "Enter a name or domain." });
       continue;
     }
     const item: CompanyWrite = {};
@@ -139,7 +139,7 @@ export async function importContactsCsv(actor: Actor, csv: string): Promise<Impo
   const pick = headerIndex(rows[0]);
   const summary: ImportResult = { created: 0, updated: 0, matched: 0, errors: [] };
   if (rows.length > 51) {
-    summary.errors.push({ row: 52, message: "Only the first 50 rows are imported at a time." });
+    summary.errors.push({ row: 52, message: tooMany(50, "rows at a time") });
   }
   const slice = rows.slice(1, 51);
   for (let index = 0; index < slice.length; index += 1) {
@@ -150,7 +150,7 @@ export async function importContactsCsv(actor: Actor, csv: string): Promise<Impo
     const phone = columnValue(row, pick(["phone"]));
     const linkedin = columnValue(row, pick(["linkedin", "linkedin url"]));
     if (![firstName, lastName, email, phone, linkedin].some((value) => value)) {
-      summary.errors.push({ row: index + 2, message: "A contact needs a name, email, phone, or LinkedIn URL." });
+      summary.errors.push({ row: index + 2, message: "Enter a name, email, phone or LinkedIn profile." });
       continue;
     }
     try {
@@ -195,7 +195,7 @@ export async function importContactsCsv(actor: Actor, csv: string): Promise<Impo
     } catch (error) {
       summary.errors.push({
         row: index + 2,
-        message: error instanceof CrmError ? error.message : "That row could not be imported.",
+        message: error instanceof CrmError ? error.message : "Couldn't import that row.",
       });
     }
   }

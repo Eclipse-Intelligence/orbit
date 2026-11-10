@@ -1,3 +1,4 @@
+import { ShownError } from "@/lib/crm/errors";
 import { lookup as dnsLookupEach, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP, type LookupFunction } from "node:net";
@@ -26,7 +27,13 @@ export type WebPage = {
   via: "fetch" | "browser" | "file";
 };
 
-export class WebPageError extends Error {}
+export class WebPageError extends ShownError {}
+
+const DENIED_STATUSES = [401, 403, 429, 503];
+
+function statusProblem(host: string, status: number) {
+  return DENIED_STATUSES.includes(status) ? `${host} blocked the request (${status}).` : `${host} returned an error (${status}).`;
+}
 
 type OutsideWebRoute = { fetchImpl: typeof fetch; lookup: Lookup };
 
@@ -238,8 +245,8 @@ async function fetchDirect(url: URL, fetchImpl: typeof fetch, lookup: Lookup, li
   }
   if (!response) throw new WebPageError("That page redirected too many times.");
   if (!response.ok) {
-    const denied = [401, 403, 429, 503].includes(response.status);
-    const message = `${current.hostname} answered ${response.status}${denied ? ", so the page is private or blocks automated reading" : ""}.`;
+    const denied = DENIED_STATUSES.includes(response.status);
+    const message = statusProblem(current.hostname, response.status);
     if (denied) return { blocked: message, proxies: true };
     throw new WebPageError(message);
   }
@@ -249,10 +256,10 @@ async function fetchDirect(url: URL, fetchImpl: typeof fetch, lookup: Lookup, li
     const { bytes, truncated } = await readBytes(response, DOCUMENT_MAX);
     if (truncated) throw new WebPageError("That file is too big to read here.");
     const text = await readAttachmentText(bytes, name, type, limit).catch(() => null);
-    if (!text) throw new WebPageError(`That ${type || "file"} has no text Orbit can read.`);
+    if (!text) throw new WebPageError("That file has no readable text.");
     return { page: { url: current.href, title: name, description: null, text: text.slice(0, limit), links: [], truncated: text.length > limit, via: "file" } };
   }
-  if (type && !/text\/|html|xml|json|markdown/.test(type)) throw new WebPageError(`That address is a ${type} file, not a page Orbit can read.`);
+  if (type && !/text\/|html|xml|json|markdown/.test(type)) throw new WebPageError("That link is a file Orbit can't read.");
   const body = await readBytes(response, BYTES_MAX);
   const raw = new TextDecoder().decode(body.bytes);
   if (!/html|xml/.test(type) && !/^\s*</.test(raw)) {
@@ -283,7 +290,8 @@ export async function readWebPage(
     rendered = await render(url.href, { proxies: direct.proxies });
   } catch (error) {
     if (direct.fallback) return direct.fallback;
-    throw new WebPageError(`${direct.blocked} Opening it in a browser didn't work either${error instanceof Error && error.message ? ` (${error.message.slice(0, 160)})` : ""}.`);
+    console.error("Opening a page in a browser failed", url.hostname, error);
+    throw new WebPageError(direct.blocked);
   }
   const landed = await checkUrl(rendered.url, lookup).catch(() => url);
   return fromHtml(rendered.html.slice(0, BYTES_MAX), landed, rendered.html.length > BYTES_MAX, "browser", limit);
@@ -317,7 +325,7 @@ export async function downloadPublic(
       current = await checkUrl(new URL(response.headers.get("location")!, current).href, lookup);
       continue;
     }
-    if (!response.ok) throw new WebPageError(`${current.hostname} answered ${response.status}.`);
+    if (!response.ok) throw new WebPageError(statusProblem(current.hostname, response.status));
     const { bytes, truncated } = await readBytes(response, options.maxBytes);
     return { url: current.href, contentType: (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase(), bytes, truncated };
   }

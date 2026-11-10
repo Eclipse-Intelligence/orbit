@@ -73,7 +73,7 @@ export function rateLimitedResponse(cost: number, id: string | number | null) {
   return jsonRpcError(
     429,
     -32029,
-    `Too many requests. A token can make ${MCP_CALLS_PER_MINUTE} tool calls a minute, and each call in a batch counts.${needed} Try again in a minute.`,
+    `Too many requests (limit ${MCP_CALLS_PER_MINUTE} tool calls a minute).${needed} Try again in a minute.`,
     id,
     { code: "rate_limited", retryAfterSeconds: 60, cost },
   );
