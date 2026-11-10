@@ -356,7 +356,7 @@ function writeFailure(error: unknown): CrmError {
   if (error instanceof CalendarWriteScopeError) return new CrmError("scope_missing", INVITE_RECONNECT, 403);
   if (error instanceof CalendarWriteError) {
     if (error.status === 429) return new CrmError("rate_limited", error.message, 429);
-    if (error.status === 400 || error.status === 404) return new CrmError("invalid_input", error.message, 400);
+    if (error.status === 400 || error.status === 404) return new CrmError("invalid_input", error.message, 400, error.reason ? { reason: error.reason } : null);
     return new CrmError("upstream_error", error.message, 502);
   }
   return new CrmError(
@@ -975,7 +975,7 @@ type OrganisedRow = {
 export const MEETING_GONE = "This meeting no longer exists in Outlook, so Orbit has taken it off your calendar.";
 
 const ORGANISER_ONLY = {
-  cancel: "Only the organiser can cancel this meeting. Decline it in Outlook instead.",
+  cancel: "Only the organiser can cancel. Decline it instead.",
   move: "Only the organiser can move this meeting. Propose a new time in Outlook instead.",
 };
 

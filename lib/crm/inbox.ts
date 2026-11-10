@@ -16,7 +16,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
-import { reconnectProblem } from "@/lib/mail/microsoft";
+import { appNeedsAttention, reconnectProblem } from "@/lib/mail/microsoft";
 import { routedAway } from "@/lib/mail/routing";
 import {
   fetchInboxMessages,
@@ -440,7 +440,7 @@ export async function sendContactEmail(
   const subject = input.subject.replace(/\s+/g, " ").trim();
   const body = input.body.trim();
   if (!subject || !body) {
-    throw new CrmError("invalid_input", "Add a subject and a message.", 400);
+    throw new CrmError("invalid_input", "Enter a subject and a message.", 400);
   }
   if (subject.length > 200) {
     throw new CrmError(
@@ -527,7 +527,7 @@ export async function sendContactEmail(
           error instanceof Error ? error.message : "Couldn't send the email.",
         ),
       502,
-      { stopsRun: Boolean(reconnect) || (error instanceof MicrosoftError && error.stopsRun) },
+      { stopsRun: Boolean(reconnect) || appNeedsAttention(error) || (error instanceof MicrosoftError && error.stopsRun) },
     );
   }
 

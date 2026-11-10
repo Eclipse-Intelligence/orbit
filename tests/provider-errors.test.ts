@@ -9,7 +9,7 @@ import { readWebPage } from "@/lib/web-page";
 import { redactSecrets } from "@/lib/upstream";
 import { granolaClient } from "@/lib/granola";
 import { completeJson, embedTexts, transcribeAudio } from "@/lib/llm";
-import { ensureInbox, sendNewMessage } from "@/lib/machinemail";
+import { MachineMailError, ensureInbox, sendNewMessage } from "@/lib/machinemail";
 import { readerClient } from "@/lib/readwise";
 import { putObject, readObject, resetStorageBucketCache } from "@/lib/storage";
 import { z } from "zod";
@@ -116,8 +116,10 @@ describe("provider failures never show the provider's own text", () => {
   });
 
   it("keeps MachineMail's server errors out of messages, and gives the assistant its reason for a bad request", async () => {
-    const rejected = await messageOf(() => sendNewMessage("agent@x.test", { to: ["a@x.test"], subject: "s", text: "t" }, replying(422, { error: { message: "Recipient   address is invalid." } })));
-    assert.equal(rejected, "MachineMail returned an error: Recipient address is invalid.");
+    const rejected = await sendNewMessage("agent@x.test", { to: ["a@x.test"], subject: "s", text: "t" }, replying(422, { error: { message: "Recipient   address is invalid." } })).then(() => null, (error: unknown) => error);
+    assert.ok(rejected instanceof MachineMailError);
+    assert.equal(rejected.message, "MachineMail returned an error (422).");
+    assert.equal(rejected.detail, "MachineMail returned an error: Recipient address is invalid.");
     const failed = await messageOf(() => sendNewMessage("agent@x.test", { to: ["a@x.test"], subject: "s", text: "t" }, replying(500, { error: { message: SECRET_BODY } })));
     assert.equal(failed, "Couldn't reach MachineMail. Try again.");
     assertClean(failed);
@@ -218,5 +220,19 @@ describe("logs never carry keys", () => {
     process.env.SOME_PROVIDER_TOKEN = "tok_abcdef123456";
     const text = redactSecrets('{"token":"tok_abcdef123456","apiKey":"zzz999"} Bearer abc.def https://x.test/a?key=k123&b=2 sk-proj-ABCDEFGH1234');
     assert.doesNotMatch(text, /tok_abcdef123456|zzz999|abc\.def|k123|ABCDEFGH1234/);
+    const wider = redactSecrets(
+      [
+        '{"refresh_token":"rt_0123456789","id_token":"eyJhbGciOi.payload.sig","client_secret":"cs~secret987"}',
+        "refresh_token=rt_form123&client_secret=cs_form456&id_token=idt_form789",
+        "Invalid API key: ak_live_9f8e7d6c5b",
+        "key=abc123def",
+        "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+        "postgres://orbit:hunter2pass@db.internal:5432/crm and https://bob:s3cretpw@example.test/path",
+        "https://login.test/cb?code=authcode123&state=ok",
+      ].join(" "),
+    );
+    assert.doesNotMatch(wider, /rt_0123456789|eyJhbGciOi|cs~secret987|rt_form123|cs_form456|idt_form789|ak_live_9f8e7d6c5b|abc123def|dXNlcjpwYXNzd29yZA|hunter2pass|s3cretpw|authcode123/);
+    assert.match(wider, /Invalid API key: \[redacted\]/);
+    assert.match(wider, /db\.internal:5432\/crm/);
   });
 });

@@ -16,11 +16,13 @@ const ATTACHMENT_LIMIT_BYTES = 30 * 1024 * 1024;
 
 export class MachineMailError extends ShownError {
   readonly status: number;
+  readonly detail: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, detail = message) {
     super(message);
     this.name = "MachineMailError";
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -59,7 +61,8 @@ async function readError(response: Response) {
   const text = await response.text().catch(() => "");
   logUpstream("MachineMail", response.status, text);
   const reason = response.status >= 400 && response.status < 500 && ![401, 403, 408, 429].includes(response.status) ? errorReason(text) : "";
-  return reason ? `MachineMail returned an error: ${reason}.` : upstreamMessage("MachineMail", response.status);
+  const generic = upstreamMessage("MachineMail", response.status);
+  return new MachineMailError(generic, response.status, reason ? `MachineMail returned an error: ${reason}.` : generic);
 }
 
 async function call<T>(route: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}, fetchImpl: typeof fetch = fetch): Promise<{ status: number; body: T }> {
@@ -76,7 +79,7 @@ async function call<T>(route: string, init: { method?: string; body?: unknown; t
     logUpstream("MachineMail", null, error);
     throw new MachineMailError(unreachable("MachineMail"), 0);
   }
-  if (!response.ok) throw new MachineMailError(await readError(response), response.status);
+  if (!response.ok) throw await readError(response);
   const text = await response.text();
   try {
     return { status: response.status, body: (text ? JSON.parse(text) : {}) as T };
@@ -203,7 +206,7 @@ export async function downloadAttachment(inbox: string, messageId: string, attac
     logUpstream("MachineMail", null, error);
     throw new MachineMailError(unreachable("MachineMail"), 0);
   }
-  if (!response.ok) throw new MachineMailError(await readError(response), response.status);
+  if (!response.ok) throw await readError(response);
   const limit = Math.min(maxBytes, ATTACHMENT_LIMIT_BYTES);
   const tooLarge = () => new MachineMailError("The file is too large.", 413);
   if (Number(response.headers.get("content-length") ?? 0) > limit) {

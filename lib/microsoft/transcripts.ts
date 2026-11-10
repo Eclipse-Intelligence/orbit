@@ -63,9 +63,12 @@ function transcriptResource(userId: string) {
 export function sanitizeTranscriptError(message: string, fallback = MICROSOFT_UNREACHABLE, code?: string | null) {
   const compact = message.replace(/\s+/g, " ").trim();
   if (compact === TRANSCRIPT_PERMISSION_MESSAGE) return compact;
-  const both = [code, compact].filter(Boolean).join(": ");
-  if (/GraphAccessToTranscriptsDisabled/i.test(both)) return TRANSCRIPTS_DISABLED_MESSAGE;
-  if (/Authorization_RequestDenied|Forbidden|insufficient privileges|CallTranscripts\.Read/i.test(both)) {
+  const codeText = (code ?? "").trim();
+  if (/GraphAccessToTranscriptsDisabled/i.test(compact) || codeText === "GraphAccessToTranscriptsDisabled") return TRANSCRIPTS_DISABLED_MESSAGE;
+  if (
+    /Authorization_RequestDenied|Forbidden|insufficient privileges|CallTranscripts\.Read/i.test(compact) ||
+    ["Authorization_RequestDenied", "Forbidden"].includes(codeText)
+  ) {
     return TRANSCRIPT_PERMISSION_MESSAGE;
   }
   return microsoftProblem(compact, fallback, code);

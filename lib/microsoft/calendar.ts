@@ -313,7 +313,7 @@ async function calendarError(response: Response, fallback = "Couldn't read the c
   if (response.status === 401 || code === "InvalidAuthenticationToken") {
     return new MicrosoftError(MICROSOFT_REJECTED);
   }
-  return new MicrosoftError(microsoftProblem(body.error?.message, fallback, code));
+  return new MicrosoftError(microsoftProblem(body.error?.message, fallback, code, response.status));
 }
 
 export async function fetchCalendarView(
@@ -392,11 +392,13 @@ export class CalendarWriteScopeError extends ShownError {
 export class CalendarWriteError extends ShownError {
   readonly status: number;
   readonly code: string;
-  constructor(message: string, status: number, code = "") {
+  readonly reason: string | null;
+  constructor(message: string, status: number, code = "", reason: string | null = null) {
     super(message);
     this.name = "CalendarWriteError";
     this.status = status;
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -599,9 +601,9 @@ async function writeError(response: Response, action: WriteAction) {
   if (action === "create" && response.status === 400 && message.trim()) {
     const reason = message.replace(/\s+/g, " ").trim().slice(0, 200).replace(/[.\s]+$/, "");
     console.error("Microsoft refused the meeting", code, reason);
-    return new CalendarWriteError(`Microsoft refused the meeting: ${reason}. Change it rather than trying again.`, 400, code);
+    return new CalendarWriteError("Couldn't create the meeting.", 400, code, `Microsoft refused the meeting: ${reason}. Change it rather than trying again.`);
   }
-  return new CalendarWriteError(microsoftProblem(message, WRITE_FALLBACK[action], code), response.status, code);
+  return new CalendarWriteError(microsoftProblem(message, WRITE_FALLBACK[action], code, response.status), response.status, code);
 }
 
 async function graphWrite(

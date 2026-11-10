@@ -615,6 +615,20 @@ describe("sending invites", () => {
         }),
       { code: "rate_limited", message: "Microsoft is busy. Try again in 30 seconds." },
     );
+    const realConsoleError = console.error;
+    console.error = () => {};
+    const refused = await createInvite(owner, baseInput(), {
+      fetchImpl: graph([], {
+        create: () => json({ error: { code: "ErrorInvalidRequest", message: "The start time must be before the end time." } }, 400),
+      }),
+      now: NOW,
+    }).then(() => null, (error: unknown) => error).finally(() => {
+      console.error = realConsoleError;
+    });
+    assert.ok(refused instanceof CrmError);
+    assert.equal(refused.message, "Couldn't create the meeting.");
+    assert.doesNotMatch(refused.message, /start time/);
+    assert.match(String(refused.details?.reason), /start time must be before the end time/);
     const rows = await getAdminPool().query("select 1 from crm.calendar_events where user_id = $1", [owner.userId]);
     assert.equal(rows.rows.length, 0);
   });

@@ -26,9 +26,9 @@ import {
   sanitizeMicrosoftError,
   signMicrosoftState,
 } from "@/lib/microsoft/oauth";
-import { callErrorText } from "@/lib/microsoft/calls";
-import { createGraphEvent, fetchCalendarView } from "@/lib/microsoft/calendar";
-import { transcriptErrorText } from "@/lib/microsoft/transcripts";
+import { callErrorText, sanitizeCallError } from "@/lib/microsoft/calls";
+import { CalendarWriteError, createGraphEvent, fetchCalendarView } from "@/lib/microsoft/calendar";
+import { sanitizeTranscriptError, transcriptErrorText } from "@/lib/microsoft/transcripts";
 import { createUser, resetDatabase } from "./helpers";
 
 const MAIN = "mark@geteclipse.co";
@@ -465,6 +465,17 @@ describe("what counts as needing a reconnect", () => {
       assert.equal(microsoftProblem("The operation timed out.", "Couldn't sync the calendar. Try again.", "ErrorTimeoutExpired"), "Couldn't sync the calendar. Try again.");
       assert.equal(microsoftProblem("AADSTS700082: The refresh token has expired.", "x"), "Microsoft rejected the mailbox connection. Connect it again.");
       assert.equal(microsoftProblem("", "x", "invalid_grant"), "Microsoft rejected the mailbox connection. Connect it again.");
+      assert.equal(microsoftProblem("The backend session expired while waiting.", "Couldn't sync the calendar. Try again.", "ServiceUnavailable", 503), "Couldn't sync the calendar. Try again.");
+      assert.equal(microsoftProblem("The refresh token has expired.", "x", "", 400), "Microsoft rejected the mailbox connection. Connect it again.");
+      const flaky = (async () => Response.json({ error: { code: "ServiceUnavailable", message: "Session expired on the server." } }, { status: 503 })) as typeof fetch;
+      const outage = await fetchCalendarView("token", { start: new Date(), end: new Date() }, { fetchImpl: flaky }).then(() => null, (error: unknown) => error);
+      assert.ok(outage instanceof Error);
+      assert.doesNotMatch(outage.message, /rejected the mailbox connection|connect it again/i);
+      assert.equal(sanitizeCallError("The request failed.", "Couldn't sync Teams calls. Try again.", "TenantThrottleExceeded"), "Couldn't sync Teams calls. Try again.");
+      assert.equal(sanitizeCallError("Tenant guid not found.", "x"), "Microsoft tenant isn't set up.");
+      assert.equal(sanitizeCallError("Insufficient privileges to complete the operation.", "x", "Authorization_RequestDenied"), sanitizeCallError("", "x", "Authorization_RequestDenied"));
+      assert.equal(sanitizeTranscriptError("The request failed.", "x", "GraphAccessToTranscriptsDisabled"), sanitizeTranscriptError("GraphAccessToTranscriptsDisabled", "x"));
+      assert.equal(sanitizeTranscriptError("The request failed.", "Couldn't sync Teams transcripts. Try again.", "ForbiddenTenantRule"), "Couldn't sync Teams transcripts. Try again.");
       const timeout = (async () => Response.json({ error: { code: "ErrorTimeoutExpired", message: "The operation timed out." } }, { status: 504 })) as typeof fetch;
       const failure = await fetchCalendarView("token", { start: new Date(), end: new Date() }, { fetchImpl: timeout }).then(() => null, (error: unknown) => error);
       assert.ok(failure instanceof Error);
@@ -474,7 +485,7 @@ describe("what counts as needing a reconnect", () => {
     }
   });
 
-  it("tells the assistant why Microsoft refused a new meeting, so it doesn't retry the same one", async () => {
+  it("keeps Microsoft's reason for a refused meeting for the assistant only, so pages show a fixed sentence and the assistant doesn't retry", async () => {
     const realConsoleError = console.error;
     const logged: string[] = [];
     console.error = (...args: unknown[]) => {
@@ -483,9 +494,10 @@ describe("what counts as needing a reconnect", () => {
     try {
       const refused = (async () => Response.json({ error: { code: "ErrorInvalidRequest", message: "The start time must be before the end time." } }, { status: 400 })) as typeof fetch;
       const failure = await createGraphEvent("token", { subject: "Call" } as Parameters<typeof createGraphEvent>[1], { fetchImpl: refused }).then(() => null, (error: unknown) => error);
-      assert.ok(failure instanceof Error);
-      assert.equal(failure.message, "Microsoft refused the meeting: The start time must be before the end time. Change it rather than trying again.");
-      assert.doesNotMatch(failure.message, /Try again/);
+      assert.ok(failure instanceof CalendarWriteError);
+      assert.equal(failure.message, "Couldn't create the meeting.");
+      assert.equal(failure.reason, "Microsoft refused the meeting: The start time must be before the end time. Change it rather than trying again.");
+      assert.doesNotMatch(`${failure.message} ${failure.reason}`, /Try again/);
       assert.ok(logged.some((line) => line.includes("start time must be before")));
     } finally {
       console.error = realConsoleError;

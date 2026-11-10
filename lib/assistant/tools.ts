@@ -5088,6 +5088,9 @@ const TOOL_LIST: AssistantTool[] = [
         notes: str(args.notes),
         includeMeetingLink: personal ? args.includeMeetingLink === true : args.includeMeetingLink !== false,
         from: optionalStr(args.from),
+      }).catch((error: unknown) => {
+        if (error instanceof CrmError && typeof error.details?.reason === "string") throw new CrmError(error.code, error.details.reason, error.status, error.details);
+        throw error;
       });
       return personal ? { event: result } : { invite: result };
     },

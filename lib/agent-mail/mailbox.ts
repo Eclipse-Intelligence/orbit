@@ -179,10 +179,10 @@ function cleanMailboxAddress(value: unknown) {
   return address;
 }
 
-function webhookOrigin() {
+function webhookOrigin(actor: UserActor) {
   const site = siteOrigin();
   if (!site || !/^https:\/\//.test(site)) {
-    throw new CrmError("invalid_input", "Set SITE_URL to Orbit's https address first, so MachineMail can reach it.", 400);
+    throw new CrmError("invalid_input", actor.role === "owner" ? "Set SITE_URL to Orbit's https address first, so MachineMail can reach it." : notSetUp("Orbit's web address"), 400);
   }
   return site.replace(/\/+$/, "");
 }
@@ -206,7 +206,7 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
   if (!existing?.set_up_at && (await addressTaken(address, actor.workspaceId))) {
     throw new CrmError("conflict", addressTakenMessage(address), 409, { field: "address" });
   }
-  const url = `${webhookOrigin()}${WEBHOOK_PATH}`;
+  const url = `${webhookOrigin(actor)}${WEBHOOK_PATH}`;
   let webhook: { id: string; secret: string };
   try {
     await ensureInbox(address, DISPLAY_NAME, fetchImpl);

@@ -50,22 +50,21 @@ export function tokenClaims(token: string | null | undefined) {
   }
 }
 
+const CALL_PERMISSION_CODES = new Set(["Authorization_RequestDenied", "Forbidden"]);
+
 export function sanitizeCallError(message: string, fallback = MICROSOFT_UNREACHABLE, code?: string | null) {
   const compact = message.replace(/\s+/g, " ").trim();
-  const both = [code, compact].filter(Boolean).join(": ");
+  const codeText = (code ?? "").trim();
   if (
-    /Authorization_RequestDenied|Forbidden|insufficient privileges|AADSTS65001|AADSTS700016|consent/i.test(
-      both,
-    )
+    /Authorization_RequestDenied|Forbidden|insufficient privileges|AADSTS65001|AADSTS700016|consent/i.test(compact) ||
+    CALL_PERMISSION_CODES.has(codeText)
   ) {
     return CALL_PERMISSION_MESSAGE;
   }
-  if (
-    /invalid_client|AADSTS7000215|AADSTS7000222|AADSTS700027/i.test(both)
-  ) {
+  if (/invalid_client|AADSTS7000215|AADSTS7000222|AADSTS700027/i.test(compact) || codeText === "invalid_client") {
     return APP_CREDENTIALS_REJECTED;
   }
-  if (/AADSTS90002|AADSTS900023|AADSTS90072|tenant/i.test(both)) {
+  if (/AADSTS90002|AADSTS900023|AADSTS90072|tenant/i.test(compact)) {
     return TENANT_MESSAGE;
   }
   return microsoftProblem(compact, fallback, code);

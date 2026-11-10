@@ -1233,7 +1233,7 @@ export async function enableClickUpWebhook(
   }
   const site = configuredSiteOrigin() ?? origin;
   if (!/^https:\/\//.test(site)) {
-    throw new CrmError("invalid_input", "Set SITE_URL to Orbit's https address first.", 400);
+    throw new CrmError("invalid_input", actor.role === "owner" ? "Set SITE_URL to Orbit's https address first." : notSetUp("Instant sync"), 400);
   }
   const endpoint = `${site}/api/clickup/webhook?workspace=${actor.workspaceId}`;
   const api = client(token, options);

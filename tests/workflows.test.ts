@@ -246,6 +246,22 @@ describe("workflows", () => {
     ]);
     const { steps } = await getRunSteps(owner, unset.runId);
     assert.match(JSON.stringify(steps.at(-1)!.output), /isn't urgent, high, medium or low, so the issue has no priority/);
+
+    const refusing: typeof fetch = async (input, init) => {
+      if (String(input).includes("linear") && !String(JSON.parse(String(init?.body ?? "{}")).query).includes("teams(")) {
+        return Response.json({ errors: [{ message: "Internal state ref 8812 is archived" }] });
+      }
+      return llm.fetchImpl(input, init);
+    };
+    const realConsoleError = console.error;
+    console.error = () => {};
+    const failed = await startRun(owner, workflow.id, { test: false, record: { type: "company", id: low }, fetchImpl: refusing }).finally(() => {
+      console.error = realConsoleError;
+    });
+    assert.equal(failed.status, "failed");
+    const { run } = await getRunSteps(owner, failed.runId);
+    assert.match(run.error ?? "", /linear_issue_1: Linear returned an error\.$/);
+    assert.doesNotMatch(run.error ?? "", /ref 8812/);
   });
 
   it("adds a line saying an email was sent automatically when the step asks for it", () => {

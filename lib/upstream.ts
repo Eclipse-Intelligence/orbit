@@ -31,9 +31,11 @@ export function redactSecrets(text: string, extra: (string | null | undefined)[]
     clean = clean.split(value.trim()).join("[redacted]");
   }
   return clean
-    .replace(/\b(wss?|https?):\/\/[^\s"'<>]*[?&](api[_-]?key|key|token|signature|sig|secret|access_token)=[^\s"'<>]*/gi, "$1://[redacted url]")
-    .replace(/\b(api[_-]?key|apikey|access[_-]?token|token|secret|signature|password)(["']?\s*[:=]\s*["']?)[^\s"',}&]+/gi, "$1$2[redacted]")
+    .replace(/\b(wss?|https?):\/\/[^\s"'<>]*[?&](api[_-]?key|key|(?:refresh_|id_|access_)?token|signature|sig|(?:client_)?secret|password|code)=[^\s"'<>]*/gi, "$1://[redacted url]")
+    .replace(/\b(wss?|https?|ftp|postgres(?:ql)?|redis|mongodb(?:\+srv)?):\/\/[^\s/@:"'<>]+:[^\s/@"'<>]+@/gi, "$1://[redacted]@")
+    .replace(/(?<![A-Za-z0-9])((?:refresh_|id_|access_)?token|(?:client_)?secret|api[ _-]?key|apikey|key|signature|password|passwd)(["']?\s*[:=]\s*["']?)[^\s"',}&]+/gi, "$1$2[redacted]")
     .replace(/\bBearer\s+[^\s"',}]+/gi, "Bearer [redacted]")
+    .replace(/\bBasic\s+[A-Za-z0-9+/=._-]{6,}/gi, "Basic [redacted]")
     .replace(/\b(sk|pk|rk)[-_](live|test|proj)?[-_]?[A-Za-z0-9]{8,}/g, "[redacted]");
 }
 

@@ -177,6 +177,8 @@ describe("sending from other accounts", () => {
       const signedOut = await refusal(tokenReply(400, { error: "invalid_grant", error_description: "AADSTS700082: The refresh token has expired due to inactivity." }));
       assert.equal(signedOut.stopsRun, true);
       assert.match(signedOut.message, /Reconnect/);
+      const appBroken = await refusal(tokenReply(401, { error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided." }));
+      assert.deepEqual(appBroken, { message: "Orbit's Microsoft app needs attention. Tell the workspace owner.", stopsRun: true });
     } finally {
       console.error = realConsoleError;
       await admin.query("update crm.mailbox_connections set access_token_expires_at = now() + interval '1 hour' where email = 'mark@geteclipse.co'");

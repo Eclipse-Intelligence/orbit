@@ -1041,7 +1041,8 @@ export async function notify(
 }
 
 function errorText(error: unknown) {
-  if (error instanceof CrmError || error instanceof LinearError || error instanceof LlmError) return error.message;
+  if (error instanceof LinearError) return error.generic;
+  if (error instanceof CrmError || error instanceof LlmError) return error.message;
   if (error instanceof z.ZodError) return "The AI reply didn't have the fields this step expects.";
   console.error("Workflow step failed", error);
   return "Something went wrong in this step.";

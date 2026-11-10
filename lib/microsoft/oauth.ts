@@ -616,7 +616,7 @@ async function graphFailure(response: Response, fallback: string) {
   };
   const code = body.error?.code ?? "";
   if (response.status === 401 || code === "InvalidAuthenticationToken") return { message: MICROSOFT_REJECTED, code };
-  return { message: microsoftProblem(body.error?.message, fallback, code), code };
+  return { message: microsoftProblem(body.error?.message, fallback, code, response.status), code };
 }
 
 async function graphError(response: Response, fallback: string) {
@@ -642,11 +642,12 @@ function logMicrosoft(label: string, detail: string) {
 
 const SIGNED_OUT_CODES = /^(invalid_grant|interaction_required)$/i;
 
-export function microsoftProblem(detail: string | null | undefined, fallback = MICROSOFT_UNREACHABLE, code?: string | null) {
+export function microsoftProblem(detail: string | null | undefined, fallback = MICROSOFT_UNREACHABLE, code?: string | null, status?: number | null) {
   const text = compact(detail);
   const codeText = compact(code);
+  const serverFault = typeof status === "number" && status >= 500;
   if (appConfigProblem(`${codeText} ${text}`)) return APP_NEEDS_ATTENTION;
-  if (SIGNED_OUT.test(text) || SIGNED_OUT_CODES.test(codeText)) return MICROSOFT_REJECTED;
+  if ((!serverFault && SIGNED_OUT.test(text)) || SIGNED_OUT_CODES.test(codeText)) return MICROSOFT_REJECTED;
   logMicrosoft("Request", [codeText, text].filter(Boolean).join(": "));
   return fallback;
 }

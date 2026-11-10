@@ -1,4 +1,4 @@
-import { ShownError, notSetUp } from "@/lib/crm/errors";
+import { ShownError } from "@/lib/crm/errors";
 import { htmlToText } from "@/lib/mail/text";
 import { LlmError, transcribeAudio, TRANSCRIBE_MAX_BYTES } from "@/lib/llm";
 import { downloadPublic, WebPageError, type Lookup } from "@/lib/web-page";
@@ -211,7 +211,7 @@ export async function readYouTube(target: string, options: MediaOptions): Promis
   if (fallback) return { title: named.title, text: withHeader({ ...named, description: direct?.description }, fallback) };
   if (direct?.status && direct.status !== "OK" && direct.status !== "LOGIN_REQUIRED") throw new MediaError("That video isn't available.");
   if (supadataKey()) throw new MediaError("That video has no captions to read.");
-  notSetUp("YouTube transcripts", "SUPADATA_API_KEY");
+  console.error("YouTube transcripts aren't set up: SUPADATA_API_KEY is missing.");
   throw new MediaError("No captions available. Upload the transcript instead.");
 }
 
