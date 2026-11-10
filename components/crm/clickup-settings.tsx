@@ -86,7 +86,7 @@ export default function ClickUpSettings({
             </span>
           ))}
           {view.teamId && !view.webhookEnabled && !httpsSite && (
-            <span className="text-subtle">Instant sync needs SITE_URL set to Orbit&apos;s https address.</span>
+            <span className="text-subtle">{isOwner ? "Instant sync needs SITE_URL set to Orbit's https address." : "Instant sync isn't set up."}</span>
           )}
           {(view.error || view.lastError) && (
             <span className="text-danger" role="alert">

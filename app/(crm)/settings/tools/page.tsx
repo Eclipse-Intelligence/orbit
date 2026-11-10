@@ -48,8 +48,8 @@ export default async function ToolsSettingsPage() {
         unenriched={unenriched}
         logoLinkReady={Boolean(enrichmentAvailability().logoClientId)}
       />
-      <AgentMailboxSettings view={agentMailbox} />
-      <LinearSettings linear={linear} connection={linearHere} workspaceName={user.workspaceName} canAdmin={canAdmin} />
+      <AgentMailboxSettings view={agentMailbox} isOwner={user.role === "owner"} />
+      <LinearSettings linear={linear} connection={linearHere} workspaceName={user.workspaceName} canAdmin={canAdmin} isOwner={user.role === "owner"} />
       <ApiSettings origin={origin} scopes={[...SCOPES]} />
       <WebhooksSettings endpoints={endpoints} deliveries={deliveries} canAdmin={canAdmin} />
     </SettingsPage>
