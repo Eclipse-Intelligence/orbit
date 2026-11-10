@@ -380,6 +380,27 @@ export const CORE_TASKS: EvalTask[] = [
     checks: [called(["list_calendar_events", "get_overview"]), answerIncludes("Quillfeather proposal review", "Copperleaf"), answerMatches(/\b16[:.]30\b|\b4[:.]30\s?pm\b/i, "gives the 16:30 start"), noWrites()],
   }),
   task({
+    id: "calendar-zoom-link",
+    suite: "core",
+    category: "calendar",
+    origin: "Mark's report: meeting links written in an invite's notes weren't clickable, so he copied them by hand.",
+    message: "What's the Zoom link for my 3pm?",
+    checks: [
+      called(["list_calendar_events", "get_overview"]),
+      answerIncludes("https://us02web.zoom.us/j/84529173006?pwd=dHJ1c3RlZA.1"),
+      answerExcludes("https://us02web.zoom.us/u/kd8xQ"),
+      noWrites(),
+    ],
+  }),
+  task({
+    id: "calendar-agenda",
+    suite: "core",
+    category: "calendar",
+    origin: "Follow-on to the Zoom link report: the agenda lives in the invite's description.",
+    message: "What's on the agenda for the Driftbox call today?",
+    checks: [called("list_calendar_events"), answerIncludesAny(["annual discount", "Annual discount"], "names the second agenda item"), answerMatches(/runner/i, "names the hosted runner pricing item"), noWrites()],
+  }),
+  task({
     id: "calendar-decline",
     suite: "core",
     category: "calendar",

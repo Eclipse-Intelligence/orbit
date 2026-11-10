@@ -1,7 +1,7 @@
 import { ShownError } from "@/lib/crm/errors";
 import { resolveZone } from "@/lib/ical/parse";
 import { canonicalEmail } from "@/lib/crm/normalize";
-import { clipNotes, eventBodyText, joinLink, safeUrl } from "@/lib/meeting-links";
+import { clipNotes, eventBodyText, joinLink, safeUrl, type JoinLink } from "@/lib/meeting-links";
 import { MICROSOFT_REJECTED, MicrosoftError, microsoftProblem } from "@/lib/microsoft/oauth";
 import { parseDateTime, zonedParts } from "@/lib/time";
 
@@ -58,7 +58,6 @@ const EVENT_FIELDS = [
   "webLink",
   "onlineMeeting",
   "onlineMeetingUrl",
-  "body",
   "organizer",
   "attendees",
   "showAs",
@@ -66,6 +65,7 @@ const EVENT_FIELDS = [
 ].join(",");
 
 export const VIEW_PREFER = 'outlook.timezone="UTC", outlook.body-content-type="text"';
+const PLAIN_PREFER = 'outlook.timezone="UTC"';
 
 type GraphDateTime = { dateTime?: string | null; timeZone?: string | null };
 type GraphAddress = { emailAddress?: { name?: string | null; address?: string | null } | null };
@@ -125,6 +125,7 @@ export type CalendarEvent = {
   location: string | null;
   webLink: string | null;
   onlineMeetingUrl: string | null;
+  privateJoinUrl: string | null;
   notes: string | null;
   organizer: CalendarPerson | null;
   attendees: CalendarAttendee[];
@@ -212,7 +213,7 @@ export async function fetchCalendars(
   return { calendars, complete };
 }
 
-export function calendarViewUrl(start: Date, end: Date, calendarId?: string | null) {
+export function calendarViewUrl(start: Date, end: Date, calendarId?: string | null, options: { body?: boolean } = {}) {
   const path = calendarId
     ? `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendarId)}/calendarView`
     : "https://graph.microsoft.com/v1.0/me/calendarView";
@@ -220,7 +221,7 @@ export function calendarViewUrl(start: Date, end: Date, calendarId?: string | nu
   url.searchParams.set("startDateTime", start.toISOString());
   url.searchParams.set("endDateTime", end.toISOString());
   url.searchParams.set("$top", String(PAGE_SIZE));
-  url.searchParams.set("$select", EVENT_FIELDS);
+  url.searchParams.set("$select", options.body === false ? EVENT_FIELDS : `${EVENT_FIELDS},body`);
   return url.toString();
 }
 
@@ -243,6 +244,13 @@ function person(value: GraphAddress | null | undefined): CalendarPerson | null {
   if (!email) return null;
   const name = clip(value?.emailAddress?.name, 200);
   return { name: name && name.toLowerCase() !== email ? name : null, email };
+}
+
+export function meetingFields(join: JoinLink | null) {
+  return {
+    onlineMeetingUrl: join && join.source !== "notes" ? join.url : null,
+    privateJoinUrl: join?.source === "notes" ? join.url : null,
+  };
 }
 
 export function toCalendarEvent(event: GraphEvent, options: { ownLink?: string | null } = {}): CalendarEvent | null {
@@ -273,12 +281,9 @@ export function toCalendarEvent(event: GraphEvent, options: { ownLink?: string |
     isCancelled: Boolean(event.isCancelled),
     location,
     webLink: safeUrl(event.webLink),
-    onlineMeetingUrl: joinLink({
-      provided: [event.onlineMeeting?.joinUrl, event.onlineMeetingUrl],
-      location,
-      notes: body,
-      own: options.ownLink,
-    }),
+    ...meetingFields(
+      joinLink({ provided: [event.onlineMeeting?.joinUrl, event.onlineMeetingUrl], location, notes: body, own: options.ownLink }),
+    ),
     notes: clipNotes(body),
     organizer: person(event.organizer),
     attendees,
@@ -328,13 +333,14 @@ export async function fetchCalendarView(
     pageLimit?: number;
     calendarId?: string | null;
     ownLink?: string | null;
+    body?: boolean;
   } = {},
 ): Promise<CalendarFetch> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const pageLimit = options.pageLimit ?? PAGE_LIMIT;
   const events: CalendarEvent[] = [];
   const seen = new Set<string>();
-  let next: string | null = calendarViewUrl(window.start, window.end, options.calendarId);
+  let next: string | null = calendarViewUrl(window.start, window.end, options.calendarId, { body: options.body });
   let pages = 0;
   let complete = true;
   while (next) {
@@ -346,7 +352,7 @@ export async function fetchCalendarView(
     const response = await fetchImpl(next, {
       headers: {
         authorization: `Bearer ${accessToken}`,
-        prefer: VIEW_PREFER,
+        prefer: options.body === false ? PLAIN_PREFER : VIEW_PREFER,
       },
       signal: AbortSignal.timeout(15000),
     });

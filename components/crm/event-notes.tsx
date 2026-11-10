@@ -5,6 +5,16 @@ import Button from "@/components/_ui/button";
 import LinkedText from "@/components/_ui/linked-text";
 import { cn } from "@/lib/utils";
 
+function hideClippedLinks(element: HTMLElement, clamped: boolean) {
+  const limit = element.clientHeight;
+  for (const link of element.querySelectorAll("a")) {
+    const hidden = clamped && link.offsetTop >= limit;
+    link.tabIndex = hidden ? -1 : 0;
+    if (hidden) link.setAttribute("aria-hidden", "true");
+    else link.removeAttribute("aria-hidden");
+  }
+}
+
 export default function EventNotes({ id, text }: { id: string; text: string }) {
   const [open, setOpen] = useState(false);
   const [long, setLong] = useState(false);
@@ -13,8 +23,16 @@ export default function EventNotes({ id, text }: { id: string; text: string }) {
 
   useEffect(() => {
     const element = notesRef.current;
-    if (!element || open) return;
-    const observer = new ResizeObserver(() => setLong(element.scrollHeight > element.clientHeight + 1));
+    if (!element) return;
+    if (open) {
+      hideClippedLinks(element, false);
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      const clamped = element.scrollHeight > element.clientHeight + 1;
+      setLong(clamped);
+      hideClippedLinks(element, clamped);
+    });
     observer.observe(element);
     return () => observer.disconnect();
   }, [open, text]);
@@ -25,7 +43,7 @@ export default function EventNotes({ id, text }: { id: string; text: string }) {
       <p
         ref={notesRef}
         id={notesId}
-        className={cn("caption-style text-soft w-full leading-[1.5] whitespace-pre-line [overflow-wrap:anywhere]", !open && "line-clamp-[8]")}
+        className={cn("caption-style text-soft relative w-full whitespace-pre-line [overflow-wrap:anywhere]", !open && "line-clamp-[8]")}
       >
         <LinkedText text={text} />
       </p>

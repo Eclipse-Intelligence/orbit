@@ -21,6 +21,7 @@ import { listCalendarItems } from "@/lib/crm/calendars";
 import { saveMeetingLink } from "@/lib/crm/invites";
 import { saveOtherEmails } from "@/lib/crm/profile";
 import { DEFAULT_STEPS } from "@/lib/crm/scheduler";
+import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import {
@@ -196,7 +197,8 @@ describe("graph calendar view", () => {
     assert.equal(first.searchParams.get("$top"), "100");
     assert.match(first.searchParams.get("$select") ?? "", /attendees/);
     assert.match(first.searchParams.get("$select") ?? "", /onlineMeeting,/);
-    assert.match(first.searchParams.get("$select") ?? "", /,body,/);
+    assert.match(first.searchParams.get("$select") ?? "", /,body$/);
+    assert.doesNotMatch(new URL(calendarViewUrl(start, end, null, { body: false })).searchParams.get("$select") ?? "", /body/);
 
     const at = Date.UTC(2026, 9, 16, 13);
     const pages = [[graphEvent("a", at), graphEvent("b", at)], [graphEvent("b", at), graphEvent("c", at)], [graphEvent("d", at)]];
@@ -242,11 +244,21 @@ describe("calendar notes and join links", () => {
     const owner = await createUser("mark@orbit-notes.test", "Mark");
     await connect(owner, "mark@orbit-notes.test");
     await saveMeetingLink(owner, "https://rooms.orbit-notes.test/mark");
+    const client = (await createContact(owner, { firstName: "Cara", lastName: "Client", email: "cara@client-notes.test" })).body.contact.id;
+    const guest = await createUser("guest@orbit-notes.test", "Guest");
+    const bystander = await createUser("bystander@orbit-notes.test", "Bystander");
+    for (const member of [guest, bystander]) {
+      await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [
+        owner.workspaceId,
+        member.userId,
+      ]);
+    }
     const now = Date.now();
     const zoom = "https://us02web.zoom.us/j/81234567890?pwd=abc";
     const meet = "https://meet.google.com/abc-defg-hij";
     const safe = `https://eur02.safelinks.protection.outlook.com/?url=${encodeURIComponent(meet)}&data=05%7C02&reserved=0`;
     const text = (content: string) => ({ contentType: "text", content });
+    const people = [{ email: "cara@client-notes.test" }, { email: "guest@orbit-notes.test" }];
     const pages = [
       [
         graphEvent("teams", now + DAY, {
@@ -261,6 +273,7 @@ describe("calendar notes and join links", () => {
           onlineMeeting: null,
           location: { displayName: "Office" },
           body: text(`Agenda: pricing\r\nQuestions to jane@acme.com\r\nJoin<${safe}>`),
+          people,
         }),
         graphEvent("own", now + DAY, {
           onlineMeeting: null,
@@ -283,19 +296,30 @@ describe("calendar notes and join links", () => {
     assert.match(new URL(view.url).searchParams.get("$select") ?? "", /\bbody\b/);
     assert.match((view.init?.headers as Record<string, string>).prefer, /outlook\.body-content-type="text"/);
 
-    const rows = await getAdminPool().query<{ provider_event_id: string; online_meeting_url: string | null; notes: string | null }>(
-      "select provider_event_id, online_meeting_url, notes from crm.calendar_events where user_id = $1",
-      [owner.userId],
-    );
-    const byId = new Map(rows.rows.map((row) => [row.provider_event_id, row]));
+    const stored = async () => {
+      const rows = await getAdminPool().query<{ provider_event_id: string; online_meeting_url: string | null; join_url: string | null; notes: string | null }>(
+        `select e.provider_event_id, e.online_meeting_url, l.join_url, n.notes
+         from crm.calendar_events e
+         left join crm.calendar_event_links l on l.event_id = e.id
+         left join crm.calendar_event_notes n on n.event_id = e.id
+         where e.user_id = $1`,
+        [owner.userId],
+      );
+      return new Map(rows.rows.map((row) => [row.provider_event_id, row]));
+    };
+    const byId = await stored();
     assert.equal(byId.get("teams")!.online_meeting_url, "https://teams.microsoft.com/l/meetup-join/teams");
+    assert.equal(byId.get("teams")!.join_url, null);
     assert.equal(byId.get("teams")!.notes, "Agenda\n________________\nJoin the meeting now<https://teams.microsoft.com/l/meetup-join/other>");
     assert.equal(byId.get("zoom")!.online_meeting_url, zoom);
-    assert.equal(byId.get("meet")!.online_meeting_url, meet);
+    assert.equal(byId.get("zoom")!.join_url, null);
+    assert.equal(byId.get("meet")!.online_meeting_url, null);
+    assert.equal(byId.get("meet")!.join_url, meet);
     assert.equal(byId.get("meet")!.notes, `Agenda: pricing\nQuestions to jane@acme.com\nJoin<${meet}>`);
-    assert.equal(byId.get("own")!.online_meeting_url, "https://rooms.orbit-notes.test/mark");
+    assert.equal(byId.get("own")!.online_meeting_url, null);
+    assert.equal(byId.get("own")!.join_url, "https://rooms.orbit-notes.test/mark");
     assert.equal(byId.get("own")!.notes, "Call on my room <https://rooms.orbit-notes.test/mark>");
-    assert.equal(byId.get("plain")!.online_meeting_url, null);
+    assert.equal(byId.get("plain")!.join_url, null);
     assert.equal(byId.get("plain")!.notes!.length, NOTES_MAX);
     assert.ok(byId.get("plain")!.notes!.endsWith("…"));
     assert.equal(byId.get("bare")!.online_meeting_url, null);
@@ -306,35 +330,52 @@ describe("calendar notes and join links", () => {
     assert.equal(meetItem.joinUrl, meet);
     assert.match(meetItem.notes ?? "", /jane@acme\.com/);
 
-    const stranger = await createUser("stranger@orbit-notes.test", "Stranger");
-    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [
-      owner.workspaceId,
-      stranger.userId,
-    ]);
-    const seen = await queryAsUser<{ count: number }>(stranger.userId, "select count(*)::int as count from crm.calendar_events where notes is not null");
-    assert.equal(seen[0].count, 0);
+    for (const member of [guest, bystander]) {
+      const notes = await queryAsUser<{ count: number }>(member.userId, "select count(*)::int as count from crm.calendar_event_notes");
+      assert.equal(notes[0].count, 0);
+      const visible = await queryAsUser<{ count: number }>(member.userId, "select count(*)::int as count from crm.calendar_events where provider_event_id = 'meet'");
+      assert.equal(visible[0].count, 1);
+    }
+    await assert.rejects(
+      queryAsUser(guest.userId, "insert into crm.calendar_event_notes (event_id, user_id, workspace_id, notes) select id, user_id, workspace_id, 'x' from crm.calendar_events where provider_event_id = 'meet'"),
+      /row-level security/,
+    );
+    const guestLinks = await queryAsUser<{ join_url: string }>(guest.userId, "select join_url from crm.calendar_event_links");
+    assert.deepEqual(guestLinks.map((row) => row.join_url), [meet]);
+    const bystanderLinks = await queryAsUser<{ count: number }>(bystander.userId, "select count(*)::int as count from crm.calendar_event_links");
+    assert.equal(bystanderLinks[0].count, 0);
 
-    pages[0][2] = graphEvent("meet", now + DAY, { onlineMeeting: null, location: { displayName: "Office" }, body: text("Moved to the office") });
+    assert.equal((await getMeetings(owner, { contactId: client }, now)).upcoming[0].joinUrl, meet);
+    const asMember = (member: UserActor): UserActor => ({ ...member, workspaceId: owner.workspaceId, role: "member", scopes: scopesForRole("member") });
+    assert.equal((await getMeetings(asMember(guest), { contactId: client }, now)).upcoming[0].joinUrl, meet);
+    const forBystander = await getMeetings(asMember(bystander), { contactId: client }, now);
+    assert.equal(forBystander.upcoming[0].subject, "Meeting meet");
+    assert.equal(forBystander.upcoming[0].joinUrl, null);
+    assert.equal(JSON.stringify(forBystander).includes("pricing"), false);
+
+    pages[0][2] = graphEvent("meet", now + DAY, { onlineMeeting: null, location: { displayName: "Office" }, body: text("Moved to the office"), people });
     await getAdminPool().query("update crm.integration_state set last_attempt_at = null where source = 'calendar'");
     await syncCalendar(owner, { fetchImpl: graphStub(() => pages, []), now });
-    const updated = await getAdminPool().query<{ online_meeting_url: string | null; notes: string | null }>(
-      "select online_meeting_url, notes from crm.calendar_events where user_id = $1 and provider_event_id = 'meet'",
-      [owner.userId],
-    );
-    assert.deepEqual(updated.rows[0], { online_meeting_url: null, notes: "Moved to the office" });
+    const updated = (await stored()).get("meet")!;
+    assert.deepEqual({ ...updated }, { provider_event_id: "meet", online_meeting_url: null, join_url: null, notes: "Moved to the office" });
   });
 
   it("re-applies the notes migration", async () => {
     const sql = readFileSync("supabase/migrations/20270113000000_calendar_notes.sql", "utf8");
     await getAdminPool().query(sql);
     await getAdminPool().query(sql);
-    const column = await getAdminPool().query<{ data_type: string; is_nullable: string }>(
-      "select data_type, is_nullable from information_schema.columns where table_schema = 'crm' and table_name = 'calendar_events' and column_name = 'notes'",
+    const column = await getAdminPool().query("select 1 from information_schema.columns where table_schema = 'crm' and table_name = 'calendar_events' and column_name = 'notes'");
+    assert.equal(column.rowCount, 0);
+    const tables = await getAdminPool().query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+      "select relname, relrowsecurity, relforcerowsecurity from pg_class where relname in ('calendar_event_notes', 'calendar_event_links') order by relname",
     );
-    assert.deepEqual(column.rows[0], { data_type: "text", is_nullable: "YES" });
+    assert.deepEqual(tables.rows, [
+      { relname: "calendar_event_links", relrowsecurity: true, relforcerowsecurity: true },
+      { relname: "calendar_event_notes", relrowsecurity: true, relforcerowsecurity: true },
+    ]);
     await assert.rejects(
-      getAdminPool().query("update crm.calendar_events set notes = repeat('x', 8001) where provider_event_id = 'bare'"),
-      /calendar_events_notes_length/,
+      getAdminPool().query("update crm.calendar_event_notes set notes = repeat('x', 8001)"),
+      /calendar_event_notes_length/,
     );
   });
 });

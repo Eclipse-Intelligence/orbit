@@ -377,6 +377,7 @@ describe("iCal parsing", () => {
     assert.equal(utc.onlineMeetingUrl, "https://meet.google.com/abc-defg-hij");
     assert.equal(utc.notes, "Agenda\nJoin: https://meet.google.com/abc-defg-hij.\nOther https://example.com/x");
     assert.equal(ny.notes, null);
+    assert.equal(ny.privateJoinUrl, null);
     assert.equal(utc.webLink, "https://example.com/event/1");
     assert.equal(utc.showAs, "busy");
     assert.equal(events.get("floating@test")!.startsAt, "2026-10-22T16:00:00.000Z");
@@ -393,7 +394,7 @@ describe("iCal parsing", () => {
       "https://teams.microsoft.com/l/meetup-join/19%3a",
     );
     assert.equal(meetingLink("https://evil.example/meet.google.com"), null);
-    assert.equal(meetingLink("http://meet.google.com/abc"), "https://meet.google.com/abc");
+    assert.equal(meetingLink("http://meet.google.com/abc-defg-hij"), "https://meet.google.com/abc-defg-hij");
     assert.equal(meetingLink("webcal://meet.google.com/abc"), null);
   });
 
@@ -620,10 +621,13 @@ describe("calendar link sync", () => {
       provider_event_id: string;
       subject: string;
       online_meeting_url: string | null;
+      join_url: string | null;
       notes: string | null;
     }>(
-      `select e.provider_event_id, e.subject, e.online_meeting_url, e.notes
+      `select e.provider_event_id, e.subject, e.online_meeting_url, l.join_url, n.notes
        from crm.calendar_events e join crm.calendar_accounts a on a.id = e.account_id
+       left join crm.calendar_event_links l on l.event_id = e.id
+       left join crm.calendar_event_notes n on n.event_id = e.id
        where e.user_id = $1 and a.provider = 'ics' order by e.starts_at`,
       [userId],
     );
@@ -682,7 +686,8 @@ describe("calendar link sync", () => {
       ["weekly@test/20261012T083000Z", "lunch@test", "zoom@test", "weekly@test/20261019T083000Z", "weekly@test/20261026T093000Z"],
     );
     assert.equal(events[1].online_meeting_url, "https://meet.google.com/aaa-bbbb-ccc");
-    assert.equal(events[2].online_meeting_url, "https://us02web.zoom.us/j/555?pwd=k");
+    assert.equal(events[2].online_meeting_url, null);
+    assert.equal(events[2].join_url, "https://us02web.zoom.us/j/555?pwd=k");
     assert.equal(events[2].notes, "Hi Mark\nJoin Zoom Meeting <https://us02web.zoom.us/j/555?pwd=k>");
 
     const groups = await listCalendarGroups(owner);

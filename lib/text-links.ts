@@ -6,7 +6,10 @@ export type TextPart =
   | { kind: "url"; text: string; href: string }
   | { kind: "email"; text: string; href: string };
 
+type Options = { emails?: boolean; markdown?: boolean };
+
 function splitEmails(text: string): TextPart[] {
+  if (!text.includes("@")) return [{ kind: "text", text }];
   const parts: TextPart[] = [];
   let last = 0;
   for (const match of text.matchAll(EMAIL_IN_TEXT)) {
@@ -20,14 +23,22 @@ function splitEmails(text: string): TextPart[] {
   return parts;
 }
 
-export function textParts(text: string, options: { emails?: boolean } = {}): TextPart[] {
+export function textParts(text: string, options: Options = {}): TextPart[] {
   const plain = (value: string): TextPart[] =>
     value ? (options.emails ? splitEmails(value) : [{ kind: "text", text: value }]) : [];
   const parts: TextPart[] = [];
   let last = 0;
   for (const match of text.matchAll(URL_IN_TEXT)) {
     parts.push(...plain(text.slice(last, match.index)));
-    parts.push({ kind: "url", text: match[0], href: match[0] });
+    const cut = options.markdown ? match[0].indexOf("](") : -1;
+    if (cut > 0) {
+      const url = match[0].slice(0, cut);
+      parts.push({ kind: "url", text: url, href: url });
+      parts.push({ kind: "text", text: "](" });
+      parts.push(...textParts(match[0].slice(cut + 2), options));
+    } else {
+      parts.push({ kind: "url", text: match[0], href: match[0] });
+    }
     last = match.index + match[0].length;
   }
   parts.push(...plain(text.slice(last)));

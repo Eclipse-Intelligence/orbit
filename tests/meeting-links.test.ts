@@ -64,6 +64,56 @@ describe("meeting links", () => {
     assert.equal(findMeetingLink(["https://meet.eclipse.example/markus"], { own }), null);
   });
 
+  it("rejects help, install and landing pages and prefers a real room anywhere", () => {
+    const pages = [
+      "https://meet.goto.com/install",
+      "https://meet.google.com/about",
+      "https://meet.google.com/tel/abc",
+      "https://meet.google.com/",
+      "https://whereby.com/information/tos",
+      "https://whereby.com/pricing",
+      "https://whereby.com/download",
+      "https://meet.jit.si/static/privacy.html",
+      "https://meet.jit.si/download",
+      "https://help.webex.com/en-us/join/abc",
+      "https://www.webex.com/downloads.html",
+      "https://teams.microsoft.com/v2/",
+      "https://teams.microsoft.com/meet-now",
+      "https://teams.microsoft.com/",
+      "https://teams.microsoft.com/meet/",
+      "https://zoom.us/download",
+      "https://zoom.us/j/",
+      "https://zoom.us/terms",
+      "https://gotomeeting.com/features",
+      "https://app.chime.aws/",
+      "https://chime.aws/download",
+      "https://around.co/about",
+      "https://8x8.vc/terms",
+    ];
+    for (const page of pages) assert.equal(meetingLink(page), null, page);
+    assert.equal(meetingLink("New to GoTo? https://meet.goto.com/install then https://meet.goto.com/123456789"), "https://meet.goto.com/123456789");
+    assert.equal(meetingLink("Help: https://whereby.com/information/tos", "Room: https://whereby.com/eclipse"), "https://whereby.com/eclipse");
+    assert.equal(meetingLink("https://www1.gotomeeting.com/join/123456789"), "https://www1.gotomeeting.com/join/123456789");
+    assert.equal(meetingLink("https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fmeetup-join%2F19%3Ameeting"), "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fmeetup-join%2F19%3Ameeting");
+  });
+
+  it("cuts markdown links and keeps own links exact at a site root", () => {
+    assert.equal(meetingLink("[https://zoom.us/j/1](https://zoom.us/j/1)"), "https://zoom.us/j/1");
+    assert.equal(findMeetingLink(["https://eclipse.example/blog/post"], { own: "https://eclipse.example" }), null);
+    assert.equal(findMeetingLink(["https://eclipse.example/"], { own: "https://eclipse.example" }), "https://eclipse.example/");
+    assert.equal(findMeetingLink(["https://rooms.example/r?id=2"], { own: "https://rooms.example/r?id=1" }), null);
+    assert.equal(findMeetingLink(["https://rooms.example/r?id=1"], { own: "https://rooms.example/r?id=1" }), "https://rooms.example/r?id=1");
+  });
+
+  it("unwraps other link wrappers", () => {
+    assert.equal(meetingLink("https://www.google.com/url?q=https://zoom.us/j/5&sa=D"), "https://zoom.us/j/5");
+    assert.equal(meetingLink("https://urldefense.com/v3/__https://zoom.us/j/123__;!!abc"), "https://zoom.us/j/123");
+    assert.equal(
+      meetingLink(`https://eur02.safelinks.protection.outlook.com/?data=x&amp;Url=${encodeURIComponent("https://zoom.us/j/9")}`),
+      "https://zoom.us/j/9",
+    );
+  });
+
   it("unwraps Outlook safe links", () => {
     const zoom = "https://us02web.zoom.us/j/81234567890?pwd=abc";
     assert.equal(unwrapSafeLink(safeLink(zoom)), zoom);
@@ -78,9 +128,9 @@ describe("meeting links", () => {
     const teams = "https://teams.microsoft.com/l/meetup-join/abc";
     const zoom = "https://zoom.us/j/111";
     const meet = "https://meet.google.com/aaa-bbbb-ccc";
-    assert.equal(joinLink({ provided: [null, teams], location: zoom, notes: meet }), teams);
-    assert.equal(joinLink({ provided: [null, undefined], location: `Online: ${zoom}`, notes: meet }), zoom);
-    assert.equal(joinLink({ location: "Room 4", notes: `Agenda\nJoin: ${meet}\nNotes https://example.com/x` }), meet);
+    assert.deepEqual(joinLink({ provided: [null, teams], location: zoom, notes: meet }), { url: teams, source: "provider" });
+    assert.deepEqual(joinLink({ provided: [null, undefined], location: `Online: ${zoom}`, notes: meet }), { url: zoom, source: "location" });
+    assert.deepEqual(joinLink({ location: "Room 4", notes: `Agenda\nJoin: ${meet}\nNotes https://example.com/x` }), { url: meet, source: "notes" });
     assert.equal(joinLink({ location: "Room 4", notes: "Agenda only, see https://example.com/doc" }), null);
     assert.equal(joinLink({ location: null, notes: null }), null);
   });
@@ -89,7 +139,9 @@ describe("meeting links", () => {
     assert.equal(meetingLink("zoommtg://zoom.us/join?confno=81234567890"), null);
     assert.equal(meetingLink("msteams:/l/meetup-join/abc"), null);
     assert.equal(joinLink({ provided: ["javascript:alert(1)"], location: null, notes: null }), null);
-    assert.equal(joinLink({ provided: ["data:text/html,hi"], location: null, notes: "https://zoom.us/j/5" }), "https://zoom.us/j/5");
+    assert.deepEqual(joinLink({ provided: ["data:text/html,hi"], location: null, notes: "https://zoom.us/j/5" }), { url: "https://zoom.us/j/5", source: "notes" });
+    assert.equal(meetingLink("HTTPS://ZOOM.US/J/123"), "https://zoom.us/J/123");
+    assert.equal(meetingLink(`http://zoom.us/j/1?pwd=${"a".repeat(1980)}`), null);
     assert.equal(meetingLink("http://meet.google.com/abc-defg-hij"), "https://meet.google.com/abc-defg-hij");
   });
 
@@ -103,29 +155,67 @@ describe("meeting links", () => {
       "For organisers: Meeting options<https://teams.microsoft.com/meetingOptions/?organizerId=1>",
     ].join("\r\n");
     assert.equal(
-      joinLink({ location: "Microsoft Teams Meeting", notes: eventBodyText(body, "text") }),
+      joinLink({ location: "Microsoft Teams Meeting", notes: eventBodyText(body, "text") })?.url,
       "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x%40thread.v2/0?context=%7b%22Tid%22%7d",
     );
   });
 });
 
 describe("event notes", () => {
+  it("stays fast on hostile descriptions", () => {
+    const size = 200_000;
+    const fill = (piece: string) => piece.repeat(Math.ceil(size / piece.length)).slice(0, size);
+    const hostile = [
+      fill('<a href="https://x.example/">x '),
+      fill('<a href="'),
+      fill("<a "),
+      fill("<!--"),
+      fill("<"),
+      fill("<style>"),
+      fill("<p "),
+      fill("https://zoom.us/j/"),
+      fill("https://"),
+      fill("a.b-c_d%e"),
+      `<p>${fill(" ")}</p>`,
+      fill("&#x"),
+      fill("a@b."),
+      `<a href="https://x.example/">${fill("https://zoom.us/j/1?")}`,
+      fill("<a href='https://x.example/' "),
+    ];
+    for (const body of hostile) {
+      const started = performance.now();
+      const text = eventBodyText(`<div>${body}</div>`);
+      joinLink({ location: body.slice(0, 500), notes: text });
+      clipNotes(text);
+      eventBodyText(body, "text");
+      const took = performance.now() - started;
+      assert.ok(took < 200, `${body.slice(0, 20)} took ${Math.round(took)} ms`);
+    }
+    const huge = eventBodyText(fill("<b>x</b> ").repeat(10));
+    assert.ok((huge?.length ?? 0) <= 200_000);
+  });
+
   it("turns HTML bodies into text and keeps link targets", () => {
     const html =
       '<html><body><p>Hi <b>all</b>,</p><p><a href="https://us02web.zoom.us/j/1?pwd=x&amp;y=2">Join Zoom Meeting</a></p>' +
       '<p><a href="https://example.com/doc">https://example.com/doc</a></p><script>alert(1)</script><a href="javascript:x()">bad</a></body></html>';
     const text = eventBodyText(html, "html")!;
-    assert.match(text, /Hi all ,/);
+    assert.match(text, /^Hi all,$/m);
     assert.match(text, /Join Zoom Meeting <https:\/\/us02web\.zoom\.us\/j\/1\?pwd=x&y=2>/);
     assert.match(text, /^https:\/\/example\.com\/doc$/m);
     assert.doesNotMatch(text, /<(?!https)|alert|javascript/);
-    assert.equal(joinLink({ location: null, notes: text }), "https://us02web.zoom.us/j/1?pwd=x&y=2");
+    assert.equal(joinLink({ location: null, notes: text })?.url, "https://us02web.zoom.us/j/1?pwd=x&y=2");
+    assert.equal(eventBodyText("<p><a href=https://zoom.us/j/2>J2</a></p>", "html"), "J2 <https://zoom.us/j/2>");
   });
 
   it("detects HTML in feed descriptions and tidies plain text", () => {
     assert.equal(eventBodyText('Join <a href="https://meet.google.com/abc-defg-hij">here</a><br>Bring notes'), "Join here <https://meet.google.com/abc-defg-hij>\nBring notes");
     assert.equal(eventBodyText("Line one  \r\n\r\n\r\n\r\nLine\u0000 two\t"), "Line one\n\nLine two");
     assert.equal(eventBodyText("   \n  "), null);
+    assert.equal(eventBodyText("Join <https://zoom.us/j/1>\nbye"), "Join <https://zoom.us/j/1>\nbye");
+    assert.equal(eventBodyText("if x <p and y > 3 then"), "if x <p and y > 3 then");
+    assert.equal(eventBodyText("Join <https://zoom.us/j/1><br>bye"), "Join <https://zoom.us/j/1>\nbye");
+    assert.equal(eventBodyText("Open https://good.example/\u202egnp.exe now"), "Open https://good.example/gnp.exe now");
     assert.equal(eventBodyText(null), null);
   });
 

@@ -269,12 +269,15 @@ export async function listCalendarItems(
   return withActor(actor, async (db) => {
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
-              e.location, e.web_link, e.online_meeting_url, e.notes, e.organizer, e.attendees,
+              e.location, e.web_link, coalesce(e.online_meeting_url, l.join_url) as online_meeting_url, n.notes,
+              e.organizer, e.attendees,
               e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
               e.invite_identity_id, e.invite_uid, e.contact_ids,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
+       left join crm.calendar_event_links l on l.event_id = e.id and l.user_id = e.user_id
+       left join crm.calendar_event_notes n on n.event_id = e.id and n.user_id = e.user_id
        left join lateral (
          select a.id, a.contact_id, a.company_id from crm.activities a
          where a.workspace_id = e.workspace_id

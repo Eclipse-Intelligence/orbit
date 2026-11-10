@@ -16,7 +16,7 @@ import {
 } from "@/lib/ical/parse";
 import { expandStarts, instantOf, parseRule } from "@/lib/ical/recurrence";
 import { clipNotes, eventBodyText, joinLink, safeUrl } from "@/lib/meeting-links";
-import type { CalendarAttendee, CalendarEvent, CalendarPerson } from "@/lib/microsoft/calendar";
+import { meetingFields, type CalendarAttendee, type CalendarEvent, type CalendarPerson } from "@/lib/microsoft/calendar";
 import { appTimeZone } from "@/lib/time";
 
 const DAY_MS = 86_400_000;
@@ -118,11 +118,11 @@ function toEvent(
   durationMs: number,
   allDay: boolean,
   ownLink: string | null,
+  description: string | null,
 ): CalendarEvent {
   const status = textOf(component, "STATUS")?.trim().toUpperCase();
   const transparent = textOf(component, "TRANSP")?.trim().toUpperCase() === "TRANSPARENT";
   const location = textOf(component, "LOCATION");
-  const description = eventBodyText(textOf(component, "DESCRIPTION"));
   return {
     providerEventId: ids.providerEventId,
     icalUid: ids.icalUid.slice(0, 400),
@@ -133,12 +133,14 @@ function toEvent(
     isCancelled: status === "CANCELLED",
     location: clip(location, 500),
     webLink: safeUrl(textOf(component, "URL")),
-    onlineMeetingUrl: joinLink({
-      provided: [textOf(component, "X-GOOGLE-CONFERENCE"), textOf(component, "X-MICROSOFT-SKYPETEAMSMEETINGURL")],
-      location,
-      notes: description,
-      own: ownLink,
-    }),
+    ...meetingFields(
+      joinLink({
+        provided: [textOf(component, "X-GOOGLE-CONFERENCE"), textOf(component, "X-MICROSOFT-SKYPETEAMSMEETINGURL")],
+        location,
+        notes: description,
+        own: ownLink,
+      }),
+    ),
     notes: clipNotes(description),
     organizer: organizerOf(component),
     attendees: attendeesOf(component),
@@ -159,6 +161,11 @@ export function readFeed(
   const events = new Map<string, CalendarEvent>();
   const overrides = new Map<string, Set<number>>();
   const masters: Master[] = [];
+  const bodies = new Map<IcsComponent, string | null>();
+  const bodyOf = (component: IcsComponent) => {
+    if (!bodies.has(component)) bodies.set(component, eventBodyText(textOf(component, "DESCRIPTION")));
+    return bodies.get(component) ?? null;
+  };
   let complete = true;
 
   const add = (event: CalendarEvent) => {
@@ -190,7 +197,7 @@ export function readFeed(
       const durationMs = durationOf(component, start, zone);
       if (startsAt < range.end && startsAt + durationMs > range.start) {
         const id = boundedId(uid, key);
-        add(toEvent(component, { providerEventId: id, icalUid: id }, startsAt, durationMs, start.allDay, options.ownLink ?? null));
+        add(toEvent(component, { providerEventId: id, icalUid: id }, startsAt, durationMs, start.allDay, options.ownLink ?? null, bodyOf(component)));
       }
       continue;
     }
@@ -207,7 +214,7 @@ export function readFeed(
       const startsAt = instantOf(start);
       if (startsAt < range.end && startsAt + durationMs > range.start) {
         const id = boundedId(uid, null);
-        add(toEvent(component, { providerEventId: id, icalUid: uid }, startsAt, durationMs, start.allDay, options.ownLink ?? null));
+        add(toEvent(component, { providerEventId: id, icalUid: uid }, startsAt, durationMs, start.allDay, options.ownLink ?? null, bodyOf(component)));
       }
       continue;
     }
@@ -225,7 +232,7 @@ export function readFeed(
       seen.add(startsAt);
       if (startsAt >= range.end || startsAt + durationMs <= range.start) continue;
       const id = boundedId(uid, timeKey(time));
-      add(toEvent(component, { providerEventId: id, icalUid: id }, startsAt, durationMs, start.allDay, options.ownLink ?? null));
+      add(toEvent(component, { providerEventId: id, icalUid: id }, startsAt, durationMs, start.allDay, options.ownLink ?? null, bodyOf(component)));
     }
   }
 

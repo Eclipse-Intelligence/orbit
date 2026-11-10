@@ -242,7 +242,6 @@ async function saveEvents(
       location: event.location,
       web_link: event.webLink,
       online_meeting_url: event.onlineMeetingUrl,
-      notes: event.notes,
       organizer: event.organizer,
       attendees: event.attendees,
       show_as: event.showAs,
@@ -252,15 +251,15 @@ async function saveEvents(
       `insert into crm.calendar_events (
          workspace_id, calendar_id, connection_id, account_id, user_id, provider_event_id, ical_uid,
          subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
-         online_meeting_url, notes, organizer, attendees, show_as, response_status
+         online_meeting_url, organizer, attendees, show_as, response_status
        )
        select $1, $2, $3::uuid, $4::uuid, $5, e.provider_event_id, e.ical_uid,
               e.subject, e.starts_at, e.ends_at, e.is_all_day, e.is_cancelled, e.location, e.web_link,
-              e.online_meeting_url, e.notes, e.organizer, coalesce(e.attendees, '[]'::jsonb), e.show_as, e.response_status
+              e.online_meeting_url, e.organizer, coalesce(e.attendees, '[]'::jsonb), e.show_as, e.response_status
        from jsonb_to_recordset($6::jsonb) as e(
          provider_event_id text, ical_uid text, subject text, starts_at timestamptz,
          ends_at timestamptz, is_all_day boolean, is_cancelled boolean, location text,
-         web_link text, online_meeting_url text, notes text, organizer jsonb, attendees jsonb, show_as text,
+         web_link text, online_meeting_url text, organizer jsonb, attendees jsonb, show_as text,
          response_status text
        )
        on conflict (calendar_id, provider_event_id) do update set
@@ -273,7 +272,6 @@ async function saveEvents(
          location = excluded.location,
          web_link = excluded.web_link,
          online_meeting_url = excluded.online_meeting_url,
-         notes = excluded.notes,
          organizer = case when crm.calendar_events.invite_identity_id is null then excluded.organizer else crm.calendar_events.organizer end,
          attendees = case when crm.calendar_events.invite_identity_id is null then excluded.attendees else crm.calendar_events.attendees end,
          show_as = excluded.show_as,
@@ -289,8 +287,43 @@ async function saveEvents(
       ],
     );
     saved += result.rowCount ?? 0;
+    await saveEventExtras(db, calendarId, events.slice(index, index + SAVE_BATCH));
   }
   return saved;
+}
+
+export async function saveEventExtras(
+  db: Db,
+  calendarId: string,
+  events: Pick<CalendarEvent, "providerEventId" | "notes" | "privateJoinUrl">[],
+) {
+  if (events.length === 0) return;
+  const rows = JSON.stringify(
+    events.map((event) => ({ provider_event_id: event.providerEventId, notes: event.notes, join_url: event.privateJoinUrl })),
+  );
+  await db.query(
+    `with x as (
+       select * from jsonb_to_recordset($2::jsonb) as x(provider_event_id text, notes text, join_url text)
+     ), e as (
+       select e.id, e.user_id, e.workspace_id, x.notes, x.join_url
+       from crm.calendar_events e join x on x.provider_event_id = e.provider_event_id
+       where e.calendar_id = $1
+     ), dropped_notes as (
+       delete from crm.calendar_event_notes n using e where n.event_id = e.id and e.notes is null
+     ), dropped_links as (
+       delete from crm.calendar_event_links l using e where l.event_id = e.id and e.join_url is null
+     ), saved_links as (
+       insert into crm.calendar_event_links (event_id, user_id, workspace_id, join_url)
+       select id, user_id, workspace_id, join_url from e where join_url is not null
+       on conflict (event_id) do update set join_url = excluded.join_url, updated_at = now()
+       where crm.calendar_event_links.join_url is distinct from excluded.join_url
+     )
+     insert into crm.calendar_event_notes (event_id, user_id, workspace_id, notes)
+     select id, user_id, workspace_id, notes from e where notes is not null
+     on conflict (event_id) do update set notes = excluded.notes, updated_at = now()
+     where crm.calendar_event_notes.notes is distinct from excluded.notes`,
+    [calendarId, rows],
+  );
 }
 
 async function removeEvents(db: Db, calendarId: string, keep: string[] | null, window: { start: Date; end: Date }) {
@@ -991,7 +1024,8 @@ export async function getMeetings(
     const select = (upcoming: boolean) =>
       db.query<EventRow>(
         `select m.id, m.subject, m.starts_at, m.ends_at, m.is_all_day, m.location, m.web_link,
-                m.online_meeting_url, m.organizer, jsonb_array_length(m.attendees)::int as attendee_count,
+                coalesce(m.online_meeting_url, l.join_url) as online_meeting_url, m.organizer,
+                jsonb_array_length(m.attendees)::int as attendee_count,
                 g.id as granola_activity_id
          from (
            select distinct on (coalesce(e.ical_uid, e.id::text)) e.*
@@ -1005,6 +1039,7 @@ export async function getMeetings(
            order by coalesce(e.ical_uid, e.id::text), (e.user_id = $1) desc, (e.connection_id is not null) desc,
              c.is_default desc nulls last, e.id
          ) m
+         left join crm.calendar_event_links l on l.event_id = m.id
          left join lateral (
            select a.id from crm.activities a
            where a.workspace_id = m.workspace_id

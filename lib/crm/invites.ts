@@ -9,6 +9,7 @@ import {
   readGrantedScopes,
   readPeople,
   readPerson,
+  saveEventExtras,
 } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
 import { createContactFromAttendeeInDb } from "@/lib/crm/conversations";
@@ -435,6 +436,7 @@ function fallbackEvent(
     location: values.link,
     webLink: null,
     onlineMeetingUrl: values.link,
+    privateJoinUrl: null,
     notes: null,
     organizer: values.organizer,
     attendees: values.guests.map((guest) => ({ ...guest, response: "none" })),
@@ -458,9 +460,9 @@ async function saveCreatedEvent(
        workspace_id, calendar_id, connection_id, account_id, user_id, provider_event_id, ical_uid,
        subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
        online_meeting_url, organizer, attendees, show_as, response_status, created_by_orbit,
-       invite_identity_id, invite_uid, invite_sequence, invite_notes, notes
+       invite_identity_id, invite_uid, invite_sequence, invite_notes
      ) values ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18, $19, true,
-               $20::uuid, $21, $22, $23, $24)
+               $20::uuid, $21, $22, $23)
      on conflict (calendar_id, provider_event_id) do update set
        ical_uid = excluded.ical_uid,
        subject = excluded.subject,
@@ -477,8 +479,7 @@ async function saveCreatedEvent(
        invite_identity_id = excluded.invite_identity_id,
        invite_uid = excluded.invite_uid,
        invite_sequence = excluded.invite_sequence,
-       invite_notes = excluded.invite_notes,
-       notes = excluded.notes
+       invite_notes = excluded.invite_notes
      returning id`,
     [
       actor.workspaceId,
@@ -504,9 +505,9 @@ async function saveCreatedEvent(
       email?.uid ?? null,
       email?.sequence ?? 0,
       email?.notes ?? null,
-      event.notes,
     ],
   );
+  await saveEventExtras(db, calendarId, [event]);
   return result.rows[0].id;
 }
 
