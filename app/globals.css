@@ -265,6 +265,7 @@
   --padding-section-md: 2rem;
   --padding-section-lg: 2.75rem;
   --padding-section-page: 6rem;
+  --z-compose: 41;
 }
 
 @variant sm {

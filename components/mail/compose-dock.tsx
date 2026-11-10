@@ -1,14 +1,19 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import Button from "@/components/_ui/button";
-import LaterPicker, { type LaterRequest } from "@/components/mail/later-picker";
-import MailComposer, { MODE_LABEL, type ComposerDraft, type ComposerStart, type SendPayload } from "@/components/mail/mail-composer";
+import type { LaterRequest } from "@/components/mail/later-picker";
+import type { ComposerDraft, ComposerStart, SendPayload } from "@/components/mail/mail-composer";
+import { ComposerLoading } from "@/components/mail/composer-loading";
+import { MODE_LABEL } from "@/lib/mail/format";
 import { emailRecipientAction } from "@/app/(crm)/quick-add";
 import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
+import CloseIcon from "@/public/assets/images/mail/close.svg";
+import MinimiseIcon from "@/public/assets/images/mail/minimise.svg";
 
 const MAX_CARDS = 6;
 const CARD_WIDTH = 544;
@@ -83,6 +88,28 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
 
 const ComposerContext = createContext<ComposerContextValue | null>(null);
 
+const loadComposer = () => import("@/components/mail/mail-composer");
+const MailComposer = dynamic(loadComposer, { ssr: false, loading: () => <ComposerLoading fill /> });
+const LaterPicker = dynamic(() => import("@/components/mail/later-picker"), { ssr: false });
+
+const NO_ACCOUNTS: ComposeAccount[] = [];
+
+const SHEET_QUERY = "(max-width: 639px)";
+
+function watchSheet(notify: () => void) {
+  const query = window.matchMedia(SHEET_QUERY);
+  query.addEventListener("change", notify);
+  return () => query.removeEventListener("change", notify);
+}
+
+function useSheet() {
+  return useSyncExternalStore(
+    watchSheet,
+    () => window.matchMedia(SHEET_QUERY).matches,
+    () => false,
+  );
+}
+
 export function useComposer() {
   const value = useContext(ComposerContext);
   if (!value) throw new Error("useComposer needs a ComposerProvider");
@@ -96,11 +123,13 @@ async function loadAccounts(): Promise<ComposeAccount[]> {
   return body.accounts;
 }
 
-function ComposeCard({
+const ComposeCard = memo(function ComposeCard({
   card,
   index,
   perRow,
   desktop,
+  sheet,
+  stack,
   accounts,
   onChange,
   onRemove,
@@ -110,22 +139,50 @@ function ComposeCard({
   index: number;
   perRow: number;
   desktop: boolean;
+  sheet: boolean;
+  stack: number;
   accounts: ComposeAccount[];
-  onChange: (change: Partial<Card>) => void;
-  onRemove: () => void;
-  onFront: () => void;
+  onChange: (key: number, change: Partial<Card>) => void;
+  onRemove: (key: number) => void;
+  onFront: (key: number) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointer: number; dx: number; dy: number } | null>(null);
-  const setTitle = useCallback((subject: string) => onChange({ title: subject.trim() }), [onChange]);
+  const setTitle = useCallback((subject: string) => onChange(card.key, { title: subject.trim() }), [onChange, card.key]);
+  const remove = useCallback(() => onRemove(card.key), [onRemove, card.key]);
+  const front = useCallback(() => onFront(card.key), [onFront, card.key]);
+  const draggable = desktop && !sheet;
+  const fitsKeyboard = sheet && !card.minimised;
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const node = element.current;
+    if (!fitsKeyboard || !viewport || !node) return;
+    const fit = () => {
+      node.style.height = `${viewport.height}px`;
+      node.style.top = `${viewport.offsetTop}px`;
+      if (window.innerHeight - viewport.height > 80) node.dataset.keyboard = "";
+      else delete node.dataset.keyboard;
+    };
+    fit();
+    viewport.addEventListener("resize", fit);
+    viewport.addEventListener("scroll", fit);
+    return () => {
+      viewport.removeEventListener("resize", fit);
+      viewport.removeEventListener("scroll", fit);
+      node.style.height = "";
+      node.style.top = "";
+      delete node.dataset.keyboard;
+    };
+  }, [fitsKeyboard]);
 
   function down(event: PointerEvent<HTMLDivElement>) {
-    if ((event.target as HTMLElement).closest("button") || !desktop) return;
+    if ((event.target as HTMLElement).closest("button") || !draggable) return;
     const rect = element.current?.getBoundingClientRect();
     if (!rect) return;
     drag.current = { pointer: event.pointerId, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
     event.currentTarget.setPointerCapture(event.pointerId);
-    onFront();
+    front();
   }
 
   function move(event: PointerEvent<HTMLDivElement>) {
@@ -134,7 +191,7 @@ function ComposeCard({
     if (!state || state.pointer !== event.pointerId || !rect) return;
     const x = Math.min(Math.max(EDGE / 2, event.clientX - state.dx), window.innerWidth - rect.width - EDGE / 2);
     const y = Math.min(Math.max(EDGE / 2, event.clientY - state.dy), window.innerHeight - 56);
-    onChange({ position: { x, y } });
+    onChange(card.key, { position: { x, y } });
   }
 
   function up(event: PointerEvent<HTMLDivElement>) {
@@ -144,7 +201,7 @@ function ComposeCard({
   const title = card.title || MODE_LABEL[card.start.mode];
   const column = index % perRow;
   const row = Math.floor(index / perRow);
-  const placed = !desktop
+  const placed = !draggable
     ? {}
     : card.position
       ? { left: card.position.x, top: card.position.y }
@@ -155,34 +212,32 @@ function ComposeCard({
       ref={element}
       role="dialog"
       aria-label={title}
-      onPointerDownCapture={onFront}
+      onPointerDownCapture={front}
       className={cn(
-        "border-line-strong bg-popover shadow-overlay animate-rise-in pointer-events-auto fixed flex flex-col overflow-hidden rounded-2xl border",
-        "inset-x-2 bottom-2 h-[85dvh] md:inset-x-auto md:bottom-auto md:h-[min(34rem,calc(100dvh-2rem))] md:w-[34rem]",
+        "bg-popover pointer-events-auto fixed flex flex-col overflow-hidden",
+        sheet
+          ? "animate-in fade-in slide-in-from-bottom-6 ease-power3-out inset-x-0 top-0 h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] duration-200 data-[keyboard]:pb-0 motion-reduce:animate-none"
+          : "border-line-strong shadow-overlay animate-rise-in inset-x-2 bottom-2 h-[85dvh] rounded-2xl border md:inset-x-auto md:bottom-auto md:h-[min(34rem,calc(100dvh-2rem))] md:w-[34rem]",
         card.minimised && "hidden",
       )}
-      style={{ ...placed, zIndex: 40 + card.layer }}
+      style={{ ...placed, zIndex: `calc(var(--z-compose) + ${Math.min(stack, 8)})` }}
     >
       <div
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={up}
-        className="flex shrink-0 cursor-default items-center gap-2 py-2 pr-2 pl-4 select-none md:cursor-grab md:active:cursor-grabbing"
+        className={cn("flex shrink-0 cursor-default items-center gap-2 py-2 pr-2 pl-4 select-none", draggable && "cursor-grab active:cursor-grabbing")}
       >
         <span className="text-foreground min-w-0 flex-1 truncate text-[13px] font-medium">{title}</span>
-        <Button variant="ghost" size="icon-sm" aria-label={`Minimise ${title}`} title="Minimise" onClick={() => onChange({ minimised: true })}>
-          <svg aria-hidden width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
-            <path d="M5 12h14" />
-          </svg>
+        <Button variant="ghost" size="icon-sm" aria-label={`Minimise ${title}`} title="Minimise" onClick={() => onChange(card.key, { minimised: true })} className="pointer-coarse:size-11">
+          <MinimiseIcon aria-hidden className="size-2.5" />
         </Button>
-        <Button variant="ghost" size="icon-sm" aria-label={`Close ${title}, keeping the draft`} title="Close (the draft stays in Outlook)" onClick={onRemove}>
-          <svg aria-hidden width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
-            <path d="M6 6 18 18M18 6 6 18" />
-          </svg>
+        <Button variant="ghost" size="icon-sm" aria-label={`Close ${title}, keeping the draft`} title="Close (the draft stays in Outlook)" onClick={remove} className="pointer-coarse:size-11">
+          <CloseIcon aria-hidden className="size-2.5" />
         </Button>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col">
         {accounts.length === 0 ? (
           <p className="caption-style text-subtle px-4 pb-4">Connect Microsoft in Settings › Email to send email from Orbit.</p>
         ) : (
@@ -191,8 +246,8 @@ function ComposeCard({
             accounts={accounts}
             variant="card"
             onSubject={setTitle}
-            onClose={onRemove}
-            onSent={onRemove}
+            onClose={remove}
+            onSent={remove}
             onDelivered={card.onSent}
             onScheduled={card.onSent}
           />
@@ -200,7 +255,7 @@ function ComposeCard({
       </div>
     </div>
   );
-}
+});
 
 export function ComposerProvider({ children }: { children: ReactNode }) {
   const [cards, setCards] = useState<Card[]>([]);
@@ -209,6 +264,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const [sent, setSent] = useState(0);
   const [toasts, setToasts] = useState<ShownToast[]>([]);
   const [later, setLater] = useState<LaterRequest | null>(null);
+  const sheet = useSheet();
   const toastCounter = useRef(0);
   const shownMessages = useRef(new Map<string, number>());
   const toastTimers = useRef(new Map<number, number>());
@@ -222,6 +278,13 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     cardsRef.current = cards;
   });
+
+  useEffect(() => {
+    const idle = window.requestIdleCallback ?? ((run: () => void) => window.setTimeout(run, 1500));
+    const cancel = window.cancelIdleCallback ?? window.clearTimeout;
+    const handle = idle(() => void loadComposer().catch(() => null));
+    return () => cancel(handle);
+  }, []);
 
   useEffect(() => {
     const resize = () => setViewport(window.innerWidth);
@@ -388,13 +451,18 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
     [openComposer, showToast],
   );
 
+  const toastsRef = useRef<ShownToast[]>([]);
+  useEffect(() => {
+    toastsRef.current = toasts;
+  });
+
   const undoLatest = useCallback(() => {
-    const latest = [...toasts].reverse().find((toast) => toast.action?.label === "Undo");
+    const latest = [...toastsRef.current].reverse().find((toast) => toast.action?.label === "Undo");
     if (!latest?.action) return false;
     latest.action.run();
     dismiss(latest.id);
     return true;
-  }, [toasts, dismiss]);
+  }, [dismiss]);
 
   useEffect(() => {
     const flush = () => {
@@ -405,8 +473,29 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   }, [deliver]);
 
   const update = useCallback((key: number, change: Partial<Card>) => {
-    setCards((current) => current.map((card) => (card.key === key ? { ...card, ...change } : card)));
+    setCards((current) => {
+      const index = current.findIndex((card) => card.key === key);
+      if (index < 0) return current;
+      const card = current[index];
+      const same = (Object.keys(change) as (keyof Card)[]).every((field) => Object.is(card[field], change[field]));
+      if (same) return current;
+      const next = [...current];
+      next[index] = { ...card, ...change };
+      return next;
+    });
   }, []);
+
+  const remove = useCallback((key: number) => {
+    setCards((current) => current.filter((item) => item.key !== key));
+  }, []);
+
+  const bringToFront = useCallback(
+    (key: number) => {
+      const card = cardsRef.current.find((item) => item.key === key);
+      if (card && card.layer !== layers.current) update(key, { layer: ++layers.current });
+    },
+    [update],
+  );
 
   const value = useMemo(
     () => ({ openComposer, sent, queueSend, scheduleSend, pickLater: setLater, showToast, dismissToast: dismiss, undoLatest }),
@@ -416,6 +505,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const desktop = viewport >= 768;
   const perRow = Math.max(1, Math.floor((viewport - EDGE * 2 + GAP) / (CARD_WIDTH + GAP)));
   const minimised = cards.filter((card) => card.minimised);
+  const stacking = [...cards].sort((a, b) => a.layer - b.layer).map((card) => card.key);
 
   return (
     <ComposerContext.Provider value={value}>
@@ -427,12 +517,12 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
           index={Math.max(0, docked.length - 1 - docked.indexOf(card))}
           perRow={perRow}
           desktop={desktop}
-          accounts={accounts ?? []}
-          onChange={(change) => update(card.key, change)}
-          onRemove={() => setCards((current) => current.filter((item) => item.key !== card.key))}
-          onFront={() => {
-            if (card.layer !== layers.current) update(card.key, { layer: ++layers.current });
-          }}
+          sheet={sheet}
+          stack={stacking.indexOf(card.key)}
+          accounts={accounts ?? NO_ACCOUNTS}
+          onChange={update}
+          onRemove={remove}
+          onFront={bringToFront}
         />
       ))}
       {minimised.length > 0 && (

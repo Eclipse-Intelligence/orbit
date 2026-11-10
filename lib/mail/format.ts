@@ -1,6 +1,9 @@
 import { dateKey } from "@/lib/calendar-view";
 import { appTimeZone } from "@/lib/time";
 import type { MailAddress } from "@/lib/mail/types";
+import type { DraftMode } from "@/lib/mail/view";
+
+export const MODE_LABEL: Record<DraftMode, string> = { new: "New email", reply: "Reply", reply_all: "Reply all", forward: "Forward" };
 
 export function personName(address: MailAddress | null | undefined) {
   if (!address) return "Unknown sender";
@@ -14,6 +17,20 @@ export function mailListWhen(iso: string | null, now: number) {
   if (dateKey(at, timeZone) === dateKey(now, timeZone)) {
     return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone }).format(at);
   }
+  const sameYear = new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(at) ===
+    new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(now);
+  return new Intl.DateTimeFormat("en-GB", sameYear ? { day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }).format(at);
+}
+
+export function mailShortWhen(iso: string | null, now: number) {
+  if (!iso) return "";
+  const at = new Date(iso);
+  const timeZone = appTimeZone();
+  const gone = now - at.getTime();
+  const today = dateKey(at, timeZone) === dateKey(now, timeZone);
+  if (today && gone < 60_000 && gone > -60_000) return "Now";
+  if (today && gone >= 0) return gone < 3_600_000 ? `${Math.floor(gone / 60_000)}m` : `${Math.floor(gone / 3_600_000)}h`;
+  if (dateKey(at, timeZone) === dateKey(now - 86_400_000, timeZone)) return "Yesterday";
   const sameYear = new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(at) ===
     new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(now);
   return new Intl.DateTimeFormat("en-GB", sameYear ? { day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }).format(at);
