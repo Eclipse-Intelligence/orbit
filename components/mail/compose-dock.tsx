@@ -436,23 +436,31 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         />
       ))}
       {minimised.length > 0 && (
-        <div className="pointer-events-none fixed right-4 bottom-4 z-40 flex max-w-[calc(100vw-2rem)] flex-wrap-reverse justify-end gap-2">
-          {minimised.map((card) => (
-            <button
-              key={card.key}
-              type="button"
-              onClick={() => update(card.key, { minimised: false, layer: ++layers.current })}
-              className="border-line-strong bg-popover shadow-overlay text-foreground pointer-events-auto flex h-9 max-w-[16rem] cursor-pointer items-center gap-2 rounded-full border px-4 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-            >
-              <span className="bg-primary size-1.5 shrink-0 rounded-full" aria-hidden />
-              <span className="truncate">{card.title || MODE_LABEL[card.start.mode]}</span>
-            </button>
-          ))}
+        <div
+          data-compose-tray=""
+          className="pointer-events-none fixed right-[calc(env(safe-area-inset-right)+1rem)] bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] z-40 flex max-w-[calc(100vw-2rem)] flex-wrap-reverse justify-end gap-2 max-md:[body:has([data-compose-fab])_&]:bottom-[calc(env(safe-area-inset-bottom)+8.25rem)]"
+        >
+          {minimised.map((card) => {
+            const title = card.title || MODE_LABEL[card.start.mode];
+            return (
+              <Button
+                key={card.key}
+                variant="subtle"
+                size="md"
+                aria-label={`Open ${title}`}
+                onClick={() => update(card.key, { minimised: false, layer: ++layers.current })}
+                className="border-line-strong bg-popover shadow-overlay pointer-events-auto h-9 max-w-[16rem] gap-2 border px-4 text-[13px] font-normal"
+              >
+                <span className="bg-primary size-1.5 shrink-0 rounded-full" aria-hidden />
+                <span className="truncate">{title}</span>
+              </Button>
+            );
+          })}
         </div>
       )}
       <LaterPicker request={later} onClose={() => setLater(null)} />
       {(notice || toasts.length > 0) && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-50 flex flex-col items-center gap-2 px-4">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-50 flex flex-col items-center gap-2 px-4 max-md:[body:has([data-compose-fab])_&]:bottom-[calc(env(safe-area-inset-bottom)+8.25rem)] max-md:[body:has([data-compose-tray])_&]:bottom-[calc(env(safe-area-inset-bottom)+11rem)]">
           {notice && (
             <p role="status" className="bg-popover border-line-strong shadow-overlay animate-rise-in rounded-full border px-4 py-2 text-[13px]">
               {notice}

@@ -74,6 +74,92 @@ function glide(element: HTMLElement, speed: number) {
   window.requestAnimationFrame(step);
 }
 
+export const EDGE_ZONE = 24;
+
+const claimedByEdge = new WeakSet<Event>();
+
+export type EdgeHandlers = {
+  enabled: boolean;
+  onDrag: (dx: number) => void;
+  onRelease: (commit: boolean, velocity: number) => void;
+  width?: () => number;
+};
+
+export function startsAtEdge(x: number) {
+  return x <= EDGE_ZONE;
+}
+
+export function watchEdgeSwipe(target: HTMLElement, handlers: () => EdgeHandlers) {
+  let gesture: Gesture | null = null;
+
+  function touchOf(event: TouchEvent, id: number) {
+    return [...Array.from(event.touches), ...Array.from(event.changedTouches)].find((touch) => touch.identifier === id);
+  }
+
+  function down(event: TouchEvent) {
+    const touch = event.touches[0];
+    const zoomed = document.documentElement.dataset.orbitZoomed === "true";
+    if (event.touches.length !== 1 || !touch || zoomed || !handlers().enabled || !startsAtEdge(touch.clientX) || startsInEditable(event.target)) {
+      if (gesture?.lock === "x") handlers().onRelease(false, 0);
+      gesture = null;
+      return;
+    }
+    claimedByEdge.add(event);
+    gesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, lock: null, samples: [{ x: touch.clientX, y: touch.clientY, at: event.timeStamp }], scrollTop: 0 };
+  }
+
+  function move(event: TouchEvent) {
+    if (!gesture) return;
+    const touch = touchOf(event, gesture.id);
+    if (!touch) return;
+    const dx = touch.clientX - gesture.x;
+    const dy = touch.clientY - gesture.y;
+    gesture.samples.push({ x: touch.clientX, y: touch.clientY, at: event.timeStamp });
+    if (gesture.samples.length > 6) gesture.samples.shift();
+    if (gesture.lock === null) {
+      gesture.lock = lockAxis(dx, dy);
+      if (gesture.lock === null) return;
+    }
+    if (gesture.lock !== "x") {
+      gesture = null;
+      return;
+    }
+    if (event.cancelable) event.preventDefault();
+    handlers().onDrag(dx > 0 ? dx : resisted(dx, false));
+  }
+
+  function up(event: TouchEvent) {
+    const from = gesture;
+    if (!from) return;
+    const touch = touchOf(event, from.id);
+    if (!touch) return;
+    gesture = null;
+    if (from.lock !== "x") return;
+    from.samples.push({ x: touch.clientX, y: touch.clientY, at: event.timeStamp });
+    const speed = velocityOf(from.samples);
+    const current = handlers();
+    const commit = swipeCommit(touch.clientX - from.x, speed, current.width?.() ?? window.innerWidth, { left: false, right: true }) === "right";
+    current.onRelease(commit, speed);
+  }
+
+  function cancel() {
+    const from = gesture;
+    gesture = null;
+    if (from?.lock === "x") handlers().onRelease(false, 0);
+  }
+
+  target.addEventListener("touchstart", down as EventListener, { passive: true, capture: true });
+  target.addEventListener("touchmove", move as EventListener, { passive: false, capture: true });
+  target.addEventListener("touchend", up as EventListener, { passive: true, capture: true });
+  target.addEventListener("touchcancel", cancel, { passive: true, capture: true });
+  return () => {
+    target.removeEventListener("touchstart", down as EventListener, { capture: true });
+    target.removeEventListener("touchmove", move as EventListener, { capture: true });
+    target.removeEventListener("touchend", up as EventListener, { capture: true });
+    target.removeEventListener("touchcancel", cancel, { capture: true });
+  };
+}
+
 export function watchSwipe(target: Document | HTMLElement, handlers: () => SwipeHandlers) {
   let gesture: Gesture | null = null;
 
@@ -88,7 +174,7 @@ export function watchSwipe(target: Document | HTMLElement, handlers: () => Swipe
 
   function down(event: TouchEvent) {
     const root = "documentElement" in target ? target.documentElement : target;
-    if (event.touches.length !== 1 || root.dataset.orbitZoomed === "true" || startsInEditable(event.target)) {
+    if (event.touches.length !== 1 || root.dataset.orbitZoomed === "true" || startsInEditable(event.target) || claimedByEdge.has(event)) {
       if (gesture?.lock === "x") release(null, 0);
       gesture = null;
       return;

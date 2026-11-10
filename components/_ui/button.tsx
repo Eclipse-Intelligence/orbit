@@ -19,6 +19,7 @@ export const buttonVariants = cva(
         ghost: "text-subtle hover:bg-white/6 hover:text-foreground active:scale-[0.97]",
         nav: "w-full justify-start rounded-lg text-sidebar-foreground hover:text-foreground data-[active=true]:bg-sidebar-primary data-[active=true]:text-foreground data-[active=true]:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
         item: "w-full items-start justify-start gap-3 rounded-lg text-left font-normal whitespace-normal text-foreground hover:bg-white/4",
+        chip: "font-normal text-subtle hover:bg-surface-hover hover:text-foreground data-[active=true]:bg-surface-active data-[active=true]:text-foreground",
         link: "rounded-none text-foreground underline decoration-from-font underline-offset-2 hover:text-soft",
       },
       size: {
@@ -26,6 +27,7 @@ export const buttonVariants = cva(
         md: "p-2 text-[14px] leading-none",
         icon: "size-[30px] p-0",
         "icon-sm": "size-6 p-0",
+        chip: "h-8 gap-1 px-2.5 text-[13px] leading-none",
         none: "p-0",
       },
     },

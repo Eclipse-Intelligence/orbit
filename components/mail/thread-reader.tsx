@@ -865,7 +865,7 @@ export default function ThreadReader({
       {previous && <ThreadPeek thread={previous} own={own} side="previous" />}
       {next && <ThreadPeek thread={next} own={own} side="next" />}
       <div ref={scroller} className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
-        <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-32 sm:px-6">
+        <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-[var(--floating-clearance)] sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
           {detail?.subscription && <SenderNotice subscription={detail.subscription} onUnsubscribe={onUnsubscribe} onBlock={onBlock} />}
           {detail && <ThreadPeople key={detail.key} people={detail.people ?? []} threadKey={detail.key} filing={detail.filing ?? null} />}
