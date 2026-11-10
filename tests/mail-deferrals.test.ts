@@ -235,7 +235,7 @@ describe("not now replies", () => {
     assert.match(prompts[0].user, /Orbit's note of what they asked[^\n]*\n"""\nAsked to pick this up in January\.\n"""/);
   });
 
-  it("Don't follow up removes the reminder and archives the task", async () => {
+  it("Cancel removes the reminder and archives the task", async () => {
     const reminder = (await getAdminPool().query<{ id: string; task_id: string }>("select id, task_id from crm.mail_reminders where user_id = $1 and deferred_message_id is not null", [owner.userId])).rows[0];
     await cancelDeferral(owner, reminder.id);
     const state = (await getAdminPool().query<{ state: string }>("select state from crm.mail_reminders where id = $1", [reminder.id])).rows[0].state;

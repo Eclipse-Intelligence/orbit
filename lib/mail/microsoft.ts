@@ -97,26 +97,26 @@ export function appNeedsAttention(error: unknown) {
 }
 
 export function disconnectedMessage(email: string) {
-  return `Reconnect ${email} in ${SETTINGS}. It isn't connected to Orbit any more.`;
+  return `Reconnect ${email} in ${SETTINGS}.`;
 }
 
 export function reconnectProblem(error: unknown, email: string | null | undefined, mailScope: boolean | null = null): string | null {
   const account = email?.trim() || "the mailbox";
   if (appNeedsAttention(error)) return null;
   if (error instanceof GraphMailError) {
-    if (error.status === 401) return `Reconnect ${account} in ${SETTINGS}. Microsoft has signed Orbit out of it.`;
+    if (error.status === 401) return `Reconnect ${account} in ${SETTINGS}.`;
     if (error.status !== 403) return null;
     if (ADMIN_CONSENT.test(error.code)) return `Ask your Microsoft admin to approve Orbit for ${account}, then reconnect it in ${SETTINGS}.`;
     if (AUTH_DENIED.test(error.code) || mailScope === false) {
-      return `Reconnect ${account} in ${SETTINGS} and allow every permission Microsoft asks for. Orbit doesn't have access to its mail.`;
+      return `Reconnect ${account} in ${SETTINGS} and allow every permission.`;
     }
     return null;
   }
   if (!(error instanceof Error)) return null;
   const detail = `${"detail" in error && typeof error.detail === "string" ? error.detail : ""} ${error.message}`;
   if (ADMIN_CONSENT.test(detail)) return `Ask your Microsoft admin to approve Orbit for ${account}, then reconnect it in ${SETTINGS}.`;
-  if (SIGNED_OUT.test(detail)) return `Reconnect ${account} in ${SETTINGS}. Microsoft has signed Orbit out of it.`;
-  if (UNREADABLE.test(detail)) return `Reconnect ${account} in ${SETTINGS}. Orbit can't read its saved connection.`;
+  if (SIGNED_OUT.test(detail)) return `Reconnect ${account} in ${SETTINGS}.`;
+  if (UNREADABLE.test(detail)) return `Reconnect ${account} in ${SETTINGS}.`;
   return null;
 }
 

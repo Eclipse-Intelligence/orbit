@@ -178,7 +178,7 @@ describe("mail AI", () => {
     const fake = model([{ queries: ["zebra migration"], from: null, after: null, before: null }]);
     const answer = await askMail(owner, { question: "Any news on zebras?" }, { fetchImpl: fake.fetchImpl });
     assert.equal(answer.sources.length, 0);
-    assert.match(answer.answer, /couldn't find/);
+    assert.match(answer.answer, /No emails found/);
     assert.equal(fake.prompts.length, 1);
   });
 });

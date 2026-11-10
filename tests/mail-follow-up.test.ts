@@ -339,7 +339,7 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     const run = outlook();
     assert.deepEqual(await sendFollowUpNow(owner, id, { origin: ORIGIN, fetchImpl: run.fetchImpl }), { sent: true, to: "Jane" });
     assert.equal(sends(run.calls).length, 1);
-    await assert.rejects(() => sendFollowUpNow(owner, id, { origin: ORIGIN, fetchImpl: outlook().fetchImpl }), /isn't waiting any more/);
+    await assert.rejects(() => sendFollowUpNow(owner, id, { origin: ORIGIN, fetchImpl: outlook().fetchImpl }), /already sent or cancelled/);
   });
 
   it("keeps the follow-up on drafts and counts from when a scheduled email actually sends", async () => {
@@ -414,7 +414,7 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     assert.equal(report.stuck, 1);
     assert.equal(sends(run.calls).length, 0);
     assert.equal((await reminder("conv-stuck")).state, "due");
-    assert.ok((await notes()).some((note) => note.title === "Check Sent: Orbit may not have sent this follow-up"));
+    assert.ok((await notes()).some((note) => note.title === "Check Sent: follow-up may not have sent"));
     const again = await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: ORIGIN });
     assert.equal(again.stuck, 0);
   });
@@ -455,7 +455,7 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     }
     assert.equal(sends(run.calls).length, 0);
     assert.equal((await reminder("conv-nocheck")).state, "due");
-    assert.ok((await notes()).some((note) => /couldn't check Outlook for a reply/.test(note.body ?? "")));
+    assert.ok((await notes()).some((note) => /Couldn't check Outlook for a reply/.test(note.body ?? "")));
   });
 
   it("Undo only brings back a follow-up that's still to come and alone on the thread", async () => {
@@ -516,7 +516,7 @@ describe("follow-ups Orbit sends when nobody replies", () => {
       await processDueMail(owner, { fetchImpl: other.fetchImpl, origin: ORIGIN });
       assert.equal(sends(other.calls).length, 0);
       assert.equal((await reminder("conv-orig")).state, "due");
-      assert.ok((await notes()).some((note) => /sent another email in this conversation/.test(note.body ?? "")));
+      assert.ok((await notes()).some((note) => /sent another email since/.test(note.body ?? "")));
     } finally {
       graph.draftInternetId = null;
     }
@@ -528,7 +528,7 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     const run = outlook();
     await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
     assert.equal(sends(run.calls).length, 0);
-    assert.ok((await notes()).some((note) => /people on your latest email/.test(note.body ?? "")));
+    assert.ok((await notes()).some((note) => /recipients have changed/.test(note.body ?? "")));
   });
 
   it("won't send from a different address when the one it was sent from has gone", async () => {
@@ -539,7 +539,7 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
     assert.equal(sends(run.calls).length, 0);
     assert.equal((await reminder("conv-identity")).state, "due");
-    assert.ok((await notes()).some((note) => /address you sent the email from isn't in Orbit any more/.test(note.body ?? "")));
+    assert.ok((await notes()).some((note) => /From address is no longer in Orbit/.test(note.body ?? "")));
   });
 
   it("shows who replied only for the newest follow-up with nothing else waiting", async () => {

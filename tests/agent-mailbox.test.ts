@@ -1481,7 +1481,7 @@ describe("the agent mailbox in normal chats", () => {
       await getAdminPool().query("select private.consume_rate_limit($1, $2, $3)", [`agent-mail-send:${owner.userId}`, AGENT_SENDS_PER_DAY, 86_400]);
     }
     const capped = (await runTool(owner, "send_email", { from: "agent", to: ["ada@analytical.test"], subject: "Again", body: "Hi" })) as { error: string };
-    assert.match(capped.error, /in the last day/);
+    assert.match(capped.error, /Daily limit of 50 agent emails reached/);
   });
 
   it("shows the contact's address on the email card", async () => {

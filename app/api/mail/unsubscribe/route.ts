@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   const existing = EXISTING_CHOICES.find((choice) => choice === body.existing) ?? "archive";
   return mailResponse(async (actor) => {
     if (!(await withinLimit(actor.userId, "unsubscribe", PER_MINUTE, 60))) {
-      throw new CrmError("rate_limited", "That's a lot of unsubscribes in a minute. Wait a moment and try again.", 429);
+      throw new CrmError("rate_limited", "Too many requests. Try again in a minute.", 429);
     }
     return unsubscribe(
       actor,

@@ -61,7 +61,7 @@ async function postJson<T>(url: string, body: unknown, keepalive = false): Promi
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
   if (!response.ok) {
-    throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status, detail: json, reconnect: (json as { reconnect?: unknown }).reconnect ?? null });
+    throw Object.assign(new Error(json.error ?? "Couldn't send. Try again."), { status: response.status, detail: json, reconnect: (json as { reconnect?: unknown }).reconnect ?? null });
   }
   return json;
 }
@@ -242,7 +242,7 @@ const ComposeCard = memo(function ComposeCard({
           variant="ghost"
           size="icon-sm"
           aria-label={held ? `Close ${title}. It isn't saved yet` : `Close ${title}, keeping the draft`}
-          title={held ? "Close (not saved yet, kept in this tab)" : "Close (the draft stays in Outlook)"}
+          title={held ? "Close (not saved yet, kept in this tab)" : "Close (draft kept)"}
           onClick={remove}
           className="pointer-coarse:size-11"
         >
@@ -251,7 +251,7 @@ const ComposeCard = memo(function ComposeCard({
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         {accounts.length === 0 ? (
-          <p className="caption-style text-subtle px-4 pb-4">Connect Microsoft in Settings › Email to send email from Orbit.</p>
+          <p className="caption-style text-subtle px-4 pb-4">Connect a mailbox in Settings › Email.</p>
         ) : (
           <MailComposer
             start={card.start}
@@ -358,7 +358,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (cardsRef.current.length >= MAX_CARDS) {
-        setNotice(`Up to ${MAX_CARDS} emails can be open at once. Send or close one first.`);
+        setNotice(`${MAX_CARDS} emails are open. Close one first.`);
         return;
       }
       counter.current += 1;

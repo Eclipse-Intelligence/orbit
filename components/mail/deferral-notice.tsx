@@ -40,7 +40,7 @@ export default function DeferralNotice({ deferral }: { deferral: DeferredFollowU
     const now = Date.now();
     pickLater({
       title: "Change date",
-      description: "Orbit drafts a follow-up then if nobody has replied. The task moves too.",
+      description: "The task moves too.",
       options: deferral.options.filter((option) => new Date(option.at).getTime() > now),
       now,
       onPick: (picked) => {
@@ -74,7 +74,7 @@ export default function DeferralNotice({ deferral }: { deferral: DeferredFollowU
     return (
       <p role="status" className="caption-style text-subtle flex items-center gap-2 py-1">
         <ClockIcon aria-hidden className="size-3 shrink-0" />
-        Orbit won&apos;t follow up.
+        Follow-up cancelled.
       </p>
     );
   }
@@ -84,14 +84,14 @@ export default function DeferralNotice({ deferral }: { deferral: DeferredFollowU
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1 rounded-xl bg-white/[0.035] py-1 pr-1 pl-3">
         <p role="status" className="text-soft mr-auto flex min-w-0 items-center gap-2 py-1.5 text-[13px] leading-5">
           <ClockIcon aria-hidden className="text-primary-foreground size-3.5 shrink-0" />
-          Orbit will draft a follow-up on {dayLabel(at)}
+          Follow-up draft on {dayLabel(at)} if no reply
         </p>
         <span className="flex items-center gap-1 max-sm:-ml-2">
           <Button variant="ghost" size="sm" disabled={busy} onClick={changeDate}>
             Change date
           </Button>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={stop}>
-            Don&apos;t follow up
+          <Button variant="ghost" size="sm" disabled={busy} onClick={stop} aria-label="Cancel follow-up">
+            Cancel
           </Button>
         </span>
       </div>

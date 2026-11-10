@@ -52,7 +52,7 @@ export async function heldAgentMail(actor: UserActor, limit = 5): Promise<HeldAg
 
 export async function runHeldAgentMail(actor: UserActor, id: string) {
   if (!isUuid(id) || !(await heldAgentMail(actor, 20)).some((item) => item.id === id)) {
-    throw new CrmError("not_found", "That email can't be run from here. Only emails from your own addresses that MachineMail filtered can.", 404);
+    throw new CrmError("not_found", "That email can't be run from here. Only filtered emails from your own addresses can run.", 404);
   }
   const result = await query<{ id: string; workspace_id: string; user_id: string }>("select * from private.agent_mail_run_anyway($1, $2)", [id, actor.userId]);
   const row = result.rows[0];

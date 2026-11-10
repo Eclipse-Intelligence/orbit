@@ -7,7 +7,7 @@ import { listCalendarGroups } from "@/lib/crm/calendars";
 import { createContact } from "@/lib/crm/contacts";
 import { listSenders, saveMailbox, saveSignature, sendContactEmail } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import { microsoftAuthorizationUrl, SEND_ACCOUNT_SCOPES, signMicrosoftState } from "@/lib/microsoft/oauth";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -126,6 +126,23 @@ describe("sending from other accounts", () => {
       sendContactEmail(other, contactId, { subject: "Nope", body: "Hi", from: consultancy.id }, out.fetchImpl),
       /isn't connected|not found/i,
     );
+  });
+
+  it("sends a disconnected sending account to Settings › Email and a calendar-only one to Settings › Calendars", async () => {
+    const consultancy = (await listSenders(owner)).find((sender) => sender.email === "mark@markridgeon.com")!;
+    const zeus = (await listCalendarGroups(owner)).find((group) => group.email === "mark@zeusvoice.com")!;
+    const admin = getAdminPool();
+    await admin.query("update crm.calendar_accounts set status = 'disconnected' where email in ('mark@markridgeon.com', 'mark@zeusvoice.com')");
+    try {
+      await assert.rejects(sendContactEmail(owner, contactId, { subject: "Nope", body: "Hi", from: consultancy.id }, graph().fetchImpl), {
+        message: "Reconnect mark@markridgeon.com in Settings › Email before sending from it.",
+      });
+      await assert.rejects(sendContactEmail(owner, contactId, { subject: "Nope", body: "Hi", from: zeus.id }, graph().fetchImpl), {
+        message: "Reconnect mark@zeusvoice.com in Settings › Calendars before sending from it.",
+      });
+    } finally {
+      await admin.query("update crm.calendar_accounts set status = 'connected' where email in ('mark@markridgeon.com', 'mark@zeusvoice.com')");
+    }
   });
 
   it("lets the assistant send from another address by name", async () => {

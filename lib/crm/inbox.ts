@@ -33,8 +33,7 @@ const OVERLAP_MS = 10 * 60 * 1000;
 const SYNC_GAP_MS = 2 * 60 * 1000;
 const RECONNECT_MESSAGE =
   "Orbit could not read the saved Microsoft connection. Disconnect, then connect Microsoft again.";
-const UNFILED_WARNING =
-  "The email was sent, but Orbit could not file it on the contact.";
+const UNFILED_WARNING = "Sent, but not added to the contact's timeline.";
 
 export type MailboxSummary = {
   id: string;
@@ -399,7 +398,7 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
   const account = found.rows[0];
   if (!account) throw new CrmError("not_found", "That email account isn't connected.", 404, { field: "from" });
   if (account.status !== "connected" || !account.refresh_token) {
-    throw new CrmError("invalid_input", `Reconnect ${account.email} in Settings › Calendars before sending from it.`, 400, { field: "from" });
+    throw new CrmError("invalid_input", `Reconnect ${account.email} in ${account.can_send ? "Settings › Email" : "Settings › Calendars"} before sending from it.`, 400, { field: "from" });
   }
   if (!account.can_send) {
     throw new CrmError("invalid_input", `Add mail for ${account.email} in Settings › Calendars first.`, 400, { field: "from" });
@@ -523,7 +522,7 @@ export async function sendContactEmail(
       "upstream_error",
       reconnectProblem(error, sender.email) ??
         sanitizeMicrosoftError(
-          error instanceof Error ? error.message : "Could not send the email.",
+          error instanceof Error ? error.message : "Couldn't send the email.",
         ),
       502,
     );
@@ -640,7 +639,7 @@ export async function syncMailbox(
     return counts;
   } catch (error) {
     const message = sanitizeMicrosoftError(
-      error instanceof Error ? error.message : "Could not sync the inbox.",
+      error instanceof Error ? error.message : "Couldn't sync the inbox.",
     );
     await withActor(owner, async (db) => {
       await db.query(
@@ -1205,7 +1204,7 @@ export async function sendOwnMail(
   } catch (error) {
     throw new CrmError(
       "upstream_error",
-      reconnectProblem(error, mailbox.email) ?? sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not send the email."),
+      reconnectProblem(error, mailbox.email) ?? sanitizeMicrosoftError(error instanceof Error ? error.message : "Couldn't send the email."),
       502,
     );
   }

@@ -31,7 +31,7 @@ export default function ScheduledList({
   if (drafts.length === 0) {
     return (
       <p role="status" className="text-subtle px-6 py-16 text-center">
-        Nothing scheduled. Use Send later in any email to pick a time.
+        Nothing scheduled
       </p>
     );
   }

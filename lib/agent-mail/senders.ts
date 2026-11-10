@@ -71,7 +71,7 @@ export function quarantinedForInstructionsOnly(reasons: unknown) {
 const FILED_AS: Record<string, string> = {
   "message.received.spam": "MachineMail filed it as spam.",
   "message.received.quarantined": "MachineMail quarantined it.",
-  "message.received.unauthenticated": "It failed email authentication (DMARC, or both SPF and DKIM).",
+  "message.received.unauthenticated": "It failed email authentication.",
   "message.received.blocked": "The sender is on MachineMail's block list.",
 };
 
@@ -95,7 +95,7 @@ export function judgeMail(input: {
   if (typeof input.trustLevel !== "string" || !input.trustLevel) return { actionable: false, reason: "It had no trust report from MachineMail." };
   if (!SAFE_LEVELS.has(input.trustLevel) && !instructions) return { actionable: false, reason: `MachineMail rated it ${input.trustLevel.slice(0, 40)}.` };
   if (!senderAuthenticated(input.from, input.auth, input.trustAligned)) {
-    return { actionable: false, reason: "It didn't pass email authentication for the sender's domain (DMARC, or DKIM for that domain), so it could be spoofed." };
+    return { actionable: false, reason: "It failed email authentication, so it could be spoofed." };
   }
   return { actionable: true, reason: null };
 }
