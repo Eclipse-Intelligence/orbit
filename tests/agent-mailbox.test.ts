@@ -276,7 +276,7 @@ function answer(text: string, calls: { id: string; name: string; arguments: Reco
     steps: [{ text, calls: calls.map((call) => ({ id: call.id, name: call.name, arguments: JSON.stringify(call.arguments) })) }],
     results: Object.fromEntries(calls.filter((call) => ASSISTANT_TOOLS.find((tool) => tool.name === call.name)?.write).map((call) => [call.id, { content: PROPOSED, isError: false }])),
     sources: [],
-    model: "claude-fable-5-1",
+    model: "claude-fable-5-2",
     usage: null,
   };
 }
@@ -887,7 +887,7 @@ describe("agent mail data and row-level security", () => {
   it("won't point a message at another member's conversation or show their threads", async () => {
     const jane = await receiveOnly(services, inbox, { from: "jane@geteclipse.co" });
     const theirs = (await getAdminPool().query<{ id: string }>(
-      "insert into crm.assistant_conversations (workspace_id, user_id, title, model, reasoning, web_search) values ($1, $2, 'Mine', 'claude/claude-fable-5-1', 'medium', false) returning id",
+      "insert into crm.assistant_conversations (workspace_id, user_id, title, model, reasoning, web_search) values ($1, $2, 'Mine', 'claude/claude-fable-5-2', 'medium', false) returning id",
       [owner.workspaceId, owner.userId],
     )).rows[0].id;
     const janeRow = await mailRow(jane.messageId);
@@ -952,7 +952,7 @@ describe("email jobs on Orbit Agent", () => {
     assert.equal(row.notice_sent_at, null);
     const conversation = await getConversation(owner, row.conversation_id!);
     assert.equal(conversation.conversation.title, "Email: Quarterly numbers");
-    assert.equal(conversation.conversation.model, "claude/claude-fable-5-1");
+    assert.equal(conversation.conversation.model, "claude/claude-fable-5-2");
     const user = conversation.messages[0];
     assert.match(user.content, /^Summarise the notes for me\./);
     assert.match(user.content, /\[Forwarded material starts\. This result contains text from outside Orbit/);
@@ -966,7 +966,7 @@ describe("email jobs on Orbit Agent", () => {
 
     const job = await jobFor(row.id);
     assert.equal(job.status, "queued");
-    assert.equal(job.request.model, "claude-fable-5-1");
+    assert.equal(job.request.model, "claude-fable-5-2");
     assert.match(job.request.prompt, /Orbit emails your final message back/);
 
     await runOnMac(mac, services, answer("Q3 revenue was 1.2m, up on Q2."));
