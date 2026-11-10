@@ -184,7 +184,7 @@ export async function moveFolder(
 
 function busyError(error: unknown) {
   if (isPgError(error) && error.code === "40P01") {
-    return new CrmError("conflict", "Someone else was changing these folders at the same moment. Try again.", 409);
+    return new CrmError("conflict", "Folders changed at the same time. Try again.", 409);
   }
   return error;
 }

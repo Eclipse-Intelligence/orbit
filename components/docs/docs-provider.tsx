@@ -16,13 +16,13 @@ function visibilityText(prompt: VisibilityPrompt) {
   if (prompt.after === "shared") {
     return {
       title: `Share ${prompt.name} with the workspace?`,
-      description: `Moving it to ${prompt.destination} shares ${what} with everyone in the workspace. They can find, read and edit it, and so can the assistant and workspace agents.`,
+      description: `Moving it to ${prompt.destination} shares ${what} with everyone in the workspace.`,
       confirm: "Move and share",
     };
   }
   return {
     title: `Make ${prompt.name} private?`,
-    description: `Moving it to ${prompt.destination} makes ${what} private to its owner. Teammates and workspace agents lose access, and links to it from shared notes show only the title.`,
+    description: `Moving it to ${prompt.destination} makes ${what} private to its owner. Teammates lose access, and links to it from shared notes show only the title.`,
     confirm: "Move and make private",
   };
 }

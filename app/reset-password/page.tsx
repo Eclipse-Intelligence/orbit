@@ -5,7 +5,7 @@ import { getUserActor } from "@/lib/auth/user";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Choose a new password",
+  title: "New password",
   robots: { index: false, follow: false },
 };
 

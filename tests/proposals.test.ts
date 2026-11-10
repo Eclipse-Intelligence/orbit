@@ -100,7 +100,7 @@ describe("proposals", () => {
     proposalTemplateId = template.id;
     await assert.rejects(
       () => createDocument(owner, { templateId: template.id, companyId: pulseId, contactId: andrewId, items: [{ productId: pilotId }] }),
-      /Only active templates/,
+      /Make this template active first/,
     );
     await updateTemplate(owner, template.id, { status: "active" });
     await assert.rejects(() => createDocument(owner, { templateId: template.id, companyId: pulseId, contactId: outsiderId }), /isn't at Pulse/);

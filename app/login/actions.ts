@@ -81,7 +81,7 @@ export async function requestResetAction(
     const supabase = await createSupabaseServer();
     await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${origin}/auth/callback` });
   } catch {
-    return { email, error: "The reset email couldn't be sent. Try again in a minute." };
+    return { email, error: "Couldn't send the reset email. Try again." };
   }
   const cookieStore = await cookies();
   cookieStore.set(RESET_COOKIE, "1", { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60, path: "/" });

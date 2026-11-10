@@ -44,7 +44,7 @@ export default function ResetPasswordForm({ email }: { email: string }) {
         <Field label="New password" htmlFor="new-password" required>
           <Input id="new-password" name="password" type="password" autoComplete="new-password" minLength={8} required autoFocus />
         </Field>
-        <Field label="Repeat it" htmlFor="confirm-password" required>
+        <Field label="Repeat password" htmlFor="confirm-password" required>
           <Input id="confirm-password" name="confirm" type="password" autoComplete="new-password" minLength={8} required />
         </Field>
         <Button type="submit" variant="primary" size="md" disabled={pending} className="w-full">

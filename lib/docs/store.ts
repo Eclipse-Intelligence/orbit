@@ -91,7 +91,7 @@ export type PageRow = {
 
 export type FullPageRow = PageRow & { content: string };
 
-const NOT_FOUND = "That doc doesn't exist, or it's private to someone else.";
+const NOT_FOUND = "That note doesn't exist, or it's private to someone else.";
 const DEFAULT_PROVENANCE: Provenance = { operation: "docs" };
 
 const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text as daily_date, p.folder_id, p.user_id,
@@ -189,10 +189,10 @@ export async function loadPage(db: Db, actor: Actor, id: string, options: { lock
 export function checkTitle(value: unknown, fallback = "") {
   const title = typeof value === "string" ? cleanTitle(value) : fallback;
   if (typeof value === "string" && value.replace(/\s+/g, " ").trim().length > 300) {
-    throw new CrmError("invalid_input", "A title can be up to 300 characters. Shorten it and try again.", 400, { field: "title" });
+    throw new CrmError("invalid_input", "A title can be up to 300 characters.", 400, { field: "title" });
   }
   if (/[[\]|#]/.test(title)) {
-    throw new CrmError("invalid_input", "A title can't contain #, [, ] or |, because links use them. Take them out and try again.", 400, { field: "title" });
+    throw new CrmError("invalid_input", "A title can't contain #, [, ] or |.", 400, { field: "title" });
   }
   return title;
 }
@@ -206,7 +206,7 @@ export function checkContent(value: unknown, code = "invalid_input", status = 40
   if (content.length > DOC_CONTENT_MAX) {
     throw new CrmError(
       code,
-      `A doc can hold up to ${DOC_CONTENT_MAX.toLocaleString("en-GB")} characters. This one has ${content.length.toLocaleString("en-GB")}. Split it into two docs.`,
+      `A note can hold up to ${DOC_CONTENT_MAX.toLocaleString("en-GB")} characters. This one has ${content.length.toLocaleString("en-GB")}. Split it into two notes.`,
       status,
       { field: "content", limit: DOC_CONTENT_MAX, characters: content.length },
     );
@@ -452,7 +452,7 @@ export type CommitOptions = {
 
 export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: { title: string; content: string }, options: CommitOptions) {
   if (options.baseRevision !== undefined && options.baseRevision !== page.revision) {
-    throw new CrmError("conflict", "This doc changed since you opened it. Reload it to see the latest, then make your change again.", 409, {
+    throw new CrmError("conflict", "This note changed since you opened it. Reload and try again.", 409, {
       revision: page.revision,
     });
   }
@@ -707,7 +707,7 @@ export async function placeableFolder(db: Db, actor: Actor, folderId: string, ow
   if (!folder) throw new CrmError("not_found", "That folder doesn't exist, or it's private to someone else.", 404, { field: "folderId" });
   if (folder.archived_at) throw new CrmError("invalid_input", `${folder.name} is archived. Restore it first, or choose another folder.`, 400, { field: "folderId" });
   if (!folder.effective_shared && folder.user_id !== ownerId) {
-    throw new CrmError("forbidden", `${folder.name} is private to someone else, so only their own docs can go in it.`, 403, { field: "folderId" });
+    throw new CrmError("forbidden", `${folder.name} is private to someone else, so only their own notes can go in it.`, 403, { field: "folderId" });
   }
   return folder;
 }
@@ -742,7 +742,7 @@ export async function saveDoc(actor: Actor, id: string, input: DocSaveInput, pro
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, id, { lock: true });
-    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
+    if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
     checkRevision(page, input.baseRevision);
     const title = input.title === undefined ? page.title : checkTitle(input.title);
     const content = input.content === undefined ? page.content : checkContent(input.content);
@@ -766,7 +766,7 @@ async function liveDocFor(db: Db, page: FullPageRow): Promise<LiveCopy & { store
 }
 
 function unreadable() {
-  return new CrmError("live_invalid", "That change couldn't be read, so it wasn't saved. Reload the note and try again.", 400);
+  return new CrmError("live_invalid", "That change wasn't saved. Reload the note and try again.", 400);
 }
 
 async function mergeLive(db: Db, actor: Actor, page: FullPageRow, input: LiveSync, provenance?: Provenance) {
@@ -796,7 +796,7 @@ async function mergeLive(db: Db, actor: Actor, page: FullPageRow, input: LiveSyn
   const title = input.title === undefined || page.kind === "daily" ? page.title : checkTitle(input.title);
   let saved = false;
   if (content !== page.content || title !== page.title) {
-    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
+    if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
     const result = await commitPage(db, actor, page, { title, content }, { stamp: stampFor(actor, provenance), provenance, live: copy, coalesceTitle: true });
     copy = result.live ?? copy;
     saved = true;
@@ -862,7 +862,7 @@ export async function syncLiveDoc(actor: Actor, id: string, input: LiveSync, pro
 
 function checkRevision(page: FullPageRow, baseRevision: number | undefined) {
   if (baseRevision !== undefined && baseRevision !== page.revision) {
-    throw new CrmError("conflict", "This doc changed since you opened it. Reload it to see the latest, then make your change again.", 409, {
+    throw new CrmError("conflict", "This note changed since you opened it. Reload and try again.", 409, {
       revision: page.revision,
     });
   }
@@ -896,7 +896,7 @@ async function renameInside(db: Db, actor: Actor, page: FullPageRow, title: stri
 }
 
 async function renameIn(db: Db, actor: Actor, page: FullPageRow, title: string, provenance?: Provenance) {
-  if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before renaming.", 400);
+  if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
   if (page.kind === "daily") {
     if (title === page.title) return 0;
     throw new CrmError("invalid_input", "A daily note is named after its date, so it can't be renamed.", 400, { field: "title" });
@@ -920,7 +920,7 @@ export async function changeDocContent(
   content: string,
   options: { provenance?: Provenance; summary?: string | null; baseRevision?: number },
 ) {
-  if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
+  if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
   return commitPage(db, actor, page, { title: page.title, content: checkContent(content) }, {
     stamp: stampFor(actor, options.provenance),
     provenance: options.provenance,
@@ -957,7 +957,7 @@ export async function editDoc(
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
     const page = options.assistantCanEdit ? await lockForAssistant(db, actor, id) : await loadPage(db, actor, id, { lock: true });
-    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
+    if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
     checkRevision(page, options.baseRevision);
     const before = await editIn(db, actor, page, edit, provenance, options.plan);
     const doc = await docDetail(db, actor, id);
@@ -979,7 +979,7 @@ export async function updateDoc(actor: Actor, id: string, input: DocUpdateInput,
   const title = input.title === undefined ? undefined : checkTitle(input.title);
   return withActor(actor, async (db) => {
     const first = await loadPage(db, actor, id, { lock: true });
-    if (first.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before changing it.", 400);
+    if (first.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
     checkRevision(first, input.baseRevision);
     let linksUpdated = 0;
     let visibility: VisibilityChange | null = null;
@@ -1010,7 +1010,7 @@ export function visibilityError(after: DocVisibility, where: string) {
 
 async function moveIn(db: Db, actor: Actor, page: FullPageRow, input: { folderId: string | null; allowVisibilityChange?: boolean }, provenance?: Provenance) {
   if (page.kind === "daily") throw new CrmError("invalid_input", "Daily notes stay in Daily notes and can't go in folders.", 400, { field: "folderId" });
-  if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before moving it.", 400);
+  if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
   const folder = input.folderId ? await placeableFolder(db, actor, input.folderId, page.user_id) : null;
   const before = visibilityOf(page.shared, page.effective_shared);
   const afterShared = page.shared || Boolean(folder?.effective_shared);
@@ -1047,7 +1047,7 @@ async function shareIn(db: Db, actor: Actor, page: FullPageRow, shared: boolean,
   if (!shared && !ownedBy(actor, page.user_id)) {
     throw new CrmError(
       "forbidden",
-      page.user_id ? `Only ${page.owner_name ?? "its owner"} can make this doc private.` : "This doc has no owner, so it can't be made private. A member can copy it into a private doc instead.",
+      page.user_id ? `Only ${page.owner_name ?? "its owner"} can make this note private.` : "This note has no owner, so it can't be made private. A member can copy it into a private note instead.",
       403,
     );
   }
@@ -1070,13 +1070,13 @@ export async function setAssistantCanEdit(actor: Actor, id: string, allowed: boo
   if (actor.type !== "user") throw new CrmError("forbidden", "Only a person can change whether the assistant edits without asking.", 403);
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, id, { lock: true });
-    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it first.", 400);
+    if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
     if (!ownedBy(actor, page.user_id)) {
       throw new CrmError(
         "forbidden",
         page.user_id
-          ? `Only ${page.owner_name ?? "its owner"} can let the assistant edit this doc without asking.`
-          : "This doc has no owner, so the assistant always asks before editing it.",
+          ? `Only ${page.owner_name ?? "its owner"} can let the assistant edit this note without asking.`
+          : "This note has no owner, so the assistant always asks before editing it.",
         403,
       );
     }
@@ -1108,7 +1108,7 @@ export async function archiveDoc(actor: Actor, id: string, provenance?: Provenan
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, id, { lock: true });
-    if (page.kind === "daily") throw new CrmError("invalid_input", "Daily notes can't be archived. Clear its text instead, and it drops out of Daily notes.", 400);
+    if (page.kind === "daily") throw new CrmError("invalid_input", "Daily notes can't be archived. Clear the text instead.", 400);
     if (!page.archived_at) {
       await db.query("update crm.pages set archived_at = now() where id = $1", [page.id]);
       await auditDoc(db, actor, "page.archived", page, provenance, {});
@@ -1284,13 +1284,13 @@ export async function restoreVersion(actor: Actor, pageId: string, versionId: st
   if (!isUuid(versionId)) throw new CrmError("not_found", "That version doesn't exist.", 404);
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, pageId, { lock: true });
-    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before restoring a version.", 400);
+    if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
     const version = await db.query<{ title: string; content: string; created_at: Date }>(
       "select title, content, created_at from crm.page_versions where id = $1 and page_id = $2",
       [versionId, page.id],
     );
     const chosen = version.rows[0];
-    if (!chosen) throw new CrmError("not_found", "That version isn't one of this doc's versions.", 404);
+    if (!chosen) throw new CrmError("not_found", "That version isn't one of this note's versions.", 404);
     const title = page.kind === "daily" ? page.title : chosen.title;
     const summary = `Restored the version from ${new Date(chosen.created_at).toLocaleString("en-GB", { timeZone: "Europe/London", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`;
     if (title !== page.title) {

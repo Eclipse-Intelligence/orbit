@@ -45,7 +45,7 @@ const BOOKING_LIMITS = {
 };
 
 export const SLOT_TAKEN = "That time was just taken. Pick another.";
-export const BOOKING_UNAVAILABLE = "Booking is temporarily unavailable. Please try again later.";
+export const BOOKING_UNAVAILABLE = "Booking is unavailable right now. Try again later.";
 const PAGE_MISSING = "This booking page isn't available.";
 
 type BookingContext = { ip: string; now?: number; fetchImpl?: typeof fetch };
@@ -215,7 +215,7 @@ async function liveBusy(
 function unavailable(error: unknown) {
   if (error instanceof CrmError) {
     if (error.code === "not_connected" && error.message === INVITE_NOT_CONNECTED) {
-      return "Microsoft isn't connected, so the booking page can't create meetings. Connect Microsoft in Settings › Email.";
+      return "Microsoft isn't connected. Connect it in Settings › Email.";
     }
     if (error.code === "scope_missing" && error.message === INVITE_RECONNECT) {
       return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Settings › Email.";
@@ -398,7 +398,6 @@ async function alertOwner(
           booking.link ? `Join: ${booking.link}` : null,
           booking.note ? `\nNote from ${booking.name}:\n${booking.note}` : null,
           "",
-          `It's in your calendar as "${booking.subject}"${booking.contactId ? ` and on ${booking.name}'s record in Orbit` : ""}.`,
           link,
         ]
           .filter((line) => line !== null)

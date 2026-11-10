@@ -146,14 +146,10 @@ export default function DailyList({ selected, chosen, initial }: { selected: str
                   <span className={cn("text-[14px] leading-5 font-medium", current ? "text-foreground" : "text-[#e3e5ea]")}>{dayName(day.date, today)}</span>
                   <span className="caption-style text-subtle">{dayDetail(day.date, today)}</span>
                   <span className="caption-style text-subtle ml-auto tabular-nums">
-                    {day.entries === 0 ? "No entries yet" : `${day.entries} ${day.entries === 1 ? "entry" : "entries"}`}
+                    {day.entries === 0 ? "No entries" : `${day.entries} ${day.entries === 1 ? "entry" : "entries"}`}
                   </span>
                 </span>
-                {day.entries === 0 ? (
-                  <span className="text-subtle truncate text-[13px] leading-[1.45]">Tap to write</span>
-                ) : (
-                  day.preview && <span className="text-subtle truncate text-[13px] leading-[1.45]">{day.preview}</span>
-                )}
+                {day.entries > 0 && day.preview && <span className="text-subtle truncate text-[13px] leading-[1.45]">{day.preview}</span>}
               </Link>
             </li>
           );
