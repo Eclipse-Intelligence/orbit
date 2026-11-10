@@ -25,7 +25,7 @@ export default function LaterPicker({ request, onClose }: { request: LaterReques
   function pickCustom() {
     const date = parseDateTime(custom);
     if (!date || !request || date.getTime() < request.now + 60_000) {
-      setError("Choose a future time.");
+      setError("Choose a time at least a minute from now.");
       return;
     }
     pick(date.toISOString());

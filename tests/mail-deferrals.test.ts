@@ -221,7 +221,7 @@ describe("not now replies", () => {
     assert.equal(moved.due_at.toISOString(), later.toISOString());
     assert.equal((await getTask(owner, reminder.task_id)).dueAt, later.toISOString());
     assert.equal((await getThread(owner, thread)).deferral?.at, later.toISOString());
-    await assert.rejects(moveDeferral(owner, reminder.id, new Date(Date.now() - 60_000).toISOString()), /future time within a year/);
+    await assert.rejects(moveDeferral(owner, reminder.id, new Date(Date.now() - 60_000).toISOString()), /at least a minute from now/);
   });
 
   it("asks for a gentle check-in when the day comes", async () => {

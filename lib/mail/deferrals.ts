@@ -381,7 +381,7 @@ async function openTask(db: Db, taskId: string | null) {
 export async function moveDeferral(caller: UserActor, id: string, atValue: string, now = Date.now()) {
   const at = new Date(atValue);
   if (Number.isNaN(at.getTime()) || at.getTime() < now + 60_000 || at.getTime() > now + 366 * 86_400_000) {
-    throw new CrmError("invalid_input", "Choose a future time within a year.", 400, { field: "at" });
+    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "at" });
   }
   const actor = await taskActor(caller, id);
   return withActor(actor, async (db) => {

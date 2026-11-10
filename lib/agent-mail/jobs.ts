@@ -27,10 +27,9 @@ export const THREAD_ROUNDS_MAX = 24;
 export const REPLY_ATTEMPTS = 3;
 export const OFFLINE_NOTICE = "Got it. Orbit Agent isn't running on your Mac, so I'll start as soon as it is.";
 export const CONFIRM_PROMPT = "Reply yes to go ahead, or tell me what to change.";
-export const ROUNDS_NOTE = `I stopped running changes by myself after ${EMAIL_ROUNDS_MAX} rounds for this email, so the rest wait for you.`;
+export const ROUNDS_NOTE = `I stop after ${EMAIL_ROUNDS_MAX} rounds per email. The rest need your OK.`;
 export const THREAD_ROUNDS_NOTE = `This email thread has used its ${THREAD_ROUNDS_MAX} rounds of changes. Start a new email to carry on.`;
-export const MODEL_MOVED =
-  "This chat was moved to a model that doesn't run on Orbit Agent, so it can't carry on by email. Switch it back to a Claude account model in Orbit, or start a new email";
+export const MODEL_MOVED = "This chat now uses a model that can't run by email. Switch it back to a Claude account model, or start a new email";
 const NO_ANSWER = "I didn't get an answer back.";
 const NOT_PAIRED = "Orbit Agent isn't paired with your Mac yet. Pair it in Settings › Connections, then email again";
 const UNCLEANED_NOTE =

@@ -757,7 +757,7 @@ export async function notePreparedSent(db: Db, actor: UserActor, messageId: stri
 
 export async function addFollowUp(actor: UserActor, input: { thread: string; dueAt: Date; subject: string | null }) {
   if (Number.isNaN(input.dueAt.getTime()) || input.dueAt.getTime() < Date.now() + 60_000 || input.dueAt.getTime() > Date.now() + 365 * 86_400_000) {
-    throw new CrmError("invalid_input", "Choose a future time within a year.", 400, { field: "until" });
+    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "until" });
   }
   const { sourceId, key } = parseThreadKey(input.thread);
   return withActor(actor, async (db) => {

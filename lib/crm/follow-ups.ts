@@ -369,10 +369,10 @@ export async function followUpCalls(
       {
         key: `no-next-step:${row.activity_id}`,
         title,
-        body: `${callDay(row.occurred_at)} with ${who}. Orbit drafted a follow-up.`,
+        body: `${callDay(row.occurred_at)} with ${who}. Follow-up drafted.`,
         url: CAPTURE_HREF,
         tag: `follow-up:${id}`,
-        bell: { title, body: `${callDay(row.occurred_at)} with ${who}. Orbit drafted a follow-up.`, href: CAPTURE_HREF, category: "capture" },
+        bell: { title, body: `${callDay(row.occurred_at)} with ${who}. Follow-up drafted.`, href: CAPTURE_HREF, category: "capture" },
       },
       { send: quiet ? async () => undefined : options.send },
     ).catch((error) => console.error("Follow-up alert failed", error instanceof Error ? error.message : error));
@@ -431,7 +431,7 @@ export async function listFollowUps(actor: UserActor, limit = CALL_FOLLOW_UP_LIM
         id: row.id,
         source: row.source,
         title: followUpTitle(row.label, row.type, row.company_name ?? "them"),
-        line: `${callDay(row.call_at)} with ${who}. Nothing has gone to ${firstName(row.person_name, row.person_email)} since. Orbit drafted a follow-up.`,
+        line: `${callDay(row.call_at)} with ${who}. No email since. Follow-up drafted.`,
         to: { name: row.person_name, address: row.person_email },
         subject: row.subject ?? "Following up",
         body: row.body,

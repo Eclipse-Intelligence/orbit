@@ -886,7 +886,7 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
 function scheduleTime(sendAt: string) {
   const at = new Date(sendAt);
   if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() + SCHEDULE_MIN_MS || at.getTime() > Date.now() + SCHEDULE_MAX_MS) {
-    throw new CrmError("invalid_input", "Choose a future time within a year.", 400, { field: "sendAt" });
+    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "sendAt" });
   }
   return at;
 }

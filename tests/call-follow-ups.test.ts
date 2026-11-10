@@ -267,7 +267,7 @@ describe("calls that ended with no next step", () => {
       assert.equal(listed.length, 1);
       assert.equal(listed[0].source, "teams");
       assert.equal(listed[0].title, "Demo with Acme ended with no next step");
-      assert.equal(listed[0].line, "Tue 27 Oct with Jane Doe. Nothing has gone to Jane since. Orbit drafted a follow-up.");
+      assert.equal(listed[0].line, "Tue 27 Oct with Jane Doe. No email since. Follow-up drafted.");
       assert.deepEqual(listed[0].to, { name: "Jane Doe", address: `jane@${call.domain}` });
       assert.equal(listed[0].subject, DRAFT.subject);
 

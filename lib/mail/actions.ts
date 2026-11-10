@@ -168,7 +168,7 @@ export async function applyMailAction(
   if (!MAIL_ACTIONS.includes(input.action)) throw new CrmError("validation_error", "Choose a mail action.", 400);
   const until = input.action === "snooze" ? new Date(input.until ?? "") : null;
   if (until && (Number.isNaN(until.getTime()) || until.getTime() < Date.now() + SNOOZE_MIN_MS || until.getTime() > Date.now() + SNOOZE_MAX_MS)) {
-    throw new CrmError("invalid_input", "Choose a future time within a year.", 400, { field: "until" });
+    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "until" });
   }
   const view = input.view && "folderId" in input.view && !isUuid(input.view.folderId) ? null : (input.view ?? null);
   const { sourceId, key } = parseThreadKey(input.thread);
