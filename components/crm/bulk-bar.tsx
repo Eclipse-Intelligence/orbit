@@ -165,7 +165,6 @@ export default function BulkActions({
   const [extraBusy, setExtraBusy] = useState<{ key: string; text: string } | null>(null);
   const noticeCount = useRef(0);
   const [confirmExtra, setConfirmExtra] = useState<{ action: BulkExtraAction; ids: string[] } | null>(null);
-  const [confirming, setConfirming] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
   const [moving, setMoving] = useState(false);
   const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | "extra" | null>(
@@ -176,7 +175,7 @@ export default function BulkActions({
   const ids = selection.selectedIds;
 
   useEffect(() => {
-    if (!notice || notice.tone === "error") return;
+    if (!notice || notice.tone === "error" || notice.undo) return;
     const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -188,7 +187,6 @@ export default function BulkActions({
 
   async function runArchive() {
     const chosen = ids;
-    setConfirming(false);
     if (chosen.length === 0) return;
     setBusy("archive");
     try {
@@ -372,7 +370,7 @@ export default function BulkActions({
                 <span className="flex flex-wrap items-center gap-1">
                   {!mailboxConnected && (
                     <Button variant="link" size="none" href="/settings/email" className="text-subtle mr-1">
-                      Connect Microsoft in Settings › Email to email
+                      Connect Microsoft to email
                     </Button>
                   )}
                   <Button
@@ -381,7 +379,7 @@ export default function BulkActions({
                     onClick={openComposer}
                     disabled={busy !== null || !mailboxConnected}
                     data-shortcut="bulk-email"
-                    title={mailboxConnected ? `${emailLabel} (E)` : "Connect Microsoft in Settings › Email to send email"}
+                    title={mailboxConnected ? `${emailLabel} (E)` : undefined}
                   >
                     {busy === "email" ? "Loading…" : emailLabel}
                   </Button>
@@ -429,15 +427,15 @@ export default function BulkActions({
                     disabled={busy !== null}
                     data-shortcut="bulk-export"
                   >
-                    {busy === "export" ? "Exporting…" : "Export selected"}
+                    {busy === "export" ? "Exporting…" : "Export"}
                   </Button>
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => setConfirming(true)}
+                    onClick={() => void runArchive()}
                     disabled={busy !== null}
                     data-shortcut="bulk-archive"
-                    title="Archive (Delete)"
+                    title="Archive (⌫)"
                   >
                     {busy === "archive" ? "Archiving…" : "Archive"}
                   </Button>
@@ -447,24 +445,6 @@ export default function BulkActions({
           </div>
         </>
       )}
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent className="max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Archive {count(ids.length, noun)}?</DialogTitle>
-            <DialogDescription>
-              {ids.length === 1 ? "It's" : "They're"} hidden from Orbit but not deleted.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="sm" onClick={runArchive} autoFocus>
-              Archive
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog open={confirmExtra !== null} onOpenChange={(open) => !open && setConfirmExtra(null)}>
         <DialogContent className="max-w-[440px]">
           {confirmExtra && (
@@ -518,7 +498,6 @@ export default function BulkActions({
             setComposing(null);
             if (sent > 0) {
               selection.clear();
-              show(`Sent ${count(sent, ["email", "emails"])}`, "status");
               router.refresh();
             }
           }}

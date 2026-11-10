@@ -8,7 +8,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/_ui/select";
-import { addActivityAction } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
 import {
   ActivityComposer,
@@ -53,14 +52,7 @@ export default function CompanyActivity({
         ? contacts[0].id
         : NONE;
   const contact = contacts.find((item) => item.id === about) ?? null;
-  const draft = useActivityDraft((kind, title, body) =>
-    addActivityAction(
-      { companyId, contactId: contact?.id ?? null },
-      kind,
-      title,
-      body,
-    ),
-  );
+  const draft = useActivityDraft();
   const emailing = draft.kind === "email";
   const reachable = contacts.filter((item) => item.email);
   const recipient = contact?.email ? contact : null;
@@ -94,7 +86,6 @@ export default function CompanyActivity({
   return (
     <DetailSection title="Activity" className="shadow-none">
       <ActivityComposer
-        idPrefix={companyId}
         draft={draft}
         pad={<ActivityPad fixedCompany={{ id: companyId, name: companyName }} onAdded={draft.push} />}
         about={
@@ -144,11 +135,7 @@ export default function CompanyActivity({
             recipient={recipient ? contactRecipient(recipient) : null}
             mailboxConnected={mailboxConnected}
             idPrefix={companyId}
-            unavailable={
-              reachable.length === 0
-                ? "No one at this company has an email address yet."
-                : "Choose who to email."
-            }
+            unavailable={reachable.length === 0 ? "No contacts with an email address" : undefined}
           />
         }
       />
@@ -158,7 +145,7 @@ export default function CompanyActivity({
         showContact
         viewerId={viewerId}
         viewerRole={viewerRole}
-        empty="No activity yet."
+        empty="No activity"
         filters={
           people.length > 1 && (
             <span className="relative flex items-center">

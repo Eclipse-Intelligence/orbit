@@ -116,7 +116,6 @@ export default function ContactEditor({
           />
           {companyId === "none" && suggestion.kind === "existing" && (
             <p className="caption-style text-subtle flex flex-wrap items-center gap-x-2">
-              Works at {suggestion.company.name}?
               <Button variant="link" size="none" className="caption-style" onClick={() => setCompanyId(suggestion.company.id)}>
                 Link to {suggestion.company.name}
               </Button>
@@ -131,7 +130,7 @@ export default function ContactEditor({
               />
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="text-foreground truncate text-[13px] leading-5">{suggestion.name}</span>
-                <span className="caption-style text-subtle truncate">{suggestion.domain} isn&apos;t in Orbit yet</span>
+                <span className="caption-style text-subtle truncate">{suggestion.domain}</span>
               </span>
               <Button variant="secondary" size="sm" disabled={adding} onClick={addSuggested}>
                 {adding ? "Adding…" : "Add company"}
@@ -239,7 +238,7 @@ export default function ContactEditor({
           data-shortcut="save"
           title="Save (⌘S)"
         >
-          {pending ? "Saving…" : editing ? "Save" : "Create contact"}
+          {pending ? "Saving…" : editing ? "Save" : "Add contact"}
         </Button>
       </div>
     </div>

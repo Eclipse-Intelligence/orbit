@@ -5,6 +5,7 @@ import Link from "next/link";
 import FindDetailButton from "@/components/crm/find-detail";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import {
   createCompanyContactAction,
@@ -55,34 +56,53 @@ export default function CompanyContacts({
 }) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
-  const [confirming, setConfirming] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [removed, setRemoved] = useState<{ id: string; name: string } | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
-  async function remove(contactId: string) {
-    setRemoving(contactId);
-    const result = await unlinkCompanyContactAction(companyId, contactId);
+  async function remove(contact: Contact) {
+    setError(null);
+    setRemoved(null);
+    setRemoving(contact.id);
+    const result = await unlinkCompanyContactAction(companyId, contact.id);
     setRemoving(null);
     if (result.error) {
       setError(result.error);
       return;
     }
-    setConfirming(null);
+    setRemoved({ id: contact.id, name: contact.name });
+    router.refresh();
+  }
+
+  async function undoRemove() {
+    if (!removed || restoring) return;
     setError(null);
+    setRestoring(true);
+    const result = await linkCompanyContactAction(companyId, removed.id);
+    setRestoring(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setRemoved(null);
     router.refresh();
   }
 
   return (
     <DetailSection
-      title="People"
+      title="Contacts"
       action={
         <Button
           variant="ghost"
           size="sm"
           aria-expanded={adding}
           data-shortcut="add-person"
-          title="Add or link a person (A)"
-          onClick={() => setAdding((current) => !current)}
+          title="Add contact (A)"
+          onClick={() => {
+            setRemoved(null);
+            setAdding((current) => !current);
+          }}
         >
           {adding ? "Close" : "Add contact"}
         </Button>
@@ -102,8 +122,18 @@ export default function CompanyContacts({
           {error}
         </p>
       )}
+      {removed && (
+        <div className="flex items-center justify-between gap-3">
+          <p role="status" className="caption-style text-soft min-w-0 [overflow-wrap:anywhere]">
+            Removed {removed.name}
+          </p>
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={restoring} onClick={() => void undoRemove()}>
+            {restoring ? "Restoring…" : "Undo"}
+          </Button>
+        </div>
+      )}
       {contacts.length === 0 ? (
-        <p className="caption-style text-subtle">No contacts on this company.</p>
+        <p className="caption-style text-subtle">No contacts</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {contacts.map((contact) => (
@@ -117,7 +147,7 @@ export default function CompanyContacts({
                     {contact.name}
                   </Link>
                   {contact.email || !findEmail ? (
-                    <span className="caption-style text-subtle">
+                    <span className="caption-style text-subtle [overflow-wrap:anywhere]">
                       {[contact.jobTitle, contact.email]
                         .filter(Boolean)
                         .join(" · ") || "No email"}
@@ -135,46 +165,16 @@ export default function CompanyContacts({
                     </span>
                   )}
                 </div>
-                {confirming === contact.id ? (
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-danger hover:text-danger"
-                      disabled={removing !== null}
-                      onClick={() => remove(contact.id)}
-                    >
-                      {removing === contact.id ? "Removing…" : "Remove"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={removing !== null}
-                      onClick={() => setConfirming(null)}
-                    >
-                      Keep
-                    </Button>
-                  </div>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0"
-                    aria-label={`Remove ${contact.name} from this company`}
-                    onClick={() => {
-                      setError(null);
-                      setConfirming(contact.id);
-                    }}
-                  >
-                    Remove
-                  </Button>
-                )}
+                <HoldButton className="shrink-0" disabled={removing !== null} onConfirm={() => void remove(contact)}>
+                  {removing === contact.id ? (
+                    "Removing…"
+                  ) : (
+                    <>
+                      Hold to remove<span className="sr-only"> {contact.name} from this company</span>
+                    </>
+                  )}
+                </HoldButton>
               </div>
-              {confirming === contact.id && (
-                <p className="caption-style text-soft">
-                  Remove {contact.name} from this company? The contact is kept.
-                </p>
-              )}
             </li>
           ))}
         </ul>
@@ -266,7 +266,7 @@ function ContactPicker({
   if (mode === "create") {
     return (
       <div className="border-line-strong flex flex-col gap-3 rounded-lg border p-3">
-        <p className="caption-style text-soft">New contact at this company</p>
+        <p className="caption-style text-soft">New contact</p>
         <div className="grid gap-3 sm:grid-cols-2">
           {DRAFT_FIELDS.map((field) => (
             <div
@@ -309,7 +309,7 @@ function ContactPicker({
             disabled={pending !== null}
             onClick={create}
           >
-            {pending === "create" ? "Creating…" : "Create contact"}
+            {pending === "create" ? "Adding…" : "Add contact"}
           </Button>
           <Button
             variant="ghost"
@@ -320,7 +320,7 @@ function ContactPicker({
               setMode("search");
             }}
           >
-            Back to search
+            Back
           </Button>
         </div>
       </div>
@@ -336,7 +336,7 @@ function ContactPicker({
         id={fieldId("search")}
         value={query}
         autoFocus
-        placeholder="Search people by name or email"
+        placeholder="Search contacts"
         onChange={(event) => setQuery(event.target.value)}
         onKeyDown={(event) => keepInPicker(event)}
       />
@@ -349,11 +349,11 @@ function ContactPicker({
         <p className="caption-style text-subtle px-1 py-2">Searching…</p>
       ) : results?.failed ? (
         <p role="alert" className="caption-style text-danger px-1 py-2">
-          Search is unavailable right now. Try again in a moment.
+          Search failed. Try again.
         </p>
       ) : results && results.contacts.length === 0 ? (
         <p className="caption-style text-subtle px-1 py-2">
-          {trimmed ? `No other contacts match “${trimmed}”.` : "No other contacts yet."}
+          {trimmed ? "No matches" : "No other contacts"}
         </p>
       ) : (
         <ul className="flex max-h-64 flex-col overflow-auto">

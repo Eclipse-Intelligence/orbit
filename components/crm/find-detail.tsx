@@ -73,7 +73,7 @@ export default function FindDetailButton({
   const status = outcome?.status ?? lookup?.status ?? null;
   const missing = status === "not_found";
   const failed = status === "failed" || status === "skipped";
-  const title = outcome?.title ?? (missing ? `No ${noun} found last time. Search again` : `Find ${noun}`);
+  const title = outcome?.title ?? (missing ? `Search for ${noun} again` : `Find ${noun}`);
 
   async function run(event: React.MouseEvent) {
     event.preventDefault();
@@ -86,7 +86,7 @@ export default function FindDetailButton({
       setOutcome({ status: result.status, title: attemptsTitle(result) });
       if (result.email || result.linkedinUrl || result.phone) router.refresh();
     } catch (error) {
-      setOutcome({ status: "failed", title: error instanceof Error ? error.message : "That lookup failed." });
+      setOutcome({ status: "failed", title: error instanceof Error ? error.message : "That lookup failed. Try again." });
     } finally {
       setRunning(false);
     }

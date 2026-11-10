@@ -149,7 +149,7 @@ export function AttachButton({
         type="button"
         disabled={disabled}
         aria-label={compact ? "Attach files" : undefined}
-        title="Attach files"
+        title={compact ? "Attach files" : undefined}
         className={compact ? "size-8 p-0" : undefined}
         onClick={() => input.current?.click()}
       >

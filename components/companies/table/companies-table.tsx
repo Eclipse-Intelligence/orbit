@@ -35,7 +35,7 @@ import {
 import { bulkAddTagAction, bulkRemoveTagAction } from "@/app/(crm)/tags";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { SortHeader, useListParams } from "@/components/crm/list-controls";
-import { QUIET_DAYS, type Company, type CompanyListQuery, type CompanySort, type TagCount } from "@/lib/crm/types";
+import { type Company, type CompanyListQuery, type CompanySort, type TagCount } from "@/lib/crm/types";
 import { activeFilterCount } from "@/lib/companies";
 import { DEFAULT_COMPANY_SORT, defaultCompanyOrder, nextSort } from "@/lib/sorting";
 import { cn } from "@/lib/utils";
@@ -97,7 +97,6 @@ export default function CompaniesTable({
   const findDetails: BulkExtraAction = {
     key: "find-details",
     label: "Find details",
-    title: "Fill in logos, socials and details from context.dev",
     run: async (ids, progress) => {
       const results = await enrichCompaniesInBatches(ids, (done) => progress(`Looking up ${done}/${ids.length}`));
       return companyEnrichSummary(results);
@@ -190,10 +189,10 @@ export default function CompaniesTable({
                   className="caption-style text-muted-foreground col-span-full flex h-[120px] items-center justify-center"
                 >
                   {filters.quiet && activeFilterCount(filters) === 1
-                    ? `Every company has been in touch in the last ${QUIET_DAYS} days.`
+                    ? "No quiet companies"
                     : filtered
-                      ? "No companies match the current filters."
-                      : "No companies yet."}
+                      ? "No matches"
+                      : "No companies"}
                 </td>
               </TableRow>
             )}
@@ -213,7 +212,7 @@ export default function CompaniesTable({
         unarchive={unarchiveCompaniesAction}
         exportRows={exportSelectedCompaniesAction}
         exportName="companies"
-        emailLabel="Email people"
+        emailLabel="Email contacts"
         recipients={companyRecipientsAction}
         mailboxConnected={mailboxConnected}
         extraActions={enrichment.company ? [findDetails] : []}

@@ -181,7 +181,7 @@ export default function ActivityPad({
     if (busy || !hasText) return;
     if (dictation.listening) dictation.stop();
     if (!contact && !company) {
-      setError("Tag who it was with: type @ and pick a person or company.");
+      setError("Type @ to tag a contact or company.");
       return;
     }
     setBusy(true);
@@ -282,7 +282,7 @@ export default function ActivityPad({
                 onClick={() => applyStarter(starter)}
                 className="hover:bg-white/[0.06] flex w-full cursor-pointer items-center gap-2 rounded-xl bg-white/[0.03] px-3 py-2 text-left transition-colors duration-150"
               >
-                <span className="text-foreground min-w-0 flex-1 truncate text-[13px] leading-5">How did {starter.subject} go?</span>
+                <span className="text-foreground min-w-0 flex-1 truncate text-[13px] leading-5">Log {starter.subject}</span>
                 <span className="caption-style text-subtle shrink-0">
                   {timeLabel(starter.startsAt)}
                   {starter.contacts[0] ? ` · ${starter.contacts[0].name}` : starter.company ? ` · ${starter.company.name}` : ""}

@@ -66,11 +66,12 @@ export function RelationshipSource({
   const override = relationship?.override;
   if (!override) return null;
   const who = override.byUserId && override.byUserId === viewerId ? "you" : (override.byName ?? "hand");
-  const automatic = relationship.automatic ? ` Automatic: ${RELATIONSHIP_META[relationship.automatic.label].label}.` : "";
+  const automatic = relationship.automatic ? `. Automatic: ${RELATIONSHIP_META[relationship.automatic.label].label}` : "";
   return (
     <p className="caption-style text-subtle">
       Set by {who}
-      {override.at ? ` on ${formatDate(override.at)}` : ""}.{automatic}
+      {override.at ? `, ${formatDate(override.at)}` : ""}
+      {automatic}
     </p>
   );
 }
