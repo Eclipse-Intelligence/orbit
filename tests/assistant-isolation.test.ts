@@ -3,7 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { applyCompanionResult, crossBrandLine, crossBrandWorkspaces, decideActions, getConversation, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { needsWebApproval, readTargets, webCard, webGateState } from "@/lib/assistant/web-gate";
 import { createActivity } from "@/lib/crm/activities";
-import { briefingHasOutside, memoryBriefing } from "@/lib/learning/memories";
+import { memoryBriefing } from "@/lib/learning/memories";
 import { finishCompanionJob, nextCompanionJob, runCompanionTool } from "@/lib/companion/jobs";
 import { authenticateCompanion, createPairingCode, redeemPairing, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { createCompany } from "@/lib/crm/companies";
@@ -122,7 +122,7 @@ describe("web reads after outside content", () => {
     assert.deepEqual(readTargets("read_web_page", "https://evil.test/a"), []);
   });
 
-  it("counts the model's own web search and outside learned notes as outside content", async () => {
+  it("counts the model's own web search as outside content, but not learned notes", async () => {
     const searched = webGateState([{ role: "user", content: "Any news on Acme?" }, { role: "assistant", content: "Here's what I found.", sources: [{ url: "https://news.test/acme", title: "Acme" }] }]);
     assert.equal(searched.outside, true);
     assert.equal(needsWebApproval("read_web_page", { url: "https://news.test/acme?d=pipeline" }, searched), true);
@@ -132,8 +132,18 @@ describe("web reads after outside content", () => {
       [owner.workspaceId],
     );
     const briefing = await memoryBriefing(owner);
-    assert.equal(briefingHasOutside(briefing), true);
-    assert.equal(briefingHasOutside("# What Orbit has learned\nNotes from emails, calls, the web or market notes repeat outside content, so"), false);
+    assert.match(briefing, /Rival launched: .*from emails, outside content, /);
+    const fake = gateway([{ tool_calls: [{ id: "call_check", name: "check_web", args: { about: "Rival", questions: [{ key: "launched", type: "yes_no", question: "Did Rival launch a new plan?" }] } }] }, { content: "Done." }]);
+    const events: AssistantEvent[] = [];
+    await sendMessage(owner, { message: "Has Rival launched anything?", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), {
+      deadline: Date.now() + 60_000,
+      fetchImpl: fake.fetchImpl,
+    });
+    assert.match(String(fake.requests[0].messages[1].content), /Rival launched/);
+    const conversationId = (events.find((event) => event.type === "conversation") as { conversation: { id: string } }).conversation.id;
+    assert.ok(!(await getConversation(owner, conversationId)).messages.some((message) => message.actions.some((action) => action.id === "call_check")));
+    const ran = await admin.query("select 1 from crm.assistant_messages where conversation_id = $1 and role = 'tool' and tool_call_id = 'call_check'", [conversationId]);
+    assert.equal(ran.rowCount, 1);
     await admin.query("delete from crm.memories where workspace_id = $1", [owner.workspaceId]);
   });
 

@@ -40,7 +40,7 @@ import {
 import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
-import { briefingHasOutside, memoryBriefing } from "@/lib/learning/memories";
+import { memoryBriefing } from "@/lib/learning/memories";
 import { BRIEF_MESSAGE_MODEL, latestBrief } from "@/lib/learning/nightly";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
@@ -622,8 +622,8 @@ function cardFor(call: ToolCall, names: Map<string, string>, web: boolean, cross
   return warning ? { ...described, lines: [...described.lines, warning] } : described;
 }
 
-function webStateOf(rows: MessageRow[], learnedOutside: boolean) {
-  return webGateState(rows, { outside: learnedOutside });
+function webStateOf(rows: MessageRow[]) {
+  return webGateState(rows);
 }
 
 function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
@@ -755,7 +755,6 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
       sections: { eclipse, linear },
     }),
     learned,
-    learnedOutside: briefingHasOutside(learned),
     tools: { multiWorkspace: shown.length > 1, eclipse, linear } satisfies ToolOptions,
   };
 }
@@ -944,7 +943,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const chosen = assistantModel(conversation.model);
   if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, fetchImpl);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, learnedOutside, tools: toolOptions } = await promptFor(actor, conversation, { fetchImpl });
+  const { system, learned, tools: toolOptions } = await promptFor(actor, conversation, { fetchImpl });
   const tools = toolDefinitions(toolOptions);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
@@ -991,7 +990,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       return;
     }
     emit({ type: "message", message: display(saved) });
-    const webState = webStateOf([...rows, saved], learnedOutside);
+    const webState = webStateOf([...rows, saved]);
     const gated = new Set(
       result.toolCalls
         .filter((call) => {

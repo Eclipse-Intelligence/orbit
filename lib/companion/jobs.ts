@@ -1,7 +1,6 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
 import { needsWebApproval, OUTSIDE_TOOLS, readTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
-import { briefingHasOutside } from "@/lib/learning/memories";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -311,8 +310,8 @@ async function continueResult(auth: AuthenticatedCompanion, jobId: string, raw: 
 
 async function companionWebState(auth: AuthenticatedCompanion, jobId: string, conversationId: string) {
   return withActor(auth.actor, async (db) => {
-    const job = await db.query<{ outside_read: boolean; seen_urls: string[]; web_search: boolean; prompt: string | null }>(
-      "select outside_read, seen_urls, coalesce((request->>'webSearch')::boolean, false) as web_search, request->>'prompt' as prompt from crm.ai_companion_jobs where id = $1",
+    const job = await db.query<{ outside_read: boolean; seen_urls: string[]; web_search: boolean }>(
+      "select outside_read, seen_urls, coalesce((request->>'webSearch')::boolean, false) as web_search from crm.ai_companion_jobs where id = $1",
       [jobId],
     );
     const rows = await db.query<{ role: string; content: string; tool_name: string | null; sources: unknown[] | null }>(
@@ -320,7 +319,7 @@ async function companionWebState(auth: AuthenticatedCompanion, jobId: string, co
       [conversationId],
     );
     const row = job.rows[0];
-    const outside = Boolean(row?.outside_read || row?.web_search || briefingHasOutside(row?.prompt ?? ""));
+    const outside = Boolean(row?.outside_read || row?.web_search);
     return webGateState(rows.rows, { outside, seen: row?.seen_urls });
   });
 }

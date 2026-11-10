@@ -16,11 +16,6 @@ export function lessTrusted(...origins: (NoteOrigin | null | undefined)[]): Note
   return origins.filter((origin): origin is NoteOrigin => Boolean(origin) && NOTE_ORIGINS.includes(origin!)).reduce<NoteOrigin>((least, origin) => (rank(origin) > rank(least) ? origin : least), "manual");
 }
 
-const OUTSIDE_NOTE = /\[[^\]\n]*, outside content, [^\]\n]*\]/;
-
-export function briefingHasOutside(text: string) {
-  return OUTSIDE_NOTE.test(text);
-}
 
 const STOP_WORDS = new Set(
   "about above after again against also among another anything around because been before being below between both cannot could does doing down during each either else even every from further have having here hers herself himself into itself just last made make many more most much must myself need never next only other ours ourselves over same shall should since some still such than that their theirs them themselves then there these they this those through today tomorrow under until upon very want were what when where which while whom whose will with within without would your yours yourself yourselves yesterday really thanks thank please hello regards best mark email emails call calls note notes said says week weeks month months year years time times".split(" "),
