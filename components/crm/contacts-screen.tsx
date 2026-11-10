@@ -117,12 +117,11 @@ export default function ContactsScreen({
     .map((field) => ({
       key: `find-${field}`,
       label: field === "email" ? "Find emails" : field === "linkedin" ? "Find LinkedIn" : "Find phones",
-      title: field === "email" ? "Find missing work emails" : field === "linkedin" ? "Find missing LinkedIn profiles" : "Find missing phone numbers",
       ...(field === "phone"
         ? {
             confirm: (ids: string[]) => ({
-              title: `Find phone numbers for ${ids.length} ${ids.length === 1 ? "person" : "people"}?`,
-              description: `Enrow charges 40 credits for each number it finds, roughly $0.35 to $0.68 each, so up to ${ids.length * 40} credits. Nothing is charged when no number is found, and people who already have a phone are skipped.`,
+              title: `Find phone numbers for ${ids.length} ${ids.length === 1 ? "contact" : "contacts"}?`,
+              description: `Enrow charges 40 credits per number found (about $0.35 to $0.68), so up to ${ids.length * 40} credits. Nothing is charged when no number is found, and contacts who already have a phone are skipped.`,
               action: "Find phones",
             }),
           }
@@ -199,7 +198,7 @@ export default function ContactsScreen({
         <SelectToggle selection={selection} />
       </div>
       <p className="caption-style text-subtle px-4 pb-2">
-        {total} {total === 1 ? "person" : "people"}
+        {total} {total === 1 ? "contact" : "contacts"}
       </p>
       <KeyboardList sequence className="flex min-h-0 flex-1 flex-col">
       <RecordList
@@ -209,8 +208,8 @@ export default function ContactsScreen({
           page > 1
             ? "No contacts on this page."
             : tag || query || filtering
-              ? "No contacts match the current filters."
-              : "No contacts yet. Add the person you need to speak with."
+              ? "No matches"
+              : "No contacts"
         }
       >
         <li
@@ -283,7 +282,7 @@ export default function ContactsScreen({
         page={page}
         count={contacts.length}
         total={total}
-        noun={["person", "people"]}
+        noun={["contact", "contacts"]}
       />
     </section>
   );
@@ -359,9 +358,7 @@ function ContactRow({
           >
             {contact.name}
           </Link>
-          <span className="caption-style text-subtle truncate">
-            {contact.jobTitle || "No title"}
-          </span>
+          {contact.jobTitle && <span className="caption-style text-subtle truncate">{contact.jobTitle}</span>}
           <RowTags tags={contact.tags} className="mt-0.5" />
         </span>
       </span>

@@ -221,9 +221,9 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
   });
   switch (action) {
     case "create":
-      return result(`New doc: ${str(args.title) || "Untitled"}`, [
+      return result(`New note: ${str(args.title) || "Untitled"}`, [
         folder ? `In ${folder}.` : "No folder.",
-        args.shared === true || folderShared ? "Shared with the workspace. Teammates and agents will see it." : "Private to you.",
+        args.shared === true || folderShared ? "Shared with the workspace and its agents." : "Private to you.",
         changeLine,
       ]);
     case "replace":
@@ -244,7 +244,7 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
       return result(`Rename ${doc}`, [
         `New title: ${str(args.title)}`,
         where ?? "",
-        links ? `Links to it in ${counted(links, "doc", "docs")} will be updated to the new title.` : "",
+        links ? `Updates links in ${counted(links, "note", "notes")}.` : "",
       ]);
     }
     case "move":
@@ -258,14 +258,14 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     case "unshare":
       return result(`Make ${doc} private`, ["Teammates and agents will no longer see it, unless its folder is shared."]);
     case "archive":
-      return result(`Archive ${doc}`, [where ?? "", "It can be restored from Docs."]);
+      return result(`Archive ${doc}`, [where ?? ""]);
     case "append_daily":
       return result(str(args.date) ? `Add to your daily note for ${str(args.date)}` : "Add to today's daily note", [
-        "Daily notes are always private to you.",
+        "Private to you.",
         args.meetings === true ? "With the day's meetings." : "",
       ]);
     default:
-      return result("Save a doc", []);
+      return result("Save a note", []);
   }
 }
 
@@ -298,15 +298,13 @@ export async function editsWithoutApproval(actor: UserActor, name: string, args:
   return assistantMayEdit(actor, docId);
 }
 
-export const CHANGED_SINCE_APPROVAL = "This doc changed after you saw this change, so it wasn't applied. Read the doc again and propose the change again.";
+export const CHANGED_SINCE_APPROVAL = "The note changed since this was proposed, so it wasn't applied. Read the note again and propose the change again.";
 
-export const EDIT_MOVED_SINCE_APPROVAL =
-  "Someone changed the text this edit was going to change after you saw it, so it wasn't applied. Read the doc again and propose the change again.";
+export const CHANGED_SINCE_APPROVAL_CARD = "The note changed since this was proposed, so it wasn't applied. Ask again.";
 
-export const REWRITE_CLASHED_SINCE_APPROVAL =
-  "Someone changed the same part of the doc after you saw this rewrite, so it wasn't applied. Read the doc again and propose the change again.";
-
-const APPROVAL_REFUSALS = [CHANGED_SINCE_APPROVAL, EDIT_MOVED_SINCE_APPROVAL, REWRITE_CLASHED_SINCE_APPROVAL];
+export function docRefusalForCard(message: string) {
+  return message === CHANGED_SINCE_APPROVAL ? CHANGED_SINCE_APPROVAL_CARD : message;
+}
 
 function refuse(message: string) {
   return new CrmError("conflict", message, 409);
@@ -340,14 +338,14 @@ export function mergeRewrite(base: string, proposed: string, current: string) {
 
 function approvedEdit(edit: Extract<DocEdit, { action: "edit" }>, approval: DocApproval) {
   return (current: string) => {
-    if (approval.matches !== undefined && countOf(current, edit.find) !== approval.matches) throw refuse(EDIT_MOVED_SINCE_APPROVAL);
+    if (approval.matches !== undefined && countOf(current, edit.find) !== approval.matches) throw refuse(CHANGED_SINCE_APPROVAL);
     let after: string;
     try {
       after = applyDocEdit(current, edit);
     } catch {
-      throw refuse(EDIT_MOVED_SINCE_APPROVAL);
+      throw refuse(CHANGED_SINCE_APPROVAL);
     }
-    if (approval.diff && cardDiff(current, after) !== JSON.stringify(approval.diff)) throw refuse(EDIT_MOVED_SINCE_APPROVAL);
+    if (approval.diff && cardDiff(current, after) !== JSON.stringify(approval.diff)) throw refuse(CHANGED_SINCE_APPROVAL);
     return after;
   };
 }
@@ -358,7 +356,7 @@ function approvedRewrite(proposed: string, approval: DocApproval & { base: strin
     const base = approval.undo ? applyEdits(proposed, approval.undo) : null;
     if (base === null || fingerprint(base) !== approval.base) throw refuse(CHANGED_SINCE_APPROVAL);
     const merged = mergeRewrite(base, proposed, current);
-    if (merged === null) throw refuse(REWRITE_CLASHED_SINCE_APPROVAL);
+    if (merged === null) throw refuse(CHANGED_SINCE_APPROVAL);
     return merged;
   };
 }
@@ -391,7 +389,7 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
       });
       return { saved: true, doc: summaryOf(doc), changed };
     } catch (error) {
-      if (error instanceof CrmError && error.code === "conflict" && !APPROVAL_REFUSALS.includes(error.message)) throw refuse(CHANGED_SINCE_APPROVAL);
+      if (error instanceof CrmError && error.code === "conflict") throw refuse(CHANGED_SINCE_APPROVAL);
       throw error;
     }
   }

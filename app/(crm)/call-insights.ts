@@ -45,7 +45,7 @@ export async function summariseCallAction(
     const insight = await summariseCall(user, activityId, transcript, { source: "manual" });
     refresh();
     if (insight.status === "failed") {
-      return { error: insight.error ?? "Could not summarise the call.", insight };
+      return { error: insight.error ?? "Couldn't summarise the call. Try again.", insight };
     }
     return { ok: true, insight };
   } catch (error) {

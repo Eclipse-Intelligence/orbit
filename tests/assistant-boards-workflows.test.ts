@@ -188,7 +188,7 @@ describe("assistant board and workflow tools", () => {
     const forColleague = (await runTool(colleague, "list_workflows", {})) as { sharedTemplates: { id: string; sharedBy: string }[] };
     assert.equal(forColleague.sharedTemplates[0].id, workflowId);
     const denied = (await runTool(colleague, "update_workflow", { workflowId, name: "Mine now" })) as { error: string };
-    assert.match(denied.error, /Only the person who built this workflow/);
+    assert.match(denied.error, /Only its owner can change this/);
     const copy = (await runTool(colleague, "create_workflow", { template: workflowId })) as WorkflowResult;
     assert.equal(copy.workflow.name, "Company check");
 

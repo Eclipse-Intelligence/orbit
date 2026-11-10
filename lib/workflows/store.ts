@@ -230,7 +230,7 @@ export async function createWorkflow(
 async function requireOwn(actor: UserActor, id: string) {
   const workflow = await readWorkflow(actor, id);
   if (!workflow) throw new CrmError("not_found", "Workflow not found.", 404);
-  if (!workflow.mine) throw new CrmError("forbidden", "Only the person who built this workflow can change it. Use it as a template to make your own copy.", 403);
+  if (!workflow.mine) throw new CrmError("forbidden", "Only its owner can change this. Use it as a template instead.", 403);
   return workflow;
 }
 
@@ -258,7 +258,7 @@ export async function setWorkflowStatus(actor: UserActor, id: string, status: Wo
   const current = await requireOwn(actor, id);
   if (status === "active") {
     validate(current.definition);
-    if (!nextNode(current.definition, TRIGGER_NODE, "out")) throw new CrmError("invalid_input", "Connect the trigger to a node before turning it on.", 400);
+    if (!nextNode(current.definition, TRIGGER_NODE, "out")) throw new CrmError("invalid_input", "Connect the trigger to a step before turning it on.", 400);
   }
   await withActor(actor, (db) =>
     db.query("update crm.workflows set status = $2, next_run_at = $3 where id = $1", [id, status, nextRunFor(current.definition, status)]),

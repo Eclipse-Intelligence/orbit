@@ -4,8 +4,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
-import { Input } from "@/components/_ui/input";
-import { addActivityAction, archiveActivityAction, type RecordActionState } from "@/app/(crm)/records";
+import { archiveActivityAction } from "@/app/(crm)/records";
 import { EditActivityButton } from "@/components/crm/activity-editor";
 import CallInsightPanel from "@/components/crm/call-insight";
 import DetailSection from "@/components/companies/detail/detail-section";
@@ -38,21 +37,8 @@ import CallIcon from "@/public/assets/images/crm/activity/call.svg";
 import EmailIcon from "@/public/assets/images/crm/activity/email.svg";
 import MeetingIcon from "@/public/assets/images/crm/activity/meeting.svg";
 import NoteIcon from "@/public/assets/images/crm/activity/note.svg";
-import { textareaClass } from "@/components/_ui/field-styles";
 
-const KINDS = [
-  { id: "note", label: "Note" },
-  { id: "call", label: "Call" },
-  { id: "email", label: "Email" },
-] as const;
-
-type ActivityKind = (typeof KINDS)[number]["id"];
-
-type SaveActivity = (
-  kind: "note" | "call",
-  title: string,
-  body: string,
-) => Promise<RecordActionState & { activity?: Activity }>;
+type ActivityKind = "note" | "call" | "email";
 
 const FILTERS: { id: TimelineFilter; label: string }[] = [
   { id: "all", label: "All" },
@@ -128,20 +114,9 @@ export function QuietTabs<T extends string>({
   );
 }
 
-export function useActivityDraft(save: SaveActivity) {
-  const router = useRouter();
-  const saving = useRef(false);
-  const [kind, setKindState] = useState<ActivityKind>("note");
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+export function useActivityDraft() {
+  const [kind, setKind] = useState<ActivityKind>("note");
   const [added, setAdded] = useState<Activity[]>([]);
-
-  function setKind(next: ActivityKind) {
-    setKindState(next);
-    setError(null);
-  }
 
   function withAdded(activities: Activity[]) {
     return [
@@ -152,30 +127,6 @@ export function useActivityDraft(save: SaveActivity) {
     ];
   }
 
-  async function add(nextKind: "note" | "call") {
-    if (saving.current || pending) return;
-    saving.current = true;
-    setPending(true);
-    setError(null);
-    try {
-      const result = await save(nextKind, title, body);
-      if (result.error) {
-        setError(result.error);
-        return;
-      }
-      if (result.activity) {
-        const activity = result.activity;
-        setAdded((current) => [activity, ...current]);
-      }
-      setTitle("");
-      setBody("");
-      router.refresh();
-    } finally {
-      saving.current = false;
-      setPending(false);
-    }
-  }
-
   function push(activity: Activity) {
     setAdded((current) => [activity, ...current]);
   }
@@ -184,13 +135,6 @@ export function useActivityDraft(save: SaveActivity) {
     kind,
     setKind,
     push,
-    title,
-    setTitle,
-    body,
-    setBody,
-    error,
-    pending,
-    add,
     withAdded,
   };
 }
@@ -198,19 +142,17 @@ export function useActivityDraft(save: SaveActivity) {
 type ActivityDraft = ReturnType<typeof useActivityDraft>;
 
 export function ActivityComposer({
-  idPrefix,
   draft,
   about,
   email,
   pad,
 }: {
-  idPrefix: string;
   draft: ActivityDraft;
   about?: ReactNode;
   email: ReactNode;
-  pad?: ReactNode;
+  pad: ReactNode;
 }) {
-  const { kind, title, body, pending } = draft;
+  const { kind } = draft;
   const root = useRef<HTMLDivElement>(null);
 
   function compose(next: ActivityKind) {
@@ -232,101 +174,16 @@ export function ActivityComposer({
       data-shortcut-scope=""
       className="border-line-strong bg-card flex flex-col gap-2.5 rounded-xl border p-2.5"
     >
-      {pad ? (
-        <QuietTabs
-          label="Activity type"
-          items={[
-            { id: "note", label: "Log activity" },
-            { id: "email", label: "Send email" },
-          ]}
-          value={kind === "email" ? "email" : "note"}
-          onChange={compose}
-        />
-      ) : (
-        <QuietTabs
-          label="Activity type"
-          items={KINDS.map((item) => ({ id: item.id, label: item.label }))}
-          value={kind}
-          onChange={draft.setKind}
-        />
-      )}
-      {pad && kind !== "email" ? pad : null}
-      {(!pad || kind === "email") && about}
-      {draft.error && (
-        <p role="alert" className="caption-style text-danger">
-          {draft.error}
-        </p>
-      )}
-      {!pad && kind === "note" && (
-        <div className="flex flex-col gap-2">
-          <label className="sr-only" htmlFor={`activity-note-${idPrefix}`}>
-            Note
-          </label>
-          <textarea
-            id={`activity-note-${idPrefix}`}
-            data-compose-focus=""
-            value={body}
-            onChange={(event) => draft.setBody(event.target.value)}
-            placeholder="Write a note"
-            maxLength={10000}
-            className={cn(textareaClass, "min-h-20")}
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            className="self-start"
-            disabled={pending || body.trim() === ""}
-            data-shortcut-submit=""
-            title="Add note (⌘ Enter)"
-            onClick={() => draft.add("note")}
-          >
-            {pending ? "Saving…" : "Add note"}
-          </Button>
-        </div>
-      )}
-      {!pad && kind === "call" && (
-        <div className="flex flex-col gap-2">
-          <label className="sr-only" htmlFor={`activity-call-${idPrefix}`}>
-            Call summary
-          </label>
-          <Input
-            id={`activity-call-${idPrefix}`}
-            data-compose-focus=""
-            value={title}
-            autoComplete="off"
-            onChange={(event) => draft.setTitle(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.preventDefault();
-            }}
-            placeholder="What was the call about?"
-            maxLength={200}
-          />
-          <label className="sr-only" htmlFor={`activity-call-body-${idPrefix}`}>
-            Call details
-          </label>
-          <textarea
-            id={`activity-call-body-${idPrefix}`}
-            value={body}
-            onChange={(event) => draft.setBody(event.target.value)}
-            placeholder="Details"
-            maxLength={10000}
-            className={cn(textareaClass, "min-h-20")}
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            className="self-start"
-            disabled={pending || (title.trim() === "" && body.trim() === "")}
-            data-shortcut-submit=""
-            title="Add call (⌘ Enter)"
-            onClick={() => draft.add("call")}
-          >
-            {pending ? "Saving…" : "Add call"}
-          </Button>
-        </div>
-      )}
+      <QuietTabs
+        label="Activity type"
+        items={[
+          { id: "note", label: "Log activity" },
+          { id: "email", label: "Send email" },
+        ]}
+        value={kind === "email" ? "email" : "note"}
+        onChange={compose}
+      />
+      {kind === "email" ? about : pad}
       {kind === "email" && email}
     </div>
   );
@@ -449,14 +306,11 @@ export default function ContactActivities({
   insights?: Record<string, CallInsight>;
   className?: string;
 }) {
-  const draft = useActivityDraft((kind, title, body) =>
-    addActivityAction({ contactId }, kind, title, body),
-  );
+  const draft = useActivityDraft();
 
   return (
     <DetailSection title="Activity" className={cn("shadow-none", className)}>
       <ActivityComposer
-        idPrefix={contactId}
         draft={draft}
         pad={<ActivityPad fixedContact={{ id: contactId, name: recipient.name || "This contact" }} onAdded={draft.push} />}
         email={
@@ -473,7 +327,7 @@ export default function ContactActivities({
         insights={insights}
         viewerId={viewerId}
         viewerRole={viewerRole}
-        empty="No activity yet."
+        empty="No activity"
       />
     </DetailSection>
   );
@@ -659,7 +513,7 @@ function ActivityRow({
         )}
         {details.attendees && (
           <div className="flex flex-col gap-1">
-            <span className="caption-style text-subtle">Attendees</span>
+            <span className="caption-style text-subtle">Guests</span>
             <p className="text-[14px] leading-5">{details.attendees}</p>
           </div>
         )}
@@ -685,7 +539,7 @@ function ActivityRow({
           <CallInsightPanel activityId={activity.id} insight={insight} />
         )}
         {emptyPanel && (
-          <p className="caption-style text-subtle">No details recorded.</p>
+          <p className="caption-style text-subtle">No details</p>
         )}
         {editable && open && (
           <div className="flex flex-wrap items-start gap-2">

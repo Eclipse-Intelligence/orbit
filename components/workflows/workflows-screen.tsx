@@ -22,7 +22,7 @@ export const RUN_LABELS: Record<string, string> = {
   queued: "Queued",
   running: "Running",
   waiting: "Waiting",
-  succeeded: "Succeeded",
+  succeeded: "Done",
   failed: "Failed",
   cancelled: "Stopped",
 };
@@ -95,9 +95,7 @@ export default function WorkflowsScreen({
           <section aria-labelledby="mine-heading" className="flex flex-col gap-3">
             <h2 id="mine-heading">Your workflows</h2>
             {mine.length === 0 ? (
-              <p className="caption-style text-subtle">
-                Nothing yet. Start from a template below, or build your own with New workflow.
-              </p>
+              <p className="caption-style text-subtle">No workflows</p>
             ) : (
               <ul className="border-border flex flex-col rounded-xl border">
                 {mine.map((item) => (
@@ -120,12 +118,7 @@ export default function WorkflowsScreen({
           </section>
 
           <section aria-labelledby="templates-heading" className="flex flex-col gap-3">
-            <div className="flex flex-col gap-1">
-              <h2 id="templates-heading">Templates</h2>
-              <p className="caption-style text-subtle">
-                Using a template makes your own copy. Share any of your workflows as a template from its page.
-              </p>
-            </div>
+            <h2 id="templates-heading">Templates</h2>
             <ul className="grid gap-3 sm:grid-cols-2">
               {starters.map((item) => (
                 <li key={item.key} className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-4">

@@ -72,14 +72,6 @@ export default function ActivityLog({
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
   }
 
-  const name = everyone
-    ? null
-    : person === viewerId
-      ? "You"
-      : (members.find((member) => member.id === person)?.name ??
-        agents.find((agent) => `${AGENT_PREFIX}${agent.id}` === person)?.name ??
-        "This person");
-
   return (
     <div className="flex flex-col gap-5">
       <ActivityPad suggestions shortcut="add-record" autoFocus={adding} />
@@ -144,7 +136,7 @@ export default function ActivityLog({
       <KeyboardList className="flex flex-col">
         {activities.length === 0 ? (
           <p className="caption-style text-subtle py-8">
-            {filtered ? "No activities match these filters." : name === "You" ? "You haven't logged anything yet." : everyone ? "Nothing logged yet." : `${name} hasn't logged anything yet.`}
+            {filtered ? "No matches" : "No activities"}
           </p>
         ) : (
           <ul className="border-border flex flex-col border-t">

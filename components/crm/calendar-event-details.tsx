@@ -34,7 +34,7 @@ export type CalendarMeta = {
 
 const RESPONSES: Record<string, string> = {
   accepted: "Accepted",
-  tentativelyAccepted: "Tentative",
+  tentativelyAccepted: "Maybe",
   declined: "Declined",
   organizer: "Organiser",
 };
@@ -121,7 +121,7 @@ function PersonRow({
     const result = await createContactFromEventAction(eventId, person.email);
     setPending(false);
     if (result.error || !result.contactId) {
-      setError(result.error ?? "Could not add this person.");
+      setError(result.error ?? "Couldn't add the contact. Try again.");
       return;
     }
     onCreated(person.email, result.contactId);
@@ -152,7 +152,7 @@ function PersonRow({
         </span>
         {!contactId && !person.internal && (
           <Button variant="ghost" size="sm" disabled={pending} onClick={create}>
-            {pending ? "Creating…" : "Create contact"}
+            {pending ? "Adding…" : "Add contact"}
           </Button>
         )}
       </span>
@@ -315,7 +315,6 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
   }
   return (
     <div className="border-line-strong flex basis-full flex-col gap-3 rounded-lg border p-3">
-      <p className="text-[14px] leading-5">{item.personal ? "Move this event" : "Move this meeting"}</p>
       <div className="grid grid-cols-[1fr_7em] gap-2">
         <Field label="Date" htmlFor={`${ids}-date`}>
           <DatePicker id={`${ids}-date`} value={date} onChange={setDate} />
@@ -335,7 +334,7 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
           </Select>
         </Field>
       </div>
-      <p className="caption-style text-subtle -mt-1">{zoneLabel()} time. Keeps the same length.</p>
+      <p className="caption-style text-subtle -mt-1">{zoneLabel()} time.</p>
       {!item.personal && (
         <>
           <label className="caption-style text-subtle" htmlFor={`${ids}-message`}>
@@ -416,7 +415,7 @@ function RespondToMeeting({ item }: { item: CalendarItem }) {
     setAnswered(result.responseStatus ?? answer.status);
     const message =
       result.warning ??
-      `${answer.done} ${eventTitle(item)}. ${tell ? `Outlook let ${organiser} know.` : "The organiser wasn't told."}`;
+      `${answer.done} ${eventTitle(item)}. ${tell ? `${item.organizer?.name ?? item.organizer?.email ?? "Organiser"} was told.` : "Organiser not told."}`;
     setDone(message);
     setNote("");
     setNoteOpen(false);
@@ -447,14 +446,14 @@ function RespondToMeeting({ item }: { item: CalendarItem }) {
         })}
         {!noteOpen && tell && (
           <Button variant="ghost" size="sm" disabled={pending !== null} onClick={() => setNoteOpen(true)}>
-            Add note
+            Add message
           </Button>
         )}
       </div>
       {noteOpen && tell && (
         <div className="flex flex-col gap-1.5">
           <label className="caption-style text-subtle" htmlFor={`${ids}-note`}>
-            Note to {organiser} (optional)
+            Message to {organiser} (optional)
           </label>
           <textarea
             id={`${ids}-note`}
@@ -579,7 +578,7 @@ export default function CalendarEventDetails({
           ))}
           {item.granolaHref && (
             <Button variant="ghost" size="sm" href={item.granolaHref}>
-              Notes in Granola
+              Notes
             </Button>
           )}
         </div>
@@ -608,7 +607,7 @@ export default function CalendarEventDetails({
         <div className="flex flex-col gap-2">
           <span className="caption-style text-subtle">
             {attendees.length}{" "}
-            {attendees.length === 1 ? "attendee" : "attendees"}
+            {attendees.length === 1 ? "guest" : "guests"}
           </span>
           <ul className="flex flex-col gap-2.5">
             {shown.map((person) => (

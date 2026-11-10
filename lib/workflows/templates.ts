@@ -21,7 +21,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   {
     key: "at-risk-follow-up",
     name: "Follow up when a client turns at risk",
-    description: "When a call leaves a client at risk, tell the account owner why and give them a task to check in tomorrow.",
+    description: "Notifies the owner and creates a check-in task when a call puts a client at risk.",
     definition: graph(
       { type: "field_changed", object: "company", field: "health", to: "at_risk" },
       [
@@ -54,7 +54,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   {
     key: "requests-to-linear",
     name: "Product requests to Linear",
-    description: "When a call summary is ready, AI picks out product requests and, once you approve, creates a Linear issue for each.",
+    description: "Turns product requests from calls into Linear issues, after you approve.",
     definition: graph(
       { type: "call_summary_ready" },
       [
@@ -100,8 +100,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   {
     key: "job-changes",
     name: "Spot job changes",
-    description:
-      "Each month, check the contacts you've been quietest with on the web. When someone has moved, and you approve, note it, move them to their new company and give you two leads: them at the new place, and whoever replaced them.",
+    description: "Monthly web check on your quietest contacts. If someone has moved, updates them after you approve.",
     definition: graph(
       { type: "schedule", frequency: "monthly", dayOfMonth: 1, time: "08:00" },
       [
@@ -125,8 +124,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   {
     key: "bounce-check",
     name: "Check if someone moved when an email bounces",
-    description:
-      "When an email to a contact bounces, look them up on the web. If they've moved, and you approve, note it, move them to their new company and create the two follow-up tasks.",
+    description: "Looks up a contact when their email bounces. If they've moved, updates them after you approve.",
     definition: graph(
       { type: "email_received", kind: "bounce" },
       moveCheckNodes("Bounce from {{contact.name}}"),

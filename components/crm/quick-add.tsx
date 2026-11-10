@@ -254,7 +254,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
               type="button"
               aria-label="Quick add"
               aria-keyshortcuts="q"
-              title="Quick add (Q). Or press C then T, C, O, P or M"
+              title="Quick add (Q)"
               className="bg-primary text-primary-foreground focus-visible:ring-ring/60 ease-power3-out pointer-events-auto flex size-12 cursor-pointer items-center justify-center rounded-full shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] transition-[background-color,transform] duration-150 outline-none hover:bg-[#4b30ff] focus-visible:ring-2 active:scale-95 data-[state=open]:rotate-45"
             >
               <PlusIcon aria-hidden className="size-5" />

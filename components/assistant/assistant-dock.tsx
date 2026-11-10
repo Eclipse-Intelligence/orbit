@@ -127,7 +127,7 @@ const ACTION_STATUS: Record<AssistantAction["status"], string> = {
   pending: "Waiting for you",
   running: "Working…",
   done: "Done",
-  failed: "Didn't work",
+  failed: "Failed",
   declined: "Cancelled",
 };
 
@@ -150,7 +150,7 @@ function groupStatus(actions: AssistantAction[]) {
   const count = (status: AssistantAction["status"]) => actions.filter((action) => action.status === status).length;
   const parts = [
     count("done") && `${count("done")} done`,
-    count("failed") && `${count("failed")} didn't work`,
+    count("failed") && `${count("failed")} failed`,
     count("declined") && `${count("declined")} cancelled`,
   ].filter(Boolean);
   const tone = count("failed") ? statusTone("failed") : count("done") ? statusTone("done") : statusTone("declined");
@@ -245,7 +245,7 @@ function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy:
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: false }])}>
             Cancel
           </Button>
-          {action.diff && <span className="caption-style text-subtle ml-auto">Saved as a version, so you can undo it</span>}
+          {action.diff && <span className="caption-style text-subtle ml-auto">You can undo this from versions</span>}
         </div>
       )}
       {action.status === "done" && action.docId && (
@@ -263,7 +263,7 @@ const MARK_CLASS = "caption-style rounded-md bg-white/[0.06] px-1.5 py-0.5 text-
 
 function UnattendedMark() {
   return (
-    <span title="This doc lets the assistant edit it without asking" className={MARK_CLASS}>
+    <span className={MARK_CLASS}>
       Edited without asking
     </span>
   );
@@ -351,7 +351,7 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
                       onChange={() => toggleSend(action.id)}
                       className="accent-primary size-3.5"
                     />
-                    Send it instead of saving a draft
+                    Send now instead
                   </label>
                 )}
               </div>
@@ -371,7 +371,7 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
       {pending.length > 0 && (
         <div className="flex items-center gap-2">
           <Button variant="primary" size="sm" disabled={busy || chosen.length === 0} onClick={() => decideAll(true)}>
-            {chosen.length === pending.length ? "Confirm all" : `Confirm ${chosen.length} and cancel ${pending.length - chosen.length}`}
+            {chosen.length === pending.length ? "Confirm all" : `Confirm ${chosen.length}, cancel ${pending.length - chosen.length}`}
           </Button>
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => decideAll(false)}>
             Cancel all
@@ -422,7 +422,7 @@ function ToolTrail({ tools }: { tools: DisplayMessage["tools"] }) {
         onClick={() => setOpen((value) => !value)}
         className="caption-style -ml-1.5 gap-1 rounded-md px-1.5 py-1"
       >
-        {open ? "Hide tool use" : "Show tool use"} · {tools.length}
+        Tool use · {tools.length}
         <ChevronDownIcon aria-hidden className={cn("size-3 transition-transform duration-150 ease-power3-out", open && "rotate-180")} />
       </Button>
       {open && (
@@ -1239,7 +1239,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
           {pendingBrief && (
             <Button variant="secondary" size="sm" className="mr-1 shrink-0 gap-1.5" disabled={busy} onClick={() => void showBrief(pendingBrief)}>
               <span aria-hidden className="bg-primary size-1.5 rounded-full" />
-              Read your brief
+              Brief
             </Button>
           )}
           <Popover open={historyOpen} onOpenChange={(next) => void openHistory(next)}>
@@ -1252,7 +1252,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               {history === null ? (
                 <p className="caption-style text-subtle px-2.5 py-3">Loading…</p>
               ) : history.length === 0 ? (
-                <p className="caption-style text-subtle px-2.5 py-3">No saved chats yet.</p>
+                <p className="caption-style text-subtle px-2.5 py-3">No chats</p>
               ) : (
                 <ul className="flex max-h-80 flex-col overflow-y-auto">
                   {history.map((item) => (
@@ -1350,11 +1350,6 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                   </li>
                 ))}
               </ul>
-              <p className="caption-style text-subtle">
-                {where
-                  ? `Works with ${where}'s records, brand profile and Knowledge. Your mail and calendar are all here. Changes need your approval.`
-                  : "Changes need your approval."}
-              </p>
             </div>
           )}
           {error && (
@@ -1393,7 +1388,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                 setMentions(nextMentions);
               }}
               onSubmit={() => send(draft)}
-              placeholder={where ? `${askLabel}… Type @ to tag` : webSearch ? "Ask about Orbit or the web… Type @ to tag" : "Ask about Orbit… Type @ to tag"}
+              placeholder="Ask Orbit… @ to tag"
             />
             <div className="flex items-center gap-1.5">
               <Select

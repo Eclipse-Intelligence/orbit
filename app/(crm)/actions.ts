@@ -177,7 +177,7 @@ export async function setRelationshipAction(
   const user = await requireUser();
   try {
     if (!isRelationshipTarget(target)) {
-      throw new CrmError("invalid_input", "Choose a company or a person to set the relationship on.", 400, { field: "target" });
+      throw new CrmError("invalid_input", "Choose a company or contact.", 400, { field: "target" });
     }
     await setRelationshipOverride(user, target, id, { label }, { operation: "set_relationship", source: "web" });
     revalidatePath("/");
@@ -252,10 +252,10 @@ export async function changePasswordAction(password: string, confirm: string): P
   await requireUser();
   if (!supabaseConfigured()) return { error: "Passwords are managed outside Orbit on this server." };
   if (password.length < 8) return { error: "Use at least 8 characters." };
-  if (password !== confirm) return { error: "The two passwords don't match." };
+  if (password !== confirm) return { error: "Passwords don't match." };
   const supabase = await createSupabaseServer();
   const { error } = await supabase.auth.updateUser({ password });
-  if (error) return { error: error.message.includes("different") ? "Choose a password you haven't used here before." : "Your password couldn't be changed. Sign in again and retry." };
+  if (error) return { error: error.message.includes("different") ? "Choose a password you haven't used here before." : "Password not changed. Sign in again and retry." };
   return {};
 }
 

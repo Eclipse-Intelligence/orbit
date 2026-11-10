@@ -64,11 +64,11 @@ describe("assistant drafts", () => {
   it("offers a draft tool that needs approval and tells the assistant mail lives in Orbit", () => {
     const tool = toolDefinitions().find((item) => item.function.name === "save_email_draft");
     assert.ok(tool);
-    assert.match(describeAction("save_email_draft", { subject: "Pulse in ChatGPT", to: ["andrew@pulse.test"], body: "Hi Andrew" }).lines.join("\n"), /Saved to Drafts\./);
+    assert.match(describeAction("save_email_draft", { subject: "Pulse in ChatGPT", to: ["andrew@pulse.test"], body: "Hi Andrew" }).lines.join("\n"), /To: andrew@pulse\.test/);
     const prompt = systemPrompt(owner);
     assert.match(prompt, /call send_email with the finished email/);
     assert.match(prompt, /never say you can't send/);
-    assert.match(describeAction("send_email", { replyToEmailId: "x", body: "Hi Andrew" }).lines.join("\n"), /To: the sender[\s\S]*Sends from Orbit Mail when you approve/);
+    assert.match(describeAction("send_email", { replyToEmailId: "x", body: "Hi Andrew" }).lines.join("\n"), /To: the sender/);
     assert.equal(toolDefinitions().find((item) => item.function.name === "send_email") !== undefined, true);
     assert.match(prompt, /Never tell the user to paste an email into Outlook/);
     assert.ok(!/the Outlook inbox/.test(prompt));
@@ -104,7 +104,7 @@ describe("assistant drafts", () => {
     assert.deepEqual(listed.senders, [{ email: "mark@eclipse.test", primary: true, default: true }]);
   });
 
-  it("offers Confirm and send on a draft, which sends it instead of saving it", async () => {
+  it("offers Send now on a draft, which sends it instead of saving it", async () => {
     process.env.LLM_API_KEY = "llm-test";
     const replies = [
       { tool_calls: [{ id: "call_draft", type: "function", function: { name: "save_email_draft", arguments: JSON.stringify({ to: ["andrew@pulse.test"], subject: "Pilot", body: "Hi Andrew,\n\nShall we start the pilot on Monday?\n\nMark" }) } }] },
@@ -115,7 +115,7 @@ describe("assistant drafts", () => {
     const events: AssistantEvent[] = [];
     await sendMessage(owner, { message: "Email Andrew about the pilot", model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, (event) => events.push(event), { deadline: Date.now() + 60_000, fetchImpl: model });
     const proposed = events.filter((event): event is Extract<AssistantEvent, { type: "actions" }> => event.type === "actions").at(-1)!;
-    assert.deepEqual(proposed.actions[0].alternative, { key: "send", label: "Confirm and send" });
+    assert.deepEqual(proposed.actions[0].alternative, { key: "send", label: "Send now" });
     const conversationId = (events.find((event) => event.type === "conversation") as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
     const { fetchImpl, calls } = outlook();
     const original = globalThis.fetch;
@@ -132,9 +132,9 @@ describe("assistant drafts", () => {
     assert.equal(final.status, "done");
     assert.equal(final.chose, "send");
     assert.equal(final.title, "Sent: Pilot");
-    assert.ok(final.lines.includes("Sent."));
+    assert.ok(!final.lines.includes("Files attach when Orbit sends it."));
     const toolMessage = (await getAdminPool().query<{ content: string }>("select content from crm.assistant_messages where tool_call_id = 'call_draft'")).rows[0].content;
     assert.match(toolMessage, /"sent":true/);
-    assert.match(toolMessage, /The user chose Confirm and send, so this ran send_email instead of save_email_draft/);
+    assert.match(toolMessage, /The user chose Send now, so this ran send_email instead of save_email_draft/);
   });
 });

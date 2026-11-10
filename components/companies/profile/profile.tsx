@@ -12,7 +12,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/_ui/sheet";
-import DetailSection from "../detail/detail-section";
 import { signOutAction } from "@/app/(crm)/actions";
 import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -48,7 +47,7 @@ export default function Profile({ viewer }: { viewer: Viewer }) {
             Signed-in user and workspace
           </SheetDescription>
           <SheetClose asChild>
-            <Button variant="ghost" size="icon-sm" className="-mr-1" aria-label="Close account">
+            <Button variant="ghost" size="icon-sm" className="-mr-1" aria-label="Close">
               <XIcon aria-hidden className="text-foreground size-4" />
             </Button>
           </SheetClose>
@@ -62,33 +61,19 @@ export default function Profile({ viewer }: { viewer: Viewer }) {
             >
               {displayInitials(viewer.name)}
             </span>
-            <div className="flex min-w-0 flex-col gap-2">
+            <div className="flex min-w-0 flex-col gap-1">
               <h2 className="truncate">{viewer.name}</h2>
               <span className="caption-style text-soft block truncate">
-                {ROLE_LABELS[viewer.role] ?? viewer.role}
+                {[ROLE_LABELS[viewer.role] ?? viewer.role, viewer.workspaceName].filter(Boolean).join(" · ")}
               </span>
+              <a
+                href={`mailto:${viewer.email}`}
+                className="caption-style text-soft hover:text-foreground ease-power3-in-out block truncate transition-colors duration-150"
+              >
+                {viewer.email}
+              </a>
             </div>
           </div>
-
-          <DetailSection title="Workspace">
-            <dl className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <dt className="caption-style text-soft">Workspace</dt>
-                <dd className="lead-style">{viewer.workspaceName}</dd>
-              </div>
-              <div className="flex flex-col gap-1">
-                <dt className="caption-style text-soft">Email</dt>
-                <dd>
-                  <a
-                    href={`mailto:${viewer.email}`}
-                    className="lead-style hover:text-soft ease-power3-in-out transition-colors duration-150"
-                  >
-                    {viewer.email}
-                  </a>
-                </dd>
-              </div>
-            </dl>
-          </DetailSection>
         </ScrollArea>
 
         <SheetFooter>
@@ -98,7 +83,7 @@ export default function Profile({ viewer }: { viewer: Viewer }) {
             </Button>
           </form>
           <Button variant="primary" size="sm" onClick={showMine}>
-            Show my companies
+            My companies
           </Button>
         </SheetFooter>
       </SheetContent>

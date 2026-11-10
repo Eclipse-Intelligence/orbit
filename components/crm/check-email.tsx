@@ -23,7 +23,7 @@ function describeCheck(check: EmailCheck) {
     check.source === "find"
       ? `${LABELS[check.verdict]}, found and verified ${when}${by ? ` by ${by}` : ""}`
       : `${LABELS[check.verdict]}, checked ${when}${by ? ` with ${by}` : ""}`;
-  return check.stale ? `${what}. It may have changed` : what;
+  return what;
 }
 
 export default function CheckEmailButton({
@@ -64,7 +64,7 @@ export default function CheckEmailButton({
           ? `Checked ${relativeWhen(latest.checkedAt).toLowerCase()}`
           : `${LABELS[latest.verdict]} · ${checkedDay(latest.checkedAt)}`
         : "Check address";
-  const title = error ?? (summary ? `${summary}. Check again` : "Check the address with an email checker");
+  const title = error ?? (summary ? `${summary}. Check again` : undefined);
 
   return (
     <>
@@ -73,7 +73,7 @@ export default function CheckEmailButton({
         onClick={run}
         disabled={running}
         title={title}
-        aria-label={running ? "Checking the address" : title}
+        aria-label={running ? "Checking the address" : (title ?? label)}
         className={cn(
           "caption-style relative z-10 -my-1 inline-flex min-w-0 shrink-0 cursor-pointer items-center rounded-md px-1 py-1 whitespace-nowrap transition-colors duration-150 ease-power3-out outline-none hover:bg-white/6 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-progress",
           error ? "text-danger/80" : latest && !running && !latest.stale ? TONES[latest.verdict] : "text-subtle hover:text-foreground",

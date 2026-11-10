@@ -32,7 +32,7 @@ import { eclipseAvailable } from "@/lib/assistant/eclipse-scope";
 import { isWebApproval, needsWebApproval, webCard, webGateState, WEB_TOOLS } from "@/lib/assistant/web-gate";
 import { linearHere } from "@/lib/crm/linear-connection";
 import { brandOrEmpty } from "@/lib/crm/brand";
-import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
+import { approvalFor, docRefusalForCard, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
 import { PROPOSED, type CompanionResult, type CompanionSteer, type Effort } from "@/companion/src/protocol";
 import {
@@ -60,8 +60,8 @@ import { workspaceActors } from "@/lib/crm/workspaces";
 import { query, type Db } from "@/lib/db/pool";
 
 export const MAX_ROUNDS = 40;
-export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
-export const FULL_MESSAGE = "I've read a lot in this step, more than the model can hold at once, so I've stopped here. Say \"carry on\" and I'll continue from what I found, or ask a narrower question.";
+export const STOPPED_MESSAGE = "Stopped after a lot of steps. Say \"carry on\" or narrow the question.";
+export const FULL_MESSAGE = "That was too much to read at once. Say \"carry on\" or narrow the question.";
 export const CUT_OFF_MESSAGE = "The answer was cut off. Ask me to continue.";
 export const CUT_OFF_CALL = "Your reply was cut off before it finished, so this call didn't run. Make it again, and keep each reply shorter (fewer calls at once, or less text in the arguments).";
 export const NOT_PROPOSED = "This call didn't run, so nothing was proposed. Make it again if it's still needed.";
@@ -94,8 +94,6 @@ export type AssistantAction = {
   approval?: DocApproval;
   baseRevision?: number;
 };
-
-export const UNATTENDED_NOTE = "Made without asking, because this doc lets the assistant edit it.";
 
 export const ALL_TOOLS_LOADED = "On Orbit Agent every tool is already loaded, so call any tool directly and never call find_tools.";
 
@@ -1187,7 +1185,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
     if (remaining < 15_000) {
       const paused = await insertMessage(actor, conversation.id, {
         role: "assistant",
-        content: "I ran out of time on this step. Say \"carry on\" and I'll pick up where I left off.",
+        content: "Ran out of time. Say \"carry on\".",
       });
       emit({ type: "message", message: display(paused) });
       return;
@@ -1300,7 +1298,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
           name: call.function.name,
           ...described,
           ...docLinkOf(call.function.name, parseArgs(call.function.arguments)),
-          ...(automatic ? { lines: [...described.lines, UNATTENDED_NOTE], unattended: true } : {}),
+          ...(automatic ? { unattended: true } : {}),
           ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
           status: automatic ? "running" : "pending",
           ...(automatic ? { startedAt: new Date().toISOString() } : {}),
@@ -1542,7 +1540,7 @@ export async function decideActions(
       });
       await update(action.id, {
         status: failed ? "failed" : "done",
-        result: failed ? String((output as { error: unknown }).error) : null,
+        result: failed ? docRefusalForCard(String((output as { error: unknown }).error)) : null,
         ...(chosenAlternative && !failed ? { chose: chosenAlternative.key, title: chosenAlternative.title(action.title), lines: chosenAlternative.lines(action.lines) } : {}),
       });
     }

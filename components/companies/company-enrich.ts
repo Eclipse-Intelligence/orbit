@@ -33,7 +33,7 @@ export function companyEnrichSummary(results: Result[]) {
   const missing = results.filter((result) => result.status === "not_found").length;
   const failed = results.filter((result) => result.status === "failed");
   const parts = [`Updated ${updated} of ${results.length} ${results.length === 1 ? "company" : "companies"}`];
-  if (missing > 0) parts.push(`${missing} not known to context.dev`);
+  if (missing > 0) parts.push(`${missing} not found`);
   if (skipped > 0) parts.push(`${skipped} skipped (no website)`);
   if (failed.length > 0) parts.push(`${failed.length} failed: ${failed[0].message}`);
   return { message: parts.join(". "), tone: failed.length > 0 && updated === 0 ? ("error" as const) : ("status" as const) };

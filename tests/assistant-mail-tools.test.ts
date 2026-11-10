@@ -244,7 +244,7 @@ describe("assistant mail tools", () => {
     const args = { to: ["jane@acme.test"], subject: "Our deck", body: "Hi Jane,\n\nThe deck is attached.\n\nMark", attachmentIds: [deckId] };
     const card = describeAction("save_email_draft", args, await recordNames(owner, [args]));
     assert.ok(card.lines.includes("Attachments: Eclipse deck"));
-    assert.ok(card.lines.includes("The files stay in Orbit and are attached when Orbit sends it."));
+    assert.ok(card.lines.includes("Files attach when Orbit sends it."));
     const result = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", args))) as { saved: boolean; draftId: string; attachments: string[] };
     assert.equal(result.saved, true);
     assert.deepEqual(result.attachments, ["Eclipse deck.pdf"]);
@@ -324,7 +324,7 @@ describe("assistant mail tools", () => {
     assert.equal(card.title, "Schedule email: Follow up");
     assert.ok(card.lines.some((line) => /^Sends \w{3} \d{1,2} \w{3}, \d{2}:\d{2} \(London time\)$/.test(line)), card.lines.join("\n"));
     assert.ok(card.lines.includes("Attachments: Eclipse deck"));
-    assert.ok(card.lines.includes("Scheduled in Orbit Mail when you approve."));
+    assert.ok(!card.lines.some((line) => /when you approve/.test(line)), card.lines.join("\n"));
     const result = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", args))) as { scheduled: boolean; sent: boolean; draftId: string };
     assert.equal(result.scheduled, true);
     assert.equal(result.sent, false);
@@ -512,7 +512,7 @@ describe("assistant mail tools", () => {
     const mixed = { draftId, cancel: true, subject: "Something else" };
     const cancelAlone = "Cancel on its own: leave out sendAt, subject, body, to, cc and bcc to cancel, or leave out cancel to change it instead.";
     assert.equal(((await runTool(owner, "change_scheduled_email", mixed)) as { error: string }).error, cancelAlone);
-    assert.equal(describeAction("change_scheduled_email", mixed, await recordNames(owner, [mixed], ["change_scheduled_email"])).lines.at(-1), `This will be refused: ${cancelAlone}`);
+    assert.equal(describeAction("change_scheduled_email", mixed, await recordNames(owner, [mixed], ["change_scheduled_email"])).lines.at(-1), "This will be refused: a cancel can't also change the email.");
     assert.ok((await listScheduledDrafts(owner)).some((item) => item.id === draftId));
 
     await admin.query("update crm.mail_drafts set send_at = null where id = $1", [draftId]);
@@ -528,7 +528,7 @@ describe("assistant mail tools", () => {
     assert.equal(cancelCard.title, "Cancel scheduled email: Renewal terms");
     assert.equal(cancelCard.lines[0], "To: jane@acme.test");
     assert.match(cancelCard.lines[1], /^Due: /);
-    assert.equal(cancelCard.lines[2], "It stays in Drafts, so you can send it or change it later.");
+    assert.equal(cancelCard.lines[2], "It stays in Drafts.");
     const cancelled = (await runTool(owner, "change_scheduled_email", cancel)) as { cancelled: boolean; kept: string; draftId: string };
     assert.deepEqual([cancelled.cancelled, cancelled.kept, cancelled.draftId], [true, "in Drafts", draftId]);
     const kept = (await admin.query<{ send_at: Date | null }>("select send_at from crm.mail_drafts where id = $1", [draftId])).rows[0];

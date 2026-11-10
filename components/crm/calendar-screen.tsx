@@ -92,13 +92,12 @@ function CalendarList({
   if (groups.length === 0) {
     return (
       <p className="caption-style text-subtle px-1">
-        Connect Microsoft in{" "}
         <Button variant="link" size="none" href="/settings/email">
-          Email settings
+          Connect Microsoft
         </Button>{" "}
-        or add a calendar in{" "}
+        or{" "}
         <Button variant="link" size="none" href={SETTINGS_PATHS.calendars}>
-          Settings
+          add a calendar
         </Button>
         .
       </p>
@@ -271,7 +270,6 @@ export default function CalendarScreen({
             variant="primary"
             size="sm"
             data-shortcut="new-event"
-            title="New event (C then E)"
             shortcut={["C", "E"]}
             onClick={() => startInvite()}
           >

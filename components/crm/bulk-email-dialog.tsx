@@ -195,20 +195,13 @@ export default function BulkEmailDialog({
             Email {plural(sendable.length, "person", "people")}
           </DialogTitle>
           <DialogDescription>
-            Each person gets their own email from {sender.chosen?.email ?? "your Microsoft mailbox"}, sent one at a time about two seconds apart.
+            Each person gets their own email from {sender.chosen?.email ?? "your Microsoft mailbox"}.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4 px-6 py-5">
-          {!mailboxConnected && sender.senders.length === 0 && (
-            <p role="alert" className="caption-style text-danger">
-              Connect Microsoft in Settings › Email before sending.
-            </p>
-          )}
           {tooMany && (
             <p role="alert" className="caption-style text-danger">
-              Orbit sends up to {BULK_EMAIL_LIMIT} emails per run. Select{" "}
-              {BULK_EMAIL_LIMIT} or fewer people with an email address and send the rest
-              in another batch.
+              Select {BULK_EMAIL_LIMIT} people or fewer. Send the rest in another batch.
             </p>
           )}
           {sendable.length === 0 && (
@@ -394,10 +387,6 @@ export default function BulkEmailDialog({
           )}
           {phase === "done" && (
             <>
-              <span className="caption-style text-subtle mr-auto">
-                Sent {plural(sentCount, "email", "emails")}
-                {failed ? ` · ${failed} failed` : ""}
-              </span>
               <Button variant="primary" size="sm" onClick={close}>
                 Close
               </Button>
