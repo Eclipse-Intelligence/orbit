@@ -190,6 +190,13 @@ begin
   delete from crm.mail_sender_relevance where workspace_id = p_from and user_id = p_user;
   delete from crm.mail_thread_relevance where workspace_id = p_from and user_id = p_user;
   delete from crm.mail_address_homes where workspace_id = p_from and user_id = p_user;
+  update crm.granola_keys set workspace_id = p_to where workspace_id = p_from and user_id = p_user;
+  update crm.recall_keys set workspace_id = p_to where workspace_id = p_from and user_id = p_user;
+  delete from crm.readwise_documents where workspace_id = p_from and user_id = p_user;
+  update crm.readwise_keys
+    set workspace_id = p_to, updated_after = null, full_sync_at = null, scan_cursor = null, scan_since = null,
+      scan_started_at = null, scan_full = false, list_cursor = null, list_full = false, list_done = false, sync_started_at = null
+    where workspace_id = p_from and user_id = p_user;
   delete from crm.mail_domain_rules where user_id = p_user and workspace_ids <@ array[p_from];
   update crm.mail_domain_rules set workspace_ids = array_remove(workspace_ids, p_from)
     where user_id = p_user and p_from = any(workspace_ids);
@@ -199,6 +206,5 @@ begin
     where user_id = p_user and capture_workspace_id = p_from;
 end;
 $$;
-
 
 revoke all on function private.move_personal_rows(uuid, uuid, uuid) from public;

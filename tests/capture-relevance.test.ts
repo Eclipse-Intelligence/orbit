@@ -767,7 +767,37 @@ describe("Capture relevance", () => {
     const before = await admin.query<{ total: number }>("select count(*)::int as total from crm.mail_sender_relevance where workspace_id = $1 and user_id = $2", [ridgeon.workspaceId, eclipse.userId]);
     assert.ok(before.rows[0].total > 0);
     const eclipseRows = await admin.query<{ total: number }>("select count(*)::int as total from crm.mail_sender_relevance where workspace_id = $1 and user_id = $2", [eclipse.workspaceId, eclipse.userId]);
+    for (const table of ["granola_keys", "recall_keys", "readwise_keys"]) await admin.query(`delete from crm.${table} where user_id = $1`, [eclipse.userId]);
+    await admin.query("insert into crm.granola_keys (workspace_id, user_id, key_cipher) values ($1, $2, 'granola')", [ridgeon.workspaceId, eclipse.userId]);
+    await admin.query("insert into crm.recall_keys (workspace_id, user_id, key_cipher) values ($1, $2, 'recall')", [ridgeon.workspaceId, eclipse.userId]);
+    const readwise = await admin.query<{ id: string }>(
+      `insert into crm.readwise_keys (workspace_id, user_id, token_cipher, token_hint, updated_after, full_sync_at, scan_cursor, list_cursor, list_done)
+       values ($1, $2, 'cipher', 'rw01', now(), now(), 'scan-cursor', 'list-cursor', true) returning id`,
+      [ridgeon.workspaceId, eclipse.userId],
+    );
+    await admin.query("insert into crm.readwise_documents (key_id, workspace_id, user_id, document_id) values ($1, $2, $3, 'doc-1')", [
+      readwise.rows[0].id,
+      ridgeon.workspaceId,
+      eclipse.userId,
+    ]);
     await admin.query("select private.move_personal_rows($1, $2, $3)", [eclipse.userId, ridgeon.workspaceId, eclipse.workspaceId]);
+    const keys = await admin.query<{ granola: string; recall: string; readwise: string; scan_cursor: string | null; list_done: boolean; documents: number }>(
+      `select (select workspace_id::text from crm.granola_keys where user_id = $1) as granola,
+         (select workspace_id::text from crm.recall_keys where user_id = $1) as recall,
+         (select workspace_id::text from crm.readwise_keys where user_id = $1) as readwise,
+         (select scan_cursor from crm.readwise_keys where user_id = $1) as scan_cursor,
+         (select list_done from crm.readwise_keys where user_id = $1) as list_done,
+         (select count(*)::int from crm.readwise_documents where user_id = $1) as documents`,
+      [eclipse.userId],
+    );
+    assert.deepEqual(keys.rows[0], {
+      granola: eclipse.workspaceId,
+      recall: eclipse.workspaceId,
+      readwise: eclipse.workspaceId,
+      scan_cursor: null,
+      list_done: false,
+      documents: 0,
+    });
     const left = await admin.query<{ senders: number; threads: number }>(
       `select (select count(*)::int from crm.mail_sender_relevance where workspace_id = $1 and user_id = $2) as senders,
          (select count(*)::int from crm.mail_thread_relevance where workspace_id = $1 and user_id = $2) as threads`,
