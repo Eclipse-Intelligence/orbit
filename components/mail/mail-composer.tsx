@@ -256,7 +256,7 @@ export default function MailComposer({
   function saveNow() {
     const run = chain.current.then(async () => {
       if (!dirty.current || discarded.current) return;
-      const snapshot = { ...payload.current, id: draftId.current };
+      const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       dirty.current = false;
       setSave({ kind: "saving" });
@@ -329,7 +329,7 @@ export default function MailComposer({
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       void chain.current
         .catch(() => null)
-        .then(() => postJson("/api/mail/drafts", { ...snapshot, id: draftId.current }, true))
+        .then(() => postJson("/api/mail/drafts", { ...snapshot, id: draftId.current, sendKey: sendKey.current }, true))
         .then(() => releaseDraft(heldKey.current))
         .catch((problem: unknown) => {
           if (reconnectOf(problem)) keepRef.current();

@@ -8,7 +8,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { ALREADY_SENDING, REPLACED_SENT, STILL_SAVING, deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import { ALREADY_SENDING, DRAFT_GONE, REPLACED_SENT, SENT_ALREADY, STILL_SAVING, deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
 import type { CrmError } from "@/lib/crm/errors";
 import { ignoreUnknownMail, setThreadFiling } from "@/lib/mail/filing";
 import { composeEmailHtml, imageMarkers, trackingIdIn } from "@/lib/mail/html";
@@ -509,6 +509,117 @@ describe("mail replies and read statuses", () => {
       assert.equal((await getAdminPool().query("select 1 from crm.mail_messages where id = $1", [outside])).rowCount, 1);
       const again = outlook(state);
       await assert.rejects(() => sendMailDraft(owner, replacing(outside), sendOptions(again.fetchImpl)), { message: REPLACED_SENT });
+      assert.equal(sendsIn(again.calls), 0);
+    } finally {
+      console.error = logged;
+    }
+  });
+
+  const plainReply = (sendKey: string) => readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Plain reply.", sendKey });
+
+  it("refuses the reopened card's autosave when the send went through but its answer was lost", async () => {
+    const before = await storedDrafts();
+    const saved = await saveMailDraft(owner, plainReply(randomUUID()), sendOptions(outlook(state).fetchImpl));
+    const sendKey = randomUUID();
+    const box = outlook(state);
+    await sendMailDraft(owner, { ...plainReply(sendKey), id: saved.id }, sendOptions(box.fetchImpl));
+    assert.equal(sendsIn(box.calls), 1);
+    await assert.rejects(() => saveMailDraft(owner, { ...plainReply(sendKey), id: saved.id }, sendOptions(box.fetchImpl)), { message: SENT_ALREADY });
+    assert.deepEqual(await sendMailDraft(owner, { ...plainReply(sendKey), id: saved.id }, sendOptions(box.fetchImpl)), { warning: null });
+    assert.equal(sendsIn(box.calls), 1);
+    assert.equal(await storedDrafts(), before);
+  });
+
+  it("never makes a sendable copy in a second tab once the first tab sent the Orbit draft", async () => {
+    const before = await storedDrafts();
+    const saved = await saveMailDraft(owner, plainReply(randomUUID()), sendOptions(outlook(state).fetchImpl));
+    const box = outlook(state);
+    await sendMailDraft(owner, { ...plainReply(randomUUID()), id: saved.id }, sendOptions(box.fetchImpl));
+    const late = randomUUID();
+    await assert.rejects(() => sendMailDraft(owner, { ...plainReply(late), id: saved.id }, sendOptions(box.fetchImpl)), (error: CrmError) => {
+      assert.equal(error.message, DRAFT_GONE);
+      assert.equal(error.details?.draftId, undefined);
+      return true;
+    });
+    await assert.rejects(() => saveMailDraft(owner, { ...plainReply(late), id: saved.id, body: "Edited in the card." }, sendOptions(box.fetchImpl)), { message: DRAFT_GONE });
+    assert.equal(sendsIn(box.calls), 1);
+    assert.equal(await storedDrafts(), before);
+  });
+
+  it("continues the draft a killed send made, then sends it once the hold runs out", async () => {
+    const before = await storedDrafts();
+    const sendKey = randomUUID();
+    const killed = await saveMailDraft(owner, plainReply(randomUUID()), sendOptions(outlook(state).fetchImpl));
+    const admin = getAdminPool();
+    await admin.query("update crm.mail_drafts set sending_at = now() where id = $1", [killed.id]);
+    await admin.query("insert into crm.mail_send_keys (user_id, workspace_id, key, draft_id) values ($1, $2, $3, $4)", [owner.userId, owner.workspaceId, sendKey, killed.id]);
+    const box = outlook(state);
+    const autosaved = await saveMailDraft(owner, { ...plainReply(sendKey), body: "Plain reply, edited." }, sendOptions(box.fetchImpl));
+    assert.equal(autosaved.id, killed.id);
+    assert.equal(await storedDrafts(), before + 1);
+    await assert.rejects(() => sendMailDraft(owner, { ...plainReply(sendKey), id: killed.id }, sendOptions(box.fetchImpl)), { message: ALREADY_SENDING });
+    await admin.query("update crm.mail_drafts set sending_at = now() - interval '11 minutes' where id = $1", [killed.id]);
+    await sendMailDraft(owner, { ...plainReply(sendKey), id: killed.id }, sendOptions(box.fetchImpl));
+    assert.equal(sendsIn(box.calls), 1);
+    assert.equal(await storedDrafts(), before);
+  });
+
+  it("says Still saving to a same-key retry after a killed send of an Outlook draft, then sends it once", async () => {
+    const outside = await outsideDraft("outside-killed");
+    const sendKey = randomUUID();
+    const admin = getAdminPool();
+    await admin.query("insert into crm.mail_send_keys (user_id, workspace_id, key) values ($1, $2, reverse($3::text)::uuid), ($1, $2, $4)", [owner.userId, owner.workspaceId, outside, sendKey]);
+    const box = outlook(state);
+    const input = { ...replacing(outside), sendKey };
+    await assert.rejects(() => sendMailDraft(owner, input, sendOptions(box.fetchImpl)), { message: STILL_SAVING });
+    await assert.rejects(() => saveMailDraft(owner, input, sendOptions(box.fetchImpl)), { message: STILL_SAVING });
+    await admin.query("update crm.mail_send_keys set created_at = now() - interval '11 minutes' where user_id = $1 and key in (reverse($2::text)::uuid, $3)", [owner.userId, outside, sendKey]);
+    await sendMailDraft(owner, input, sendOptions(box.fetchImpl));
+    assert.equal(sendsIn(box.calls), 1);
+  });
+
+  it("refuses a second tab while Orbit remakes the draft the first tab is sending", async () => {
+    const outside = await outsideDraft("outside-remaking");
+    const saved = await saveMailDraft(owner, replacing(outside), sendOptions(outlook(state).fetchImpl));
+    const provider = (await getAdminPool().query<{ provider_draft_id: string }>("select provider_draft_id from crm.mail_drafts where id = $1", [saved.id])).rows[0].provider_draft_id;
+    const first = outlook({ ...state, missing: new Set([provider]) });
+    let reached: () => void = () => undefined;
+    const atGate = new Promise<void>((done) => (reached = done));
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((done) => (open = done));
+    const gated: typeof fetch = async (input, init) => {
+      if (/createReply$/.test(String(input))) {
+        reached();
+        await gate;
+      }
+      return first.fetchImpl(input, init);
+    };
+    const sending = sendMailDraft(owner, { ...replacing(outside), id: saved.id }, sendOptions(gated));
+    await atGate;
+    const second = outlook(state);
+    await assert.rejects(() => sendMailDraft(owner, replacing(outside), sendOptions(second.fetchImpl)), { message: ALREADY_SENDING });
+    open();
+    await sending;
+    assert.equal(sendsIn(first.calls) + sendsIn(second.calls), 1);
+  });
+
+  it("keeps a sent claim past a week while the Outlook draft is still there, and tries the delete only when it matters", async () => {
+    const outside = await outsideDraft("outside-lingering");
+    const logged = console.error;
+    console.error = () => undefined;
+    try {
+      const stuck = outlook(state);
+      const saved = await saveMailDraft(owner, replacing(outside), sendOptions(failing(stuck, "DELETE", 500)));
+      await saveMailDraft(owner, { ...replacing(outside), id: saved.id, body: "Sounds good, edited." }, sendOptions(failing(stuck, "DELETE", 500)));
+      assert.equal(stuck.calls.filter((call) => call.method === "DELETE").length, 1);
+      await sendMailDraft(owner, { ...replacing(outside), id: saved.id }, sendOptions(failing(stuck, "DELETE", 500)));
+      assert.equal(stuck.calls.filter((call) => call.method === "DELETE").length, 2);
+      const admin = getAdminPool();
+      await admin.query("update crm.mail_send_keys set sent_at = now() - interval '8 days', created_at = now() - interval '9 days' where user_id = $1 and key = reverse($2::text)::uuid", [owner.userId, outside]);
+      await sendMailDraft(owner, plainReply(randomUUID()), sendOptions(outlook(state).fetchImpl));
+      assert.equal((await admin.query("select 1 from crm.mail_send_keys where user_id = $1 and key = reverse($2::text)::uuid", [owner.userId, outside])).rowCount, 1);
+      const again = outlook(state);
+      await assert.rejects(() => sendMailDraft(owner, replacing(outside), sendOptions(failing(again, "DELETE", 500))), { message: REPLACED_SENT });
       assert.equal(sendsIn(again.calls), 0);
     } finally {
       console.error = logged;

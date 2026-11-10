@@ -32,7 +32,7 @@ type SendMeta = { onDelivered?: () => void; onUndone?: () => void; onReopen?: (d
 
 type Outgoing = SendMeta & { payload: Promise<SendPayload>; timer: number };
 
-type SendFailure = Error & { status?: number; detail?: { draftId?: string; maybeSent?: boolean } };
+type SendFailure = Error & { status?: number; detail?: { draftId?: string; maybeSent?: boolean; stillSaving?: boolean } };
 
 type Card = {
   key: number;
@@ -74,7 +74,7 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
     sendProblem: failure?.detail?.maybeSent ? failure.message : null,
     sourceId: payload.sourceId,
     replaces: payload.replaces ?? null,
-    unsaved: true,
+    unsaved: Boolean(failure?.detail?.draftId || failure?.detail?.stillSaving),
     mode: payload.mode,
     messageId: payload.messageId,
     to: payload.to,

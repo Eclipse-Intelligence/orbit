@@ -1,4 +1,5 @@
 import { withActor } from "@/lib/crm/context";
+import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { memberActor } from "@/lib/crm/conversations";
@@ -124,7 +125,8 @@ export async function processDueMail(
     } catch (error) {
       report.failed += 1;
       const message = error instanceof Error ? error.message : "The scheduled email didn't send.";
-      await failDueDraft(actor, draft.id, message);
+      const remade = error instanceof CrmError && typeof error.details?.draftId === "string" ? error.details.draftId : null;
+      await failDueDraft(actor, remade ?? draft.id, message);
       const title = `Scheduled email didn't send: ${draft.subject?.trim() || "(no subject)"}`;
       await sendAlert(
         actor,
