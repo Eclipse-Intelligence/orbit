@@ -16,8 +16,8 @@ export default async function KnowledgeSettingsPage() {
   const [items, proof] = await Promise.all([listKnowledge(user, { eclipse: true }), listProof(user)]);
   resumeStale(user, items);
   return (
-    <SettingsPage title="Knowledge" description="Documents and links the assistant searches, and the client proof it may quote. Add company material on each company page.">
-      <KnowledgePanel target={{ eclipse: true }} initial={items} variant="settings" ownerName={user.workspaceName} />
+    <SettingsPage title="Knowledge">
+      <KnowledgePanel target={{ eclipse: true }} initial={items} variant="settings" />
       <ProofList entries={proof} workspaceName={user.workspaceName} />
     </SettingsPage>
   );

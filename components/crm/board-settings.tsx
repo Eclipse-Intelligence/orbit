@@ -152,24 +152,23 @@ export default function BoardSettings({
               Add stage
             </Button>
           </div>
-          <p className="caption-style text-subtle">A stage with companies on it stays until they move.</p>
         </fieldset>
         <div className="flex items-start justify-between gap-4">
           <span className="flex flex-col gap-1">
-            <span className="text-[14px] leading-5">Add companies when a deal is won</span>
-            <span className="caption-style text-subtle">
-              When an opportunity is marked won, its company goes into the first stage here.
-            </span>
+            <span className="text-[14px] leading-5">Add companies when an opportunity is won</span>
+            <span className="caption-style text-subtle">Into the first stage.</span>
           </span>
-          <Switch checked={addOnWon} onChange={setAddOnWon} label="Add companies when a deal is won" />
+          <Switch checked={addOnWon} onChange={setAddOnWon} label="Add companies when an opportunity is won" />
         </div>
         <div className="border-border border-t pt-5">
           <HoldButton disabled={pending} onConfirm={() => void remove()}>
-            Hold to delete board
+            Hold to delete
           </HoldButton>
-          <p className="caption-style text-subtle mt-2">
-            {count > 0 ? `The ${count === 1 ? "1 company" : `${count} companies`} on it will be taken off. The companies themselves stay.` : "The companies themselves stay."}
-          </p>
+          {count > 0 && (
+            <p className="caption-style text-subtle mt-2">
+              {`Takes its ${count === 1 ? "1 company" : `${count} companies`} off. They are not deleted.`}
+            </p>
+          )}
         </div>
       </div>
       <SheetFooter>

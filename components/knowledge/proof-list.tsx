@@ -26,7 +26,7 @@ export default function ProofList({ entries, workspaceName }: { entries: ProofEn
     <SettingsCard
       id="proof"
       title="Proof list"
-      description="Client results the assistant can use in cold emails, as written."
+      description="Client results the assistant may quote."
       action={
         <Button variant="secondary" size="sm" type="button" onClick={() => open(null)}>
           Add proof
@@ -34,7 +34,7 @@ export default function ProofList({ entries, workspaceName }: { entries: ProofEn
       }
     >
       {entries.length === 0 ? (
-        <p className="caption-style text-subtle">No proof yet. Until there is, cold emails use a finding or something made for them.</p>
+        <p className="caption-style text-subtle">No proof</p>
       ) : (
         <ul className="-mx-2 flex flex-col">
           {entries.map((entry) => (
@@ -97,7 +97,7 @@ function ProofForm({ entry, products, usual, onClose }: { entry: ProofEntry | nu
     setPending(true);
     setError(null);
     const saved = await saveProofAction(entry?.id ?? null, { client, description, product, usedFor, result, measured, permission, approvedBy: entry?.approvedBy ?? "", reviewOn: entry?.reviewOn ?? null }).catch(() => ({
-      error: "That proof didn't save. Try again.",
+      error: "Couldn't save. Try again.",
       field: undefined,
     }));
     setPending(false);
@@ -112,7 +112,7 @@ function ProofForm({ entry, products, usual, onClose }: { entry: ProofEntry | nu
   async function remove() {
     if (!entry || pending) return;
     setPending(true);
-    const removed = await archiveProofAction(entry.id).catch(() => ({ error: "That proof wasn't removed. Try again." }));
+    const removed = await archiveProofAction(entry.id).catch(() => ({ error: "Couldn't delete. Try again." }));
     setPending(false);
     if (removed.error) {
       setError({ message: removed.error });
@@ -180,7 +180,7 @@ function ProofForm({ entry, products, usual, onClose }: { entry: ProofEntry | nu
             onChange={(event) => setDescription(event.target.value)}
           />
           <span id={`${id}-description-hint`} className="caption-style text-subtle">
-            Segment, size and what they sell, without naming them. Used in place of the name when it&apos;s described only.
+            Used instead of the name when they can&apos;t be named.
           </span>
         </div>
         <label className="flex flex-col gap-2" htmlFor={`${id}-product`}>
@@ -219,7 +219,7 @@ function ProofForm({ entry, products, usual, onClose }: { entry: ProofEntry | nu
       <SheetFooter>
         {entry && (
           <HoldButton onConfirm={remove} disabled={pending} className="mr-auto">
-            Hold to remove
+            Hold to delete
           </HoldButton>
         )}
         <Button variant="subtle" size="sm" type="button" onClick={onClose}>

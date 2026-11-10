@@ -44,7 +44,7 @@ const KIND_LABEL: Record<KnowledgeItem["kind"], string> = {
 };
 
 type Uploading = { key: string; name: string; error: string | null };
-type Removal = { label: string; ids: string[]; title: string; description: string };
+type Removal = { label: string; ids: string[]; title: string };
 type Entry = { type: "item"; item: KnowledgeItem } | { type: "site"; host: string; items: KnowledgeItem[] };
 
 function hostOf(item: KnowledgeItem) {
@@ -110,12 +110,10 @@ export default function KnowledgePanel({
   target: given,
   initial,
   variant = "section",
-  ownerName = "Your business",
 }: {
   target: KnowledgeTargetProp;
   initial: KnowledgeItem[];
   variant?: "section" | "settings";
-  ownerName?: string;
 }) {
   const targetKey = "companyId" in given ? given.companyId : "eclipse";
   const target = useMemo<KnowledgeTargetProp>(() => (targetKey === "eclipse" ? { eclipse: true } : { companyId: targetKey }), [targetKey]);
@@ -237,7 +235,7 @@ export default function KnowledgePanel({
   }
 
   function askRemove(item: KnowledgeItem) {
-    setRemoving({ label: "Remove", ids: [item.id], title: "Remove from Knowledge?", description: `The assistant will no longer use ${item.title}.` });
+    setRemoving({ label: "Remove", ids: [item.id], title: `Remove ${item.title}?` });
   }
 
   function renderItem(item: KnowledgeItem) {
@@ -321,8 +319,7 @@ export default function KnowledgePanel({
               setRemoving({
                 label: "Remove all",
                 ids: group.map((item) => item.id),
-                title: `Remove ${group.length.toLocaleString("en-GB")} pages?`,
-                description: `The assistant will no longer use any of the ${host} pages.`,
+                title: `Remove all ${group.length.toLocaleString("en-GB")} ${host} pages?`,
               })
             }
           >
@@ -423,7 +420,7 @@ export default function KnowledgePanel({
               className="min-w-0 flex-1"
             />
             <Button variant="primary" size="sm" type="submit" disabled={adding || !link.trim()}>
-              {adding ? "Adding" : "Add"}
+              {adding ? "Adding…" : "Add"}
             </Button>
             <Button
               variant="ghost"
@@ -444,7 +441,7 @@ export default function KnowledgePanel({
         </form>
       )}
       {items.length === 0 && uploads.length === 0 ? (
-        <p className="caption-style text-subtle">None yet.</p>
+        <p className="caption-style text-subtle">No documents or links</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {uploads.map((entry) => (
@@ -475,8 +472,7 @@ export default function KnowledgePanel({
         onOpenChange={(open) => {
           if (!open) setRemoving(null);
         }}
-        title={removing?.title ?? "Remove from Knowledge?"}
-        description={removing?.description ?? ""}
+        title={removing?.title ?? "Remove?"}
         confirmLabel={removing?.label ?? "Remove"}
         onConfirm={() => {
           if (removing) void remove(removing.ids);
@@ -496,7 +492,7 @@ export default function KnowledgePanel({
 
   if (settings) {
     return (
-      <SettingsCard title={ownerName} action={addMenu}>
+      <SettingsCard title="Documents and links" action={addMenu}>
         {body}
       </SettingsCard>
     );

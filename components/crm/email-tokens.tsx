@@ -32,7 +32,7 @@ export function TokenChips({
   return (
     <div className="flex flex-col gap-1.5">
       <p className="caption-style text-subtle">
-        Personalise with a token. Click one to insert it where you are typing.
+        Tokens
       </p>
       <ul className="flex flex-wrap gap-1">
         {PERSONAL_TOKENS.map((item) => (

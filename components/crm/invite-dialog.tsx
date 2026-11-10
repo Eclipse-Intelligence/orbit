@@ -101,13 +101,6 @@ function ConnectionNotice({ setup, sender, personal }: { setup: InviteSetup; sen
       <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/settings/email">
         {setup.connected ? `Reconnect Microsoft to ${goal}` : `Connect Microsoft in Settings › Email to ${goal}`}
       </Button>
-      <p className="caption-style text-subtle">
-        {setup.connected
-          ? "Orbit now needs permission to add events to your Outlook calendar."
-          : personal
-            ? "Events go into your Outlook calendar."
-            : "Invites go out from your Outlook calendar."}
-      </p>
     </div>
   );
 }
@@ -205,7 +198,7 @@ function InviteForm({
       return false;
     }
     if (own.has(email)) {
-      setError("attendees", "That's your own address. You're the organiser, so you're already in the meeting.");
+      setError("attendees", "You're already the organiser.");
       return false;
     }
     if (added.has(email)) return true;
@@ -326,11 +319,7 @@ function InviteForm({
       <DialogHeader>
         <DialogTitle>New event</DialogTitle>
         <DialogDescription>
-          {personal
-            ? `Adds it to ${sender ? `the ${sender.address} calendar` : "your calendar"}. Nobody is invited.`
-            : sender?.kind === "smtp"
-              ? `Orbit emails the invite from ${sender.address} and holds the time in your calendar.`
-              : `Outlook sends the invite from ${sender?.address ?? "your connected mailbox"} and adds it to your calendar.`}
+          {personal ? "Nobody is invited." : `Sends from ${sender?.address ?? "your connected mailbox"}.`}
         </DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-4 px-6 py-5">
@@ -363,7 +352,6 @@ function InviteForm({
             value={title}
             maxLength={INVITE_TITLE_MAX}
             autoComplete="off"
-            placeholder={personal ? "What's it for?" : "What's the meeting about?"}
             aria-invalid={errors.title ? true : undefined}
             onChange={(event) => {
               setTitleDraft(event.target.value);
@@ -430,7 +418,6 @@ function InviteForm({
           label="Guests"
           htmlFor={field("guests")}
           error={errors.attendees}
-          hint="Optional. Search your contacts, or type any email address and press Enter."
         >
           <div className="relative">
             <div
@@ -536,7 +523,7 @@ function InviteForm({
             id={field("notes")}
             value={notes}
             maxLength={INVITE_NOTES_MAX}
-            placeholder={personal ? "Anything to remember" : "Agenda or anything guests should know"}
+            placeholder={personal ? undefined : "Guests see this"}
             onChange={(event) => setNotes(event.target.value)}
             className={cn(textareaClass, "min-h-24")}
           />

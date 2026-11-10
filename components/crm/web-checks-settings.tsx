@@ -5,17 +5,21 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
-import { Textarea } from "@/components/_ui/textarea";
 import { NativeSelect } from "@/components/_ui/native-select";
 import Switch from "@/components/_ui/switch";
+import { RecordTag } from "@/components/beautifui/record-marks";
 import { SettingsCard } from "@/components/crm/settings-ui";
+import { showRuleAsColumnAction } from "@/app/(crm)/ai-fields";
 import { backfillWebChecksAction, listWebChecksAction, removeWebCheckAction, saveEnrichmentSettingsAction, saveWebCheckAction } from "@/app/(crm)/enrichment";
 import type { EnrichmentSettings } from "@/lib/enrichment/settings";
 import type { SignalNoteKind, WebCheck, WebCheckKind } from "@/lib/enrichment/web-checks";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 
 const NOTE_LABELS: Record<SignalNoteKind, string> = { funding: "Funding", hire: "People", launch: "Launch", signal: "Other" };
+
+export type RuleColumn = { tagged: number; shown: boolean };
 
 function Status({ on, children }: { on: boolean; children: string }) {
   return (
@@ -26,7 +30,7 @@ function Status({ on, children }: { on: boolean; children: string }) {
   );
 }
 
-function Toggle({ title, caption, on, canAdmin, disabled, onChange }: { title: string; caption: string; on: boolean; canAdmin: boolean; disabled: boolean; onChange: (value: boolean) => void }) {
+function Toggle({ title, caption, on, canAdmin, disabled, onChange }: { title: string; caption?: string; on: boolean; canAdmin: boolean; disabled: boolean; onChange: (value: boolean) => void }) {
   const change = (value: boolean) => {
     if (!disabled) onChange(value);
   };
@@ -34,22 +38,50 @@ function Toggle({ title, caption, on, canAdmin, disabled, onChange }: { title: s
     <label className="flex items-center justify-between gap-3">
       <span className="flex flex-col gap-0.5">
         <span className="text-foreground text-[13.5px] leading-5">{title}</span>
-        <span className="caption-style text-subtle leading-[1.4]">{caption}</span>
+        {caption && <span className="caption-style text-subtle leading-[1.4]">{caption}</span>}
       </span>
       {canAdmin ? <Switch checked={on} label={title} disabled={disabled} onChange={change} /> : <Status on={on}>{on ? "On" : "Off"}</Status>}
     </label>
   );
 }
 
+function ShowAsColumn({ check, column, canAdmin, onError }: { check: WebCheck; column: RuleColumn | undefined; canAdmin: boolean; onError: (message: string | null) => void }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  async function show() {
+    setBusy(true);
+    onError(null);
+    try {
+      const result = await showRuleAsColumnAction(check.id);
+      if ("error" in result) onError(result.error);
+      else router.refresh();
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) onError("Couldn't add the column. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (column?.shown) return <span className="caption-style text-subtle shrink-0 pt-1">Shown as a column</span>;
+  if (!canAdmin) return null;
+  return (
+    <Button variant="secondary" size="sm" disabled={busy} onClick={() => void show()}>
+      {busy ? "Adding…" : "Show as column"}
+      <span className="sr-only"> for {check.label}</span>
+    </Button>
+  );
+}
+
 function Rules({
   kind,
   checks,
+  columns,
   canAdmin,
   onSaved,
   onRemoved,
 }: {
   kind: WebCheckKind;
   checks: WebCheck[];
+  columns?: Record<string, RuleColumn>;
   canAdmin: boolean;
   onSaved: (check: WebCheck) => void;
   onRemoved: (id: string) => void;
@@ -77,7 +109,7 @@ function Rules({
       setLabel("");
       setQuestion("");
     } catch (problem) {
-      if (!reloadIfStaleDeploy(problem)) setError("That didn't save. Try again.");
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't save. Try again.");
     } finally {
       setBusy(false);
     }
@@ -90,7 +122,7 @@ function Rules({
       if ("error" in result) setError(result.error);
       else onRemoved(id);
     } catch (problem) {
-      if (!reloadIfStaleDeploy(problem)) setError("That didn't go through. Try again.");
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't delete. Try again.");
     }
   }
 
@@ -99,24 +131,44 @@ function Rules({
       {checks.length > 0 ? (
         <ul className="flex flex-col">
           {checks.map((check) => (
-            <li key={check.id} className="border-border flex items-start justify-between gap-3 border-t py-2 first:border-t-0">
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-foreground text-[13.5px] leading-5">
-                  {check.label}
-                  {kind === "signal" && <span className="text-subtle"> · {NOTE_LABELS[check.noteKind]}</span>}
+            <li key={check.id} className="border-border flex flex-col gap-2 border-t py-2 first:border-t-0">
+              <div className="flex items-start justify-between gap-3">
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  {kind === "tag" ? (
+                    <span className="flex flex-wrap items-center gap-2">
+                      <RecordTag label={check.label} />
+                      {columns?.[check.id] && <span className="caption-style text-subtle">{columns[check.id].tagged.toLocaleString("en-GB")} tagged</span>}
+                    </span>
+                  ) : (
+                    <span className="text-foreground text-[13.5px] leading-5">
+                      {check.label}
+                      <span className="text-subtle"> · {NOTE_LABELS[check.noteKind]}</span>
+                    </span>
+                  )}
+                  <span className="caption-style text-subtle leading-[1.4]">{check.question}</span>
                 </span>
-                <span className="caption-style text-subtle leading-[1.4]">{check.question}</span>
-              </span>
-              {canAdmin && (
-                <HoldButton tone="neutral" onConfirm={() => void remove(check.id)}>
-                  Remove<span className="sr-only"> {check.label}</span>
-                </HoldButton>
+                {kind === "tag" ? (
+                  <ShowAsColumn check={check} column={columns?.[check.id]} canAdmin={canAdmin} onError={setError} />
+                ) : (
+                  canAdmin && (
+                    <HoldButton tone="neutral" onConfirm={() => void remove(check.id)}>
+                      Hold to delete<span className="sr-only"> {check.label}</span>
+                    </HoldButton>
+                  )
+                )}
+              </div>
+              {kind === "tag" && canAdmin && (
+                <span className="self-end">
+                  <HoldButton tone="neutral" onConfirm={() => void remove(check.id)}>
+                    Hold to delete<span className="sr-only"> {check.label}</span>
+                  </HoldButton>
+                </span>
               )}
             </li>
           ))}
         </ul>
       ) : (
-        <p className="caption-style text-subtle">{kind === "tag" ? "No tag rules yet." : "No signals yet."}</p>
+        <p className="caption-style text-subtle">{kind === "tag" ? "No tag rules" : "No signals"}</p>
       )}
       {canAdmin && (
         <form onSubmit={add} className="flex flex-col gap-2">
@@ -210,10 +262,10 @@ function Backfill({ initial, blocked }: { initial: number; blocked: string | nul
           {blocked
             ? blocked
             : running
-            ? `Checking… ${done} done, ${remaining} to go`
+            ? `${done} done, ${remaining} to go`
             : remaining > 0
-              ? `${remaining} ${remaining === 1 ? "company hasn't" : "companies haven't"} been checked. $0.001 each.`
-              : "Every company with a website has been checked."}
+              ? `${remaining} unchecked. $0.001 each.`
+              : "Nothing to check"}
         </span>
         {message && (
           <span role={message.error ? "alert" : "status"} className={cn("caption-style", message.error ? "text-danger" : "text-subtle")}>
@@ -222,69 +274,8 @@ function Backfill({ initial, blocked }: { initial: number; blocked: string | nul
         )}
       </span>
       <Button variant="secondary" size="sm" disabled={running || remaining === 0 || Boolean(blocked)} onClick={run}>
-        {running ? "Checking…" : "Check now"}
+        {running ? "Checking…" : "Check"}
       </Button>
-    </div>
-  );
-}
-
-function IdealCustomer({ initial, learned, canAdmin, onSaved }: { initial: string; learned: string | null; canAdmin: boolean; onSaved: (value: string | null) => void }) {
-  const [value, setValue] = useState(initial);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
-  const id = useId();
-
-  async function save() {
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await saveEnrichmentSettingsAction({ icpText: value });
-      if ("error" in result) setMessage({ text: result.error, error: true });
-      else {
-        onSaved(result.icpText);
-        setMessage({ text: "Saved. Companies are rescored when you next check them.", error: false });
-      }
-    } catch (problem) {
-      if (!reloadIfStaleDeploy(problem)) setMessage({ text: "That didn't save. Try again.", error: true });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <label htmlFor={id} className="caption-style text-subtle">
-        Ideal customer
-      </label>
-      <Textarea
-        id={id}
-        rows={4}
-        maxLength={20000}
-        value={value}
-        readOnly={!canAdmin}
-        placeholder="UK content and SEO agencies of 10 to 50 people that sell to B2B brands"
-        onChange={(event) => setValue(event.target.value)}
-      />
-      <span className="caption-style text-subtle leading-[1.4]">
-        {value.trim() ? "Companies are scored against this. Saving a change makes them due for rescoring. Same as Who it's for in Settings, Brand." : "Describe your ideal customer to score companies. Same as Who it's for in Settings, Brand."}
-      </span>
-      {canAdmin && (
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          {learned && learned !== value.trim() && (
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setValue(learned)}>
-              Use what Orbit has learned
-            </Button>
-          )}
-          {message && (
-            <span role={message.error ? "alert" : "status"} className={cn("caption-style", message.error ? "text-danger" : "text-subtle")}>
-              {message.text}
-            </span>
-          )}
-          <Button variant="secondary" size="sm" disabled={busy || value.trim() === initial.trim()} onClick={save}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
@@ -295,14 +286,14 @@ export default function WebChecksSettings({
   configured,
   canAdmin,
   unchecked,
-  learnedIcp,
+  columns,
 }: {
   settings: EnrichmentSettings;
   checks: WebCheck[];
   configured: boolean;
   canAdmin: boolean;
   unchecked: number;
-  learnedIcp: string | null;
+  columns: Record<string, RuleColumn>;
 }) {
   const router = useRouter();
   const [current, setCurrent] = useState(settings);
@@ -349,30 +340,28 @@ export default function WebChecksSettings({
   const signals = checks.filter((check) => check.kind === "signal");
 
   return (
-    <SettingsCard
-      id="web-checks"
-      title="Web checks"
-      description="Answers questions about each company from the live web with Parallel, for $0.001 a company. Only adds to what context.dev finds, never replaces it."
-    >
+    <SettingsCard id="web-checks" title="Web checks" description="$0.001 a company, via Parallel.">
       <div className="flex flex-col gap-5">
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <span className="text-foreground text-[13.5px] leading-5">Parallel</span>
-          <Status on={configured}>{configured ? "Key set" : "Add PARALLEL_API_KEY in Vercel"}</Status>
-        </div>
+        {!configured && (
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <span className="text-foreground text-[13.5px] leading-5">Parallel</span>
+            <Status on={false}>Add PARALLEL_API_KEY in Vercel</Status>
+          </div>
+        )}
         <div className="flex flex-col gap-3">
           <Toggle
             title="Tag new companies"
-            caption="Adds a tag when the web shows its rule is very likely true. Never removes tags."
+            caption="Never removes tags."
             on={current.webTags}
             canAdmin={canAdmin}
             disabled={busy}
             onChange={(value) => void save("webTags", value)}
           />
-          <Rules kind="tag" checks={tags} canAdmin={canAdmin} onSaved={saved} onRemoved={removed} />
+          <Rules kind="tag" checks={tags} columns={columns} canAdmin={canAdmin} onSaved={saved} onRemoved={removed} />
         </div>
         <Toggle
           title="Fill gaps"
-          caption="Fills size and industry when context.dev leaves them empty. Industry is picked from the ones you already use."
+          caption="Size and industry, when empty."
           on={current.webGaps}
           canAdmin={canAdmin}
           disabled={busy}
@@ -380,31 +369,36 @@ export default function WebChecksSettings({
         />
         <div className="flex flex-col gap-3">
           <Toggle
-            title="ICP fit"
-            caption="Scores each company from 0 to 4 against your ideal customer, with the sources it used. Adds a Fit column to Companies."
+            title="Fit score"
+            caption="Scores each company 0 to 4 in a Fit column."
             on={current.webIcp}
             canAdmin={canAdmin}
             disabled={busy}
             onChange={(value) => void save("webIcp", value)}
           />
           {current.webIcp && (
-            <IdealCustomer key={current.icpText ?? ""} initial={current.icpText ?? ""} learned={learnedIcp} canAdmin={canAdmin} onSaved={(value) => {
-              setCurrent((settings) => ({ ...settings, icpText: value }));
-              router.refresh();
-            }} />
+            <span className="caption-style text-subtle">
+              <Button variant="link" size="none" href={`${SETTINGS_PATHS.brand}#brand-profile`} className="whitespace-normal">
+                {!canAdmin
+                  ? "Ideal customer is in Settings › Brand"
+                  : current.icpText?.trim()
+                    ? "Edit Ideal customer in Settings › Brand"
+                    : "Add your Ideal customer in Settings › Brand"}
+              </Button>
+            </span>
           )}
         </div>
         {canAdmin && configured && (current.webTags || current.webGaps || current.webIcp) && (
           <Backfill
             key={unchecked}
             initial={unchecked}
-            blocked={current.webIcp && !current.webTags && !current.webGaps && !current.icpText ? "Describe your ideal customer first." : null}
+            blocked={current.webIcp && !current.webTags && !current.webGaps && !current.icpText ? "Add your Ideal customer in Settings › Brand first." : null}
           />
         )}
         <div className="flex flex-col gap-3">
           <Toggle
             title="Weekly signals"
-            caption="Checks customers, prospects and companies with an open deal once a week. Anything likely goes into market notes and the morning brief."
+            caption="Customers, prospects and open opportunities. Results go to market notes and the morning brief."
             on={current.webSignals}
             canAdmin={canAdmin}
             disabled={busy}

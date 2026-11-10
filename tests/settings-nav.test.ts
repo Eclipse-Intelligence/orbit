@@ -49,6 +49,7 @@ describe("old settings addresses", () => {
     assert.equal(legacySettingsHref("/settings/integrations/", query("")), SETTINGS_PATHS.connections);
     assert.equal(legacySettingsHref("/settings/integrations", query("error=Nope")), `${SETTINGS_PATHS.connections}?error=Nope`);
     assert.equal(legacySettingsHref("/settings/api", query("")), SETTINGS_PATHS.apiTokens);
+    assert.equal(legacySettingsHref("/settings/brand/playbook", query("")), SETTINGS_PATHS.brand);
     assert.equal(legacySettingsHref("/settings/email-templates", query("")), null);
     assert.equal(legacySettingsHref("/settings/general", query("")), null);
     assert.equal(legacySettingsHref("/settings/api-tokens", query("")), null);

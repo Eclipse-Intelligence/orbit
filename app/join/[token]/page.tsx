@@ -9,9 +9,9 @@ export const metadata = {
 };
 
 const CLOSED: Record<string, string> = {
-  accepted: "This invite has already been used. Sign in with the email and password you chose.",
-  revoked: "This invite was cancelled. Ask whoever invited you for a new one.",
-  expired: "This invite has expired. Ask whoever invited you for a new one.",
+  accepted: "This invite has already been used. Sign in instead.",
+  revoked: "This invite was cancelled. Ask for a new one.",
+  expired: "This invite has expired. Ask for a new one.",
 };
 
 export default async function JoinPage({ params }: { params: Promise<{ token: string }> }) {
