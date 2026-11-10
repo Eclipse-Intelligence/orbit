@@ -1,4 +1,4 @@
-import { decideActions, readDecisions, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
+import { decideActions, readDecisions, resumeConversation, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { AssistantError, gatewayConfigured } from "@/lib/assistant/gateway";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
@@ -47,6 +47,8 @@ export async function POST(request: Request) {
         const decisions = readDecisions(body);
         if (decisions && typeof body.conversationId === "string") {
           await decideActions(actor, { conversationId: body.conversationId, decisions }, emit, options);
+        } else if (body.resume === true && typeof body.conversationId === "string") {
+          await resumeConversation(actor, body.conversationId, emit, options);
         } else {
           await sendMessage(
             actor,
@@ -58,6 +60,7 @@ export async function POST(request: Request) {
               webSearch: body.webSearch,
               files: body.files,
               page: body.page,
+              steer: body.steer === true,
             },
             emit,
             options,

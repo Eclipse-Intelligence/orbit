@@ -9,8 +9,8 @@ export function messageFence(messageId: string) {
   return createHmac("sha256", appSecret()).update(`untrusted-fence:${messageId}`).digest("hex").slice(0, 12);
 }
 
-export function turnFence(rows: readonly { role: string; id: string }[], fallbackId: string) {
-  const user = rows.filter((row) => row.role === "user").at(-1);
+export function turnFence(rows: readonly { role: string; id: string; steering?: string | null }[], fallbackId: string) {
+  const user = rows.filter((row) => row.role === "user" && !row.steering).at(-1) ?? rows.filter((row) => row.role === "user").at(-1);
   return messageFence(user?.id ?? fallbackId);
 }
 

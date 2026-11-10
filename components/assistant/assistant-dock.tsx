@@ -1,7 +1,7 @@
 "use client";
 
 import WorkspaceTile from "@/components/workspaces/workspace-tile";
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useEffectEvent, useId, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
@@ -632,7 +632,6 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const [handledBrief, setHandledBrief] = useState<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const abort = useRef<AbortController | null>(null);
   const changed = useRef(false);
   const conversationId = useRef<string | null>(null);
   const modelChosen = useRef(false);
@@ -642,6 +641,11 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const waiting = useRef(false);
   const recovering = useRef(0);
   const view = useRef(0);
+  const streams = useRef(new Set<AbortController>());
+  const steerQueue = useRef<Promise<void>>(Promise.resolve());
+  const pickedUp = useRef(new Set<string>());
+  const shownMessages = useRef<DisplayMessage[]>([]);
+  const resumedFor = useRef<string | null>(null);
   const [connected, setConnected] = useState<ModelSource[] | null>(null);
   const [dragging, setDragging] = useState(false);
   const files = useEmailAttachments([], CHAT_UPLOADS);
@@ -658,12 +662,12 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   }, []);
 
   const follow = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<DisplayMessage[] | null> => {
       const token = ++recovering.current;
       const started = Date.now();
       while (Date.now() - started < FOLLOW_MS) {
         await new Promise((resolve) => window.setTimeout(resolve, FOLLOW_EVERY_MS));
-        if (conversationId.current !== id || recovering.current !== token) return;
+        if (conversationId.current !== id || recovering.current !== token) return null;
         const result = await getConversationAction(id).catch(() => null);
         if (!result || conversationId.current !== id || recovering.current !== token) continue;
         setMessages(result.messages);
@@ -671,56 +675,13 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
         if (!result.working) {
           setNotice(null);
           router.refresh();
-          return;
+          return result.messages;
         }
       }
+      return null;
     },
     [router],
   );
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const saved = readSettings();
-      settingsRead.current = true;
-      setModel(saved.model);
-      setReasoning(saved.reasoning);
-      setWebSearch(saved.webSearch);
-      const url = new URL(window.location.href);
-      const linked = url.searchParams.get(CHAT_PARAM);
-      if (linked) {
-        url.searchParams.delete(CHAT_PARAM);
-        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-      }
-      if (linked) modelChosen.current = true;
-      void applyDefaults();
-      const last = linked ?? sessionStorage.getItem(CONVERSATION_KEY);
-      if (last) {
-        const mine = view.current;
-        void getConversationAction(last).then((result) => {
-          if (view.current !== mine) return;
-          if (!result) {
-            if (linked) {
-              setOpen(true);
-              setError("That chat couldn't be opened.");
-            }
-            return;
-          }
-          setConversation(result.conversation);
-          setMessages(result.messages);
-          setWorking(result.working);
-          if (linked) {
-            const settings = settingsFor(result.conversation.model, result.conversation.reasoning);
-            setModel(settings.model);
-            setReasoning(settings.reasoning);
-            setWebSearch(result.conversation.webSearch);
-            setOpen(true);
-          }
-          if (result.working) void follow(result.conversation.id);
-        });
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [follow, applyDefaults]);
 
   useEffect(() => {
     if (!settingsRead.current) return;
@@ -736,6 +697,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
       else sessionStorage.removeItem(CONVERSATION_KEY);
     } catch {}
   }, [conversation]);
+
+  useEffect(() => {
+    shownMessages.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     const node = scroller.current;
@@ -770,7 +735,23 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
       conversationId.current = event.conversation.id;
       setConversation(event.conversation);
     }
-    if (event.type === "user") setMessages((current) => [...current.filter((message) => !message.id.startsWith("local-")), event.message]);
+    if (event.type === "user") {
+      const saved = pickedUp.current.has(event.message.id) ? { ...event.message, waiting: false } : event.message;
+      setMessages((current) => {
+        if (current.some((message) => message.id === saved.id)) return current;
+        if (!event.message.waiting) return [...current.filter((message) => !message.id.startsWith("local-") || message.waiting), saved];
+        const local = current.findIndex((message) => message.id.startsWith("local-") && message.waiting);
+        return [...current.filter((_, index) => index !== local), saved];
+      });
+    }
+    if (event.type === "steered") {
+      const ids = new Set(event.ids);
+      for (const id of event.ids) pickedUp.current.add(id);
+      setMessages((current) => {
+        const moved = current.filter((message) => ids.has(message.id)).map((message) => ({ ...message, waiting: false }));
+        return moved.length > 0 ? [...current.filter((message) => !ids.has(message.id)), ...moved] : current;
+      });
+    }
     if (event.type === "tool") {
       setLive((current) => {
         const others = current.filter((tool) => tool.id !== event.id);
@@ -813,10 +794,14 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     }
   }, []);
 
+  function abortStreams() {
+    for (const controller of streams.current) controller.abort();
+    streams.current.clear();
+  }
+
   function detach() {
     view.current += 1;
-    abort.current?.abort();
-    abort.current = null;
+    abortStreams();
     recovering.current += 1;
     waiting.current = false;
     setBusy(false);
@@ -825,27 +810,34 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     return view.current;
   }
 
-  async function run(body: Record<string, unknown>) {
-    const mine = ++view.current;
+  function resumeWaiting(list: DisplayMessage[], id: string | null) {
+    const held = list.filter((message) => message.waiting && !message.id.startsWith("local-"));
+    if (!id || held.length === 0 || list.some((message) => message.actions.some((action) => action.status === "pending"))) return;
+    const key = held.map((message) => message.id).join(",");
+    if (resumedFor.current === key) return;
+    resumedFor.current = key;
+    void run({ conversationId: id, resume: true });
+  }
+
+  async function stream(body: Record<string, unknown>, mine: number, onSaved?: (saved: boolean) => void) {
     const current = () => view.current === mine;
-    setBusy(true);
-    recovering.current += 1;
-    setWorking(null);
-    setError(null);
-    setNotice(null);
-    setLive([]);
-    setStreamed(null);
     const controller = new AbortController();
-    abort.current = controller;
+    streams.current.add(controller);
+    setBusy(true);
+    let clean = true;
     try {
       await streamAssistant(
         body,
         (event) => {
-          if (current()) onEvent(event);
+          if (!current()) return;
+          onEvent(event);
+          if (event.type === "user") onSaved?.(true);
+          if (event.type === "error") clean = false;
         },
         controller.signal,
       );
     } catch (caught) {
+      clean = false;
       if (!current()) return;
       if (!(caught instanceof Error && caught.name === "AbortError")) {
         const dropped = caught instanceof TypeError;
@@ -857,15 +849,20 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
         }
       }
     } finally {
-      if (abort.current === controller) abort.current = null;
-      if (current()) {
+      onSaved?.(false);
+      streams.current.delete(controller);
+      const last = streams.current.size === 0;
+      if (current() && last) {
         setBusy(false);
         setLive([]);
         setStreamed(null);
       }
-      if (current() && waiting.current && conversationId.current) {
+      if (current() && last && waiting.current && conversationId.current) {
         waiting.current = false;
-        void follow(conversationId.current);
+        const id = conversationId.current;
+        void follow(id).then((list) => list && resumeWaiting(list, id));
+      } else if (current() && last && clean) {
+        resumeWaiting(shownMessages.current, conversationId.current);
       }
       if (changed.current) {
         changed.current = false;
@@ -874,15 +871,63 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     }
   }
 
+  async function run(body: Record<string, unknown>) {
+    const mine = ++view.current;
+    setBusy(true);
+    recovering.current += 1;
+    setWorking(null);
+    setError(null);
+    setNotice(null);
+    setLive([]);
+    setStreamed(null);
+    await stream(body, mine);
+  }
+
+  function steer(message: string, attached: typeof files.files) {
+    const id = conversationId.current;
+    if (!id) return;
+    const mine = view.current;
+    setMessages((current) => [
+      ...current,
+      { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], files: attached, createdAt: new Date().toISOString(), waiting: true },
+    ]);
+    const body = { conversationId: id, message, files: attached.map((file) => file.id), page: pageSnapshot(), steer: true };
+    steerQueue.current = steerQueue.current.then(
+      () =>
+        new Promise<void>((resolve) => {
+          if (view.current !== mine) {
+            resolve();
+            return;
+          }
+          let settled = false;
+          void stream(body, mine, (saved) => {
+            if (settled) return;
+            settled = true;
+            if (!saved && view.current === mine) {
+              setMessages((current) => {
+                const unsent = current.findIndex((message) => message.id.startsWith("local-") && message.waiting);
+                return unsent < 0 ? current : current.filter((_, index) => index !== unsent);
+              });
+            }
+            resolve();
+          });
+        }),
+    );
+  }
+
   function send(text: string) {
     const typed = text.trim();
     const attached = files.files;
-    if ((!typed && attached.length === 0) || busy || files.uploading) return;
+    if ((!typed && attached.length === 0) || files.uploading || (busy && !conversationId.current)) return;
     const message = typed ? encodeMentions(typed, liveMentions(typed, mentions)) : "";
     pinned.current = true;
     setDraft("");
     setMentions([]);
     files.clear();
+    if (busy) {
+      steer(message, attached);
+      return;
+    }
     setMessages((current) => [
       ...current,
       { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], files: attached, createdAt: new Date().toISOString() },
@@ -897,6 +942,53 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
       page: pageSnapshot(),
     });
   }
+
+  const resumeOnLoad = useEffectEvent((list: DisplayMessage[], id: string) => resumeWaiting(list, id));
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const saved = readSettings();
+      settingsRead.current = true;
+      setModel(saved.model);
+      setReasoning(saved.reasoning);
+      setWebSearch(saved.webSearch);
+      const url = new URL(window.location.href);
+      const linked = url.searchParams.get(CHAT_PARAM);
+      if (linked) {
+        url.searchParams.delete(CHAT_PARAM);
+        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+      if (linked) modelChosen.current = true;
+      void applyDefaults();
+      const last = linked ?? sessionStorage.getItem(CONVERSATION_KEY);
+      if (last) {
+        const mine = view.current;
+        void getConversationAction(last).then((result) => {
+          if (view.current !== mine) return;
+          if (!result) {
+            if (linked) {
+              setOpen(true);
+              setError("That chat couldn't be opened.");
+            }
+            return;
+          }
+          setConversation(result.conversation);
+          setMessages(result.messages);
+          setWorking(result.working);
+          if (!result.working) resumeOnLoad(result.messages, result.conversation.id);
+          if (linked) {
+            const settings = settingsFor(result.conversation.model, result.conversation.reasoning);
+            setModel(settings.model);
+            setReasoning(settings.reasoning);
+            setWebSearch(result.conversation.webSearch);
+            setOpen(true);
+          }
+          if (result.working) void follow(result.conversation.id).then((list) => list && resumeOnLoad(list, result.conversation.id));
+        });
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [follow, applyDefaults]);
 
   function carriesFiles(event: DragEvent) {
     return Array.from(event.dataTransfer.types).includes("Files");
@@ -928,10 +1020,11 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   }
 
   function stopTurn() {
-    abort.current?.abort();
+    abortStreams();
     recovering.current += 1;
     waiting.current = false;
     setNotice(null);
+    setMessages((current) => current.map((message) => (message.waiting ? { ...message, waiting: false } : message)));
     if (conversationId.current) void stopConversationAction(conversationId.current);
   }
 
@@ -974,8 +1067,11 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     setConversation(result.conversation);
     setMessages(result.messages);
     setWorking(result.working);
-    if (result.working) void follow(result.conversation.id);
-    else recovering.current += 1;
+    if (result.working) void follow(result.conversation.id).then((list) => list && resumeWaiting(list, result.conversation.id));
+    else {
+      recovering.current += 1;
+      resumeWaiting(result.messages, result.conversation.id);
+    }
     const settings = settingsFor(result.conversation.model, result.conversation.reasoning);
     modelChosen.current = true;
     setModel(settings.model);
@@ -986,6 +1082,8 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   }
 
   const pendingBrief = unhandledBrief(brief, handledBrief);
+  const cardsWaiting = messages.some((message) => message.actions.some((action) => action.status === "pending"));
+  const canSend = Boolean(draft.trim() || files.ids.length > 0) && !files.uploading;
 
   function expand() {
     setOpen(true);
@@ -1169,7 +1267,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
           <div aria-hidden className="pointer-events-none sticky top-0 z-10 -mx-5 -mt-3 -mb-1 h-4 bg-gradient-to-b from-[#1c1c1c] to-transparent" />
           {messages.length > 0 || busy ? (
             <div className="flex flex-col gap-5">
-              {shownItems(messages, busy).map((item) =>
+              {shownItems(
+                messages.filter((message) => !message.waiting),
+                busy,
+              ).map((item) =>
                 "message" in item ? (
                   <Message key={item.key} message={item.message} busy={busy} onDecide={decide} />
                 ) : (
@@ -1182,6 +1283,14 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                   <Markdown text={streamed} />
                 </div>
               )}
+              {messages
+                .filter((message) => message.waiting)
+                .map((message) => (
+                  <div key={message.id} className="flex flex-col items-end gap-1">
+                    <Message message={message} busy={busy} onDecide={decide} />
+                    <p className="caption-style text-subtle">{!busy && cardsWaiting ? "Orbit reads this once you answer the changes above" : "Sent while Orbit was working"}</p>
+                  </div>
+                ))}
             </div>
           ) : (
             <div className="flex flex-col gap-3 pt-1 pb-2">
@@ -1227,7 +1336,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
 
         <form onSubmit={submit} className="shrink-0 px-5 pt-1 pb-3">
           <div className="flex flex-col gap-2">
-            <AttachmentList items={files.items} onRemove={files.remove} disabled={busy} />
+            <AttachmentList items={files.items} onRemove={files.remove} />
             <label htmlFor="assistant-input" className="sr-only">
               Message Orbit
             </label>
@@ -1312,18 +1421,19 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               </button>
               <AttachButton compact id="assistant-files" onFiles={(picked) => void files.add(picked)} />
               <span className="flex-1" />
-              {busy ? (
+              {busy && (
                 <Button variant="secondary" size="icon" type="button" aria-label="Stop" onClick={stopTurn}>
                   <StopIcon aria-hidden className="size-3.5" />
                 </Button>
-              ) : (
+              )}
+              {(!busy || canSend) && (
                 <Button
                   variant="primary"
                   size="icon"
                   type="submit"
                   aria-label="Send"
-                  title={files.uploading ? "Wait for the files to upload" : `Send (Enter). New line: ${mac ? "⇧" : "Shift"}+Enter`}
-                  disabled={(!draft.trim() && files.ids.length === 0) || files.uploading}
+                  title={files.uploading ? "Wait for the files to upload" : busy ? "Send now. Orbit takes it into account as it works" : `Send (Enter). New line: ${mac ? "⇧" : "Shift"}+Enter`}
+                  disabled={!canSend || (busy && !conversation)}
                 >
                   <ArrowUpIcon aria-hidden className="size-3.5" />
                 </Button>

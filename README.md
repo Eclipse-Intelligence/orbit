@@ -628,7 +628,8 @@ The account groups only appear once the account is connected. Reasoning is Low, 
 1. You send a message (up to 200,000 characters). Any changes still waiting for approval in that chat are cancelled first.
 2. The model gets the system prompt (who you are, the brand profile, a map of tool areas and guides, the rules and answer style), the main tools, and the chat so far. Your latest message ends with a short Orbit block giving the date and time in London, whether web search is on and the learned notes related to it. Other tools load by area when a task needs them, and guides for jobs such as first emails, proposals and workflows are read when needed. In a very long chat, older tool results are shortened and the earliest messages are left out.
 3. Read tools the model asks for run straight away and in parallel, and the dock shows each one as it runs (for example "Checking tasks"). Their results go back to the model, which can call more tools.
-4. The turn ends when the model replies without tools, or when it proposes changes. A turn stops after 40 model calls, and pauses with "I ran out of time on this step" when less than 15 seconds of its five-minute budget is left. Say "carry on" to continue. Stop ends the turn on the server too, not just in the browser. A read tool that runs for more than 90 seconds is stopped (approved actions always run to the end, and each one runs only once even if it is confirmed twice), a turn that has read more than the model can hold stops with "carry on", and if the model gateway is briefly unavailable the call is retried once.
+4. You can keep typing while it works ("actually, only the London ones"). The message shows in the chat straight away, marked "Sent while Orbit was working", and Orbit takes it into account before its next step, or answers it straight after if it had already finished. A message sent while changes wait for approval is read once you confirm or cancel them. Stop still stops everything.
+5. The turn ends when the model replies without tools, or when it proposes changes. A turn stops after 40 model calls, and pauses with "I ran out of time on this step" when less than 15 seconds of its five-minute budget is left. Say "carry on" to continue. Stop ends the turn on the server too, not just in the browser. A read tool that runs for more than 90 seconds is stopped (approved actions always run to the end, and each one runs only once even if it is confirmed twice), a turn that has read more than the model can hold stops with "carry on", and if the model gateway is briefly unavailable the call is retried once.
 
 Replies are markdown, with links to the records they mention. Copy copies a reply as plain text, and Stop ends the request in the browser. If the connection drops, the dock keeps checking the chat and shows the answer when it is saved.
 
@@ -725,7 +726,7 @@ Claude account models run through Orbit Agent, a small command-line program on y
 2. In Settings › Connections, AI accounts, choose Pair a Mac. Orbit shows a command with a one-time code that works for 10 minutes:
 
    ```bash
-   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent-1.5.2.tgz orbit-agent --pair ABCD-EFGH --install
+   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent-1.6.0.tgz orbit-agent --pair ABCD-EFGH --install
    ```
 
    The version in the address is the one current when the command was shown. Every `/downloads/orbit-agent-<version>.tgz` address serves the current package (a rewrite in `next.config.ts`), so an older command or an installed agent never gets a 404. On any other Orbit address the command uses that address for the package and adds `--url <address>`.
@@ -751,12 +752,13 @@ Claude Code runs with Orbit's tools only, plus web search when it is on. It has 
 
 | Method | Path | Auth | What it does |
 | --- | --- | --- | --- |
-| `POST` | `/api/assistant` | Signed-in session; 60 requests per 10 minutes per person | Send a message or decide on proposed changes. Streams NDJSON events. |
+| `POST` | `/api/assistant` | Signed-in session; 60 requests per 10 minutes per person | Send a message (`steer: true` while a turn runs), decide on proposed changes, or `resume: true` to answer messages left waiting. Streams NDJSON events. |
 | `GET` | `/api/assistant/probe` | `Authorization: Bearer <CRON_SECRET>` | Checks tool calling (and, with `search=1`, web search) on each model |
 | `POST` | `/api/companion/pair` | None; one-time pairing code in the body; 10 attempts per 10 minutes per IP | Swaps a pairing code for an agent token |
 | `GET` | `/api/companion/me` | `Authorization: Bearer oa_…` | The paired Mac, its user and workspace |
 | `GET` | `/api/companion/next` | `Authorization: Bearer oa_…` | Waits up to 25 seconds for the next job |
 | `POST` | `/api/companion/jobs/{id}/tool` | `Authorization: Bearer oa_…`, job claimed by this Mac | Runs one read tool as the paired user |
+| `POST` | `/api/companion/jobs/{id}/messages` | `Authorization: Bearer oa_…`, job claimed by this Mac | The messages sent in the chat while the job runs |
 | `POST` | `/api/companion/jobs/{id}/complete` | `Authorization: Bearer oa_…`, job claimed by this Mac | Saves the answer |
 | `POST` | `/api/companion/jobs/{id}/fail` | `Authorization: Bearer oa_…`, job claimed by this Mac | Marks the job failed with a message |
 

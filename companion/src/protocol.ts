@@ -26,6 +26,10 @@ export type CompanionToolResult = { content: string; isError: boolean };
 
 export type CompanionSource = { url: string; title: string | null };
 
+export type CompanionSteer = { id: string; text: string };
+
+export type CompanionSteered = { id: string; step: number };
+
 export const PROPOSED =
   "Proposed. Orbit will show this change to the user for approval. It has not happened yet. Do not call this tool again for the same change. When you have proposed everything, say in one or two sentences what you proposed and stop.";
 
@@ -35,6 +39,7 @@ export type CompanionResult = {
   sources: CompanionSource[];
   model: string | null;
   usage: Record<string, unknown> | null;
+  steered?: CompanionSteered[];
 };
 
 export type PairResponse = { token: string; companionId: string; email: string | null; workspace: string | null };

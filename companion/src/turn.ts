@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type * as AgentSdk from "@anthropic-ai/claude-agent-sdk";
 import type {
   CompanionCall,
   CompanionRequest,
   CompanionResult,
   CompanionSource,
+  CompanionSteer,
+  CompanionSteered,
   CompanionStep,
   CompanionToolResult,
 } from "./protocol";
@@ -22,12 +24,15 @@ type TurnDeps = {
   signal?: AbortSignal;
   onTool?: (name: string) => void;
   onDraft?: (text: string) => void;
+  steers?: () => Promise<CompanionSteer[]>;
+  steerEveryMs?: number;
 };
 
 const SERVER = "orbit";
 const PREFIX = `mcp__${SERVER}__`;
 const MAX_TURNS = 40;
 const MCP_OUTPUT_TOKENS = "60000";
+const STEER_EVERY_MS = 3_000;
 
 export const STOPPED = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
 export const CUT_OFF = "The answer was cut off. Ask me to continue.";
@@ -93,6 +98,46 @@ function collectSources(value: unknown, into: Map<string, CompanionSource>, dept
   for (const nested of Object.values(record)) collectSources(nested, into, depth + 1);
 }
 
+function userMessage(id: string, text: string): SDKUserMessage {
+  return { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null, uuid: id as SDKUserMessage["uuid"] };
+}
+
+function inbox(first: SDKUserMessage) {
+  const queue: SDKUserMessage[] = [first];
+  let wake: (() => void) | null = null;
+  let closed = false;
+  async function* messages(): AsyncGenerator<SDKUserMessage> {
+    for (;;) {
+      const next = queue.shift();
+      if (next) {
+        yield next;
+        continue;
+      }
+      if (closed) return;
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      wake = null;
+    }
+  }
+  return {
+    messages,
+    push(message: SDKUserMessage) {
+      if (closed) return false;
+      queue.push(message);
+      wake?.();
+      return true;
+    },
+    close() {
+      closed = true;
+      wake?.();
+    },
+    get closed() {
+      return closed;
+    },
+  };
+}
+
 export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promise<CompanionResult> {
   const server = deps.sdk.createSdkMcpServer({
     name: SERVER,
@@ -120,56 +165,95 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
   let cutOff = false;
 
   let draft = "";
-  const stream = deps.sdk.query({ prompt: request.prompt, options: turnOptions(request, { [SERVER]: server }, deps, abort) });
-  for await (const message of stream as AsyncIterable<SDKMessage>) {
-    if (message.type === "stream_event") {
-      if (message.parent_tool_use_id) continue;
-      const event = message.event as { type?: string; delta?: { type?: string; text?: string } };
-      if (event.type === "message_start") draft = "";
-      else if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-        draft += event.delta.text;
-        deps.onDraft?.(draft);
+  const input = deps.steers ? inbox(userMessage(randomUUID(), request.prompt)) : null;
+  const pushed: CompanionSteered[] = [];
+  const seenSteers = new Set<string>();
+  const consumed = new Set<string>();
+  let reported = false;
+  let started = 0;
+  let polling = false;
+  const poll = async () => {
+    if (!deps.steers || !input || input.closed || polling) return;
+    polling = true;
+    try {
+      for (const steer of await deps.steers()) {
+        if (seenSteers.has(steer.id) || input.closed) continue;
+        seenSteers.add(steer.id);
+        if (input.push(userMessage(steer.id, steer.text))) pushed.push({ id: steer.id, step: started });
       }
-    } else if (message.type === "assistant") {
-      if (message.parent_tool_use_id) continue;
-      const id = message.message.id ?? message.uuid;
-      const step = steps.get(id) ?? { text: "", calls: [] };
-      steps.set(id, step);
-      model = message.message.model ?? model;
-      if (message.error === "max_output_tokens") cutOff = true;
-      for (const block of message.message.content ?? []) {
-        if (block.type === "text" && block.text) {
-          step.text = step.text ? `${step.text}\n\n${block.text}` : block.text;
-        } else if (block.type === "tool_use") {
-          if (block.name.startsWith(PREFIX)) {
-            step.calls.push({ id: block.id, name: block.name.slice(PREFIX.length), arguments: JSON.stringify(block.input ?? {}) });
-          } else if (block.name === "WebSearch") {
-            webCalls.add(block.id);
+    } catch {
+      return;
+    } finally {
+      polling = false;
+    }
+  };
+  const timer = input ? setInterval(() => void poll(), deps.steerEveryMs ?? STEER_EVERY_MS) : null;
+  abort.signal.addEventListener("abort", () => input?.close(), { once: true });
+  const stream = deps.sdk.query({ prompt: input ? input.messages() : request.prompt, options: turnOptions(request, { [SERVER]: server }, deps, abort) });
+  try {
+    for await (const message of stream as AsyncIterable<SDKMessage>) {
+      if (message.type === "stream_event") {
+        if (message.parent_tool_use_id) continue;
+        const event = message.event as { type?: string; delta?: { type?: string; text?: string } };
+        if (event.type === "message_start") {
+          draft = "";
+          started += 1;
+        } else if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
+          draft += event.delta.text;
+          deps.onDraft?.(draft);
+        }
+      } else if (message.type === "assistant") {
+        if (message.parent_tool_use_id) continue;
+        const id = message.message.id ?? message.uuid;
+        const step = steps.get(id) ?? { text: "", calls: [] };
+        steps.set(id, step);
+        model = message.message.model ?? model;
+        if (message.error === "max_output_tokens") cutOff = true;
+        for (const block of message.message.content ?? []) {
+          if (block.type === "text" && block.text) {
+            step.text = step.text ? `${step.text}\n\n${block.text}` : block.text;
+          } else if (block.type === "tool_use") {
+            if (block.name.startsWith(PREFIX)) {
+              step.calls.push({ id: block.id, name: block.name.slice(PREFIX.length), arguments: JSON.stringify(block.input ?? {}) });
+            } else if (block.name === "WebSearch") {
+              webCalls.add(block.id);
+            }
           }
         }
-      }
-    } else if (message.type === "user") {
-      if (message.parent_tool_use_id) continue;
-      const content = message.message.content;
-      if (!Array.isArray(content)) continue;
-      for (const block of content) {
-        if (block.type !== "tool_result") continue;
-        if (webCalls.has(block.tool_use_id)) {
-          collectSources(message.tool_use_result, sources);
-          continue;
+      } else if (message.type === "user") {
+        if (message.parent_tool_use_id) continue;
+        const content = message.message.content;
+        if (!Array.isArray(content)) continue;
+        for (const block of content) {
+          if (block.type !== "tool_result") continue;
+          if (webCalls.has(block.tool_use_id)) {
+            collectSources(message.tool_use_result, sources);
+            continue;
+          }
+          results[block.tool_use_id] = { content: text(block.content), isError: block.is_error === true };
         }
-        results[block.tool_use_id] = { content: text(block.content), isError: block.is_error === true };
+      } else if (message.type === "result") {
+        usage = (message.usage as unknown as Record<string, unknown>) ?? null;
+        if (message.stop_reason === "max_tokens") cutOff = true;
+        if (message.subtype === "error_max_turns") stopped = true;
+        else if (message.subtype !== "success") failure = message.errors.join(" ") || "Claude Code stopped before finishing.";
+        else if (message.is_error && !cutOff) failure = message.result || "Claude Code couldn't answer.";
+        const echoed = (message as { user_message_uuids?: unknown }).user_message_uuids;
+        if (Array.isArray(echoed)) {
+          reported = true;
+          for (const id of echoed) if (typeof id === "string") consumed.add(id);
+        }
+        const queued = (message as { queued_turn_count?: unknown }).queued_turn_count;
+        if (!(typeof queued === "number" && queued > 0)) input?.close();
       }
-    } else if (message.type === "result") {
-      usage = (message.usage as unknown as Record<string, unknown>) ?? null;
-      if (message.stop_reason === "max_tokens") cutOff = true;
-      if (message.subtype === "error_max_turns") stopped = true;
-      else if (message.subtype !== "success") failure = message.errors.join(" ") || "Claude Code stopped before finishing.";
-      else if (message.is_error && !cutOff) failure = message.result || "Claude Code couldn't answer.";
     }
+  } finally {
+    if (timer) clearInterval(timer);
+    input?.close();
   }
   if (failure) throw new Error(failure);
   const ending = stopped ? STOPPED : cutOff ? CUT_OFF : null;
   const finished = ending ? [...steps.values(), { text: ending, calls: [] }] : [...steps.values()];
-  return { steps: finished, results, sources: [...sources.values()], model, usage };
+  const steered = pushed.filter((entry) => (reported ? consumed.has(entry.id) : entry.step < started));
+  return { steps: finished, results, sources: [...sources.values()], model, usage, ...(steered.length > 0 ? { steered } : {}) };
 }

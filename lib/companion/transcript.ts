@@ -16,8 +16,11 @@ function clip(text: string, max: number) {
   return text.length > max ? `${text.slice(0, max)}\n[cut ${text.length - max} characters]` : text;
 }
 
-export function buildPrompt(messages: ChatMessage[]) {
-  const turns = messages.filter((message) => message.role !== "system");
+export function buildPrompt(messages: ChatMessage[], followUps = 0) {
+  const all = messages.filter((message) => message.role !== "system");
+  const later = followUps > 0 ? all.slice(-followUps) : [];
+  const turns = all.slice(0, all.length - later.length);
+  const also = later.length > 0 ? `\n\nWhile you were working, the user also wrote:\n${later.map((message) => `<user>\n${escape(String(message.content ?? ""))}\n</user>`).join("\n")}` : "";
   const lastUser = turns.map((message) => message.role).lastIndexOf("user");
   const endsWithUser = lastUser === turns.length - 1 && lastUser >= 0;
   const earlier = endsWithUser ? turns.slice(0, lastUser) : turns;
@@ -55,7 +58,7 @@ export function buildPrompt(messages: ChatMessage[]) {
 
   if (endsWithUser) {
     const latest = (turns[lastUser] as { content: string }).content;
-    return history ? `${history}\n\nThe user's latest message:\n${latest}` : latest;
+    return `${history ? `${history}\n\nThe user's latest message:\n${latest}` : latest}${also}`;
   }
-  return `${history}\n\nThe user has just approved or cancelled the actions you proposed. Their results are the last tool results above. Tell the user briefly what happened, then carry on with anything left to do.`;
+  return `${history}\n\nThe user has just approved or cancelled the actions you proposed. Their results are the last tool results above. Tell the user briefly what happened, then carry on with anything left to do.${also}`;
 }

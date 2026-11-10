@@ -26,11 +26,15 @@ export const LOST_MESSAGE = "I couldn't finish that. Orbit Agent on your Mac sto
 
 type ToolEvent = { type: "tool"; id: string; name: string; label: string; status: "running" | "done" };
 
+type SteeredEvent = { type: "steered"; ids: string[] };
+
+type JobEvent = ToolEvent | SteeredEvent;
+
 type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 type JobState = {
   status: JobStatus;
-  events: ToolEvent[];
+  events: JobEvent[];
   result: { messageIds: string[] } | null;
   error: string | null;
   draft: string | null;
@@ -237,6 +241,21 @@ async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
   return job;
 }
 
+export async function companionJobConversation(auth: AuthenticatedCompanion, jobId: string) {
+  return (await runningJob(auth, jobId)).conversation_id;
+}
+
+export async function noteSteered(auth: AuthenticatedCompanion, jobId: string, ids: string[]) {
+  if (ids.length === 0) return;
+  await withActor(auth.actor, async (db) => {
+    const result = await db.query<{ events: JobEvent[] }>("select events from crm.ai_companion_jobs where id = $1 and user_id = $2 for update", [jobId, auth.actor.userId]);
+    const known = new Set((result.rows[0]?.events ?? []).flatMap((event) => (event.type === "steered" ? event.ids : [])));
+    const fresh = ids.filter((id) => !known.has(id));
+    if (fresh.length === 0) return;
+    await db.query("update crm.ai_companion_jobs set events = events || $2::jsonb, updated_at = now() where id = $1", [jobId, JSON.stringify([{ type: "steered", ids: fresh }])]);
+  });
+}
+
 async function addEvent(auth: AuthenticatedCompanion, jobId: string, event: ToolEvent) {
   await withActor(auth.actor, (db) =>
     db.query("update crm.ai_companion_jobs set events = events || $2::jsonb where id = $1", [jobId, JSON.stringify([event])]),
@@ -405,6 +424,7 @@ export async function finishCompanionJob(
     await withActor(auth.actor, (db) =>
       db.query("update crm.ai_companion_jobs set result = $2::jsonb where id = $1", [jobId, JSON.stringify({ messageIds })]),
     );
+    return conversationId;
   } catch (error) {
     await withActor(auth.actor, async (db) => {
       await db.query("update crm.ai_companion_jobs set status = 'failed', error = $2 where id = $1", [jobId, "Orbit couldn't save the answer."]);
@@ -417,12 +437,13 @@ export async function finishCompanionJob(
 export async function failCompanionJob(auth: AuthenticatedCompanion, jobId: string, error: unknown) {
   await runningJob(auth, jobId);
   const message = typeof error === "string" && error.trim() ? error.trim().slice(0, 1_000) : "Orbit Agent couldn't answer.";
-  await withActor(auth.actor, async (db) => {
+  return withActor(auth.actor, async (db) => {
     const failed = await db.query<{ conversation_id: string }>(
       "update crm.ai_companion_jobs set status = 'failed', error = $2, finished_at = now(), results = '{}'::jsonb where id = $1 and status = 'running' returning conversation_id",
       [jobId, message],
     );
     await closeJobs(db, auth.actor, failed.rows.map((row) => row.conversation_id), failureReply(message));
+    return failed.rows[0]?.conversation_id ?? null;
   });
 }
 
@@ -450,11 +471,18 @@ export function readCompanionResult(body: unknown): CompanionResult {
       ? [{ url: source.url, title: typeof source.title === "string" ? source.title : null }]
       : [];
   });
+  const steered = (Array.isArray(input.steered) ? input.steered : []).slice(0, 50).flatMap((raw) => {
+    const entry = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    return typeof entry.id === "string" && isUuid(entry.id) && typeof entry.step === "number" && Number.isInteger(entry.step) && entry.step >= 0
+      ? [{ id: entry.id, step: entry.step }]
+      : [];
+  });
   return {
     steps,
     results,
     sources,
     model: typeof input.model === "string" ? input.model : null,
     usage: input.usage && typeof input.usage === "object" ? (input.usage as Record<string, unknown>) : null,
+    ...(steered.length > 0 ? { steered } : {}),
   };
 }
