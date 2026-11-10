@@ -30,7 +30,7 @@ export async function saveBrandProfileAction(input: unknown): Promise<Result<{ s
     revalidatePath(SETTINGS_PATHS.brand, "layout");
     return { saved };
   } catch (error) {
-    return failure(error, "Could not save the brand profile.");
+    return failure(error, "Couldn't save. Try again.");
   }
 }
 
@@ -39,7 +39,7 @@ export async function draftBrandAction(input: { website: string }): Promise<Resu
   try {
     return { draft: await draftBrandFromWebsite(user, input, { deadline: Date.now() + 90_000 }) };
   } catch (error) {
-    return failure(error, "Could not draft from the website.");
+    return failure(error, "Couldn't draft from the website. Try again.");
   }
 }
 
@@ -50,6 +50,6 @@ export async function saveBrandPlaybookAction(input: unknown): Promise<Result<{ 
     revalidatePath(SETTINGS_PATHS.brand, "layout");
     return { saved };
   } catch (error) {
-    return failure(error, "Could not save the playbook.");
+    return failure(error, "Couldn't save. Try again.");
   }
 }

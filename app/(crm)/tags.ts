@@ -64,7 +64,7 @@ async function editRecord(
     refresh();
     return { tags: record.tags };
   } catch (error) {
-    return { error: message(error, "Could not save the tag.") };
+    return { error: message(error, "Couldn't save the tag. Try again.") };
   }
 }
 
@@ -89,7 +89,7 @@ async function bulkTag(
     refresh();
     return { results };
   } catch (error) {
-    return { error: message(error, "Something went wrong.") };
+    return { error: message(error, "Couldn't tag those records. Try again.") };
   }
 }
 
@@ -108,7 +108,7 @@ export async function renameTagAction(from: string, to: string): Promise<TagChan
     refresh();
     return result;
   } catch (error) {
-    return { error: message(error, "Could not rename the tag.") };
+    return { error: message(error, "Couldn't rename the tag. Try again.") };
   }
 }
 
@@ -119,6 +119,6 @@ export async function deleteTagAction(name: string): Promise<TagChangeResult> {
     refresh();
     return result;
   } catch (error) {
-    return { error: message(error, "Could not delete the tag.") };
+    return { error: message(error, "Couldn't delete the tag. Try again.") };
   }
 }

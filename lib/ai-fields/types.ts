@@ -123,12 +123,10 @@ export function costHint(kind: AiFieldKind, companies: number, refresh: AiFieldR
   const count = Math.max(0, Math.round(companies));
   const fill = count * unit;
   const monthly = refresh === "manual" ? 0 : refresh === "weekly" ? fill * WEEKS_A_MONTH : fill;
-  const checks = `About ${count.toLocaleString("en-GB")} web ${count === 1 ? "check" : "checks"} to fill it, ${money(fill)}`;
-  const text = refresh === "manual" ? `${checks}, then only when you ask.` : `${checks}, then about ${money(monthly)} a month.`;
-  const note = usesDecisions(kind)
-    ? "Yes or no and pick from list questions about the same company share one check, so more of them cost no more."
-    : "Numbers and short text need a longer check, $0.01 a company. Other number and short text fields share it.";
-  return { fill, monthly, text, note };
+  const cost = money(fill);
+  const filled = `${cost[0].toUpperCase()}${cost.slice(1)} to fill (${count.toLocaleString("en-GB")} ${count === 1 ? "check" : "checks"})`;
+  const text = refresh === "manual" ? `${filled}.` : `${filled}, then about ${money(monthly)} a month.`;
+  return { fill, monthly, text };
 }
 
 const STAFF_PATTERN = /\b(staff|employees?|headcount|head count|workforce|team size|people work|work(?:s|ing)? (?:at|for)|how many people)\b/i;

@@ -26,8 +26,7 @@ export default function JoinForm({
       <div className="border-border bg-card flex w-full max-w-[420px] flex-col gap-3 rounded-2xl border p-6">
         <h1>Check your email</h1>
         <p className="text-muted-foreground">
-          We&apos;ve sent a confirmation link to {state.confirmEmail}. Open it, then sign in with your email and the password you
-          just chose.
+          Open the confirmation link sent to {state.confirmEmail}, then sign in.
         </p>
         <a href="/login" className="text-foreground underline underline-offset-2">
           Go to sign in
@@ -41,15 +40,13 @@ export default function JoinForm({
       <input type="hidden" name="token" value={token} />
       <div className="mb-6 flex flex-col gap-2">
         <h1>Join {workspaceName}</h1>
-        <p className="text-muted-foreground">
-          {invitedBy ? `${invitedBy} invited you to Orbit.` : "You've been invited to Orbit."} Set up your login to get started.
-        </p>
+        {invitedBy && <p className="text-muted-foreground">{invitedBy} invited you.</p>}
       </div>
       <div className="flex flex-col gap-4">
         <Field label="Email" htmlFor="join-email">
           <Input id="join-email" type="email" value={email} readOnly disabled />
         </Field>
-        <Field label="Your name" htmlFor="join-name" required error={state.error}>
+        <Field label="Name" htmlFor="join-name" required error={state.error}>
           <Input
             id="join-name"
             name="name"
@@ -67,7 +64,7 @@ export default function JoinForm({
       </div>
       <div className="mt-6 flex flex-wrap gap-2">
         <Button type="submit" variant="primary" size="md" disabled={pending}>
-          {pending ? "Setting up…" : "Join"}
+          {pending ? "Joining…" : "Join"}
         </Button>
       </div>
     </form>

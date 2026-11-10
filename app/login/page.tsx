@@ -26,7 +26,7 @@ export default async function LoginPage({
       <LoginForm
         resets={supabaseConfigured()}
         next={after ?? undefined}
-        notice={confirmed ? "Email confirmed. Sign in to continue." : undefined}
+        notice={confirmed ? "Email confirmed." : undefined}
         hintEmail={
           process.env.NODE_ENV === "production" || supabaseConfigured()
             ? undefined

@@ -174,7 +174,7 @@ export function UseTemplateButton({
                   className="caption-style text-subtle py-10 text-center"
                   role="status"
                 >
-                  Loading templates…
+                  Loading…
                 </p>
               ) : (
                 <CommandEmpty className="flex flex-col items-center gap-2 px-4 py-8">
@@ -182,14 +182,14 @@ export function UseTemplateButton({
                     <span className="text-danger">{error}</span>
                   ) : templates && templates.length === 0 ? (
                     <>
-                      <span>No templates yet.</span>
+                      <span>No templates</span>
                       <Button
                         variant="link"
                         size="none"
                         href={SETTINGS_PATHS.emailTemplates}
                         className="caption-style"
                       >
-                        Create one in Settings
+                        Create one
                       </Button>
                     </>
                   ) : (
@@ -343,7 +343,7 @@ export function SaveTemplateForm({
         className="caption-style text-subtle"
         htmlFor={`template-name-${idPrefix}`}
       >
-        Template name
+        Name
       </label>
       <Input
         id={`template-name-${idPrefix}`}
@@ -351,7 +351,6 @@ export function SaveTemplateForm({
         autoFocus
         autoComplete="off"
         maxLength={TEMPLATE_NAME_MAX}
-        placeholder="For example, Intro follow-up"
         aria-invalid={error ? true : undefined}
         onChange={(event) => setName(event.target.value)}
       />
@@ -374,7 +373,7 @@ export function SaveTemplateForm({
           type="submit"
           disabled={pending || !name.trim()}
         >
-          {pending ? "Saving…" : "Save template"}
+          {pending ? "Saving…" : "Save"}
         </Button>
         <Button
           variant="ghost"

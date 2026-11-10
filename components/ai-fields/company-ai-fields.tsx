@@ -157,7 +157,7 @@ function Editor({ field, answer, companyId, onDone }: { field: AiField; answer: 
       ) : null}
       {control}
       <span className="caption-style text-subtle leading-[1.4]">
-        {summary ? `${summary} ` : ""}Saving your own keeps it and stops checks.
+        {summary ? `${summary} ` : ""}Your answer stops further checks.
       </span>
       {error && (
         <span role="alert" className="caption-style text-danger">
@@ -335,11 +335,11 @@ export default function CompanyAiFields({
       )}
       <dl className="grid grid-cols-[6em_1fr] gap-x-3 gap-y-3 text-[14px] leading-5">
         {fit && (
-          <Row label="ICP fit">
+          <Row label="Fit">
             <span className="flex flex-col gap-0.5">
               <span>
                 {fit.label}, {fit.score.toFixed(1)} of 4
-                {fit.stale && <span className="text-subtle"> (before your ICP changed)</span>}
+                {fit.stale && <span className="text-subtle"> (out of date)</span>}
               </span>
               <Sources sources={fit.sources} checkedAt={fit.checkedAt} />
             </span>

@@ -75,7 +75,7 @@ export function FilePicker({
         id={fieldId}
         value={query}
         autoFocus
-        placeholder="Search people by name or email"
+        placeholder="Search contacts"
         onChange={(event) => setQuery(event.target.value)}
         onKeyDown={keepInPicker}
       />
@@ -88,10 +88,10 @@ export function FilePicker({
         <p className="caption-style text-subtle px-1 py-2">Searching…</p>
       ) : results?.failed ? (
         <p role="alert" className="caption-style text-danger px-1 py-2">
-          Search is unavailable right now. Try again in a moment.
+          Search failed. Try again.
         </p>
       ) : results && results.contacts.length === 0 ? (
-        <p className="caption-style text-subtle px-1 py-2">{trimmed ? `No contacts match “${trimmed}”.` : "No contacts yet."}</p>
+        <p className="caption-style text-subtle px-1 py-2">{trimmed ? "No matches" : "No contacts"}</p>
       ) : (
         <ul className="flex max-h-64 flex-col overflow-auto">
           {results?.contacts.map((contact) => (

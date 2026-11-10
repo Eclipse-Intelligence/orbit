@@ -192,6 +192,7 @@ export function settingsAnchorRedirect(pathname: string, search: string, hash: s
 const MOVED_PAGES: Record<string, string> = {
   "/settings/integrations": SETTINGS_PATHS.connections,
   "/settings/api": SETTINGS_PATHS.apiTokens,
+  "/settings/brand/playbook": SETTINGS_PATHS.brand,
 };
 
 export function settingsRedirect(search: URLSearchParams) {

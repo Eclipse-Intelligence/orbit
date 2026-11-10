@@ -48,7 +48,7 @@ export function ClickUpBadge({ task, className }: { task: Task; className?: stri
   }
   if (!task.clickupListId) return null;
   return (
-    <span title={task.clickupError ?? "Waiting to reach ClickUp"} className={cn(base, task.clickupError ? "text-danger" : "text-subtle")}>
+    <span title={task.clickupError ?? undefined} className={cn(base, task.clickupError ? "text-danger" : "text-subtle")}>
       <ClickUpIcon aria-hidden className="size-3" />
       {task.clickupError ? "ClickUp failed" : "ClickUp pending"}
     </span>

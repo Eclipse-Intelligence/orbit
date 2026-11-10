@@ -298,7 +298,7 @@ describe("invite rules", () => {
         { email: "carol@acme.test", name: null },
       ],
     );
-    assert.throws(() => cleanGuests([{ email: "Founder@orbit-invites.test" }], own), /someone other than yourself/);
+    assert.throws(() => cleanGuests([{ email: "Founder@orbit-invites.test" }], own), /already the organiser/);
     assert.throws(() => cleanGuests([], own), /at least one guest/);
     assert.throws(() => cleanGuests([{ email: "not-an-email" }], own), /“not-an-email” isn't a valid email/);
     const many = Array.from({ length: 51 }, (_, index) => ({ email: `guest${index}@acme.test` }));

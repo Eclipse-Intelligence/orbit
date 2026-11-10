@@ -13,7 +13,7 @@ export default async function TeamSettingsPage() {
   const [team, mailbox, workspaces] = await Promise.all([getTeam(user), getMailbox(user), getWorkspaceChoices()]);
   const connected = mailbox?.status === "connected";
   return (
-    <SettingsPage title="Team" description={`Who's in ${user.workspaceName}, what they can do, and inviting someone new.`}>
+    <SettingsPage title="Team">
       <TeamSettings
         team={team}
         workspaceName={user.workspaceName}

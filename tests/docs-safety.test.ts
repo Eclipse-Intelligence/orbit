@@ -68,7 +68,7 @@ after(async () => {
 describe("edit without asking", () => {
   it("only lets the owner switch it on, and only honours it for the owner", async () => {
     const shared = await createDoc(mark, { title: "Mark's shared plan", content: "Plan", shared: true });
-    await assert.rejects(setAssistantCanEdit(priya, shared.id, true), /Only Mark Ridgeon can let the assistant edit this doc without asking/);
+    await assert.rejects(setAssistantCanEdit(priya, shared.id, true), /Only Mark Ridgeon can let the assistant edit this note without asking/);
     assert.equal(await assistantMayEdit(mark, shared.id), false);
     await assert.rejects(
       queryAsUser(priya.userId, "update crm.pages set assistant_can_edit = true where id = $1", [shared.id]),
@@ -251,11 +251,9 @@ describe("REST API edge cases", () => {
     assert.equal((await getDoc(agent, shared.id)).visibility, "shared");
 
     for (const query of ["?limit=abc", "?offset=abc", "?limit=-5&offset=1e309", "?q=agent&limit=NaN"]) {
-      assert.equal((await listRoute(request(`/docs${query}`))).status, 200, query);
+      assert.equal((await listRoute(request(`/docs${query}`))).status, 400, query);
     }
-    const far = await readRoute(request(`/docs/${shared.id}?offset=1e300`), params(shared.id));
-    assert.equal(far.status, 200);
-    assert.equal(((await far.json()) as { nextOffset: number | null }).nextOffset, null);
+    assert.equal((await readRoute(request(`/docs/${shared.id}?offset=1e300`), params(shared.id))).status, 400);
     assert.equal((await listDocs(agent, { limit: Number.NaN, offset: Number.POSITIVE_INFINITY })).data.length > 0, true);
     assert.ok(Array.isArray(await searchDocs(agent, "agent", { limit: Number.NaN })));
   });

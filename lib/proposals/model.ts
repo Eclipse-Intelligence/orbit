@@ -11,7 +11,7 @@ export type DocumentStatus = "draft" | "sent" | "viewed" | "client_signed" | "co
 export const STATUS_LABELS: Record<DocumentStatus | "expired", string> = {
   draft: "Draft",
   sent: "Sent",
-  viewed: "Viewed",
+  viewed: "Opened",
   client_signed: "Signed by client",
   completed: "Signed",
   declined: "Declined",

@@ -104,7 +104,7 @@ type Reader = () => NoteText;
 
 const RECENT_KEY = "orbit-docs-recent";
 const SAVE_DELAY_MS = 500;
-const UNSAVED = "Your latest changes haven't saved yet, so nothing was restored. Try again once they have.";
+const UNSAVED = "Your latest changes haven't saved yet. Try again once they have.";
 
 let noticeId = 0;
 let session = 0;
@@ -459,7 +459,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       void get().refreshTitles();
       return page;
     } catch (error) {
-      get().notify(message(error, "Could not create the note."), { tone: "alert" });
+      get().notify(message(error, "Couldn't create the note. Try again."), { tone: "alert" });
       return null;
     }
   },
@@ -472,7 +472,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       set((state) => ({ pages: state.pages[page.id] ? state.pages : { ...state.pages, [page.id]: page }, summaries: { ...state.summaries, [page.id]: state.summaries[page.id] ?? summaryFrom(page) } }));
       return get().pages[page.id] ?? page;
     } catch (error) {
-      get().notify(message(error, "Could not open the daily note."), { tone: "alert" });
+      get().notify(message(error, "Couldn't open the daily note. Try again."), { tone: "alert" });
       return null;
     }
   },
@@ -499,7 +499,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         });
         return;
       }
-      get().notify(message(error, "Could not move the note."), { tone: "alert" });
+      get().notify(message(error, "Couldn't move the note. Try again."), { tone: "alert" });
     }
   },
 
@@ -523,7 +523,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       await get().refreshNav();
       return null;
     } catch (error) {
-      return message(error, "Could not change who can see this.");
+      return message(error, "Couldn't change who can see this. Try again.");
     }
   },
 
@@ -552,11 +552,11 @@ export const useDocsStore = create<DocsState>((set, get) => ({
               void get().refreshTitles();
               get().notify(`Restored ${title}.`);
             })
-            .catch((error: unknown) => get().notify(message(error, `Could not restore ${title}.`), { tone: "alert" }));
+            .catch((error: unknown) => get().notify(message(error, `Couldn't restore ${title}. Try again.`), { tone: "alert" }));
         },
       });
     } catch (error) {
-      get().notify(message(error, "Could not archive the note."), { tone: "alert" });
+      get().notify(message(error, "Couldn't archive the note. Try again."), { tone: "alert" });
     }
   },
 
@@ -565,7 +565,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       const page = await docsData().setAssistantCanEdit(id, value);
       set((state) => ({ pages: { ...state.pages, [id]: { ...(state.pages[id] ?? page), assistantCanEdit: page.assistantCanEdit } } }));
     } catch (error) {
-      get().notify(message(error, "Could not change the setting."), { tone: "alert" });
+      get().notify(message(error, "Couldn't change the setting. Try again."), { tone: "alert" });
     }
   },
 
@@ -575,7 +575,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       await get().refreshNav();
       return folder;
     } catch (error) {
-      get().notify(message(error, "Could not create the folder."), { tone: "alert" });
+      get().notify(message(error, "Couldn't create the folder. Try again."), { tone: "alert" });
       return null;
     }
   },
@@ -586,7 +586,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       await get().refreshNav();
       return null;
     } catch (error) {
-      return message(error, "Could not rename the folder.");
+      return message(error, "Couldn't rename the folder. Try again.");
     }
   },
 
@@ -612,7 +612,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         });
         return;
       }
-      get().notify(message(error, "Could not move the folder."), { tone: "alert" });
+      get().notify(message(error, "Couldn't move the folder. Try again."), { tone: "alert" });
     }
   },
 
@@ -650,10 +650,10 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     try {
       const page = await docsData().restoreVersion(pageId, versionId);
       get().replaceBody(page);
-      get().notify("Restored. The version you replaced is in the history.");
+      get().notify("Restored");
       return null;
     } catch (error) {
-      return message(error, "Could not restore that version.");
+      return message(error, "Couldn't restore that version. Try again.");
     }
   },
 

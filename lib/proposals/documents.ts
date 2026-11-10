@@ -382,9 +382,9 @@ export async function createDocument(
   assertScope(actor.scopes, "opportunities:write");
   if (typeof input.templateId !== "string") throw invalid("Choose a template.", "templateId");
   const template = await getTemplate(actor, input.templateId);
-  if (template.status !== "active") throw invalid("Only active templates can be used. Make this template active first.", "templateId");
+  if (template.status !== "active") throw invalid("Make this template active first.", "templateId");
   if (typeof input.companyId !== "string" || !isUuid(input.companyId)) throw invalid("Choose a company.", "companyId");
-  if (typeof input.contactId !== "string" || !isUuid(input.contactId)) throw invalid("Choose a person at the company.", "contactId");
+  if (typeof input.contactId !== "string" || !isUuid(input.contactId)) throw invalid("Choose a contact at the company.", "contactId");
   const company = await getCompany(actor, input.companyId);
   const contact = await getContact(actor, input.contactId);
   if (contact.companyId !== company.id) throw invalid(`${contact.name} isn't at ${company.name}. Choose someone from that company.`, "contactId");
@@ -588,7 +588,7 @@ export async function updateDocument(
       set("valid_until", value);
     }
     if (input.contactId !== undefined) {
-      if (typeof input.contactId !== "string" || !isUuid(input.contactId)) throw invalid("Choose a person at the company.", "contactId");
+      if (typeof input.contactId !== "string" || !isUuid(input.contactId)) throw invalid("Choose a contact at the company.", "contactId");
       const contact = await readContactInDb(db, input.contactId, actor.workspaceId);
       if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
       if (contact.companyId !== row.company_id) throw invalid(`${contact.name} isn't at ${row.company_name}.`, "contactId");
@@ -651,7 +651,7 @@ export async function sendDocument(
     const row = await readRow(db, actor, id, true);
     if (row.status === "completed" || row.status === "client_signed") throw invalid("This has already been signed.", "status");
     if (OPEN.has(row.status) && row.current_version_id) {
-      if (isExpired(row.status, row.valid_until)) throw invalid("This has expired. Choose Make changes, set a later valid-until date and send it again.", "validUntil");
+      if (isExpired(row.status, row.valid_until)) throw invalid("This has expired. Choose Make changes and set a later date.", "validUntil");
       const link = await db.query<{ token_cipher: string }>(
         "select token_cipher from crm.document_links where document_id = $1 and revoked_at is null order by created_at desc limit 1",
         [id],
@@ -661,12 +661,12 @@ export async function sendDocument(
     if (row.status !== "draft") throw invalid("Choose Make changes first, then send it again.", "status");
     if (row.template_id) {
       const template = await db.query<{ status: string }>("select status from crm.document_templates where id = $1", [row.template_id]);
-      if (template.rows[0] && template.rows[0].status !== "active") throw invalid("Its template isn't active any more. Make the template active to send this.", "template");
+      if (template.rows[0] && template.rows[0].status !== "active") throw invalid("Make its template active to send this.", "template");
     }
     if (row.valid_until && row.valid_until < todayKey()) throw invalid("The valid-until date has passed. Choose a later date.", "validUntil");
     const issuedAt = new Date().toISOString();
     const built = await buildContent(db, actor, row, issuedAt);
-    if (built.missing.length) throw invalid(`Fill in ${built.missing.map((item) => `{{${item}}}`).join(", ")} before sending. Add the details to the record, or edit the text.`, "blocks");
+    if (built.missing.length) throw invalid(`Fill in ${built.missing.map((item) => `{{${item}}}`).join(", ")} before sending.`, "blocks");
     if (built.placeholders.length) throw invalid(`Replace ${built.placeholders.join(", ")} with your own wording before sending.`, "blocks");
     if (!built.contactEmail) throw invalid(`${row.contact_name ?? "The contact"} has no email address.`, "contactId");
     if (row.kind === "proposal" && built.content.items.length === 0) throw invalid("Add at least one product before sending.", "items");
@@ -727,7 +727,7 @@ export async function sendDocument(
       warning = sent.warning;
     } catch (error) {
       emailed = false;
-      warning = `The proposal is ready, but the email didn't send: ${error instanceof Error ? error.message : "try again"}. You can copy the link instead.`;
+      warning = `The email didn't send: ${error instanceof Error ? error.message : "try again"}. Copy the link instead.`;
     }
     if (prepared.resend && emailed) {
       await withActor(actor, (db) =>

@@ -80,8 +80,8 @@ describe("docs privacy", () => {
     assert.equal((await getDoc(mark, mine.id)).content, "Only me. Priya was here.");
     assert.equal((await getDoc(agent, mine.id)).title, "Private plan");
 
-    await assert.rejects(shareDoc(priya, mine.id, false), /Only Mark Ridgeon can make this doc private/);
-    await assert.rejects(shareDoc(agent, mine.id, false), /Only Mark Ridgeon can make this doc private/);
+    await assert.rejects(shareDoc(priya, mine.id, false), /Only Mark Ridgeon can make this note private/);
+    await assert.rejects(shareDoc(agent, mine.id, false), /Only Mark Ridgeon can make this note private/);
     await shareDoc(mark, mine.id, false);
     await assert.rejects(getDoc(priya, mine.id), /private to someone else/);
   });
