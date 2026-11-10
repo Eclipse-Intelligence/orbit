@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { after } from "next/server";
-import { conciseResult, withDetail } from "@/lib/assistant/concise";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
 import { everywhereAllowed, forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
@@ -5330,7 +5329,7 @@ export function assistantTools(options: ToolOptions = {}) {
 export function toolDefinitions(options: ToolOptions = {}) {
   return assistantTools(options).map((tool) => ({
     type: "function" as const,
-    function: { name: tool.name, description: toolDescription(tool), parameters: withDetail(tool.name, tool.parameters) },
+    function: { name: tool.name, description: toolDescription(tool), parameters: tool.parameters },
   }));
 }
 
@@ -5656,7 +5655,7 @@ export async function runTool(
       }),
       late,
     ]);
-    return marked(tool.name, conciseResult(tool.name, cleaned, output));
+    return marked(tool.name, output);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };
     if (error instanceof LinearError) return { error: error.message };

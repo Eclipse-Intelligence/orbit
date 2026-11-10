@@ -10,7 +10,6 @@ The Orbit assistant is the "Ask Orbit anything" dock on every CRM page. It answe
 | `lib/assistant/gateway.ts` | Model calls for Orbit and ChatGPT account models, and the stop reasons and reasoning they carry between rounds |
 | `lib/assistant/providers/anthropic.ts` | Claude through the Messages API (`@anthropic-ai/sdk`), with thinking kept across tool rounds |
 | `lib/assistant/page-context.ts` | The page the person is on, checked and turned into a short note for their message |
-| `lib/assistant/concise.ts` | The concise default for tools with big results (`detail`) |
 | `lib/assistant/models.ts` | The model list and reasoning levels |
 | `lib/assistant/files.ts` | Files attached in the chat: upload, the note the model gets, reading, adding to Knowledge and the sweep |
 | `companion/` | Orbit Agent, which runs Claude account turns on the person's Mac |
@@ -77,20 +76,13 @@ The dock sends `page` with every message: the path and query string, the rows se
 
 ### History budget (`history` in `chat.ts`)
 
-Every tool round sends the whole history again, so what stays in it is what each round costs, and a long history full of old results makes the model worse at finding what matters. What a tool returns in the current turn is never cut beyond the technical limit below; what is managed is what earlier turns leave behind.
-
 | Limit | Value | What happens |
 | --- | --- | --- |
-| `KEPT_RESULTS`, `KEPT_RESULTS_BUDGET` | 6 results, 150,000 characters (about 37,500 tokens) | Tool results from earlier turns: the latest 6 stay in full while together they fit in 150,000 characters. Older or bigger ones become `{cleared: true, tool, note: "Result cleared to save space. Call the tool again if you need it."}`. Results under 2,000 characters are always kept, since clearing them saves nothing. Six covers the last turn or two, which is what follow-up questions refer to. Results from the current turn are never cleared, so the history the model saw earlier in a turn never changes, which keeps reasoning and prompt caching valid. |
-| `SUMMARY_AT`, `SUMMARY_KEEPS_TURNS` | 200,000 characters (about 50,000 tokens), 3 turns | At the start of a turn, when the history since the last summary passes 200,000 characters, everything before the last 3 user messages is summarised in one `completeJson` call (the default `LLM_MODEL`), merged with any earlier summary and stored on the conversation (`summary`, `summary_through`, the last message `seq` it covers). From then on `history` replaces those messages with an `<earlier_conversation>` note at the start of the first user message. The summary keeps every request, preference, record with its id and link, fact, figure, date, quote, proposal and outcome as given, and says what was uncertain; it may never add or soften anything. The summariser sees tool results cut to 20,000 characters each and the assistant's replies in full. If it fails, the turn goes on with the full history and the budget below. 50,000 tokens is where repeated history starts to dominate the cost of a tool round; the last 3 turns stay verbatim because follow-ups refer to them. |
-| `HISTORY_BUDGET` | 900,000 characters (about 225,000 tokens) | The technical limit. The earliest messages are left out, starting at a user message, with a note that earlier parts were left out. Mid-turn, going over it ends the turn with `FULL_MESSAGE` ("say carry on"). |
+| `HISTORY_BUDGET` | 900,000 characters (about 225,000 tokens) | The earliest messages are left out, starting at a user message, with a note that earlier parts were left out. Mid-turn, going over it ends the turn with `FULL_MESSAGE` ("say carry on"). |
 | `CURRENT_RESULT_MAX` | 400,000 characters | A tool result in the current turn is cut to this, with "[Cut N characters … Call the tool again if you need the rest.]" |
+| `OLD_RESULT_MAX` | 100,000 characters | A tool result from an earlier turn is cut to this. |
 
 Tool calls without a stored result are left out of the history.
-
-`get_company`, `get_contact` and `list_activities` take `detail`, `concise` by default (`lib/assistant/concise.ts`, applied in `runTool`). Concise keeps the newest 25 timeline entries and the call summaries for them, the newest 40 Knowledge items and 20 completed tasks, shortens any activity `body` or `summary` over 1,200 characters with "… [N more characters]", and adds `detailNote` saying what it left out and to call again with `detail` `full`, which returns everything as before. Nothing is cut when the model asks for `full`.
-
-For a 20-turn conversation with 26 tool calls of typical sizes (company records, mail searches and threads, Knowledge reads and web pages), the history sent across its 40 model calls went from about 6.1 million input tokens to about 1.8 million, the last call from about 218,000 to 53,000 and the largest from about 221,000 to 82,000 (characters divided by four, with an 8,000 character summary; the system prompt and tool definitions, about 28,000 tokens a call, are the same before and after).
 
 ### The morning brief as a conversation
 
@@ -98,7 +90,7 @@ When the user has an unread morning brief, the Ask Orbit bar shows a dot; the do
 
 ### Claude account turns (Orbit Agent)
 
-`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (with the same summary, clearing and budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens. Claude Code also moves any single tool result over about 50 KB into a file the model can't open, so Orbit sends a result over 36,000 bytes in pieces: the first piece ends with a note, and the model calls `continue_result` with the `resultId` and `offset` from it to read on. The full result is kept with the job and cleared when the job ends.
+`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (cut with the same budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens. Claude Code also moves any single tool result over about 50 KB into a file the model can't open, so Orbit sends a result over 36,000 bytes in pieces: the first piece ends with a note, and the model calls `continue_result` with the `resultId` and `offset` from it to read on. The full result is kept with the job and cleared when the job ends.
 
 - Read tools call back to `POST /api/companion/jobs/{id}/tool`, which runs `runTool` as the person. It refuses write tools.
 - Write tools never call Orbit. They return "Proposed … It has not happened yet" to Claude, and `applyCompanionResult` turns them into cards on the last message, exactly like gateway turns.

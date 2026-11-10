@@ -2,21 +2,16 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import {
   BROKEN_CALL,
-  CLEARED_RESULT,
   CUT_OFF_CALL,
   CUT_OFF_MESSAGE,
   getConversation,
-  history,
-  SUMMARY_AT,
   sendMessage,
   type AssistantEvent,
 } from "@/lib/assistant/chat";
 import { CUT_OFF, runTurn, type Sdk } from "@/companion/src/turn";
-import { conciseResult } from "@/lib/assistant/concise";
 import { complete } from "@/lib/assistant/gateway";
 import { OUTPUT_TOKENS, outputTokens } from "@/lib/assistant/models";
 import { PAGE_CONTEXT_TAG, pageContext, readPageInput } from "@/lib/assistant/page-context";
-import { toolDefinitions } from "@/lib/assistant/tools";
 import { createBoard } from "@/lib/crm/boards";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -475,91 +470,5 @@ describe("reasoning between tool rounds", () => {
     const switched = (gateway.sent[2].body.messages as Record<string, unknown>[])[1] as { reasoning_details?: unknown; tool_calls: { extra_content?: unknown }[] };
     assert.equal(switched.reasoning_details, undefined);
     assert.equal(switched.tool_calls[0].extra_content, undefined);
-  });
-});
-
-describe("context budget", () => {
-  type Row = Parameters<typeof history>[0][number];
-  const row = (role: Row["role"], content: string, extra: Partial<Row> = {}): Row => ({
-    id: crypto.randomUUID(),
-    role,
-    content,
-    tool_calls: null,
-    tool_call_id: null,
-    tool_name: null,
-    actions: null,
-    sources: null,
-    provider_state: null,
-    created_at: new Date(),
-    ...extra,
-  });
-
-  it("keeps the latest results in full, clears older ones, and never changes the current turn's prefix", () => {
-    const rows: Row[] = [];
-    for (let turn = 0; turn < 10; turn += 1) {
-      rows.push(row("user", `Question ${turn}`));
-      rows.push(row("assistant", "", { tool_calls: [{ id: `t${turn}`, type: "function", function: { name: "get_company", arguments: "{}" } }] }));
-      rows.push(row("tool", `${turn}`.repeat(10_000), { tool_call_id: `t${turn}`, tool_name: "get_company" }));
-      rows.push(row("assistant", `Answer ${turn}`));
-    }
-    rows.push(row("user", "Now this"));
-    const before = history(rows);
-    const results = before.filter((message) => message.role === "tool").map((message) => String(message.content));
-    assert.equal(results.filter((content) => content.includes(CLEARED_RESULT)).length, 4);
-    assert.equal(results.filter((content) => content.length === 10_000).length, 6);
-    rows.push(row("assistant", "", { tool_calls: [{ id: "now", type: "function", function: { name: "get_company", arguments: "{}" } }] }));
-    rows.push(row("tool", "n".repeat(300_000), { tool_call_id: "now", tool_name: "get_company" }));
-    const afterRound = history(rows);
-    assert.deepEqual(afterRound.slice(0, before.length), before);
-    assert.equal(afterRound.at(-1)!.content!.length, 300_000);
-  });
-
-  it("gives get_company a concise default and the full record on request", () => {
-    const timeline = Array.from({ length: 60 }, (_, index) => ({ id: `a${index}`, body: index === 0 ? "b".repeat(5_000) : "short" }));
-    const output = { company: { name: "Initech" }, timeline, knowledge: Array.from({ length: 50 }, (_, index) => ({ id: `k${index}` })), insights: { a0: { summary: "x" }, a59: { summary: "y" } } };
-    const concise = conciseResult("get_company", {}, output) as typeof output & { detailNote: string };
-    assert.equal(concise.timeline.length, 25);
-    assert.equal(concise.knowledge.length, 40);
-    assert.match(concise.timeline[0].body, /… \[3,800 more characters\]$/);
-    assert.deepEqual(Object.keys(concise.insights), ["a0"]);
-    assert.match(concise.detailNote, /newest 25 of 60 timeline entries/);
-    assert.equal(conciseResult("get_company", { detail: "full" }, output), output);
-    const definition = toolDefinitions().find((tool) => tool.function.name === "get_company")!;
-    assert.ok((definition.function.parameters as { properties: Record<string, unknown> }).properties.detail);
-  });
-
-  it("summarises earlier turns once history passes the threshold, keeps the summary on the conversation and replays the rest", async () => {
-    const first = fake(() => chatReply({ content: "Hi." }));
-    const { conversationId } = await ask(owner, "Start", first.fetchImpl);
-    const admin = getAdminPool();
-    for (let turn = 0; turn < 6; turn += 1) {
-      await admin.query(
-        `insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content) values ($1, $2, $3, 'user', $4), ($1, $2, $3, 'assistant', $5)`,
-        [conversationId, owner.workspaceId, owner.userId, `Old question ${turn}`, `Old answer ${turn} ${"z".repeat(SUMMARY_AT / 5)}`],
-      );
-    }
-    let summaries = 0;
-    const gateway = fake((body) => {
-      const system = String((body.messages as { content: string }[])[0].content);
-      if (system.startsWith("You summarise the earlier part")) {
-        summaries += 1;
-        return chatReply({ content: JSON.stringify({ summary: "Mark asked six old questions about Initech [company id x]. Nothing is open." }) });
-      }
-      return chatReply({ content: "Carrying on." });
-    });
-    await ask(owner, "Newest question", gateway.fetchImpl, { conversationId });
-    assert.equal(summaries, 1);
-    const sent = gateway.sent.find((entry) => !String((entry.body.messages as { content: string }[])[0].content).startsWith("You summarise"))!;
-    const messages = sent.body.messages as { role: string; content: string }[];
-    const text = messages.map((message) => message.content).join("\n");
-    assert.match(text, /<earlier_conversation>[\s\S]*six old questions/);
-    assert.doesNotMatch(text, /Old question 2\b/);
-    assert.match(text, /Old question 4/);
-    assert.match(text, /Newest question/);
-    const stored = await admin.query<{ summary: string }>("select summary from crm.assistant_conversations where id = $1", [conversationId]);
-    assert.match(stored.rows[0].summary, /six old questions/);
-
-    await ask(owner, "One more", gateway.fetchImpl, { conversationId });
-    assert.equal(summaries, 1);
   });
 });

@@ -199,7 +199,7 @@ describe("assistant safety and limits", () => {
     }
   });
 
-  it("keeps long histories inside the budget and clears old tool results", () => {
+  it("keeps long histories inside the budget and clips old tool results", () => {
     const big = "x".repeat(150_000);
     const rows: Row[] = [
       row("user", "First question"),
@@ -209,24 +209,18 @@ describe("assistant safety and limits", () => {
       row("user", "Second question"),
       row("assistant", "", { tool_calls: [{ id: "t2", type: "function", function: { name: "search_email", arguments: "{}" } }] }),
       row("tool", big, { tool_call_id: "t2", tool_name: "search_email" }),
-      row("assistant", "Second answer"),
-      row("user", "Third question"),
-      row("assistant", "", { tool_calls: [{ id: "t3", type: "function", function: { name: "search_email", arguments: "{}" } }] }),
-      row("tool", big, { tool_call_id: "t3", tool_name: "search_email" }),
     ];
     const full = history(rows);
-    const oldest = full[2] as { content: string };
-    const latestEarlier = full[6] as { content: string };
-    const current = full[10] as { content: string };
-    assert.equal(JSON.parse(oldest.content).cleared, true);
-    assert.equal(JSON.parse(oldest.content).tool, "search_email");
-    assert.equal(latestEarlier.content, big);
+    const old = full[2] as { content: string };
+    const current = full[6] as { content: string };
+    assert.ok(old.content.length < 101_000);
+    assert.match(old.content, /Cut \d[\d,]* characters/);
     assert.equal(current.content, big);
 
     const trimmed = history(rows, 160_000);
     assert.equal(trimmed[0].role, "user");
     assert.match(String(trimmed[0].content), /^\(Earlier parts of this conversation were left out/);
-    assert.match(String(trimmed[0].content), /Third question$/);
+    assert.match(String(trimmed[0].content), /Second question$/);
     assert.equal(trimmed.length, 3);
   });
 
