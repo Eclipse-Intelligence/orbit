@@ -9,6 +9,7 @@ import type {
   CompanionStep,
   CompanionToolResult,
 } from "./protocol";
+import { PROPOSED } from "./protocol";
 import { shapeFor } from "./schema";
 
 export type Sdk = Pick<typeof AgentSdk, "query" | "createSdkMcpServer" | "tool">;
@@ -31,8 +32,7 @@ const MCP_OUTPUT_TOKENS = "60000";
 export const STOPPED = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
 export const CUT_OFF = "The answer was cut off. Ask me to continue.";
 
-export const PROPOSED =
-  "Proposed. Orbit will show this change to the user for approval. It has not happened yet. Do not call this tool again for the same change. When you have proposed everything, say in one or two sentences what you proposed and stop.";
+export { PROPOSED };
 
 const STRIPPED_ENV = [
   "ANTHROPIC_API_KEY",
@@ -117,8 +117,7 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
   let usage: Record<string, unknown> | null = null;
   let failure: string | null = null;
   let stopped = false;
-  let lastStep: string | null = null;
-  const stops = new Map<string, string>();
+  let cutOff = false;
 
   let draft = "";
   const stream = deps.sdk.query({ prompt: request.prompt, options: turnOptions(request, { [SERVER]: server }, deps, abort) });
@@ -137,8 +136,7 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
       const step = steps.get(id) ?? { text: "", calls: [] };
       steps.set(id, step);
       model = message.message.model ?? model;
-      lastStep = id;
-      if (message.message.stop_reason) stops.set(id, message.message.stop_reason);
+      if (message.error === "max_output_tokens") cutOff = true;
       for (const block of message.message.content ?? []) {
         if (block.type === "text" && block.text) {
           step.text = step.text ? `${step.text}\n\n${block.text}` : block.text;
@@ -164,13 +162,14 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
       }
     } else if (message.type === "result") {
       usage = (message.usage as unknown as Record<string, unknown>) ?? null;
+      if (message.stop_reason === "max_tokens") cutOff = true;
       if (message.subtype === "error_max_turns") stopped = true;
       else if (message.subtype !== "success") failure = message.errors.join(" ") || "Claude Code stopped before finishing.";
-      else if (message.is_error) failure = message.result || "Claude Code couldn't answer.";
+      else if (message.is_error && !cutOff) failure = message.result || "Claude Code couldn't answer.";
     }
   }
   if (failure) throw new Error(failure);
-  const ending = stopped ? STOPPED : lastStep && stops.get(lastStep) === "max_tokens" ? CUT_OFF : null;
+  const ending = stopped ? STOPPED : cutOff ? CUT_OFF : null;
   const finished = ending ? [...steps.values(), { text: ending, calls: [] }] : [...steps.values()];
   return { steps: finished, results, sources: [...sources.values()], model, usage };
 }

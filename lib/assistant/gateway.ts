@@ -1,9 +1,16 @@
 import { OAuthError } from "@/lib/ai-accounts/oauth";
 import { aiAccess, noteAiError } from "@/lib/ai-accounts/store";
 import { assistantModel, outputTokens } from "@/lib/assistant/models";
-import { MessagesRefusedError, ThinkingRejectedError, completeAnthropic, withoutThinking, type AnthropicRoute } from "@/lib/assistant/providers/anthropic";
+import {
+  BindingRejectedError,
+  MessagesRefusedError,
+  ThinkingRejectedError,
+  completeAnthropic,
+  withoutThinking,
+  type AnthropicRoute,
+} from "@/lib/assistant/providers/anthropic";
 import { chatGptRequest, completeChatGpt, readResponses } from "@/lib/assistant/providers/chatgpt";
-import { ProviderAuthError, ProviderError, type FunctionTool } from "@/lib/assistant/providers/shared";
+import { ProviderAuthError, ProviderError, replayContent, type FunctionTool } from "@/lib/assistant/providers/shared";
 import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -13,7 +20,7 @@ const CHAT_STATE = "chat";
 
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string }; extra_content?: unknown };
 
-export type ProviderState = { model: string; content: unknown[]; format?: "responses" | "anthropic" | "chat" };
+export type ProviderState = { model: string; content: unknown[]; format?: "responses" | "anthropic" | "chat"; refused?: boolean };
 
 export type ChatMessage =
   | { role: "system" | "user"; content: string }
@@ -30,6 +37,7 @@ export type Completion = {
   usage: Record<string, unknown> | null;
   state?: ProviderState | null;
   cutOff?: boolean;
+  contextFull?: boolean;
 };
 
 export class AssistantError extends Error {
@@ -75,11 +83,15 @@ export function gatewayConfigured() {
   return Boolean(process.env.LLM_API_KEY?.trim());
 }
 
+export function messagesOptIn() {
+  return process.env.LLM_CLAUDE_MESSAGES?.trim() === "on";
+}
+
 export function claudeRoute(): (AnthropicRoute & { via: "anthropic" | "gateway" }) | null {
   const direct = process.env.ANTHROPIC_API_KEY?.trim();
   if (direct) return { via: "anthropic", baseURL: ANTHROPIC_BASE_URL, apiKey: direct };
   const key = process.env.LLM_API_KEY?.trim();
-  if (key && process.env.LLM_CLAUDE_MESSAGES?.trim() === "on") return { via: "gateway", baseURL: baseUrl().replace(/\/v1$/, ""), authToken: key };
+  if (key && messagesOptIn()) return { via: "gateway", baseURL: baseUrl().replace(/\/v1$/, ""), authToken: key };
   return null;
 }
 
@@ -257,7 +269,7 @@ type ChatReasoning = { reasoning_details?: unknown[]; tool_calls?: { id: string;
 function plain(messages: ChatMessage[], model: string) {
   return messages.map((message) => {
     if (message.role !== "assistant") return message;
-    const state = message.state?.format === CHAT_STATE && message.state.model === model ? (message.state.content[0] as ChatReasoning) : null;
+    const state = messagesOptIn() && message.state?.format === CHAT_STATE && message.state.model === model ? (message.state.content[0] as ChatReasoning) : null;
     const extras = new Map((state?.tool_calls ?? []).map((entry) => [entry.id, entry.extra_content]));
     const calls = message.tool_calls?.map((call) => {
       const bare = { id: call.id, type: call.type, function: call.function };
@@ -265,7 +277,7 @@ function plain(messages: ChatMessage[], model: string) {
     });
     return {
       role: message.role,
-      content: message.content,
+      content: replayContent(message),
       ...(calls ? { tool_calls: calls } : {}),
       ...(state?.reasoning_details && state.reasoning_details.length > 0 ? { reasoning_details: state.reasoning_details } : {}),
     };
@@ -456,8 +468,14 @@ function statelessMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => (message.role === "assistant" ? { ...message, state: null } : message));
 }
 
+const TIMED_OUT = "The model took too long to reply. Try again, or pick a lower reasoning level.";
+const FALLBACK_MIN_MS = 5_000;
+
 async function completeClaude(input: CompleteInput, modelId: string, route: AnthropicRoute & { via: string }): Promise<Completion> {
-  const attempt = (messages: ChatMessage[]) =>
+  const started = Date.now();
+  const left = () => input.timeoutMs - (Date.now() - started);
+  let binding = true;
+  const send = (messages: ChatMessage[]) =>
     completeAnthropic({
       modelId,
       apiModel: input.model,
@@ -466,13 +484,23 @@ async function completeClaude(input: CompleteInput, modelId: string, route: Anth
       webSearch: input.webSearch,
       tools: (input.tools ?? toolDefinitions()) as FunctionTool[],
       maxTokens: outputTokens(modelId, input.reasoning),
-      keepThinking: true,
+      binding,
       route,
-      timeoutMs: input.timeoutMs,
+      timeoutMs: left(),
       fetchImpl: input.fetchImpl,
       signal: input.signal,
       onText: input.onText,
     });
+  const attempt = async (messages: ChatMessage[]) => {
+    try {
+      return await send(messages);
+    } catch (error) {
+      if (!(error instanceof BindingRejectedError) || !binding) throw error;
+      console.error(`Claude Messages refused the thinking-binding control (${route.via}), retrying without it`, error.message);
+      binding = false;
+      return send(messages);
+    }
+  };
   try {
     try {
       return await attempt(input.messages);
@@ -483,10 +511,12 @@ async function completeClaude(input: CompleteInput, modelId: string, route: Anth
     }
   } catch (error) {
     if (input.signal?.aborted) throw new StoppedError("Stopped.");
-    if (error instanceof MessagesRefusedError || error instanceof ThinkingRejectedError) {
+    if (error instanceof MessagesRefusedError || error instanceof ThinkingRejectedError || error instanceof BindingRejectedError) {
       if (!gatewayConfigured()) throw new AssistantError(error.message);
+      const remaining = left();
+      if (remaining < FALLBACK_MIN_MS) throw new AssistantError(TIMED_OUT);
       console.error(`Claude Messages request refused (${route.via}), retrying through chat completions`, error.message);
-      return completeGateway({ ...input, onText: undefined, messages: statelessMessages(input.messages) });
+      return completeGateway({ ...input, timeoutMs: remaining, onText: undefined, messages: statelessMessages(input.messages) });
     }
     if (error instanceof ProviderError) throw new AssistantError(error.message);
     throw error;

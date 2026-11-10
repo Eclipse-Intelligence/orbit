@@ -1,5 +1,5 @@
 import { ORIGINATOR } from "@/lib/ai-accounts/oauth";
-import { ProviderAuthError, ProviderError, type ProviderInput } from "@/lib/assistant/providers/shared";
+import { ProviderAuthError, ProviderError, replayContent, type ProviderInput } from "@/lib/assistant/providers/shared";
 import type { Completion, Source, ToolCall } from "@/lib/assistant/gateway";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
@@ -30,8 +30,9 @@ export function chatGptRequest(input: ProviderInput) {
       );
       continue;
     }
-    if (message.content) {
-      items.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: message.content, annotations: [] }] });
+    const text = replayContent(message);
+    if (text) {
+      items.push({ type: "message", role: "assistant", content: [{ type: "output_text", text, annotations: [] }] });
     }
     for (const call of message.tool_calls ?? []) {
       items.push({ type: "function_call", call_id: callId(call.id), name: call.function.name, arguments: call.function.arguments || "{}" });

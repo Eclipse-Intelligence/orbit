@@ -6,6 +6,13 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/**": ["./lib/proposals/fonts/*.ttf"],
   },
+  async rewrites() {
+    return {
+      beforeFiles: [{ source: "/downloads/:file(orbit-agent-.+\\.tgz)", destination: "/downloads/orbit-agent.tgz" }],
+      afterFiles: [],
+      fallback: [],
+    };
+  },
   async redirects() {
     return [
       { source: "/inbox", destination: "/capture", permanent: true },

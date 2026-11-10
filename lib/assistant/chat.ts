@@ -9,7 +9,7 @@ import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceR
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
-import type { CompanionResult, Effort } from "@/companion/src/protocol";
+import { PROPOSED, type CompanionResult, type Effort } from "@/companion/src/protocol";
 import {
   CONTINUE_RESULT_TOOL,
   cancelCompanionJob,
@@ -38,6 +38,7 @@ export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again mor
 export const FULL_MESSAGE = "I've read a lot in this step, more than the model can hold at once, so I've stopped here. Say \"carry on\" and I'll continue from what I found, or ask a narrower question.";
 export const CUT_OFF_MESSAGE = "The answer was cut off. Ask me to continue.";
 export const CUT_OFF_CALL = "Your reply was cut off before it finished, so this call didn't run. Make it again, and keep each reply shorter (fewer calls at once, or less text in the arguments).";
+export const NOT_PROPOSED = "This call didn't run, so nothing was proposed. Make it again if it's still needed.";
 export const BROKEN_CALL = "The arguments for this call weren't valid JSON, so it didn't run. Call it again with valid arguments.";
 const EMPTY_REPLY = "I didn't get an answer back. Try again.";
 const STOP_POLL_MS = 3_000;
@@ -569,7 +570,8 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
   }
   const refused = await refusedWrites(actor, writes);
-  const proposed = writes.filter((call) => !refused.has(call.id));
+  const unrun = writes.filter((call) => !refused.has(call.id) && result.results[call.id]?.content !== PROPOSED);
+  const proposed = writes.filter((call) => !refused.has(call.id) && !unrun.includes(call));
   if (refused.size > 0) {
     const reasons = [...new Set(refused.values())].join("\n\n");
     const last = entries.at(-1);
@@ -605,6 +607,14 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       await insertMessage(actor, conversationId, {
         role: "tool",
         content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
+    }
+    for (const call of unrun) {
+      await insertMessage(actor, conversationId, {
+        role: "tool",
+        content: result.results[call.id]?.content || toolJson({ error: NOT_PROPOSED }),
         toolCallId: call.id,
         toolName: call.function.name,
       });
@@ -890,12 +900,12 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       onText: draftEmitter(emit),
     });
     if (signal?.aborted) return;
-    const cutOff = Boolean(result.cutOff);
-    const stopsHere = cutOff && (continuedAfterCut || result.toolCalls.length === 0);
+    const cutOff = Boolean(result.cutOff || result.contextFull);
+    const stopsHere = cutOff && (continuedAfterCut || result.toolCalls.length === 0 || Boolean(result.contextFull));
     const text = result.content.trim() ? result.content : "";
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: stopsHere ? [text, CUT_OFF_MESSAGE].filter(Boolean).join("\n\n") : text || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
+      content: stopsHere ? [text, result.contextFull ? FULL_MESSAGE : CUT_OFF_MESSAGE].filter(Boolean).join("\n\n") : text || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
       toolCalls: result.toolCalls,
       sources: result.sources,
       model: result.model,
