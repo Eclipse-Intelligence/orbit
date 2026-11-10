@@ -136,7 +136,7 @@ describe("Orbit Agent turns", () => {
           { text: "Looking up Acme.", calls: [{ id: "toolu_read", name: "search_records", arguments: '{"query":"Acme"}' }] },
           { text: "I'll add a follow-up task.", calls: [{ id: "toolu_write", name: "create_task", arguments: '{"title":"Call Acme","sendToClickUp":false}' }] },
         ],
-        results: { toolu_read: { content: tool.content, isError: false } },
+        results: { toolu_read: { content: tool.content, isError: false }, toolu_write: { content: PROPOSED, isError: false } },
         sources: [],
         model: "claude-sonnet-5-5",
         usage: { input_tokens: 10 },
@@ -155,7 +155,10 @@ describe("Orbit Agent turns", () => {
     const request = (firstJob as CompanionJob | null)!.request as CompanionRequest;
     assert.equal(request.model, "claude-sonnet-5-5");
     assert.equal(request.effort, "high");
-    assert.equal(request.prompt, "Add a task to call Acme");
+    assert.match(request.prompt, /^Add a task to call Acme\n\n<orbit_context>\nNow: .+\(Europe\/London\)\.\nWeb search is off/);
+    assert.ok(request.tools.some((tool) => tool.name === "send_proposal"));
+    assert.ok(!request.tools.some((tool) => tool.name === "find_tools"));
+    assert.match(request.system, /every tool is already loaded/);
     assert.ok(request.tools.find((tool) => tool.name === "create_task")!.write);
     assert.ok(!request.tools.find((tool) => tool.name === "search_records")!.write);
     assert.match(request.system, /You are the assistant inside Orbit/);

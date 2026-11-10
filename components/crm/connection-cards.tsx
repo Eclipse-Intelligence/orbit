@@ -21,6 +21,8 @@ import type { Mailbox } from "@/lib/mail/accounts";
 import { addAccountHref } from "@/lib/mail/mailboxes";
 import type { MailSourceStatus } from "@/lib/mail/store";
 import type { LinearStatus } from "@/lib/linear";
+import type { LinearConnection } from "@/lib/crm/linear-connection";
+import LinearWorkspace from "@/components/crm/linear-workspace";
 import GranolaKey from "@/components/crm/granola-key";
 import type { MailboxSummary } from "@/lib/crm/inbox";
 import { ReadwiseSync, ReadwiseToken, ReadwiseWorkspace } from "@/components/crm/readwise-settings";
@@ -446,26 +448,40 @@ export function RecallSettings({ recall }: { recall: RecallStatus }) {
   );
 }
 
-export function LinearSettings({ linear }: { linear: LinearStatus }) {
+export function LinearSettings({
+  linear,
+  connection,
+  workspaceName,
+  canAdmin,
+}: {
+  linear: LinearStatus;
+  connection: LinearConnection;
+  workspaceName: string;
+  canAdmin: boolean;
+}) {
+  if (!connection.here && !connection.claimable) return null;
   return (
     <SettingsCard
       id="linear"
       title="Linear"
       description="The assistant can read Linear issues and, when you ask it to, create, comment on and update them. It never files issues on its own."
     >
-      {linear.configured ? (
-        <div className="flex flex-col gap-1.5">
-          <Status tone={linear.error ? "error" : "on"}>
-            {linear.team ? `Connected · Issues go to ${linear.team.name} (${linear.team.key})` : "Couldn't connect"}
+      <LinearWorkspace connected={connection.here} canAdmin={canAdmin} workspaceName={workspaceName}>
+        {!connection.here ? (
+          <Status tone="off">Not connected</Status>
+        ) : linear.configured ? (
+          <>
+            <Status tone={linear.error ? "error" : "on"}>
+              {linear.team ? `Connected in ${workspaceName} · Issues go to ${linear.team.name} (${linear.team.key})` : `Connected in ${workspaceName}, but Linear didn't answer`}
+            </Status>
+            {linear.error && <span className="caption-style text-danger leading-[1.4]">{linear.error}</span>}
+          </>
+        ) : (
+          <Status tone="off">
+            {`Connected in ${workspaceName}. Set LINEAR_API_KEY (a personal API key from Linear, Settings, Security and access) in the server environment, then redeploy Orbit`}
           </Status>
-          {linear.error && <span className="caption-style text-danger leading-[1.4]">{linear.error}</span>}
-        </div>
-      ) : (
-        <Status tone="off">
-          Set LINEAR_API_KEY (a personal API key from Linear, Settings, Security and access) in the server environment, then
-          redeploy Orbit
-        </Status>
-      )}
+        )}
+      </LinearWorkspace>
     </SettingsCard>
   );
 }

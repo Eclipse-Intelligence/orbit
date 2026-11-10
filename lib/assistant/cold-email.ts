@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { completeJson } from "@/lib/llm";
 import { midSentenceColons } from "@/lib/writing-style";
+import { currentToolNames } from "@/lib/assistant/guides";
 import { PROOF_PERMISSIONS, type ProofEntry, type ProofPermission } from "@/lib/crm/proof-rules";
 
 export const COLD_EMAIL_PLAYBOOK = `# Writing a first email to a prospect (v2)
@@ -42,7 +43,7 @@ Don't send (a NO-SEND) when any of these is true:
 Tell Mark what's missing.
 
 ## 4. Client proof
-The proof list. Client proof lives in the proof list in Knowledge (Settings, Knowledge), and cold_email_playbook returns it as proofList. Mark keeps it, and everything on it is cleared to use exactly as it stands. Each entry has the client, a description, the product, what they used it for, the result, how it was measured, and whether they can be named.
+The proof list. Client proof lives in the proof list in Knowledge (Settings, Knowledge), and the cold_email guide returns it as proofList. Mark keeps it, and everything on it is cleared to use exactly as it stands. Each entry has the client, a description, the product, what they used it for, the result, how it was measured, and whether they can be named.
 
 How to use it:
 - Use the entry as written. Don't check it against Orbit, mail, the company record or anything else, don't question its description, product, dates or wording, and don't ask whether it's approved. If the list says it, you can say it.
@@ -198,7 +199,8 @@ export function senderFirstName(fullName: string | null, email: string) {
 const FIRST_NAME_TOKEN = "{{first_name}}";
 const BOOKING_TOKEN = "{{booking_url}}";
 
-export function playbookFor(sender: PlaybookSender, playbook: string) {
+export function playbookFor(sender: PlaybookSender, stored: string) {
+  const playbook = currentToolNames(stored);
   const template =
     playbook === COLD_EMAIL_PLAYBOOK
       ? playbook.replaceAll(PLAYBOOK_BOOKING, BOOKING_TOKEN).replace(new RegExp(`\\b${PLAYBOOK_SENDER}\\b`, "g"), FIRST_NAME_TOKEN)

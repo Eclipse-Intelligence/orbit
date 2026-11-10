@@ -1,14 +1,38 @@
 import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, startingSettings, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
+import { pageContext, readPageInput } from "@/lib/assistant/page-context";
 import { connectedProviders } from "@/lib/ai-accounts/store";
-import { systemPrompt } from "@/lib/assistant/prompt";
+import { approvalNote, systemPrompt, turnContext } from "@/lib/assistant/prompt";
+import { messageFence, turnFence, withoutMarkers } from "@/lib/assistant/untrusted";
 import { docLinkOf } from "@/lib/assistant/doc-link";
-import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel } from "@/lib/assistant/tools";
+import {
+  ACTION_ALTERNATIVES,
+  actionAlternative,
+  assistantTools,
+  crossWorkspaceRefusal,
+  describeAction,
+  findTool,
+  loadedDomains,
+  matchWorkspace,
+  recordNames,
+  runTool,
+  toolDefinitions,
+  toolDescription,
+  toolJson,
+  toolLabel,
+  WORKSPACE_READ_TOOLS,
+  hiddenToolRefusal,
+  type ToolOptions,
+  type ToolSwitches,
+} from "@/lib/assistant/tools";
+import { eclipseAvailable } from "@/lib/assistant/eclipse-scope";
+import { isWebApproval, needsWebApproval, webCard, webGateState, WEB_TOOLS } from "@/lib/assistant/web-gate";
+import { linearHere } from "@/lib/crm/linear-connection";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
-import type { CompanionResult, Effort } from "@/companion/src/protocol";
+import { PROPOSED, type CompanionResult, type Effort } from "@/companion/src/protocol";
 import {
   CONTINUE_RESULT_TOOL,
   cancelCompanionJob,
@@ -35,6 +59,10 @@ import type { Db } from "@/lib/db/pool";
 export const MAX_ROUNDS = 40;
 export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
 export const FULL_MESSAGE = "I've read a lot in this step, more than the model can hold at once, so I've stopped here. Say \"carry on\" and I'll continue from what I found, or ask a narrower question.";
+export const CUT_OFF_MESSAGE = "The answer was cut off. Ask me to continue.";
+export const CUT_OFF_CALL = "Your reply was cut off before it finished, so this call didn't run. Make it again, and keep each reply shorter (fewer calls at once, or less text in the arguments).";
+export const NOT_PROPOSED = "This call didn't run, so nothing was proposed. Make it again if it's still needed.";
+export const BROKEN_CALL = "The arguments for this call weren't valid JSON, so it didn't run. Call it again with valid arguments.";
 const EMPTY_REPLY = "I didn't get an answer back. Try again.";
 const STOP_POLL_MS = 3_000;
 const HISTORY_BUDGET = 900_000;
@@ -65,6 +93,8 @@ export type AssistantAction = {
 };
 
 export const UNATTENDED_NOTE = "Made without asking, because this doc lets the assistant edit it.";
+
+export const ALL_TOOLS_LOADED = "On Orbit Agent every tool is already loaded, so call any tool directly and never call find_tools.";
 
 export type ConversationSummary = {
   id: string;
@@ -112,6 +142,8 @@ type MessageRow = {
   sources: Source[] | null;
   provider_state: ProviderState | null;
   files?: ChatFile[] | null;
+  page_context?: string | null;
+  turn_context?: string | null;
   created_at: Date | string;
 };
 
@@ -144,7 +176,7 @@ function display(row: MessageRow): DisplayMessage {
     role: row.role === "user" ? "user" : "assistant",
     content: row.content,
     tools: (row.tool_calls ?? [])
-      .filter((call) => !findTool(call.function.name)?.write)
+      .filter((call) => !findTool(call.function.name)?.write && !(row.actions ?? []).some((action) => action.id === call.id))
       .map((call) => ({ id: call.id, name: call.function.name, label: toolLabel(call.function.name) })),
     actions: row.actions ?? [],
     sources: row.sources ?? [],
@@ -153,16 +185,20 @@ function display(row: MessageRow): DisplayMessage {
   };
 }
 
-function parseArgs(raw: string) {
+export function argsOf(raw: string) {
   try {
     const parsed = JSON.parse(raw || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, created_at";
+function parseArgs(raw: string) {
+  return argsOf(raw) ?? {};
+}
+
+const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, turn_context, created_at";
 const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
 const EMAIL_MARK = "exists (select 1 from crm.agent_mail_threads t where t.conversation_id = crm.assistant_conversations.id) as email";
 
@@ -199,13 +235,14 @@ async function insertMessage(
     usage?: Record<string, unknown> | null;
     state?: ProviderState | null;
     files?: ChatFile[];
+    pageContext?: string | null;
   },
 ) {
   return withActor(actor, async (db) => {
     const result = await db.query<MessageRow>(
       `insert into crm.assistant_messages
-         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb)
+         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files, page_context)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14)
        returning ${MESSAGE_COLUMNS}`,
       [
         conversationId,
@@ -221,6 +258,7 @@ async function insertMessage(
         message.usage ? JSON.stringify(message.usage) : null,
         message.state ? JSON.stringify(message.state) : null,
         message.files && message.files.length > 0 ? JSON.stringify(message.files) : null,
+        message.pageContext || null,
       ],
     );
     if (message.files && message.files.length > 0) {
@@ -411,15 +449,15 @@ function weight(message: ChatMessage) {
 function userContent(row: MessageRow) {
   const note = chatFileNote(row.files ?? []);
   const typed = expandMentions(row.content);
-  return note ? (typed.trim() ? `${typed}\n\n${note}` : note) : typed;
+  return [typed.trim() ? typed : "", note, row.page_context ?? ""].filter(Boolean).join("\n\n");
 }
 
-export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessage[] {
+export function history(rows: MessageRow[], budget = HISTORY_BUDGET, context = ""): ChatMessage[] {
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
   const lastUser = rows.map((row) => row.role).lastIndexOf("user");
   const messages: ChatMessage[] = [];
   rows.forEach((row, index) => {
-    if (row.role === "user") messages.push({ role: "user", content: userContent(row) });
+    if (row.role === "user") messages.push({ role: "user", content: index === lastUser && context ? `${userContent(row)}\n\n${context}` : userContent(row) });
     else if (row.role === "tool" && row.tool_call_id) {
       messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
     } else if (row.role === "assistant") {
@@ -519,9 +557,9 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
   }
 }
 
-function companionTools(multiWorkspace: boolean) {
+function companionTools(options: ToolOptions) {
   return [
-    ...assistantTools({ multiWorkspace }).map((tool) => ({
+    ...assistantTools(options).filter((tool) => tool.name !== "find_tools").map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -531,36 +569,114 @@ function companionTools(multiWorkspace: boolean) {
   ];
 }
 
-async function refusedWrites(actor: UserActor, writes: ToolCall[]) {
-  const refused = new Map<string, string>();
+type Refusal = { error: string; field: string | null };
+
+async function refusedWrites(actor: UserActor, writes: ToolCall[], switches?: ToolSwitches) {
+  const refused = new Map<string, Refusal>();
   for (const call of writes) {
+    const hidden = switches ? hiddenToolRefusal(call.function.name, switches) : null;
+    if (hidden) {
+      refused.set(call.id, { error: hidden, field: null });
+      continue;
+    }
     const reason = await crossWorkspaceRefusal(actor, call.function.name, parseArgs(call.function.arguments)).catch(() => null);
-    if (reason) refused.set(call.id, reason);
+    if (reason) refused.set(call.id, { error: reason, field: "workspace" });
   }
   return refused;
+}
+
+const CROSS_BRAND_NOUNS: Record<string, string> = {
+  send_email: "email",
+  save_email_draft: "email",
+  change_scheduled_email: "email",
+  save_email_template: "email template",
+  save_doc: "doc",
+  create_proposal: "proposal",
+  update_proposal: "proposal",
+  update_proposal_steps: "proposal",
+  revise_proposal: "proposal",
+  send_proposal: "proposal",
+  create_proposal_template: "proposal template",
+  update_proposal_template: "proposal template",
+  create_meeting_invite: "invite",
+  log_activity: "activity",
+  remember: "note",
+  eclipse_action: "Eclipse action",
+  linear_create_issue: "issue",
+};
+
+function memoryWorkspaces(content: string) {
+  try {
+    const parsed = JSON.parse(content) as { memories?: { workspaceId?: unknown }[] };
+    return (parsed.memories ?? []).map((memory) => memory.workspaceId).filter((id): id is string => typeof id === "string");
+  } catch {
+    return [];
+  }
+}
+
+export async function crossBrandWorkspaces(actor: UserActor, rows: Pick<MessageRow, "role" | "tool_calls" | "content" | "tool_name">[]) {
+  const wanted = rows
+    .flatMap((row) => (row.role === "assistant" ? (row.tool_calls ?? []) : []))
+    .filter((call) => WORKSPACE_READ_TOOLS.has(call.function.name))
+    .map((call) => parseArgs(call.function.arguments).workspace)
+    .filter((value): value is string => typeof value === "string" && value.trim() !== "");
+  const remembered = rows.flatMap((row) => (row.role === "tool" && row.tool_name === "recall" ? memoryWorkspaces(row.content) : []));
+  if (wanted.length === 0 && remembered.length === 0) return [];
+  const actors = await workspaceActors(actor);
+  const names = new Set<string>();
+  for (const value of wanted) {
+    const found = value.trim().toLowerCase() === "all" ? actors : [matchWorkspace(actors, value)];
+    for (const item of found) if (item && item.workspaceId !== actor.workspaceId) names.add(item.workspaceName);
+  }
+  for (const id of remembered) {
+    const found = actors.find((item) => item.workspaceId === id);
+    if (found && found.workspaceId !== actor.workspaceId) names.add(found.workspaceName);
+  }
+  return [...names];
+}
+
+export function crossBrandLine(name: string, workspaces: string[]) {
+  const noun = CROSS_BRAND_NOUNS[findTool(name)?.name ?? name];
+  if (!noun || workspaces.length === 0) return null;
+  return `This chat read ${workspaces.join(" and ")} data. Check nothing from it is in this ${noun}.`;
+}
+
+function cardFor(call: ToolCall, names: Map<string, string>, web: boolean, crossBrand: string[]) {
+  const args = parseArgs(call.function.arguments);
+  const described = web ? webCard(findTool(call.function.name)?.name ?? call.function.name, args) : describeAction(call.function.name, args, names);
+  const warning = web ? null : crossBrandLine(call.function.name, crossBrand);
+  return warning ? { ...described, lines: [...described.lines, warning] } : described;
+}
+
+function webStateOf(rows: MessageRow[]) {
+  return webGateState(rows);
 }
 
 function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
   return { id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } };
 }
 
-export async function applyCompanionResult(actor: UserActor, conversationId: string, result: CompanionResult) {
+export async function applyCompanionResult(actor: UserActor, conversationId: string, result: CompanionResult, switches?: ToolSwitches) {
   await withActor(actor, (db) => readConversation(db, actor, conversationId));
   const entries: { content: string; reads: ToolCall[] }[] = [];
   const writes: ToolCall[] = [];
+  const gated = new Set<string>();
   for (const step of result.steps) {
     const reads: ToolCall[] = [];
     for (const call of step.calls) {
       const tool = findTool(call.name);
       if (!tool) continue;
-      (tool.write ? writes : reads).push(toToolCall(call));
+      const web = !tool.write && WEB_TOOLS.has(tool.name) && isWebApproval(result.results[call.id]?.content);
+      if (web) gated.add(call.id);
+      (tool.write || web ? writes : reads).push(toToolCall(call));
     }
-    if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
+    if (step.text.trim() || reads.length > 0) entries.push({ content: withoutMarkers(step.text).trim(), reads });
   }
-  const refused = await refusedWrites(actor, writes);
-  const proposed = writes.filter((call) => !refused.has(call.id));
+  const refused = await refusedWrites(actor, writes.filter((call) => !gated.has(call.id)), switches);
+  const unrun = writes.filter((call) => !refused.has(call.id) && !gated.has(call.id) && result.results[call.id]?.content !== PROPOSED);
+  const proposed = writes.filter((call) => !refused.has(call.id) && !unrun.includes(call));
   if (refused.size > 0) {
-    const reasons = [...new Set(refused.values())].join("\n\n");
+    const reasons = [...new Set([...refused.values()].map((entry) => entry.error))].join("\n\n");
     const last = entries.at(-1);
     if (last) last.content = [last.content, reasons].filter(Boolean).join("\n\n");
     else entries.push({ content: reasons, reads: [] });
@@ -593,7 +709,15 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     for (const call of writes.filter((entry) => refused.has(entry.id))) {
       await insertMessage(actor, conversationId, {
         role: "tool",
-        content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        content: toolJson(refused.get(call.id)),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
+    }
+    for (const call of unrun) {
+      await insertMessage(actor, conversationId, {
+        role: "tool",
+        content: result.results[call.id]?.content || toolJson({ error: NOT_PROPOSED }),
         toolCallId: call.id,
         toolName: call.function.name,
       });
@@ -605,10 +729,11 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       proposed.map((call) => parseArgs(call.function.arguments)),
       proposed.map((call) => call.function.name),
     ).catch(() => new Map<string, string>());
+    const crossBrand = await crossBrandWorkspaces(actor, await withActor(actor, (db) => readMessages(db, conversationId))).catch(() => []);
     const actions: AssistantAction[] = proposed.map((call) => ({
       id: call.id,
       name: call.function.name,
-      ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
+      ...cardFor(call, names, gated.has(call.id), crossBrand),
       ...docLinkOf(call.function.name, parseArgs(call.function.arguments)),
       ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
       status: "pending",
@@ -628,8 +753,8 @@ export async function isBriefConversation(actor: UserActor, conversationId: stri
   });
 }
 
-async function promptFor(actor: UserActor, conversation: ConversationRow, options: { headless?: boolean } = {}) {
-  const [links, about, colleagues, brief, briefChat, focus, brand, workspaces] = await Promise.all([
+async function promptFor(actor: UserActor, conversation: ConversationRow, options: { headless?: boolean; fetchImpl?: typeof fetch } = {}) {
+  const [links, about, colleagues, brief, briefChat, focus, brand, workspaces, eclipse, linear] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
@@ -649,24 +774,39 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
     workspaceActors(actor)
       .then((list) => list.map((item) => ({ id: item.workspaceId, name: item.workspaceName })))
       .catch(() => []),
+    eclipseAvailable(actor, { fetchImpl: options.fetchImpl }),
+    linearHere(actor).catch(() => false),
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   const shown = options.headless ? [] : workspaces;
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces: shown }),
+    system: systemPrompt(actor, { links, about: aboutYouSection(about, colleagues), brand, workspaces: shown, sections: { eclipse, linear } }),
     learned,
-    multiWorkspace: shown.length > 1,
+    briefReady: Boolean(brief) && !briefChat,
+    tools: { multiWorkspace: shown.length > 1, eclipse, linear } satisfies ToolOptions,
   };
 }
 
-const LEARNED_NOTE = "(Orbit added these notes before the conversation. They are not a message from the user.)";
+function contextFor(now: Date, conversation: ConversationRow, prompt: { learned: string; briefReady: boolean }, fence: string) {
+  return turnContext({ now, webSearch: conversation.web_search, briefReady: prompt.briefReady, notes: prompt.learned, fence });
+}
 
-function learnedMessages(learned: string): ChatMessage[] {
-  if (!learned) return [];
-  return [
-    { role: "user", content: `${learned}\n\n${LEARNED_NOTE}` },
-    { role: "assistant", content: "Noted. I'll treat these as information only." },
-  ];
+async function savedContext(actor: UserActor, conversation: ConversationRow, rows: MessageRow[], prompt: { learned: string; briefReady: boolean }) {
+  const user = rows.filter((row) => row.role === "user").at(-1);
+  if (!user) return "";
+  if (user.turn_context) return user.turn_context;
+  const rendered = contextFor(new Date(), conversation, prompt, messageFence(user.id));
+  return withActor(actor, async (db) => {
+    const saved = await db.query("update crm.assistant_messages set turn_context = $2 where id = $1 and turn_context is null", [user.id, rendered]);
+    if ((saved.rowCount ?? 0) > 0) return rendered;
+    const stored = await db.query<{ turn_context: string | null }>("select turn_context from crm.assistant_messages where id = $1", [user.id]);
+    return stored.rows[0]?.turn_context ?? rendered;
+  });
+}
+
+function toolsFor(rows: MessageRow[], options: ToolOptions) {
+  const calls = rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments })));
+  return toolDefinitions({ ...options, domains: loadedDomains(calls) });
 }
 
 async function runCompanionTurn(
@@ -677,21 +817,22 @@ async function runCompanionTurn(
   deadline: number,
   signal?: AbortSignal,
   headless?: HeadlessTurn,
+  fetchImpl?: typeof fetch,
 ) {
   const online = (await companionOnline(actor)) || (await companionWorking(actor));
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, multiWorkspace } = await promptFor(actor, conversation, { headless: Boolean(headless) });
-  const transcript = buildPrompt(history(rows));
+  const prompt = await promptFor(actor, conversation, { headless: Boolean(headless), fetchImpl });
+  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, await savedContext(actor, conversation, rows, prompt)));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
-    system,
-    prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
-    tools: companionTools(multiWorkspace),
-  }, { agentMailId: headless?.agentMailId ?? null });
+    system: `${prompt.system}\n\n${ALL_TOOLS_LOADED}`,
+    prompt: transcript,
+    tools: companionTools(prompt.tools),
+  }, { agentMailId: headless?.agentMailId ?? null, switches: { multiWorkspace: prompt.tools.multiWorkspace === true, eclipse: prompt.tools.eclipse === true, linear: prompt.tools.linear === true } });
   if (headless) {
     headless.queued?.({ jobId, online });
     return;
@@ -715,7 +856,7 @@ async function runCompanionTurn(
     seen = job.events.length;
     if (job.status === "running" && job.draft && job.draft !== draft) {
       draft = job.draft;
-      emit({ type: "draft", text: job.draft });
+      emit({ type: "draft", text: withoutMarkers(job.draft) });
     }
     if (job.status === "done") {
       if (!job.result) continue;
@@ -836,20 +977,25 @@ function draftEmitter(emit: Emit) {
     const now = Date.now();
     if (now - last < DRAFT_EVERY_MS) return;
     last = now;
-    emit({ type: "draft", text });
+    emit({ type: "draft", text: withoutMarkers(text) });
   };
 }
 
 async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
-  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
+  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, fetchImpl);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, multiWorkspace } = await promptFor(actor, conversation);
-  const tools = toolDefinitions({ multiWorkspace });
+  const prompt = await promptFor(actor, conversation, { fetchImpl });
+  const { system, tools: toolOptions } = prompt;
+  const switches = { multiWorkspace: toolOptions.multiWorkspace, eclipse: toolOptions.eclipse, linear: toolOptions.linear };
+  let continuedAfterCut = false;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
+    const tools = toolsFor(rows, toolOptions);
+    const fence = turnFence(rows, conversation.id);
+    const context = await savedContext(actor, conversation, rows, prompt);
     const remaining = deadline - Date.now();
     if (remaining < 15_000) {
       const paused = await insertMessage(actor, conversation.id, {
@@ -859,7 +1005,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       emit({ type: "message", message: display(paused) });
       return;
     }
-    const messages = history(rows);
+    const messages = history(rows, HISTORY_BUDGET, context);
     if (round > 0 && messages.reduce((sum, message) => sum + weight(message), 0) > HISTORY_BUDGET) {
       const full = await insertMessage(actor, conversation.id, { role: "assistant", content: FULL_MESSAGE });
       emit({ type: "message", message: display(full) });
@@ -869,7 +1015,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       model: conversation.model,
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
-      messages: [{ role: "system", content: system }, ...learnedMessages(learned), ...messages],
+      messages: [{ role: "system", content: system }, ...messages],
       tools,
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
@@ -878,27 +1024,50 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       onText: draftEmitter(emit),
     });
     if (signal?.aborted) return;
+    const cutOff = Boolean(result.cutOff || result.contextFull);
+    const stopsHere = cutOff && (continuedAfterCut || result.toolCalls.length === 0 || Boolean(result.contextFull));
+    const text = result.content.trim() ? withoutMarkers(result.content) : "";
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: result.content.trim() || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
+      content: stopsHere ? [text, result.contextFull ? FULL_MESSAGE : CUT_OFF_MESSAGE].filter(Boolean).join("\n\n") : text || result.toolCalls.length > 0 ? withoutMarkers(result.content) : EMPTY_REPLY,
       toolCalls: result.toolCalls,
       sources: result.sources,
       model: result.model,
       usage: result.usage,
       state: result.state ?? null,
     });
-    if (result.toolCalls.length === 0) {
-      emit({ type: "message", message: display(saved) });
-      return;
+    const blocked = result.toolCalls.filter((call) => cutOff || argsOf(call.function.arguments) === null);
+    for (const call of blocked) {
+      await insertMessage(actor, conversation.id, {
+        role: "tool",
+        content: toolJson({ error: cutOff ? CUT_OFF_CALL : BROKEN_CALL }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
     }
     emit({ type: "message", message: display(saved) });
-    const reads = result.toolCalls.filter((call) => !findTool(call.function.name)?.write);
-    let writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
+    if (stopsHere || result.toolCalls.length === 0) return;
+    if (cutOff) {
+      continuedAfterCut = true;
+      continue;
+    }
+    const runnable = result.toolCalls.filter((call) => !blocked.includes(call));
+    const webState = webStateOf([...rows, saved]);
+    const gated = new Set(
+      runnable
+        .filter((call) => {
+          const tool = findTool(call.function.name);
+          return tool && !tool.write && needsWebApproval(tool.name, parseArgs(call.function.arguments), webState);
+        })
+        .map((call) => call.id),
+    );
+    const reads = runnable.filter((call) => !findTool(call.function.name)?.write && !gated.has(call.id));
+    let writes = runnable.filter((call) => findTool(call.function.name)?.write);
     await Promise.all(
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
@@ -909,16 +1078,16 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       }),
     );
     if (signal?.aborted) return;
-    const refused = await refusedWrites(actor, writes);
+    const refused = await refusedWrites(actor, writes, switches);
     for (const call of writes.filter((entry) => refused.has(entry.id))) {
       await insertMessage(actor, conversation.id, {
         role: "tool",
-        content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        content: toolJson(refused.get(call.id)),
         toolCallId: call.id,
         toolName: call.function.name,
       });
     }
-    writes = writes.filter((call) => !refused.has(call.id));
+    writes = [...writes.filter((call) => !refused.has(call.id)), ...runnable.filter((call) => gated.has(call.id))];
     if (writes.length > 0) {
       const unattended = new Set<string>();
       for (const call of writes) {
@@ -929,8 +1098,9 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
         writes.map((call) => parseArgs(call.function.arguments)),
         writes.map((call) => call.function.name),
       ).catch(() => new Map<string, string>());
+      const crossBrand = await crossBrandWorkspaces(actor, [...rows, saved]).catch(() => []);
       let actions: AssistantAction[] = writes.map((call) => {
-        const described = describeAction(call.function.name, parseArgs(call.function.arguments), names);
+        const described = cardFor(call, names, gated.has(call.id), crossBrand);
         const automatic = unattended.has(call.id);
         return {
           id: call.id,
@@ -952,6 +1122,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
           deadline: deadline - 20_000,
           callId: call.id,
           unattended: true,
+          fence,
         })) as Record<string, unknown> | null;
         const failed = Boolean(output && typeof output === "object" && "error" in output);
         await insertMessage(actor, conversation.id, { role: "tool", content: toolJson(output), toolCallId: call.id, toolName: call.function.name });
@@ -972,7 +1143,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
 
 export async function sendMessage(
   actor: UserActor,
-  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean },
+  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean; page?: unknown },
   emit: Emit,
   options: TurnOptions,
 ) {
@@ -1007,7 +1178,11 @@ export async function sendMessage(
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   await settleStuckActions(actor, conversation.id, rows);
   if (!input.keepPending) await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
-  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files });
+  const page = await pageContext(actor, readPageInput(input.page)).catch((error) => {
+    console.error("Couldn't read the page context", error instanceof Error ? error.message : error);
+    return "";
+  });
+  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page });
   emit({ type: "user", message: display(user) });
   await runLoop(actor, conversation, emit, options);
   emit({ type: "done" });
@@ -1027,9 +1202,11 @@ export async function decideActions(
   }));
   emit({ type: "conversation", conversation: summary(conversation) });
   const decisions = new Map(input.decisions.map((decision) => [decision.id, decision.approve]));
+  const approved = approvalNote(new Date());
   const variants = new Map(input.decisions.map((decision) => [decision.id, decision.variant]));
   const owner = rows.find((row) => (row.actions ?? []).some((action) => decisions.has(action.id)));
   if (!owner || decisions.size === 0) throw new AssistantError("That action is no longer available.");
+  const fence = turnFence(rows.slice(0, rows.indexOf(owner) + 1), conversation.id);
   const chosen = (owner.actions ?? []).filter((action) => decisions.has(action.id));
   if (chosen.length !== decisions.size) throw new AssistantError("Some of those actions are no longer available.");
   if (chosen.some((action) => action.status !== "pending")) throw new AssistantError("That action has already been handled.");
@@ -1064,15 +1241,16 @@ export async function decideActions(
       callId: call.id,
       approval: action.name === "save_doc" ? approvalFor(action) : undefined,
       source: options.headless ? "email" : undefined,
+      fence,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {
       role: "tool",
-      content: toolJson(
-        chosenAlternative && output && typeof output === "object"
-          ? { ...output, note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` }
-          : output,
-      ),
+      content: toolJson({
+        approved,
+        ...(output && typeof output === "object" && !Array.isArray(output) ? output : { result: output }),
+        ...(chosenAlternative ? { note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` } : {}),
+      }),
       toolCallId: action.id,
       toolName: action.name,
     });

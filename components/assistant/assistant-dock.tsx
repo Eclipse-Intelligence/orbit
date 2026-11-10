@@ -45,6 +45,7 @@ import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useDocsStore } from "@/stores/docs-store";
+import { pageSnapshot } from "@/stores/page-context-store";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import CopyIcon from "@/public/assets/images/assistant/copy.svg";
@@ -893,6 +894,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
       reasoning: active.reasoning,
       webSearch,
       files: attached.map((file) => file.id),
+      page: pageSnapshot(),
     });
   }
 

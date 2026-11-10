@@ -34,11 +34,20 @@ async function probe(model: string, webSearch: boolean, full: boolean, reasoning
       tools,
       messages: [
         ...messages,
-        { role: "assistant", content: first.content || null, tool_calls: [call] },
+        { role: "assistant", content: first.content || null, tool_calls: [call], state: first.state ?? null },
         { role: "tool", tool_call_id: call.id, content: JSON.stringify({ openTasks: 7 }) },
       ],
     });
-    return { model, webSearch, ok: /7|seven/i.test(second.content), toolCalled: true, reply: second.content.slice(0, 200), ms: Date.now() - started };
+    return {
+      model,
+      webSearch,
+      ok: /7|seven/i.test(second.content),
+      toolCalled: true,
+      reasoningCarried: first.state?.format ?? null,
+      cutOff: Boolean(first.cutOff || second.cutOff),
+      reply: second.content.slice(0, 200),
+      ms: Date.now() - started,
+    };
   } catch (error) {
     return { model, webSearch, ok: false, error: error instanceof Error ? error.message : String(error), ms: Date.now() - started };
   }

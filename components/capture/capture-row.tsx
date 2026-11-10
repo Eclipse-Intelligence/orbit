@@ -15,6 +15,7 @@ import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/s
 import type { SnoozeChoice } from "@/lib/crm/task-snooze";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
+import { focusOnPage, useReleaseFocusOnUnmount } from "@/stores/page-context-store";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -188,6 +189,7 @@ export default function CaptureRow({
   const phoneMore = actions.filter((action) => action.phoneMore);
   const hasMore = phoneMore.length > 0 || more.length > 0;
   const closing = leaving || height !== null;
+  useReleaseFocusOnUnmount("capture", rowId);
 
   useEffect(() => {
     if (!leaving) return;
@@ -277,8 +279,10 @@ export default function CaptureRow({
       data-capture-row={rowId}
       data-leaving={leaving ? "" : undefined}
       onFocus={(event) => {
+        focusOnPage("capture", rowId);
         if (event.target === event.currentTarget) setActive(true);
       }}
+      onPointerDown={() => focusOnPage("capture", rowId)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActive(false);
       }}

@@ -101,3 +101,9 @@ export async function queryAsUser<T extends Record<string, unknown>>(
     client.release();
   }
 }
+
+export function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : "")).join("");
+}

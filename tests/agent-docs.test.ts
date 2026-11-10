@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ASSISTANT_TOOLS } from "@/lib/assistant/tools";
+import { ASSISTANT_TOOLS, CORE_TOOLS, TOOL_DOMAIN_NAMES, TOOL_DOMAINS } from "@/lib/assistant/tools";
 import { SCOPES } from "@/lib/crm/scopes";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -69,11 +69,40 @@ describe("agent docs", () => {
     assert.deepEqual(stale, [], `docs/assistant.md lists tools that no longer exist: ${stale.join(", ")}`);
   });
 
-  it("keeps the assistant within the tool count every model accepts", () => {
+  it("keeps the core tools small and every tool in one place", () => {
+    assert.ok(
+      CORE_TOOLS.length <= 30,
+      `The assistant sends ${CORE_TOOLS.length} core tools on every call. Keep it to 30 or fewer and put the rest in an area of TOOL_DOMAINS (see "Adding a tool" in docs/assistant.md).`,
+    );
     assert.ok(
       ASSISTANT_TOOLS.length <= 126,
-      `The assistant has ${ASSISTANT_TOOLS.length} tools. Some model APIs refuse requests with more than 128 tools (OpenAI documents 128, Gemini may allow fewer), and 126 is the most proven to work on every model in lib/assistant/models.ts. Merge overlapping tools (see "Adding a tool" in docs/assistant.md) to get back to 126 or fewer.`,
+      `The assistant has ${ASSISTANT_TOOLS.length} tools. A conversation that loads every area sends them all, ChatGPT adds web_search and Orbit Agent adds continue_result, and some model APIs refuse requests with more than 128 tools. Merge overlapping tools to get back to 126 or fewer.`,
     );
+    const placed = [...CORE_TOOLS, ...TOOL_DOMAIN_NAMES.flatMap((domain) => TOOL_DOMAINS[domain].tools)];
+    const names = ASSISTANT_TOOLS.map((tool) => tool.name);
+    const unplaced = names.filter((name) => !placed.includes(name));
+    assert.deepEqual(unplaced, [], `Put these tools in CORE_TOOLS or an area of TOOL_DOMAINS: ${unplaced.join(", ")}`);
+    const twice = placed.filter((name, index) => placed.indexOf(name) !== index);
+    assert.deepEqual(twice, [], `These tools are in more than one place: ${twice.join(", ")}`);
+    const unknown = placed.filter((name) => !names.includes(name));
+    assert.deepEqual(unknown, [], `These names in CORE_TOOLS or TOOL_DOMAINS aren't tools: ${unknown.join(", ")}`);
+  });
+
+  it("describes every assistant tool parameter, nested ones included", () => {
+    type Schema = { description?: unknown; properties?: Record<string, Schema>; items?: Schema; anyOf?: Schema[]; oneOf?: Schema[] };
+    const missing: string[] = [];
+    const walk = (tool: string, at: string, schema: Schema | undefined) => {
+      if (!schema || typeof schema !== "object") return;
+      for (const [key, child] of Object.entries(schema.properties ?? {})) {
+        const path = at ? `${at}.${key}` : key;
+        if (typeof child?.description !== "string" || !child.description.trim()) missing.push(`${tool}.${path}`);
+        walk(tool, path, child);
+      }
+      if (schema.items) walk(tool, `${at}[]`, schema.items);
+      for (const option of [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) walk(tool, at, option);
+    };
+    for (const tool of ASSISTANT_TOOLS) walk(tool.name, "", tool.parameters as Schema);
+    assert.deepEqual(missing, [], `Describe these assistant tool parameters: ${missing.join(", ")}`);
   });
 
   it("documents every MCP tool each kind of token sees in docs/mcp.md, and only real ones", async () => {

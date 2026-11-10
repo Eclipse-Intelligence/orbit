@@ -30,6 +30,7 @@ import {
 } from "@/app/(crm)/bulk";
 import { bulkAddTagAction, bulkRemoveTagAction } from "@/app/(crm)/tags";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
+import { usePageSelection } from "@/stores/page-context-store";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Recipient } from "@/lib/crm/personalise";
 import type { Contact, ContactPresence, ContactSort, TagCount } from "@/lib/crm/types";
@@ -105,6 +106,7 @@ export default function ContactsScreen({
     contacts.map((contact) => contact.id),
     `${page}|${query}|${tag}|${view.sort}|${view.order}|${view.has.join()}|${view.missing.join()}`,
   );
+  usePageSelection("contacts", selection.selectedIds);
   const sortBy = (column: ContactSort) =>
     replaceParams(nextSort(column, view, { sort: DEFAULT_CONTACT_SORT, order: defaultContactOrder }));
   const direction = (column: ContactSort) => (view.sort === column ? view.order : null);

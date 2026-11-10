@@ -24,6 +24,7 @@ import { formatMoney, type Currency } from "@/lib/proposals/model";
 import type { Company, CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { createLinearIssue, LINEAR_PRIORITIES, LinearError } from "@/lib/linear";
+import { assertLinearHere } from "@/lib/crm/linear-connection";
 import { pushToUser, type PushSender } from "@/lib/push";
 import { completeJson, LlmError } from "@/lib/llm";
 import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
@@ -981,6 +982,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     case "create_proposal":
       return proposalStep(ctx, step);
     case "linear_issue": {
+      await assertLinearHere(ctx.actor);
       const wanted = render(config.priority, ctx.vars).trim().toLowerCase().replace(/\s*priority$/, "");
       const priority = (LINEAR_PRIORITIES as readonly string[]).includes(wanted) ? wanted : null;
       const issue = await createLinearIssue(

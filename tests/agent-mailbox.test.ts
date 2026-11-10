@@ -36,7 +36,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { AGENT_EVENTS, MACHINE_MAIL_API, ensureWebhook, signPayload, verifySignature } from "@/lib/machinemail";
 import { resetStorageBucketCache } from "@/lib/storage";
-import type { CompanionResult } from "@/companion/src/protocol";
+import { PROPOSED, type CompanionResult } from "@/companion/src/protocol";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const SUPABASE = "https://project.supabase.test";
@@ -274,7 +274,7 @@ async function runOnMac(mac: AuthenticatedCompanion, services: Services, result:
 function answer(text: string, calls: { id: string; name: string; arguments: Record<string, unknown> }[] = []): CompanionResult {
   return {
     steps: [{ text, calls: calls.map((call) => ({ id: call.id, name: call.name, arguments: JSON.stringify(call.arguments) })) }],
-    results: {},
+    results: Object.fromEntries(calls.filter((call) => ASSISTANT_TOOLS.find((tool) => tool.name === call.name)?.write).map((call) => [call.id, { content: PROPOSED, isError: false }])),
     sources: [],
     model: "claude-fable-5-1",
     usage: null,

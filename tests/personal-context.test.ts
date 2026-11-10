@@ -118,7 +118,7 @@ describe("About you", () => {
 
   it("tells the assistant who it's helping and who their colleagues are, or suggests filling it in", async () => {
     const about = await getPersonalContext(owner);
-    const prompt = systemPrompt(owner, { webSearch: false, about: aboutYouSection(about, await getColleagues(owner)) });
+    const prompt = systemPrompt(owner, { about: aboutYouSection(about, await getColleagues(owner)) });
     assert.match(prompt, /# Who you're helping\nRole: Founder and CEO, Eclipse/);
     assert.match(prompt, /What they care about, their interests and the views they hold:\nRepeated prompt tests over screenshots\./);
     assert.match(prompt, /Their colleagues in this workspace:\n- Sam Colleague \(sam@about\.test\): Head of delivery/);

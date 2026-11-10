@@ -26,6 +26,9 @@ export type CompanionToolResult = { content: string; isError: boolean };
 
 export type CompanionSource = { url: string; title: string | null };
 
+export const PROPOSED =
+  "Proposed. Orbit will show this change to the user for approval. It has not happened yet. Do not call this tool again for the same change. When you have proposed everything, say in one or two sentences what you proposed and stop.";
+
 export type CompanionResult = {
   steps: CompanionStep[];
   results: Record<string, CompanionToolResult>;

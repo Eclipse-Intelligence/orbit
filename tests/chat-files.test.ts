@@ -8,7 +8,7 @@ import { sweepEmailAttachments } from "@/lib/crm/email-attachments";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { resetStorageBucketCache } from "@/lib/storage";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createUser, messageText, queryAsUser, resetDatabase } from "./helpers";
 
 const SUPABASE = "https://project.supabase.test";
 
@@ -44,7 +44,7 @@ function storage() {
 }
 
 function gateway(replies: string[]) {
-  const requests: { messages: { role: string; content: string }[] }[] = [];
+  const requests: { messages: { role: string; content: unknown }[] }[] = [];
   const fetchImpl = (async (_url: string, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body)));
     return Response.json({
@@ -129,7 +129,8 @@ describe("chat files", () => {
     const brief = await upload(env, "Brief.txt", new TextEncoder().encode("The pilot covers three markets."), "text/plain");
     const photo = await upload(env, "Whiteboard.png", new Uint8Array([137, 80, 78, 71]), "image/png");
     const { conversation, requests, events } = await sendWith(owner, "What does the brief say?", [brief, photo]);
-    const sent = requests[0].messages.at(-1)!;
+    const last = requests[0].messages.at(-1)!;
+    const sent = { role: last.role, content: messageText(last.content) };
     assert.equal(sent.role, "user");
     assert.match(sent.content, /^What does the brief say\?\n\n\[Orbit note: the user attached these files/);
     assert.ok(sent.content.includes(`- Brief.txt (text/plain, 1 KB, chat file id ${brief})`), sent.content);
@@ -147,7 +148,7 @@ describe("chat files", () => {
     const only = await upload(env, "Notes.md", new TextEncoder().encode("# Notes"), "text/markdown");
     const alone = await sendWith(owner, "", [only]);
     assert.equal(alone.conversation.title, "Notes.md");
-    assert.match(alone.requests[0].messages.at(-1)!.content, /^\[Orbit note: the user attached this file/);
+    assert.match(messageText(alone.requests[0].messages.at(-1)!.content), /^\[Orbit note: the user attached this file/);
   });
 
   it("reads a long file in parts and keeps the text so it's only extracted once", async () => {

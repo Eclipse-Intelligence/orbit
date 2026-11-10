@@ -15,7 +15,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { insertMemory } from "@/lib/learning/memories";
 import { runUnit, unreadBrief } from "@/lib/learning/nightly";
-import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, messageText, queryAsUser, resetDatabase } from "./helpers";
 
 const DAY_MS = 86_400_000;
 
@@ -259,7 +259,7 @@ describe("Morning brief in the assistant", () => {
     assert.equal(stored.rows[0].conversation_id, opened.conversation.id);
 
     process.env.LLM_API_KEY = "llm-test";
-    const requests: { messages: { role: string; content: string }[] }[] = [];
+    const requests: { messages: { role: string; content: unknown }[] }[] = [];
     const gateway: typeof fetch = async (_input, init) => {
       requests.push(JSON.parse(String(init?.body)));
       return Response.json({ model: "claude-haiku-5-5", choices: [{ message: { role: "assistant", content: "Drafted a note to Acme." } }], usage: {} });
@@ -270,13 +270,13 @@ describe("Morning brief in the assistant", () => {
       () => undefined,
       { deadline: Date.now() + 60_000, fetchImpl: gateway },
     );
-    const sent = requests[0].messages;
-    assert.doesNotMatch(sent[0].content, /brief is ready/, "the brief chat doesn't send the model to get_daily_brief again");
+    const sent = requests[0].messages.map((message) => ({ role: message.role, content: messageText(message.content) }));
+    assert.doesNotMatch(sent.map((message) => message.content).join("\n"), /brief is ready/, "the brief chat doesn't send the model to get_daily_brief again");
     const briefAt = sent.findIndex((message) => message.role === "assistant" && message.content === body);
     assert.ok(briefAt > 0, "the brief is replayed to the model");
     assert.equal(sent[briefAt - 1].role, "user");
     assert.match(sent[briefAt - 1].content, /morning brief/);
-    assert.equal(sent.at(-1)!.content, "Draft that note to Acme");
+    assert.ok(sent.at(-1)!.content.startsWith("Draft that note to Acme\n\n<orbit_context>\n"));
 
     const after = await getConversation(owner, opened.conversation.id);
     assert.deepEqual(after.messages.map((message) => message.role), ["assistant", "user", "assistant"]);

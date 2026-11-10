@@ -1,5 +1,7 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
+import { untrustedToken } from "@/lib/assistant/untrusted";
+import { needsWebApproval, OUTSIDE_TOOLS, readTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -80,7 +82,16 @@ export async function expireStaleJobs(actor: UserActor) {
   await withActor(actor, (db) => expireStale(db, actor));
 }
 
-export async function enqueueCompanionJob(actor: UserActor, conversationId: string, request: CompanionRequest, options: { agentMailId?: string | null } = {}) {
+export type JobSwitches = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean };
+
+const NO_SWITCHES: JobSwitches = { multiWorkspace: false, eclipse: false, linear: false };
+
+export async function enqueueCompanionJob(
+  actor: UserActor,
+  conversationId: string,
+  request: CompanionRequest,
+  options: { agentMailId?: string | null; switches?: JobSwitches } = {},
+) {
   await pruneFinished(actor);
   return withActor(actor, async (db) => {
     await expireStale(db, actor);
@@ -91,8 +102,8 @@ export async function enqueueCompanionJob(actor: UserActor, conversationId: stri
     );
     const result = await db.query<{ id: string }>(
       `insert into crm.ai_companion_jobs (workspace_id, user_id, conversation_id, request, agent_mail_id)
-       values ($1, $2, $3, $4::jsonb, $5) returning id`,
-      [actor.workspaceId, actor.userId, conversationId, JSON.stringify(request), options.agentMailId ?? null],
+       values ($1, $2, $3, $4::jsonb || jsonb_build_object('switches', $6::jsonb), $5) returning id`,
+      [actor.workspaceId, actor.userId, conversationId, JSON.stringify(request), options.agentMailId ?? null, JSON.stringify(options.switches ?? NO_SWITCHES)],
     );
     return result.rows[0].id;
   });
@@ -161,7 +172,7 @@ async function claim(auth: AuthenticatedCompanion): Promise<CompanionJob | null>
          where user_id = $1 and status = 'queued'
          order by created_at limit 1 for update skip locked
        )
-       returning id, request`,
+       returning id, request - 'switches' as request`,
       [auth.actor.userId, auth.companionId],
     );
     return result.rows[0] ?? null;
@@ -215,8 +226,8 @@ export async function nextCompanionJob(auth: AuthenticatedCompanion, waitMs: num
 async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
   if (!isUuid(jobId)) throw new CrmError("not_found", "That request is gone.", 404);
   const job = await withActor(auth.actor, async (db) => {
-    const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string }>(
-      "select status, companion_id, conversation_id from crm.ai_companion_jobs where id = $1 and user_id = $2",
+    const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string; switches: JobSwitches | null }>(
+      "select status, companion_id, conversation_id, request -> 'switches' as switches from crm.ai_companion_jobs where id = $1 and user_id = $2",
       [jobId, auth.actor.userId],
     );
     return result.rows[0];
@@ -307,15 +318,53 @@ async function continueResult(auth: AuthenticatedCompanion, jobId: string, raw: 
   return { content: piece(resultId, stored, offset), isError: false };
 }
 
+async function companionWebState(auth: AuthenticatedCompanion, jobId: string, conversationId: string) {
+  return withActor(auth.actor, async (db) => {
+    const job = await db.query<{ outside_read: boolean; seen_urls: string[]; web_search: boolean }>(
+      "select outside_read, seen_urls, coalesce((request->>'webSearch')::boolean, false) as web_search from crm.ai_companion_jobs where id = $1",
+      [jobId],
+    );
+    const rows = await db.query<{ role: string; content: string; tool_name: string | null; sources: unknown[] | null; page_context: string | null }>(
+      "select role, content, tool_name, sources, page_context from crm.assistant_messages where conversation_id = $1 order by seq",
+      [conversationId],
+    );
+    const row = job.rows[0];
+    const outside = Boolean(row?.outside_read || row?.web_search);
+    return webGateState(rows.rows, { outside, seen: row?.seen_urls });
+  });
+}
+
+async function noteRead(auth: AuthenticatedCompanion, jobId: string, name: string, content: string) {
+  await withActor(auth.actor, (db) =>
+    db.query(
+      `update crm.ai_companion_jobs set outside_read = outside_read or $2,
+         seen_urls = (select coalesce(array_agg(item), '{}') from (select distinct item from unnest(seen_urls || $3::text[]) as seen(item) limit 5000) as kept)
+       where id = $1 and user_id = $4`,
+      [jobId, OUTSIDE_TOOLS.has(name), readTargets(name, content).slice(0, 2_000), auth.actor.userId],
+    ),
+  );
+}
+
 export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: string, call: CompanionCall) {
-  await runningJob(auth, jobId);
+  const job = await runningJob(auth, jobId);
   if (call.name === CONTINUE_RESULT_TOOL.name) return continueResult(auth, jobId, call.arguments);
   const tool = findTool(call.name);
   if (!tool) return { content: toolJson({ error: `There is no tool called ${call.name}.` }), isError: true };
   if (tool.write) return { content: toolJson({ error: "Changes need the user's approval in Orbit." }), isError: true };
+  const args = parseArgs(call.arguments);
+  if (WEB_TOOLS.has(tool.name) && needsWebApproval(tool.name, args, await companionWebState(auth, jobId, job.conversation_id))) {
+    return { content: toolJson({ approvalNeeded: WEB_APPROVAL_MARK, message: WEB_APPROVAL_RESULT }), isError: false };
+  }
   const id = String(call.id || `${call.name}-${Date.now()}`).slice(0, 120);
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "running" });
-  const output = (await runTool(auth.actor, call.name, parseArgs(call.arguments))) as Record<string, unknown> | null;
+  const switches = { ...NO_SWITCHES, ...(job.switches ?? {}) };
+  const output = (await runTool(auth.actor, call.name, args, {
+    fence: untrustedToken(),
+    multiWorkspace: switches.multiWorkspace === true,
+    eclipse: switches.eclipse === true,
+    linear: switches.linear === true,
+  })) as Record<string, unknown> | null;
+  await noteRead(auth, jobId, tool.name, toolJson(output));
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "done" });
   return sendResult(auth, jobId, id, toolJson(output), Boolean(output && typeof output === "object" && "error" in output));
 }
@@ -340,19 +389,19 @@ export async function checkCompanionJob(auth: AuthenticatedCompanion, jobId: str
 export async function finishCompanionJob(
   auth: AuthenticatedCompanion,
   jobId: string,
-  apply: (actor: UserActor, conversationId: string) => Promise<string[]>,
+  apply: (actor: UserActor, conversationId: string, switches?: JobSwitches) => Promise<string[]>,
 ) {
   await runningJob(auth, jobId);
   const claimed = await withActor(auth.actor, (db) =>
-    db.query<{ conversation_id: string }>(
-      "update crm.ai_companion_jobs set status = 'done', finished_at = now(), results = '{}'::jsonb where id = $1 and companion_id = $2 and status = 'running' returning conversation_id",
+    db.query<{ conversation_id: string; switches: JobSwitches | null }>(
+      "update crm.ai_companion_jobs set status = 'done', finished_at = now(), results = '{}'::jsonb where id = $1 and companion_id = $2 and status = 'running' returning conversation_id, request -> 'switches' as switches",
       [jobId, auth.companionId],
     ),
   );
   const conversationId = claimed.rows[0]?.conversation_id;
   if (!conversationId) throw new CrmError("conflict", "That request was cancelled.", 409);
   try {
-    const messageIds = await apply(auth.actor, conversationId);
+    const messageIds = await apply(auth.actor, conversationId, claimed.rows[0]?.switches ?? undefined);
     await withActor(auth.actor, (db) =>
       db.query("update crm.ai_companion_jobs set result = $2::jsonb where id = $1", [jobId, JSON.stringify({ messageIds })]),
     );

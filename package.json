@@ -11,12 +11,14 @@
     "db:setup": "tsx scripts/setup-db.ts",
     "db:reset": "tsx scripts/setup-db.ts --reset",
     "agent:create": "tsx scripts/create-agent.ts",
+    "eval": "tsx scripts/eval.ts",
     "mcp": "tsx scripts/mcp-stdio.ts",
     "companion:pack": "node scripts/pack-companion.mjs",
     "extension:build": "node scripts/build-extension.mjs",
     "extension:zip": "node scripts/build-extension.mjs --zip"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.13.1",
@@ -69,6 +71,7 @@
     "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "^16.3.0",
+    "pg-connection-string": "^2.14.1",
     "prettier": "3.8.1",
     "prettier-plugin-tailwindcss": "^0.6.14",
     "tailwind-scrollbar": "^4.0.2",
