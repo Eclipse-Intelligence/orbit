@@ -22,12 +22,11 @@ type SidebarProps = {
   boards: BoardSummary[];
   companyCount: number;
   openActionCount: number;
-  mailUnread: number;
   capture: CaptureStatus | null;
   workspace: SidebarWorkspace;
 };
 
-export default function Sidebar({ boards, companyCount, openActionCount, mailUnread, capture, workspace }: SidebarProps) {
+export default function Sidebar({ boards, companyCount, openActionCount, capture, workspace }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const setCapture = useCompaniesStore((state) => state.setCapture);
@@ -53,7 +52,6 @@ export default function Sidebar({ boards, companyCount, openActionCount, mailUnr
           boards={boards}
           companyCount={companyCount}
           openActionCount={openActionCount}
-          mailUnread={mailUnread}
           capture={capture}
           workspace={workspace}
           settingsHref={SETTINGS_PATHS.general}
@@ -75,7 +73,6 @@ export default function Sidebar({ boards, companyCount, openActionCount, mailUnr
             boards={boards}
             companyCount={companyCount}
             openActionCount={openActionCount}
-            mailUnread={mailUnread}
             capture={capture}
             workspace={workspace}
           />

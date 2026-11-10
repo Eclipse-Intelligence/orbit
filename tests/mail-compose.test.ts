@@ -81,6 +81,8 @@ function outlook(state: { inbox: unknown[]; sent: unknown[]; drafts: unknown[]; 
       if (method === "DELETE") return new Response(null, { status: 204 });
       return Response.json({ id });
     }
+    const asked = decodeURIComponent(url.match(/\/me\/messages\/([^/?]+)/)?.[1] ?? "");
+    if (asked && state.missing?.has(asked)) return Response.json({ error: { code: "ErrorItemNotFound", message: "Not found." } }, { status: 404 });
     const named = url.match(/\/me\/mailFolders\/(inbox|sentitems|drafts|archive|deleteditems|junkemail|outbox)\?\$select=id$/);
     if (named) {
       const ids: Record<string, string> = { inbox: "f-inbox", sentitems: "f-sent", drafts: "f-drafts" };
@@ -328,7 +330,6 @@ describe("mail replies and read statuses", () => {
     const resend = outlook({ ...state, missing: new Set([goneDraft]) });
     await sendMailDraft(owner, { ...input, id: kept.id, subject: "Second" }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: resend.fetchImpl });
     assert.deepEqual(resend.calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "").split("?")[0]}`), [
-      `POST /me/messages/${goneDraft}/send`,
       "POST /me/messages",
       `PATCH /me/messages/draft-${draftCount}`,
       `POST /me/messages/draft-${draftCount}/send`,

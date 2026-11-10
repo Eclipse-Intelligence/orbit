@@ -3,7 +3,8 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, reconnectProblem, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import { sourceReconnect } from "@/lib/mail/accounts";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailView } from "@/lib/mail/view";
@@ -142,9 +143,17 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
   }
 }
 
-function failureMessage(error: unknown) {
+async function sourceEmail(actor: UserActor, sourceId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ email: string }>("select email from crm.mail_sources where id = $1 and user_id = $2", [sourceId, actor.userId]);
+    return result.rows[0]?.email ?? null;
+  }).catch(() => null);
+}
+
+async function failureMessage(actor: UserActor, sourceId: string, error: unknown) {
+  const reconnect = reconnectProblem(error, await sourceEmail(actor, sourceId));
+  if (reconnect) return reconnect;
   if (error instanceof GraphMailError) {
-    if (error.status === 401 || error.status === 403) return "Microsoft didn't allow that change. Connect the account again in Settings › Email.";
     if (error.status === 404) return "Outlook no longer has that email. It will disappear after the next sync.";
     return error.message;
   }
@@ -168,11 +177,11 @@ export async function applyMailAction(
       `select m.id, m.provider_message_id, m.folder_id, f.role, m.is_read, m.is_flagged, m.subject,
          coalesce(m.received_at, m.sent_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
+       where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
          and f.role <> 'outbox'
          and (f.role <> 'junk' or not exists (
            select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-           where o.user_id = m.user_id and o.source_id = m.source_id and coalesce(o.thread_key, 'm:' || o.id::text) = $3
+           where o.user_id = m.user_id and o.source_id = m.source_id and o.thread_key = $3
              and ofo.role not in ('junk', 'outbox')
          ))
        order by at asc, m.id asc
@@ -216,7 +225,9 @@ export async function applyMailAction(
       }
     });
   }
-  if (failures.length > 0) throw new CrmError("mail_action_failed", failureMessage(failures[0]), 502);
+  if (failures.length > 0) {
+    throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
+  }
   return { changed: done.length };
 }
 
@@ -224,7 +235,7 @@ export async function threadForEmail(actor: UserActor, emailId: string) {
   if (!isUuid(emailId)) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
   return withActor(actor, async (db) => {
     const result = await db.query<{ source_id: string; tk: string; subject: string | null }>(
-      "select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject from crm.mail_messages where id = $1 and user_id = $2",
+      "select source_id, thread_key as tk, subject from crm.mail_messages where id = $1 and user_id = $2",
       [emailId, actor.userId],
     );
     const row = result.rows[0];
@@ -259,5 +270,5 @@ export async function moveMessages(
       }
     });
   }
-  return { moved: done.map((item) => item.id), error: failures.length ? failureMessage(failures[0]) : null };
+  return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };
 }

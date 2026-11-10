@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { tagBase } from "@/components/beautifui/record-marks";
-import { followUpDay, mailListWhen, personName, recipientList, snippetCore } from "@/lib/mail/format";
+import { followUpDay, mailFullWhen, mailListWhen, personName, recipientList, snippetCore } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
 import type { ThreadSummary } from "@/lib/mail/view";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
+import { keepLeaving, type Shown } from "@/components/mail/leaving";
 import { cn } from "@/lib/utils";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
@@ -15,6 +16,7 @@ import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
+import CheckIcon from "@/public/assets/images/mail/check.svg";
 
 type SwipeActions = {
   leftLabel: string;
@@ -36,6 +38,7 @@ function swallowNextClick() {
 }
 const OUT_MS = 180;
 const COLLAPSE_MS = 220;
+const LEAVE_MS = COLLAPSE_MS + 60;
 
 function Row({
   thread,
@@ -50,7 +53,11 @@ function Row({
   selecting,
   selected,
   onToggle,
+  leaving,
+  focusable,
 }: {
+  leaving: boolean;
+  focusable: boolean;
   selecting: boolean;
   selected: boolean;
   onToggle: () => void;
@@ -120,6 +127,29 @@ function Row({
     };
   });
 
+  const wasLeaving = useRef(false);
+  useEffect(() => {
+    const element = row.current;
+    if (!element) return;
+    let frame = 0;
+    if (leaving) {
+      wasLeaving.current = true;
+      frame = window.requestAnimationFrame(() => {
+        setHeight((current) => current ?? element.offsetHeight);
+        frame = window.requestAnimationFrame(() => {
+          frame = window.requestAnimationFrame(() => setHeight(0));
+        });
+      });
+    } else if (wasLeaving.current) {
+      wasLeaving.current = false;
+      frame = window.requestAnimationFrame(() => {
+        setHeight(null);
+        setOffset(0);
+      });
+    }
+    return () => window.cancelAnimationFrame(frame);
+  }, [leaving]);
+
   useEffect(() => {
     const element = button.current;
     const pending = timers.current;
@@ -135,7 +165,9 @@ function Row({
   return (
     <li
       ref={row}
-      className={cn("relative overflow-hidden rounded-xl", height !== null && "ease-power3-in-out transition-[height,opacity] duration-200")}
+      role="none"
+      inert={leaving}
+      className={cn("relative overflow-hidden rounded-xl", height !== null && "ease-power3-in-out transition-[height,opacity] duration-200 motion-reduce:transition-none")}
       style={height !== null ? { height, opacity: height === 0 ? 0 : 1 } : undefined}
     >
       {offset !== 0 && swipe && (
@@ -145,7 +177,7 @@ function Row({
             "ease-power3-out absolute inset-0 flex items-center rounded-xl px-5 text-[13px] font-medium transition-colors duration-150",
             offset < 0 ? "justify-end" : "justify-start",
             !armed
-              ? "text-soft bg-white/[0.06]"
+              ? "text-soft bg-surface-raised"
               : offset < 0
                 ? "bg-[color-mix(in_srgb,var(--success)_78%,black)] text-white"
                 : "bg-primary text-white",
@@ -207,7 +239,9 @@ function Row({
           if (selecting || event.metaKey || event.ctrlKey || event.shiftKey) onToggle();
           else onOpen();
         }}
-        aria-pressed={selecting ? selected : undefined}
+        role="option"
+        aria-selected={selected}
+        tabIndex={focusable ? 0 : -1}
         ref={button}
         onMouseEnter={onHover}
         onFocus={onHover}
@@ -219,10 +253,10 @@ function Row({
           offset !== 0
             ? "bg-background"
             : active
-              ? "bg-white/[0.07]"
+              ? "bg-surface-active"
               : selected
-                ? "bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]"
-                : "hover:bg-white/[0.035]",
+                ? "bg-surface-selected"
+                : "hover:bg-surface-hover",
         )}
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
@@ -235,11 +269,7 @@ function Row({
                 selected ? "bg-primary" : "shadow-[inset_0_0_0_1.5px_var(--line-strong)]",
               )}
             >
-              {selected && (
-                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M5 12.5 10 17.5 19 7.5" />
-                </svg>
-              )}
+              {selected && <CheckIcon className="size-2 text-white" />}
             </span>
           ) : (
             <span
@@ -268,20 +298,21 @@ function Row({
               />
             )}
             {thread.snoozedUntil ? (
-              <span className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums" title="Comes back to your inbox">
+              <time dateTime={thread.snoozedUntil} title={`Snoozed until ${mailFullWhen(thread.snoozedUntil)}`} className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums">
                 <ClockIcon aria-hidden className="size-3" />
+                <span className="sr-only">Snoozed until</span>
                 {laterDetail(thread.snoozedUntil, now)}
-              </span>
+              </time>
             ) : thread.followUpAt ? (
-              <span className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums" title="Follow-up goes out if nobody replies">
+              <time dateTime={thread.followUpAt} title={`Follow-up goes out ${mailFullWhen(thread.followUpAt)} if nobody replies`} className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums">
                 <FollowUpIcon aria-hidden className="size-3" />
                 <span className="sr-only">Follow-up on</span>
                 {followUpDay(thread.followUpAt)}
-              </span>
+              </time>
             ) : (
-              <span className={cn("text-[12px] tabular-nums", thread.unread ? "text-foreground" : "text-subtle")}>
+              <time dateTime={thread.latestAt ?? undefined} title={mailFullWhen(thread.latestAt)} className={cn("text-[12px] tabular-nums", thread.unread ? "text-foreground" : "text-subtle")}>
                 {mailListWhen(thread.latestAt, now)}
-              </span>
+              </time>
             )}
           </span>
         </span>
@@ -306,6 +337,7 @@ function Row({
 
 export default function ThreadList({
   threads,
+  scope,
   cursor,
   outgoing,
   showAccount,
@@ -324,6 +356,7 @@ export default function ThreadList({
   selected: Set<string>;
   onToggle: (key: string) => void;
   threads: ThreadSummary[];
+  scope: string;
   cursor: string | null;
   outgoing: boolean;
   showAccount: boolean;
@@ -338,7 +371,22 @@ export default function ThreadList({
   swipe: SwipeActions | null;
 }) {
   const sentinel = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
   const loadMore = useRef(onMore);
+  const [shown, setShown] = useState<Shown[]>(() => threads.map((thread) => ({ thread, leaving: false })));
+  const [source, setSource] = useState({ threads, scope });
+
+  if (source.threads !== threads || source.scope !== scope) {
+    setSource({ threads, scope });
+    setShown(source.scope === scope ? keepLeaving(shown, threads) : threads.map((thread) => ({ thread, leaving: false })));
+  }
+
+  useEffect(() => {
+    const gone = new Set(shown.filter((item) => item.leaving).map((item) => item.thread.key));
+    if (gone.size === 0) return;
+    const timer = window.setTimeout(() => setShown((current) => current.filter((item) => !(item.leaving && gone.has(item.thread.key)))), LEAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [shown]);
 
   useEffect(() => {
     loadMore.current = onMore;
@@ -356,21 +404,27 @@ export default function ThreadList({
 
   useEffect(() => {
     if (!cursor) return;
-    document.querySelector(`[data-mail-row="${CSS.escape(cursor)}"]`)?.scrollIntoView({ block: "nearest" });
+    const row = list.current?.querySelector<HTMLElement>(`[data-mail-row="${CSS.escape(cursor)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    if (list.current?.contains(document.activeElement) && document.activeElement !== row) row.focus({ preventScroll: true });
   }, [cursor]);
 
-  if (threads.length === 0) {
+  if (shown.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 py-16">
         {loading ? (
-          <ul aria-label="Loading mail" className="flex w-full flex-col gap-3">
-            {Array.from({ length: 7 }, (_, index) => (
-              <li key={index} className="flex flex-col gap-2 px-3 py-2">
-                <span className="bg-white/[0.05] h-3 w-1/3 animate-pulse rounded-full" />
-                <span className="bg-white/[0.035] h-3 w-4/5 animate-pulse rounded-full" />
-              </li>
-            ))}
-          </ul>
+          <div role="status" aria-busy="true" className="flex w-full flex-col">
+            <span className="sr-only">Loading mail…</span>
+            <ul aria-hidden className="flex w-full flex-col gap-3">
+              {Array.from({ length: 7 }, (_, index) => (
+                <li key={index} className="flex flex-col gap-2 px-3 py-2">
+                  <span className="bg-surface-raised h-3 w-1/3 animate-pulse rounded-full" />
+                  <span className="bg-surface-field h-3 w-4/5 animate-pulse rounded-full" />
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : (
           <p role="status" className="text-subtle text-center">
             {empty}
@@ -380,14 +434,23 @@ export default function ThreadList({
     );
   }
 
+  const focusKey = threads.some((thread) => thread.key === cursor) ? cursor : (threads[0]?.key ?? null);
+
   return (
-    <div className="flex flex-col pb-24">
-      <ul aria-label="Conversations" className="flex flex-col gap-px px-2">
-        {threads.map((thread) => (
+    <div className="flex flex-col pb-24 max-md:pb-[var(--floating-clearance)]">
+      <ul
+        ref={list}
+        role="listbox"
+        aria-label="Conversations"
+        aria-multiselectable="true"
+        aria-busy={loading || undefined}
+        className="flex flex-col gap-px px-2"
+      >
+        {shown.map(({ thread, leaving }) => (
           <Row
             key={thread.key}
             thread={thread}
-            active={thread.key === cursor}
+            active={!leaving && thread.key === cursor}
             outgoing={outgoing}
             showAccount={showAccount}
             own={own}
@@ -396,8 +459,10 @@ export default function ThreadList({
             onHover={() => onHover(thread.key)}
             swipe={swipe}
             selecting={selected.size > 0}
-            selected={selected.has(thread.key)}
+            selected={!leaving && selected.has(thread.key)}
             onToggle={() => onToggle(thread.key)}
+            leaving={leaving}
+            focusable={!leaving && thread.key === focusKey}
           />
         ))}
       </ul>

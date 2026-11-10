@@ -39,7 +39,7 @@ export function replyAfterSql(reminder: string, userParam: string, emailParam: s
   return `select rp.id, rp.from_name, rp.from_email from crm.mail_messages rp
     join crm.mail_folders rpf on rpf.id = rp.folder_id
     where rp.user_id = ${userParam} and rp.source_id = ${reminder}.source_id
-      and coalesce(rp.thread_key, 'm:' || rp.id::text) = ${reminder}.thread_key
+      and rp.thread_key = ${reminder}.thread_key
       and not rp.is_draft and rpf.role not in ('drafts', 'outbox')
       and coalesce(rp.received_at, rp.sent_at, rp.created_at) > ${reminder}.created_at
       and lower(coalesce(rp.from_email, '')) <> all ${ownMailAddresses(userParam, emailParam)}

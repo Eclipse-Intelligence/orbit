@@ -111,6 +111,8 @@ function world() {
       draftCount += 1;
       return Response.json({ id: `draft-${draftCount}`, conversationId: `conv-${draftCount}`, subject: "" }, { status: 201 });
     }
+    const lost = decodeURIComponent(url.match(/\/me\/messages\/([^/?]+)/)?.[1] ?? "");
+    if (url.startsWith(GRAPH) && unsendable.has(lost) && !url.endsWith("/attachments")) return Response.json({ error: { code: "ErrorItemNotFound", message: "Not found." } }, { status: 404 });
     if (url.endsWith("/attachments") && method === "POST") return Response.json({ id: "att" }, { status: 201 });
     if (url.endsWith("/send")) {
       const id = decodeURIComponent(url.match(/\/me\/messages\/([^/]+)\/send$/)?.[1] ?? "");

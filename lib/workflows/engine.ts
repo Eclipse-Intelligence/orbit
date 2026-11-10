@@ -336,7 +336,7 @@ async function emailVars(actor: UserActor, messageId: string) {
       body_text: string | null;
       at: Date | string | null;
     }>(
-      `select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.from_name, m.to_recipients,
+      `select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.from_name, m.to_recipients,
          m.snippet, m.body_text, coalesce(m.received_at, m.created_at) as at
        from crm.mail_messages m where m.id = $1 and m.user_id = $2`,
       [messageId, actor.userId],

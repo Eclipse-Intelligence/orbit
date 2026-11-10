@@ -2,7 +2,7 @@ import type { Db } from "@/lib/db/pool";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
-import { readStored, type StoredTokens } from "@/lib/crm/inbox";
+import { readStored, sameMicrosoftAccount, wrongAccount, type SignedInAccount, type StoredTokens } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
@@ -120,9 +120,17 @@ export async function readAccounts(db: Db, actor: UserActor): Promise<StoredAcco
 export async function storeAccountToken(db: Db, accountId: string, token: MicrosoftToken) {
   await db.query(
     `update crm.calendar_accounts
-     set refresh_token = $2, access_token = $3, access_token_expires_at = $4, calendar_write = coalesce($5::boolean, calendar_write)
+     set refresh_token = $2, access_token = $3, access_token_expires_at = $4, calendar_write = coalesce($5::boolean, calendar_write),
+         granted_scopes = coalesce($6, granted_scopes)
      where id = $1`,
-    [accountId, encryptSecret(token.refreshToken), encryptSecret(token.accessToken), token.expiresAt, grantsCalendarWrite(token.scope)],
+    [
+      accountId,
+      encryptSecret(token.refreshToken),
+      encryptSecret(token.accessToken),
+      token.expiresAt,
+      grantsCalendarWrite(token.scope),
+      token.scope ? token.scope.replace(/\s+/g, " ").trim().slice(0, 2000) : null,
+    ],
   );
 }
 
@@ -161,7 +169,7 @@ export function calendarConnectError(detail: string | null | undefined) {
 
 export async function connectCalendarAccount(
   actor: UserActor,
-  input: { origin: string; code: string; purpose?: "calendar_account" | "send_account" },
+  input: { origin: string; code: string; purpose?: "calendar_account" | "send_account"; expected?: string | null },
   fetchImpl: typeof fetch = fetch,
 ) {
   const purpose = input.purpose ?? "calendar_account";
@@ -172,7 +180,7 @@ export async function connectCalendarAccount(
     const detail = error instanceof MicrosoftTokenError ? error.detail : error instanceof Error ? error.message : null;
     throw new CrmError("invalid_input", calendarConnectError(detail), 400);
   }
-  let identity: { email: string; displayName: string | null };
+  let identity: Awaited<ReturnType<typeof fetchMicrosoftIdentity>>;
   try {
     identity = await fetchMicrosoftIdentity(token.accessToken, fetchImpl);
   } catch (error) {
@@ -189,45 +197,93 @@ export async function connectCalendarAccount(
   const scopeMissing = grantsCalendar(token.scope) === false;
   const canSend = purpose === "send_account" ? grantsMailSend(token.scope) !== false : null;
   const calendarWrite = grantsCalendarWrite(token.scope);
+  const expected = canonicalEmail(input.expected ?? "");
+  const signedIn: SignedInAccount = { email, id: identity.id, aliases: identity.aliases };
   return withActor(actor, async (db) => {
     const primary = await readStored(db, actor);
-    if (primary && canonicalEmail(primary.email) === email) {
+    const isPrimary = Boolean(primary && sameMicrosoftAccount(primary, signedIn));
+    const known = await readMicrosoftAccounts(db, actor);
+    const match = known.find((account) => sameMicrosoftAccount(account, signedIn)) ?? null;
+    if (expected) {
+      const target = known.find((account) => canonicalEmail(account.email ?? "") === expected) ?? null;
+      if (!sameMicrosoftAccount(target ?? { email: expected, microsoftUserId: null }, signedIn)) {
+        throw wrongAccount(email, expected, !isPrimary && !match, !target);
+      }
+    }
+    if (isPrimary) {
       throw new CrmError("conflict", SAME_AS_PRIMARY, 409, { field: "email" });
     }
-    const saved = await db.query<{ id: string }>(
-      `insert into crm.calendar_accounts (
-         workspace_id, user_id, provider, email, display_name, tenant_id, status, scope_missing,
-         refresh_token, access_token, access_token_expires_at, last_error, can_send, calendar_write
-       ) values ($1, $2, 'microsoft', $3, $4, $5, 'connected', $6, $7, $8, $9, null, coalesce($10::boolean, false), $11::boolean)
-       on conflict (user_id, provider, email) do update set
-         display_name = coalesce(excluded.display_name, crm.calendar_accounts.display_name),
-         tenant_id = coalesce(excluded.tenant_id, crm.calendar_accounts.tenant_id),
-         status = 'connected',
-         scope_missing = excluded.scope_missing,
-         refresh_token = excluded.refresh_token,
-         access_token = excluded.access_token,
-         access_token_expires_at = excluded.access_token_expires_at,
-         last_attempt_at = null,
-         last_error = null,
-         can_send = coalesce($10::boolean, crm.calendar_accounts.can_send),
-         calendar_write = coalesce($11::boolean, crm.calendar_accounts.calendar_write)
-       returning id`,
-      [
-        actor.workspaceId,
-        actor.userId,
-        email,
-        identity.displayName,
-        token.tenantId ?? null,
-        scopeMissing,
-        encryptSecret(token.refreshToken),
-        encryptSecret(token.accessToken),
-        token.expiresAt,
-        canSend,
-        calendarWrite,
-      ],
-    );
-    return { id: saved.rows[0].id, email, scopeMissing, canSend };
+    const values = [
+      actor.workspaceId,
+      actor.userId,
+      email,
+      identity.displayName,
+      token.tenantId ?? null,
+      scopeMissing,
+      encryptSecret(token.refreshToken),
+      encryptSecret(token.accessToken),
+      token.expiresAt,
+      canSend,
+      calendarWrite,
+      identity.id,
+      token.scope ? token.scope.replace(/\s+/g, " ").trim().slice(0, 2000) : null,
+    ];
+    const saved = match
+      ? await db.query<{ id: string }>(
+          `update crm.calendar_accounts set
+             email = $2,
+             display_name = coalesce($3, display_name),
+             tenant_id = coalesce($4, tenant_id),
+             status = 'connected',
+             scope_missing = $5,
+             refresh_token = $6,
+             access_token = $7,
+             access_token_expires_at = $8,
+             last_attempt_at = null,
+             last_error = null,
+             can_send = coalesce($9::boolean, can_send),
+             calendar_write = coalesce($10::boolean, calendar_write),
+             microsoft_user_id = coalesce($11, microsoft_user_id),
+             granted_scopes = coalesce($12, granted_scopes)
+           where id = $1 and user_id = $13
+           returning id`,
+          [match.id, ...values.slice(2), actor.userId],
+        )
+      : await db.query<{ id: string }>(
+          `insert into crm.calendar_accounts (
+             workspace_id, user_id, provider, email, display_name, tenant_id, status, scope_missing,
+             refresh_token, access_token, access_token_expires_at, last_error, can_send, calendar_write,
+             microsoft_user_id, granted_scopes
+           ) values ($1, $2, 'microsoft', $3, $4, $5, 'connected', $6, $7, $8, $9, null, coalesce($10::boolean, false), $11::boolean, $12, $13)
+           on conflict (user_id, provider, email) do update set
+             display_name = coalesce(excluded.display_name, crm.calendar_accounts.display_name),
+             tenant_id = coalesce(excluded.tenant_id, crm.calendar_accounts.tenant_id),
+             status = 'connected',
+             scope_missing = excluded.scope_missing,
+             refresh_token = excluded.refresh_token,
+             access_token = excluded.access_token,
+             access_token_expires_at = excluded.access_token_expires_at,
+             last_attempt_at = null,
+             last_error = null,
+             can_send = coalesce($10::boolean, crm.calendar_accounts.can_send),
+             calendar_write = coalesce($11::boolean, crm.calendar_accounts.calendar_write),
+             microsoft_user_id = coalesce(excluded.microsoft_user_id, crm.calendar_accounts.microsoft_user_id),
+             granted_scopes = coalesce(excluded.granted_scopes, crm.calendar_accounts.granted_scopes)
+           returning id`,
+          values,
+        );
+    const id = saved.rows[0].id;
+    await db.query("update crm.mail_sources set last_error = null where account_id = $1", [id]);
+    return { id, email, scopeMissing, canSend };
   });
+}
+
+async function readMicrosoftAccounts(db: Db, actor: UserActor) {
+  const result = await db.query<{ id: string; email: string | null; microsoft_user_id: string | null }>(
+    "select id, email, microsoft_user_id from crm.calendar_accounts where user_id = $1 and provider = 'microsoft'",
+    [actor.userId],
+  );
+  return result.rows.map((row) => ({ id: row.id, email: row.email, microsoftUserId: row.microsoft_user_id }));
 }
 
 export async function forgetInviteSender(db: Db, actor: UserActor, address: string | null) {
@@ -237,28 +293,33 @@ export async function forgetInviteSender(db: Db, actor: UserActor, address: stri
   await db.query("delete from crm.invite_sender_choices where user_id = $1 and address = $2", [actor.userId, canonical]);
 }
 
-export async function disconnectCalendarAccount(actor: UserActor, accountId: string) {
+export async function disconnectCalendarAccount(actor: UserActor, accountId: string, confirmed: { email?: string | null } = {}) {
   if (!isUuid(accountId)) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
   const removed = await withActor(actor, async (db) => {
+    const found = await db.query<{ email: string | null; mail: boolean; addresses: string[] }>(
+      `select a.email,
+         exists (select 1 from crm.mail_sources s where s.account_id = a.id) as mail,
+         coalesce((select array_agg(i.email) from crm.send_identities i join crm.mail_sources s on s.id = i.source_id where s.account_id = a.id), '{}') as addresses
+       from crm.calendar_accounts a where a.id = $1 and a.user_id = $2`,
+      [accountId, actor.userId],
+    );
+    const account = found.rows[0];
+    if (!account) return 0;
+    const cascades = account.mail || account.addresses.length > 0;
+    const confirmedEmail = canonicalEmail(confirmed.email ?? "");
+    const accountEmail = canonicalEmail(account.email ?? "");
+    const confirmedThis = Boolean(confirmedEmail) && Boolean(accountEmail) && confirmedEmail === accountEmail;
+    if (cascades && !confirmedThis) {
+      throw new CrmError("conflict", `Confirm removing ${account.email ?? "this account"} first. It deletes Orbit's copy of its mail and its sending addresses.`, 409);
+    }
     const result = await db.query<{ email: string | null }>(
       "delete from crm.calendar_accounts where id = $1 and user_id = $2 returning email",
       [accountId, actor.userId],
     );
-    for (const row of result.rows) await forgetInviteSender(db, actor, row.email);
+    for (const address of [...result.rows.map((row) => row.email), ...account.addresses]) await forgetInviteSender(db, actor, address);
     return result.rowCount ?? 0;
   });
   if (removed === 0) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
-}
-
-export async function removeAccountsForEmail(actor: UserActor, email: string) {
-  const canonical = canonicalEmail(email);
-  if (!canonical) return;
-  await withActor(actor, async (db) => {
-    await db.query(
-      "delete from crm.calendar_accounts where user_id = $1 and provider = 'microsoft' and email = $2",
-      [actor.userId, canonical],
-    );
-  });
 }
 
 export async function hasCalendarAccounts(db: Db, actor: UserActor) {

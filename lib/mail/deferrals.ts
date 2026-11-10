@@ -100,7 +100,7 @@ export async function deferralEligible(actor: UserActor, messageId: string, from
 
 async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
   const result = await db.query<Candidate>(
-    `select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.from_name, m.body_text, m.snippet,
+    `select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.from_name, m.body_text, m.snippet,
        coalesce(m.received_at, m.sent_at, m.created_at) as at
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
      where m.user_id = $1 and not m.is_draft and f.role not in ('sent', 'drafts', 'junk', 'outbox', 'trash')
@@ -116,7 +116,7 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
        and not exists (
          select 1 from crm.mail_messages later join crm.mail_folders lf on lf.id = later.folder_id
          where later.user_id = $1 and later.source_id = m.source_id
-           and coalesce(later.thread_key, 'm:' || later.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+           and later.thread_key = m.thread_key
            and later.id <> m.id and not later.is_draft and lf.role not in ('drafts', 'junk', 'outbox')
            and coalesce(later.received_at, later.sent_at, later.created_at) > coalesce(m.received_at, m.sent_at, m.created_at)
        )

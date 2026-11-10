@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Button from "@/components/_ui/button";
 import { enablePush, pushState, type PushState } from "@/components/push/push-client";
 import BellIcon from "@/public/assets/images/mail/bell.svg";
+import CloseIcon from "@/public/assets/images/mail/close.svg";
 
 const DISMISSED = "orbit-push-prompt";
 
@@ -34,13 +35,11 @@ export default function PushPrompt() {
   }
 
   return (
-    <div className="animate-rise-in flex flex-col gap-2 rounded-xl bg-white/[0.04] px-3 py-2.5">
-      <div className="flex items-center gap-2.5">
+    <div className="animate-rise-in bg-surface-field flex flex-col gap-1 rounded-lg py-1 pr-1 pl-3">
+      <div className="flex min-h-8 items-center gap-2">
         <BellIcon aria-hidden className="text-primary-foreground size-3.5 shrink-0" />
-        <p className="min-w-0 flex-1 text-[13px] leading-5">
-          {state === "install"
-            ? "For mail notifications, add Orbit to your Home Screen (Share, then Add to Home Screen) and open it from there."
-            : "Get a notification when important email arrives."}
+        <p className="ui-style min-w-0 flex-1 leading-[1.3]">
+          {state === "install" ? "For notifications, use Share › Add to Home Screen" : "Notify me about important email"}
         </p>
         {state === "off" && (
           <Button
@@ -55,14 +54,12 @@ export default function PushPrompt() {
             Turn on
           </Button>
         )}
-        <Button variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={dismiss}>
-          <svg aria-hidden width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
-            <path d="M6 6 18 18M18 6 6 18" />
-          </svg>
+        <Button variant="ghost" size="icon" aria-label="Dismiss notification prompt" title="Dismiss" onClick={dismiss}>
+          <CloseIcon aria-hidden className="size-2.5" />
         </Button>
       </div>
       {error && (
-        <p role="alert" className="caption-style text-danger">
+        <p role="alert" className="caption-style text-danger pb-1">
           {error}
         </p>
       )}

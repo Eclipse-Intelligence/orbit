@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Suspense, use, useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import Button from "@/components/_ui/button";
+import FilterChip from "@/components/_ui/filter-chip";
 import { Kbd } from "@/components/_ui/command";
 import {
   DropdownMenu,
@@ -20,16 +22,23 @@ import type { Viewer } from "@/components/crm/viewer";
 import {
   cachedList,
   cachedThread,
+  dwellReadDue,
   fetchList,
   fetchNav,
   fetchScheduled,
   postSenderSplit,
   askAi,
+  forgetDwellRead,
   forgetOtherLists,
   forgetThread,
   loadThread,
+  noteDwellRead,
   postAction,
   prefetchThreads,
+  refreshFailure,
+  refreshProblem,
+  restoreToList,
+  sameList,
   storeList,
   storeThread,
   syncNow,
@@ -40,11 +49,13 @@ import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
 import { setBadge } from "@/components/push/push-client";
 import PushPrompt from "@/components/push/push-prompt";
+import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/mail/reconnect-notice";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
 import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { useComposer } from "@/components/mail/compose-dock";
+import { watchEdgeSwipe, type EdgeHandlers } from "@/components/mail/swipe";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
 import { MAIL_SPLITS, SPLIT_LABELS, type MailSplit, type ComposeAccount, type ComposeIntent, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
@@ -62,6 +73,8 @@ import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 import UnsubscribeIcon from "@/public/assets/images/mail/unsubscribe.svg";
+import FlagIcon from "@/public/assets/images/mail/flag.svg";
+import CloseIcon from "@/public/assets/images/mail/close.svg";
 import { usePullToRefresh } from "@/components/mail/pull-refresh";
 
 const HOME_VIEW = "inbox";
@@ -83,6 +96,19 @@ function inInbox(view: string) {
 
 const MOVES = new Set<ReaderAction>(["archive", "trash", "inbox", "snooze"]);
 const DONE_LABEL: Record<string, string> = { archive: "Archived.", trash: "Moved to Trash.", inbox: "Moved to Inbox.", snooze: "Snoozed." };
+const NARROW = "(max-width: 47.99rem)";
+const BACK_MS = 200;
+
+type Motion = "open" | "back" | null;
+
+function narrow() {
+  return window.matchMedia(NARROW).matches;
+}
+
+function pushedThread() {
+  const state = window.history.state as { mailThread?: string } | null;
+  return Boolean(state?.mailThread);
+}
 const POLL_MS = 60_000;
 const QUESTION = /\?\s*$|^(who|what|when|where|why|how|which|did|does|do|is|are|was|were|has|have|had|can|could|should|would|will|find|show|list|summari[sz]e|tell)\s+\S+\s+\S+/i;
 const FIRST_POLL_MS = 12_000;
@@ -102,6 +128,27 @@ function MailOverscroll() {
     };
   }, []);
   return null;
+}
+
+const QUICK_ADD_SLOT = "[data-quick-add-slot]";
+
+function watchSlot(notify: () => void) {
+  const frame = window.requestAnimationFrame(notify);
+  return () => window.cancelAnimationFrame(frame);
+}
+
+function ComposeButton({ onCompose }: { onCompose: () => void }) {
+  const slot = useSyncExternalStore(watchSlot, () => document.querySelector<HTMLElement>(QUICK_ADD_SLOT), () => null);
+  if (!slot) return null;
+  return createPortal(
+    <span data-compose-fab="" className="contents md:hidden">
+      <Button variant="primary" size="md" onClick={onCompose} title="Write an email" className="pointer-events-auto h-12 gap-2 px-5 text-[14px] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] md:hidden">
+        <ComposeIcon aria-hidden className="size-4" />
+        Compose
+      </Button>
+    </span>,
+    slot,
+  );
 }
 
 function mailUrl(query: ListQuery, thread: string | null) {
@@ -140,17 +187,30 @@ function patchSummary(thread: ThreadSummary, action: ReaderAction): ThreadSummar
   return thread;
 }
 
-function shiftUnread(nav: MailNav, sourceId: string, change: number): MailNav {
+function shiftUnread(nav: MailNav, thread: Pick<ThreadSummary, "sourceId" | "split">, change: number): MailNav {
+  const { sourceId, split } = thread;
   return {
     ...nav,
     unread: Math.max(0, nav.unread + change),
     accounts: nav.accounts.map((account) => (account.id === sourceId ? { ...account, unread: Math.max(0, account.unread + change) } : account)),
+    folders: nav.folders.map((folder) => (folder.role === "inbox" && folder.sourceId === sourceId ? { ...folder, unread: Math.max(0, folder.unread + change) } : folder)),
+    splits: split ? nav.splits.map((row) => (row.sourceId === sourceId && row.split === split ? { ...row, unread: Math.max(0, row.unread + change) } : row)) : nav.splits,
   };
+}
+
+const FULL_REFRESH_MS = 5 * 60_000;
+const NAV_SETTLE_MS = 1_500;
+
+function NavStream({ promise, onNav }: { promise: Promise<MailNav | null>; onNav: (nav: MailNav | null) => void }) {
+  const streamed = use(promise);
+  useEffect(() => onNav(streamed), [streamed, onNav]);
+  return null;
 }
 
 export default function MailScreen({
   viewer,
   initialNav,
+  navPromise,
   initialQuery,
   initialPage,
   initialThread,
@@ -161,13 +221,14 @@ export default function MailScreen({
   viewer: Viewer;
   accounts: ComposeAccount[];
   initialNav: MailNav;
+  navPromise?: Promise<MailNav | null>;
   initialQuery: ListQuery;
   initialPage: ThreadPage;
   initialThread: ThreadDetail | null;
   initialCompose?: ComposeIntent | null;
   initialNow: number;
 }) {
-  const { openComposer, sent: sentCount, pickLater, showToast, undoLatest } = useComposer();
+  const { openComposer, sent: sentCount, pickLater, showToast, dismissToast, undoLatest } = useComposer();
   const [scheduled, setScheduled] = useState<MailDraft[] | null>(null);
   const [ask, setAsk] = useState<AskState | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -187,17 +248,47 @@ export default function MailScreen({
   const [syncing, setSyncing] = useState(false);
   const [entered, setEntered] = useState<string | null>(null);
   const [unsubscribing, setUnsubscribing] = useState<UnsubscribeRequest | null>(null);
+  const [motion, setMotion] = useState<Motion>(null);
+  const [peeking, setPeeking] = useState(false);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
   const keptUnread = useRef(new Set<string>());
   const loadingMore = useRef(false);
   const searchInput = useRef<HTMLInputElement>(null);
   const searchInputList = useRef<HTMLInputElement>(null);
-  const latest = useRef({ query, page, cursor });
+  const latest = useRef({ query, page, cursor, open });
+  const fullRefresh = useRef(0);
+  const seenVersion = useRef(initialNav.version);
+  const navTimer = useRef<number | null>(null);
+  const navAccounts = useRef(nav.accounts);
 
   useEffect(() => {
-    latest.current = { query, page, cursor };
+    latest.current = { query, page, cursor, open };
+    navAccounts.current = nav.accounts;
   });
+
+  useEffect(() => {
+    fullRefresh.current = Date.now();
+  }, []);
+
+  const receiveNav = useCallback((streamed: MailNav | null) => {
+    const apply = (fresh: MailNav) => {
+      setNav(fresh);
+      seenVersion.current ??= fresh.version;
+      const current = latest.current.query;
+      if (current.account && !fresh.accounts.some((account) => account.id === current.account)) showRef.current({ ...current, account: null });
+    };
+    if (streamed) apply(streamed);
+    else fetchNav().then(apply).catch(() => null);
+  }, []);
+
+  function settleNav() {
+    if (navTimer.current) return;
+    navTimer.current = window.setTimeout(() => {
+      navTimer.current = null;
+      fetchNav().then(setNav).catch(() => null);
+    }, NAV_SETTLE_MS);
+  }
 
   useEffect(() => {
     if (page) storeList(query, page);
@@ -205,9 +296,10 @@ export default function MailScreen({
 
   const importantUnread = nav.splits.filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0);
   useEffect(() => {
+    if (nav.partial) return;
     setMailUnread(importantUnread);
     setBadge(importantUnread);
-  }, [importantUnread, setMailUnread]);
+  }, [importantUnread, setMailUnread, nav.partial]);
 
   useEffect(() => {
     if (initialThread) storeThread(initialThread);
@@ -232,10 +324,26 @@ export default function MailScreen({
     total: splitRows.filter((row) => row.split === split).reduce((sum, row) => sum + row.total, 0),
     unread: splitRows.filter((row) => row.split === split).reduce((sum, row) => sum + row.unread, 0),
   })).filter((tab) => tab.split === "important" || tab.total > 0 || query.view === tab.id);
-  const accountLabel = nav.accounts.find((account) => account.id === query.account)?.email ?? "All accounts";
+  const accountLabel =
+    nav.accounts.find((account) => account.id === query.account)?.email ??
+    (query.account ? (threads.find((thread) => thread.sourceId === query.account)?.account ?? "One account") : "All accounts");
 
   function writeUrl(next: ListQuery, thread: string | null) {
-    window.history.replaceState(window.history.state, "", mailUrl(next, thread));
+    const shown = thread && (latest.current.open || !narrow()) ? thread : null;
+    window.history.replaceState(window.history.state, "", mailUrl(next, shown));
+  }
+
+  function closeReader(animate = true) {
+    if (!latest.current.open) return;
+    if (narrow() && pushedThread()) {
+      window.history.back();
+      return;
+    }
+    latest.current = { ...latest.current, open: false };
+    setOpen(false);
+    setMotion(animate ? "back" : null);
+    settleReader();
+    writeUrl(latest.current.query, latest.current.cursor);
   }
 
   function pull(key: string) {
@@ -261,8 +369,14 @@ export default function MailScreen({
   function select(key: string | null, show = false) {
     keptUnread.current.clear();
     setCursor(key);
-    if (show) setOpen(true);
-    writeUrl(latest.current.query, key);
+    const opening = show && Boolean(key) && !latest.current.open;
+    if (show && key) {
+      latest.current = { ...latest.current, open: true };
+      setOpen(true);
+    }
+    setMotion(opening ? "open" : null);
+    if (opening && narrow()) window.history.pushState({ ...window.history.state, mailThread: key }, "", mailUrl(latest.current.query, key));
+    else writeUrl(latest.current.query, key);
     if (!key) return;
     if (!pull(key)) fetchDetail(key);
     const list = latest.current.page?.threads ?? [];
@@ -283,7 +397,9 @@ export default function MailScreen({
     setAsk(null);
     setQuery(next);
     setCursor(null);
+    latest.current = { ...latest.current, open: false };
     setOpen(false);
+    setMotion(null);
     setListError(null);
     if (next.view === "scheduled" && !next.query) {
       setPage({ threads: [], next: null });
@@ -310,14 +426,38 @@ export default function MailScreen({
       });
   }
 
-  function refresh(sync: boolean) {
+  function refresh(sync: boolean, poll = false) {
     const target = latest.current.query;
     const token = request.current;
     setSyncing(true);
-    (sync ? syncNow().catch(() => null) : Promise.resolve(null))
-      .then(() => Promise.all([fetchList(target), fetchNav()]))
-      .then(([fresh, freshNav]) => {
-        setNav(freshNav);
+    let problems: string[] = [];
+    (sync
+      ? syncNow().then(
+          (result) => {
+            problems = flagSyncProblems(result.problems ?? [], navAccounts.current);
+            return result;
+          },
+          (error: unknown) => {
+            problems = [refreshFailure(error)];
+            return null;
+          },
+        )
+      : Promise.resolve(null)
+    )
+      .then((synced) => {
+        const unchanged = poll && synced?.version && synced.version === seenVersion.current && Date.now() - fullRefresh.current < FULL_REFRESH_MS;
+        if (unchanged) {
+          setNow(Date.now());
+          return null;
+        }
+        return Promise.all([fetchList(target), fetchNav().catch(() => null), synced?.version ?? null]);
+      })
+      .then((loaded) => {
+        if (!loaded) return;
+        const [fresh, freshNav, version] = loaded;
+        fullRefresh.current = Date.now();
+        seenVersion.current = version ?? freshNav?.version ?? seenVersion.current;
+        if (freshNav) setNav(freshNav);
         setNow(Date.now());
         if (token !== request.current) return;
         const hidden = new Set(removing.current);
@@ -338,8 +478,13 @@ export default function MailScreen({
           };
         });
       })
-      .catch(() => null)
-      .finally(() => setSyncing(false));
+      .catch((error: unknown) => {
+        if (problems.length === 0) problems = [refreshFailure(error)];
+      })
+      .finally(() => {
+        setSyncing(false);
+        if (refreshProblem(problems.length ? problems.join("\n") : null)) for (const message of problems) showToast({ message, tone: "alert" });
+      });
   }
 
   function more() {
@@ -363,22 +508,20 @@ export default function MailScreen({
       });
   }
 
-  function restore(thread: ThreadSummary, from: string) {
-    setPage((existing) => (existing ? { ...existing, threads: insertByDate(existing.threads, thread) } : existing));
-    if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, 1));
+  function restore(thread: ThreadSummary, origin: ListQuery) {
+    if (sameList(latest.current.query, origin)) setPage((existing) => (existing ? { ...existing, threads: insertByDate(existing.threads, thread) } : existing));
+    else restoreToList(origin, thread);
+    if (thread.unread && !origin.query && inInbox(origin.view)) setNav((existing) => shiftUnread(existing, thread, 1));
   }
 
   function snooze(keys: string[]) {
     const now = Date.now();
     pickLater({
-      title: "Remind me",
-      description:
-        keys.length > 1
-          ? `Orbit moves ${keys.length} conversations out of your inbox and brings them back to the top at this time.`
-          : "Orbit moves the conversation out of your inbox and brings it back to the top at this time.",
+      title: keys.length > 1 ? `Snooze ${keys.length} until` : "Snooze until",
+      description: keys.length > 1 ? "They come back to the top of your inbox." : "It comes back to the top of your inbox.",
       options: laterOptions(now),
       now,
-      onPick: (at, detail) => (keys.length > 1 ? actMany(keys, "snooze", at, detail) : act(keys[0], "snooze", false, at, detail)),
+      onPick: (at, detail) => (keys.length > 1 ? actMany(keys, "snooze", at, detail) : act(keys[0], "snooze", at, detail)),
     });
   }
 
@@ -392,7 +535,7 @@ export default function MailScreen({
       const remaining = list.filter((item) => item.key !== key);
       setPage({ ...currentPage!, threads: remaining });
       select(remaining[index]?.key ?? remaining[index - 1]?.key ?? null);
-      setOpen(false);
+      closeReader();
     } else if (thread) {
       setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? { ...item, split } : item)) } : existing));
     }
@@ -401,8 +544,8 @@ export default function MailScreen({
     postSenderSplit(sender, split)
       .then(() => fetchNav().then(setNav).catch(() => null))
       .catch((error: Error) => {
-        if (thread && leaves) restore(thread, target.view);
-        showToast({ message: error.message, tone: "alert" });
+        if (thread && leaves) restore(thread, target);
+        if (!flagReconnect(error, { sourceId: thread?.sourceId })) showToast({ message: error.message, tone: "alert" });
       });
   }
 
@@ -416,10 +559,10 @@ export default function MailScreen({
     const index = list.findIndex((item) => item.key === key);
     const remaining = list.filter((item) => item.key !== key);
     setPage({ ...currentPage!, threads: remaining });
-    if (thread.unread) setNav((existing) => shiftUnread(existing, thread.sourceId, -1));
+    if (thread.unread) setNav((existing) => shiftUnread(existing, thread, -1));
     if (latest.current.cursor === key) {
       select(remaining[index]?.key ?? remaining[index - 1]?.key ?? null);
-      setOpen(false);
+      closeReader();
     }
   }
 
@@ -456,19 +599,28 @@ export default function MailScreen({
     setSelected(new Set());
     if (chosen.length === 0) return;
     if (!MOVES.has(action)) {
-      for (const thread of chosen) act(thread.key, action, true);
-      window.setTimeout(() => fetchNav().then(setNav).catch(() => null), 1500);
+      for (const thread of chosen) act(thread.key, action);
       return;
     }
     const from = target.query ? "search" : target.view;
     const chosenKeys = new Set(chosen.map((thread) => thread.key));
     chosen.forEach((thread) => removing.current.add(thread.key));
     setPage({ ...currentPage!, threads: currentPage!.threads.filter((thread) => !chosenKeys.has(thread.key)) });
+    const unread = chosen.filter((thread) => thread.unread);
+    if (inInbox(from)) setNav((existing) => unread.reduce((shifted, thread) => shiftUnread(shifted, thread, -1), existing));
+    else if (action === "inbox") setNav((existing) => unread.reduce((shifted, thread) => shiftUnread(shifted, thread, 1), existing));
+    const restored = new Set<string>();
+    const putBack = (thread: ThreadSummary) => {
+      if (restored.has(thread.key)) return;
+      restored.add(thread.key);
+      restore(thread, target);
+    };
     if (latest.current.cursor && chosenKeys.has(latest.current.cursor)) {
       select(null);
-      setOpen(false);
+      closeReader();
     }
     forgetOtherLists(target);
+    let reconnecting = false;
     const runAll = async (run: (thread: ThreadSummary) => Promise<unknown>) => {
       const failures: string[] = [];
       let next = 0;
@@ -479,8 +631,9 @@ export default function MailScreen({
             try {
               await run(thread);
             } catch (error) {
-              failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
-              restore(thread, from);
+              if (flagReconnect(error, { sourceId: thread.sourceId })) reconnecting = true;
+              else failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
+              putBack(thread);
             }
           }
         }),
@@ -496,7 +649,7 @@ export default function MailScreen({
     };
     const pending = runAll((thread) => postAction(thread.key, action, from, until));
     const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
-    showToast({
+    const shown = showToast({
       message: labels[action],
       action:
         action === "inbox"
@@ -505,10 +658,10 @@ export default function MailScreen({
               label: "Undo",
               run: () => {
                 void pending.then(() => {
-                  chosen.forEach((thread) => restore(thread, from));
+                  chosen.forEach(putBack);
                   void runAll((thread) => postAction(thread.key, "inbox", undoFrom)).then(() => {
                     forgetOtherLists(latest.current.query);
-                    fetchNav().then(setNav).catch(() => null);
+                    settleNav();
                   });
                 });
               },
@@ -516,13 +669,14 @@ export default function MailScreen({
     });
     void pending
       .then((failures) => {
+        if (reconnecting) dismissToast(shown);
         if (failures.length) showToast({ message: `${failures.length} of ${count} didn't move. ${failures[0]}`, tone: "alert" });
-        fetchNav().then(setNav).catch(() => null);
+        settleNav();
       })
       .finally(() => chosen.forEach((thread) => removing.current.delete(thread.key)));
   }
 
-  function act(key: string, action: ReaderAction, quiet = false, until?: string, detail?: string) {
+  function act(key: string, action: ReaderAction, until?: string, detail?: string, silent = false) {
     const { page: currentPage, query: target } = latest.current;
     const thread = currentPage?.threads.find((item) => item.key === key);
     if (!thread) return;
@@ -533,63 +687,73 @@ export default function MailScreen({
       const remaining = list.filter((item) => item.key !== key);
       removing.current.add(key);
       setPage({ ...currentPage!, threads: remaining });
-      if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, -1));
+      if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, -1));
+      else if (thread.unread && action === "inbox") setNav((existing) => shiftUnread(existing, thread, 1));
+      let restored = false;
+      const putBack = () => {
+        if (restored) return;
+        restored = true;
+        restore(thread, target);
+      };
       if (latest.current.cursor === key) {
         const next = remaining[index] ?? remaining[index - 1] ?? null;
         select(next?.key ?? null);
-        setOpen(false);
+        closeReader();
       }
       forgetOtherLists(target);
       const undoable = (inInbox(from) && action !== "inbox") || action === "snooze";
       const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
-      showToast({
-        message: action === "snooze" && detail ? `Back in your inbox ${detail}.` : DONE_LABEL[action],
+      const shown = showToast({
+        message: action === "snooze" && detail ? `Snoozed until ${detail}.` : DONE_LABEL[action],
         action: undoable
           ? {
               label: "Undo",
               run: () => {
                 void pendingMove.then(() => {
-                  restore(thread, from);
+                  putBack();
                   postAction(key, "inbox", undoFrom)
-                    .then(() => {
-                      forgetOtherLists(latest.current.query);
-                      fetchNav().then(setNav).catch(() => null);
+                    .then(() => forgetOtherLists(latest.current.query))
+                    .catch((error: Error) => {
+                      if (!flagReconnect(error, { sourceId: thread.sourceId })) showToast({ message: error.message, tone: "alert" });
                     })
-                    .catch((error: Error) => showToast({ message: error.message, tone: "alert" }));
+                    .finally(settleNav);
                 });
               },
             }
           : undefined,
       });
       const pendingMove = postAction(key, action, from, until)
-        .then(() => {
-          fetchNav().then(setNav).catch(() => null);
-        })
+        .then(() => undefined)
         .catch((error: Error) => {
-          restore(thread, from);
-          showToast({ message: error.message, tone: "alert" });
+          putBack();
+          if (flagReconnect(error, { sourceId: thread.sourceId })) dismissToast(shown);
+          else showToast({ message: error.message, tone: "alert" });
         })
-        .finally(() => removing.current.delete(key));
+        .finally(() => {
+          removing.current.delete(key);
+          settleNav();
+        });
       return;
     }
-    if (action === "unread") keptUnread.current.add(key);
+    if (action === "unread") {
+      keptUnread.current.add(key);
+      forgetDwellRead(key);
+    }
     const change = action === "read" && thread.unread ? -1 : action === "unread" && !thread.unread ? 1 : 0;
     setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, action) : item)) } : existing));
     setDetails((existing) => (existing[key] ? { ...existing, [key]: patchDetail(existing[key], action) } : existing));
     const cached = cachedThread(key);
     if (cached) storeThread(patchDetail(cached, action));
-    if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, change));
+    if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, change));
     const undoAction: ReaderAction = action === "read" ? "unread" : action === "unread" ? "read" : action === "flag" ? "unflag" : "flag";
     postAction(key, action, from)
-      .then(() => {
-        if (!quiet) fetchNav().then(setNav).catch(() => null);
-      })
       .catch((error: Error) => {
         setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, undoAction) : item)) } : existing));
         forgetThread(key);
         fetchDetail(key, true);
-        if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, -change));
-        showToast({ message: error.message, tone: "alert" });
+        if (change && inInbox(from)) settleNav();
+        const handled = flagReconnect(error, { sourceId: thread.sourceId });
+        if (!silent && !handled) showToast({ message: error.message, tone: "alert" });
       });
   }
 
@@ -618,11 +782,15 @@ export default function MailScreen({
   usePullToRefresh(listScroller, listBody, pullMark, pullRefresh);
 
   useEffect(() => {
-    if (!cursor || !current?.unread || keptUnread.current.has(cursor)) return;
+    if (!cursor || !current?.unread || keptUnread.current.has(cursor) || !dwellReadDue(cursor, current.latestId)) return;
     const key = cursor;
-    const timer = window.setTimeout(() => actRef.current(key, "read", true), READ_DWELL_MS);
+    const latestId = current.latestId;
+    const timer = window.setTimeout(() => {
+      noteDwellRead(key, latestId);
+      actRef.current(key, "read", undefined, undefined, true);
+    }, READ_DWELL_MS);
     return () => window.clearTimeout(timer);
-  }, [cursor, current?.unread]);
+  }, [cursor, current?.unread, current?.latestId]);
 
   useEffect(() => {
     const onOpen = (event: Event) => {
@@ -640,6 +808,90 @@ export default function MailScreen({
   useEffect(() => {
     selectRef.current = select;
   });
+
+  const readerPane = useRef<HTMLDivElement>(null);
+  const backSwiped = useRef(false);
+  const edge = useRef<EdgeHandlers>({ enabled: false, onDrag: () => {}, onRelease: () => {} });
+  const closeRef = useRef(closeReader);
+  useEffect(() => {
+    closeRef.current = closeReader;
+  });
+
+  useEffect(() => {
+    if (!initialThread || !narrow() || pushedThread()) return;
+    const url = window.location.href;
+    window.history.replaceState(window.history.state, "", mailUrl(initialQuery, null));
+    window.history.pushState({ ...window.history.state, mailThread: initialThread.key }, "", url);
+  }, [initialThread, initialQuery]);
+
+  useEffect(() => {
+    const onPop = (event: PopStateEvent) => {
+      if (window.location.pathname !== "/mail" || !narrow()) return;
+      const uaAnimated = Boolean((event as PopStateEvent & { hasUAVisualTransition?: boolean }).hasUAVisualTransition);
+      const thread = new URL(window.location.href).searchParams.get("thread");
+      if (thread && pushedThread()) {
+        if (latest.current.open) return;
+        latest.current = { ...latest.current, open: true };
+        selectRef.current(thread);
+        setOpen(true);
+        setMotion(uaAnimated ? null : "open");
+        return;
+      }
+      if (!latest.current.open) return;
+      latest.current = { ...latest.current, open: false };
+      setOpen(false);
+      setMotion(uaAnimated || backSwiped.current ? null : "back");
+      backSwiped.current = false;
+      setPeeking(false);
+      readerPane.current?.style.removeProperty("transform");
+      readerPane.current?.style.removeProperty("transition");
+      window.history.replaceState(window.history.state, "", mailUrl(latest.current.query, null));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  function slideReader(dx: number, duration: number) {
+    const element = readerPane.current;
+    if (!element) return;
+    element.style.transition = duration ? `transform ${duration}ms var(--ease-power3-out)` : "none";
+    element.style.transform = dx ? `translate3d(${dx}px, 0, 0)` : "";
+  }
+
+  function settleReader() {
+    backSwiped.current = false;
+    slideReader(0, 0);
+    setPeeking(false);
+  }
+
+  useEffect(() => {
+    edge.current = {
+      enabled: open && narrow(),
+      width: () => readerPane.current?.offsetWidth ?? window.innerWidth,
+      onDrag: (dx) => {
+        setPeeking(true);
+        slideReader(Math.max(0, dx), 0);
+      },
+      onRelease: (commit) => {
+        const width = readerPane.current?.offsetWidth ?? window.innerWidth;
+        slideReader(commit ? width : 0, BACK_MS);
+        window.setTimeout(() => {
+          if (!commit) {
+            settleReader();
+            return;
+          }
+          backSwiped.current = true;
+          closeRef.current(false);
+        }, BACK_MS);
+      },
+    };
+  });
+
+  useEffect(() => {
+    const element = readerPane.current;
+    if (!element) return;
+    return watchEdgeSwipe(element, () => edge.current);
+  }, []);
 
   const showRef = useRef(show);
   useEffect(() => {
@@ -669,7 +921,7 @@ export default function MailScreen({
     const tick = () => {
       if (document.visibilityState !== "visible" || Date.now() - last < MIN_POLL_GAP_MS) return;
       last = Date.now();
-      refreshRef.current(true);
+      refreshRef.current(true, true);
     };
     const first = window.setTimeout(tick, FIRST_POLL_MS);
     const timer = window.setInterval(tick, POLL_MS);
@@ -700,7 +952,7 @@ export default function MailScreen({
   useShortcut("list-up-arrow", () => step(-1));
   useShortcut("list-open", () => {
     if (!cursor) return false;
-    setOpen(true);
+    select(cursor, true);
   });
   useShortcut("back", () => {
     if (selected.size) {
@@ -708,9 +960,11 @@ export default function MailScreen({
       return;
     }
     if (!open) return false;
-    setOpen(false);
+    closeReader();
   });
   const selectedThreads = threads.filter((thread) => selected.has(thread.key));
+  const selectionLabel =
+    selectedThreads.length === 0 ? "" : selectedThreads.length === threads.length && threads.length > 1 ? `All ${selectedThreads.length} selected` : `${selectedThreads.length} selected`;
 
   function bulk(action: "archive" | "trash" | "read" | "flag" | "snooze") {
     const keys = selectedThreads.map((thread) => thread.key);
@@ -844,30 +1098,24 @@ export default function MailScreen({
         }}
         placeholder="Search, or ask a question"
         autoComplete="off"
-        className={cn("placeholder:text-subtle text-foreground ease-power3-out w-full rounded-xl bg-white/[0.04] pr-24 pl-9 text-[14px] transition-colors duration-150 outline-none focus:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:hidden", place === "header" ? "h-8" : "h-9")}
+        className={cn("placeholder:text-subtle text-foreground ease-power3-out bg-surface-field focus:bg-surface-raised w-full rounded-xl pr-24 pl-9 text-[14px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:hidden", place === "header" ? "h-8" : "h-9")}
       />
       {search ? (
         <>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="none"
           onClick={() => runAsk(search.trim())}
           aria-label="Ask AI about your email"
           title="Ask AI (⌘ Enter)"
-          className="text-primary-foreground absolute top-1/2 right-9 flex h-6 -translate-y-1/2 cursor-pointer items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--primary)_22%,transparent)] px-2 text-[12px] outline-none hover:bg-[color-mix(in_srgb,var(--primary)_32%,transparent)] focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="text-primary-foreground hover:text-primary-foreground absolute top-1/2 right-9 h-6 -translate-y-1/2 gap-1 bg-[color-mix(in_srgb,var(--primary)_22%,transparent)] px-2 text-[12px] font-normal hover:bg-[color-mix(in_srgb,var(--primary)_32%,transparent)]"
         >
           <SparkleIcon aria-hidden className="size-3" />
           Ask
-        </button>
-        <button
-          type="button"
-          onClick={clearSearch}
-          aria-label="Clear search"
-          className="text-subtle hover:text-foreground absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full outline-none hover:bg-white/6 focus-visible:ring-2 focus-visible:ring-ring/60"
-        >
-          <svg aria-hidden width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
-            <path d="M6 6 18 18M18 6 6 18" />
-          </svg>
-        </button>
+        </Button>
+        <Button variant="ghost" size="icon-sm" onClick={clearSearch} aria-label="Clear search" className="absolute top-1/2 right-2 -translate-y-1/2">
+          <CloseIcon aria-hidden className="size-2.5" />
+        </Button>
         </>
       ) : (
         <Kbd aria-hidden className="absolute top-1/2 right-2 -translate-y-1/2">
@@ -888,7 +1136,7 @@ export default function MailScreen({
         ? `${activeFolder.name} is empty.`
         : `Nothing in ${MORE_VIEWS.find((view) => view.id === query.view)?.label ?? "this folder"}.`;
 
-  if (nav.accounts.length === 0) {
+  if (nav.accounts.length === 0 && !nav.partial) {
     return (
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SectionHeader title="Mail" viewer={viewer} />
@@ -906,6 +1154,11 @@ export default function MailScreen({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 touch-pan-y flex-col overscroll-x-none">
       <MailOverscroll />
+      {navPromise && (
+        <Suspense fallback={null}>
+          <NavStream promise={navPromise} onNav={receiveNav} />
+        </Suspense>
+      )}
       <SectionHeader
         title="Mail"
         viewer={viewer}
@@ -917,9 +1170,8 @@ export default function MailScreen({
         }
         action={
           <>
-            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)" aria-label="Compose" shortcut={["C", "M"]} className="max-sm:size-[30px] max-sm:p-0">
-              <ComposeIcon aria-hidden className="size-3.5 sm:hidden" />
-              <span className="max-sm:sr-only">Compose</span>
+            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)" shortcut={["C", "M"]} className="max-md:hidden">
+              Compose
             </Button>
             {nav.accounts.length > 1 && (
               <DropdownMenu>
@@ -972,66 +1224,57 @@ export default function MailScreen({
           </>
         }
       />
-      <div className="flex min-h-0 flex-1">
-        <div className={cn("min-h-0 w-full flex-col md:flex md:w-[20rem] md:shrink-0 lg:w-[25rem] xl:w-[29rem]", open ? "hidden" : "flex")}>
+      <ReconnectNotices accounts={nav.accounts} className="shrink-0 px-3 pt-2 lg:pt-3" onReturn={() => fetchNav().then(setNav).catch(() => null)} />
+      <div className="relative flex min-h-0 flex-1 overflow-x-clip">
+        <div
+          onAnimationEnd={(event) => {
+            if (event.target === event.currentTarget) setMotion(null);
+          }}
+          className={cn(
+            "min-h-0 w-full flex-col md:flex md:w-[20rem] md:shrink-0 lg:w-[25rem] xl:w-[29rem]",
+            open ? (peeking ? "max-md:absolute max-md:inset-0 max-md:flex" : "hidden") : "flex",
+            !open && motion === "back" && "max-md:motion-safe:animate-enter-from-left",
+          )}
+        >
           <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-1.5 lg:pt-3">
-            {nav.accounts.some((account) => !account.connected) && (
-              <div
-                role="status"
-                className="flex items-center justify-between gap-3 rounded-xl border border-[var(--tag-amber-border)] bg-[var(--tag-amber-bg)] py-2 pr-2 pl-3 text-[13px] leading-5 text-[var(--tag-amber-text)]"
-              >
-                <span className="min-w-0">
-                  {nav.accounts
-                    .filter((account) => !account.connected)
-                    .map((account) => account.email)
-                    .join(", ")}{" "}
-                  disconnected
-                </span>
-                <Button variant="secondary" size="sm" href="/settings/email" className="shrink-0">
-                  Reconnect
-                </Button>
-              </div>
-            )}
             <PushPrompt />
             <div className="lg:hidden">{searchForm("list")}</div>
-            <nav
-              aria-label="Mail folders"
-              className="-mx-1 flex items-center gap-0.5 overflow-x-auto px-1 pr-6 [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] [scrollbar-width:none]"
-            >
-              {splitTabs.map((tab) => {
-                const active = !query.query && query.view === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => show({ ...query, view: tab.id, query: "" })}
-                    aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "ease-power3-out flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-                      active ? "text-foreground bg-white/[0.07]" : "text-subtle hover:text-foreground hover:bg-white/[0.035]",
-                    )}
-                  >
-                    {tab.label}
-                    {tab.unread > 0 && <span className={cn("tabular-nums", tab.split === "important" ? "text-primary-foreground" : "text-soft")}>{tab.unread}</span>}
-                  </button>
-                );
-              })}
-              <DropdownMenu>
+            <div className="relative">
+              <p role="status" className="sr-only">
+                {selectionLabel}
+              </p>
+              <nav aria-label="Mail folders" inert={selectedThreads.length > 0} className="-mx-1 flex items-center gap-1">
+                <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1 pr-5 [mask-image:linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] [scrollbar-width:none]">
+                  {splitTabs.map((tab) => {
+                    const active = !query.query && query.view === tab.id;
+                    return (
+                      <FilterChip
+                        key={tab.id}
+                        active={active}
+                        aria-current={active ? "page" : undefined}
+                        count={tab.unread}
+                        countTone={tab.split === "important" ? "primary" : "soft"}
+                        onClick={() => show({ ...query, view: tab.id, query: "" })}
+                      >
+                        {tab.label}
+                      </FilterChip>
+                    );
+                  })}
+                </div>
+                <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
+                    <FilterChip
+                      active={Boolean(moreLabel)}
                       aria-current={moreLabel ? "page" : undefined}
-                      className={cn(
-                        "ease-power3-out flex h-8 max-w-[12em] shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-                        moreLabel ? "text-foreground bg-white/[0.07]" : "text-subtle hover:text-foreground hover:bg-white/[0.035]",
-                      )}
+                      aria-label={moreLabel ? `More folders: ${moreLabel}` : "More folders"}
+                      icon={<FolderIcon aria-hidden className="size-3.5 shrink-0" />}
+                      trailing={<ChevronDownIcon aria-hidden className="size-3 shrink-0" />}
+                      className="mr-1 max-w-[10em]"
                     >
-                      <FolderIcon aria-hidden className="size-3.5 shrink-0" />
-                      <span className="truncate">{moreLabel ?? "More"}</span>
-                      <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
-                    </button>
+                      {moreLabel ?? "More"}
+                    </FilterChip>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="min-w-[14rem]">
+                  <DropdownMenuContent align="end" className="min-w-[14rem]">
                     <DropdownMenuRadioGroup value={query.query ? "" : query.view} onValueChange={(value) => show({ ...query, view: value, query: "" })}>
                       {MORE_VIEWS.map((view) => {
                         const count = view.id === "snoozed" ? nav.snoozed : view.id === "scheduled" ? nav.scheduled : 0;
@@ -1066,36 +1309,54 @@ export default function MailScreen({
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-            </nav>
-            {selectedThreads.length > 0 && (
-              <div role="toolbar" aria-label="Selected conversations" className="animate-rise-in flex items-center gap-0.5 rounded-xl bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] py-1 pr-1 pl-3">
-                <span className="text-foreground mr-auto text-[13px] tabular-nums">{selectedThreads.length} selected</span>
-                <Button variant="ghost" size="icon-sm" aria-label={primaryMove() === "inbox" ? "Move to Inbox" : "Archive"} title={primaryMove() === "inbox" ? "Move to Inbox (E)" : "Archive (E)"} onClick={() => bulk("archive")}>
-                  {primaryMove() === "inbox" ? <InboxIcon aria-hidden className="size-3.5" /> : <ArchiveIcon aria-hidden className="size-3.5" />}
-                </Button>
-                {query.view !== "snoozed" && (
-                  <Button variant="ghost" size="icon-sm" aria-label="Remind me" title="Remind me (H)" onClick={() => bulk("snooze")}>
-                    <ClockIcon aria-hidden className="size-3.5" />
+              </nav>
+              {selectedThreads.length > 0 && (
+                <div
+                  role="toolbar"
+                  aria-label="Selected conversations"
+                  className="animate-in fade-in-0 zoom-in-[0.98] ease-power3-out absolute inset-x-0 top-1/2 z-10 flex h-11 -translate-y-1/2 items-center gap-0.5 rounded-xl border border-line-subtle bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))] pr-1 pl-3 shadow-overlay duration-150 md:h-10"
+                >
+                  <span aria-hidden className="ui-style text-foreground mr-auto min-w-0 truncate tabular-nums">
+                    {selectionLabel}
+                  </span>
+                  {[
+                    primaryMove() === "inbox"
+                      ? { action: "archive" as const, label: "Move to Inbox", hint: "E", icon: InboxIcon }
+                      : { action: "archive" as const, label: "Archive", hint: "E", icon: ArchiveIcon },
+                    query.view === "snoozed" ? null : { action: "snooze" as const, label: "Snooze", hint: "H", icon: ClockIcon },
+                    selectedThreads.some((thread) => !thread.flagged)
+                      ? { action: "flag" as const, label: "Flag", hint: "S", icon: FlagIcon }
+                      : { action: "flag" as const, label: "Remove flag", hint: "S", icon: FlagIcon },
+                    selectedThreads.some((thread) => thread.unread)
+                      ? { action: "read" as const, label: "Mark read", hint: "U", icon: MailOpenIcon }
+                      : { action: "read" as const, label: "Mark unread", hint: "U", icon: MailOpenIcon },
+                    query.view === "trash" ? null : { action: "trash" as const, label: "Move to Trash", hint: "#", icon: TrashIcon },
+                  ]
+                    .filter((item) => item !== null)
+                    .map((item) => (
+                      <Button
+                        key={item.label}
+                        variant="ghost"
+                        size="icon"
+                        aria-label={item.label}
+                        title={`${item.label} (${item.hint})`}
+                        onClick={() => bulk(item.action)}
+                        className="max-md:size-9"
+                      >
+                        <item.icon aria-hidden className="size-4 md:size-3.5" />
+                      </Button>
+                    ))}
+                  {selectedThreads.length < threads.length && (
+                    <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(threads.map((thread) => thread.key)))} title="Select all (⌘A)" className="max-md:h-9">
+                      All
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="icon" aria-label="Clear selection" title="Clear selection (Esc)" onClick={() => setSelected(new Set())} className="max-md:size-9">
+                    <CloseIcon aria-hidden className="size-3" />
                   </Button>
-                )}
-                {query.view !== "trash" && (
-                  <Button variant="ghost" size="icon-sm" aria-label="Move to Trash" title="Move to Trash (#)" onClick={() => bulk("trash")}>
-                    <TrashIcon aria-hidden className="size-3.5" />
-                  </Button>
-                )}
-                <Button variant="ghost" size="icon-sm" aria-label="Mark read or unread" title="Mark read or unread (U)" onClick={() => bulk("read")}>
-                  <MailOpenIcon aria-hidden className="size-3.5" />
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(threads.map((thread) => thread.key)))} title="Select all (⌘A)">
-                  All
-                </Button>
-                <Button variant="ghost" size="icon-sm" aria-label="Clear selection" title="Clear (Esc)" onClick={() => setSelected(new Set())}>
-                  <svg aria-hidden width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
-                    <path d="M6 6 18 18M18 6 6 18" />
-                  </svg>
-                </Button>
-              </div>
-            )}
+                </div>
+              )}
+            </div>
             {query.query && (
               <p role="status" className="caption-style text-subtle px-1">
                 {loading && threads.length === 0 ? "Searching…" : `Results for “${query.query}” across every folder${query.account ? ` in ${accountLabel}` : ""}.`}
@@ -1106,7 +1367,7 @@ export default function MailScreen({
             <span
               ref={pullMark}
               aria-hidden
-              className="text-soft data-[ready=true]:text-foreground pointer-events-none absolute top-0 left-1/2 z-10 flex size-8 -translate-x-1/2 items-center justify-center rounded-full bg-white/[0.08] opacity-0"
+              className="text-soft data-[ready=true]:text-foreground bg-surface-raised pointer-events-none absolute top-0 left-1/2 z-10 flex size-8 -translate-x-1/2 items-center justify-center rounded-full opacity-0"
             >
               <RefreshIcon className="size-3.5" />
             </span>
@@ -1127,6 +1388,7 @@ export default function MailScreen({
             ) : (
               <ThreadList
                 threads={threads}
+                scope={`${query.view}|${query.account ?? ""}|${query.query}`}
                 cursor={cursor}
                 outgoing={!query.query && (query.view === "sent" || query.view === "drafts")}
                 showAccount={!query.account && nav.accounts.length > 1}
@@ -1144,10 +1406,10 @@ export default function MailScreen({
                   !query.query && query.view === "drafts"
                     ? null
                     : {
-                        leftLabel: primaryMove() === "inbox" ? "Inbox" : "Archive",
+                        leftLabel: primaryMove() === "inbox" ? "Move to Inbox" : "Archive",
                         restore: primaryMove() === "inbox",
                         onLeft: (key) => act(key, primaryMove()),
-                        rightLabel: query.view === "snoozed" && !query.query ? null : "Remind me",
+                        rightLabel: query.view === "snoozed" && !query.query ? null : "Snooze",
                         onRight: (key) => {
                           if (query.view !== "snoozed" || query.query) snooze([key]);
                         },
@@ -1158,7 +1420,18 @@ export default function MailScreen({
             </div>
           </div>
         </div>
-        <div className={cn("min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:my-2 md:mr-2 md:flex md:rounded-2xl md:bg-white/[0.02]", open ? "flex" : "hidden")}>
+        <div
+          ref={readerPane}
+          onAnimationEnd={(event) => {
+            if (event.target === event.currentTarget) setMotion(null);
+          }}
+          className={cn(
+            "md:bg-surface-panel min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:my-2 md:mr-2 md:flex md:rounded-2xl",
+            open ? "flex" : "hidden",
+            open && motion === "open" && "max-md:motion-safe:animate-enter-from-right",
+            peeking && "max-md:bg-background max-md:relative max-md:z-10 max-md:shadow-[-12px_0_32px_rgba(0,0,0,0.45)]",
+          )}
+        >
           <ThreadReader
             key={cursor ?? "none"}
             summary={current}
@@ -1174,7 +1447,7 @@ export default function MailScreen({
               if (action === "snooze") snooze([cursor]);
               else act(cursor, action);
             }}
-            onBack={() => setOpen(false)}
+            onBack={() => closeReader()}
             onNext={(swiped) => {
               const next = threads[currentIndex + 1];
               setEntered(next && !swiped ? next.key : null);
@@ -1199,6 +1472,7 @@ export default function MailScreen({
         onClose={() => setUnsubscribing(null)}
         onDone={finishUnsubscribe}
       />
+      {!open && <ComposeButton onCompose={() => openComposer()} />}
     </section>
   );
 }

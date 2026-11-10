@@ -1,7 +1,8 @@
 "use client";
 
 import type { AskResult } from "@/components/mail/mail-cache";
-import { mailListWhen } from "@/lib/mail/format";
+import Button from "@/components/_ui/button";
+import { mailFullWhen, mailListWhen } from "@/lib/mail/format";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 
 export type AskState = { question: string; result: AskResult | null; error: string | null };
@@ -23,9 +24,10 @@ export default function AskPanel({ ask, now, onOpen }: { ask: AskState; now: num
             {ask.result.answer}
           </p>
         ) : (
-          <div role="status" aria-label="Reading your email" className="flex flex-col gap-2 py-1">
-            <span className="h-2.5 w-11/12 animate-pulse rounded-full bg-white/[0.07]" />
-            <span className="h-2.5 w-2/3 animate-pulse rounded-full bg-white/[0.05]" />
+          <div role="status" aria-busy="true" className="flex flex-col gap-2 py-1">
+            <span className="sr-only">Reading your email…</span>
+            <span aria-hidden className="bg-surface-active h-2.5 w-11/12 animate-pulse rounded-full" />
+            <span aria-hidden className="bg-surface-raised h-2.5 w-2/3 animate-pulse rounded-full" />
           </div>
         )}
       </div>
@@ -33,17 +35,20 @@ export default function AskPanel({ ask, now, onOpen }: { ask: AskState; now: num
         <ul aria-label="Emails the answer came from" className="flex flex-col gap-px">
           {ask.result.sources.map((source) => (
             <li key={source.key}>
-              <button
-                type="button"
+              <Button
+                variant="item"
+                size="none"
                 onClick={() => onOpen(source.key)}
-                className="ease-power3-out flex w-full cursor-pointer flex-col gap-0.5 rounded-xl px-3 py-2 text-left transition-colors duration-150 outline-none hover:bg-white/[0.035] focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="hover:bg-surface-hover flex-col gap-0.5 rounded-xl px-3 py-2 leading-[1.4] active:scale-100"
               >
-                <span className="flex min-w-0 items-center gap-2">
+                <span className="flex w-full min-w-0 items-center gap-2">
                   <span className="text-soft min-w-0 truncate text-[14px]">{source.from}</span>
-                  <span className="text-subtle ml-auto shrink-0 text-[12px] tabular-nums">{mailListWhen(source.at, now)}</span>
+                  <time dateTime={source.at ?? undefined} title={mailFullWhen(source.at)} className="text-subtle ml-auto shrink-0 text-[12px] tabular-nums">
+                    {mailListWhen(source.at, now)}
+                  </time>
                 </span>
-                <span className="text-subtle truncate text-[13px]">{source.subject || "(no subject)"}</span>
-              </button>
+                <span className="text-subtle w-full truncate text-[13px]">{source.subject || "(no subject)"}</span>
+              </Button>
             </li>
           ))}
         </ul>

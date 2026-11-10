@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { afterSending, snippetCore } from "@/lib/mail/format";
+import { afterSending, mailShortWhen, snippetCore } from "@/lib/mail/format";
 
 describe("mail previews", () => {
   it("drops the quoted history from a preview", () => {
@@ -25,5 +25,16 @@ describe("mail previews", () => {
     assert.equal(afterSending("2026-10-29T21:14:51.000Z", sent), "2 days after sending");
     assert.equal(afterSending("2026-10-27T21:14:50.000Z", sent), "0 seconds after sending");
     assert.equal(afterSending("2026-10-27T21:15:11.000Z", null), null);
+  });
+
+  it("shows short relative times in the reader", () => {
+    const now = Date.parse("2026-11-07T15:30:00.000Z");
+    assert.equal(mailShortWhen("2026-11-07T15:29:40.000Z", now), "Now");
+    assert.equal(mailShortWhen("2026-11-07T15:05:00.000Z", now), "25m");
+    assert.equal(mailShortWhen("2026-11-07T13:10:00.000Z", now), "2h");
+    assert.equal(mailShortWhen("2026-11-06T09:00:00.000Z", now), "Yesterday");
+    assert.equal(mailShortWhen("2026-11-05T09:00:00.000Z", now), "5 Nov");
+    assert.equal(mailShortWhen("2025-11-05T09:00:00.000Z", now), "5 Nov 2025");
+    assert.equal(mailShortWhen(null, now), "");
   });
 });

@@ -73,15 +73,16 @@ export async function setCalendarForCrmAction(
   return { ok: true };
 }
 
-export async function disconnectCalendarAccountAction(accountId: string): Promise<CalendarActionState> {
+export async function disconnectCalendarAccountAction(accountId: string, confirmedEmail?: string | null): Promise<CalendarActionState> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to change your calendars." };
   try {
-    await disconnectCalendarAccount(user, accountId);
+    await disconnectCalendarAccount(user, accountId, { email: typeof confirmedEmail === "string" ? confirmedEmail : null });
   } catch (error) {
     return actionError(error);
   }
   refreshRecords();
+  revalidatePath("/mail");
   return { ok: true };
 }
 
