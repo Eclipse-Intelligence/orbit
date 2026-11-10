@@ -204,7 +204,7 @@ function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }
             </>
           )}
           <div className="flex gap-2">
-            <Button variant="primary" size="sm" type="submit" disabled={busy}>
+            <Button variant="primary" size="sm" type="submit" disabled={busy} aria-label={busy ? undefined : `Save ${memory.title}`}>
               {busy ? "Saving…" : "Save"}
             </Button>
             <Button
@@ -301,6 +301,16 @@ export function MemoriesCard({
     return (memories[scope] ?? []).filter((memory) => words.every((word) => `${memory.title} ${memory.body} ${memory.kind}`.toLowerCase().includes(word)));
   }, [memories, scope, search]);
 
+  function changeScope(next: MemoryScope) {
+    if (next === scope) return;
+    setScope(next);
+    setAdding(false);
+    setTitle("");
+    setBody("");
+    setEverywhere(false);
+    setError(null);
+  }
+
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -324,7 +334,7 @@ export function MemoriesCard({
         {scopes.length > 1 && (
           <div role="group" aria-label="Which notes" className="flex flex-wrap gap-1">
             {scopes.map((key) => (
-              <Button key={key} variant={scope === key ? "secondary" : "ghost"} size="sm" aria-pressed={scope === key} onClick={() => setScope(key)}>
+              <Button key={key} variant={scope === key ? "secondary" : "ghost"} size="sm" aria-pressed={scope === key} onClick={() => changeScope(key)}>
                 {SCOPE_LABELS[key]} <span className="text-subtle tabular-nums">{(memories[key] ?? []).length}</span>
               </Button>
             ))}
@@ -346,8 +356,8 @@ export function MemoriesCard({
             <Field label="Title" htmlFor="new-memory-title">
               <Input id="new-memory-title" value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} placeholder={scope === "personal" ? "Keep first emails short" : "Agencies ask for a pilot first"} />
             </Field>
-            <Field label="Note" htmlFor="new-memory-body">
-              <textarea id="new-memory-body" rows={3} value={body} maxLength={1200} onChange={(event) => setBody(event.target.value)} className={AREA} />
+            <Field label="Note" htmlFor="new-memory-body" hint={SCOPE_HINTS[scope]}>
+              <textarea id="new-memory-body" rows={3} value={body} maxLength={1200} onChange={(event) => setBody(event.target.value)} className={AREA} aria-describedby="new-memory-body-hint" />
             </Field>
             {scope === "personal" && manyWorkspaces && (
               <Field label="Applies in" htmlFor="new-memory-place">
@@ -355,7 +365,7 @@ export function MemoriesCard({
               </Field>
             )}
             <div className="flex gap-2">
-              <Button variant="primary" size="sm" type="submit" disabled={busy || !body.trim()}>
+              <Button variant="primary" size="sm" type="submit" disabled={busy || !body.trim()} aria-label={busy ? undefined : "Save new note"}>
                 {busy ? "Saving…" : "Save"}
               </Button>
               <Button variant="ghost" size="sm" type="button" onClick={() => setAdding(false)}>
@@ -550,7 +560,7 @@ export function GrokCard({ status, mcpUrl, routine, canConnect }: { status: Mark
     const result = await connectGrokAction();
     setBusy(false);
     if (result.error || !result.result) {
-      setError(result.error ?? "Could not create the token.");
+      setError(result.error ?? "Couldn't create the token.");
       return;
     }
     setToken(result.result.token);

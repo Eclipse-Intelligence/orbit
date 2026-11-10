@@ -25,6 +25,7 @@ function describedBy(id: string, error: string | undefined) {
 }
 
 function SaveRow({
+  name,
   pending,
   busy,
   dirty,
@@ -32,6 +33,7 @@ function SaveRow({
   status,
   onUndo,
 }: {
+  name: string;
   pending: boolean;
   busy: boolean;
   dirty: boolean;
@@ -47,7 +49,7 @@ function SaveRow({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="primary" size="sm" type="submit" disabled={busy || !dirty}>
+        <Button variant="primary" size="sm" type="submit" disabled={busy || !dirty} aria-label={pending ? undefined : `Save ${name}`}>
           {pending ? "Saving…" : "Save"}
         </Button>
         {dirty && !busy && (
@@ -186,10 +188,12 @@ export function AboutYouSettings({
   about: initialAbout,
   linkedinUrl,
   website: initialWebsite,
+  workspaceName,
 }: {
   about: AboutYouInput;
   linkedinUrl: string;
   website: string;
+  workspaceName: string;
 }) {
   const router = useRouter();
   const [savedAbout, setSavedAbout] = useState(initialAbout);
@@ -253,7 +257,7 @@ export function AboutYouSettings({
   }
 
   return (
-    <SettingsCard id="about-you" title="About you">
+    <SettingsCard id="about-you" title="About you" description={`For ${workspaceName}.`}>
       <form className="flex flex-col gap-4" noValidate onSubmit={saveAbout}>
         <RoleField value={about.jobTitle} error={errors.jobTitle} onChange={(value) => updateAbout("jobTitle", value)} />
         <AboutField
@@ -286,6 +290,7 @@ export function AboutYouSettings({
           </p>
         )}
         <SaveRow
+          name="About you"
           pending={pending === "save"}
           busy={busy}
           dirty={aboutDirty}
@@ -353,13 +358,14 @@ export function YouSettings({ you: initialYou, website }: { you: YouInput; websi
   }
 
   return (
-    <SettingsCard id="you" title="You" description="Private to you.">
+    <SettingsCard id="you" title="You" description="The same in every workspace. Private to you.">
       <form className="flex flex-col gap-4" noValidate onSubmit={saveYou}>
         <LinkedinField value={you.linkedinUrl} error={errors.linkedinUrl} onChange={(value) => updateYou("linkedinUrl", value)} />
         <WritingField value={you.writing} error={errors.writing} onChange={(value) => updateYou("writing", value)} />
         <InterestsField value={you.interests} error={errors.interests} onChange={(value) => updateYou("interests", value)} />
         <DraftButton pending={pending === "draft"} disabled={busy || (!you.linkedinUrl.trim() && !website.trim())} onDraft={() => void draft()} />
         <SaveRow
+          name="You"
           pending={pending === "save"}
           busy={busy}
           dirty={youDirty}
@@ -491,6 +497,7 @@ export function ProfileSettings({
         <InterestsField value={you.interests} error={errors.interests} onChange={(value) => updateYou("interests", value)} />
         <DraftButton pending={pending === "draft"} disabled={busy || (!you.linkedinUrl.trim() && !website.trim())} onDraft={() => void draft()} />
         <SaveRow
+          name="About you"
           pending={pending === "save"}
           busy={busy}
           dirty={aboutDirty || youDirty}

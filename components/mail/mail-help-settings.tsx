@@ -62,8 +62,9 @@ export default function MailHelpSettings({ initial, readStatuses }: { initial: S
           />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label htmlFor="auto-remind" className="text-[14px] leading-5">
-            Remind me when nobody replies
+          <label htmlFor="auto-remind" className="flex flex-col">
+            <span className="text-[14px] leading-5">Remind me when nobody replies</span>
+            <span className="caption-style text-subtle">For emails that ask something.</span>
           </label>
           <select
             id="auto-remind"

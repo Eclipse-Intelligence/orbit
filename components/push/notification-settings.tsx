@@ -16,8 +16,8 @@ const LEVELS: { id: NotifyMail; label: string; detail?: string }[] = [
 
 const STATE_TEXT: Record<PushState, string> = {
   unsupported: "This browser can't show Orbit notifications.",
-  install: "On iPhone, add Orbit to your Home Screen first (Share, then Add to Home Screen).",
-  blocked: "Blocked on this device. Allow them in your device settings.",
+  install: "On iPhone, add Orbit to your Home Screen (Share, then Add to Home Screen) and open it from there.",
+  blocked: "Blocked on this device. Allow notifications in your device settings.",
   off: "Off on this device",
   on: "On for this device",
 };
@@ -119,7 +119,7 @@ export default function NotificationSettings({
                       const result = await sendPushTest();
                       const failure = result.failures[0];
                       if (failure?.status === 404 || failure?.status === 410) {
-                        throw new Error("This device's setup had expired. Turn notifications on again.");
+                        throw new Error("This device's setup had expired. Turn notifications off and on again.");
                       }
                       if (!result.sent) {
                         const code = failure ? [failure.status, failure.reason].filter(Boolean).join(" ") : "";
@@ -130,7 +130,7 @@ export default function NotificationSettings({
                         );
                       }
                       return isAppleMobile() ? "Test sent" : "Test sent. If nothing appears on a Mac, check System Settings › Notifications and Focus.";
-                    }, "Test sent.")
+                    }, "Test sent")
                   }
                 >
                   Send test

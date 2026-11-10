@@ -43,7 +43,10 @@ export default function ApiSettings({
           make 120 requests a minute. To revoke one, set <Code>revoked_at</Code>{" "}
           on its row in <Code>crm.agent_credentials</Code>.
         </p>
-        <ul aria-label="Scopes" className="flex flex-wrap gap-1.5">
+        <p id="agent-scopes" className="caption-style text-subtle">
+          Scopes
+        </p>
+        <ul aria-labelledby="agent-scopes" className="flex flex-wrap gap-1.5">
           {scopes.map((scope) => (
             <li key={scope}>
               <Code>{scope}</Code>
