@@ -63,8 +63,8 @@ describe("assistant record tools", () => {
     try {
       const args = { contactIds: [jane, omar], field: "email" };
       const card = describeAction("find_contact_details", args, await recordNames(owner, [args]));
-      assert.equal(card.title, "Find work email for 2 people");
-      assert.deepEqual(card.lines, ["People: Jane Doe, Omar Khan", "Uses enrichment credits. Saves what's found to the contact."]);
+      assert.equal(card.title, "Find work email for 2 contacts");
+      assert.deepEqual(card.lines, ["Contacts: Jane Doe, Omar Khan", "Uses enrichment credits. Saves what's found to the contact."]);
       assert.equal(describeAction("find_contact_details", { contactIds: [jane], field: "phone" }, await recordNames(owner, [{ contactIds: [jane] }])).title, "Find phone number: Jane Doe");
 
       const result = (await withFetch(hunter, () => runTool(owner, "find_contact_details", args))) as {
@@ -110,7 +110,7 @@ describe("assistant record tools", () => {
     const args = { companyIds: [old], contactIds: [person], opportunityIds: [deal] };
     assert.deepEqual(describeAction("archive_records", args, await recordNames(owner, [args])), {
       title: "Archive 3 records",
-      lines: ["Companies: Old Co", "People: Pat Lee", "Opportunities: Old Co renewal", "Nothing is deleted."],
+      lines: ["Companies: Old Co", "Contacts: Pat Lee", "Opportunities: Old Co renewal", "Nothing is deleted."],
     });
     const result = (await runTool(owner, "archive_records", args)) as { archived: number; failed: unknown[] };
     assert.deepEqual(result, { archived: 3, failed: [] });
@@ -142,13 +142,13 @@ describe("assistant record tools", () => {
   it("assigns tasks to a team member and archives a task", async () => {
     const args = { title: "Send the pilot plan", ownerId: samId, sendToClickUp: false };
     const card = describeAction("create_task", args, await recordNames(owner, [args]));
-    assert.ok(card.lines.includes("Assignee: Sam Taylor"));
+    assert.ok(card.lines.includes("Owner: Sam Taylor"));
     const created = (await runTool(owner, "create_task", args)) as { task: { id: string; ownerId: string } };
     assert.equal(created.task.ownerId, samId);
     const mine = (await runTool(owner, "create_task", { title: "Book the kickoff", sendToClickUp: false })) as { task: { id: string; ownerId: string } };
     assert.equal(mine.task.ownerId, owner.userId);
     const update = { taskId: mine.task.id, ownerId: samId };
-    assert.deepEqual(describeAction("update_task", update, await recordNames(owner, [update])), { title: "Update task: Book the kickoff", lines: ["Assignee: Sam Taylor"] });
+    assert.deepEqual(describeAction("update_task", update, await recordNames(owner, [update])), { title: "Update task: Book the kickoff", lines: ["Owner: Sam Taylor"] });
     const updated = (await runTool(owner, "update_task", update)) as { task: { ownerId: string } };
     assert.equal(updated.task.ownerId, samId);
 
@@ -214,8 +214,8 @@ describe("assistant record tools", () => {
     const kim = (await createContact(owner, { firstName: "Kim", lastName: "Lee" })).body.contact.id;
     const people = { contactIds: [jo, kim], companyId: alpha, jobTitle: "Founder" };
     assert.deepEqual(describeAction("update_contact", people, await recordNames(owner, [people])), {
-      title: "Update 2 people",
-      lines: ["Company: Alpha Tools", "Job title: Founder", "People: Jo Ray, Kim Lee"],
+      title: "Update 2 contacts",
+      lines: ["Company: Alpha Tools", "Job title: Founder", "Contacts: Jo Ray, Kim Lee"],
     });
     assert.deepEqual(await runTool(owner, "update_contact", people), { updated: 2, failed: [] });
     assert.equal((await getContact(owner, kim)).companyId, alpha);

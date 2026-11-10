@@ -338,7 +338,7 @@ describe("create and file from an attendee", () => {
     const card = describeAction("file_conversation", args, await recordNames(owner, [args], ["file_conversation"]));
     assert.equal(card.title, "File conversation: Acme quarterly review");
     assert.match(card.lines[0], /^Granola meeting, \w{3} \d{1,2} \w{3}, \d{2}:\d{2}$/);
-    assert.deepEqual(card.lines.slice(1), ["People: Jane Doe, Founder", "File on: Jane Doe (Acme)", "Orbit summarises the transcript afterwards."]);
+    assert.deepEqual(card.lines.slice(1), ["People: Jane Doe, Founder", "File on: Jane Doe (Acme)"]);
     const deferred: (() => Promise<unknown>)[] = [];
     const defer = (work: () => Promise<unknown>) => void deferred.push(work);
     const filed = (await runTool(owner, "file_conversation", args, { defer })) as { filed: boolean; activityId: string; contact: { id: string; name: string; created: boolean } };

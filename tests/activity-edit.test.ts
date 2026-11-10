@@ -263,7 +263,7 @@ describe("editing activities", () => {
     const call = (await createActivity(owner, { type: "call", title: "Intro call", body: "Talked pricing.", contactId: jane, companyId: acme, occurredAt: "2026-10-20T13:30:00.000Z" })).body.activity;
     const args = { activityId: call.id, title: "Intro call with Jane", body: "Talked pricing.", occurredAt: "2026-10-20T15:00", contactId: null };
     const card = describeAction("update_activity", args, await recordNames(owner, [args], ["update_activity"]));
-    assert.equal(card.title, "Edit activity");
+    assert.equal(card.title, "Update activity");
     assert.match(card.lines[0], /^Activity: Call "Intro call" on .*14:30$/);
     assert.equal(card.lines[1], "Title: from Intro call to Intro call with Jane");
     assert.match(card.lines[2], /^When: from .*14:30 to .*15:00$/);

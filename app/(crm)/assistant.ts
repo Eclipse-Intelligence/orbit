@@ -40,7 +40,7 @@ export async function deleteConversationAction(id: string) {
     await deleteConversation(user, id);
     return {};
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Could not delete that chat." };
+    return { error: error instanceof CrmError ? error.message : "Couldn't delete that chat. Try again." };
   }
 }
 
@@ -51,13 +51,13 @@ export async function stopConversationAction(id: string) {
     await stopConversation(user, id);
     return {};
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Could not stop that answer." };
+    return { error: error instanceof CrmError ? error.message : "Couldn't stop that answer. Try again." };
   }
 }
 
 export async function prepareChatFileAction(file: { name: string; size: number; contentType: string }): Promise<{ attachment?: PreparedChatFile; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to attach files." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { attachment: await prepareChatFile(user, file) };
   } catch (error) {

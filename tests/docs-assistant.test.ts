@@ -6,12 +6,16 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createFolder } from "@/lib/docs/folders";
-import { EDIT_MOVED_SINCE_APPROVAL, mergeRewrite, REWRITE_CLASHED_SINCE_APPROVAL } from "@/lib/assistant/docs";
+import { CHANGED_SINCE_APPROVAL, CHANGED_SINCE_APPROVAL_CARD, mergeRewrite } from "@/lib/assistant/docs";
 import { EXTERNAL_NOTICE } from "@/lib/assistant/tools";
 import { createDoc, getDoc, listVersions, saveDoc, setAssistantCanEdit } from "@/lib/docs/store";
 import { createUser, resetDatabase } from "./helpers";
 
 type Reply = { content?: string; tool_calls?: { id: string; name: string; args: Record<string, unknown> }[] };
+
+async function toolMessage(id: string) {
+  return (await getAdminPool().query<{ content: string }>("select content from crm.assistant_messages where tool_call_id = $1 order by created_at desc limit 1", [id])).rows[0]?.content ?? "";
+}
 
 function gateway(replies: Reply[]) {
   const requests: Record<string, unknown>[] = [];
@@ -132,8 +136,8 @@ describe("assistant tools for docs", () => {
     assert.ok(brokenCard.lines.some((line) => /This won't work yet: That text isn't in the doc/.test(line)));
     const created = { action: "create", title: "New plan", content: "Line one", folderId: folder.id };
     const createCard = describeAction("save_doc", created, await recordNames(mark, [created], ["save_doc"]));
-    assert.equal(createCard.title, "New doc: New plan");
-    assert.deepEqual(createCard.lines, ["In Partnerships.", "Shared with the workspace. Teammates and agents will see it.", "1 line added, 0 lines removed."]);
+    assert.equal(createCard.title, "New note: New plan");
+    assert.deepEqual(createCard.lines, ["In Partnerships.", "Shared with the workspace and its agents.", "1 line added, 0 lines removed."]);
     const move = { action: "move", docId: doc.id, allowVisibilityChange: true };
     assert.deepEqual(describeAction("save_doc", move, await recordNames(mark, [move], ["save_doc"])).lines, [
       "Out of its folder.",
@@ -181,7 +185,7 @@ describe("assistant can edit without asking", () => {
     const actions = lastActions(run.events);
     assert.equal(actions[0].status, "done");
     assert.equal(actions[0].unattended, true);
-    assert.ok(actions[0].lines.includes("Made without asking, because this doc lets the assistant edit it."));
+    assert.ok(!actions[0].lines.some((line) => /without asking/.test(line)));
     assert.equal((await getDoc(mark, doc.id)).content, "Draft\n\nAdded by the assistant");
     assert.equal(fake.requests.length, 2);
     const final = run.events.filter((event) => event.type === "message").at(-1) as Extract<AssistantEvent, { type: "message" }>;
@@ -293,7 +297,8 @@ describe("approved doc edits", () => {
     await decideActions(mark, { conversationId, decisions: [{ id: "call_stale", approve: true }] }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
     const decided = lastActions(second.events)[0];
     assert.equal(decided.status, "failed");
-    assert.equal(decided.result, REWRITE_CLASHED_SINCE_APPROVAL);
+    assert.equal(decided.result, CHANGED_SINCE_APPROVAL_CARD);
+    assert.ok((await toolMessage(decided.id)).includes(CHANGED_SINCE_APPROVAL));
     assert.equal((await getDoc(mark, doc.id)).content, "Line one, and Priya's line");
   });
 
@@ -328,7 +333,8 @@ describe("approved doc edits", () => {
     await saveDoc(priya, doc.id, { content: changed });
     const decided = await approve();
     assert.equal(decided.status, "failed");
-    assert.equal(decided.result, EDIT_MOVED_SINCE_APPROVAL);
+    assert.equal(decided.result, CHANGED_SINCE_APPROVAL_CARD);
+    assert.ok((await toolMessage(decided.id)).includes(CHANGED_SINCE_APPROVAL));
     assert.equal((await getDoc(mark, doc.id)).content, changed);
   });
 
@@ -338,7 +344,8 @@ describe("approved doc edits", () => {
     await saveDoc(priya, doc.id, { content: `${MINUTES}\n- one more` });
     const decided = await approve();
     assert.equal(decided.status, "failed");
-    assert.equal(decided.result, EDIT_MOVED_SINCE_APPROVAL);
+    assert.equal(decided.result, CHANGED_SINCE_APPROVAL_CARD);
+    assert.ok((await toolMessage(decided.id)).includes(CHANGED_SINCE_APPROVAL));
   });
 
   it("merges an approved rewrite with typing elsewhere, and keeps both", async () => {

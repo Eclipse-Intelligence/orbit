@@ -4,7 +4,6 @@ import Button from "@/components/_ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -69,7 +68,6 @@ export default function FilterMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align}>
-        {label && <DropdownMenuLabel>{label}</DropdownMenuLabel>}
         <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
           {options.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value}>

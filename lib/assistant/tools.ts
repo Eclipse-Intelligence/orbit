@@ -488,9 +488,9 @@ const CONVERSATION_ACTIONS = ["archive", "trash", "inbox", "read", "unread", "fl
 const SENDER_TOOL_ACTIONS = ["unsubscribe", "keep", "research", "block"] as const;
 const PROTECTION_UNCHECKED = "protect-unchecked";
 const EXISTING_LINES: Record<ExistingMailChoice, string> = {
-  archive: "Mail already received from them is archived.",
-  trash: "Mail already received from them moves to Trash.",
-  leave: "Mail already received from them stays where it is.",
+  archive: "Existing mail is archived.",
+  trash: "Existing mail moves to Trash.",
+  leave: "Existing mail stays put.",
 };
 
 function senderKeys(args: Args) {
@@ -518,13 +518,13 @@ function describeSenderAction(args: Args, name: Names) {
   return {
     title: titles[action] ?? "Update senders",
     lines: [
-      unchecked ? "Orbit couldn't check whether these senders are CRM contacts or companies. Check them before you confirm." : "",
+      unchecked ? "Couldn't check these against your contacts. Check before confirming." : "",
       ...protectedOnes,
       ...shown,
       others.length > shown.length ? `and ${others.length - shown.length} more` : "",
       invalid.length ? `Not an address or @domain, so left out: ${invalid.join(", ")}` : "",
       action === "unsubscribe" || action === "block" ? EXISTING_LINES[existing] : "",
-      action === "research" ? (existing === "leave" ? "Their new mail goes to a Research folder; mail already here stays put." : "Their mail moves out of the inbox to a Research folder and stays readable.") : "",
+      action === "research" ? (existing === "leave" ? "New mail goes to Research. Existing mail stays put." : "Their mail moves to Research.") : "",
       action === "block" ? "New mail from them is archived as it arrives." : "",
       str(args.summary) ? `Why: ${str(args.summary)}` : "",
     ],
@@ -660,7 +660,7 @@ function reminderLine(args: Args, name: Names) {
     typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : draftId ? Number(detail(name, `${draftId}:remind_hours`)) : 0;
   if (!Number.isInteger(hours) || hours < 1) return "";
   const days = Math.max(1, Math.round(hours / 24));
-  return `Reminder: if nobody replies within ${days} ${days === 1 ? "day" : "days"}`;
+  return `Reminder: if no reply within ${days} ${days === 1 ? "day" : "days"}`;
 }
 
 function storedScheduleLine(args: Args, name: Names) {
@@ -758,7 +758,7 @@ function inviteGuestLines(args: Args, name: Names) {
     if (email && invited.has(email)) return [];
     return [email ? `${name(id)} <${email}>` : `${name(id)} (no email address in Orbit)`];
   });
-  return [`Guests: ${guests.join(", ")}`, left.length ? `Not invited, because their address isn't in the guests: ${left.join(", ")}` : ""];
+  return [`Guests: ${guests.join(", ")}`, left.length ? `Not invited: ${left.join(", ")}` : ""];
 }
 
 type NoteToForget = { title: string; scope: string; workspaceId: string; workspaceName: string };
@@ -804,7 +804,7 @@ function followUpLines(value: unknown) {
   if (!followUp) return [];
   const when = `${followUp.afterDays} working ${followUp.afterDays === 1 ? "day" : "days"}`;
   return [
-    `Follow-up: sent in the same thread at 09:00 after ${when} if nobody replies${followUp.body ? ":" : ". Orbit writes it then, in your voice."}`,
+    `Follow-up sent after ${when} if no reply${followUp.body ? ":" : ". Orbit writes it then."}`,
     followUp.body ?? "",
   ].filter(Boolean);
 }
@@ -866,6 +866,7 @@ async function scheduledDetails(actor: UserActor, args: Args): Promise<Record<st
   };
 }
 
+const CANCEL_REFUSED = "This will be refused: a cancel can't also change the email.";
 const CANCEL_ALONE = "Cancel on its own: leave out sendAt, subject, body, to, cc and bcc to cancel, or leave out cancel to change it instead.";
 
 function scheduledChanges(args: Args) {
@@ -1421,7 +1422,7 @@ function moveCardDetails(key: string, preview: MovePreview, copy: boolean, copyD
   const deals = copy ? (copyDeals ? preview.dealsAvailable : 0) : preview.deals;
   const goes = countedParts([
     [preview.contacts, "contact", "contacts"],
-    [deals, "deal", "deals"],
+    [deals, "opportunity", "opportunities"],
     [copy ? 0 : preview.tasks, "task", "tasks"],
     [preview.activities, "activity", "activities"],
     [copy ? 0 : preview.files, "file", "files"],
@@ -1436,14 +1437,14 @@ function moveCardDetails(key: string, preview: MovePreview, copy: boolean, copyD
     [`${key}:goes`]: goes.length > 0 ? `${copy ? "Copies" : "Goes with them"}: ${goes.join(", ")}` : copy ? "Copies the details only" : "Nothing else goes with them",
     [`${key}:along`]: along.join("; "),
     [`${key}:merges`]: preview.merges.map((merge) => `${merge.name} merges into existing ${merge.into}`).join("; "),
-    [`${key}:deals`]: deals > 0 ? `Deals go to ${where ?? "the pipeline"}, ${preview.stageName ?? "the stage with the same name"}` : "",
+    [`${key}:deals`]: deals > 0 ? `Opportunities go to ${where ?? "the pipeline"}, ${preview.stageName ?? "the stage with the same name"}` : "",
     [`${key}:boards`]: !copy && preview.boards.length > 0 ? `Comes off ${preview.boards.join(", ")}` : "",
     [`${key}:behind`]: preview.aiFields.length > 0 ? `Not carried over: AI fields ${preview.aiFields.join(", ")}` : "",
     [`${key}:proposals`]: preview.proposalContacts.length > 0 ? `Goes too, named on a proposal: ${preview.proposalContacts.join(", ")}` : "",
     [`${key}:stays`]: staying ? (copy ? `Not copied: ${staying}` : `Stay here without a company: ${staying}`) : "",
     [`${key}:primary`]:
       !copy && preview.dealsLosingContact > 0
-        ? `${preview.dealsLosingContact === 1 ? "1 deal loses its" : `${preview.dealsLosingContact} deals lose their`} main contact`
+        ? `${preview.dealsLosingContact === 1 ? "1 opportunity loses its" : `${preview.dealsLosingContact} opportunities lose their`} main contact`
         : "",
   };
 }
@@ -1744,7 +1745,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "list_contacts",
-    label: "Looking at people",
+    label: "Looking at contacts",
     description: "List people with optional search, company and tag filters.",
     parameters: {
       type: "object",
@@ -1771,7 +1772,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "get_contact",
-    label: "Reading a person",
+    label: "Reading a contact",
     description: "Everything about one person: details, company, tasks, the activity timeline with call summaries, and meetings.",
     parameters: { type: "object", properties: { contactId: idParam("Contact id.") }, required: ["contactId"] },
     run: async (actor, args) => {
@@ -1886,7 +1887,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "get_deal_history",
-    label: "Reading the deal's history",
+    label: "Reading the opportunity's history",
     description:
       "Every stage a deal or board card has been in, oldest first: stage, the stage it came from, when it entered and left, days in it and who moved it. Creating the deal counts as entering its first stage.",
     parameters: {
@@ -1918,7 +1919,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "stalled_deals",
-    label: "Finding deals gone quiet",
+    label: "Finding opportunities gone quiet",
     description:
       `Open deals where nothing has happened for N days (default ${STALLED_DAYS}) since they entered their current stage: no activity or email on the deal, its company or its contact, and no open task that you can see due in that time or later (a long-overdue task doesn't count). Returns each deal with its stage, days in stage, last activity date and why it's stalled, quietest first. Sales pipelines by default; pass boardId for a board. Use this for "which deals have gone quiet".`,
     parameters: {
@@ -2274,7 +2275,6 @@ const TOOL_LIST: AssistantTool[] = [
         [`${id}:what`]: conversationLine(conversation),
         [`${id}:people`]: conversation.participants.map((person) => person.name || person.email).filter(Boolean).join(", "),
         [`${id}:filed`]: conversation.status === "unfiled" ? "" : conversation.status === "filed" ? "This conversation is already filed." : "This conversation is no longer waiting to be filed.",
-        [`${id}:summary`]: conversation.transcriptLength > 0 ? "Orbit summarises the transcript afterwards." : "",
         ...(contact ? { [`${contactId}:company`]: contact.companyName ?? "" } : {}),
         ...(email ? { [`${id}:person`]: newPerson ? (newPerson.name ? `${newPerson.name} (${newPerson.email})` : newPerson.email) : "", [`${id}:known`]: newPerson ? "" : "yes" } : {}),
       };
@@ -2298,7 +2298,7 @@ const TOOL_LIST: AssistantTool[] = [
       const people = detail(name, `${id}:people`);
       return {
         title: titled("File conversation", detail(name, `${id}:title`) || undefined),
-        lines: [detail(name, `${id}:what`), people ? `People: ${people}` : "", target, detail(name, `${id}:filed`), detail(name, `${id}:summary`)],
+        lines: [detail(name, `${id}:what`), people ? `People: ${people}` : "", target, detail(name, `${id}:filed`)],
       };
     },
     run: async (actor, args, context) => {
@@ -2968,7 +2968,7 @@ const TOOL_LIST: AssistantTool[] = [
           .filter(([key]) => key !== "confirm" && key !== "idempotencyKey")
           .slice(0, 12)
           .map(([key, value]) => `${key}: ${typeof value === "string" ? value.slice(0, 200) : JSON.stringify(value).slice(0, 200)}`),
-        "Runs through Orbit's shared Eclipse connection. Anything it costs comes from Eclipse's own account.",
+        "Any cost comes from the shared Eclipse account.",
       ].filter(Boolean),
     }),
     run: async (actor, args, context) => {
@@ -3180,7 +3180,7 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => ({
       title: `Create task: ${str(args.title)}`,
       lines: [
-        ...fieldLines(args, { companyId: "Company", contactId: "Person", ownerId: "Assignee", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
+        ...fieldLines(args, { companyId: "Company", contactId: "Contact", ownerId: "Owner", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
         ...fieldLines(args, { remindMinutes: "Reminder" }),
         `ClickUp: ${args.sendToClickUp === false ? "no" : "yes"}`,
       ],
@@ -3223,7 +3223,7 @@ const TOOL_LIST: AssistantTool[] = [
       title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
       lines: [
         ...fieldLines(args, { title: "Title", dueAt: "Due", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
-        ...fieldLines(args, { ownerId: "Assignee" }, name),
+        ...fieldLines(args, { ownerId: "Owner" }, name),
       ],
     }),
     run: async (actor, args) => {
@@ -3266,7 +3266,7 @@ const TOOL_LIST: AssistantTool[] = [
     },
     describe: (args, name) => ({
       title: `Log ${str(args.type) || "note"}`,
-      lines: fieldLines(args, { companyId: "Company", contactId: "Person", title: "Title", body: "Text" }, name),
+      lines: fieldLines(args, { companyId: "Company", contactId: "Contact", title: "Title", body: "Text" }, name),
     }),
     run: async (actor, args) => {
       const type = oneOf(args.type, ["note", "call", "email"] as const) ?? "note";
@@ -3324,7 +3324,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "update_activity",
-    label: "Editing an activity",
+    label: "Updating an activity",
     write: true,
     description:
       "Edit a logged activity by its id from list_activities, get_company or get_contact: its type, title, text, when it happened, and the company, person and opportunity it is on. Pass only what changes. Emails filed from Mail only take a new company or opportunity. Calls and meetings from Teams, Granola or a transcript only take a new title, company, person or opportunity. Only the person who logged it, or an owner or admin, can edit it, and it can be undone with undo_change.",
@@ -3373,7 +3373,7 @@ const TOOL_LIST: AssistantTool[] = [
         if (from && from === to) return [];
         return [`${ACTIVITY_FIELD_LABELS[field]}: ${from ? `from ${from} ` : ""}to ${to}`];
       });
-      return { title: "Edit activity", lines: [activity ? `Activity: ${activity}` : "", ...changes] };
+      return { title: "Update activity", lines: [activity ? `Activity: ${activity}` : "", ...changes] };
     },
     run: async (actor, args) => {
       const edit: ActivityEdit = {};
@@ -3511,7 +3511,7 @@ const TOOL_LIST: AssistantTool[] = [
       lines: [
         mergeLine("Keep", args.keepId, name),
         mergeLine("Merge and archive", args.mergeId, name),
-        "People, deals, tasks, activity and emails move to the kept company",
+        "Contacts, opportunities, tasks, activity and emails move to the kept company",
       ],
     }),
     run: async (actor, args) => {
@@ -3561,8 +3561,8 @@ const TOOL_LIST: AssistantTool[] = [
       if (isMany(args.contactIds)) {
         const ids = strings(args.contactIds);
         return {
-          title: `Update ${ids.length} ${ids.length === 1 ? "person" : "people"}`,
-          lines: [...fieldLines(args, { ownerId: "Owner", companyId: "Company", jobTitle: "Job title", source: "Source" }, name), nameList(ids, name, "People")],
+          title: `Update ${ids.length} ${ids.length === 1 ? "contact" : "contacts"}`,
+          lines: [...fieldLines(args, { ownerId: "Owner", companyId: "Company", jobTitle: "Job title", source: "Source" }, name), nameList(ids, name, "Contacts")],
         };
       }
       return {
@@ -3648,7 +3648,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "merge_contacts",
-    label: "Merging people",
+    label: "Merging contacts",
     write: true,
     description:
       "Merge a duplicate person into the one to keep. Their activity, tasks, deals, emails and proposals move to the kept person, empty fields are filled from the duplicate, tags are combined, and the duplicate is archived. The kept person's email stays; a different email from the duplicate is added to the notes.",
@@ -3661,11 +3661,11 @@ const TOOL_LIST: AssistantTool[] = [
       required: ["keepId", "mergeId"],
     },
     describe: (args, name) => ({
-      title: titled("Merge people", `${name(args.mergeId)} into ${name(args.keepId)}`),
+      title: titled("Merge contacts", `${name(args.mergeId)} into ${name(args.keepId)}`),
       lines: [
         mergeLine("Keep", args.keepId, name),
         mergeLine("Merge and archive", args.mergeId, name),
-        "Activity, tasks, deals and emails move to the kept person",
+        "Activity, tasks, opportunities and emails move to the kept contact",
       ],
     }),
     run: async (actor, args) => {
@@ -3737,7 +3737,7 @@ const TOOL_LIST: AssistantTool[] = [
         title: `${args.copy === true ? "Copy" : "Move"} to ${detail("workspace") || str(args.toWorkspace)}: ${label}`,
         lines: [
           companies.length > 0 ? nameList(companies, name, "Companies") : "",
-          people.length > 0 ? nameList(people, name, "People") : "",
+          people.length > 0 ? nameList(people, name, "Contacts") : "",
           args.copy === true ? "Copy: they stay here too" : "Move: they leave this workspace",
           detail("goes"),
           detail("along"),
@@ -3792,8 +3792,8 @@ const TOOL_LIST: AssistantTool[] = [
       const ids = lookupIds(args.contactIds);
       const noun = FIELD_NOUNS[oneOf(args.field, ["email", "linkedin", "phone"] as const) ?? "email"];
       return {
-        title: ids.length === 1 ? `Find ${noun}: ${name(ids[0])}` : `Find ${noun} for ${ids.length} people`,
-        lines: [ids.length > 1 ? nameList(ids, name, "People") : "", "Uses enrichment credits. Saves what's found to the contact."],
+        title: ids.length === 1 ? `Find ${noun}: ${name(ids[0])}` : `Find ${noun} for ${ids.length} contacts`,
+        lines: [ids.length > 1 ? nameList(ids, name, "Contacts") : "", "Uses enrichment credits. Saves what's found to the contact."],
       };
     },
     run: async (actor, args) => {
@@ -3839,7 +3839,7 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => {
       const groups = [
         { ids: [...new Set(strings(args.companyIds))], noun: "Companies" },
-        { ids: [...new Set(strings(args.contactIds))], noun: "People" },
+        { ids: [...new Set(strings(args.contactIds))], noun: "Contacts" },
         { ids: [...new Set(strings(args.opportunityIds))], noun: "Opportunities" },
         { ids: [...new Set(strings(args.taskIds))], noun: "Tasks" },
       ].filter((group) => group.ids.length > 0);
@@ -3950,7 +3950,7 @@ const TOOL_LIST: AssistantTool[] = [
       title: `Create board: ${str(args.name)}`,
       lines: [
         strings(args.stages).length ? `Stages: ${strings(args.stages).join(", ")}` : "",
-        args.addOnWon === true ? "Adds companies when a deal is won" : "",
+        args.addOnWon === true ? "Adds companies when an opportunity is won" : "",
       ],
     }),
     run: async (actor, args) => {
@@ -3979,7 +3979,7 @@ const TOOL_LIST: AssistantTool[] = [
       title: titled("Update board", name(args.boardId)),
       lines: [
         str(args.name) ? `Name: ${str(args.name)}` : "",
-        typeof args.addOnWon === "boolean" ? `Add companies when a deal is won: ${args.addOnWon ? "on" : "off"}` : "",
+        typeof args.addOnWon === "boolean" ? `Add companies when an opportunity is won: ${args.addOnWon ? "on" : "off"}` : "",
       ],
     }),
     run: async (actor, args) => {
@@ -4284,8 +4284,8 @@ const TOOL_LIST: AssistantTool[] = [
       required: ["kind", "ids"],
     },
     describe: (args, name) => ({
-      title: `Tag ${strings(args.ids).length} ${args.kind === "contact" ? "people" : "companies"}`,
-      lines: [...fieldLines(args, { add: "Add", remove: "Remove" }), nameList(strings(args.ids), name, args.kind === "contact" ? "People" : "Companies")],
+      title: `Tag ${strings(args.ids).length} ${args.kind === "contact" ? "contacts" : "companies"}`,
+      lines: [...fieldLines(args, { add: "Add", remove: "Remove" }), nameList(strings(args.ids), name, args.kind === "contact" ? "Contacts" : "Companies")],
     }),
     run: async (actor, args) => {
       const kind = oneOf(args.kind, ["company", "contact"] as const) ?? "company";
@@ -4403,7 +4403,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "update_proposal",
-    label: "Editing a proposal",
+    label: "Updating a proposal",
     write: true,
     description:
       `Change a draft proposal: title, currency, valid-until date (YYYY-MM-DD), products (replaces the list) or blocks (replaces them; read them with get_proposal first). A sent one needs revise_proposal first. The live Next steps plan is changed with update_proposal_steps. ${BLOCKS_GUIDE} Before adding a booking block, check with get_settings that the booking page is enabled. Copy image, cover and photo links in with add_proposal_image first.`,
@@ -4433,7 +4433,7 @@ const TOOL_LIST: AssistantTool[] = [
       required: ["id"],
     },
     describe: (args, name) => ({
-      title: `Edit ${name(args.id)}`,
+      title: `Update ${name(args.id)}`,
       lines: [
         str(args.title) ? `Title: ${str(args.title)}` : "",
         str(args.validUntil) ? `Valid until: ${str(args.validUntil)}` : "",
@@ -4623,7 +4623,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "update_proposal_template",
-    label: "Editing a proposal template",
+    label: "Updating a proposal template",
     write: true,
     description:
       "Change a proposal or NDA template: name, status (draft, active or archived), accent colour, days valid, or blocks (replaces them; read them with list_proposal_templates and its id first). Blocks work as update_proposal describes; default Next steps are items on a steps block (title, side client or us, dueInDays). Changes apply to proposals created afterwards.",
@@ -4640,7 +4640,7 @@ const TOOL_LIST: AssistantTool[] = [
       required: ["id"],
     },
     describe: (args, name) => ({
-      title: `Edit template ${name(args.id)}`,
+      title: `Update template ${name(args.id)}`,
       lines: [
         str(args.name) ? `Name: ${str(args.name)}` : "",
         str(args.status) ? `Status: ${str(args.status)}` : "",
@@ -4745,7 +4745,6 @@ const TOOL_LIST: AssistantTool[] = [
           str(args.from) ? `From: ${str(args.from)}` : detail(name, sendFromKey(args)) ? `From: ${detail(name, sendFromKey(args))}` : "",
           attachmentLine(args, name),
           strings(args.attachmentIds).length ? DRAFT_FILES_NOTE : "",
-          DRAFT_NOTE,
           str(args.body),
         ].filter(Boolean),
       };
@@ -4847,7 +4846,6 @@ const TOOL_LIST: AssistantTool[] = [
           sendAtLine(args.sendAt),
           str(args.from) === AGENT_MAILBOX ? "" : storedScheduleLine(args, name),
           attachmentLine(args, name),
-          str(args.from) === AGENT_MAILBOX ? "Sends from the agent mailbox when you approve." : later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
           str(args.body),
           ...(str(args.from) === AGENT_MAILBOX ? [] : followUpLines(chosenFollowUp(args, name))),
           str(args.from) === AGENT_MAILBOX ? "" : reminderLine(args, name),
@@ -4905,7 +4903,7 @@ const TOOL_LIST: AssistantTool[] = [
           cc: sent.cc,
           subject: sent.subject,
           href: sent.href,
-          ...(followUp ? { followUp: `Follow-up set for ${followUp.afterDays} working days after it sends, at 09:00, if nobody replies.` } : {}),
+          ...(followUp ? { followUp: `Follow-up set for ${followUp.afterDays} working days after it sends, at 09:00, if no reply.` } : {}),
         };
       }
       return {
@@ -4949,7 +4947,7 @@ const TOOL_LIST: AssistantTool[] = [
           title: titled("Cancel scheduled email", subjectNow),
           lines: [
             ...scheduledLines(id, name),
-            scheduledChanges(args) ? `This will be refused: ${CANCEL_ALONE}` : "It stays in Drafts, so you can send it or change it later.",
+            scheduledChanges(args) ? CANCEL_REFUSED : "It stays in Drafts.",
           ],
         };
       }
@@ -5508,10 +5506,9 @@ const TOOL_LIST: AssistantTool[] = [
         title: onlyBrief ? "Rebuild the morning brief" : "Run learning now",
         lines: [
           kinds.length ? `Runs: ${kinds.map((kind) => LEARNING_LABELS[kind]).join(", ")}` : "",
-          kinds.length ? `Takes up to about ${counted(kinds.length, "minute", "minutes")} in the background. You can keep chatting.` : "",
-          onlyBrief
-            ? "Uses a model call and replaces today's brief with one covering everything since yesterday's."
-            : "Uses model calls and updates what Orbit has learned, which the assistant uses from then on.",
+          kinds.length ? `Takes up to ${counted(kinds.length, "minute", "minutes")}.` : "",
+          "Uses model calls.",
+          onlyBrief ? "Replaces today's brief." : "",
         ],
       };
     },
@@ -5600,7 +5597,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "save_doc",
-    label: "Saving a doc",
+    label: "Saving a note",
     write: true,
     description: [
       "Create or change a doc in Docs, the user's Markdown notes. Docs link to each other with [[Doc title]] (or [[Doc title#Heading]] and [[Doc title|label]]), carry inline #tags (nested like #clients/acme) and mention records as @[Name](company:id), @[Name](contact:id) or @[Name](opportunity:id).",
@@ -5679,8 +5676,7 @@ const TOOL_LIST: AssistantTool[] = [
 
 export const ASSISTANT_TOOLS: AssistantTool[] = TOOL_LIST.map(withWorkspaceParam);
 
-export const DRAFT_NOTE = "Saved to Drafts.";
-const DRAFT_FILES_NOTE = "The files stay in Orbit and are attached when Orbit sends it.";
+const DRAFT_FILES_NOTE = "Files attach when Orbit sends it.";
 
 export type ActionAlternative = {
   key: "send";
@@ -5694,11 +5690,11 @@ export type ActionAlternative = {
 export const ACTION_ALTERNATIVES: Record<string, ActionAlternative> = {
   save_email_draft: {
     key: "send",
-    label: "Confirm and send",
+    label: "Send now",
     tool: "send_email",
     args: (args) => onlyParameters("save_email_draft", args),
     title: (title) => title.replace(/^Save draft: /, "Sent: "),
-    lines: (lines) => lines.filter((line) => line !== DRAFT_FILES_NOTE).map((line) => (line === DRAFT_NOTE ? "Sent." : line)),
+    lines: (lines) => lines.filter((line) => line !== DRAFT_FILES_NOTE),
   },
 };
 

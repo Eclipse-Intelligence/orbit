@@ -9,8 +9,8 @@ import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 
 const OUTCOMES: Record<string, string> = {
   succeeded: "Done",
-  waiting: "Waiting for approval or a delay",
-  failed: "It failed. See the run for details",
+  waiting: "Waiting",
+  failed: "Failed",
   cancelled: "Stopped",
 };
 

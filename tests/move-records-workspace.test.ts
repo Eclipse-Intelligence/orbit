@@ -507,9 +507,9 @@ describe("moving records to another workspace", () => {
     const card = describeAction("move_records_to_workspace", args, names);
     assert.equal(card.title, "Move to Mark Ridgeon: Wayne Enterprises");
     assert.ok(card.lines.includes("Move: they leave this workspace"), card.lines.join(" / "));
-    assert.ok(card.lines.includes("Goes with them: 2 contacts, 1 deal, 1 task, 1 activity"), card.lines.join(" / "));
+    assert.ok(card.lines.includes("Goes with them: 2 contacts, 1 opportunity, 1 task, 1 activity"), card.lines.join(" / "));
     assert.ok(card.lines.includes("Bruce Wayne merges into existing Bruce"), card.lines.join(" / "));
-    assert.ok(card.lines.includes("Deals go to the pipeline, Won"), card.lines.join(" / "));
+    assert.ok(card.lines.includes("Opportunities go to the pipeline, Won"), card.lines.join(" / "));
     const copyNames = await recordNames(eclipse, [{ ...args, copy: true }], ["move_records_to_workspace"]);
     const copyCard = describeAction("move_records_to_workspace", { ...args, copy: true }, copyNames);
     assert.equal(copyCard.title, "Copy to Mark Ridgeon: Wayne Enterprises");
@@ -964,16 +964,16 @@ describe("moving records to another workspace", () => {
 
     const apart = { toWorkspace: "Mark Ridgeon", companyIds: [orion.id], includeContacts: false };
     const card = describeAction("move_records_to_workspace", apart, await recordNames(eclipse, [apart], ["move_records_to_workspace"]));
-    assert.ok(card.lines.includes("Goes with them: 1 deal"), card.lines.join(" / "));
+    assert.ok(card.lines.includes("Goes with them: 1 opportunity"), card.lines.join(" / "));
     assert.ok(card.lines.includes("Stay here without a company: Ola Orion, Oli Orion"), card.lines.join(" / "));
-    assert.ok(card.lines.includes("1 deal loses its main contact"), card.lines.join(" / "));
+    assert.ok(card.lines.includes("1 opportunity loses its main contact"), card.lines.join(" / "));
     const copyArgs = { ...apart, copy: true };
     const copyCard = describeAction("move_records_to_workspace", copyArgs, await recordNames(eclipse, [copyArgs], ["move_records_to_workspace"]));
     assert.ok(copyCard.lines.includes("Not copied: Ola Orion, Oli Orion"), copyCard.lines.join(" / "));
 
     const person = { toWorkspace: "Mark Ridgeon", contactIds: [ola.id] };
     const personCard = describeAction("move_records_to_workspace", person, await recordNames(eclipse, [person], ["move_records_to_workspace"]));
-    assert.ok(personCard.lines.includes("Goes with them: 1 contact, 1 deal"), personCard.lines.join(" / "));
+    assert.ok(personCard.lines.includes("Goes with them: 1 contact, 1 opportunity"), personCard.lines.join(" / "));
     assert.ok(personCard.lines.includes("Orion comes too"), personCard.lines.join(" / "));
     const aloneArgs = { ...person, includeCompany: false };
     const aloneCard = describeAction("move_records_to_workspace", aloneArgs, await recordNames(eclipse, [aloneArgs], ["move_records_to_workspace"]));

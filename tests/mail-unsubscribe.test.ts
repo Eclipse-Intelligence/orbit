@@ -588,7 +588,7 @@ describe("unsubscribing in Mail", () => {
     assert.equal(manyCard.lines[0], "jane@acme.test. Jane Doe is a contact in Orbit.");
     assert.ok(manyCard.lines.includes("and 5 more"));
     assert.ok(card.lines.includes("digest@list.test"));
-    assert.ok(card.lines.includes("Mail already received from them is archived."));
+    assert.ok(card.lines.includes("Existing mail is archived."));
     const original = globalThis.fetch;
     globalThis.fetch = graph.fetchImpl;
     try {
