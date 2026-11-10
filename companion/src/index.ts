@@ -119,6 +119,17 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
         if (pending !== null) flush();
       });
   };
+  let steering = true;
+  const steers = async () => {
+    if (!steering || cancel.signal.aborted) return [];
+    try {
+      return (await api.messages(job.id)).messages;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) steering = false;
+      cancelled(error);
+      return [];
+    }
+  };
   current = { api, jobId: job.id };
   log(`Answering on ${job.request.model}…`);
   try {
@@ -133,6 +144,7 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
           throw error;
         }),
       onTool: (name) => log(`  ${name}`),
+      steers,
       onDraft: (text) => {
         pending = text;
         flush();

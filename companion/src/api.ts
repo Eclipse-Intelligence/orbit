@@ -1,4 +1,4 @@
-import type { CompanionCall, CompanionJob, CompanionResult, CompanionToolResult, PairResponse } from "./protocol";
+import type { CompanionCall, CompanionJob, CompanionResult, CompanionSteer, CompanionToolResult, PairResponse } from "./protocol";
 
 export class ApiError extends Error {
   constructor(
@@ -43,6 +43,7 @@ export function createApi(baseUrl: string, token: string | null, fetchImpl: type
     fail: (jobId: string, error: string, timeoutMs?: number) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/fail`, { body: { error }, timeoutMs }),
     draft: (jobId: string, text: string) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/draft`, { body: { text }, timeoutMs: 15_000 }),
     heartbeat: (jobId: string) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/heartbeat`, { body: {}, timeoutMs: 20_000 }),
+    messages: (jobId: string) => call<{ messages: CompanionSteer[] }>(`/api/companion/jobs/${jobId}/messages`, { body: {}, timeoutMs: 15_000 }),
   };
 }
 

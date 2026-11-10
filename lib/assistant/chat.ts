@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { after } from "next/server";
 import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, startingSettings, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
@@ -32,17 +34,18 @@ import { linearHere } from "@/lib/crm/linear-connection";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
-import { PROPOSED, type CompanionResult, type Effort } from "@/companion/src/protocol";
+import { PROPOSED, type CompanionResult, type CompanionSteer, type Effort } from "@/companion/src/protocol";
 import {
   CONTINUE_RESULT_TOOL,
   cancelCompanionJob,
   companionBusy,
+  companionJobConversation,
   companionWorking,
   enqueueCompanionJob,
   failureReply,
   readCompanionJob,
 } from "@/lib/companion/jobs";
-import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/companion/pairing";
+import { actorFor, companionOfflineMessage, companionOnline, listCompanions, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
@@ -54,7 +57,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
-import type { Db } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 
 export const MAX_ROUNDS = 40;
 export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
@@ -115,6 +118,7 @@ export type DisplayMessage = {
   sources: Source[];
   files: ChatFile[];
   createdAt: string;
+  waiting?: boolean;
 };
 
 export type AssistantEvent =
@@ -127,6 +131,7 @@ export type AssistantEvent =
   | { type: "ping" }
   | { type: "waiting"; message: string }
   | { type: "draft"; text: string }
+  | { type: "steered"; ids: string[] }
   | { type: "error"; message: string };
 
 type Emit = (event: AssistantEvent) => void;
@@ -144,8 +149,11 @@ type MessageRow = {
   files?: ChatFile[] | null;
   page_context?: string | null;
   turn_context?: string | null;
+  steering?: Steering | null;
   created_at: Date | string;
 };
+
+type Steering = "waiting" | "folded";
 
 type ConversationRow = {
   id: string;
@@ -155,6 +163,7 @@ type ConversationRow = {
   web_search: boolean;
   updated_at: Date | string;
   stopped_at: Date | string | null;
+  turn_until?: Date | string | null;
   email?: boolean;
 };
 
@@ -182,6 +191,7 @@ function display(row: MessageRow): DisplayMessage {
     sources: row.sources ?? [],
     files: row.files ?? [],
     createdAt: iso(row.created_at) ?? new Date().toISOString(),
+    ...(row.steering === "waiting" ? { waiting: true } : {}),
   };
 }
 
@@ -198,8 +208,8 @@ function parseArgs(raw: string) {
   return argsOf(raw) ?? {};
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, turn_context, created_at";
-const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
+const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, turn_context, steering, created_at";
+const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at, turn_until";
 const EMAIL_MARK = "exists (select 1 from crm.agent_mail_threads t where t.conversation_id = crm.assistant_conversations.id) as email";
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
@@ -236,13 +246,14 @@ async function insertMessage(
     state?: ProviderState | null;
     files?: ChatFile[];
     pageContext?: string | null;
+    steering?: "waiting" | null;
   },
 ) {
   return withActor(actor, async (db) => {
     const result = await db.query<MessageRow>(
       `insert into crm.assistant_messages
-         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files, page_context)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14)
+         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files, page_context, steering)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15)
        returning ${MESSAGE_COLUMNS}`,
       [
         conversationId,
@@ -259,6 +270,7 @@ async function insertMessage(
         message.state ? JSON.stringify(message.state) : null,
         message.files && message.files.length > 0 ? JSON.stringify(message.files) : null,
         message.pageContext || null,
+        message.steering ?? null,
       ],
     );
     if (message.files && message.files.length > 0) {
@@ -361,20 +373,29 @@ const MID_TURN_MS = 6 * 60_000;
 
 type JobProgress = { status: string; created_at: Date; claimed_at: Date | null; events: { id: string; label: string; status: string }[] };
 
-function workingState(rows: MessageRow[], conversation: ConversationRow, job: JobProgress | null): Working | null {
+function anchorOf<T extends { role: string; steering?: Steering | null }>(rows: readonly T[]) {
+  return rows.filter((row) => row.role === "user" && !row.steering).at(-1) ?? rows.filter((row) => row.role === "user").at(-1);
+}
+
+function workingState(all: MessageRow[], conversation: ConversationRow, job: JobProgress | null): Working | null {
+  const rows = all.filter((row) => row.steering !== "waiting");
   const updatedAt = conversation.updated_at;
   if (job) {
     const done = new Set(job.events.filter((event) => event.status === "done").map((event) => event.id));
     const running = [...job.events].reverse().find((event) => event.status === "running" && !done.has(event.id));
     return { where: "mac", steps: done.size, current: running?.label ?? null, since: new Date(job.claimed_at ?? job.created_at).toISOString() };
   }
+  const since = anchorOf(rows)?.created_at ?? updatedAt;
+  const steps = () => rows.filter((row) => row.role === "tool" && new Date(row.created_at) >= new Date(since)).length;
+  if (conversation.turn_until && new Date(conversation.turn_until).getTime() > Date.now()) {
+    return { where: "orbit", steps: steps(), current: null, since: new Date(since).toISOString() };
+  }
   const last = rows.at(-1);
   if (!last || Date.now() - new Date(updatedAt).getTime() > MID_TURN_MS) return null;
   const waitingOnTools = last.role === "assistant" && (last.tool_calls ?? []).length > 0 && !(last.actions ?? []).some((action) => action.status === "pending");
   if (last.role !== "user" && last.role !== "tool" && !waitingOnTools) return null;
-  const since = [...rows].reverse().find((row) => row.role === "user")?.created_at ?? updatedAt;
   if (conversation.stopped_at && new Date(conversation.stopped_at) >= new Date(since)) return null;
-  return { where: "orbit", steps: rows.filter((row) => row.role === "tool" && new Date(row.created_at) >= new Date(since)).length, current: null, since: new Date(since).toISOString() };
+  return { where: "orbit", steps: steps(), current: null, since: new Date(since).toISOString() };
 }
 
 export async function getConversation(actor: UserActor, id: string) {
@@ -391,12 +412,12 @@ export async function getConversation(actor: UserActor, id: string) {
        where conversation_id = $1 and status in ('queued', 'running') order by created_at desc limit 1`,
       [id],
     );
+    const shown = messages
+      .filter((row) => row.role !== "tool")
+      .filter((row) => row.role === "user" || row.content || (row.tool_calls ?? []).length > 0 || (row.actions ?? []).length > 0);
     return {
       conversation: summary(conversation),
-      messages: messages
-        .filter((row) => row.role !== "tool")
-        .filter((row) => row.role === "user" || row.content || (row.tool_calls ?? []).length > 0 || (row.actions ?? []).length > 0)
-        .map(display),
+      messages: [...shown.filter((row) => row.steering !== "waiting"), ...shown.filter((row) => row.steering === "waiting")].map(display),
       working: workingState(messages, conversation, job.rows[0] ?? null),
     };
   });
@@ -452,16 +473,31 @@ function userContent(row: MessageRow) {
   return [typed.trim() ? typed : "", note, row.page_context ?? ""].filter(Boolean).join("\n\n");
 }
 
-export function history(rows: MessageRow[], budget = HISTORY_BUDGET, context = ""): ChatMessage[] {
+export function history(all: MessageRow[], budget = HISTORY_BUDGET, context = ""): ChatMessage[] {
+  const rows = all.filter((row) => row.steering !== "waiting");
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
-  const lastUser = rows.map((row) => row.role).lastIndexOf("user");
+  const anchor = anchorOf(rows);
+  const lastUser = anchor ? rows.indexOf(anchor) : -1;
   const messages: ChatMessage[] = [];
+  const results = new Map<string, number[]>();
   rows.forEach((row, index) => {
-    if (row.role === "user") messages.push({ role: "user", content: index === lastUser && context ? `${userContent(row)}\n\n${context}` : userContent(row) });
-    else if (row.role === "tool" && row.tool_call_id) {
-      messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
+    if (row.role === "tool" && row.tool_call_id) results.set(row.tool_call_id, [...(results.get(row.tool_call_id) ?? []), index]);
+  });
+  const called = new Set(rows.flatMap((row) => (row.role === "assistant" ? (row.tool_calls ?? []).map((call) => call.id) : [])));
+  const placed = new Set<string>();
+  const result = (index: number): ChatMessage => {
+    const row = rows[index];
+    return { role: "tool", tool_call_id: row.tool_call_id!, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) };
+  };
+  let anchorAt = -1;
+  rows.forEach((row, index) => {
+    if (row.role === "user") {
+      if (index === lastUser) anchorAt = messages.length;
+      messages.push({ role: "user", content: index === lastUser && context ? `${userContent(row)}\n\n${context}` : userContent(row) });
+    } else if (row.role === "tool" && row.tool_call_id) {
+      if (!called.has(row.tool_call_id)) messages.push(result(index));
     } else if (row.role === "assistant") {
-      const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id));
+      const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id) && !placed.has(call.id));
       if (calls.length === 0 && !row.content.trim()) return;
       const state = row.provider_state ?? null;
       messages.push(
@@ -469,13 +505,19 @@ export function history(rows: MessageRow[], budget = HISTORY_BUDGET, context = "
           ? { role: "assistant", content: row.content || null, tool_calls: calls, state }
           : { role: "assistant", content: row.content || "", state },
       );
+      for (const call of calls) placed.add(call.id);
+      const answers = calls.flatMap((call) => results.get(call.id) ?? []).sort((first, second) => first - second);
+      for (const at of answers) messages.push(result(at));
     }
   });
-  if (messages[0]?.role === "assistant") messages.unshift({ role: "user", content: BRIEF_PREFACE });
+  if (messages[0]?.role === "assistant") {
+    messages.unshift({ role: "user", content: BRIEF_PREFACE });
+    if (anchorAt >= 0) anchorAt += 1;
+  }
   const suffix = new Array<number>(messages.length + 1).fill(0);
   for (let index = messages.length - 1; index >= 0; index -= 1) suffix[index] = suffix[index + 1] + weight(messages[index]);
   if (suffix[0] <= budget) return messages;
-  const starts = messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
+  const starts = messages.flatMap((message, index) => (message.role === "user" && (anchorAt < 0 || index <= anchorAt) ? [index] : []));
   const start = starts.find((index) => suffix[index] <= budget) ?? starts[starts.length - 1] ?? 0;
   const kept = messages.slice(start);
   const first = kept[0];
@@ -554,6 +596,103 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
         toolName: action.name,
       });
     }
+  }
+}
+
+const LEASE_SLACK_MS = 15_000;
+const DETACHED_MS = 120_000;
+const FOLLOW_ON_MS = 45_000;
+const BLOCKED = `exists (select 1 from crm.assistant_messages b where b.conversation_id = $1 and (b.actions @> '[{"status":"pending"}]'::jsonb or b.actions @> '[{"status":"running"}]'::jsonb))
+  or exists (select 1 from crm.ai_companion_jobs j where j.conversation_id = $1 and j.status in ('queued', 'running'))`;
+
+async function moveWaiting(db: Db, conversationId: string, as: Steering | null, ids?: string[]) {
+  const waiting = await db.query<{ id: string }>(
+    `select id from crm.assistant_messages
+     where conversation_id = $1 and role = 'user' and steering = 'waiting' and ($2::uuid[] is null or id = any($2::uuid[]))
+     order by seq for update`,
+    [conversationId, ids ?? null],
+  );
+  for (const row of waiting.rows) await db.query("update crm.assistant_messages set steering = $2, seq = default where id = $1", [row.id, as]);
+  return waiting.rows.map((row) => row.id);
+}
+
+async function takeWaiting(actor: UserActor, conversationId: string, as: Steering | null, options: { unlessBlocked?: boolean; runner?: string } = {}) {
+  return withActor(actor, async (db) => {
+    if (options.runner) {
+      const lease = await db.query<{ turn_runner: string | null }>("select turn_runner from crm.assistant_conversations where id = $1 for update", [conversationId]);
+      if (lease.rows[0]?.turn_runner !== options.runner) return null;
+    }
+    if (options.unlessBlocked) {
+      const blocked = await db.query<{ blocked: boolean }>(`select (${BLOCKED}) as blocked`, [conversationId]);
+      if (blocked.rows[0]?.blocked) return [];
+    }
+    return moveWaiting(db, conversationId, as);
+  });
+}
+
+async function steersReady(actor: UserActor, conversationId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ ready: boolean }>(
+      `select exists (select 1 from crm.assistant_messages where conversation_id = $1 and role = 'user' and steering = 'waiting')
+         and not (${BLOCKED}) as ready`,
+      [conversationId],
+    );
+    return result.rows[0]?.ready === true;
+  });
+}
+
+async function claimTurn(actor: UserActor, conversationId: string, runner: string, until: number, force: boolean) {
+  return withActor(actor, async (db) => {
+    const result = await db.query(
+      `update crm.assistant_conversations set turn_runner = $2, turn_until = $3
+       where id = $1 and ($4 or turn_runner is null or turn_runner = $2 or turn_until is null or turn_until < now())
+       returning id`,
+      [conversationId, runner, new Date(until), force],
+    );
+    return (result.rowCount ?? 0) > 0;
+  });
+}
+
+async function releaseTurn(actor: UserActor, conversationId: string, runner: string) {
+  await withActor(actor, (db) =>
+    db.query("update crm.assistant_conversations set turn_runner = null, turn_until = null where id = $1 and turn_runner = $2", [conversationId, runner]),
+  );
+}
+
+type Opening = "turn" | "steers";
+
+async function runTurns(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions, opening: Opening, held?: string) {
+  if (options.headless) {
+    await runLoop(actor, conversation, emit, options);
+    return true;
+  }
+  const runner = held ?? randomUUID();
+  const owned = { ...options, runner };
+  let next = opening;
+  let ran = false;
+  let claimed = Boolean(held);
+  for (;;) {
+    if (!claimed && !(await claimTurn(actor, conversation.id, runner, options.deadline + LEASE_SLACK_MS, next === "turn"))) return ran;
+    claimed = false;
+    let carryOn = false;
+    try {
+      for (;;) {
+        if (next === "steers") {
+          const ids = await takeWaiting(actor, conversation.id, null, { unlessBlocked: true, runner });
+          if (!ids) return ran;
+          if (ids.length === 0) break;
+          emit({ type: "steered", ids });
+        }
+        ran = true;
+        const finished = await runLoop(actor, conversation, emit, owned);
+        next = "steers";
+        if (!finished || options.detach || options.deadline - Date.now() < FOLLOW_ON_MS) return ran;
+      }
+      carryOn = true;
+    } finally {
+      await releaseTurn(actor, conversation.id, runner).catch(() => undefined);
+    }
+    if (!carryOn || options.deadline - Date.now() < FOLLOW_ON_MS || !(await steersReady(actor, conversation.id))) return ran;
   }
 }
 
@@ -658,10 +797,10 @@ function toToolCall(call: { id: string; name: string; arguments: string }): Tool
 
 export async function applyCompanionResult(actor: UserActor, conversationId: string, result: CompanionResult, switches?: ToolSwitches) {
   await withActor(actor, (db) => readConversation(db, actor, conversationId));
-  const entries: { content: string; reads: ToolCall[] }[] = [];
+  const entries: { content: string; reads: ToolCall[]; step: number }[] = [];
   const writes: ToolCall[] = [];
   const gated = new Set<string>();
-  for (const step of result.steps) {
+  for (const [index, step] of result.steps.entries()) {
     const reads: ToolCall[] = [];
     for (const call of step.calls) {
       const tool = findTool(call.name);
@@ -670,7 +809,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       if (web) gated.add(call.id);
       (tool.write || web ? writes : reads).push(toToolCall(call));
     }
-    if (step.text.trim() || reads.length > 0) entries.push({ content: withoutMarkers(step.text).trim(), reads });
+    if (step.text.trim() || reads.length > 0) entries.push({ content: withoutMarkers(step.text).trim(), reads, step: index });
   }
   const refused = await refusedWrites(actor, writes.filter((call) => !gated.has(call.id)), switches);
   const unrun = writes.filter((call) => !refused.has(call.id) && !gated.has(call.id) && result.results[call.id]?.content !== PROPOSED);
@@ -679,13 +818,23 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     const reasons = [...new Set([...refused.values()].map((entry) => entry.error))].join("\n\n");
     const last = entries.at(-1);
     if (last) last.content = [last.content, reasons].filter(Boolean).join("\n\n");
-    else entries.push({ content: reasons, reads: [] });
+    else entries.push({ content: reasons, reads: [], step: result.steps.length });
   }
-  if (entries.length === 0) entries.push({ content: writes.length > 0 ? "" : EMPTY_REPLY, reads: [] });
+  if (entries.length === 0) entries.push({ content: writes.length > 0 ? "" : EMPTY_REPLY, reads: [], step: result.steps.length });
+  const steered = [...(result.steered ?? [])];
+  const placeSteers = async (step: number, final: boolean) => {
+    const due = steered.filter((entry) => final || entry.step <= step).map((entry) => entry.id);
+    if (due.length === 0) return;
+    for (const id of due) steered.splice(steered.findIndex((entry) => entry.id === id), 1);
+    await withActor(actor, async (db) => {
+      for (const id of due) await moveWaiting(db, conversationId, "folded", [id]);
+    });
+  };
   const ids: string[] = [];
   let last: MessageRow | null = null;
   for (const [index, entry] of entries.entries()) {
     const final = index === entries.length - 1;
+    await placeSteers(entry.step, final);
     const toolCalls = final ? [...entry.reads, ...writes] : entry.reads;
     last = await insertMessage(actor, conversationId, {
       role: "assistant",
@@ -743,6 +892,22 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
   return ids;
 }
 
+const STEERS_PER_FETCH = 20;
+
+export async function companionSteers(auth: AuthenticatedCompanion, jobId: string): Promise<CompanionSteer[]> {
+  const { conversationId, email } = await companionJobConversation(auth, jobId);
+  if (email) return [];
+  const rows = await withActor(auth.actor, async (db) => {
+    const result = await db.query<MessageRow>(
+      `select ${MESSAGE_COLUMNS} from crm.assistant_messages
+       where conversation_id = $1 and role = 'user' and steering = 'waiting' order by seq limit ${STEERS_PER_FETCH}`,
+      [conversationId],
+    );
+    return result.rows;
+  });
+  return rows.map((row) => ({ id: row.id, text: userContent(row) }));
+}
+
 export async function isBriefConversation(actor: UserActor, conversationId: string) {
   return withActor(actor, async (db) => {
     const result = await db.query("select 1 from crm.assistant_messages where conversation_id = $1 and model = $2 limit 1", [
@@ -792,7 +957,7 @@ function contextFor(now: Date, conversation: ConversationRow, prompt: { learned:
 }
 
 async function savedContext(actor: UserActor, conversation: ConversationRow, rows: MessageRow[], prompt: { learned: string; briefReady: boolean }) {
-  const user = rows.filter((row) => row.role === "user").at(-1);
+  const user = anchorOf(rows.filter((row) => row.steering !== "waiting"));
   if (!user) return "";
   if (user.turn_context) return user.turn_context;
   const rendered = contextFor(new Date(), conversation, prompt, messageFence(user.id));
@@ -809,6 +974,13 @@ function toolsFor(rows: MessageRow[], options: ToolOptions) {
   return toolDefinitions({ ...options, domains: loadedDomains(calls) });
 }
 
+function trailingSteers(rows: MessageRow[]) {
+  const kept = rows.filter((row) => row.steering !== "waiting");
+  let count = 0;
+  for (let index = kept.length - 1; index >= 0 && kept[index].role === "user" && kept[index].steering === "folded"; index -= 1) count += 1;
+  return count;
+}
+
 async function runCompanionTurn(
   actor: UserActor,
   conversation: ConversationRow,
@@ -818,13 +990,15 @@ async function runCompanionTurn(
   signal?: AbortSignal,
   headless?: HeadlessTurn,
   fetchImpl?: typeof fetch,
+  detach?: boolean,
 ) {
   const online = (await companionOnline(actor)) || (await companionWorking(actor));
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
+  const folded = new Set(rows.filter((row) => row.steering === "folded").map((row) => row.id));
   const prompt = await promptFor(actor, conversation, { headless: Boolean(headless), fetchImpl });
-  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, await savedContext(actor, conversation, rows, prompt)));
+  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, await savedContext(actor, conversation, rows, prompt)), trailingSteers(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
@@ -837,6 +1011,7 @@ async function runCompanionTurn(
     headless.queued?.({ jobId, online });
     return;
   }
+  if (detach) return;
   const show = (row: MessageRow) => {
     emit({ type: "message", message: display(row) });
     if ((row.actions ?? []).length > 0) emit({ type: "actions", messageId: row.id, actions: row.actions ?? [] });
@@ -862,7 +1037,10 @@ async function runCompanionTurn(
       if (!job.result) continue;
       const ids = new Set(job.result.messageIds);
       const saved = await withActor(actor, (db) => readMessages(db, conversation.id));
-      for (const row of saved.filter((entry) => ids.has(entry.id))) show(row);
+      for (const row of saved) {
+        if (ids.has(row.id)) show(row);
+        else if (row.steering === "folded" && !folded.has(row.id)) emit({ type: "steered", ids: [row.id] });
+      }
       return;
     }
     if (job.status === "failed" || job.status === "cancelled") {
@@ -885,7 +1063,7 @@ async function runCompanionTurn(
 
 export type HeadlessTurn = { agentMailId: string; queued?: (job: { jobId: string; online: boolean }) => void };
 
-type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn };
+type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn; detach?: boolean; runner?: string };
 
 export const HEADLESS_MODEL_ERROR = "Email jobs only run on Orbit Agent, so they need a Claude account model.";
 
@@ -893,7 +1071,7 @@ async function turnMarker(actor: UserActor, conversationId: string) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ stopped_at: Date | null; last_user: string | null }>(
       `select c.stopped_at,
-         (select m.id from crm.assistant_messages m where m.conversation_id = c.id and m.role = 'user' order by m.seq desc limit 1) as last_user
+         (select m.id from crm.assistant_messages m where m.conversation_id = c.id and m.role = 'user' and m.steering is null order by m.seq desc limit 1) as last_user
        from crm.assistant_conversations c where c.id = $1`,
       [conversationId],
     );
@@ -936,6 +1114,7 @@ export async function stopConversation(actor: UserActor, id: string) {
       "update crm.ai_companion_jobs set status = 'cancelled', finished_at = now() where conversation_id = $1 and agent_mail_id is not null and status in ('queued', 'running')",
       [id],
     );
+    await moveWaiting(db, id, null);
   });
 }
 
@@ -956,14 +1135,16 @@ async function runLoop(actor: UserActor, conversation: ConversationRow, emit: Em
   const signal = options.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal;
   try {
     await runRounds(actor, conversation, emit, { ...options, signal });
+    return !signal.aborted;
   } catch (error) {
     if (!(error instanceof AssistantError)) throw error;
-    if (error instanceof StoppedError || signal.aborted) return;
+    if (error instanceof StoppedError || signal.aborted) return false;
     const failed = await insertMessage(actor, conversation.id, {
       role: "assistant",
       content: failureReply(error.message),
     });
     emit({ type: "message", message: display(failed) });
+    return true;
   } finally {
     if (watch) clearInterval(watch);
   }
@@ -984,7 +1165,17 @@ function draftEmitter(emit: Emit) {
 async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
-  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, fetchImpl);
+  const pickUp = async () => {
+    if (options.headless || !options.runner) return true;
+    const ids = await takeWaiting(actor, conversation.id, "folded", { runner: options.runner });
+    if (!ids) return false;
+    if (ids.length > 0) emit({ type: "steered", ids });
+    return true;
+  };
+  if (chosen?.source === "claude") {
+    if (!(await pickUp())) return;
+    return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, fetchImpl, options.detach);
+  }
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
   const prompt = await promptFor(actor, conversation, { fetchImpl });
   const { system, tools: toolOptions } = prompt;
@@ -992,10 +1183,6 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   let continuedAfterCut = false;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
-    const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
-    const tools = toolsFor(rows, toolOptions);
-    const fence = turnFence(rows, conversation.id);
-    const context = await savedContext(actor, conversation, rows, prompt);
     const remaining = deadline - Date.now();
     if (remaining < 15_000) {
       const paused = await insertMessage(actor, conversation.id, {
@@ -1005,6 +1192,11 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       emit({ type: "message", message: display(paused) });
       return;
     }
+    if (!(await pickUp())) return;
+    const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
+    const tools = toolsFor(rows, toolOptions);
+    const fence = turnFence(rows, conversation.id);
+    const context = await savedContext(actor, conversation, rows, prompt);
     const messages = history(rows, HISTORY_BUDGET, context);
     if (round > 0 && messages.reduce((sum, message) => sum + weight(message), 0) > HISTORY_BUDGET) {
       const full = await insertMessage(actor, conversation.id, { role: "assistant", content: FULL_MESSAGE });
@@ -1068,6 +1260,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
         const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches });
+        if (signal?.aborted) return;
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
@@ -1143,7 +1336,18 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
 
 export async function sendMessage(
   actor: UserActor,
-  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean; page?: unknown },
+  input: {
+    conversationId?: string | null;
+    message: string;
+    model: unknown;
+    reasoning: unknown;
+    webSearch: unknown;
+    files?: unknown;
+    title?: string;
+    keepPending?: boolean;
+    page?: unknown;
+    steer?: boolean;
+  },
   emit: Emit,
   options: TurnOptions,
 ) {
@@ -1154,6 +1358,17 @@ export async function sendMessage(
     throw new AssistantError(
       `That message is ${message.length.toLocaleString("en-GB")} characters. The limit is ${MESSAGE_MAX.toLocaleString("en-GB")}. Cut ${(message.length - MESSAGE_MAX).toLocaleString("en-GB")} characters and send it again.`,
     );
+  }
+  if (input.steer && input.conversationId && !options.headless) {
+    const conversation = await withActor(actor, (db) => readConversation(db, actor, input.conversationId!));
+    emit({ type: "conversation", conversation: summary(conversation) });
+    const page = await readPage(actor, input.page);
+    const stopped = await stoppedTurn(actor, conversation);
+    const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page, steering: stopped ? null : "waiting" });
+    emit({ type: "user", message: display(user) });
+    if (!stopped) await runTurns(actor, conversation, emit, options, "steers");
+    emit({ type: "done" });
+    return;
   }
   const settings = settingsFor(input.model, input.reasoning);
   const picked = assistantModel(settings.model);
@@ -1178,14 +1393,81 @@ export async function sendMessage(
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   await settleStuckActions(actor, conversation.id, rows);
   if (!input.keepPending) await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
-  const page = await pageContext(actor, readPageInput(input.page)).catch((error) => {
+  const page = await readPage(actor, input.page);
+  if (!options.headless) {
+    const earlier = (await takeWaiting(actor, conversation.id, null)) ?? [];
+    if (earlier.length > 0) emit({ type: "steered", ids: earlier });
+  }
+  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page });
+  emit({ type: "user", message: display(user) });
+  await runTurns(actor, conversation, emit, options, "turn");
+  emit({ type: "done" });
+}
+
+async function readPage(actor: UserActor, page: unknown) {
+  return pageContext(actor, readPageInput(page)).catch((error) => {
     console.error("Couldn't read the page context", error instanceof Error ? error.message : error);
     return "";
   });
-  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page });
-  emit({ type: "user", message: display(user) });
-  await runLoop(actor, conversation, emit, options);
+}
+
+export async function resumeConversation(actor: UserActor, conversationId: string, emit: Emit, options: TurnOptions) {
+  const conversation = await withActor(actor, (db) => readConversation(db, actor, conversationId));
+  emit({ type: "conversation", conversation: summary(conversation) });
+  const ran = await runTurns(actor, conversation, emit, options, "steers");
+  if (!ran && (await steersReady(actor, conversationId))) emit({ type: "waiting", message: "Still working." });
   emit({ type: "done" });
+}
+
+async function stoppedTurn(actor: UserActor, conversation: ConversationRow) {
+  if (!conversation.stopped_at) return false;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ stopped: boolean }>(
+      `select coalesce(max(created_at) <= $2, false) as stopped from crm.assistant_messages
+       where conversation_id = $1 and role = 'user' and steering is null`,
+      [conversation.id, new Date(conversation.stopped_at!)],
+    );
+    return result.rows[0]?.stopped === true;
+  });
+}
+
+async function answerWaiting(actor: UserActor, conversationId: string, deadline: number, onlyClaude: boolean, fetchImpl?: typeof fetch) {
+  const conversation = await withActor(actor, (db) => readConversation(db, actor, conversationId));
+  const claude = assistantModel(conversation.model)?.source === "claude";
+  if ((onlyClaude && !claude) || conversation.email) return false;
+  if (!(await steersReady(actor, conversationId))) return false;
+  return runTurns(actor, conversation, () => undefined, { deadline, detach: claude, fetchImpl }, "steers");
+}
+
+const SWEEP_TURN_MS = 240_000;
+const SWEEP_START_MS = 90_000;
+
+export async function sweepWaitingSteers(until: number, options: { fetchImpl?: typeof fetch } = {}) {
+  const found = await query<{ conversation_id: string; workspace_id: string; user_id: string }>("select * from private.assistant_waiting_conversations($1)", [10]);
+  let answered = 0;
+  for (const row of found.rows) {
+    if (until - Date.now() < SWEEP_START_MS) break;
+    const actor = await actorFor(row.user_id, row.workspace_id).catch(() => null);
+    if (!actor) continue;
+    const ran = await answerWaiting(actor, row.conversation_id, Math.min(until, Date.now() + SWEEP_TURN_MS), false, options.fetchImpl).catch((error) => {
+      console.error("Couldn't answer messages left waiting", error instanceof Error ? error.message : error);
+      return false;
+    });
+    if (ran) answered += 1;
+  }
+  return answered;
+}
+
+export function continueSteersLater(actor: UserActor, conversationId: string) {
+  const work = async () => {
+    await answerWaiting(actor, conversationId, Date.now() + DETACHED_MS, true);
+  };
+  const guarded = () => work().catch((error) => console.error("Couldn't answer the messages sent while Orbit Agent was working", error instanceof Error ? error.message : error));
+  try {
+    after(guarded);
+  } catch {
+    void guarded();
+  }
 }
 
 export type ActionDecision = { id: string; approve: boolean; variant?: "send" };
@@ -1216,56 +1498,64 @@ export async function decideActions(
     strict: true,
     extra: { startedAt: new Date().toISOString() },
   });
-  let actions = claim.actions;
-  emit({ type: "actions", messageId: owner.id, actions });
-  const update = async (id: string, patch: Partial<AssistantAction>) => {
-    actions = await patchAction(actor, owner.id, id, patch);
+  const runner = options.headless ? undefined : randomUUID();
+  if (runner) await claimTurn(actor, conversation.id, runner, options.deadline + LEASE_SLACK_MS, true);
+  let handed = false;
+  try {
+    let actions = claim.actions;
     emit({ type: "actions", messageId: owner.id, actions });
-  };
-  for (const action of claim.claimed) {
-    const call = callFor(action.id);
-    if (!runs(action) || !call) {
+    const update = async (id: string, patch: Partial<AssistantAction>) => {
+      actions = await patchAction(actor, owner.id, id, patch);
+      emit({ type: "actions", messageId: owner.id, actions });
+    };
+    for (const action of claim.claimed) {
+      const call = callFor(action.id);
+      if (!runs(action) || !call) {
+        await insertMessage(actor, conversation.id, {
+          role: "tool",
+          content: toolJson({ declined: true, message: "The user declined this action." }),
+          toolCallId: action.id,
+          toolName: action.name,
+        });
+        continue;
+      }
+      const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
+      const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
+      const callArgs = parseArgs(call.function.arguments);
+      const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, chosenAlternative ? chosenAlternative.args(callArgs) : callArgs, {
+        deadline: options.deadline - 20_000,
+        callId: call.id,
+        approval: action.name === "save_doc" ? approvalFor(action) : undefined,
+        source: options.headless ? "email" : undefined,
+        fence,
+      })) as Record<string, unknown> | null;
+      const failed = Boolean(output && typeof output === "object" && "error" in output);
       await insertMessage(actor, conversation.id, {
         role: "tool",
-        content: toolJson({ declined: true, message: "The user declined this action." }),
+        content: toolJson({
+          approved,
+          ...(output && typeof output === "object" && !Array.isArray(output) ? output : { result: output }),
+          ...(chosenAlternative ? { note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` } : {}),
+        }),
         toolCallId: action.id,
         toolName: action.name,
       });
-      continue;
+      await update(action.id, {
+        status: failed ? "failed" : "done",
+        result: failed ? String((output as { error: unknown }).error) : null,
+        ...(chosenAlternative && !failed ? { chose: chosenAlternative.key, title: chosenAlternative.title(action.title), lines: chosenAlternative.lines(action.lines) } : {}),
+      });
     }
-    const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
-    const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
-    const callArgs = parseArgs(call.function.arguments);
-    const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, chosenAlternative ? chosenAlternative.args(callArgs) : callArgs, {
-      deadline: options.deadline - 20_000,
-      callId: call.id,
-      approval: action.name === "save_doc" ? approvalFor(action) : undefined,
-      source: options.headless ? "email" : undefined,
-      fence,
-    })) as Record<string, unknown> | null;
-    const failed = Boolean(output && typeof output === "object" && "error" in output);
-    await insertMessage(actor, conversation.id, {
-      role: "tool",
-      content: toolJson({
-        approved,
-        ...(output && typeof output === "object" && !Array.isArray(output) ? output : { result: output }),
-        ...(chosenAlternative ? { note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` } : {}),
-      }),
-      toolCallId: action.id,
-      toolName: action.name,
-    });
-    await update(action.id, {
-      status: failed ? "failed" : "done",
-      result: failed ? String((output as { error: unknown }).error) : null,
-      ...(chosenAlternative && !failed ? { chose: chosenAlternative.key, title: chosenAlternative.title(action.title), lines: chosenAlternative.lines(action.lines) } : {}),
-    });
-  }
-  if (actions.some((entry) => entry.status === "pending")) {
+    if (actions.some((entry) => entry.status === "pending")) {
+      emit({ type: "done" });
+      return;
+    }
+    handed = true;
+    await runTurns(actor, conversation, emit, options, "turn", runner);
     emit({ type: "done" });
-    return;
+  } finally {
+    if (runner && !handed) await releaseTurn(actor, conversation.id, runner).catch(() => undefined);
   }
-  await runLoop(actor, conversation, emit, options);
-  emit({ type: "done" });
 }
 
 export function readDecisions(body: Record<string, unknown>): ActionDecision[] | null {

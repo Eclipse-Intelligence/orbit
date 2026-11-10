@@ -58,6 +58,7 @@ async function expireStale(db: Db, actor: UserActor) {
     [actor.userId],
   );
   await closeJobs(db, actor, expired.rows.map((row) => row.conversation_id), EXPIRED_MESSAGE);
+  answerLater(actor, expired.rows.map((row) => row.conversation_id));
   const lost = await db.query<{ conversation_id: string }>(
     `update crm.ai_companion_jobs j set status = 'cancelled', finished_at = now()
      where j.user_id = $1 and j.status = 'running'
@@ -66,6 +67,16 @@ async function expireStale(db: Db, actor: UserActor) {
     [actor.userId],
   );
   await closeJobs(db, actor, lost.rows.map((row) => row.conversation_id), LOST_MESSAGE);
+  answerLater(actor, lost.rows.map((row) => row.conversation_id));
+}
+
+function answerLater(actor: UserActor, conversationIds: string[]) {
+  if (conversationIds.length === 0) return;
+  void import("@/lib/assistant/chat")
+    .then(({ continueSteersLater }) => {
+      for (const conversationId of new Set(conversationIds)) continueSteersLater(actor, conversationId);
+    })
+    .catch(() => undefined);
 }
 
 async function pruneFinished(actor: UserActor) {
@@ -226,8 +237,8 @@ export async function nextCompanionJob(auth: AuthenticatedCompanion, waitMs: num
 async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
   if (!isUuid(jobId)) throw new CrmError("not_found", "That request is gone.", 404);
   const job = await withActor(auth.actor, async (db) => {
-    const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string; switches: JobSwitches | null }>(
-      "select status, companion_id, conversation_id, request -> 'switches' as switches from crm.ai_companion_jobs where id = $1 and user_id = $2",
+    const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string; switches: JobSwitches | null; email: boolean }>(
+      "select status, companion_id, conversation_id, request -> 'switches' as switches, agent_mail_id is not null as email from crm.ai_companion_jobs where id = $1 and user_id = $2",
       [jobId, auth.actor.userId],
     );
     return result.rows[0];
@@ -235,6 +246,11 @@ async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
   if (!job || job.companion_id !== auth.companionId) throw new CrmError("not_found", "That request is gone.", 404);
   if (job.status !== "running") throw new CrmError("conflict", "That request was cancelled.", 409);
   return job;
+}
+
+export async function companionJobConversation(auth: AuthenticatedCompanion, jobId: string) {
+  const job = await runningJob(auth, jobId);
+  return { conversationId: job.conversation_id, email: job.email };
 }
 
 async function addEvent(auth: AuthenticatedCompanion, jobId: string, event: ToolEvent) {
@@ -405,6 +421,7 @@ export async function finishCompanionJob(
     await withActor(auth.actor, (db) =>
       db.query("update crm.ai_companion_jobs set result = $2::jsonb where id = $1", [jobId, JSON.stringify({ messageIds })]),
     );
+    return conversationId;
   } catch (error) {
     await withActor(auth.actor, async (db) => {
       await db.query("update crm.ai_companion_jobs set status = 'failed', error = $2 where id = $1", [jobId, "Orbit couldn't save the answer."]);
@@ -417,12 +434,13 @@ export async function finishCompanionJob(
 export async function failCompanionJob(auth: AuthenticatedCompanion, jobId: string, error: unknown) {
   await runningJob(auth, jobId);
   const message = typeof error === "string" && error.trim() ? error.trim().slice(0, 1_000) : "Orbit Agent couldn't answer.";
-  await withActor(auth.actor, async (db) => {
+  return withActor(auth.actor, async (db) => {
     const failed = await db.query<{ conversation_id: string }>(
       "update crm.ai_companion_jobs set status = 'failed', error = $2, finished_at = now(), results = '{}'::jsonb where id = $1 and status = 'running' returning conversation_id",
       [jobId, message],
     );
     await closeJobs(db, auth.actor, failed.rows.map((row) => row.conversation_id), failureReply(message));
+    return failed.rows[0]?.conversation_id ?? null;
   });
 }
 
@@ -450,11 +468,18 @@ export function readCompanionResult(body: unknown): CompanionResult {
       ? [{ url: source.url, title: typeof source.title === "string" ? source.title : null }]
       : [];
   });
+  const steered = (Array.isArray(input.steered) ? input.steered : []).slice(0, 50).flatMap((raw) => {
+    const entry = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    return typeof entry.id === "string" && isUuid(entry.id) && typeof entry.step === "number" && Number.isInteger(entry.step) && entry.step >= 0
+      ? [{ id: entry.id, step: entry.step }]
+      : [];
+  });
   return {
     steps,
     results,
     sources,
     model: typeof input.model === "string" ? input.model : null,
     usage: input.usage && typeof input.usage === "object" ? (input.usage as Record<string, unknown>) : null,
+    ...(steered.length > 0 ? { steered } : {}),
   };
 }
