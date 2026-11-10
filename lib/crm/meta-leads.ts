@@ -11,7 +11,7 @@ import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail, isSharedHost, normalizeCompanyName, normalizeTag, TAG_LIMIT } from "@/lib/crm/normalize";
 import { alertLink, workspaceActors } from "@/lib/crm/workspaces";
-import type { Company, Contact, ContactWrite, Provenance, UserActor, WorkspaceRole } from "@/lib/crm/types";
+import type { Activity, Company, Contact, ContactWrite, Provenance, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import {
   cut,
@@ -46,6 +46,7 @@ const FIRST_LOOK_BACK_MS = 24 * 60 * 60 * 1000;
 const STEP_RESERVE_MS = 1_500;
 const ALERT_RESERVE_MS = 3_000;
 const PAGE_RESERVE_MS = 3_000;
+const RESUME_MAX_MS = 60 * 60 * 1000;
 const RETRY_SHARE = 0.4;
 const MAX_VALUE = 1000;
 const MAX_ANSWERS = 100;
@@ -126,8 +127,8 @@ type FiledLead = {
 };
 
 function errorType(error: unknown) {
-  if (isPgError(error)) return `pg ${error.code}`;
   if (error instanceof CrmError) return `crm ${error.code}`;
+  if (isPgError(error)) return `pg ${error.code}`;
   if (error instanceof Error) return error.name;
   return typeof error;
 }
@@ -243,6 +244,8 @@ function firstPhone(values: string[]) {
   const value = values.find((item) => /^\+?[\d\s().-]{6,40}$/.test(item) && item.replace(/\D/g, "").length >= 6);
   return value ? clip(value, 40) : null;
 }
+
+const EMPTY_PERSON = { firstName: null, lastName: null, email: null, phone: null, jobTitle: null, companyName: null, city: null };
 
 type LeadPerson = {
   firstName: string | null;
@@ -497,6 +500,16 @@ async function save(leadgenId: string, input: { pageId: string | null; formId: s
   return result.rows[0] ?? null;
 }
 
+async function saveLead(lead: MetaLead, input: { pageId: string | null; formId: string | null; adId: string | null; via: Via; formName: string | null }) {
+  const fields = { pageId: input.pageId, formId: input.formId, adId: input.adId, via: input.via, lead: normaliseLead(lead, input.formName) };
+  try {
+    return await save(lead.id, { ...fields, payload: { lead: rawLead(lead) } });
+  } catch (error) {
+    logFailure("Meta lead saved without its raw copy", lead.id, error);
+    return save(lead.id, { ...fields, payload: { lead: { id: String(lead.id), truncated: true } } });
+  }
+}
+
 async function markFailed(id: string, message: string) {
   await query("select private.meta_lead_failed($1, $2)", [id, cut(message, 500)]).catch((error) => logFailure("Meta lead failure not saved", id, error));
 }
@@ -547,8 +560,7 @@ async function processLead(pending: Pending, forms: Map<string, string | null>, 
       return null;
     }
     const formId = metaId(lead.form_id) ?? pending.formId;
-    const normalised = normaliseLead(lead, await formName(formId, forms, options));
-    const row = await save(pending.leadgenId, { pageId: pending.pageId, formId, adId: metaId(lead.ad_id) ?? pending.adId, via: pending.via, lead: normalised, payload: { lead: rawLead(lead) } });
+    const row = await saveLead({ ...lead, id: pending.leadgenId }, { pageId: pending.pageId, formId, adId: metaId(lead.ad_id) ?? pending.adId, via: pending.via, formName: await formName(formId, forms, options) });
     if (!row || row.filed) return null;
     workspaceId = row.workspace_id;
     linkedBy = row.linked_by;
@@ -600,7 +612,10 @@ async function fileAndAlert(leadId: string, workspaceId: string, linkedBy: strin
 async function notifyFiled(leadId: string, workspaceId: string, linkedBy: string | null, options: MetaLeadOptions) {
   const members = await workspaceMembers(workspaceId);
   const actor = filingActor(members, linkedBy);
-  if (!actor) return;
+  if (!actor) {
+    await markFailed(leadId, "Nobody in the workspace can take the lead.");
+    return;
+  }
   const filed = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string; leadgen_id: string; contact_id: string | null; company_id: string | null; activity_id: string | null; campaign_name: string | null; form_name: string | null; contact_name: string | null; company_name: string | null }>(
       `select l.id, l.leadgen_id, l.contact_id, l.company_id, l.activity_id, l.campaign_name, l.form_name,
@@ -613,7 +628,10 @@ async function notifyFiled(leadId: string, workspaceId: string, linkedBy: string
     );
     return result.rows[0] ?? null;
   });
-  if (!filed) return;
+  if (!filed) {
+    await markFailed(leadId, "Couldn't find the lead to tell people about it.");
+    return;
+  }
   await alertNewLead(
     {
       leadId: filed.id,
@@ -777,32 +795,39 @@ async function fileMetaLead(actor: UserActor, leadId: string): Promise<FiledLead
       () => matchContact(db, actor, person, companyId, row.leadgen_id),
       () => matchContact(db, actor, { ...person, phone: null, jobTitle: null, city: null }, companyId, row.leadgen_id),
       () => matchContact(db, actor, { ...person, phone: null, jobTitle: null, city: null }, null, row.leadgen_id),
+      () => matchContact(db, actor, { ...EMPTY_PERSON, email: person.email }, null, row.leadgen_id),
     ]);
     let activityId: string | null = null;
     if (contact.contact || company.company) {
-      const activity = await createActivityInDb(
-        db,
-        actor,
-        {
-          type: "note",
-          title: cut(`Meta lead: ${row.form_name ?? "Lead form"}`, 200),
-          body: activityBody(row, answers) || "No answers.",
-          occurredAt: row.lead_created_at ? new Date(row.lead_created_at).toISOString() : undefined,
-          contactId: contact.contact?.id ?? null,
-          companyId: companyId ?? contact.contact?.companyId ?? null,
-          metadata: {
-            source: "meta_lead_ad",
-            metaLeadId: row.id,
-            leadgenId: row.leadgen_id,
-            pageId: row.page_id,
-            formId: row.form_id,
-            adId: row.ad_id,
-            adsetId: row.adset_id,
-            campaignId: row.campaign_id,
+      const note = (title: string, body: string) =>
+        createActivityInDb(
+          db,
+          actor,
+          {
+            type: "note",
+            title,
+            body,
+            occurredAt: row.lead_created_at ? new Date(row.lead_created_at).toISOString() : undefined,
+            contactId: contact.contact?.id ?? null,
+            companyId: companyId ?? contact.contact?.companyId ?? null,
+            metadata: {
+              source: "meta_lead_ad",
+              metaLeadId: row.id,
+              leadgenId: row.leadgen_id,
+              pageId: row.page_id,
+              formId: row.form_id,
+              adId: row.ad_id,
+              adsetId: row.adset_id,
+              campaignId: row.campaign_id,
+            },
           },
-        },
-        PROVENANCE,
-      );
+          PROVENANCE,
+        );
+      const activity = await degrade<Activity | null>(db, "meta_note", row.id, null, [
+        () => note(cut(`Meta lead: ${row.form_name ?? "Lead form"}`, 200), activityBody(row, answers) || "No answers."),
+        () => note("Meta lead", cut(activityBody(row, answers), 2_000) || "No answers."),
+      ]);
+      if (!activity) throw new CrmError("invalid_input", "Couldn't save the lead's note.", 400);
       activityId = activity.id;
       await recordAudit(db, actor, "lead.created", "lead", contact.contact?.id ?? companyId!, PROVENANCE, {
         companyId,
@@ -890,11 +915,12 @@ async function alertHeld(pageId: string, options: RunContext) {
   try {
     const owners = await query<MemberRow>("select * from private.meta_lead_alert_owners()");
     const day = new Date().toISOString().slice(0, 10);
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       owners.rows.map((owner) =>
         alert(memberActor(owner), { key: `meta-unlinked:${pageId}:${day}`, title: "Lead from a Page that isn't linked", body: `Page ${pageId}`, href: META_SETTINGS_HREF }, options),
       ),
     );
+    for (const result of results) if (result.status === "rejected") logFailure("Meta held lead alert failed", pageId, result.reason);
   } catch (error) {
     logFailure("Meta held lead alert failed", pageId, error);
   }
@@ -960,7 +986,7 @@ type PageRun = { imported: number; skipped: number; complete: boolean; errors: s
 async function backupLead(page: DuePage, formId: string, formName: string | null, lead: MetaLead, options: RunContext) {
   let row: SavedRow | null;
   try {
-    row = await save(lead.id, { pageId: page.page_id, formId, adId: metaId(lead.ad_id), via: "backup", lead: normaliseLead(lead, formName), payload: { lead: rawLead(lead) } });
+    row = await saveLead(lead, { pageId: page.page_id, formId, adId: metaId(lead.ad_id), via: "backup", formName });
   } catch (error) {
     logFailure("Meta lead not saved", lead.id, error);
     const stub = (await receive([{ leadgenId: lead.id, pageId: page.page_id, formId, adId: metaId(lead.ad_id), raw: {} }], "backup"))[0];
@@ -979,7 +1005,7 @@ function outOfTime(deadline: number | undefined) {
 
 async function backupForm(page: DuePage, form: { id: string; name: string | null }, cursor: FormCursor | undefined, floor: number, run: PageRun, options: RunContext) {
   const base = { fetchImpl: options.fetchImpl, deadline: options.deadline };
-  const resuming = Boolean(cursor?.list_after && cursor.list_since && cursor.list_started_at);
+  const resuming = Boolean(cursor?.list_after && cursor.list_since && cursor.list_started_at && Date.now() - new Date(cursor.list_started_at).getTime() < RESUME_MAX_MS);
   const listStarted = resuming ? new Date(cursor!.list_started_at!) : new Date();
   const fromCursor = cursor?.last_run_at ? new Date(cursor.last_run_at).getTime() - OVERLAP_MS : floor;
   const since = resuming ? new Date(cursor!.list_since!) : new Date(Math.max(fromCursor, floor));
@@ -1131,7 +1157,7 @@ export async function getMetaLeadSettings(actor: UserActor, origin: string): Pro
       );
       return result.rows;
     }),
-    actor.role === "owner"
+    canAdmin
       ? query<{ page_id: string; leads: number; last_at: Date | null; linked_workspace_id: string | null }>("select * from private.meta_held_pages($1)", [actor.userId]).then((result) => result.rows)
       : Promise.resolve([]),
   ]);

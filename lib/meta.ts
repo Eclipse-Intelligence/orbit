@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { ShownError } from "@/lib/crm/errors";
-import { logUpstream, redactSecrets, unreachable, upstreamMessage } from "@/lib/upstream";
+import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 
 const META_GRAPH_VERSION = "v27.0";
 const GRAPH_ORIGIN = "https://graph.facebook.com";
@@ -58,7 +58,9 @@ export class MetaError extends ShownError {
 export function cut(value: string, max: number) {
   const whole = value.toWellFormed();
   if (whole.length <= max) return whole;
-  return Array.from(whole).slice(0, max).join("");
+  const head = whole.slice(0, Math.max(0, max));
+  const last = head.charCodeAt(head.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? head.slice(0, -1) : head;
 }
 
 function env(name: string) {
@@ -134,7 +136,9 @@ function graphFailure(status: number, body: unknown, token: string | null) {
   logUpstream(
     "Meta",
     status,
-    error ? { code, subcode: error.error_subcode ?? null, type: error.type ?? null, message: error.message ?? null, trace: error.fbtrace_id ?? null } : body,
+    error
+      ? { code, subcode: error.error_subcode ?? null, type: error.type ?? null, message: error.message ?? null, trace: error.fbtrace_id ?? null }
+      : { body: typeof body === "string" ? "unreadable" : body === null ? "empty" : "unexpected", length: typeof body === "string" ? body.length : null },
     [token, env("META_APP_SECRET")],
   );
   let effective = status;
@@ -167,7 +171,7 @@ async function graphGet<T>(url: URL, options: MetaOptions): Promise<T> {
   try {
     body = text ? JSON.parse(text) : null;
   } catch {
-    body = redactSecrets(cut(text, 300), [token]);
+    body = text;
   }
   if (!response.ok || (body && typeof body === "object" && "error" in body)) {
     throw graphFailure(response.ok ? 400 : response.status, body, token);
@@ -258,10 +262,12 @@ export async function listMetaLeadsPage(formId: string, since: Date, after: stri
     const id = metaId(lead.id);
     if (id) leads.push({ ...lead, id });
   }
-  const next = typeof body.paging?.next === "string" ? nextUrl(body.paging.next) : null;
+  const nextText = typeof body.paging?.next === "string" ? body.paging.next : null;
+  const next = nextText ? nextUrl(nextText) : null;
   const cursor = typeof body.paging?.cursors?.after === "string" ? body.paging.cursors.after : null;
   const following = next ? (next.searchParams.get("after") ?? cursor) : null;
-  return { leads, after: following && following.length <= 2000 ? following : null };
+  if (nextText && (!following || following.length > 2000)) throw new MetaError("Meta returned an error.", 502);
+  return { leads, after: following };
 }
 
 export function metaId(value: unknown) {

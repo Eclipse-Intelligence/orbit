@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, beforeEach, describe, it } from "node:test";
+import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { GET, POST } from "@/app/api/webhooks/meta-leads/route";
 import { applyCompanionResult, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { pageContext } from "@/lib/assistant/page-context";
@@ -16,6 +16,7 @@ import {
   isoTime,
   leadPerson,
   linkMetaPage,
+  metaLeadWorkDue,
   parseMetaWebhook,
   rawLead,
   readAnswers,
@@ -52,20 +53,35 @@ type GraphState = {
   pageSize?: number;
 };
 
+function abortable(ms: number, signal: AbortSignal | null | undefined) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("The operation was aborted.", "AbortError"));
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    });
+  });
+}
+
 function graph(state: GraphState) {
   const calls: URL[] = [];
+  const violations: string[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     calls.push(url);
-    assert.equal(url.origin, "https://graph.facebook.com");
-    assert.equal(new Headers(init?.headers).get("authorization")?.startsWith("Bearer "), true);
-    assert.equal(url.searchParams.has("access_token"), false);
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    const [version, id, edge] = url.pathname.split("/").filter(Boolean);
+    if (url.origin !== "https://graph.facebook.com") violations.push(`origin ${url.origin}`);
+    if (!auth.startsWith("Bearer ")) violations.push(`no bearer on ${url.pathname}`);
+    if (url.searchParams.has("access_token")) violations.push(`token in URL ${url.pathname}`);
+    if (version !== "v27.0") violations.push(`version ${version}`);
+    if ((edge === "leadgen_forms" || edge === "leads") && auth !== "Bearer page-token") violations.push(`system token on ${url.pathname}`);
+    if ((!edge || edge === undefined) && /^\d{10}$/.test(id) && auth !== `Bearer ${TOKEN}`) violations.push(`page token on ${url.pathname}`);
     const wait = state.delay?.(url) ?? 0;
-    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    if (wait) await abortable(wait, init?.signal);
     const failure = state.fail?.(url);
     if (failure) return failure;
-    const [version, id, edge] = url.pathname.split("/").filter(Boolean);
-    assert.equal(version, "v27.0");
     if (!edge) {
       const lead = state.leads.get(id);
       if (lead) return Response.json(lead);
@@ -80,7 +96,9 @@ function graph(state: GraphState) {
     if (edge === "leads") {
       const all = [...state.leads.values()].filter((lead) => lead.form_id === id);
       if (!state.pageSize) return Response.json({ data: all });
-      const start = Number(url.searchParams.get("after") ?? 0);
+      const after = url.searchParams.get("after");
+      if (after !== null && !/^\d+$/.test(after)) return Response.json({ error: { message: "Invalid cursor", code: 100 } }, { status: 400 });
+      const start = Number(after ?? 0);
       const data = all.slice(start, start + state.pageSize);
       const more = start + state.pageSize < all.length;
       const next = new URL(url);
@@ -89,7 +107,7 @@ function graph(state: GraphState) {
     }
     return Response.json({ error: { message: "Unknown path", code: 100 } }, { status: 400 });
   };
-  return { fetchImpl, calls };
+  return { fetchImpl, calls, violations };
 }
 
 function lead(id: string, answers: Record<string, string | string[]>, extra: Record<string, unknown> = {}): FakeLead {
@@ -261,6 +279,10 @@ describe("Meta lead ads", () => {
     );
   });
 
+  afterEach(() => {
+    assert.deepEqual(fake.violations, []);
+  });
+
   after(async () => {
     globalThis.fetch = realFetch;
     for (const name of ENV_NAMES) {
@@ -350,6 +372,8 @@ describe("Meta lead ads", () => {
     });
 
     it("rate limits one address", async () => {
+      const intoMinute = (Date.now() / 1000) % 60;
+      if (intoMinute > 50) await new Promise((resolve) => setTimeout(resolve, Math.ceil((61 - intoMinute) * 1000)));
       const ip = `198.51.100.${Math.floor(Math.random() * 200) + 1}`;
       let limited = 0;
       for (let index = 0; index < 302; index += 1) {
@@ -418,15 +442,17 @@ describe("Meta lead ads", () => {
       assert.deepEqual([others.email, others.phone], [null, "07700 900111"]);
     });
 
-    it("cuts text by whole characters, even at an emoji, and repairs broken ones", () => {
+    it("cuts text to the validators' length without splitting an emoji, and repairs broken ones", () => {
       const answers = readAnswers([
-        { name: "q", values: [`${"a".repeat(999)}😀tail`] },
+        { name: "q", values: [`${"a".repeat(998)}😀tail`] },
         { name: `${"n".repeat(199)}😀`, values: ["x"] },
         { name: "broken", values: ["ok\ud800here"] },
+        { name: "split", values: [`${"a".repeat(999)}😀`] },
       ]);
-      assert.equal(answers[0].values[0], `${"a".repeat(999)}😀`);
-      assert.equal([...answers[0].values[0]].length, 1000);
-      assert.equal(answers[1].name, `${"n".repeat(199)}😀`);
+      assert.equal(answers[0].values[0], `${"a".repeat(998)}😀`);
+      assert.equal(answers[0].values[0].length, 1000);
+      assert.equal(answers[1].name, "n".repeat(199));
+      assert.equal(answers[3].values[0], "a".repeat(999));
       assert.equal(answers[2].values[0], "ok�here");
       assert.doesNotThrow(() => JSON.parse(JSON.stringify(answers)));
       assert.ok(answers.every((answer) => answer.values.every((value) => value.isWellFormed())));
@@ -455,8 +481,7 @@ describe("Meta lead ads", () => {
       };
       const first = await listMetaLeadsPage("6666", new Date(0), null, { fetchImpl, token: TOKEN });
       assert.deepEqual([first.leads.map((item) => item.id), first.after], [["1"], "two"]);
-      const second = await listMetaLeadsPage("6666", new Date(0), first.after, { fetchImpl, token: TOKEN });
-      assert.deepEqual([second.leads.map((item) => item.id), second.after], [["2"], null]);
+      await assert.rejects(() => listMetaLeadsPage("6666", new Date(0), first.after, { fetchImpl, token: TOKEN }), /Meta returned an error/);
       assert.ok(seen.every((url) => url.startsWith(`${GRAPH}/`) && !url.includes("access_token")));
     });
 
@@ -659,16 +684,17 @@ describe("Meta lead ads", () => {
         lead("100034", {
           full_name: `${"N".repeat(79)}😀 Emoji`,
           email: "emoji@cut.example",
-          [`${"q".repeat(199)}😀`]: `${"a".repeat(999)}😀tail`,
+          [`${"q".repeat(198)}😀`]: `${"a".repeat(998)}😀tail`,
           broken: "ok\ud800here",
-        }, { ad_name: `${"b".repeat(299)}😀` }),
+        }, { ad_name: `${"b".repeat(298)}😀` }),
       );
       await deliver(webhookBody([{ leadgen: "100034" }]));
       const row = await lead_("100034");
       assert.ok(row.filed_at, String(row.error));
-      assert.equal(row.ad_name, `${"b".repeat(299)}😀`);
+      assert.equal(row.ad_name, `${"b".repeat(298)}😀`);
       const answers = row.answers as { name: string; values: string[] }[];
-      assert.equal(answers[2].values[0], `${"a".repeat(999)}😀`);
+      assert.equal(answers[2].name, `${"q".repeat(198)}😀`);
+      assert.equal(answers[2].values[0], `${"a".repeat(998)}😀`);
       assert.equal(answers[3].values[0], "ok�here");
     });
 
@@ -685,7 +711,11 @@ describe("Meta lead ads", () => {
       assert.equal(failed.notified_at, null);
       assert.equal(failed.error, "The lead has no name, email, phone or company.");
       assert.equal(await count("select count(*)::int as count from crm.push_log"), 0);
-      assert.ok(new Date(failed.next_attempt_at as Date).getTime() > Date.now());
+      const wait = new Date(failed.next_attempt_at as Date).getTime() - Date.now();
+      assert.ok(wait > 4.5 * 60_000 && wait <= 5 * 60_000, String(wait));
+      await sql("update crm.meta_leads set filed_at = now() - interval '5 minutes'");
+      await backup();
+      assert.equal(await count("select count(*)::int as count from crm.notifications"), 0);
 
       await sql("update crm.meta_leads set next_attempt_at = now() - interval '1 minute', filed_at = now() - interval '5 minutes'");
       await backup();
@@ -727,6 +757,10 @@ describe("Meta lead ads", () => {
       assert.ok(first > 4.5 * 60_000 && first <= 5 * 60_000, String(first));
       assert.ok(logged.some((line) => line.includes("Meta request failed")));
       assert.ok(!logged.some((line) => line.includes(TOKEN)));
+      fake.calls.length = 0;
+      await quietly(() => backup());
+      assert.equal(fake.calls.filter((url) => url.pathname === "/v27.0/100006").length, 0);
+      assert.equal((await lead_("100006")).attempts, 1);
 
       await sql("update crm.meta_leads set attempts = 3, next_attempt_at = now() - interval '1 minute'");
       await quietly(() => backup());
@@ -779,7 +813,9 @@ describe("Meta lead ads", () => {
       const { result } = await quietly(() => backup());
       assert.equal(result.retried.filed, 1);
       assert.ok((await lead_("100050")).filed_at);
-      assert.ok(fake.calls.filter((url) => /\/7[01]\d{4}$/.test(url.pathname)).length <= 5);
+      const fetched = fake.calls.filter((url) => /^\/v27\.0\/\d{6}$/.test(url.pathname)).map((url) => url.pathname);
+      assert.equal(fetched[0], "/v27.0/100050");
+      assert.ok(fetched.filter((path) => /\/7[01]\d{4}$/.test(path)).length <= 5);
     });
   });
 
@@ -799,7 +835,7 @@ describe("Meta lead ads", () => {
       assert.deepEqual((await getMetaLeadSettings(admin, ORIGIN)).held, []);
     });
 
-    it("alerts once per Page in a batch and never counts a held lead's failures", async () => {
+    it("never counts a held lead's failures and alerts owners once a day per Page", async () => {
       state.fail = (url) => (/\/10011\d$/.test(url.pathname) ? Response.json({ error: { message: "No access", code: 10 } }, { status: 403 }) : null);
       await quietly(() => deliver(webhookBody([{ leadgen: "100110", page: "7777777777" }, { leadgen: "100111", page: "7777777777" }])));
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1000,17 +1036,20 @@ describe("Meta lead ads", () => {
       state.delay = (url) => (url.pathname === "/v27.0/6666/leads" && url.searchParams.get("after") === "1" ? 4_000 : 0);
       const first = await runMetaLeadBackup({ ...options(), deadline: Date.now() + 5_000 });
       assert.equal(first.pages[0].complete, false);
-      const [cursor] = await rows<{ list_after: string | null; list_since: Date | null }>("select list_after, list_since from crm.meta_lead_forms where page_id = $1 and form_id = '6666'", [PAGE]);
+      const [cursor] = await rows<{ list_after: string | null; list_since: Date | null; list_started_at: Date | null }>("select list_after, list_since, list_started_at from crm.meta_lead_forms where page_id = $1 and form_id = '6666'", [PAGE]);
       assert.equal(cursor.list_after, "1");
+      const firstFilter = fake.calls.find((url) => url.pathname === "/v27.0/6666/leads")?.searchParams.get("filtering");
       assert.ok((await lead_("100070")).filed_at);
       state.delay = undefined;
       fake.calls.length = 0;
       const second = await backup();
       assert.equal(second.pages[0].complete, true);
       assert.equal(fake.calls.find((url) => url.pathname === "/v27.0/6666/leads")?.searchParams.get("after"), "1");
+      assert.equal(fake.calls.find((url) => url.pathname === "/v27.0/6666/leads")?.searchParams.get("filtering"), firstFilter);
       assert.ok((await lead_("100071")).filed_at && (await lead_("100072")).filed_at);
       const [done] = await rows<{ list_after: string | null; last_run_at: Date | null }>("select list_after, last_run_at from crm.meta_lead_forms where page_id = $1 and form_id = '6666'", [PAGE]);
-      assert.deepEqual([done.list_after, Boolean(done.last_run_at)], [null, true]);
+      assert.equal(done.list_after, null);
+      assert.equal(new Date(done.last_run_at as Date).toISOString(), new Date(cursor.list_started_at as Date).toISOString());
     });
 
     it("lets Pages and forms take turns when one runs out of time", async () => {
@@ -1073,6 +1112,190 @@ describe("Meta lead ads", () => {
       } finally {
         process.env.META_ACCESS_TOKEN = TOKEN;
       }
+    });
+  });
+
+  describe("retries, alerts and the time budget", () => {
+    it("holds a webhook lead created before a non-owner's link", async () => {
+      state.forms.set("7777", { id: "7777", name: "Other form", page: OTHER_PAGE });
+      await linkAs(outsider, OTHER_PAGE, new Date(Date.now() - 60_000).toISOString());
+      state.leads.set("100130", lead("100130", { full_name: "Old Lead", email: "old@lead.example" }, { form_id: "7777", created_time: new Date(Date.now() - 3_600_000).toISOString() }));
+      await deliver(webhookBody([{ leadgen: "100130", page: OTHER_PAGE, form: "7777" }]));
+      const row = await lead_("100130");
+      assert.deepEqual([row.workspace_id, row.filed_at, Boolean(row.held_at), Boolean(row.fetched_at)], [null, null, true, true]);
+    });
+
+    it("tells everyone else when one person's notification fails, and that person later", async () => {
+      await sql(`alter table crm.notifications add constraint notifications_test_one check (user_id <> '${admin.userId}'::uuid) not valid`);
+      state.leads.set("100131", lead("100131", { full_name: "Ola One", email: "ola@one.example" }));
+      try {
+        await quietly(() => deliver(webhookBody([{ leadgen: "100131" }])));
+      } finally {
+        await sql("alter table crm.notifications drop constraint notifications_test_one");
+      }
+      assert.deepEqual((await rows<{ user_id: string }>("select user_id from crm.notifications")).map((row) => row.user_id), [owner.userId]);
+      assert.equal((await lead_("100131")).notified_at, null);
+      await sql("update crm.meta_leads set filed_at = now() - interval '5 minutes', next_attempt_at = null");
+      await backup();
+      const notes = await rows<{ user_id: string }>("select user_id from crm.notifications");
+      assert.deepEqual(notes.map((row) => row.user_id).sort(), [owner.userId, admin.userId].sort());
+      assert.ok((await lead_("100131")).notified_at);
+    });
+
+    it("doesn't wait for a slow push past the deadline", async () => {
+      const slow: PushSender = () => new Promise((resolve) => setTimeout(resolve, 6_000));
+      state.leads.set("100132", lead("100132", { full_name: "Sly Slow", email: "sly@slow.example" }));
+      await sql("insert into crm.meta_leads (leadgen_id, page_id, workspace_id) values ('100132', $1, $2)", [PAGE, owner.workspaceId]);
+      const started = Date.now();
+      await runMetaLeadBackup({ ...options({ send: slow }), deadline: Date.now() + 4_500 });
+      assert.ok(Date.now() - started < 4_000, String(Date.now() - started));
+      assert.equal(await count("select count(*)::int as count from crm.notifications"), 2);
+    });
+
+    it("treats a Graph call cut by Orbit's own deadline as unfinished, not as a Meta error", async () => {
+      await sql("update crm.meta_lead_pages set last_attempt_at = null where page_id = $1", [PAGE]);
+      state.delay = (url) => (url.pathname === "/v27.0/6666/leads" ? 10_000 : 0);
+      const report = await runMetaLeadBackup({ ...options(), deadline: Date.now() + 5_000 });
+      state.delay = undefined;
+      assert.deepEqual([report.pages[0].complete, report.pages[0].error], [false, "Not finished. Orbit carries on in the next run."]);
+      const [page] = await rows<{ pending: boolean; last_error: string }>("select pending, last_error from crm.meta_lead_pages where page_id = $1", [PAGE]);
+      assert.deepEqual([page.pending, page.last_error], [true, "Not finished. Orbit carries on in the next run."]);
+    });
+
+    it("drops a paging cursor Meta rejects and reads the form again", async () => {
+      state.pageSize = 1;
+      state.leads.set("100140", lead("100140", { full_name: "Cur Sor", email: "cur@sor.example" }));
+      await sql("insert into crm.meta_lead_forms (page_id, form_id, list_since, list_after, list_started_at) values ($1, '6666', now() - interval '1 day', 'bogus', now() - interval '5 minutes')", [PAGE]);
+      await sql("update crm.meta_lead_pages set last_attempt_at = null where page_id = $1", [PAGE]);
+      const { result } = await quietly(() => backup());
+      assert.equal(result.pages[0].error, "Meta returned an error (400).");
+      const [cursor] = await rows<{ list_after: string | null; list_since: Date | null; list_started_at: Date | null }>("select list_after, list_since, list_started_at from crm.meta_lead_forms where page_id = $1", [PAGE]);
+      assert.deepEqual([cursor.list_after, cursor.list_since, cursor.list_started_at], [null, null, null]);
+      await sql("update crm.meta_lead_pages set last_attempt_at = null where page_id = $1", [PAGE]);
+      fake.calls.length = 0;
+      await backup();
+      assert.equal(fake.calls.find((url) => url.pathname === "/v27.0/6666/leads")?.searchParams.has("after"), false);
+      assert.ok((await lead_("100140")).filed_at);
+    });
+
+    it("ignores a paging cursor older than an hour", async () => {
+      state.pageSize = 1;
+      state.leads.set("100141", lead("100141", { full_name: "Old Cursor", email: "old@cursor.example" }));
+      await sql("insert into crm.meta_lead_forms (page_id, form_id, list_since, list_after, list_started_at) values ($1, '6666', now() - interval '1 day', '1', now() - interval '2 hours')", [PAGE]);
+      await sql("update crm.meta_lead_pages set last_attempt_at = null where page_id = $1", [PAGE]);
+      await backup();
+      assert.equal(fake.calls.find((url) => url.pathname === "/v27.0/6666/leads")?.searchParams.has("after"), false);
+      assert.ok((await lead_("100141")).filed_at);
+    });
+
+    it("files leads whose form name, note or name is full of emoji", async () => {
+      state.forms.set("6666", { id: "6666", name: `${"F".repeat(184)}${"😀".repeat(6)}`, page: PAGE });
+      state.leads.set("100142", lead("100142", { full_name: "Fay Form", email: "fay@emoji-form.example" }));
+      state.leads.set(
+        "100143",
+        lead("100143", { email: "body@emoji.example", ...Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`q${index}`, "😀".repeat(1000)])) }),
+      );
+      state.leads.set("100144", lead("100144", { first_name: `${"A".repeat(70)}${"😀".repeat(10)}`, email: "first@emoji.example" }));
+      await deliver(webhookBody([{ leadgen: "100142" }, { leadgen: "100143" }, { leadgen: "100144" }]));
+      for (const id of ["100142", "100143", "100144"]) {
+        const row = await lead_(id);
+        assert.ok(row.filed_at && row.activity_id && row.contact_id, `${id} ${String(row.error)}`);
+      }
+      const [activity] = await rows<{ title: string }>("select title from crm.activities where id = $1", [(await lead_("100142")).activity_id]);
+      assert.ok(activity.title.length <= 200 && activity.title.isWellFormed() && activity.title.startsWith("Meta lead: FFFF"));
+      const [note] = await rows<{ body: string }>("select body from crm.activities where id = $1", [(await lead_("100143")).activity_id]);
+      assert.ok(note.body.length <= 10_000 && note.body.isWellFormed());
+      const [contact] = await rows<{ first_name: string; email: string }>("select first_name, email from crm.contacts where id = $1", [(await lead_("100144")).contact_id]);
+      assert.equal(contact.email, "first@emoji.example");
+      assert.ok(contact.first_name.length <= 80 && contact.first_name.isWellFormed());
+    });
+
+    it("only counts Meta work that is really due", async () => {
+      assert.equal(await metaLeadWorkDue(), false);
+      await sql("update crm.meta_lead_pages set pending = true where page_id = $1", [PAGE]);
+      assert.equal(await metaLeadWorkDue(), true);
+      await sql("update crm.meta_lead_pages set pending = false where page_id = $1", [PAGE]);
+      await sql("insert into crm.meta_leads (leadgen_id, page_id, workspace_id) values ('100160', $1, $2)", [PAGE, owner.workspaceId]);
+      assert.equal(await metaLeadWorkDue(), true);
+      await sql("update crm.meta_leads set next_attempt_at = now() + interval '1 hour'");
+      assert.equal(await metaLeadWorkDue(), false);
+      await sql("update crm.meta_leads set filed_at = now() - interval '5 minutes', workspace_id = null, next_attempt_at = null");
+      assert.equal(await metaLeadWorkDue(), false);
+      await sql("truncate crm.meta_leads");
+      await sql("insert into crm.meta_leads (leadgen_id, page_id, held_at) select (720000 + n)::text, '5555555555', now() from generate_series(1, 130) n");
+      assert.equal(await metaLeadWorkDue(), true);
+      await quietly(() => backup());
+      assert.equal(await metaLeadWorkDue(), false);
+      assert.equal(await count("select count(*)::int as count from crm.meta_leads where attempts > 0"), 0);
+    });
+
+    it("files the next lead when one fails at filing in the backup", async () => {
+      await sql("alter table crm.meta_leads add constraint meta_leads_test_filing check (filed_at is null or leadgen_id <> '100150') not valid");
+      try {
+        state.leads.set("100150", lead("100150", { full_name: "Fil Fail", email: "fil@fail.example" }));
+        state.leads.set("100151", lead("100151", { full_name: "Fil Fine", email: "fil@fine.example" }));
+        await sql("update crm.meta_lead_pages set last_attempt_at = null where page_id = $1", [PAGE]);
+        const { result } = await quietly(() => backup());
+        assert.equal(result.pages[0].imported, 1);
+        assert.ok((await lead_("100151")).filed_at);
+        const failed = await lead_("100150");
+        assert.deepEqual([failed.filed_at, failed.attempts], [null, 1]);
+      } finally {
+        await sql("alter table crm.meta_leads drop constraint meta_leads_test_filing");
+      }
+    });
+
+    it("starts a filed lead's alerts on a fresh clock", async () => {
+      await sql("insert into crm.meta_leads (leadgen_id, page_id, workspace_id, attempts, next_attempt_at) values ('100152', $1, $2, 8, now() - interval '1 minute')", [PAGE, owner.workspaceId]);
+      state.leads.set("100152", lead("100152", { full_name: "Fresh Clock", email: "fresh@clock.example" }));
+      await sql("alter table crm.notifications add constraint notifications_test_clock check (title <> 'New lead: Fresh Clock') not valid");
+      try {
+        await quietly(() => backup());
+      } finally {
+        await sql("alter table crm.notifications drop constraint notifications_test_clock");
+      }
+      const row = await lead_("100152");
+      assert.ok(row.filed_at);
+      assert.equal(row.attempts, 1);
+      const wait = new Date(row.next_attempt_at as Date).getTime() - Date.now();
+      assert.ok(wait > 4.5 * 60_000 && wait <= 5 * 60_000, String(wait));
+    });
+
+    it("resets a held lead's retries when it is released", async () => {
+      state.fail = (url) => (url.pathname.endsWith("/100153") ? Response.json({ error: { message: "down", code: 2 } }, { status: 500 }) : null);
+      await quietly(() => deliver(webhookBody([{ leadgen: "100153", page: OTHER_PAGE, form: "7777" }])));
+      await sql("update crm.meta_leads set attempts = 25, next_attempt_at = now() + interval '1 day', error = 'down'");
+      await linkAs(outsider, OTHER_PAGE);
+      assert.equal((await lead_("100153")).attempts, 25);
+      await addHeldLeads(ownerInOther, OTHER_PAGE, { schedule: () => undefined });
+      const row = await lead_("100153");
+      assert.deepEqual([row.attempts, row.next_attempt_at, row.error, row.released_to, row.workspace_id], [0, null, null, outsider.workspaceId, outsider.workspaceId]);
+    });
+
+    it("never adds the fallback audience when someone owns every workspace", async () => {
+      await sql("update crm.workspace_members set role = 'owner' where workspace_id = $1 and user_id = $2", [owner.workspaceId, admin.userId]);
+      try {
+        const [result] = await rows<{ ada: boolean; mark: boolean }>("select private.meta_sees_held($1) as ada, private.meta_sees_held($2) as mark", [admin.userId, owner.userId]);
+        assert.deepEqual(result, { ada: false, mark: true });
+        assert.equal(await count("select count(*)::int as count from private.meta_lead_alert_owners()"), 1);
+      } finally {
+        await sql("update crm.workspace_members set role = 'admin' where workspace_id = $1 and user_id = $2", [owner.workspaceId, admin.userId]);
+      }
+    });
+
+    it("keeps a lead's company and note in its workspace, and lets links be cleared", async () => {
+      state.leads.set("100154", lead("100154", { full_name: "Wes Workspace", email: "wes@workspace.example", company_name: "Wes Co" }));
+      await deliver(webhookBody([{ leadgen: "100154" }]));
+      const stamp = Date.now();
+      const otherCompany = await rows<{ id: string }>("insert into crm.companies (workspace_id, name, normalized_name) values ($1, $2, $3) returning id", [outsider.workspaceId, `Other ${stamp}`, `other ${stamp}`]);
+      const otherContact = await createContact(ownerInOther, { firstName: "Elsewhere", email: `elsewhere${stamp}@ws.example` });
+      const otherNote = await createActivity(ownerInOther, { type: "note", title: "Elsewhere", body: "x", contactId: otherContact.body.contact.id });
+      await assert.rejects(() => queryAsUser(owner.userId, "update crm.meta_leads set company_id = $1", [otherCompany[0].id]), /another workspace/);
+      await assert.rejects(() => queryAsUser(owner.userId, "update crm.meta_leads set activity_id = $1", [otherNote.body.activity.id]), /another workspace/);
+      const row = await lead_("100154");
+      await sql("update crm.contacts set workspace_id = $2, company_id = null where id = $1", [row.contact_id, outsider.workspaceId]);
+      await sql("update crm.meta_leads set company_id = null where id = $1", [row.id]);
+      assert.equal((await lead_("100154")).company_id, null);
     });
   });
 
@@ -1211,7 +1434,11 @@ describe("Meta lead ads", () => {
       );
       await assert.rejects(
         () => queryAsUser(admin.userId, "insert into crm.meta_lead_pages (workspace_id, page_id, linked_by, full_history) values ($1, '4444444444', $2, true)", [owner.workspaceId, admin.userId]),
-        /row-level security/,
+        /permission denied/,
+      );
+      await assert.rejects(
+        () => queryAsUser(admin.userId, "insert into crm.meta_lead_pages (workspace_id, page_id, linked_by, created_at) values ($1, '4444444444', $2, now() - interval '1 year')", [owner.workspaceId, admin.userId]),
+        /permission denied/,
       );
     });
 

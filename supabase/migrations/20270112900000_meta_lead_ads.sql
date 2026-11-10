@@ -101,6 +101,7 @@ create index if not exists meta_leads_contact_idx on crm.meta_leads (contact_id)
 create index if not exists meta_leads_company_idx on crm.meta_leads (company_id) where company_id is not null;
 create index if not exists meta_leads_activity_idx on crm.meta_leads (activity_id) where activity_id is not null;
 create index if not exists meta_leads_released_idx on crm.meta_leads (released_to) where released_to is not null;
+create index if not exists meta_leads_due_idx on crm.meta_leads (next_attempt_at) where filed_at is null and (workspace_id is not null or fetched_at is null);
 
 alter table crm.meta_lead_pages enable row level security;
 alter table crm.meta_lead_pages force row level security;
@@ -135,7 +136,8 @@ create policy meta_leads_admin_update on crm.meta_leads for update to authentica
 revoke all on crm.meta_lead_pages from public, anon, authenticated, crm_agent;
 revoke all on crm.meta_lead_forms from public, anon, authenticated, crm_agent;
 revoke all on crm.meta_leads from public, anon, authenticated, crm_agent;
-grant select, insert, delete on crm.meta_lead_pages to authenticated;
+grant select, delete on crm.meta_lead_pages to authenticated;
+grant insert (workspace_id, page_id, linked_by) on crm.meta_lead_pages to authenticated;
 grant select on crm.meta_leads to authenticated;
 grant update (contact_id, company_id, activity_id, filed_at, error) on crm.meta_leads to authenticated;
 
@@ -161,17 +163,17 @@ security definer
 set search_path = ''
 as $$
 begin
-  if new.contact_id is not null and not exists (
+  if new.contact_id is not null and new.contact_id is distinct from old.contact_id and not exists (
     select 1 from crm.contacts c where c.id = new.contact_id and c.workspace_id is not distinct from new.workspace_id
   ) then
     raise exception 'contact belongs to another workspace' using errcode = '23514';
   end if;
-  if new.company_id is not null and not exists (
+  if new.company_id is not null and new.company_id is distinct from old.company_id and not exists (
     select 1 from crm.companies c where c.id = new.company_id and c.workspace_id is not distinct from new.workspace_id
   ) then
     raise exception 'company belongs to another workspace' using errcode = '23514';
   end if;
-  if new.activity_id is not null and not exists (
+  if new.activity_id is not null and new.activity_id is distinct from old.activity_id and not exists (
     select 1 from crm.activities a where a.id = new.activity_id and a.workspace_id is not distinct from new.workspace_id
   ) then
     raise exception 'activity belongs to another workspace' using errcode = '23514';
@@ -186,6 +188,27 @@ drop trigger if exists meta_leads_same_workspace on crm.meta_leads;
 create trigger meta_leads_same_workspace
   before update of contact_id, company_id, activity_id on crm.meta_leads
   for each row execute function private.meta_lead_same_workspace();
+
+create or replace function private.meta_lead_filed()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if old.filed_at is null and new.filed_at is not null then
+    new.attempts := 0;
+    new.next_attempt_at := null;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.meta_lead_filed() from public;
+
+drop trigger if exists meta_leads_filed on crm.meta_leads;
+create trigger meta_leads_filed
+  before update of filed_at on crm.meta_leads
+  for each row execute function private.meta_lead_filed();
 
 create or replace function private.meta_lead_page_removed()
 returns trigger
@@ -279,7 +302,7 @@ begin
     select l.id,
       p.workspace_id is not null and (
         l.released_to = p.workspace_id
-        or (l.held_at is null and (p.full_history or l.lead_created_at is null or l.lead_created_at >= p.created_at))
+        or (l.held_at is null and (p.full_history or l.fetched_at is null or l.lead_created_at >= p.created_at))
       ) as eligible,
       p.workspace_id as page_workspace,
       l.held_at
@@ -537,6 +560,15 @@ begin
     select * from unnotified
     union all
     select * from held
+  ),
+  bumped as (
+    update crm.meta_leads b
+    set next_attempt_at = now() + interval '1 hour'
+    where b.filed_at is null and b.workspace_id is null and b.fetched_at is null
+      and (b.next_attempt_at is null or b.next_attempt_at <= now())
+      and b.page_id in (select h.page_id from crm.meta_leads h join held k on k.id = h.id)
+      and b.id not in (select k.id from held k)
+    returning b.id
   )
   select l.id, l.workspace_id, l.leadgen_id, l.page_id, l.form_id, l.ad_id,
     l.fetched_at is not null, l.filed_at is not null, p.linked_by, l.received_via
@@ -566,10 +598,16 @@ begin
     where p.pending or p.last_attempt_at is null or p.last_attempt_at < now() - p_every
   ) or exists (
     select 1 from crm.meta_leads l
-    where (
-        (l.filed_at is null and (l.workspace_id is not null or l.fetched_at is null))
-        or (l.filed_at is not null and l.notified_at is null)
-      )
+    where l.filed_at is null and (l.workspace_id is not null or l.fetched_at is null)
+      and l.next_attempt_at is null
+  ) or exists (
+    select 1 from crm.meta_leads l
+    where l.filed_at is null and (l.workspace_id is not null or l.fetched_at is null)
+      and l.next_attempt_at <= now()
+  ) or exists (
+    select 1 from crm.meta_leads l
+    where l.filed_at is not null and l.notified_at is null and l.workspace_id is not null
+      and l.filed_at < now() - interval '2 minutes'
       and (l.next_attempt_at is null or l.next_attempt_at <= now())
   );
 end;
@@ -690,9 +728,9 @@ begin
     last_run_at = case when p_ok then p_started else f.last_run_at end,
     last_attempt_at = now(),
     last_error = case when p_ok then null else left(p_error, 500) end,
-    list_since = case when p_ok then null else f.list_since end,
-    list_after = case when p_ok then null else f.list_after end,
-    list_started_at = case when p_ok then null else f.list_started_at end;
+    list_since = null,
+    list_after = null,
+    list_started_at = null;
 end;
 $$;
 
