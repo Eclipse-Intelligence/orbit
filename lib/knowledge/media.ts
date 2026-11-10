@@ -1,3 +1,4 @@
+import { ShownError } from "@/lib/crm/errors";
 import { htmlToText } from "@/lib/mail/text";
 import { LlmError, transcribeAudio, TRANSCRIBE_MAX_BYTES } from "@/lib/llm";
 import { downloadPublic, WebPageError, type Lookup } from "@/lib/web-page";
@@ -11,7 +12,7 @@ const PARAGRAPH_MS = 60_000;
 const SUPADATA = "https://api.supadata.ai/v1";
 const ANDROID_CLIENT = { clientName: "ANDROID", clientVersion: "20.10.38", androidSdkVersion: 30, hl: "en", gl: "GB" };
 
-export class MediaError extends Error {}
+export class MediaError extends ShownError {}
 
 export type MediaOptions = { fetchImpl?: typeof fetch; lookup?: Lookup; deadline?: number };
 export type MediaText = { text: string; title: string | null };
@@ -102,11 +103,12 @@ async function supadata(target: string, options: MediaOptions) {
         body = job;
         break;
       }
-      if (job?.status === "failed") throw new MediaError("The transcript service couldn't transcribe it.");
+      if (job?.status === "failed") throw new MediaError("Couldn't transcribe it.");
     }
     if (!body) throw new MediaError("The transcript took too long. Try again.");
   } else if (!response.ok) {
-    throw new MediaError(response.status === 206 || response.status === 404 ? "There's no transcript for that." : `The transcript service answered ${response.status}.`);
+    if (response.status !== 206 && response.status !== 404) console.error("Supadata transcript failed", response.status);
+    throw new MediaError(response.status === 206 || response.status === 404 ? "There's no transcript for that." : "Couldn't get the transcript. Try again.");
   }
   const content = body?.content;
   if (typeof content === "string") return content.trim() || null;
@@ -207,12 +209,10 @@ export async function readYouTube(target: string, options: MediaOptions): Promis
   const named = direct?.title ? { title: direct.title, author: direct.author } : await oembedTitle(watch, options);
   const fallback = await supadata(watch, options);
   if (fallback) return { title: named.title, text: withHeader({ ...named, description: direct?.description }, fallback) };
-  if (direct?.status && direct.status !== "OK" && direct.status !== "LOGIN_REQUIRED") throw new MediaError("YouTube says that video isn't available.");
-  throw new MediaError(
-    supadataKey()
-      ? "That video has no captions to read."
-      : "YouTube didn't share this video's captions with Orbit. Set SUPADATA_API_KEY in Vercel to read any video, or upload the transcript as a file.",
-  );
+  if (direct?.status && direct.status !== "OK" && direct.status !== "LOGIN_REQUIRED") throw new MediaError("That video isn't available.");
+  if (supadataKey()) throw new MediaError("That video has no captions to read.");
+  console.error("YouTube transcripts aren't set up: SUPADATA_API_KEY is missing.");
+  throw new MediaError("No captions available. Upload the transcript instead.");
 }
 
 type Episode = { title: string | null; show: string | null; audioUrl: string; feedUrl: string | null; description: string | null };
@@ -254,7 +254,7 @@ async function appleEpisode(url: URL, options: MediaOptions): Promise<Episode> {
   const lookup = await text(`https://itunes.apple.com/lookup?id=${show}&entity=podcastEpisode&limit=200`, options, 5_000_000);
   const results = (JSON.parse(lookup.body) as { results?: { wrapperType?: string; kind?: string; trackId?: number; trackName?: string; collectionName?: string; episodeUrl?: string; feedUrl?: string; description?: string }[] }).results ?? [];
   const match = results.find((item) => String(item.trackId) === episode && item.episodeUrl);
-  if (!match?.episodeUrl) throw new MediaError("Apple only lists a show's latest 200 episodes. Paste the episode's audio file link instead.");
+  if (!match?.episodeUrl) throw new MediaError("Apple no longer lists that episode. Paste its audio file link.");
   const feedUrl = results.find((item) => item.feedUrl)?.feedUrl ?? match.feedUrl ?? null;
   return { title: match.trackName ?? null, show: match.collectionName ?? null, audioUrl: match.episodeUrl, feedUrl, description: match.description ?? null };
 }
@@ -274,7 +274,7 @@ function episodeFromPage(html: string, base: string): Episode {
     find(/<audio\b[^>]*\bsrc="([^"]+)"/i) ??
     find(/<source\b[^>]*\bsrc="([^"]+)"[^>]*type="audio\//i) ??
     find(/href="([^"]+\.(?:mp3|m4a)(?:\?[^"]*)?)"/i);
-  if (!audio) throw new MediaError("Orbit couldn't find the episode's audio on that page. Paste the Apple Podcasts link or the audio file link.");
+  if (!audio) throw new MediaError("No audio found. Paste the Apple Podcasts or audio file link.");
   const feed = find(/<link\b[^>]*type="application\/rss\+xml"[^>]*href="([^"]+)"/i) ?? find(/<link\b[^>]*href="([^"]+)"[^>]*type="application\/rss\+xml"/i);
   return {
     title: find(/<meta[^>]+property="og:title"[^>]+content="([^"]*)"/i) ?? find(/<title[^>]*>([^<]*)<\/title>/i),
@@ -287,9 +287,9 @@ function episodeFromPage(html: string, base: string): Episode {
 
 async function resolveEpisode(target: string, options: MediaOptions): Promise<Episode> {
   const url = parse(target);
-  if (!url) throw new MediaError("That isn't a link Orbit can open.");
+  if (!url) throw new MediaError("Enter a valid link.");
   const host = url.hostname.replace(/^www\./, "");
-  if (host === "open.spotify.com") throw new MediaError("Spotify doesn't share episode audio. Paste the Apple Podcasts link or the episode's own page.");
+  if (host === "open.spotify.com") throw new MediaError("Spotify links don't work. Paste the Apple Podcasts link.");
   if (host === "podcasts.apple.com") return appleEpisode(url, options);
   if (isAudioUrl(target)) return { title: decodeURIComponent(url.pathname.split("/").pop() ?? "").replace(AUDIO_EXTENSION, "") || null, show: null, audioUrl: url.href, feedUrl: null, description: null };
   const page = await text(target, options, 15_000_000);
@@ -397,10 +397,10 @@ export function mp3Pieces(bytes: Uint8Array, size = PIECE_BYTES) {
 
 export async function transcribeBytes(bytes: Uint8Array, name: string, type: string, options: MediaOptions) {
   if (bytes.byteLength <= TRANSCRIBE_MAX_BYTES) return transcribeAudio(bytes, name, type, { fetchImpl: options.fetchImpl });
-  if (!isMp3(bytes, type, name)) throw new MediaError("Audio over 10 MB has to be MP3 for Orbit to transcribe it.");
+  if (!isMp3(bytes, type, name)) throw new MediaError("Audio over 10 MB must be MP3.");
   const pieces = mp3Pieces(bytes);
   if (options.deadline && Date.now() + Math.ceil(pieces.length / PARALLEL) * ROUND_MS > options.deadline) {
-    throw new MediaError("That audio is too long to transcribe here. Upload its transcript instead.");
+    throw new MediaError("Audio too long. Upload its transcript instead.");
   }
   const results: string[] = new Array(pieces.length).fill("");
   const stop = new AbortController();
@@ -411,7 +411,7 @@ export async function transcribeBytes(bytes: Uint8Array, name: string, type: str
       next += 1;
       if (options.deadline && Date.now() > options.deadline - ROUND_MS) {
         stop.abort();
-        throw new MediaError("That audio is too long to transcribe here. Upload its transcript instead.");
+        throw new MediaError("Audio too long. Upload its transcript instead.");
       }
       try {
         results[index] = await transcribeAudio(pieces[index], `part-${index + 1}.mp3`, "audio/mpeg", { fetchImpl: options.fetchImpl, signal: stop.signal });
@@ -460,7 +460,7 @@ export async function readPodcast(target: string, options: MediaOptions): Promis
       const fallback = await supadata(episode.audioUrl, options);
       if (fallback) return { title, text: [header(episode.description), `Transcript:\n${fallback}`].filter(Boolean).join("\n\n") };
     }
-    if (error instanceof LlmError) throw new MediaError("Transcribing the episode didn't work. Try again.");
+    if (error instanceof LlmError) throw new MediaError("Couldn't transcribe the episode. Try again.");
     throw error;
   }
   if (!transcript.trim()) throw new MediaError("The episode had no speech to transcribe.");

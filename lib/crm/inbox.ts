@@ -16,10 +16,11 @@ import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
-import { reconnectProblem } from "@/lib/mail/microsoft";
+import { appNeedsAttention, reconnectProblem } from "@/lib/mail/microsoft";
 import { routedAway } from "@/lib/mail/routing";
 import {
   fetchInboxMessages,
+  MicrosoftError,
   refreshMicrosoftToken,
   sanitizeMicrosoftError,
   sendGraphMail,
@@ -370,7 +371,7 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
   if (!from || from === PRIMARY_SENDER) {
     const mailbox = await readStored(db, actor);
     if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshTokenCipher) {
-      throw new CrmError("invalid_input", "Connect Microsoft in Settings › Email before sending.", 400);
+      throw new CrmError("invalid_input", "Connect Microsoft in Settings › Email before sending.", 400, { stopsRun: true });
     }
     return {
       email: mailbox.email,
@@ -398,7 +399,7 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
   const account = found.rows[0];
   if (!account) throw new CrmError("not_found", "That email account isn't connected.", 404, { field: "from" });
   if (account.status !== "connected" || !account.refresh_token) {
-    throw new CrmError("invalid_input", `Reconnect ${account.email} in ${account.can_send ? "Settings › Email" : "Settings › Calendars"} before sending from it.`, 400, { field: "from" });
+    throw new CrmError("invalid_input", `Reconnect ${account.email} in ${account.can_send ? "Settings › Email" : "Settings › Calendars"} before sending from it.`, 400, { field: "from", stopsRun: true });
   }
   if (!account.can_send) {
     throw new CrmError("invalid_input", `Add mail for ${account.email} in Settings › Calendars first.`, 400, { field: "from" });
@@ -439,7 +440,7 @@ export async function sendContactEmail(
   const subject = input.subject.replace(/\s+/g, " ").trim();
   const body = input.body.trim();
   if (!subject || !body) {
-    throw new CrmError("invalid_input", "Add a subject and a message.", 400);
+    throw new CrmError("invalid_input", "Enter a subject and a message.", 400);
   }
   if (subject.length > 200) {
     throw new CrmError(
@@ -518,13 +519,15 @@ export async function sendContactEmail(
       fetchImpl,
     );
   } catch (error) {
+    const reconnect = reconnectProblem(error, sender.email);
     throw new CrmError(
       "upstream_error",
-      reconnectProblem(error, sender.email) ??
+      reconnect ??
         sanitizeMicrosoftError(
           error instanceof Error ? error.message : "Couldn't send the email.",
         ),
       502,
+      { stopsRun: Boolean(reconnect) || appNeedsAttention(error) || (error instanceof MicrosoftError && error.stopsRun) },
     );
   }
 
@@ -1095,7 +1098,7 @@ export async function currentToken(
   fetchImpl: typeof fetch,
 ): Promise<MicrosoftToken> {
   const refreshToken = readSecret(stored.refreshTokenCipher);
-  if (!refreshToken) throw new Error(RECONNECT_MESSAGE);
+  if (!refreshToken) throw new MicrosoftError(RECONNECT_MESSAGE, { stopsRun: true });
   const accessToken = readSecret(stored.accessTokenCipher);
   const expires = stored.accessTokenExpiresAt
     ? new Date(stored.accessTokenExpiresAt).getTime()

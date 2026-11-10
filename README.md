@@ -265,7 +265,7 @@ Accounts outside the Entra app's own tenant only work when the app allows them:
 2. Keep `MICROSOFT_TENANT` unset or `common` so other tenants and personal accounts can sign in. A single tenant id there limits every connection to that tenant.
 3. If the other organisation blocks user consent, its admin has to consent to Orbit in that tenant first.
 
-Until then the connection ends with "This Microsoft account's organisation doesn't allow Orbit yet", and nothing is saved. Connecting the main mailbox's own address as an extra account is refused.
+Until then the connection ends with "This Microsoft organisation hasn't approved Orbit", and nothing is saved. Connecting the main mailbox's own address as an extra account is refused.
 
 ### Google Calendar, iCloud and other calendars by link
 
@@ -601,7 +601,7 @@ Live editing runs over Supabase Realtime whenever `NEXT_PUBLIC_SUPABASE_URL` and
 
 Every CRM page has an "Ask Orbit anything" bar at the bottom. Click it or press `O` to open the assistant; `Esc` minimises it. It answers from Orbit's data using tools, and proposes changes for you to approve. It works as you, with your role's permissions and the same row-level security as the app.
 
-Set `LLM_API_KEY` to turn it on. Without it, every request returns "Set LLM_API_KEY in Vercel to use the assistant.", including for ChatGPT and Claude account models.
+Set `LLM_API_KEY` to turn it on. Without it, every request returns "The assistant isn't set up." (with "Add LLM_API_KEY." for the workspace owner), including for ChatGPT and Claude account models.
 
 ### Files in the chat
 

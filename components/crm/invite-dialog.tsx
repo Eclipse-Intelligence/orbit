@@ -71,7 +71,7 @@ function formErrorHref(message: string, sender: SenderOption | null) {
   if (sender?.fixHref && message === sender.problem) return sender.fixHref;
   const allow = /^Allow invites for (\S+) in Settings/.exec(message);
   if (allow) return `/api/microsoft/connect?purpose=send_account&hint=${encodeURIComponent(allow[1])}`;
-  if (/^Choose a calendar for invite holds/.test(message)) return "/settings/email#sending-addresses";
+  if (/^Choose a hold calendar for/.test(message)) return "/settings/email#sending-addresses";
   if (/in Settings › Calendars/.test(message)) return "/settings/calendars";
   if (/Reconnect Microsoft|Connect Microsoft/.test(message)) return "/settings/email";
   return null;

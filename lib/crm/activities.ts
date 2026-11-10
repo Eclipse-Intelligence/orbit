@@ -10,7 +10,7 @@ import {
   type ActivityOrigin,
 } from "@/lib/crm/activity-edit";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
 import {
   actorIds,
@@ -132,7 +132,7 @@ function prepareActivity(input: ActivityWrite): {
   if (!(ACTIVITY_TYPES as readonly string[]).includes(type)) {
     throw new CrmError(
       "invalid_input",
-      "Activity type is not recognised.",
+      "Unknown activity type.",
       400,
       { field: "type" },
     );
@@ -200,7 +200,7 @@ export async function createActivityInDb(
   if (!links.companyId && !links.contactId && !links.opportunityId) {
     throw new CrmError(
       "invalid_input",
-      "Attach the activity to a company, contact, or opportunity.",
+      "Choose a company, contact or opportunity.",
       400,
       { field: "companyId" },
     );
@@ -234,7 +234,7 @@ export async function createActivityInDb(
     );
     const row = saved.rows[0];
     if (!row)
-      throw new CrmError("internal_error", "Activity was not saved.", 500);
+      throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     const activity = mapActivity(row);
     await recordAudit(
       db,
@@ -252,7 +252,7 @@ export async function createActivityInDb(
     constraintError(
       error,
       "duplicate_activity",
-      "That activity already exists.",
+      "A matching activity already exists.",
     );
   }
 }
@@ -488,22 +488,22 @@ export async function logActivity(
   const trimmedTitle = title.trim();
   const trimmedBody = body.trim();
   if (type === "note" && !trimmedBody) {
-    throw new CrmError("invalid_input", "Write the note.", 400, {
+    throw new CrmError("invalid_input", "Enter the note.", 400, {
       field: "body",
     });
   }
   if (type === "call" && !trimmedTitle && !trimmedBody) {
-    throw new CrmError("invalid_input", "Describe the call.", 400, {
+    throw new CrmError("invalid_input", "Enter a title or a note.", 400, {
       field: "title",
     });
   }
   if (type === "email" && !trimmedTitle) {
-    throw new CrmError("invalid_input", "Add a subject.", 400, {
+    throw new CrmError("invalid_input", "Enter a subject.", 400, {
       field: "title",
     });
   }
   if (type === "email" && !trimmedBody) {
-    throw new CrmError("invalid_input", "Write the email.", 400, {
+    throw new CrmError("invalid_input", "Enter the email.", 400, {
       field: "body",
     });
   }
@@ -512,13 +512,13 @@ export async function logActivity(
   if (!companyId && !contactId) {
     throw new CrmError(
       "invalid_input",
-      "Attach the activity to a company or contact.",
+      "Choose a company or contact.",
       400,
       { field: "contactId" },
     );
   }
   if ((companyId && !isUuid(companyId)) || (contactId && !isUuid(contactId))) {
-    throw new CrmError("not_found", "Record not found.", 404);
+    throw notFound("record");
   }
   const saved = await createActivity(
     actor,
@@ -537,14 +537,14 @@ export async function logActivity(
 
 export async function getActivity(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
+  if (!isUuid(id)) throw notFound("activity");
   return withActor(actor, async (db) => {
     const result = await db.query<ActivityRow>(
       `${ACTIVITY_SQL} where a.id = $1 and a.archived_at is null`,
       [id],
     );
     const row = result.rows[0];
-    if (!row) throw new CrmError("not_found", "Activity not found.", 404);
+    if (!row) throw notFound("activity");
     return mapActivity(row);
   });
 }
@@ -577,7 +577,7 @@ type ArchiveRow = {
 };
 
 const ARCHIVE_DENIED =
-  "Only the person who logged this activity, or an owner or admin, can delete it.";
+  "Only its author, owners and admins can delete this.";
 
 function mayArchive(actor: Actor, row: Pick<ArchiveRow, "actor_user_id" | "actor_agent_id">) {
   if (actor.type === "agent") return row.actor_agent_id === actor.agentId;
@@ -591,7 +591,7 @@ async function readForArchive(db: Db, actor: Actor, id: string) {
     [id, actor.workspaceId],
   );
   const row = result.rows[0];
-  if (!row) throw new CrmError("not_found", "Activity not found.", 404);
+  if (!row) throw notFound("activity");
   return row;
 }
 
@@ -699,7 +699,7 @@ export async function restoreActivityInDb(
 
 export async function archiveActivity(actor: Actor, id: string, provenance: Provenance) {
   assertScope(actor.scopes, "activities:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
+  if (!isUuid(id)) throw notFound("activity");
   return withActor(actor, (db) => archiveActivityInDb(db, actor, id, provenance));
 }
 
@@ -719,7 +719,7 @@ export type ActivityEditValues = {
   opportunityId: string | null;
 };
 
-const EDIT_DENIED = "Only the person who logged this activity, or an owner or admin, can edit it.";
+const EDIT_DENIED = "Only its author, owners and admins can edit this.";
 
 const EDIT_COLUMNS: Record<ActivityEditField, string> = {
   type: "type",
@@ -760,8 +760,7 @@ export async function readActivityState(db: Db, workspaceId: string, id: string)
 function linkId(value: unknown, field: ActivityEditField) {
   if (value === null || value === "") return null;
   if (typeof value !== "string" || !isUuid(value)) {
-    const noun = field === "companyId" ? "Company" : field === "contactId" ? "Contact" : "Opportunity";
-    throw new CrmError("not_found", `${noun} not found.`, 404, { field });
+    throw notFound(field === "companyId" ? "company" : field === "contactId" ? "contact" : "opportunity", { field });
   }
   return value;
 }
@@ -769,7 +768,7 @@ function linkId(value: unknown, field: ActivityEditField) {
 function editedValue(field: ActivityEditField, value: unknown): unknown {
   if (field === "type") {
     if (typeof value !== "string" || !(ACTIVITY_TYPES as readonly string[]).includes(value)) {
-      throw new CrmError("invalid_input", "Activity type is not recognised.", 400, { field: "type" });
+      throw new CrmError("invalid_input", "Unknown activity type.", 400, { field: "type" });
     }
     return value;
   }
@@ -808,14 +807,14 @@ function editSummary(values: ActivityEditValues) {
 }
 
 function lockedField(field: ActivityEditField, origin: ActivityOrigin) {
-  const limit = origin === "logged" ? "" : ` ${ORIGIN_LIMITS[origin]}`;
-  return new CrmError("invalid_input", `${ACTIVITY_FIELD_LABELS[field]} can't be changed.${limit}`, 400, { field });
+  const message = origin === "logged" ? `${ACTIVITY_FIELD_LABELS[field]} can't be changed.` : ORIGIN_LIMITS[origin];
+  return new CrmError("invalid_input", message, 400, { field });
 }
 
 async function readForEdit(db: Db, actor: Actor, id: string) {
   const result = await db.query<EditRow>(EDIT_ROW_SQL, [id, actor.workspaceId]);
   const row = result.rows[0];
-  if (!row) throw new CrmError("not_found", "Activity not found.", 404);
+  if (!row) throw notFound("activity");
   if (!mayArchive(actor, row)) throw new CrmError("forbidden", EDIT_DENIED, 403);
   const locked = await db.query<EditRow>(`${EDIT_ROW_SQL} for update`, [id, actor.workspaceId]);
   if (!locked.rows[0]) throw new CrmError("forbidden", EDIT_DENIED, 403);
@@ -823,10 +822,10 @@ async function readForEdit(db: Db, actor: Actor, id: string) {
 }
 
 export async function updateActivityInDb(db: Db, actor: Actor, id: string, input: ActivityEdit, provenance: Provenance) {
-  if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
+  if (!isUuid(id)) throw notFound("activity");
   const row = await readForEdit(db, actor, id);
   if (row.archived_at) {
-    throw new CrmError("conflict", "This activity has been deleted. Undo the delete before editing it.", 409);
+    throw new CrmError("conflict", "This activity is deleted. Undo the delete first.", 409);
   }
   const before = editValues(row);
   const transcript = await db.query("select 1 from crm.call_insights where activity_id = $1 and workspace_id = $2", [id, actor.workspaceId]);
@@ -855,7 +854,7 @@ export async function updateActivityInDb(db: Db, actor: Actor, id: string, input
       { companyId: before.companyId, contactId: before.contactId, opportunityId: before.opportunityId },
     );
     if (!links.companyId && !links.contactId && !links.opportunityId) {
-      throw new CrmError("invalid_input", "Keep the activity on a company, person or opportunity.", 400, { field: "companyId" });
+      throw new CrmError("invalid_input", "Choose a company, contact or opportunity.", 400, { field: "companyId" });
     }
     Object.assign(next, links);
     for (const field of LINK_FIELDS) {
@@ -915,7 +914,7 @@ export async function undoActivityEditInDb(
 
 export async function updateActivity(actor: Actor, id: string, input: ActivityEdit, provenance: Provenance) {
   assertScope(actor.scopes, "activities:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
+  if (!isUuid(id)) throw notFound("activity");
   return withActor(actor, (db) => updateActivityInDb(db, actor, id, input, provenance));
 }
 

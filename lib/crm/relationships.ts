@@ -3,7 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import { readCompanyInDb } from "@/lib/crm/companies";
 import { listActivities, listCompanyTimeline } from "@/lib/crm/activities";
 import { listContacts } from "@/lib/crm/contacts";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { listOpportunities } from "@/lib/crm/opportunities";
 import { relationshipsFor, relationshipsInDb } from "@/lib/crm/relationship-signals";
@@ -22,11 +22,11 @@ import { dayWindow } from "@/lib/time";
 
 export async function getCompanyContext(actor: Actor, id: string): Promise<CompanyContext> {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  if (!isUuid(id)) throw notFound("company");
   const company = await withActor(actor, async (db) => {
     const row = await readCompanyInDb(db, id, actor.workspaceId);
     if (!row) {
-      throw new CrmError("not_found", "Company not found.", 404);
+      throw notFound("company");
     }
     return row;
   });
@@ -185,7 +185,7 @@ export async function getDueActions(
 ): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
-    throw new CrmError("invalid_input", "That task view is not recognised.", 400, {
+    throw new CrmError("invalid_input", "Unknown task view.", 400, {
       field: "view",
     });
   }

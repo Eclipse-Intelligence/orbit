@@ -171,7 +171,7 @@ export default function OpportunityRecord({
           <>
             <DetailSection title="Details">
               <DetailList>
-                <InlineField label="Name" value={opportunity.name} onSave={(value) => (value ? patch({ name: value }) : Promise.resolve("Give it a name."))} />
+                <InlineField label="Name" value={opportunity.name} onSave={(value) => (value ? patch({ name: value }) : Promise.resolve("Enter a name."))} />
                 <InlineField
                   label="Value"
                   type="number"

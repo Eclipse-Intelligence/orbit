@@ -36,8 +36,8 @@ function syncedLine(lastSyncedAt: string | null) {
     : "Not synced yet";
 }
 
-function subscriptionLine(status: TeamsTranscriptStatus) {
-  if (!status.instant) return "Instant updates need SITE_URL on https";
+function subscriptionLine(status: TeamsTranscriptStatus, isOwner: boolean) {
+  if (!status.instant) return isOwner ? "Instant updates need SITE_URL on https" : "Instant updates not set up";
   if (status.subscriptionId && status.subscriptionExpiresAt) {
     return `Instant updates on until ${formatWhen(status.subscriptionExpiresAt)}`;
   }
@@ -270,11 +270,13 @@ export function TeamsCallsSettings({
   mailbox,
   calls,
   transcripts,
+  isOwner,
 }: {
   configured: boolean;
   mailbox: MailboxSummary | null;
   calls: CallSyncSummary | null;
   transcripts: TeamsTranscriptStatus | null;
+  isOwner: boolean;
 }) {
   const live = mailbox?.status === "connected";
   return (
@@ -311,7 +313,7 @@ export function TeamsCallsSettings({
           <Status tone={transcripts.lastError ? "error" : "on"}>
             {`${syncedLine(transcripts.lastSyncedAt)}${transcripts.pending ? ` · ${transcripts.pending} waiting for the call log` : ""}`}
           </Status>
-          <span className="caption-style text-subtle">{subscriptionLine(transcripts)}</span>
+          <span className="caption-style text-subtle">{subscriptionLine(transcripts, isOwner)}</span>
           {transcripts.lastError && (
             <span role="alert" className="caption-style text-danger leading-[1.4]">
               {transcripts.lastError}
@@ -392,11 +394,13 @@ export function LinearSettings({
   connection,
   workspaceName,
   canAdmin,
+  isOwner,
 }: {
   linear: LinearStatus;
   connection: LinearConnection;
   workspaceName: string;
   canAdmin: boolean;
+  isOwner: boolean;
 }) {
   if (!connection.here && !connection.claimable) return null;
   return (
@@ -413,7 +417,7 @@ export function LinearSettings({
           </>
         ) : (
           <Status tone="off">
-            Set LINEAR_API_KEY (a personal API key from Linear) in the server environment, then redeploy.
+            {isOwner ? "Set LINEAR_API_KEY (a personal API key from Linear) in the server environment, then redeploy." : "Linear isn't set up."}
           </Status>
         )}
       </LinearWorkspace>

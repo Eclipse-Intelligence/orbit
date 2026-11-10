@@ -202,7 +202,7 @@ describe("imports, pipeline, communications, and webhooks", () => {
             .filter((stage) => stage.name !== "New")
             .map((stage) => ({ ...stage })),
         ),
-      /Move opportunities off a stage/,
+      /Empty the stage before removing it/,
     );
   });
 

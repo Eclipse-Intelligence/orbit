@@ -1,6 +1,7 @@
+import { ShownError } from "@/lib/crm/errors";
 import { resolveZone } from "@/lib/ical/parse";
 import { canonicalEmail } from "@/lib/crm/normalize";
-import { sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
+import { MICROSOFT_REJECTED, MicrosoftError, microsoftProblem } from "@/lib/microsoft/oauth";
 import { parseDateTime, zonedParts } from "@/lib/time";
 
 const PAGE_SIZE = 100;
@@ -127,9 +128,9 @@ export type CalendarEvent = {
 
 export type CalendarFetch = { events: CalendarEvent[]; complete: boolean; pages: number };
 
-export class CalendarScopeError extends Error {
+export class CalendarScopeError extends ShownError {
   constructor() {
-    super("Microsoft has not allowed calendar access for this connection.");
+    super("Reconnect Microsoft to allow calendar access.");
     this.name = "CalendarScopeError";
   }
 }
@@ -191,7 +192,7 @@ export async function fetchCalendars(
       headers: { authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok) throw await calendarError(response, "Microsoft could not list the calendars.");
+    if (!response.ok) throw await calendarError(response, "Couldn't read your calendars. Try again.");
     const body = (await response.json()) as { value?: GraphCalendar[]; "@odata.nextLink"?: string };
     for (const item of body.value ?? []) {
       const calendar = toCalendarInfo(item, (options.colorOffset ?? 0) + calendars.length);
@@ -303,16 +304,16 @@ function graphLink(value: string | undefined) {
   }
 }
 
-async function calendarError(response: Response, fallback = "Microsoft could not list the calendar.") {
+async function calendarError(response: Response, fallback = "Couldn't read the calendar. Try again.") {
   const body = (await response.json().catch(() => ({}))) as {
     error?: { message?: string; code?: string };
   };
   const code = body.error?.code ?? "";
   if (response.status === 403 && (!code || SCOPE_ERRORS.has(code))) return new CalendarScopeError();
   if (response.status === 401 || code === "InvalidAuthenticationToken") {
-    return new Error("Microsoft rejected the mailbox connection. Connect it again.");
+    return new MicrosoftError(MICROSOFT_REJECTED);
   }
-  return new Error(sanitizeMicrosoftError(body.error?.message || fallback));
+  return new MicrosoftError(microsoftProblem(body.error?.message, fallback, code, response.status));
 }
 
 export async function fetchCalendarView(
@@ -379,23 +380,25 @@ const WINDOWS_ZONES: Record<string, string> = {
 const RETRY_STATUSES = new Set([502, 503, 504]);
 const WRITE_TIMEOUT_MS = 20_000;
 export const CALENDAR_WRITE_RECONNECT = "Reconnect Microsoft to send invites.";
-export const RESPOND_ORGANISER = "You organised this one, so there's no invite to answer.";
+export const RESPOND_ORGANISER = "You're the organiser.";
 
-export class CalendarWriteScopeError extends Error {
+export class CalendarWriteScopeError extends ShownError {
   constructor() {
     super(CALENDAR_WRITE_RECONNECT);
     this.name = "CalendarWriteScopeError";
   }
 }
 
-export class CalendarWriteError extends Error {
+export class CalendarWriteError extends ShownError {
   readonly status: number;
   readonly code: string;
-  constructor(message: string, status: number, code = "") {
+  readonly reason: string | null;
+  constructor(message: string, status: number, code = "", reason: string | null = null) {
     super(message);
     this.name = "CalendarWriteError";
     this.status = status;
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -543,10 +546,10 @@ function retryAfter(response: Response) {
 type WriteAction = "create" | "cancel" | "move" | "respond";
 
 const WRITE_FALLBACK: Record<WriteAction, string> = {
-  create: "Microsoft could not create the meeting.",
-  cancel: "Microsoft could not cancel the meeting.",
-  move: "Microsoft could not move the meeting.",
-  respond: "Microsoft could not send your response.",
+  create: "Couldn't create the meeting. Try again.",
+  cancel: "Couldn't cancel the meeting. Try again.",
+  move: "Couldn't move the meeting. Try again.",
+  respond: "Couldn't send your response. Try again.",
 };
 
 async function writeError(response: Response, action: WriteAction) {
@@ -554,12 +557,12 @@ async function writeError(response: Response, action: WriteAction) {
   const code = body.error?.code ?? "";
   const message = body.error?.message ?? "";
   if (response.status === 401 || code === "InvalidAuthenticationToken") {
-    return new CalendarWriteError("Microsoft rejected the mailbox connection. Connect it again.", 401, code);
+    return new CalendarWriteError(MICROSOFT_REJECTED, 401, code);
   }
   if (response.status === 403 && (!code || SCOPE_ERRORS.has(code))) return new CalendarWriteScopeError();
   if (response.status === 403) {
     return new CalendarWriteError(
-      "Microsoft didn't let Orbit change this calendar. Check that the mailbox can create meetings in Outlook.",
+      "Microsoft blocked the change. Check this mailbox can create meetings.",
       403,
       code,
     );
@@ -567,14 +570,14 @@ async function writeError(response: Response, action: WriteAction) {
   if (response.status === 429 || code === "TooManyRequests" || code === "ApplicationThrottled") {
     const wait = retryAfter(response);
     return new CalendarWriteError(
-      `Microsoft is limiting requests right now. Try again in ${wait ? `${wait} seconds` : "a minute"}.`,
+      `Microsoft is busy. Try again in ${wait ? `${wait} seconds` : "a minute"}.`,
       429,
       code,
     );
   }
   if (action === "cancel" && response.status === 400 && /organi[sz]er/i.test(message)) {
     return new CalendarWriteError(
-      "Only the organiser can cancel this meeting. Decline it in Outlook instead.",
+      "Only the organiser can cancel. Decline it instead.",
       400,
       code,
     );
@@ -584,7 +587,7 @@ async function writeError(response: Response, action: WriteAction) {
   }
   if (action === "respond" && response.status === 400 && /propos/i.test(`${code} ${message}`)) {
     return new CalendarWriteError(
-      "The organiser isn't taking new time proposals for this meeting. Respond without a new time, or suggest one in your note.",
+      "The organiser isn't accepting new times. Respond without one.",
       400,
       code,
     );
@@ -593,9 +596,14 @@ async function writeError(response: Response, action: WriteAction) {
     return new CalendarWriteError(RESPOND_ORGANISER, 400, code);
   }
   if (response.status === 404 || code === "ErrorItemNotFound") {
-    return new CalendarWriteError("Outlook no longer has this meeting.", 404, code);
+    return new CalendarWriteError("Meeting not found.", 404, code);
   }
-  return new CalendarWriteError(sanitizeMicrosoftError(message || WRITE_FALLBACK[action]), response.status, code);
+  if (action === "create" && response.status === 400 && message.trim()) {
+    const reason = message.replace(/\s+/g, " ").trim().slice(0, 200).replace(/[.\s]+$/, "");
+    console.error("Microsoft refused the meeting", code, reason);
+    return new CalendarWriteError("Couldn't create the meeting.", 400, code, `Microsoft refused the meeting: ${reason}. Change it rather than trying again.`);
+  }
+  return new CalendarWriteError(microsoftProblem(message, WRITE_FALLBACK[action], code, response.status), response.status, code);
 }
 
 async function graphWrite(

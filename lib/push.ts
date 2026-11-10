@@ -76,12 +76,12 @@ export async function savePushSubscription(
   const p256dh = typeof input.keys?.p256dh === "string" ? input.keys.p256dh : "";
   const auth = typeof input.keys?.auth === "string" ? input.keys.auth : "";
   if (!/^https:\/\//.test(endpoint) || endpoint.length > 2000 || !p256dh || p256dh.length > 200 || !auth || auth.length > 100) {
-    throw new CrmError("invalid_input", "This device couldn't set up notifications. Try again.", 400);
+    throw new CrmError("invalid_input", "Couldn't set up notifications. Try again.", 400);
   }
   if (!isPushEndpoint(endpoint)) {
     throw new CrmError(
       "invalid_input",
-      "This browser's push service isn't one Orbit sends to. Use Safari, Chrome, Edge or Firefox.",
+      "This browser can't get notifications. Use Safari, Chrome, Edge or Firefox.",
       400,
       { field: "endpoint" },
     );
@@ -107,12 +107,15 @@ type PushFailure = { status: number | null; reason: string };
 function failureReason(error: unknown): PushFailure {
   const status = (error as { statusCode?: number }).statusCode ?? null;
   const body = String((error as { body?: unknown }).body ?? "").slice(0, 300);
-  let reason = body;
+  let reason = "";
   try {
     const parsed = JSON.parse(body) as { reason?: unknown };
-    if (typeof parsed.reason === "string") reason = parsed.reason;
+    if (typeof parsed.reason === "string" && /^[A-Za-z]{1,60}$/.test(parsed.reason)) reason = parsed.reason;
   } catch {}
-  if (!reason) reason = error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
+  if (!reason) {
+    console.error("Push failed", status, body || (error instanceof Error ? error.message : error));
+    reason = "The push service refused it.";
+  }
   return { status, reason };
 }
 
@@ -145,7 +148,7 @@ export async function pushToUser(
   await Promise.all(
     subscriptions.map(async (subscription) => {
       if (!isPushEndpoint(subscription.endpoint)) {
-        failures.push({ status: null, reason: "This device's push service isn't one Orbit sends to." });
+        failures.push({ status: null, reason: "This browser can't get notifications." });
         return;
       }
       try {

@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
 import {
   actorIds,
@@ -163,13 +163,13 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   if (input.dueAt !== undefined) next.dueAt = timestamp(input.dueAt, "dueAt");
   if (input.remindMinutes !== undefined) {
     if (input.remindMinutes !== null && !isReminderMinutes(input.remindMinutes)) {
-      throw new CrmError("invalid_input", "Pick a reminder from the list.", 400, { field: "remindMinutes" });
+      throw new CrmError("invalid_input", "Choose a reminder.", 400, { field: "remindMinutes" });
     }
     next.remindMinutes = input.remindMinutes;
   }
   if (input.priority !== undefined) {
     if (!(TASK_PRIORITIES as readonly string[]).includes(input.priority)) {
-      throw new CrmError("invalid_input", "Priority is not recognised.", 400, { field: "priority" });
+      throw new CrmError("invalid_input", "Unknown priority.", 400, { field: "priority" });
     }
     next.priority = input.priority;
   }
@@ -223,12 +223,12 @@ export async function createTaskInDb(
       ],
     );
     const saved = await readTask(db, inserted.rows[0].id);
-    if (!saved) throw new CrmError("internal_error", "Task was not saved.", 500);
+    if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     const task = mapTask(saved);
     await recordAudit(db, actor, "task.created", "task", task.id, provenance, { after: task });
     return task;
   } catch (error) {
-    constraintError(error, "duplicate_task", "That task already exists.");
+    constraintError(error, "duplicate_task", "A matching task already exists.");
   }
 }
 
@@ -282,15 +282,15 @@ async function applyTask(
     if (isPgError(error) && error.code === "42501") {
       throw new CrmError(
         "forbidden",
-        "You can't hand this task to someone else because you didn't create it. Ask the owner or an admin to reassign it.",
+        "Only the task's creator, a workspace owner or an admin can reassign it.",
         403,
         { field: "ownerId" },
       );
     }
-    constraintError(error, "duplicate_task", "That task already exists.");
+    constraintError(error, "duplicate_task", "A matching task already exists.");
   }
   const saved = await readTask(db, current.id);
-  if (!saved) throw new CrmError("not_found", "Task not found.", 404);
+  if (!saved) throw notFound("task");
   const task = mapTask(saved);
   const event =
     before.completedAt !== task.completedAt
@@ -322,7 +322,7 @@ export async function updateTaskInDb(
   provenance?: Provenance,
 ) {
   const current = await readTask(db, id);
-  if (!current) throw new CrmError("not_found", "Task not found.", 404);
+  if (!current) throw notFound("task");
   return applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
 }
 
@@ -434,10 +434,10 @@ export async function listTasks(actor: Actor, query: TaskListQuery = {}) {
 
 export async function getTask(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(id)) throw new CrmError("not_found", "Task not found.", 404);
+  if (!isUuid(id)) throw notFound("task");
   return withActor(actor, async (db) => {
     const row = await readTask(db, id);
-    if (!row) throw new CrmError("not_found", "Task not found.", 404);
+    if (!row) throw notFound("task");
     return mapTask(row);
   });
 }
@@ -464,13 +464,13 @@ export async function updateTask(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ task: Task }>> {
   assertScope(actor.scopes, "tasks:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Task not found.", 404);
+  if (!isUuid(id)) throw notFound("task");
   const provenance = options.provenance ?? { operation: "update_task" };
   const hash = requestHash("update_task", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       const current = await readTask(db, id);
-      if (!current) throw new CrmError("not_found", "Task not found.", 404);
+      if (!current) throw notFound("task");
       const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
       return { task: updated.task };
     }),
@@ -494,7 +494,7 @@ export async function archiveTask(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ task: Task }>> {
   assertScope(actor.scopes, "tasks:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Task not found.", 404);
+  if (!isUuid(id)) throw notFound("task");
   const provenance = options.provenance ?? { operation: "archive_task" };
   const hash = requestHash("archive_task", { id, provenance });
   return withActor(actor, (db) =>
@@ -504,11 +504,11 @@ export async function archiveTask(
 
 export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   const current = await readTask(db, id);
-  if (!current) throw new CrmError("not_found", "Task not found.", 404);
+  if (!current) throw notFound("task");
   if (current.archived_at) return { task: mapTask(current) };
   await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
   const saved = await readTask(db, id);
-  if (!saved) throw new CrmError("not_found", "Task not found.", 404);
+  if (!saved) throw notFound("task");
   const task = mapTask(saved);
   await recordAudit(db, actor, "task.archived", "task", task.id, provenance, {
     before: { archivedAt: null },
@@ -519,11 +519,11 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
 
 export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   const current = await readTask(db, id);
-  if (!current) throw new CrmError("not_found", "Task not found.", 404);
+  if (!current) throw notFound("task");
   if (!current.archived_at) return { task: mapTask(current) };
   await db.query("update crm.tasks set archived_at = null where id = $1", [id]);
   const saved = await readTask(db, id);
-  if (!saved) throw new CrmError("not_found", "Task not found.", 404);
+  if (!saved) throw notFound("task");
   const task = mapTask(saved);
   await recordAudit(db, actor, "task.updated", "task", task.id, provenance, {
     fields: ["archivedAt"],
@@ -547,7 +547,7 @@ export async function restoreTaskInDb(
   provenance: Provenance,
 ) {
   const current = await readTask(db, id);
-  if (!current) throw new CrmError("not_found", "Task not found.", 404);
+  if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;
   return applyTask(db, actor, current, write, provenance);

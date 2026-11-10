@@ -13,6 +13,7 @@ import { meetingLink, readFeed } from "@/lib/ical/events";
 import {
   assertPublicHost,
   FEED_MAX_BYTES,
+  feedErrorSummary,
   fetchFeed,
   isPublicAddress,
   maskFeedUrl,
@@ -154,7 +155,7 @@ describe("calendar link safety", () => {
       "feed.mixed.test",
       "feed.mapped.test",
     ]) {
-      await assert.rejects(assertPublicHost(host, publicLookup), /can't read calendars from/, host);
+      await assert.rejects(assertPublicHost(host, publicLookup), /Can't read calendars from/, host);
     }
     await assert.rejects(assertPublicHost("feed.missing.test", publicLookup), /Couldn't find feed\.missing\.test/);
   });
@@ -177,7 +178,7 @@ describe("calendar link safety", () => {
     );
     await assert.rejects(
       fetchFeed(new URL("https://a.example/cal.ics"), { fetchImpl, lookup: publicLookup }),
-      /can't read calendars from feed\.private\.test/,
+      /Can't read calendars from feed\.private\.test/,
     );
     assert.ok(!calls.some((call) => call.url.includes("private.test")));
     await assert.rejects(
@@ -244,12 +245,18 @@ describe("calendar link safety", () => {
       (error: Error) => error,
     );
     assert.ok(gone instanceof Error);
-    assert.match(gone.message, /HTTP 404/);
+    assert.equal(gone.message, "The calendar link stopped working. Add it again.");
     assert.doesNotMatch(gone.message, /gone\.ics|e\.example/);
   });
 
+  it("keeps the private link out of logs", () => {
+    const summary = feedErrorSummary(new TypeError("Invalid URL: webcal://outlook.example/owa/calendar/abc123secret/reachcalendar.ics"));
+    assert.equal(summary, "TypeError: Invalid URL: <link>");
+    assert.doesNotMatch(feedErrorSummary(new Error("fetch failed for https://feeds.example/private/token=xyz")), /token=xyz/);
+  });
+
   it("refuses loopback even when connecting directly", async () => {
-    await assert.rejects(secureFeedFetch("https://localhost:9/cal.ics"), /can't read calendars from localhost/);
+    await assert.rejects(secureFeedFetch("https://localhost:9/cal.ics"), /Can't read calendars from localhost/);
   });
 });
 
@@ -686,7 +693,7 @@ describe("calendar link sync", () => {
         { url: "https://feed.private.test/cal.ics" },
         { feedFetch, lookup: publicLookup, now: NOW },
       ),
-      /can't read calendars from feed\.private\.test/,
+      /Can't read calendars from feed\.private\.test/,
     );
     await assert.rejects(
       addCalendarFeed(
@@ -702,7 +709,7 @@ describe("calendar link sync", () => {
         { url: "https://calendar.google.com/broken.ics" },
         { feedFetch, lookup: publicLookup, now: NOW },
       ),
-      /stopped working \(HTTP 404\)/,
+      /The calendar link stopped working\. Add it again\./,
     );
     assert.equal((await feedRows(owner.userId)).length, 1);
     assert.ok(!calls.some((call) => call.url.includes("private.test")));
@@ -728,12 +735,12 @@ describe("calendar link sync", () => {
   it("records failures on the account and keeps the events", async () => {
     feedStatus = 500;
     const result = await syncCalendar(owner, { feedFetch, lookup: publicLookup, now: NOW + 20 * HOUR, force: true });
-    assert.match(result.error ?? "", /HTTP 500/);
+    assert.match(result.error ?? "", /Couldn't sync this calendar\. Orbit will retry\./);
     const [row] = await feedRows(owner.userId);
-    assert.match(row.last_error ?? "", /HTTP 500/);
+    assert.match(row.last_error ?? "", /Couldn't sync this calendar\. Orbit will retry\./);
     assert.equal((await feedEventRows(owner.userId)).length, 4);
     const group = (await listCalendarGroups(owner)).find((item) => item.provider === "ics")!;
-    assert.match(group.lastError ?? "", /HTTP 500/);
+    assert.match(group.lastError ?? "", /Couldn't sync this calendar\. Orbit will retry\./);
     assert.equal(group.connected, true);
 
     feedStatus = 200;

@@ -1,7 +1,7 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { membershipsFor } from "@/lib/auth/user";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { hashToken } from "@/lib/crm/tokens";
@@ -75,13 +75,13 @@ export async function companionOnline(actor: UserActor) {
 }
 
 export async function revokeCompanion(actor: UserActor, id: unknown) {
-  if (typeof id !== "string" || !isUuid(id)) throw new CrmError("not_found", "That Mac isn't paired.", 404);
+  if (typeof id !== "string" || !isUuid(id)) throw notFound("Mac");
   await withActor(actor, async (db) => {
     const result = await db.query("update crm.ai_companions set revoked_at = now() where id = $1 and user_id = $2 and revoked_at is null", [
       id,
       actor.userId,
     ]);
-    if (result.rowCount === 0) throw new CrmError("not_found", "That Mac isn't paired.", 404);
+    if (result.rowCount === 0) throw notFound("Mac");
   });
 }
 
@@ -109,7 +109,7 @@ export async function redeemPairing(code: unknown, name: unknown) {
     [hashToken(clean), hashToken(token), typeof name === "string" ? name.slice(0, 120) : "Mac"],
   );
   const row = result.rows[0];
-  if (!row) throw new CrmError("invalid_input", "That code has expired or was already used. Make a new one in Orbit.", 400);
+  if (!row) throw new CrmError("invalid_input", "Code expired or used. Make a new one in Orbit.", 400);
   const actor = await actorFor(row.user_id, row.workspace_id);
   return { token, companionId: row.companion_id, email: actor?.email ?? null, workspace: actor?.workspaceName ?? null };
 }
@@ -141,11 +141,11 @@ function sinceText(iso: string, now: number) {
 export async function companionOfflineMessage(actor: UserActor, now = Date.now()) {
   const companions = await listCompanions(actor);
   if (companions.length === 0) {
-    return "To use your Claude account, pair your Mac in Settings › Connections. It takes one command in Terminal.";
+    return "Pair your Mac in Settings › Connections to use your Claude account.";
   }
   const latest = companions
     .filter((companion) => companion.lastSeenAt)
     .sort((a, b) => new Date(b.lastSeenAt!).getTime() - new Date(a.lastSeenAt!).getTime())[0];
   const seen = latest ? ` ${latest.name} was last seen ${sinceText(latest.lastSeenAt!, now)}.` : "";
-  return `Orbit Agent isn't running on your Mac.${seen} Run this once in Terminal and it will keep running, starting by itself at login: ${AGENT_START_COMMAND}`;
+  return `Orbit Agent isn't running on your Mac.${seen} Start it in Terminal: ${AGENT_START_COMMAND}`;
 }

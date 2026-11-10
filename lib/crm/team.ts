@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -42,11 +42,7 @@ function inviteTokenHash(token: string) {
 }
 
 function teamError(error: unknown): never {
-  if (isPgError(error) && ["42501", "22023", "23505"].includes(error.code)) {
-    const code = error.code === "42501" ? "forbidden" : error.code === "23505" ? "conflict" : "invalid_input";
-    const status = error.code === "42501" ? 403 : error.code === "23505" ? 409 : 400;
-    throw new CrmError(code, error.message, status);
-  }
+  if (isPgError(error) && ["42501", "22023", "23505"].includes(error.code)) throw pgFailure(error, { "23505": "They're already in this workspace." }) ?? error;
   throw error;
 }
 

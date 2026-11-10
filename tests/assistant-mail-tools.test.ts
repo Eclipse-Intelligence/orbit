@@ -273,7 +273,7 @@ describe("assistant mail tools", () => {
 
     const link = (await admin.query<{ id: string }>("insert into crm.knowledge_items (workspace_id, scope, kind, title, source_url, status) values ($1, 'eclipse', 'link', 'Pricing page', 'https://eclipse.test/pricing', 'ready') returning id", [owner.workspaceId])).rows[0].id;
     const refused = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", { ...args, attachmentIds: [link] }))) as { error: string };
-    assert.match(refused.error, /Pricing page is a link or text in Knowledge, not a file/);
+    assert.match(refused.error, /Pricing page is a link or text in Knowledge, not a file, so it can't be attached/);
     const empty = (
       await admin.query<{ id: string }>(
         `insert into crm.knowledge_items (workspace_id, scope, kind, title, file_path, mime_type, size_bytes, status, created_by_user_id)
@@ -283,7 +283,7 @@ describe("assistant mail tools", () => {
     ).rows[0].id;
     env.objects.set(`knowledge/${owner.workspaceId}/blank/Blank.pdf`, new Uint8Array());
     const blank = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", { ...args, attachmentIds: [empty] }))) as { error: string };
-    assert.equal(blank.error, "Blank form is an empty file in Knowledge, so it can't be attached.");
+    assert.equal(blank.error, "Blank form is empty.");
   });
 
   it("emails a file attached in the chat, names it on the cards and keeps the chat's own copy", async () => {

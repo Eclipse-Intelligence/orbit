@@ -1,13 +1,15 @@
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notSetUp } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { graphReconnect } from "@/lib/mail/accounts";
 import { appNeedsAttention } from "@/lib/mail/microsoft";
 import { APP_NEEDS_ATTENTION } from "@/lib/microsoft/oauth";
 
-export const AI_NOT_SET_UP = "AI isn't set up. Add LLM_API_KEY in Vercel.";
+export function aiNotSetUp(actor: UserActor) {
+  return notSetUp("AI", "LLM_API_KEY", actor);
+}
 
 export const TOO_MANY_REQUESTS = "Too many requests. Try again in a few minutes.";
 

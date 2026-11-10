@@ -65,7 +65,7 @@ describe("web checks", () => {
     assert.equal(decision.answers.pick.type === "choice" && decision.answers.pick.choice, "b");
     assert.deepEqual(decision.answers.nope, { type: "refusal" });
     assert.deepEqual(decision.citations, [{ url: "https://news.test/a", title: "A", excerpts: ["One"] }]);
-    await assert.rejects(decide({}, { q: { type: "noul", instructions: "Q?" } }, { env: {} }), /PARALLEL_API_KEY/);
+    await assert.rejects(decide({}, { q: { type: "noul", instructions: "Q?" } }, { env: {} }), /Web checks aren't set up\./);
     const denied = parallel(() => new Response("no", { status: 401 }));
     await assert.rejects(decide({}, { q: { type: "noul", instructions: "Q?" } }, { fetchImpl: denied.fetchImpl, env: ENV }), /rejected the key/);
   });
@@ -75,8 +75,26 @@ describe("web checks", () => {
     await assert.rejects(saveWebCheck(owner, { kind: "tag", label: "agency", question: "Agency?" }), /10 to 1,000/);
     const rule = await saveWebCheck(owner, { kind: "tag", label: "  Agency ", question: "Is the company a marketing, content or SEO agency?" });
     assert.equal(rule.label, "agency");
-    await assert.rejects(saveWebCheck(owner, { kind: "tag", label: "AGENCY", question: "Is the company a marketing agency?" }), /already a check for agency/);
+    await assert.rejects(saveWebCheck(owner, { kind: "tag", label: "AGENCY", question: "Is the company a marketing agency?" }), /agency already exists/);
     await saveWebCheck(owner, { kind: "tag", label: "fintech", question: "Is the company a financial technology business?" });
+    await assert.rejects(saveWebCheck(owner, { kind: "tag", label: "  ", question: "Is the company a marketing agency?" }), /^CrmError: Enter a name\.$/);
+    await assert.rejects(saveWebCheck(owner, { kind: "signal", label: "x".repeat(61), question: "Did the company raise money?" }), /Keep the name to 60 characters\./);
+  });
+
+  it("stops checking when Parallel wants payment, a key or a pause, but not on a server error", async () => {
+    const company = (await createCompany(owner, { name: "Payment Due", domain: "payment-due.test" })).body.company;
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      for (const [status, stop] of [[402, true], [401, true], [429, true], [500, false]] as const) {
+        const api = parallel(() => new Response("no", { status }));
+        const result = await checkCompany(owner, company.id, { tags: true, gaps: true, fetchImpl: api.fetchImpl, env: ENV });
+        assert.equal(result.status, "failed", String(status));
+        assert.equal(result.stop, stop, String(status));
+      }
+    } finally {
+      console.error = realConsoleError;
+    }
   });
 
   it("adds confident tags and fills only the gaps context.dev left", async () => {
@@ -246,7 +264,7 @@ describe("web checks", () => {
     await saveEnrichmentSettings(owner, { webIcp: false });
     assert.equal(await getCompanyFit(owner, target.id), null);
     await saveEnrichmentSettings(owner, { webIcp: true });
-    await assert.rejects(saveEnrichmentSettings(owner, { icpText: "x".repeat(20_001) }), /under 20,000/);
+    await assert.rejects(saveEnrichmentSettings(owner, { icpText: "x".repeat(20_001) }), /to 20,000 characters/);
   });
 
   it("checks facts for the assistant and reports refusals as unknown", async () => {
@@ -280,7 +298,7 @@ describe("web checks", () => {
     assert.equal(result.answers.leader.answer, null);
     assert.deepEqual(result.sources[0].excerpts, ["Pulse raised £2m.", "Second passage."]);
     assert.deepEqual(await checkWeb({ about: "Pulse", questions: [{ key: "x", type: "choice", question: "Which?", options: ["One"] }] }, { env: ENV }), { error: "x: give 2 to 50 options." });
-    assert.deepEqual(await checkWeb({ about: "Pulse", questions: [{ key: "x", type: "yes_no", question: "Q?" }] }, { env: {} }), { error: "Add PARALLEL_API_KEY in Vercel to run web checks." });
+    assert.deepEqual(await checkWeb({ about: "Pulse", questions: [{ key: "x", type: "yes_no", question: "Q?" }] }, { env: {} }), { error: "Web checks aren't set up." });
   });
 
   it("saves the check for companies an agent creates", async () => {

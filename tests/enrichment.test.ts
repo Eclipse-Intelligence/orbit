@@ -155,7 +155,7 @@ describe("company enrichment", () => {
   it("explains when it can't look a company up", async () => {
     const bare = (await createCompany(owner, { name: "No Site Ltd" })).body.company;
     assert.equal((await enrichCompany(owner, bare.id, { env: ENV })).status, "skipped");
-    assert.equal((await enrichCompany(owner, bare.id, { env: {} })).message, "Add CONTEXT_DEV_API_KEY to enrich companies.");
+    assert.equal((await enrichCompany(owner, bare.id, { env: {} })).message, "Enrichment isn't set up. Add CONTEXT_DEV_API_KEY.");
     await updateCompany(owner, bare.id, { domain: "nosite.test" });
     const missing = fake([(call) => (call.url.endsWith("/v1/brand/retrieve") ? { status: 400, body: { code: "NOT_FOUND", message: "Brand not found" } } : null)]);
     assert.equal((await enrichCompany(owner, bare.id, { env: ENV, fetchImpl: missing.fetchImpl })).status, "not_found");
@@ -331,7 +331,7 @@ describe("contact email and LinkedIn waterfall", () => {
         ["found", "Found Kent Brockman's email with Hunter."],
       ],
     );
-    await assert.rejects(enrichContacts(owner, Array.from({ length: 7 }, () => crypto.randomUUID()), "email"), /up to 6 people/);
+    await assert.rejects(enrichContacts(owner, Array.from({ length: 7 }, () => crypto.randomUUID()), "email"), /Up to 6 contacts/);
     assert.deepEqual(enrichmentAvailability(ENV), { email: true, linkedin: true, phone: true, company: true, logoClientId: null });
     assert.deepEqual(enrichmentAvailability({ ENROW_API_KEY: "x", NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID: "brandLL_1" }), {
       email: true,

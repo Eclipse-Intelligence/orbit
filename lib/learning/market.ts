@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, tooMany } from "@/lib/crm/errors";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import type { Actor, UserActor } from "@/lib/crm/types";
 
@@ -60,15 +60,15 @@ export async function listWatchlist(actor: Actor): Promise<WatchItem[]> {
 
 export async function addWatchItems(actor: UserActor, items: unknown) {
   if (!Array.isArray(items) || items.length === 0) throw new CrmError("invalid_input", "Add at least one thing to watch.", 400, { field: "label" });
-  if (items.length > 50) throw new CrmError("invalid_input", "Add up to 50 at a time.", 400);
+  if (items.length > 50) throw new CrmError("invalid_input", tooMany(50, "at a time"), 400);
   const clean = items.map((item) => {
     const raw = (item ?? {}) as Record<string, unknown>;
     const kind = WATCH_KINDS.includes(raw.kind as WatchKind) ? (raw.kind as WatchKind) : null;
     const label = text(raw.label, 160);
     if (!kind) throw new CrmError("invalid_input", "Choose topic, competitor, person, account or source.", 400, { field: "kind" });
-    if (!label) throw new CrmError("invalid_input", "Give it a name.", 400, { field: "label" });
+    if (!label) throw new CrmError("invalid_input", "Enter a name.", 400, { field: "label" });
     const url = raw.url ? link(raw.url, 500) : null;
-    if (raw.url && !url) throw new CrmError("invalid_input", "Enter a full link starting with https://.", 400, { field: "url" });
+    if (raw.url && !url) throw new CrmError("invalid_input", "Use an https link.", 400, { field: "url" });
     return { kind, label, url, notes: text(raw.notes, 500) || null, companyId: typeof raw.companyId === "string" ? raw.companyId : null };
   });
   return withActor(actor, async (db) => {
@@ -99,7 +99,7 @@ export async function removeWatchItems(actor: UserActor, ids: unknown) {
 export async function addMarketNotes(actor: Actor, notes: unknown) {
   if (actor.type === "agent") assertScope(actor.scopes, "market:write");
   if (!Array.isArray(notes) || notes.length === 0) throw new CrmError("invalid_input", "Send at least one note.", 400, { field: "notes" });
-  if (notes.length > MARKET_NOTES_PER_CALL) throw new CrmError("invalid_input", `Send up to ${MARKET_NOTES_PER_CALL} notes at a time.`, 400, { field: "notes" });
+  if (notes.length > MARKET_NOTES_PER_CALL) throw new CrmError("invalid_input", tooMany(MARKET_NOTES_PER_CALL, "notes at a time"), 400, { field: "notes" });
   const rejected: { index: number; reason: string }[] = [];
   const clean = notes.flatMap((note, index) => {
     const raw = (note ?? {}) as Record<string, unknown>;
@@ -199,7 +199,7 @@ export async function listMarketNotes(actor: UserActor, options: { limit?: numbe
 export async function deleteMarketNote(actor: UserActor, id: string) {
   return withActor(actor, async (db) => {
     const result = await db.query("delete from crm.market_notes where workspace_id = $1 and id = $2", [actor.workspaceId, id]);
-    if (!result.rowCount) throw new CrmError("not_found", "That note doesn't exist.", 404);
+    if (!result.rowCount) throw notFound("note");
     return { deleted: true };
   });
 }

@@ -144,7 +144,7 @@ describe("email attachments", () => {
 
   it("refuses files that are too big, never finished uploading, or belong to someone else", async () => {
     const env = world();
-    await assert.rejects(prepareAttachment(owner, { name: "Huge.zip", size: 26 * 1024 * 1024 }, env.fetchImpl), /up to 25.0 MB in total|up to 25 MB/);
+    await assert.rejects(prepareAttachment(owner, { name: "Huge.zip", size: 26 * 1024 * 1024 }, env.fetchImpl), /over the 25 MB attachment limit/);
     const pending = await prepareAttachment(owner, { name: "Half.pdf", size: 100 }, env.fetchImpl);
     await assert.rejects(
       sendContactEmail(owner, contactId, { subject: "Half", body: "Hm.", attachments: [pending.id] }, env.fetchImpl),

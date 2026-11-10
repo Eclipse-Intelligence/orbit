@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, tooMany } from "@/lib/crm/errors";
 import { isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { cleanText } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
@@ -23,7 +23,7 @@ function mapBoard(row: BoardRow): BoardSummary {
 
 function boardName(value: unknown) {
   const name = cleanText(typeof value === "string" ? value : "", 120, "name");
-  if (!name) throw new CrmError("invalid_input", "Give the board a name.", 400, { field: "name" });
+  if (!name) throw new CrmError("invalid_input", "Enter a board name.", 400, { field: "name" });
   return name;
 }
 
@@ -40,15 +40,15 @@ async function readBoard(db: Db, workspaceId: string, id: string) {
 }
 
 async function assertUniqueName(db: Db, workspaceId: string, name: string, except: string | null) {
-  const clash = await db.query(
-    `select 1 from crm.pipelines
+  const clash = await db.query<{ name: string }>(
+    `select name from crm.pipelines
      where workspace_id = $1 and archived_at is null and kind = 'board'
        and lower(name) = lower($2) and ($3::uuid is null or id <> $3::uuid)
      limit 1`,
     [workspaceId, name, except],
   );
-  if ((clash.rowCount ?? 0) > 0) {
-    throw new CrmError("conflict", `There's already a board called ${name}.`, 409, { field: "name" });
+  if (clash.rows[0]) {
+    throw new CrmError("conflict", `${clash.rows[0].name} already exists.`, 409, { field: "name" });
   }
 }
 
@@ -71,7 +71,7 @@ export async function getBoard(actor: Actor, id: string): Promise<Board> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const row = await readBoard(db, actor.workspaceId, id);
-    if (!row) throw new CrmError("not_found", "Board not found.", 404);
+    if (!row) throw notFound("board");
     const stages = await db.query<{ id: string; pipeline_id: string; name: string; position: number; probability: number; is_won: boolean; is_lost: boolean }>(
       `select id, pipeline_id, name, position, probability, is_won, is_lost
        from crm.pipeline_stages where pipeline_id = $1 order by position asc`,
@@ -108,7 +108,7 @@ export async function createBoard(actor: Actor, input: { name: unknown }): Promi
       "select count(*)::int as total from crm.pipelines where workspace_id = $1 and archived_at is null and kind = 'board'",
       [actor.workspaceId],
     );
-    if ((count.rows[0]?.total ?? 0) >= 30) throw new CrmError("invalid_input", "You can have up to 30 boards.", 400);
+    if ((count.rows[0]?.total ?? 0) >= 30) throw new CrmError("invalid_input", tooMany(30, "boards"), 400);
     const inserted = await db.query<{ id: string }>(
       `insert into crm.pipelines (workspace_id, name, is_default, kind, position)
        values ($1, $2, false, 'board',
@@ -126,7 +126,7 @@ export async function createBoard(actor: Actor, input: { name: unknown }): Promi
     }
     await recordAudit(db, actor, "board.created", "pipeline", id, { operation: "create_board" }, { after: { name } });
     const row = await readBoard(db, actor.workspaceId, id);
-    if (!row) throw new CrmError("internal_error", "Board was not saved.", 500);
+    if (!row) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     return mapBoard(row);
   });
 }
@@ -139,7 +139,7 @@ export async function updateBoard(
   assertScope(actor.scopes, "opportunities:write");
   return withActor(actor, async (db) => {
     const current = await readBoard(db, actor.workspaceId, id);
-    if (!current) throw new CrmError("not_found", "Board not found.", 404);
+    if (!current) throw notFound("board");
     const sets: string[] = [];
     const values: unknown[] = [];
     const before: Record<string, unknown> = {};
@@ -172,7 +172,7 @@ export async function updateBoard(
       after,
     });
     const row = await readBoard(db, actor.workspaceId, current.id);
-    if (!row) throw new CrmError("not_found", "Board not found.", 404);
+    if (!row) throw notFound("board");
     return mapBoard(row);
   });
 }
@@ -183,7 +183,7 @@ export async function archiveBoard(actor: Actor, id: string): Promise<{ archived
   assertScope(actor.scopes, "opportunities:write");
   return withActor(actor, async (db) => {
     const current = await readBoard(db, actor.workspaceId, id);
-    if (!current) throw new CrmError("not_found", "Board not found.", 404);
+    if (!current) throw notFound("board");
     const provenance = { operation: "archive_board" };
     const open = await db.query<{ total: number }>(
       "select count(*)::int as total from crm.opportunities where pipeline_id = $1 and archived_at is null",
@@ -192,7 +192,7 @@ export async function archiveBoard(actor: Actor, id: string): Promise<{ archived
     if ((open.rows[0]?.total ?? 0) > BOARD_ARCHIVE_CARD_LIMIT) {
       throw new CrmError(
         "invalid_input",
-        `${current.name} has more than ${BOARD_ARCHIVE_CARD_LIMIT} cards. Archive some of them first, then delete the board.`,
+        `${current.name} has over ${BOARD_ARCHIVE_CARD_LIMIT} cards. Archive some first.`,
         400,
       );
     }

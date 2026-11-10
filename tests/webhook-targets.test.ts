@@ -117,7 +117,7 @@ describe("webhook targets", () => {
     assert.equal(called, 0);
     const row = await readDelivery(id);
     assert.equal(row.status, "failed");
-    assert.match(row.last_error ?? "", /private or local address/);
+    assert.match(row.last_error ?? "", /isn't a public address/);
   });
 
   it("retries later when the address can't be looked up just now", async () => {
@@ -135,10 +135,10 @@ describe("webhook targets", () => {
     assert.equal(called, 0);
     const row = await readDelivery(id);
     assert.equal(row.status, "pending");
-    assert.match(row.last_error ?? "", /couldn't be looked up just now/);
+    assert.match(row.last_error ?? "", /Couldn't look up flaky\.example/);
     await assert.rejects(
       createWebhook(owner, { url: "https://flaky.example/hook", events: ["*"] }, { lookup }),
-      (error: unknown) => error instanceof CrmError && error.status === 400 && /Try again in a minute/.test(error.message),
+      (error: unknown) => error instanceof CrmError && error.status === 400 && /Couldn't look up flaky\.example\. Try again\./.test(error.message),
     );
   });
 
@@ -148,7 +148,7 @@ describe("webhook targets", () => {
     await deliverDueWebhooks(20, { lookup: resolver({}), fetchImpl: (async () => new Response("ok")) as typeof fetch });
     const row = await readDelivery(id);
     assert.equal(row.status, "failed");
-    assert.match(row.last_error ?? "", /couldn't be found/);
+    assert.match(row.last_error ?? "", /not found\. Check the URL/);
   });
 
   it("does not follow redirects and records a redirect as a failed attempt", async () => {
@@ -164,7 +164,7 @@ describe("webhook targets", () => {
     const row = await readDelivery(id);
     assert.equal(row.status, "pending");
     assert.equal(row.last_status_code, 302);
-    assert.match(row.last_error ?? "", /redirect/);
+    assert.match(row.last_error ?? "", /Redirected/);
   });
 
   it("delivers to a public host", async () => {

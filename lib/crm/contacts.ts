@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { requireCompany } from "@/lib/crm/links";
 import {
   actorIds,
@@ -261,7 +261,7 @@ function prepareContact(input: ContactWrite, mode: "create" | "patch" | "upsert"
     if (!canMatch) {
       throw new CrmError(
         "invalid_input",
-        "Provide an email, LinkedIn profile, Sales Navigator lead, or a name and company.",
+        "Enter an email, LinkedIn profile, Sales Navigator lead or a name and company.",
         400,
         { field: "email" },
       );
@@ -369,7 +369,7 @@ async function applyContact(
   if (!hasIdentity(current, write)) {
     throw new CrmError(
       "invalid_input",
-      "A contact needs a name, email, phone, LinkedIn profile or Sales Navigator lead.",
+      "Enter a name, email, phone, LinkedIn profile or Sales Navigator lead.",
       400,
       { field: "email" },
     );
@@ -430,7 +430,7 @@ async function applyContact(
     constraintError(error, "duplicate_contact", "A matching contact already exists.");
   }
   const saved = await readContact(db, current.id, actor.workspaceId);
-  if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!saved) throw notFound("contact");
   const contact = mapContact(saved);
   await recordAudit(
     db,
@@ -490,7 +490,7 @@ async function insertContact(
       ],
     );
     const saved = await readContact(db, inserted.rows[0].id, actor.workspaceId);
-    if (!saved) throw new CrmError("internal_error", "Contact was not saved.", 500);
+    if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     const contact = mapContact(saved);
     await recordAudit(db, actor, "contact.created", "contact", contact.id, provenance, {
       after: contact,
@@ -635,7 +635,7 @@ export async function findContactsToLink(
 ) {
   assertScope(actor.scopes, "crm:read");
   if (companyId !== null && !isUuid(companyId)) {
-    throw new CrmError("not_found", "Company not found.", 404);
+    throw notFound("company");
   }
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];
@@ -667,10 +667,10 @@ export async function findContactsToLink(
 
 export async function getContact(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!isUuid(id)) throw notFound("contact");
   return withActor(actor, async (db) => {
     const row = await readContact(db, id, actor.workspaceId);
-    if (!row) throw new CrmError("not_found", "Contact not found.", 404);
+    if (!row) throw notFound("contact");
     return mapContact(row);
   });
 }
@@ -697,14 +697,14 @@ export async function updateContact(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ contact: Contact }>> {
   assertScope(actor.scopes, "contacts:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!isUuid(id)) throw notFound("contact");
   const provenance = options.provenance ?? { operation: "update_contact" };
   const hash = requestHash("update_contact", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await lockNamespace(db, actor.workspaceId, "contacts");
       const current = await readContact(db, id, actor.workspaceId);
-      if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+      if (!current) throw notFound("contact");
       const write = prepareContact(input, "patch");
       const updated = await applyContact(db, actor, current, write, provenance);
       return { contact: updated.contact };
@@ -720,7 +720,7 @@ export async function editContactTagsInDb(
   provenance: Provenance,
 ) {
   const current = await readContact(db, id, actor.workspaceId);
-  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!current) throw notFound("contact");
   const write = prepareContact({ tags: edit(current.tags ?? []) }, "patch");
   return applyContact(db, actor, current, write, provenance);
 }
@@ -732,7 +732,7 @@ export async function editContactTags(
   provenance: Provenance,
 ) {
   assertScope(actor.scopes, "contacts:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!isUuid(id)) throw notFound("contact");
   return withActor(actor, async (db) => {
     await lockNamespace(db, actor.workspaceId, "contacts");
     const updated = await editContactTagsInDb(db, actor, id, edit, provenance);
@@ -746,7 +746,7 @@ export async function archiveContact(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ contact: Contact }>> {
   assertScope(actor.scopes, "contacts:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!isUuid(id)) throw notFound("contact");
   const provenance = options.provenance ?? { operation: "archive_contact" };
   const hash = requestHash("archive_contact", { id, provenance });
   return withActor(actor, (db) =>
@@ -756,14 +756,14 @@ export async function archiveContact(
 
 export async function archiveContactInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   const current = await readContact(db, id, actor.workspaceId);
-  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!current) throw notFound("contact");
   if (current.archived_at) return { contact: mapContact(current) };
   await db.query(
     "update crm.contacts set archived_at = now() where id = $1 and workspace_id = $2",
     [id, actor.workspaceId],
   );
   const saved = await readContact(db, id, actor.workspaceId);
-  if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!saved) throw notFound("contact");
   const contact = mapContact(saved);
   await recordAudit(db, actor, "contact.archived", "contact", contact.id, provenance, {
     before: { archivedAt: null },
@@ -778,7 +778,7 @@ export async function unarchiveContact(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ contact: Contact }>> {
   assertScope(actor.scopes, "contacts:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!isUuid(id)) throw notFound("contact");
   const provenance = options.provenance ?? { operation: "unarchive_contact" };
   const hash = requestHash("unarchive_contact", { id, provenance });
   return withActor(actor, (db) =>
@@ -789,7 +789,7 @@ export async function unarchiveContact(
 export async function unarchiveContactInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   await lockNamespace(db, actor.workspaceId, "contacts");
   const current = await readContact(db, id, actor.workspaceId);
-  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!current) throw notFound("contact");
   if (!current.archived_at) return { contact: mapContact(current) };
   try {
     await db.query(
@@ -804,7 +804,7 @@ export async function unarchiveContactInDb(db: Db, actor: Actor, id: string, pro
     );
   }
   const saved = await readContact(db, id, actor.workspaceId);
-  if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!saved) throw notFound("contact");
   const contact = mapContact(saved);
   await recordAudit(db, actor, "contact.updated", "contact", contact.id, provenance, {
     fields: ["archivedAt"],
@@ -817,7 +817,7 @@ export async function unarchiveContactInDb(db: Db, actor: Actor, id: string, pro
 export async function updateContactInDb(db: Db, actor: Actor, id: string, input: ContactWrite, provenance: Provenance) {
   await lockNamespace(db, actor.workspaceId, "contacts");
   const current = await readContact(db, id, actor.workspaceId);
-  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!current) throw notFound("contact");
   return applyContact(db, actor, current, prepareContact(input, "patch"), provenance);
 }
 

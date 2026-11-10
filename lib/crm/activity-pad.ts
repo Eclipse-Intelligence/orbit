@@ -4,7 +4,7 @@ import { createActivity } from "@/lib/crm/activities";
 import { createTaskWithClickUp, getClickUpPicker } from "@/lib/crm/clickup";
 import { getContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, tooLong } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Activity, UserActor } from "@/lib/crm/types";
 import { completeJson } from "@/lib/llm";
@@ -52,8 +52,8 @@ function headline(text: string) {
 export async function logPadActivity(actor: UserActor, input: PadActivityInput): Promise<{ activity: Activity; warning: string | null }> {
   const raw = typeof input.text === "string" ? input.text.trim() : "";
   const text = namedMentions(raw).replace(/[ \t]+([,.;:!?])/g, "$1");
-  if (!text) throw new CrmError("invalid_input", "Write what happened first.", 400);
-  if (text.length > 10_000) throw new CrmError("invalid_input", "That's too long for one activity.", 400);
+  if (!text) throw new CrmError("invalid_input", "Enter what happened first.", 400);
+  if (text.length > 10_000) throw new CrmError("invalid_input", tooLong("the activity", 10_000), 400);
   const type = TYPES.includes(input.type as PadActivityType) ? (input.type as PadActivityType) : "note";
   const tags = mentionsIn(raw);
   let contactId = input.contactId && isUuid(input.contactId) ? input.contactId : (tags.find((tag) => tag.kind === "contact")?.id ?? null);

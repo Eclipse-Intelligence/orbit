@@ -13,7 +13,7 @@ import {
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, errorText, notFound } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { hasCalendarAccounts, hasCalendarFeeds } from "@/lib/crm/calendar-accounts";
 import { readStored } from "@/lib/crm/inbox";
@@ -171,10 +171,7 @@ export function validTime(value: string | null | undefined) {
   return new Date(time).toISOString();
 }
 
-export function errorText(error: unknown, fallback: string) {
-  const message = error instanceof Error ? error.message : fallback;
-  return message.replace(/\s+/g, " ").trim().slice(0, 500) || fallback;
-}
+export { errorText };
 
 function mapParticipants(value: unknown): Participant[] {
   if (!Array.isArray(value)) return [];
@@ -694,7 +691,7 @@ async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, con
     [contactId, actor.workspaceId],
   );
   const contact = found.rows[0];
-  if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!contact) throw notFound("contact");
   const activity = await createActivityInDb(
     db,
     actor,
@@ -725,7 +722,7 @@ async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, con
 
 async function lockUnfiled(db: Db, actor: UserActor, importId: string) {
   const row = await lockImport(db, actor, importId);
-  if (!row) throw new CrmError("not_found", "Conversation not found.", 404);
+  if (!row) throw notFound("conversation");
   if (row.status === "filed") {
     throw new CrmError("conflict", "This conversation is already filed.", 409);
   }
@@ -741,8 +738,8 @@ export async function fileImport(
   options: FileOptions = {},
 ) {
   assertScope(actor.scopes, "activities:write");
-  if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
-  if (!isUuid(contactId)) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!isUuid(importId)) throw notFound("conversation");
+  if (!isUuid(contactId)) throw notFound("contact");
   const filed = await withActor(actor, async (db) => {
     const row = await lockUnfiled(db, actor, importId);
     const result = await fileLockedImport(db, actor, row, contactId, options.provenance);
@@ -791,7 +788,7 @@ export async function createContactFromAttendeeInDb(
   if (internal.isInternal(wanted)) {
     throw new CrmError(
       "invalid_input",
-      "That address belongs to you or your workspace, so it can't become a contact.",
+      "That's your own or a colleague's address.",
       400,
       { field: "email" },
     );
@@ -851,7 +848,7 @@ export async function createContactFromAttendeeInDb(
       created = result.created;
     }
   }
-  if (!contactId) throw new CrmError("internal_error", "Contact was not saved.", 500);
+  if (!contactId) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
   return { contactId, email: wanted, created };
 }
 
@@ -890,7 +887,7 @@ export async function createContactAndFile(
   assertScope(actor.scopes, "activities:write");
   assertScope(actor.scopes, "contacts:write");
   assertScope(actor.scopes, "companies:write");
-  if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
+  if (!isUuid(importId)) throw notFound("conversation");
   const wanted = canonicalEmail(typeof email === "string" ? email : "");
   if (!wanted) {
     throw new CrmError("invalid_input", "Enter a valid email address.", 400, { field: "email" });
@@ -922,7 +919,7 @@ export async function createContactAndFile(
 
 export async function ignoreImport(actor: UserActor, importId: string) {
   assertScope(actor.scopes, "activities:write");
-  if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
+  if (!isUuid(importId)) throw notFound("conversation");
   await withActor(actor, async (db) => {
     const row = await lockUnfiled(db, actor, importId);
     await db.query(
@@ -994,7 +991,7 @@ export async function summariseImport(
         reuse: claimed.sibling,
       },
     );
-    if (insight.status === "failed") error = insight.error ?? "Could not summarise the conversation.";
+    if (insight.status === "failed") error = insight.error ?? "Couldn't summarise the conversation.";
     await withActor(actor, async (db) => {
       await db.query("update crm.conversation_imports set error = $2 where id = $1", [
         importId,
@@ -1003,7 +1000,7 @@ export async function summariseImport(
     });
     return insight;
   } catch (failure) {
-    error = errorText(failure, "Could not summarise the conversation.");
+    error = errorText(failure, "Couldn't summarise the conversation.");
     await withActor(actor, async (db) => {
       await db.query("update crm.conversation_imports set error = $2 where id = $1", [
         importId,

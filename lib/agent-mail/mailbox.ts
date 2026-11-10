@@ -2,7 +2,7 @@ import { heldAgentMail, type HeldAgentMail } from "@/lib/agent-mail/held";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { listMembers } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, notSetUp } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -179,25 +179,25 @@ function cleanMailboxAddress(value: unknown) {
   return address;
 }
 
-function webhookOrigin() {
+function webhookOrigin(actor: UserActor) {
   const site = siteOrigin();
   if (!site || !/^https:\/\//.test(site)) {
-    throw new CrmError("invalid_input", "Set SITE_URL to Orbit's https address first, so MachineMail can reach it.", 400);
+    throw new CrmError("invalid_input", actor.role === "owner" ? "Set SITE_URL to Orbit's https address first, so MachineMail can reach it." : notSetUp("Orbit's web address"), 400);
   }
   return site.replace(/\/+$/, "");
 }
 
-function upstream(error: unknown): never {
+function upstream(error: unknown, actor: UserActor): never {
   if (error instanceof MachineMailError) {
-    if (error.status === 401 || error.status === 403) throw new CrmError("upstream_error", "MachineMail refused the API key. Check MACHINE_MAIL_API_KEY.", 502);
-    throw new CrmError("upstream_error", `MachineMail: ${error.message}`, 502);
+    if (error.status === 401 || error.status === 403) throw new CrmError("upstream_error", `MachineMail rejected the key.${actor.role === "owner" ? " Check MACHINE_MAIL_API_KEY." : ""}`, 502);
+    throw new CrmError("upstream_error", error.message, 502);
   }
   throw error;
 }
 
 export async function setUpAgentMailbox(actor: UserActor, input: { address?: unknown }, fetchImpl: typeof fetch = fetch) {
   requireAdmin(actor);
-  if (!machineMailConfigured()) throw new CrmError("invalid_input", "Set MACHINE_MAIL_API_KEY on the server first.", 400);
+  if (!machineMailConfigured()) throw new CrmError("invalid_input", notSetUp("MachineMail", "MACHINE_MAIL_API_KEY", actor), 400);
   const existing = await agentMailbox(actor);
   const address = existing?.set_up_at ? existing.address : cleanMailboxAddress(input.address ?? existing?.address ?? DEFAULT_ADDRESS);
   if (existing?.set_up_at && typeof input.address === "string" && input.address.trim() && cleanMailboxAddress(input.address) !== existing.address) {
@@ -206,14 +206,14 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
   if (!existing?.set_up_at && (await addressTaken(address, actor.workspaceId))) {
     throw new CrmError("conflict", addressTakenMessage(address), 409, { field: "address" });
   }
-  const url = `${webhookOrigin()}${WEBHOOK_PATH}`;
+  const url = `${webhookOrigin(actor)}${WEBHOOK_PATH}`;
   let webhook: { id: string; secret: string };
   try {
     await ensureInbox(address, DISPLAY_NAME, fetchImpl);
     webhook = await ensureWebhook(address, url, fetchImpl);
   } catch (error) {
     if (existing) await query("select private.agent_mailbox_note_error($1, $2)", [existing.id, error instanceof Error ? error.message : "Set up failed."]).catch(() => undefined);
-    upstream(error);
+    upstream(error, actor);
   }
   if (existing?.webhook_id && existing.webhook_id !== webhook.id) await deleteWebhook(existing.webhook_id, fetchImpl).catch(() => undefined);
   const own = existing?.set_up_at ? [] : await ownSenderAddresses(actor, address);

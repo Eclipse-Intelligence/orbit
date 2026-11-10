@@ -1,7 +1,7 @@
 import { decideActions, readDecisions, resumeConversation, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { AssistantError, gatewayConfigured } from "@/lib/assistant/gateway";
 import { getUserActor } from "@/lib/auth/user";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notSetUp } from "@/lib/crm/errors";
 import { query } from "@/lib/db/pool";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   const started = Date.now();
   const actor = await getUserActor();
   if (!actor) return Response.json({ error: "Sign in again." }, { status: 401 });
-  if (!gatewayConfigured()) return Response.json({ error: "Set LLM_API_KEY in Vercel to use the assistant." }, { status: 503 });
+  if (!gatewayConfigured()) return Response.json({ error: notSetUp("The assistant", "LLM_API_KEY", actor) }, { status: 503 });
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;

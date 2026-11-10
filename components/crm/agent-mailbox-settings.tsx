@@ -40,7 +40,7 @@ function Status({ on, children }: { on: boolean; children: ReactNode }) {
   );
 }
 
-export default function AgentMailboxSettings({ view }: { view: AgentMailboxView }) {
+export default function AgentMailboxSettings({ view, isOwner }: { view: AgentMailboxView; isOwner: boolean }) {
   const router = useRouter();
   const [address, setAddress] = useState(view.address);
   const [senders, setSenders] = useState<SenderDraft[]>(() => draftsFrom(view));
@@ -87,7 +87,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           <span className="min-w-0 wrap-anywhere">{`For ${view.workspaceName}`}</span>
         </span>
         {!view.configured ? (
-          <Status on={false}>MACHINE_MAIL_API_KEY isn&apos;t set</Status>
+          <Status on={false}>{isOwner ? "MACHINE_MAIL_API_KEY isn't set" : "Not set up"}</Status>
         ) : view.setUp ? (
           <Status on>
             <span className="min-w-0 wrap-anywhere">{view.address}</span>

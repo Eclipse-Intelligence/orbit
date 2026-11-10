@@ -10,7 +10,7 @@ import { GAP_THRESHOLD, TAG_THRESHOLD } from "@/lib/enrichment/web-checks";
 import { createTaskRun, decide, getTaskResult, getTaskRun, parallelKey, ParallelError, stopsParallel, type DecisionCitation, type DecisionQuestion, type TaskField, type TaskFieldBasis } from "@/lib/parallel";
 import { BACKGROUND_PROVENANCE, fillSizeFromStaff, recordAnswerChange, type StoredValue } from "@/lib/ai-fields/answers";
 import { readFields, scopeProblem, scopeSql, spendThisMonth, type StoredField } from "@/lib/ai-fields/fields";
-import { DECISION_COST, MONTHLY_LIMIT_USD, TASK_COST, usesDecisions, type AiSource } from "@/lib/ai-fields/types";
+import { DECISION_COST, MONTHLY_LIMIT_USD, TASK_COST, usesDecisions, webChecksNotSetUp, type AiSource } from "@/lib/ai-fields/types";
 
 export const YES_THRESHOLD = TAG_THRESHOLD;
 export const NO_THRESHOLD = 1 - TAG_THRESHOLD;
@@ -494,7 +494,7 @@ async function checkCompany(actor: Actor, companyId: string, fields: StoredField
   }
 }
 
-export const MONTHLY_LIMIT_MESSAGE = `Paused until next month: this month's checks reached $${MONTHLY_LIMIT_USD}.`;
+export const MONTHLY_LIMIT_MESSAGE = `Paused: monthly limit of $${MONTHLY_LIMIT_USD} reached.`;
 
 async function finish(actor: Actor, pass: Pass) {
   const clean: string[] = [];
@@ -605,13 +605,13 @@ export async function checkCompanyNow(actor: Actor, companyId: string, options: 
   return report;
 }
 
-export function checkNowMessage(report: AiFieldsReport): { ok: true; message: string } | { error: string } {
-  if (report.skipped === "No PARALLEL_API_KEY.") return { error: "Add PARALLEL_API_KEY in Vercel to check the web." };
+export function checkNowMessage(report: AiFieldsReport, viewer?: Actor): { ok: true; message: string } | { error: string } {
+  if (report.skipped === "No PARALLEL_API_KEY.") return { error: webChecksNotSetUp(viewer) };
   if (report.skipped === "Monthly limit reached.") return { error: `Monthly limit of $${MONTHLY_LIMIT_USD} reached.` };
   if (report.error) return { error: report.error };
   if (report.started > 0) return { ok: true, message: "Checking…" };
   if (report.checked > 0) return { ok: true, message: "Checked." };
-  if (report.failed > 0) return { error: "The web check failed. Try again shortly." };
+  if (report.failed > 0) return { error: "Web check failed. Try again." };
   return { ok: true, message: "Nothing to check" };
 }
 

@@ -1215,7 +1215,7 @@ describe("email jobs on Orbit Agent", () => {
     const email = await deliver(lonelyServices, "orbit-lonely@ai-mail.geteclipse.co", { subject: "Hello", text: "Are you there?" });
     const sent = lonelyServices.repliesTo(email.messageId);
     assert.equal(sent.length, 1);
-    assert.match(String(sent[0].body?.text), /^I couldn't finish that\. Orbit Agent isn't paired with your Mac yet\./);
+    assert.match(String(sent[0].body?.text), /^Couldn't finish: Orbit Agent isn't paired with your Mac yet\./);
     assert.equal((await mailRow(email.messageId)).status, "replied");
   });
 

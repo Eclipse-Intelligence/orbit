@@ -56,7 +56,7 @@ describe("CSV export paging", () => {
     assert.deepEqual([result.truncated, result.outOfTime], [true, true]);
     assert.equal(
       exportNote({ exported: result.rows.length, total: result.total, truncated: result.truncated, outOfTime: result.outOfTime }, "tasks"),
-      "Exported 500 of 9,000 tasks, Orbit ran out of time.",
+      "Exported 500 of 9,000 tasks, ran out of time.",
     );
     const quick = await collectForExport(fakeList(300).load, { budgetMs: 5_000, now: () => 0 });
     assert.deepEqual([quick.rows.length, quick.outOfTime], [300, false]);

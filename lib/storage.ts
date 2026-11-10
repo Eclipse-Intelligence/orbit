@@ -1,3 +1,5 @@
+import { ShownError, notSetUp } from "@/lib/crm/errors";
+import { logUpstream } from "@/lib/upstream";
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 export const KNOWLEDGE_MAX_BYTES = 50 * 1024 * 1024;
 export const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -15,7 +17,7 @@ export function chatFileKey(id: string) {
   return `chat/${id}`;
 }
 
-export class StorageError extends Error {}
+export class StorageError extends ShownError {}
 
 function baseUrl() {
   return process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, "") || null;
@@ -31,24 +33,19 @@ export function storageConfigured() {
 
 function headers(extra: Record<string, string> = {}) {
   const key = secretKey();
-  if (!key) throw new StorageError("Set SUPABASE_SERVICE_ROLE_KEY to send attachments.");
+  if (!key) throw new StorageError(notSetUp("file storage", "SUPABASE_SERVICE_ROLE_KEY"));
   return { apikey: key, ...(key.startsWith("eyJ") ? { authorization: `Bearer ${key}` } : {}), ...extra };
 }
 
 function endpoint(path: string) {
   const base = baseUrl();
-  if (!base) throw new StorageError("Set NEXT_PUBLIC_SUPABASE_URL to send attachments.");
+  if (!base) throw new StorageError(notSetUp("file storage", "NEXT_PUBLIC_SUPABASE_URL"));
   return `${base}/storage/v1${path}`;
 }
 
 async function failure(response: Response, action: string) {
-  const text = await response.text().catch(() => "");
-  let message = "";
-  try {
-    const body = JSON.parse(text) as { message?: string; error?: string };
-    message = body.message || body.error || "";
-  } catch {}
-  return new StorageError(`Couldn't ${action}${message ? `: ${message.slice(0, 200)}` : ""}.`);
+  logUpstream("Supabase Storage", response.status, await response.text().catch(() => ""));
+  return new StorageError(`Couldn't ${action}. Try again.`);
 }
 
 const bucketsReady = new Map<Bucket, Promise<void>>();
@@ -64,7 +61,10 @@ async function ensureBucket(bucket: Bucket, fetchImpl: typeof fetch) {
   });
   if (response.ok) return;
   const text = await response.text().catch(() => "");
-  if (response.status !== 409 && !/already exists|Duplicate/i.test(text)) throw new StorageError("Couldn't prepare file storage.");
+  if (response.status !== 409 && !/already exists|Duplicate/i.test(text)) {
+    logUpstream("Supabase Storage", response.status, text);
+    throw new StorageError("Couldn't prepare file storage. Try again.");
+  }
   if (!types) return;
   const updated = await fetchImpl(endpoint(`/bucket/${id}`), {
     method: "PUT",
@@ -72,7 +72,10 @@ async function ensureBucket(bucket: Bucket, fetchImpl: typeof fetch) {
     body: JSON.stringify(settings),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!updated.ok) throw new StorageError("Couldn't prepare file storage.");
+  if (!updated.ok) {
+    logUpstream("Supabase Storage", updated.status, await updated.text().catch(() => ""));
+    throw new StorageError("Couldn't prepare file storage. Try again.");
+  }
 }
 
 export function resetStorageBucketCache() {

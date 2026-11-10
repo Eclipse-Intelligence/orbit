@@ -105,7 +105,7 @@ describe("knowledge sites", () => {
   it("says why when a site can't be reached, and opens blocked sites in a browser", async () => {
     await assert.rejects(mapSite("26pmx.con", { fetchImpl: web({}).fetchImpl, lookup: async () => Promise.reject(new Error("ENOTFOUND")), render: null }), /26pmx\.con couldn't be found/);
     const blocked: typeof fetch = async () => new Response("denied", { status: 403 });
-    await assert.rejects(mapSite("https://guarded.test/", { fetchImpl: blocked, lookup, render: null }), /guarded\.test answered 403/);
+    await assert.rejects(mapSite("https://guarded.test/", { fetchImpl: blocked, lookup, render: null }), /guarded\.test blocked the request \(403\)/);
     const rendered: string[] = [];
     const map = await mapSite("https://guarded.test/", {
       fetchImpl: blocked,

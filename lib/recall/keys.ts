@@ -4,8 +4,9 @@ import type { UserActor } from "@/lib/crm/types";
 import { homeWorkspaceId } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { recallClient } from "@/lib/recall";
+import { unreachable } from "@/lib/upstream";
 
-export const RECALL_NOT_CONNECTED = "Recall isn't connected. Add your Recall API key in Settings, Connections.";
+export const RECALL_NOT_CONNECTED = "Connect Recall in Settings › Connections.";
 export const TAG_PROBE_EVERY_MS = 24 * 60 * 60 * 1000;
 
 export type RecallTagSupport = "names" | "ids" | "unknown";
@@ -73,20 +74,20 @@ export async function saveRecallKey(actor: UserActor, apiKey: string, options: {
     throw new CrmError("invalid_input", "Paste the whole Recall API key.", 400, { field: "key" });
   }
   if (!trimmed.startsWith("sk_")) {
-    throw new CrmError("invalid_input", "Recall API keys start with sk_. Copy the key from Recall, Settings, API & MCP.", 400, { field: "key" });
+    throw new CrmError("invalid_input", "Recall keys start with sk_.", 400, { field: "key" });
   }
   const api = recallClient({ apiKey: trimmed, fetchImpl: options.fetchImpl, deadline: Date.now() + 25_000 });
   let valid: boolean;
   try {
     valid = await api.validate();
   } catch (error) {
-    const reason = error instanceof CrmError ? error.message : "";
-    throw new CrmError("invalid_input", `Couldn't check the key with Recall. ${reason}`.trim(), 400, { field: "key" });
+    console.error("Checking a Recall key failed", error);
+    throw new CrmError("invalid_input", unreachable("Recall"), 400, { field: "key" });
   }
   if (!valid) {
     throw new CrmError(
       "invalid_input",
-      "Recall didn't accept that key. Check it hasn't expired, or create a new one in Recall, Settings, API & MCP.",
+      "Recall rejected that key. Create a new one in Recall.",
       400,
       { field: "key" },
     );

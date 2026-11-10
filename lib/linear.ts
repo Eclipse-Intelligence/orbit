@@ -1,3 +1,5 @@
+import { ShownError, errorText, notFoundMessage, notSetUp } from "@/lib/crm/errors";
+import { clipReason, logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 const DEFAULT_URL = "https://api.linear.app/graphql";
 const TIMEOUT_MS = 15_000;
 const TEAM_TTL_MS = 5 * 60 * 1000;
@@ -7,7 +9,7 @@ type LinearPriority = (typeof LINEAR_PRIORITIES)[number];
 
 const PRIORITY_VALUE: Record<LinearPriority, number> = { urgent: 1, high: 2, medium: 3, low: 4 };
 
-type LinearOptions = { fetchImpl?: typeof fetch; url?: string; apiKey?: string | null; teamKey?: string };
+type LinearOptions = { fetchImpl?: typeof fetch; url?: string; apiKey?: string | null; teamKey?: string; viewer?: { type?: string; role?: string } | null };
 
 type LinearState = { id: string; name: string; type: string };
 
@@ -39,7 +41,20 @@ type LinearIssueDetail = LinearIssue & {
   comments: { author: string | null; body: string; createdAt: string }[];
 };
 
-export class LinearError extends Error {}
+export class LinearError extends ShownError {
+  readonly generic: string;
+
+  constructor(message: string, generic = message) {
+    super(message);
+    this.generic = generic;
+  }
+}
+
+function linearFailure(status: number | null, reason: unknown) {
+  const generic = status === null || status === 200 ? "Linear returned an error." : upstreamMessage("Linear", status);
+  const detail = status === null || status === 200 || status === 400 ? clipReason(reason) : "";
+  return new LinearError(detail ? `Linear returned an error: ${detail}.` : generic, generic);
+}
 
 type IssueNode = {
   id: string;
@@ -79,7 +94,7 @@ export function resetLinearCache() {
 
 async function linearRequest<T>(query: string, variables: Record<string, unknown>, options: LinearOptions = {}): Promise<T> {
   const apiKey = options.apiKey === undefined ? linearApiKey() : options.apiKey;
-  if (!apiKey) throw new LinearError("Linear isn't connected. Add LINEAR_API_KEY to the server environment.");
+  if (!apiKey) throw new LinearError(notSetUp("Linear", "LINEAR_API_KEY", options.viewer));
   const url = options.url ?? (process.env.LINEAR_API_URL?.trim() || DEFAULT_URL);
   const fetcher = options.fetchImpl ?? fetch;
   let response: Response;
@@ -90,17 +105,18 @@ async function linearRequest<T>(query: string, variables: Record<string, unknown
       body: JSON.stringify({ query, variables }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-  } catch {
-    throw new LinearError("Couldn't reach Linear. Try again in a moment.");
+  } catch (error) {
+    logUpstream("Linear", null, error, [apiKey]);
+    throw new LinearError(unreachable("Linear"));
   }
   const payload = (await response.json().catch(() => null)) as { data?: T; errors?: { message?: string }[] } | null;
-  if (response.status === 401 || response.status === 403) {
-    throw new LinearError("Linear rejected the API key. Check LINEAR_API_KEY.");
+  if (!response.ok) {
+    logUpstream("Linear", response.status, payload?.errors?.[0]?.message ?? payload, [apiKey]);
+    throw linearFailure(response.status, payload?.errors?.[0]?.message);
   }
-  if (response.status === 429) throw new LinearError("Linear is rate limiting Orbit. Try again in a minute.");
-  if (!response.ok || !payload || payload.errors?.length || !payload.data) {
-    const message = payload?.errors?.[0]?.message;
-    throw new LinearError(message ? `Linear said: ${message}` : `Linear returned ${response.status}.`);
+  if (!payload || payload.errors?.length || !payload.data) {
+    logUpstream("Linear", response.status, payload?.errors?.[0]?.message ?? "no data", [apiKey]);
+    throw linearFailure(null, payload?.errors?.[0]?.message);
   }
   return payload.data;
 }
@@ -149,7 +165,7 @@ async function getLinearTeam(options: LinearOptions = {}): Promise<LinearTeam> {
     options,
   );
   const node = data.teams.nodes[0];
-  if (!node) throw new LinearError(`There's no Linear team with the key ${key}.`);
+  if (!node) throw new LinearError(notFoundMessage(`Linear team ${key}`));
   const team: LinearTeam = {
     id: node.id,
     key: node.key,
@@ -201,7 +217,7 @@ export async function getLinearIssue(id: string, options: LinearOptions = {}): P
     { id: id.trim() },
     options,
   );
-  if (!data.issue) throw new LinearError(`Couldn't find ${id} in Linear.`);
+  if (!data.issue) throw new LinearError(notFoundMessage(`issue ${id}`));
   return {
     ...mapIssue(data.issue),
     description: data.issue.description,
@@ -246,7 +262,7 @@ export async function createLinearIssue(
   options: LinearOptions = {},
 ): Promise<LinearIssue> {
   const title = input.title.replace(/\s+/g, " ").trim().slice(0, 250);
-  if (!title) throw new LinearError("Give the issue a title.");
+  if (!title) throw new LinearError("Enter a title.");
   const team = await getLinearTeam(options);
   const issueInput: Record<string, unknown> = { teamId: team.id, title };
   const description = input.description?.trim();
@@ -268,7 +284,7 @@ export async function createLinearIssue(
     { input: issueInput },
     options,
   );
-  if (!data.issueCreate.success || !data.issueCreate.issue) throw new LinearError("Linear didn't create the issue.");
+  if (!data.issueCreate.success || !data.issueCreate.issue) throw new LinearError("Couldn't create the issue. Try again.");
   return mapIssue(data.issueCreate.issue);
 }
 
@@ -293,13 +309,13 @@ export async function updateLinearIssue(
     { id: id.trim(), input: issueInput },
     options,
   );
-  if (!data.issueUpdate.success || !data.issueUpdate.issue) throw new LinearError("Linear didn't update the issue.");
+  if (!data.issueUpdate.success || !data.issueUpdate.issue) throw new LinearError("Couldn't update the issue. Try again.");
   return mapIssue(data.issueUpdate.issue);
 }
 
 export async function commentOnLinearIssue(id: string, body: string, options: LinearOptions = {}) {
   const text = body.trim();
-  if (!text) throw new LinearError("Write the comment first.");
+  if (!text) throw new LinearError("Enter a comment.");
   const issue = await getLinearIssue(id, options);
   const data = await linearRequest<{ commentCreate: { success: boolean; comment: { id: string; url: string } | null } }>(
     `mutation Comment($input: CommentCreateInput!) {
@@ -308,7 +324,7 @@ export async function commentOnLinearIssue(id: string, body: string, options: Li
     { input: { issueId: issue.id, body: text.slice(0, 50_000) } },
     options,
   );
-  if (!data.commentCreate.success || !data.commentCreate.comment) throw new LinearError("Linear didn't add the comment.");
+  if (!data.commentCreate.success || !data.commentCreate.comment) throw new LinearError("Couldn't add the comment. Try again.");
   return { issue: issue.identifier, url: data.commentCreate.comment.url };
 }
 
@@ -321,6 +337,6 @@ export async function linearStatus(options: LinearOptions = {}): Promise<LinearS
     const team = await getLinearTeam(options);
     return { configured: true, team: { key: team.key, name: team.name }, error: null };
   } catch (error) {
-    return { configured: true, team: null, error: error instanceof Error ? error.message : "Couldn't reach Linear." };
+    return { configured: true, team: null, error: error instanceof LinearError ? error.generic : errorText(error, unreachable("Linear")) };
   }
 }

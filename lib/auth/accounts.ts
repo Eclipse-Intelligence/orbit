@@ -9,7 +9,7 @@ import { query } from "@/lib/db/pool";
 
 type JoinedAccount = { userId: string; signedIn: boolean; needsConfirmation: boolean };
 
-const EXISTING = "You already have an Orbit login with this email. Enter that password to join.";
+const EXISTING = "This email already has an Orbit account. Enter its password.";
 
 function serviceKey() {
   return process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || process.env.SUPABASE_SECRET_KEY?.trim() || null;
@@ -17,6 +17,14 @@ function serviceKey() {
 
 function alreadyRegistered(message: string | undefined) {
   return Boolean(message && /already (been )?registered|already exists/i.test(message));
+}
+
+export const WEAK_PASSWORD = "That password isn't strong enough. Choose a longer or less common one.";
+
+export function accountFailure(error: { code?: unknown; message?: unknown } | null | undefined, code: string, status: number) {
+  const weak = error?.code === "weak_password" || (typeof error?.message === "string" && /password.*(weak|at least|should contain|too short|strength)/i.test(error.message));
+  if (weak) return new CrmError("invalid_input", WEAK_PASSWORD, 400, { field: "password" });
+  return new CrmError(code, "Couldn't create your account. Try again.", status);
 }
 
 async function localAccount(email: string, password: string, fullName: string): Promise<JoinedAccount> {
@@ -36,7 +44,7 @@ async function existingSupabaseAccount(email: string, password: string): Promise
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error || !data.user) {
     if (error && /not confirmed/i.test(error.message)) {
-      throw new CrmError("invalid_input", "Confirm your email first using the link we sent, then open this invite again.", 400);
+      throw new CrmError("invalid_input", "Confirm your email, then open this invite again.", 400);
     }
     throw new CrmError("invalid_input", EXISTING, 400, { field: "password" });
   }
@@ -64,7 +72,8 @@ export async function createJoinAccount(
     });
     if (error || !data.user) {
       if (alreadyRegistered(error?.message)) return existingSupabaseAccount(email, password);
-      throw new CrmError("upstream_error", error?.message ?? "Couldn't create your login.", 502);
+      console.error("Supabase Auth couldn't create the account", error?.message);
+      throw accountFailure(error, "upstream_error", 502);
     }
     return { userId: data.user.id, signedIn: false, needsConfirmation: false };
   }
@@ -77,7 +86,8 @@ export async function createJoinAccount(
   });
   if (error) {
     if (alreadyRegistered(error.message)) return existingSupabaseAccount(email, password);
-    throw new CrmError("invalid_input", error.message, 400);
+    console.error("Supabase Auth sign-up failed", error.message);
+    throw accountFailure(error, "invalid_input", 400);
   }
   if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
     return existingSupabaseAccount(email, password);

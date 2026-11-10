@@ -394,7 +394,7 @@ describe("extra calendar account oauth", () => {
     }
     assert.equal(consentProblem("access_denied AADSTS65004: User declined to consent"), SIGN_IN_CANCELLED);
     assert.equal(consentProblem("AADSTS70008: The provided authorization code has expired"), null);
-    assert.match(ORGANISATION_BLOCKED, /Supported account types/);
+    assert.match(ORGANISATION_BLOCKED, /Allow other organisations in Entra/);
   });
 
   it("stores an extra account with encrypted tokens, tenant and display name", async () => {
@@ -557,7 +557,7 @@ describe("multi-calendar sync", () => {
     assert.equal(calendars.get("main-default")!.connection_id !== null, true);
     assert.equal(calendars.get("side-default")!.color, "#00aa55");
     assert.equal(calendars.get("main-birthdays")!.color, "#e46aa6");
-    assert.match(calendars.get("side-shared")!.last_error ?? "", /didn't let Orbit read/);
+    assert.match(calendars.get("side-shared")!.last_error ?? "", /Microsoft blocked this calendar/);
 
     const views = calls.filter((call) => call.url.includes("/calendarView")).map((call) => new URL(call.url));
     assert.equal(views.length, 5);
@@ -637,9 +637,9 @@ describe("multi-calendar sync", () => {
     assert.ok(!calls.some((call) => call.url.includes("/side-team/")));
     assert.ok((await eventsFor(owner.userId)).has("t1"));
 
-    await assert.rejects(setCalendarVisible(owner, "not-a-uuid", true), /isn't connected/);
+    await assert.rejects(setCalendarVisible(owner, "not-a-uuid", true), /Calendar not found/);
     const stranger = await createUser("stranger@orbit-sync.test", "Stranger");
-    await assert.rejects(setCalendarVisible(stranger, calendars.get("side-team")!.id, true), /isn't connected/);
+    await assert.rejects(setCalendarVisible(stranger, calendars.get("side-team")!.id, true), /Calendar not found/);
 
     await getAdminPool().query("update crm.calendars set last_synced_at = null where id = $1", [
       calendars.get("side-team")!.id,
@@ -679,7 +679,7 @@ describe("multi-calendar sync", () => {
     const again = refreshed.find((item) => item.id === shared.id)!;
     assert.equal(again.attendees.find((person) => person.email === "raj@acme.com")!.contactId, created.contactId);
     const stranger = await createUser("other@orbit-sync.test", "Other");
-    await assert.rejects(createContactFromEvent(stranger, shared.id, "raj@acme.com"), /isn't in your calendar/);
+    await assert.rejects(createContactFromEvent(stranger, shared.id, "raj@acme.com"), /Meeting not found/);
   });
 
   it("resumes calendars it ran out of time for on the next run", async () => {
@@ -832,7 +832,7 @@ describe("multi-calendar sync", () => {
     assert.deepEqual([...calendars.keys()], ["main-birthdays", "main-default"]);
     const events = await eventsFor(owner.userId);
     assert.ok(![...events.values()].some((row) => row.account_id === accountId));
-    await assert.rejects(disconnectCalendarAccount(owner, accountId), /isn't connected/);
+    await assert.rejects(disconnectCalendarAccount(owner, accountId), /Calendar account not found/);
   });
 });
 

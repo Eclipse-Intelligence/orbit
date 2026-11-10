@@ -285,6 +285,7 @@ export default function WebChecksSettings({
   checks: initialChecks,
   configured,
   canAdmin,
+  isOwner,
   unchecked,
   columns,
 }: {
@@ -292,6 +293,7 @@ export default function WebChecksSettings({
   checks: WebCheck[];
   configured: boolean;
   canAdmin: boolean;
+  isOwner: boolean;
   unchecked: number;
   columns: Record<string, RuleColumn>;
 }) {
@@ -345,7 +347,7 @@ export default function WebChecksSettings({
         {!configured && (
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <span className="text-foreground text-[13.5px] leading-5">Parallel</span>
-            <Status on={false}>Add PARALLEL_API_KEY in Vercel</Status>
+            <Status on={false}>{isOwner ? "Add PARALLEL_API_KEY in Vercel" : "Not set up"}</Status>
           </div>
         )}
         <div className="flex flex-col gap-3">

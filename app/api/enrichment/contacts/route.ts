@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   }
   const ids = Array.isArray(body?.ids) ? body.ids : [];
   if (!(await enrichmentAllowed(user.userId, ids.length))) {
-    return Response.json({ error: "That's a lot of lookups this hour. Try again later." }, { status: 429 });
+    return Response.json({ error: "Hourly lookup limit reached. Try again later." }, { status: 429 });
   }
   try {
     const results = await enrichContacts(user, ids, field);

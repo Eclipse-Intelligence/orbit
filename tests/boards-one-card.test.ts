@@ -164,7 +164,7 @@ describe("one card per company on a board", () => {
        select $1, made.id, $2, $3, made.name, 'open', 'GBP' from made`,
       [owner.workspaceId, board.id, first.id],
     );
-    await assert.rejects(archiveBoard(owner, board.id), /Crowded has more than 500 cards\. Archive some of them first/);
+    await assert.rejects(archiveBoard(owner, board.id), /Crowded has over 500 cards\. Archive some first/);
     const open = await admin.query("select 1 from crm.opportunities where pipeline_id = $1 and archived_at is null", [board.id]);
     assert.equal(open.rowCount, BOARD_ARCHIVE_CARD_LIMIT + 1);
     assert.equal((await getBoard(owner, board.id)).name, "Crowded");

@@ -32,7 +32,8 @@ import {
   type Participant,
 } from "@/lib/crm/conversations";
 import { captureWorkspaceInDb, ownCallAddresses, routeCallInDb } from "@/lib/crm/call-routing";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notSetUp } from "@/lib/crm/errors";
+import { unreachable } from "@/lib/upstream";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { actorForWorkspace, homeWorkspaceId, workspaceActors } from "@/lib/crm/workspaces";
@@ -59,11 +60,11 @@ const MAX_LIST_PAGES = 50;
 const STEP_RESERVE_MS = 5_000;
 const WEBHOOK_BUDGET_MS = 50_000;
 
-const GRANOLA_NOT_CONFIGURED = "Set GRANOLA_API_KEY to import Granola meetings.";
-export const GRANOLA_WEBHOOK_UNAVAILABLE =
-  "Granola webhooks aren't available for this workspace; Orbit will check every 10 minutes instead.";
-const GRANOLA_NO_WORKSPACE =
-  "Orbit could not work out which workspace the Granola notes belong to.";
+function granolaNotSetUp(actor?: UserActor | null) {
+  return notSetUp("Granola", "GRANOLA_API_KEY", actor);
+}
+export const GRANOLA_WEBHOOK_UNAVAILABLE = "Instant sync isn't available. Orbit checks every 10 minutes.";
+const GRANOLA_NO_WORKSPACE = "Choose a workspace for Granola notes.";
 const GRANOLA_OTHER_WORKSPACE = "Granola notes are imported into another workspace.";
 
 type GranolaSyncResult = {
@@ -191,14 +192,9 @@ export async function saveGranolaKey(actor: UserActor, key: string, options: Gra
   try {
     await client(trimmed, options).listNotes({ pageSize: 1 });
   } catch (error) {
-    const reason = errorText(error, "");
-    const rejected = /reject|401|403|unauthori[sz]ed|invalid/i.test(reason);
-    throw new CrmError(
-      "invalid_input",
-      rejected ? "Granola didn't accept that key. Check you copied all of it." : `Couldn't reach Granola to check the key. ${reason}`.trim(),
-      400,
-      { field: "key" },
-    );
+    const rejected = error instanceof GranolaError && (error.status === 401 || error.status === 403);
+    if (!rejected) console.error("Checking a Granola key failed", error);
+    throw new CrmError("invalid_input", rejected ? "Granola rejected that key." : unreachable("Granola"), 400, { field: "key" });
   }
   const home = await homeWorkspaceId(actor);
   await withActor(actor, (db) =>
@@ -389,14 +385,14 @@ export async function syncGranola(
   const personalRow = options.actor ? await readPersonalKey(options.actor).catch(() => null) : null;
   const personal = personalRow ? decryptKey(personalRow.key_cipher) : null;
   const apiKey = personal ?? granolaApiKey();
-  if (!apiKey) return { ...idle, error: GRANOLA_NOT_CONFIGURED };
+  if (!apiKey) return { ...idle, error: granolaNotSetUp(options.actor) };
   const api = client(apiKey, options);
   let actor = options.actor && personalRow && personal ? await actorForWorkspace(options.actor, personalRow.workspace_id) : (options.actor ?? null);
   if (!actor) {
     try {
       actor = await resolveGranolaActor(api, apiKey, options.targets);
     } catch (error) {
-      return { ...idle, ran: true, error: errorText(error, "Could not reach Granola.") };
+      return { ...idle, ran: true, error: errorText(error, unreachable("Granola")) };
     }
   }
   if (!actor) return { ...idle, error: GRANOLA_NO_WORKSPACE };
@@ -449,13 +445,13 @@ export async function syncGranola(
       try {
         const outcome = await importGranolaNote(owner, api, id, everyone);
         if (outcome === "missing" && retries.includes(id)) {
-          throw new Error("Granola no longer returns this note.");
+          throw new GranolaError("Granola note not found.", 404);
         }
         if (outcome === "filed") result.filed += 1;
         else if (outcome === "unfiled") result.unfiled += 1;
         else result.skipped += 1;
       } catch (error) {
-        const message = errorText(error, "Could not import a Granola note.");
+        const message = errorText(error, "Couldn't import a Granola note.");
         firstError ??= message;
         result.failed += 1;
         await recordImportFailure(
@@ -480,7 +476,7 @@ export async function syncGranola(
     });
     return result;
   } catch (error) {
-    const message = errorText(error, "Could not sync Granola.");
+    const message = errorText(error, "Couldn't sync Granola.");
     await withActor(owner, (db) => finishIntegration(db, key, { error: message }));
     return { ...idle, ran: true, error: message };
   }
@@ -489,7 +485,7 @@ export async function syncGranola(
 export async function syncGranolaFor(actor: UserActor, options: GranolaOptions = {}) {
   if (await readPersonalKey(actor)) return syncGranola({ ...options, actor, force: true });
   const apiKey = granolaApiKey();
-  if (!apiKey) throw new CrmError("invalid_input", GRANOLA_NOT_CONFIGURED, 400);
+  if (!apiKey) throw new CrmError("invalid_input", granolaNotSetUp(actor), 400);
   await workspaceActor(actor, client(apiKey, options), apiKey);
   return syncGranola({ ...options, actor, force: true });
 }
@@ -501,13 +497,13 @@ export async function enableGranolaWebhook(
 ): Promise<{ enabled: boolean; message: string }> {
   assertScope(actor.scopes, "admin");
   const apiKey = granolaApiKey();
-  if (!apiKey) throw new CrmError("invalid_input", GRANOLA_NOT_CONFIGURED, 400);
+  if (!apiKey) throw new CrmError("invalid_input", granolaNotSetUp(actor), 400);
   const api = client(apiKey, options);
   await workspaceActor(actor, api, apiKey);
   const key = granolaKey(actor);
   const state = await withActor(actor, (db) => readIntegration(db, key));
   if (state?.webhook_id && state.webhook_secret) {
-    return { enabled: true, message: "Instant Granola sync is already on." };
+    return { enabled: true, message: "Instant sync on" };
   }
   const url = `${configuredSiteOrigin() ?? origin}/api/granola/webhook`;
   let endpoint;
@@ -520,13 +516,14 @@ export async function enableGranolaWebhook(
   } catch (error) {
     throw new CrmError(
       "upstream_error",
-      error instanceof GranolaError ? error.message : "Could not reach Granola.",
+      errorText(error, unreachable("Granola")),
       502,
     );
   }
   if (!endpoint) return { enabled: false, message: GRANOLA_WEBHOOK_UNAVAILABLE };
   if (!endpoint.signing_secret) {
-    throw new CrmError("upstream_error", "Granola did not return a signing secret.", 502);
+    console.error("Granola returned no signing secret");
+    throw new CrmError("upstream_error", "Couldn't turn on instant sync. Try again.", 502);
   }
   await withActor(actor, async (db) => {
     await ensureIntegration(db, key);
@@ -543,7 +540,7 @@ export async function enableGranolaWebhook(
       ],
     );
   });
-  return { enabled: true, message: "Instant Granola sync is on." };
+  return { enabled: true, message: "Instant sync on" };
 }
 
 type WebhookTarget = {
@@ -627,7 +624,7 @@ export async function processGranolaWebhook(
   try {
     await importGranolaNote(actor, client(apiKey, options), noteId);
   } catch (error) {
-    const message = errorText(error, "Could not import a Granola note.");
+    const message = errorText(error, "Couldn't import a Granola note.");
     await recordImportFailure(actor, { source: "granola", kind: "meeting", externalId: noteId }, message);
     await recordIntegrationError(actor, granolaKey(actor), message);
     return;

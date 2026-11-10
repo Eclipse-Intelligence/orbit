@@ -1,5 +1,5 @@
 import { linkCreatedWorkspace } from "@/lib/assistant/eclipse-scope";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, pgFailure, tooLong } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -13,15 +13,15 @@ export function canCreateWorkspaces(roles: string[]) {
 
 export async function createWorkspace(actor: UserActor, input: { name: unknown }, options: { fetchImpl?: typeof fetch } = {}): Promise<CreatedWorkspace> {
   const name = typeof input.name === "string" ? input.name.trim() : "";
-  if (!name) throw new CrmError("invalid_input", "Give the workspace a name.", 400);
-  if (name.length > 120) throw new CrmError("invalid_input", "Keep the name to 120 characters.", 400);
+  if (!name) throw new CrmError("invalid_input", "Enter a workspace name.", 400);
+  if (name.length > 120) throw new CrmError("invalid_input", tooLong("the name", 120), 400);
   try {
     const result = await query<{ id: string }>("select private.create_workspace($1, $2, null) as id", [actor.userId, name]);
     await linkCreatedWorkspace(actor.userId, result.rows[0].id, name, options).catch(() => false);
     return { id: result.rows[0].id, name };
   } catch (error) {
     if (isPgError(error) && (error.code === "42501" || error.code === "22023")) {
-      throw new CrmError(error.code === "42501" ? "forbidden" : "invalid_input", error.message, error.code === "42501" ? 403 : 400);
+      throw pgFailure(error, { "42501": "Only workspace owners can create a workspace." }) ?? error;
     }
     throw error;
   }

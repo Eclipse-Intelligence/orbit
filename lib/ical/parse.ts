@@ -1,3 +1,4 @@
+import { ShownError } from "@/lib/crm/errors";
 import { isTimeZone } from "@/lib/time";
 
 export type IcsProperty = { name: string; params: Record<string, string[]>; value: string };
@@ -51,7 +52,7 @@ const WINDOWS_ZONES: Record<string, string> = {
   "coordinated universal time": "UTC",
 };
 
-export class IcsParseError extends Error {
+export class IcsParseError extends ShownError {
   constructor(message: string) {
     super(message);
     this.name = "IcsParseError";

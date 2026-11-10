@@ -39,16 +39,17 @@ export default async function ToolsSettingsPage() {
   const canAdmin = user.role === "owner" || user.role === "admin";
   return (
     <SettingsPage title="Tools">
-      <ClickUpSettings view={clickup} canAdmin={canAdmin} />
+      <ClickUpSettings view={clickup} canAdmin={canAdmin} isOwner={user.role === "owner"} />
       <EnrichmentSettingsCard
         settings={enrichment}
         providers={providerStatuses()}
         canAdmin={canAdmin}
+        isOwner={user.role === "owner"}
         unenriched={unenriched}
         logoLinkReady={Boolean(enrichmentAvailability().logoClientId)}
       />
-      <AgentMailboxSettings view={agentMailbox} />
-      <LinearSettings linear={linear} connection={linearHere} workspaceName={user.workspaceName} canAdmin={canAdmin} />
+      <AgentMailboxSettings view={agentMailbox} isOwner={user.role === "owner"} />
+      <LinearSettings linear={linear} connection={linearHere} workspaceName={user.workspaceName} canAdmin={canAdmin} isOwner={user.role === "owner"} />
       <ApiSettings origin={origin} scopes={[...SCOPES]} />
       <WebhooksSettings endpoints={endpoints} deliveries={deliveries} canAdmin={canAdmin} />
     </SettingsPage>

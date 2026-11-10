@@ -209,7 +209,7 @@ describe("email templates", () => {
         body: "x",
         tags: Array.from({ length: 21 }, (_, index) => `tag ${index}`),
       }, WEB),
-      code("invalid_input", /template can have at most 20 tags/),
+      code("invalid_input", /Up to 20 tags/),
     );
     await assert.rejects(
       createEmailTemplate(owner, {
@@ -248,7 +248,7 @@ describe("email templates", () => {
     }, WEB);
     await assert.rejects(
       createEmailTemplate(owner, { name: "  PRICING ", body: "Two" }, WEB),
-      code("duplicate", /“PRICING” already exists/),
+      code("duplicate", /PRICING already exists/),
     );
     const other = await createEmailTemplate(owner, {
       name: "Pricing v2",

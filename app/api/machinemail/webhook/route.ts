@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { startAgentMailJob } from "@/lib/agent-mail/jobs";
 import { receiveAgentMail } from "@/lib/agent-mail/receive";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -25,6 +26,6 @@ export async function POST(request: Request) {
     return Response.json(result.body, { status: result.status, headers: NO_STORE });
   } catch (error) {
     console.error("Agent mail webhook failed", error instanceof Error ? error.name : "unknown");
-    return Response.json({ error: "Something went wrong." }, { status: 500, headers: NO_STORE });
+    return Response.json({ error: GENERIC_ERROR }, { status: 500, headers: NO_STORE });
   }
 }

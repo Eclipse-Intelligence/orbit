@@ -1,7 +1,7 @@
 import type { Db } from "@/lib/db/pool";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { readStored, sameMicrosoftAccount, wrongAccount, type SignedInAccount, type StoredTokens } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -13,12 +13,14 @@ import {
   grantsCalendar,
   grantsCalendarWrite,
   grantsMailSend,
+  MICROSOFT_CONNECT_FAILED,
+  microsoftErrorText,
+  microsoftProblem,
   MicrosoftTokenError,
-  sanitizeMicrosoftError,
   type MicrosoftToken,
 } from "@/lib/microsoft/oauth";
 
-export const SAME_AS_PRIMARY = "That Microsoft account is already connected as your main account.";
+export const SAME_AS_PRIMARY = "Already connected as your main account.";
 
 export type CalendarProvider = "microsoft" | "ics";
 
@@ -164,7 +166,12 @@ export async function finishAccount(
 }
 
 export function calendarConnectError(detail: string | null | undefined) {
-  return consentProblem(detail) ?? sanitizeMicrosoftError(detail || "Could not connect the Microsoft account.");
+  return consentProblem(detail) ?? microsoftProblem(detail, MICROSOFT_CONNECT_FAILED);
+}
+
+export function calendarConnectFailure(error: unknown) {
+  if (error instanceof MicrosoftTokenError) return calendarConnectError(error.detail);
+  return consentProblem(error instanceof Error ? error.message : null) ?? microsoftErrorText(error, MICROSOFT_CONNECT_FAILED);
 }
 
 export async function connectCalendarAccount(
@@ -177,22 +184,17 @@ export async function connectCalendarAccount(
   try {
     token = await exchangeAuthorizationCode(input.origin, input.code, fetchImpl, purpose);
   } catch (error) {
-    const detail = error instanceof MicrosoftTokenError ? error.detail : error instanceof Error ? error.message : null;
-    throw new CrmError("invalid_input", calendarConnectError(detail), 400);
+    throw new CrmError("invalid_input", calendarConnectFailure(error), 400);
   }
   let identity: Awaited<ReturnType<typeof fetchMicrosoftIdentity>>;
   try {
     identity = await fetchMicrosoftIdentity(token.accessToken, fetchImpl);
   } catch (error) {
-    throw new CrmError(
-      "invalid_input",
-      calendarConnectError(error instanceof Error ? error.message : null),
-      400,
-    );
+    throw new CrmError("invalid_input", calendarConnectFailure(error), 400);
   }
   const email = canonicalEmail(identity.email);
   if (!email) {
-    throw new CrmError("invalid_input", "Microsoft did not return an email address.", 400, { field: "email" });
+    throw new CrmError("invalid_input", "Couldn't read the account's email. Try again.", 400, { field: "email" });
   }
   const scopeMissing = grantsCalendar(token.scope) === false;
   const canSend = purpose === "send_account" ? grantsMailSend(token.scope) !== false : null;
@@ -294,7 +296,7 @@ export async function forgetInviteSender(db: Db, actor: UserActor, address: stri
 }
 
 export async function disconnectCalendarAccount(actor: UserActor, accountId: string, confirmed: { email?: string | null } = {}) {
-  if (!isUuid(accountId)) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
+  if (!isUuid(accountId)) throw notFound("calendar account");
   const removed = await withActor(actor, async (db) => {
     const found = await db.query<{ email: string | null; mail: boolean; addresses: string[] }>(
       `select a.email,
@@ -310,7 +312,7 @@ export async function disconnectCalendarAccount(actor: UserActor, accountId: str
     const accountEmail = canonicalEmail(account.email ?? "");
     const confirmedThis = Boolean(confirmedEmail) && Boolean(accountEmail) && confirmedEmail === accountEmail;
     if (cascades && !confirmedThis) {
-      throw new CrmError("conflict", `Confirm removing ${account.email ?? "this account"} first. It deletes Orbit's copy of its mail and its sending addresses.`, 409);
+      throw new CrmError("conflict", `Confirm removing ${account.email ?? "this account"}. Its mail and sending addresses will be deleted from Orbit.`, 409);
     }
     const result = await db.query<{ email: string | null }>(
       "delete from crm.calendar_accounts where id = $1 and user_id = $2 returning email",
@@ -319,7 +321,7 @@ export async function disconnectCalendarAccount(actor: UserActor, accountId: str
     for (const address of [...result.rows.map((row) => row.email), ...account.addresses]) await forgetInviteSender(db, actor, address);
     return result.rowCount ?? 0;
   });
-  if (removed === 0) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
+  if (removed === 0) throw notFound("calendar account");
 }
 
 export async function hasCalendarAccounts(db: Db, actor: UserActor) {

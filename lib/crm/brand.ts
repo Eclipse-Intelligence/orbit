@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Renderer } from "@/lib/browserbase";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, ShownError, isPgError, errorText, tooLong, tooMany } from "@/lib/crm/errors";
 import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -31,7 +31,7 @@ const SELECT = `select b.website, b.what_you_sell, b.tone, b.playbook, b.outreac
   left join crm.workspace_brands b on b.workspace_id = w.workspace_id
   left join crm.enrichment_settings e on e.workspace_id = w.workspace_id`;
 
-const FORBIDDEN = "Only workspace owners and admins can change the brand.";
+const FORBIDDEN = "Only owners and admins can change the brand.";
 
 function mapBrand(workspaceId: string, workspaceName: string, row: BrandRow | undefined): BrandProfile {
   return {
@@ -80,7 +80,7 @@ function text(input: Record<string, unknown>, key: keyof typeof BRAND_LIMITS, la
   }
   const cleaned = (value ?? "").replace(/\r\n?/g, "\n").trim();
   if (cleaned.length > BRAND_LIMITS[key]) {
-    throw new CrmError("invalid_input", `${label} can be up to ${BRAND_LIMITS[key].toLocaleString("en-GB")} characters.`, 400, { field: key });
+    throw new CrmError("invalid_input", tooLong(`${label.charAt(0).toLowerCase()}${label.slice(1)}`, BRAND_LIMITS[key]), 400, { field: key });
   }
   return cleaned;
 }
@@ -90,7 +90,7 @@ function website(value: unknown) {
     throw new CrmError("invalid_input", "The website must be text.", 400, { field: "website" });
   }
   const checked = normaliseWebsite(value ?? "");
-  if (!checked.ok) throw new CrmError("invalid_input", "Enter the website address, for example ridgeon.me.", 400, { field: "website" });
+  if (!checked.ok) throw new CrmError("invalid_input", "Enter a website, such as example.com.", 400, { field: "website" });
   return checked.url ?? "";
 }
 
@@ -99,10 +99,10 @@ function formerNames(value: unknown) {
   const names = value === null ? [] : formerNamesFrom(value);
   if (!names) throw new CrmError("invalid_input", "Former names must be text, separated by commas.", 400, { field: "formerNames" });
   if (names.length > FORMER_NAME_LIMITS.count) {
-    throw new CrmError("invalid_input", `Add up to ${FORMER_NAME_LIMITS.count} former names.`, 400, { field: "formerNames" });
+    throw new CrmError("invalid_input", tooMany(FORMER_NAME_LIMITS.count, "former names"), 400, { field: "formerNames" });
   }
   if (names.some((name) => name.length > FORMER_NAME_LIMITS.length)) {
-    throw new CrmError("invalid_input", `Each former name can be up to ${FORMER_NAME_LIMITS.length} characters.`, 400, { field: "formerNames" });
+    throw new CrmError("invalid_input", tooLong("each former name", FORMER_NAME_LIMITS.length), 400, { field: "formerNames" });
   }
   return names;
 }
@@ -210,12 +210,14 @@ export async function draftBrandFromWebsite(
 ): Promise<BrandDraft> {
   requireAdmin(actor);
   const site = website(input.website);
-  if (!site) throw new CrmError("invalid_input", "Add the website first.", 400, { field: "website" });
+  if (!site) throw new CrmError("invalid_input", "Enter the website first.", 400, { field: "website" });
   let pages: WebPage[];
   try {
     pages = await readSite(site, options);
   } catch (error) {
-    throw new CrmError("unavailable", `Couldn't read ${site}: ${error instanceof Error ? error.message : "the page didn't load"}`, 502, { field: "website" });
+    if (!(error instanceof ShownError)) console.error("Reading the website for the brand profile failed", error);
+    const reason = error instanceof ShownError ? errorText(error, "Try again.") : "Try again.";
+    throw new CrmError("unavailable", `Couldn't read ${site}. ${reason}`, 502, { field: "website" });
   }
   const material = pages.map((page) => `Page from the website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, 8_000)}`);
   const name = actor.workspaceName;
@@ -235,6 +237,7 @@ export async function draftBrandFromWebsite(
       timeoutMs: 60_000,
       deadline: options.deadline,
       fetchImpl: options.fetchImpl,
+      viewer: actor,
     });
     const clip = (value: string, max: number) => value.trim().slice(0, max);
     const draft = {
@@ -247,10 +250,13 @@ export async function draftBrandFromWebsite(
     return {
       draft,
       sources: pages.map((page) => page.url),
-      notes: empty.length ? [`The site didn't say enough for ${empty.map((key) => labels[key]).join(" or ")}.`] : [],
+      notes: empty.length ? [`Nothing found for ${empty.map((key) => labels[key]).join(" or ")}.`] : [],
     };
   } catch (error) {
-    if (error instanceof LlmError) throw new CrmError("unavailable", `The draft couldn't be written: ${error.message}`, 502);
+    if (error instanceof LlmError) {
+      console.error("Drafting the brand profile failed", error.message);
+      throw new CrmError("unavailable", error.actionable ? error.message : "Couldn't write the draft. Try again.", 502);
+    }
     throw error;
   }
 }

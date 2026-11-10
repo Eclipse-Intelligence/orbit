@@ -14,7 +14,6 @@ import {
   claimIntegration,
   createContactFromAttendee,
   ensureIntegration,
-  errorText,
   finishIntegration,
   internalAddresses,
   type IntegrationKey,
@@ -27,7 +26,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
 import { readFeed } from "@/lib/ical/events";
-import { FeedError, fetchFeed, type Lookup } from "@/lib/ical/fetch";
+import { FeedError, feedErrorSummary, fetchFeed, type Lookup } from "@/lib/ical/fetch";
 import { IcsParseError } from "@/lib/ical/parse";
 import {
   CalendarScopeError,
@@ -43,7 +42,7 @@ import {
 import {
   grantsCalendar,
   microsoftConfigured,
-  sanitizeMicrosoftError,
+  microsoftErrorText,
   type MicrosoftToken,
 } from "@/lib/microsoft/oauth";
 
@@ -59,9 +58,10 @@ const SAVE_BATCH = 200;
 const MEETINGS_SHOWN = 5;
 const PEOPLE_SHOWN = 25;
 export const DEFAULT_CALENDAR_PLACEHOLDER = "__default__";
-const CALENDAR_NO_ACCESS = "Microsoft didn't let Orbit read this calendar.";
+const CALENDAR_NO_ACCESS = "Microsoft blocked this calendar.";
 const NOT_CONNECTED = "Connect Microsoft or add a calendar link to sync your calendar.";
-const FEED_FAILED = "Couldn't sync this calendar link. Orbit will try again later.";
+const FEED_FAILED = "Couldn't sync this calendar link. Orbit will retry.";
+const SYNC_FAILED = "Couldn't sync the calendar. Try again.";
 const REJECTED = /rejected the mailbox connection|could not read the saved Microsoft connection/i;
 
 type CalendarSyncResult = {
@@ -703,7 +703,7 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
           await withActor(actor, (db) => markCalendarError(db, calendar.id, CALENDAR_NO_ACCESS));
           continue;
         }
-        const message = sanitizeMicrosoftError(errorText(error, "Could not sync the calendar."));
+        const message = microsoftErrorText(error, SYNC_FAILED);
         await withActor(actor, (db) => markCalendarError(db, calendar.id, message));
         outcome.complete = false;
         outcome.error ??= message;
@@ -718,7 +718,7 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
     return outcome;
   } catch (error) {
     if (error instanceof CalendarScopeError) return missing();
-    const message = sanitizeMicrosoftError(errorText(error, "Could not sync the calendar."));
+    const message = microsoftErrorText(error, SYNC_FAILED);
     await finishSource(actor, source, { error: message, scopeMissing: false });
     return { ...outcome, complete: false, error: message };
   }
@@ -748,7 +748,7 @@ async function syncFeedSource(actor: UserActor, source: SyncSource, context: Syn
     try {
       url = new URL(decryptSecret(feed.urlCipher));
     } catch {
-      throw new FeedError("Orbit couldn't read the saved calendar link. Remove it and add it again.");
+      throw new FeedError("Calendar link unreadable. Remove it and add it again.");
     }
     const recent = feed.fetchedAt !== null && context.now - new Date(feed.fetchedAt).getTime() < FEED_REFRESH_MS;
     const fetched = await fetchFeed(url, {
@@ -820,7 +820,7 @@ async function syncFeedSource(actor: UserActor, source: SyncSource, context: Syn
     const message =
       error instanceof FeedError || error instanceof IcsParseError ? error.message : FEED_FAILED;
     if (!(error instanceof FeedError || error instanceof IcsParseError)) {
-      console.error("Calendar link sync failed", errorText(error, FEED_FAILED));
+      console.error("Calendar link sync failed", feedErrorSummary(error));
     }
     await withActor(actor, (db) =>
       db.query("update crm.calendars set last_attempt_at = now(), last_error = $2 where account_id = $1", [

@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound, tooLong } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor } from "@/lib/crm/types";
@@ -60,16 +60,16 @@ function invalid(message: string, field: string): never {
   throw new CrmError("invalid_input", message, 400, { field });
 }
 
-function notFound(): never {
-  throw new CrmError("not_found", "That proof entry no longer exists.", 404);
+function missing(): never {
+  throw notFound("proof entry");
 }
 
 function text(source: Record<string, unknown>, field: keyof typeof LIMITS, required = false) {
   const value = source[field];
   if (value != null && typeof value !== "string") invalid(`${FIELD_NAMES[field]} must be text.`, field);
   const cleaned = (value ?? "").toString().replace(/\s+/g, " ").trim();
-  if (required && !cleaned) invalid(field === "client" ? "Add the client's name." : "Add the result.", field);
-  if (cleaned.length > LIMITS[field]) invalid(`${FIELD_NAMES[field]} must be ${LIMITS[field]} characters or fewer.`, field);
+  if (required && !cleaned) invalid(field === "client" ? "Enter the client's name." : "Enter the result.", field);
+  if (cleaned.length > LIMITS[field]) invalid(tooLong(`${FIELD_NAMES[field].charAt(0).toLowerCase()}${FIELD_NAMES[field].slice(1)}`, LIMITS[field]), field);
   return cleaned;
 }
 
@@ -77,7 +77,7 @@ function reviewDate(value: unknown) {
   if (value == null || value === "") return null;
   const parsed = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00Z`) : null;
   if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
-    invalid("Pick a review date.", "reviewOn");
+    invalid("Choose a review date.", "reviewOn");
   }
   return value;
 }
@@ -98,7 +98,7 @@ function cleanWrite(input: unknown) {
     reviewOn: reviewDate(source.reviewOn),
   };
   if (values.permission === "described" && !values.description) {
-    invalid("Described only entries need a description that doesn't identify them, such as a 12-person B2B SEO agency.", "description");
+    invalid("Enter a description that doesn't identify them.", "description");
   }
   return values;
 }
@@ -108,12 +108,12 @@ function auditFields(entry: ProofEntry) {
 }
 
 async function readEntry(db: Db, actor: UserActor, id: string) {
-  if (!isUuid(id)) notFound();
+  if (!isUuid(id)) missing();
   const result = await db.query<ProofRow>(
     `select ${COLUMNS} from crm.proof_entries where workspace_id = $1 and id = $2 and archived_at is null for update`,
     [actor.workspaceId, id],
   );
-  if (!result.rows[0]) notFound();
+  if (!result.rows[0]) missing();
   return mapEntry(result.rows[0]);
 }
 

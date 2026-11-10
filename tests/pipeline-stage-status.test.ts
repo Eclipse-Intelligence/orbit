@@ -137,7 +137,7 @@ describe("changing which stage is won or lost", () => {
           isLost: stage.isLost,
         })),
       ),
-      /more than 250 deals between open, won and lost at once/,
+      /More than 250 opportunities would change status/,
     );
     const statuses = await admin.query<{ status: string; total: number }>(
       "select status, count(*)::int as total from crm.opportunities where stage_id = $1 group by status",

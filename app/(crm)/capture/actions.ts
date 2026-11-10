@@ -159,7 +159,7 @@ export async function sendContactEmailAction(
   },
 ) {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in again." };
+  if (!user) return { error: "Sign in again.", stopsRun: true as const };
   let warning: string | null;
   try {
     ({ warning } = await sendContactEmail(user, contactId, email));

@@ -105,6 +105,12 @@ export function likelihoodText(answer: { likelihood: number | null; confidence: 
 }
 
 export const MONTHLY_LIMIT_USD = 100;
+
+export function webChecksNotSetUp(viewer?: { type?: string; role?: string } | null, log = true) {
+  if (viewer?.type !== "agent" && viewer?.role === "owner") return "Web checks aren't set up. Add PARALLEL_API_KEY.";
+  if (log) console.error("Web checks aren't set up: PARALLEL_API_KEY is missing.");
+  return "Web checks aren't set up.";
+}
 export const DECISION_COST = 0.001;
 export const TASK_COST = 0.01;
 const WEEKS_A_MONTH = 52 / 12;

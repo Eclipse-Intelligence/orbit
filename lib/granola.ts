@@ -1,3 +1,5 @@
+import { ShownError } from "@/lib/crm/errors";
+import { unreachable, upstreamFailure } from "@/lib/upstream";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 const DEFAULT_BASE_URL = "https://public-api.granola.ai";
@@ -59,7 +61,7 @@ type GranolaWebhookEndpoint = {
   signing_secret: string;
 };
 
-export class GranolaError extends Error {
+export class GranolaError extends ShownError {
   readonly status: number;
 
   constructor(message: string, status: number) {
@@ -93,21 +95,10 @@ function retryDelay(response: Response, attempt: number) {
 }
 
 async function errorMessage(response: Response) {
-  const body = (await response.json().catch(() => ({}))) as {
-    message?: unknown;
-    error?: unknown;
-    code?: unknown;
-  };
-  const detail =
-    typeof body.message === "string"
-      ? body.message
-      : typeof body.error === "string"
-        ? body.error
-        : "";
-  if (response.status === 401) return "Granola rejected the API key. Check GRANOLA_API_KEY.";
-  if (response.status === 403) return "Granola refused the request. Check the API key's access in Granola.";
-  if (response.status === 429) return "Granola is rate limiting Orbit. It will try again on the next sync.";
-  return `Granola returned ${response.status}${detail ? `: ${detail.replace(/\s+/g, " ").slice(0, 200)}` : "."}`;
+  return upstreamFailure("Granola", response, {
+    fix: response.status === 403 ? "Check its access." : undefined,
+    busy: "Orbit will retry.",
+  });
 }
 
 export function granolaClient(options: GranolaClientOptions) {
@@ -121,7 +112,7 @@ export function granolaClient(options: GranolaClientOptions) {
 
   async function request(path: string, init: RequestInit = {}) {
     for (let attempt = 0; ; attempt += 1) {
-      if (remaining() < 1_000) throw new GranolaError("Ran out of time talking to Granola.", 0);
+      if (remaining() < 1_000) throw new GranolaError(unreachable("Granola"), 0);
       const response = await fetchImpl(`${base}${path}`, {
         ...init,
         headers: {

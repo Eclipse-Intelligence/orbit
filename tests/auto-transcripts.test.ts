@@ -435,7 +435,7 @@ describe("granola transcripts", () => {
     assert.notEqual(stored.rows[0].webhook_secret, SIGNING_SECRET);
     assert.match(stored.rows[0].webhook_secret, /^v1\./);
     const again = await enableGranolaWebhook(owner, "http://localhost:4173", { fetchImpl });
-    assert.equal(again.message, "Instant Granola sync is already on.");
+    assert.equal(again.message, "Instant sync on");
 
     const now = Date.now();
     const timestamp = String(Math.floor(now / 1000));
@@ -622,7 +622,8 @@ describe("granola transcripts", () => {
     const before = await watermark();
     const first = await syncGranola({ fetchImpl: granola(state).fetchImpl, force: true });
     assert.equal(first.failed, 1);
-    assert.match(first.error ?? "", /Granola returned 500/);
+    assert.equal(first.error, "Couldn't reach Granola. Try again.");
+    assert.doesNotMatch(first.error ?? "", /Internal error/);
     assert.equal(first.complete, true);
     assert.ok((await watermark()) > before);
     let row = (await importRows(owner.workspaceId)).get(noteId(11))!;
@@ -860,6 +861,30 @@ describe("teams transcripts", () => {
       [owner.workspaceId],
     );
     assert.equal(stored.rows[0].last_error, TRANSCRIPTS_DISABLED_MESSAGE);
+  });
+
+  it("keeps Microsoft's own error text out of the transcript sync status", async () => {
+    const { fetchImpl: base } = graph(state);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (String(input).includes("getAllTranscripts")) {
+        return Response.json({ error: { code: "UnknownError", message: "Backend shard tx-eu-4 rejected request 7f3a." } }, { status: 500 });
+      }
+      return base(input, init);
+    };
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const result = await syncTeamsTranscripts(owner, { fetchImpl, force: true });
+      assert.equal(result.error, "Couldn't read Teams transcripts. Try again.");
+      const stored = await getAdminPool().query<{ last_error: string }>(
+        "select last_error from crm.integration_state where workspace_id = $1 and source = 'teams_transcripts'",
+        [owner.workspaceId],
+      );
+      assert.equal(stored.rows[0].last_error, "Couldn't read Teams transcripts. Try again.");
+      assert.doesNotMatch(stored.rows[0].last_error, /shard|7f3a/);
+    } finally {
+      console.error = realConsoleError;
+    }
   });
 
   it("creates, renews and recreates the transcript subscription", async () => {
@@ -1181,7 +1206,7 @@ describe("scheduled sync", () => {
     assert.deepEqual(ran, ["mail", "calls", "summaries"]);
     assert.equal(report.errors, 2);
     const entry = report.workspaces[0];
-    assert.deepEqual(entry.steps.mail, { ok: false, error: "Mail exploded" });
+    assert.deepEqual(entry.steps.mail, { ok: false, error: "The step failed." });
     assert.equal(entry.steps.calls.ok, false);
     assert.equal(entry.steps.calls.error, "Calls said no");
     assert.deepEqual(entry.steps.summaries, { summarised: 2, ok: true });

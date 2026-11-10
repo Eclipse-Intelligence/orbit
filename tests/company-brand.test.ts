@@ -123,7 +123,7 @@ describe("filling in many companies", () => {
     assert.deepEqual(filled.results.map((result) => [result.companyId, result.status]), [[b, "not_found"]]);
     assert.equal(filled.remaining, 0);
     assert.deepEqual((await backfillCompanies(owner, { env: ENV, fetchImpl: net.fetchImpl })).results, []);
-    await assert.rejects(enrichCompanies(owner, Array.from({ length: 6 }, () => crypto.randomUUID())), /up to 5 companies/);
+    await assert.rejects(enrichCompanies(owner, Array.from({ length: 6 }, () => crypto.randomUUID())), /Up to 5 companies/);
   });
 });
 

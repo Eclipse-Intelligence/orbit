@@ -521,7 +521,7 @@ describe("merging contacts", () => {
     const archived = await contact({ firstName: "Old", lastName: "Cara" });
     await archiveContact(owner, archived.id, { provenance: PROVENANCE });
 
-    await assert.rejects(mergeContacts(owner, keep.id, keep.id, PROVENANCE), isCrmError("invalid_input", /different person/));
+    await assert.rejects(mergeContacts(owner, keep.id, keep.id, PROVENANCE), isCrmError("invalid_input", /different contact/));
     await assert.rejects(mergeContacts(owner, keep.id, foreign.id, PROVENANCE), isCrmError("not_found", /isn't in this workspace/));
     await assert.rejects(mergeContacts(owner, keep.id, archived.id, PROVENANCE), isCrmError("invalid_input", /Old Cara is already archived/));
     await assert.rejects(mergeContacts(owner, archived.id, dupe.id, PROVENANCE), isCrmError("invalid_input", /Old Cara is archived/));

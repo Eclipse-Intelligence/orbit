@@ -92,7 +92,7 @@ describe("editing activities", () => {
     await assert.rejects(updateActivity(owner, note.id, { body: "  " }, WEB), code("invalid_input", /Enter a title or a note/));
     await assert.rejects(updateActivity(owner, note.id, { occurredAt: "next week sometime" }, WEB), code("invalid_input", /valid date and time/));
     await assert.rejects(updateActivity(owner, note.id, { occurredAt: null }, WEB), code("invalid_input", /valid date and time/));
-    await assert.rejects(updateActivity(owner, note.id, { type: "fax" as never }, WEB), code("invalid_input", /type is not recognised/));
+    await assert.rejects(updateActivity(owner, note.id, { type: "fax" as never }, WEB), code("invalid_input", /Unknown activity type/));
     await assert.rejects(updateActivity(owner, "not-an-id", { body: "x" }, WEB), code("not_found"));
   });
 
@@ -101,7 +101,7 @@ describe("editing activities", () => {
     const theirs = (await createActivity(colleague, { type: "note", body: "Sam's note", companyId: acme })).body.activity;
 
     await assert.rejects(updateActivity(colleague, mine.id, { body: "Changed by Sam" }, WEB), (error: unknown) => {
-      return error instanceof CrmError && error.status === 403 && /Only the person who logged this activity, or an owner or admin, can edit it/.test(error.message);
+      return error instanceof CrmError && error.status === 403 && /Only its author, owners and admins can edit this/.test(error.message);
     });
     assert.equal((await getActivity(owner, mine.id)).body, "Owner note");
     assert.equal((await updateActivity(colleague, theirs.id, { body: "Sam's note, edited" }, WEB)).changed, true);
@@ -143,7 +143,7 @@ describe("editing activities", () => {
     await assert.rejects(updateActivity(owner, note.id, { companyId: foreign, contactId: null }, WEB), code("not_found", /Company not found/));
     await assert.rejects(updateActivity(owner, note.id, { contactId: foreignContact }, WEB), code("not_found", /Contact not found/));
     await assert.rejects(updateActivity(owner, note.id, { contactId: john }, WEB), code("invalid_input", /different company/));
-    await assert.rejects(updateActivity(owner, note.id, { companyId: null, contactId: null }, WEB), code("invalid_input", /Keep the activity on a company, person or opportunity/));
+    await assert.rejects(updateActivity(owner, note.id, { companyId: null, contactId: null }, WEB), code("invalid_input", /Choose a company, contact or opportunity/));
     await assert.rejects(
       queryAsUser(owner.userId, "update crm.activities set company_id = $2 where id = $1", [note.id, foreign]),
       /another workspace/,
@@ -162,7 +162,7 @@ describe("editing activities", () => {
     const note = (await createActivity(owner, { type: "note", body: "Gone soon", companyId: acme })).body.activity;
     await archiveActivity(owner, note.id, { operation: "archive_activity", source: "web" });
     await assert.rejects(updateActivity(owner, note.id, { body: "Too late" }, WEB), (error: unknown) => {
-      return error instanceof CrmError && error.status === 409 && /Undo the delete before editing it/.test(error.message);
+      return error instanceof CrmError && error.status === 409 && /This activity is deleted\. Undo the delete first\./.test(error.message);
     });
   });
 
@@ -178,12 +178,12 @@ describe("editing activities", () => {
       })
     ).body.activity;
     assert.equal(activityOrigin(reply), "mail");
-    const limit = /can't be changed\. This email was filed from Mail, so only its company and opportunity can change\./;
+    const limit = /^Filed from Mail: only company and opportunity can change\.$/;
     await assert.rejects(updateActivity(owner, reply.id, { body: "Rewritten" }, WEB), code("invalid_input", limit));
     await assert.rejects(updateActivity(owner, reply.id, { title: "New subject" }, WEB), code("invalid_input", limit));
     await assert.rejects(updateActivity(owner, reply.id, { occurredAt: "2026-01-01T09:00" }, WEB), code("invalid_input", limit));
     await assert.rejects(updateActivity(owner, reply.id, { type: "note" }, WEB), code("invalid_input", limit));
-    await assert.rejects(updateActivity(owner, reply.id, { contactId: john, companyId: globex }, WEB), code("invalid_input", /Person can't be changed/));
+    await assert.rejects(updateActivity(owner, reply.id, { contactId: john, companyId: globex }, WEB), code("invalid_input", limit));
 
     const unchanged = await updateActivity(owner, reply.id, { title: "Re: pricing", body: "Looks good." }, WEB);
     assert.equal(unchanged.changed, false);
@@ -234,7 +234,7 @@ describe("editing activities", () => {
     );
     assert.equal(activityOrigin(call, true), "conversation");
 
-    const limit = /This call or meeting came from Teams, Granola or a transcript, so only its title, company, person and opportunity can change\./;
+    const limit = /^Imported call: only title, company, contact and opportunity can change\.$/;
     await assert.rejects(updateActivity(owner, call.id, { body: "My own words" }, WEB), code("invalid_input", limit));
     await assert.rejects(updateActivity(owner, call.id, { occurredAt: "2026-10-22T10:00" }, WEB), code("invalid_input", limit));
     await assert.rejects(updateActivity(owner, call.id, { type: "meeting" }, WEB), code("invalid_input", limit));
@@ -267,7 +267,7 @@ describe("editing activities", () => {
     assert.match(card.lines[0], /^Activity: Call "Intro call" on .*14:30$/);
     assert.equal(card.lines[1], "Title: from Intro call to Intro call with Jane");
     assert.match(card.lines[2], /^When: from .*14:30 to .*15:00$/);
-    assert.equal(card.lines[3], "Person: from Jane Doe to none");
+    assert.equal(card.lines[3], "Contact: from Jane Doe to none");
     assert.equal(card.lines.length, 4);
 
     const result = (await runTool(owner, "update_activity", args)) as { activity: { title: string; contactId: string | null; companyId: string }; changed: boolean };
@@ -280,6 +280,6 @@ describe("editing activities", () => {
     assert.equal(audit[0].operation, "assistant_update_activity");
 
     const refused = (await runTool(colleague, "update_activity", { activityId: call.id, title: "Sam's title" })) as { error: string };
-    assert.match(refused.error, /Only the person who logged this activity/);
+    assert.match(refused.error, /Only its author, owners and admins can edit this/);
   });
 });

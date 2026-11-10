@@ -56,7 +56,7 @@ function fromParallel(asked: Asked, answer: DecisionAnswer | undefined) {
   return { question: asked.question, answer: null, note: "No answer. Treat it as unknown, not as no." };
 }
 
-export async function checkWeb(args: Record<string, unknown>, options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined> } = {}) {
+export async function checkWeb(args: Record<string, unknown>, options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; viewer?: { type?: string; role?: string } | null } = {}) {
   const about = text(args.about, 1000);
   if (!about) return { error: "Say who or what the questions are about." };
   const asked = readQuestions(args.questions);

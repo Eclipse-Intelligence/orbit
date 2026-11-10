@@ -1,3 +1,4 @@
+import { notSetUp } from "@/lib/crm/errors";
 import { OAuthError } from "@/lib/ai-accounts/oauth";
 import { aiAccess, noteAiError } from "@/lib/ai-accounts/store";
 import { assistantModel, outputTokens } from "@/lib/assistant/models";
@@ -330,7 +331,7 @@ class ResponsesUnsupportedError extends AssistantError {}
 
 async function gatewayResponsesAttempt(input: CompleteInput, modelId: string): Promise<Completion> {
   const apiKey = process.env.LLM_API_KEY?.trim();
-  if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
+  if (!apiKey) throw new AssistantError(notSetUp("The assistant", "LLM_API_KEY", input.actor));
   const request = chatGptRequest({
     modelId,
     apiModel: input.model,
@@ -440,7 +441,7 @@ async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<
 
 async function gatewayRequest(input: CompleteInput, timeoutMs: number, marks: boolean): Promise<Completion> {
   const apiKey = process.env.LLM_API_KEY?.trim();
-  if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
+  if (!apiKey) throw new AssistantError(notSetUp("The assistant", "LLM_API_KEY", input.actor));
   const raw = input.tools ?? toolDefinitions();
   const tools = input.model.startsWith("gemini") ? raw.map(geminiTool) : raw;
   let response: Response;

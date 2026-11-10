@@ -1,3 +1,4 @@
+import { ShownError } from "@/lib/crm/errors";
 import { createHmac } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns";
 import { request as httpsRequest } from "node:https";
@@ -17,7 +18,13 @@ type FeedResult =
   | { status: "not_modified" }
   | { status: "ok"; text: string; etag: string | null; lastModified: string | null };
 
-export class FeedError extends Error {
+export function feedErrorSummary(error: unknown) {
+  const name = error instanceof Error ? error.name : typeof error;
+  const message = error instanceof Error ? error.message : "";
+  return `${name}: ${message.replace(/\b(?:https?|webcals?):\/\/\S+/gi, "<link>")}`.slice(0, 300);
+}
+
+export class FeedError extends ShownError {
   constructor(message: string) {
     super(message);
     this.name = "FeedError";
@@ -79,10 +86,10 @@ export function normalizeFeedUrl(input: string) {
   try {
     url = new URL(rewritten);
   } catch {
-    throw new FeedError("That doesn't look like a link. Paste the full https:// or webcal:// address.");
+    throw new FeedError("Paste the full https:// or webcal:// link.");
   }
   if (url.protocol !== "https:") throw new FeedError("Use an https:// or webcal:// calendar link.");
-  if (url.username || url.password) throw new FeedError("Calendar links with a username or password aren't supported.");
+  if (url.username || url.password) throw new FeedError("Remove the username and password from the link.");
   if (!url.hostname) throw new FeedError("That link has no host.");
   url.hash = "";
   return url;
@@ -113,7 +120,7 @@ const systemLookup: Lookup = (hostname) =>
   });
 
 function blockedHost(host: string) {
-  return new FeedError(`Orbit can't read calendars from ${host}. Use a public calendar link.`);
+  return new FeedError(`Can't read calendars from ${host}. Use a public link.`);
 }
 
 export async function assertPublicHost(hostname: string, lookup: Lookup = systemLookup) {
@@ -215,11 +222,11 @@ async function readBody(response: Response) {
 
 function statusError(status: number) {
   if (status === 401 || status === 403 || status === 404 || status === 410) {
-    return new FeedError(
-      `The calendar link stopped working (HTTP ${status}). Copy the secret address again and add it again.`,
-    );
+    console.error("Calendar link refused", status);
+    return new FeedError("The calendar link stopped working. Add it again.");
   }
-  return new FeedError(`The calendar server answered with HTTP ${status}. Orbit will try again later.`);
+  console.error("Calendar link failed", status);
+  return new FeedError("Couldn't sync this calendar. Orbit will retry.");
 }
 
 export async function fetchFeed(
@@ -249,8 +256,8 @@ export async function fetchFeed(
       response = await fetchImpl(current.toString(), { method: "GET", headers, redirect: "manual", signal });
     } catch (error) {
       if (error instanceof FeedError) throw error;
-      if (signal.aborted) throw new FeedError(`${host} took too long to send the calendar.`);
-      throw new FeedError(`Couldn't reach ${host}. Orbit will try again later.`);
+      console.error("Calendar link unreachable", host, feedErrorSummary(error));
+      throw new FeedError(`Couldn't reach ${host}. Orbit will retry.`);
     }
     if (REDIRECTS.has(response.status)) {
       await response.body?.cancel().catch(() => {});
@@ -260,7 +267,7 @@ export async function fetchFeed(
       try {
         next = new URL(location, current);
       } catch {
-        throw new FeedError("The calendar link redirected somewhere Orbit can't follow.");
+        throw new FeedError("The calendar link redirected to an invalid link.");
       }
       if (next.protocol !== "https:") throw new FeedError("The calendar link redirected away from https.");
       current = next;
@@ -279,7 +286,7 @@ export async function fetchFeed(
       text = await readBody(response);
     } catch (error) {
       if (error instanceof FeedError) throw error;
-      throw new FeedError(`Couldn't download the calendar from ${host}.`);
+      throw new FeedError(`Couldn't download the calendar from ${host}. Try again.`);
     }
     if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 4096))) {
       throw new FeedError("That link didn't return a calendar (iCal) file.");

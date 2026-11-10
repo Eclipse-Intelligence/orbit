@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import {
   highlightText,
@@ -186,7 +186,7 @@ export async function readerRead(actor: UserActor, documentId: string, part = 1,
   return live(async () => {
     const page = await api.listPage({ id, withHtmlContent: true });
     const document = page.results.find((item) => item.id === id);
-    if (!document) throw new CrmError("not_found", "That document isn't in your Reader.", 404);
+    if (!document) throw notFound("Reader document");
     const text = readerText(document);
     const parts = readerParts(text);
     if (part > parts.length) {
@@ -232,7 +232,7 @@ export async function readerHighlights(actor: UserActor, input: ReaderHighlights
     if (documentId) {
       const page = await api.listPage({ id: documentId });
       const document = page.results.find((item) => item.id === documentId);
-      if (!document) throw new CrmError("not_found", "That document isn't in your Reader.", 404);
+      if (!document) throw notFound("Reader document");
       titles.set(document.id, document.title);
       after = updatedAfter ?? since(document);
     } else if (tag) {

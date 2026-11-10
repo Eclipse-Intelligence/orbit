@@ -145,7 +145,7 @@ describe("linear client", () => {
       createLinearIssue({ title: "X", status: "Shipped" }, { fetchImpl: fake.fetchImpl, apiKey: "k" }),
       /no status called Shipped\. Use one of: Backlog, Todo, Done/,
     );
-    await assert.rejects(createLinearIssue({ title: " " }, { fetchImpl: fake.fetchImpl, apiKey: "k" }), /Give the issue a title/);
+    await assert.rejects(createLinearIssue({ title: " " }, { fetchImpl: fake.fetchImpl, apiKey: "k" }), /Enter a title/);
   });
 
   it("updates, comments and reports problems plainly", async () => {
@@ -158,8 +158,20 @@ describe("linear client", () => {
     assert.deepEqual(fake.calls.at(-1)?.variables, { input: { issueId: "uuid-CNT-7", body: "Client confirmed" } });
 
     const denied = fakeLinear({ status: 401 });
-    await assert.rejects(searchLinearIssues({}, { fetchImpl: denied.fetchImpl, apiKey: "bad" }), /rejected the API key/);
-    await assert.rejects(searchLinearIssues({}, { apiKey: null }), /Linear isn't connected/);
+    await assert.rejects(searchLinearIssues({}, { fetchImpl: denied.fetchImpl, apiKey: "bad" }), (error: unknown) => error instanceof Error && error.message === "Linear rejected the key.");
+    await assert.rejects(searchLinearIssues({}, { apiKey: null }), /Linear isn't set up\./);
+    resetLinearCache();
+    const graphError: typeof fetch = async () => Response.json({ errors: [{ message: "Field 'internalField' doesn't exist on type 'Issue'" }] });
+    await assert.rejects(
+      searchLinearIssues({}, { fetchImpl: graphError, apiKey: "k" }),
+      (error: unknown) => error instanceof Error && error.message === "Linear returned an error: Field 'internalField' doesn't exist on type 'Issue'.",
+    );
+    assert.deepEqual(await linearStatus({ fetchImpl: graphError, apiKey: "k" }), { configured: true, team: null, error: "Linear returned an error." });
+    const offline: typeof fetch = async () => {
+      throw new TypeError("fetch failed");
+    };
+    assert.deepEqual(await linearStatus({ fetchImpl: offline, apiKey: "k" }), { configured: true, team: null, error: "Couldn't reach Linear. Try again." });
+    resetLinearCache();
     assert.deepEqual(await linearStatus({ apiKey: null }), { configured: false, team: null, error: null });
     assert.deepEqual(await linearStatus({ fetchImpl: fake.fetchImpl, apiKey: "k" }), {
       configured: true,
@@ -214,7 +226,7 @@ describe("linear in the assistant", () => {
 
   it("files an issue linked back to the company, and explains when Linear isn't set up", async () => {
     const missing = await runTool(owner, "linear_search_issues", { query: "x" });
-    assert.deepEqual(missing, { error: "Linear isn't connected. Add LINEAR_API_KEY to the server environment." });
+    assert.deepEqual(missing, { error: "Linear isn't set up. Add LINEAR_API_KEY." });
 
     process.env.LINEAR_API_KEY = "lin_api_test";
     process.env.SITE_URL = "https://orbit.example.com";
@@ -298,7 +310,7 @@ describe("linear in the assistant", () => {
     assert.ok(toolDefinitions({ linear: true }).some((tool) => tool.function.name === "linear_create_issue"));
     await assert.rejects(connectLinear(other), /can't be connected here/);
     const member = { ...owner, role: "member" as const };
-    await assert.rejects(disconnectLinear(member), /Only workspace owners and admins/);
+    await assert.rejects(disconnectLinear(member), /Only owners and admins can change where Linear is connected/);
 
     await disconnectLinear(owner);
     assert.deepEqual(await linearConnection(other), { here: false, claimable: false });

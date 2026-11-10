@@ -333,7 +333,8 @@ describe("calendar sync", () => {
       }) as typeof fetch,
       now,
     });
-    assert.equal(failing.error, "Page two failed");
+    assert.equal(failing.error, "Couldn't read the calendar. Try again.");
+    assert.doesNotMatch(failing.error ?? "", /Page two failed/);
     assert.equal((await eventRows(owner.userId)).size, 4);
 
     await getAdminPool().query("update crm.integration_state set last_attempt_at = null where source = 'calendar'");
@@ -497,7 +498,7 @@ describe("calendar sync", () => {
     );
 
     await assert.rejects(createContactFromMeeting(owner, "stranger@nowhere.io"), /isn't in your calendar/);
-    await assert.rejects(createContactFromMeeting(owner, "partner@ridgeon.me"), /belongs to you/);
+    await assert.rejects(createContactFromMeeting(owner, "partner@ridgeon.me"), /your own or a colleague.s address/);
     const created = await createContactFromMeeting(owner, "ISABELLE@jumpstart-uk.com");
     assert.equal(created.created, true);
     assert.equal(created.contactName, "Isabelle Pitman");
@@ -579,9 +580,24 @@ describe("calendar sync", () => {
       fetchImpl: graphStub(() => [], [], { status: 500, code: "ErrorInternalServerError" }),
     });
     assert.equal(broken.scopeMissing, false);
-    assert.equal(broken.error, "Access is denied.");
+    assert.equal(broken.error, "Couldn't read your calendars. Try again.");
     const status = await getCalendarStatus(legacy);
-    assert.equal(status?.lastError, "Access is denied.");
+    assert.equal(status?.lastError, "Couldn't read your calendars. Try again.");
+
+    await getAdminPool().query("update crm.integration_state set last_attempt_at = null where source = 'calendar'");
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const crashed = await syncCalendar(legacy, {
+        fetchImpl: (async () => {
+          throw new TypeError("Cannot read properties of undefined (reading 'value')");
+        }) as typeof fetch,
+      });
+      assert.equal(crashed.error, "Couldn't sync the calendar. Try again.");
+      assert.equal((await getCalendarStatus(legacy))?.lastError, "Couldn't sync the calendar. Try again.");
+    } finally {
+      console.error = realConsoleError;
+    }
 
     await getAdminPool().query("update crm.integration_state set last_attempt_at = null where source = 'calendar'");
     const fixed = await syncCalendar(legacy, { fetchImpl: graphStub(() => [[]], []) });

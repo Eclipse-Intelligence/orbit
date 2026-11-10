@@ -1,3 +1,5 @@
+import { ShownError } from "@/lib/crm/errors";
+import { unreachable, upstreamFailure } from "@/lib/upstream";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 const DEFAULT_BASE_URL = "https://api.clickup.com/api/v2";
@@ -81,7 +83,7 @@ export type ClickUpTaskWrite = {
   custom_fields?: { id: string; value: unknown }[];
 };
 
-export class ClickUpError extends Error {
+export class ClickUpError extends ShownError {
   readonly status: number;
 
   constructor(message: string, status: number) {
@@ -122,16 +124,11 @@ function rateLimitDelay(response: Response, attempt: number, now: number) {
 }
 
 async function errorMessage(response: Response) {
-  const body = (await response.json().catch(() => ({}))) as { err?: unknown; ECODE?: unknown };
-  const detail = typeof body.err === "string" ? body.err.replace(/\s+/g, " ").slice(0, 200) : "";
-  if (response.status === 401) {
-    return detail && !/token|oauth|authoriz/i.test(detail)
-      ? `ClickUp refused the request: ${detail}`
-      : "ClickUp rejected the API token. Check CLICKUP_API_TOKEN.";
-  }
-  if (response.status === 403) return "ClickUp refused the request. Check the token's access in ClickUp.";
-  if (response.status === 429) return "ClickUp is rate limiting Orbit. It will try again on the next sync.";
-  return `ClickUp returned ${response.status}${detail ? `: ${detail}` : "."}`;
+  return upstreamFailure("ClickUp", response, {
+    credential: "token",
+    fix: response.status === 403 ? "Check its access." : undefined,
+    busy: "Orbit will retry.",
+  });
 }
 
 function idPart(value: string | number) {
@@ -163,7 +160,7 @@ export function clickupClient(options: ClickUpClientOptions) {
 
   async function request(path: string, init: RequestInit = {}) {
     for (let attempt = 0; ; attempt += 1) {
-      if (remaining() < 1_000) throw new ClickUpError("Ran out of time talking to ClickUp.", 0);
+      if (remaining() < 1_000) throw new ClickUpError(unreachable("ClickUp"), 0);
       const response = await fetchImpl(`${base}${path}`, {
         ...init,
         headers: {

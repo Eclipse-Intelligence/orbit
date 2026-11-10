@@ -1,4 +1,4 @@
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, tooLong, tooMany } from "@/lib/crm/errors";
 import { cleanLifecycle } from "@/lib/companies";
 import { ACCOUNT_HEALTH, type CompanyWrite } from "@/lib/crm/types";
 import { linkedinProfileSlug, SALES_NAVIGATOR_ID } from "@/lib/extension/protocol";
@@ -194,17 +194,18 @@ export function normalizedLinkedin(url: string) {
   return url.replace(/^https:\/\/www\./, "");
 }
 
+const FIELD_LABELS: Record<string, string> = { sizeCategory: "size" };
+
+export function fieldLabel(field: string) {
+  return FIELD_LABELS[field] ?? field.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ").toLowerCase();
+}
+
 export function cleanText(value: string | null | undefined, max: number, field: string) {
   if (value == null) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
   if (trimmed.length > max) {
-    throw new CrmError(
-      "invalid_input",
-      `${field} must be ${max} characters or fewer.`,
-      400,
-      { field },
-    );
+    throw new CrmError("invalid_input", tooLong(`the ${fieldLabel(field)}`, max), 400, { field });
   }
   return trimmed;
 }
@@ -222,12 +223,7 @@ export function normalizeTags(values: readonly string[] | null | undefined, fiel
     const tag = normalizeTag(value);
     if (!tag) continue;
     if (tag.length > TAG_MAX_LENGTH) {
-      throw new CrmError(
-        "invalid_input",
-        `Tags must be ${TAG_MAX_LENGTH} characters or fewer.`,
-        400,
-        { field },
-      );
+      throw new CrmError("invalid_input", tooLong("each tag", TAG_MAX_LENGTH), 400, { field });
     }
     if (tag.includes(";")) {
       throw new CrmError("invalid_input", "Tags can't contain a semicolon.", 400, { field });
@@ -235,12 +231,7 @@ export function normalizeTags(values: readonly string[] | null | undefined, fiel
     if (!tags.includes(tag)) tags.push(tag);
   }
   if (tags.length > TAG_LIMIT) {
-    throw new CrmError(
-      "invalid_input",
-      `A record can have at most ${TAG_LIMIT} tags.`,
-      400,
-      { field },
-    );
+    throw new CrmError("invalid_input", tooMany(TAG_LIMIT, "tags"), 400, { field });
   }
   return tags;
 }
@@ -335,7 +326,7 @@ export function normalizeCompanyWrite(
     } else {
       const linkedin = canonicalCompanyLinkedin(input.linkedinUrl);
       if (!linkedin) {
-        throw new CrmError("invalid_input", "Enter a LinkedIn company page like linkedin.com/company/acme.", 400, {
+        throw new CrmError("invalid_input", "Enter a LinkedIn page like linkedin.com/company/acme.", 400, {
           field: "linkedinUrl",
         });
       }
@@ -353,7 +344,7 @@ export function normalizeCompanyWrite(
       next.logoUrl = null;
     } else {
       const logo = canonicalImageUrl(input.logoUrl);
-      if (!logo) throw new CrmError("invalid_input", "The logo must be an https image URL.", 400, { field: "logoUrl" });
+      if (!logo) throw new CrmError("invalid_input", "Enter an https image link for the logo.", 400, { field: "logoUrl" });
       next.logoUrl = logo;
     }
   }
@@ -366,7 +357,7 @@ export function normalizeCompanyWrite(
   if (input.lifecycle !== undefined) {
     const lifecycle = typeof input.lifecycle === "string" ? cleanLifecycle(input.lifecycle) : null;
     if (!lifecycle) {
-      throw new CrmError("invalid_input", "Give the lifecycle a name.", 400, { field: "lifecycle" });
+      throw new CrmError("invalid_input", "Enter a lifecycle name.", 400, { field: "lifecycle" });
     }
     next.lifecycle = lifecycle;
   }
@@ -388,7 +379,7 @@ export function normalizeCompanyWrite(
   if (mode === "upsert" && next.name === undefined && next.domain === undefined) {
     throw new CrmError(
       "invalid_input",
-      "Provide a company name or domain.",
+      "Enter a company name or domain.",
       400,
       { field: "name" },
     );

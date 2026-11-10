@@ -204,7 +204,7 @@ describe("readwise reader", () => {
   });
 
   it("saves the token encrypted and private to its owner", async () => {
-    await assert.rejects(saveReadwiseToken(owner, "rw_wrong_token_000000", reader), /Readwise didn't accept that token/);
+    await assert.rejects(saveReadwiseToken(owner, "rw_wrong_token_000000", reader), /Readwise rejected that token/);
     await assert.rejects(saveReadwiseToken(owner, "short", reader), /Paste the whole Readwise access token/);
     await saveReadwiseToken(owner, `  ${GOOD} `, reader);
     assert.equal(await readwiseToken(owner), GOOD);
@@ -379,9 +379,9 @@ describe("readwise reader", () => {
     assert.deepEqual(waits, [2000]);
     reader.limit(2);
     const twice = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async (ms) => void waits.push(ms) });
-    assert.match(twice.error ?? "", /Readwise is limiting requests \(20 a minute\)\. Try again in 2 seconds\./);
+    assert.match(twice.error ?? "", /Readwise is busy\. Try again in 2 seconds\./);
     const status = await readwiseStatus(owner);
-    assert.match(status.lastError ?? "", /limiting requests/);
+    assert.match(status.lastError ?? "", /Readwise is busy/);
     assert.ok(status.lastErrorAt);
     const recovered = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined });
     assert.equal(recovered.error, undefined);
@@ -389,7 +389,7 @@ describe("readwise reader", () => {
 
     reader.limitHighlights(2);
     const midScan = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined });
-    assert.match(midScan.error ?? "", /limiting requests/);
+    assert.match(midScan.error ?? "", /Readwise is busy/);
     const paused = await getAdminPool().query<{ scan_started_at: Date | null }>("select scan_started_at from crm.readwise_keys where user_id = $1", [owner.userId]);
     assert.ok(paused.rows[0].scan_started_at);
     const resumed = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined });
@@ -493,7 +493,7 @@ describe("readwise reader", () => {
     assert.ok(liveBefore > 0);
     reader.malform(1);
     const broken = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined, full: true });
-    assert.match(broken.error ?? "", /Readwise sent a reply Orbit couldn't read/);
+    assert.equal(broken.error, "Couldn't reach Readwise. Try again.");
     assert.equal(broken.archived, 0);
     assert.equal((await items(owner.workspaceId)).filter((row) => !row.archived_at).length, liveBefore);
     const rows = await getAdminPool().query<{ total: number }>("select count(*)::int as total from crm.readwise_documents where user_id = $1", [owner.userId]);
@@ -650,12 +650,12 @@ describe("readwise reader", () => {
       assert.equal(tooMany.error, "Highlights can be filtered by one tag at a time.");
       const recent = (await runTool(owner, "reader_highlights", { limit: 100 })) as { highlights: { id: string }[] };
       assert.ok(recent.highlights.length >= 4);
-      assert.equal(((await runTool(owner, "reader_read", { id: "missing" })) as { error: string }).error, "That document isn't in your Reader.");
+      assert.equal(((await runTool(owner, "reader_read", { id: "missing" })) as { error: string }).error, "Reader document not found.");
 
       const before = reader.requests.length;
       for (const name of ["reader_list", "reader_read", "reader_highlights"]) {
         const refused = (await runTool(member, name, { id: "doc-eclipse" })) as { error?: string };
-        assert.match(refused.error ?? "", /Readwise Reader isn't connected/);
+        assert.match(refused.error ?? "", /Connect Readwise Reader in Settings › Connections\./);
       }
       assert.equal(reader.requests.length, before);
     } finally {
@@ -693,7 +693,7 @@ describe("readwise reader", () => {
       assert.equal(secondBody.highlights, undefined);
       const refused = await rpc(memberToken, "tools/call", { name: "reader_list", arguments: {} });
       assert.equal(refused.result!.isError, true);
-      assert.match(refused.result!.content![0].text, /isn't connected/);
+      assert.match(refused.result!.content![0].text, /Connect Readwise Reader in Settings › Connections/);
     } finally {
       globalThis.fetch = original;
     }

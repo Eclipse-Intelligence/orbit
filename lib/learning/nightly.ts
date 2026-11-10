@@ -2,7 +2,7 @@ import { z } from "zod";
 import { brandOrEmpty, brandToneNote } from "@/lib/crm/brand";
 import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, errorText } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { query, type Db } from "@/lib/db/pool";
@@ -625,7 +625,7 @@ async function withTidy(actor: UserActor, kind: LearningKind, result: UnitResult
     }
     return { ...result, tidied };
   } catch (error) {
-    return { ...result, tidyError: error instanceof Error ? error.message.slice(0, 300) : "The tidy-up failed." };
+    return { ...result, tidyError: errorText(error, "The tidy-up failed.") };
   }
 }
 
@@ -721,7 +721,7 @@ async function sortedFirst(actor: UserActor, options: Options): Promise<Pick<Uni
     const { sorted } = await sortPersonalMemories(actor, options);
     return sorted ? { sorted } : {};
   } catch (error) {
-    return { sortError: error instanceof Error ? error.message.slice(0, 300) : "Sorting notes failed." };
+    return { sortError: errorText(error, "Sorting notes failed.") };
   }
 }
 
@@ -756,7 +756,7 @@ export async function runUnit(actor: UserActor, kind: LearningKind, options: Uni
     await withActor(actor, (db) => db.query("update crm.learning_runs set status = 'done', summary = $2::jsonb, finished_at = now() where id = $1", [run, JSON.stringify(finished)]));
     return finished;
   } catch (error) {
-    const message = error instanceof Error ? error.message.slice(0, 1_000) : "Learning failed.";
+    const message = errorText(error, "Learning failed. Try again.");
     await withActor(actor, (db) => db.query("update crm.learning_runs set status = 'failed', error = $2, finished_at = now() where id = $1", [run, message])).catch(() => undefined);
     return { error: message };
   }
@@ -823,7 +823,7 @@ export const LEARNING_KINDS: LearningKind[] = ["business", "market", "personal",
 export async function learningKinds(actor: UserActor, choice: LearningKind | "all") {
   const allowed = allowedKinds(actor);
   if (choice !== "all" && !allowed.includes(choice)) {
-    throw new CrmError("forbidden", "Only owners and admins can run the business and market learning. You can run learning about you, or rebuild your morning brief.", 403, { field: "kind" });
+    throw new CrmError("forbidden", "Only owners and admins can run business and market learning.", 403, { field: "kind" });
   }
   const kinds = choice === "all" ? allowed : [choice];
   const running = await withActor(actor, async (db) => {
@@ -836,7 +836,7 @@ export async function learningKinds(actor: UserActor, choice: LearningKind | "al
     return result.rows.map((row) => row.kind);
   });
   if (running.length) {
-    throw new CrmError("conflict", "Orbit is already learning right now. Wait a few minutes for it to finish, then check Settings, Learning.", 409, { field: "kind" });
+    throw new CrmError("conflict", "Learning is already running. Try again in a few minutes.", 409, { field: "kind" });
   }
   return kinds;
 }

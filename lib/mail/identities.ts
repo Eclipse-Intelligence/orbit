@@ -240,7 +240,7 @@ export async function identityForSend(actor: UserActor, id: string) {
     const result = await db.query<IdentityRow>(`select ${COLUMNS} from crm.send_identities where id = $1 and user_id = $2`, [id, actor.userId]);
     return result.rows[0] ?? null;
   });
-  if (!row) throw new CrmError("not_found", "That sending address isn't set up any more. Choose another From address.", 404);
+  if (!row) throw new CrmError("not_found", "Sending address not found. Choose another From address.", 404);
   return { ...toIdentity(row), password: decryptSecret(row.password_cipher) };
 }
 

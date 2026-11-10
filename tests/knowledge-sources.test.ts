@@ -127,7 +127,7 @@ describe("knowledge sources", () => {
     assert.equal(eclipse.created, true);
     assert.equal(eclipse.item.scope, "eclipse");
 
-    await assert.rejects(addMailAttachmentToKnowledge(owner, messageId, "att-2", { companyId: acme }, mail), /can't read text from photo\.png/);
+    await assert.rejects(addMailAttachmentToKnowledge(owner, messageId, "att-2", { companyId: acme }, mail), /Can't read text from photo\.png/);
     await assert.rejects(addMailAttachmentToKnowledge(owner, messageId, "att-9", { companyId: acme }, mail), /Attachment not found/);
   });
 });

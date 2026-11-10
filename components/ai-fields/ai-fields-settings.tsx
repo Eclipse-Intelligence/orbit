@@ -131,6 +131,7 @@ export default function AiFieldsSettings({
   views,
   configured,
   canAdmin,
+  isOwner,
   children,
 }: {
   fields: AiField[];
@@ -139,6 +140,7 @@ export default function AiFieldsSettings({
   views: CompanyView[];
   configured: boolean;
   canAdmin: boolean;
+  isOwner: boolean;
   children?: ReactNode;
 }) {
   const [dialog, setDialog] = useState<{ open: boolean; field: AiField | null }>({ open: false, field: null });
@@ -154,7 +156,7 @@ export default function AiFieldsSettings({
     .filter((value): value is string => Boolean(value))
     .sort()[0];
   const refresh = next ? ` Next refresh ${shortDate(next)}.` : "";
-  const description = configured ? `This month: ${money(spend)} of $${MONTHLY_LIMIT_USD}.${refresh}` : "Add PARALLEL_API_KEY in Vercel";
+  const description = configured ? `This month: ${money(spend)} of $${MONTHLY_LIMIT_USD}.${refresh}` : isOwner ? "Add PARALLEL_API_KEY in Vercel" : "Web checks aren't set up.";
 
   return (
     <SettingsPage title="AI fields" action={add}>

@@ -129,7 +129,7 @@ describe("team", () => {
     const raw = await queryAsUser<{ total: number }>(member.userId, "select count(*)::int as total from crm.tasks where id = $1", [mine.id]);
     assert.equal(raw[0].total, 0);
 
-    await assert.rejects(updateTask(member, handed.id, { ownerId: owner.userId }), /didn't create it/);
+    await assert.rejects(updateTask(member, handed.id, { ownerId: owner.userId }), /Only the task's creator/);
     const own = (await createTask(member, { title: "Ask Mark to sign", companyId })).body.task;
     const passed = await updateTask(member, own.id, { ownerId: owner.userId });
     assert.equal(passed.body.task.ownerId, owner.userId);
@@ -211,7 +211,7 @@ describe("team", () => {
       if (status !== 200) return Response.json({ message: "Invalid API key" }, { status });
       return Response.json({ notes: [], hasMore: false, cursor: null });
     };
-    await assert.rejects(saveGranolaKey(member, "grn_bad_key_123456", { fetchImpl: granola(401) }), /Granola didn't accept that key/);
+    await assert.rejects(saveGranolaKey(member, "grn_bad_key_123456", { fetchImpl: granola(401) }), /Granola rejected that key\./);
     await saveGranolaKey(member, "grn_sam_key_123456", { fetchImpl: granola() });
     assert.equal(await personalGranolaKey(member), "grn_sam_key_123456");
     assert.deepEqual((await getGranolaStatus(member)).personal, { connected: true, hint: "3456" });

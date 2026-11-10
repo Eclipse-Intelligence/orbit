@@ -104,11 +104,11 @@ describe("relationship overrides", () => {
     await archiveCompany(owner, gone);
     await assert.rejects(
       setRelationshipOverride(owner, "company", gone, { label: "cold" }, { operation: "set_relationship" }),
-      (error: unknown) => error instanceof CrmError && error.code === "archived" && error.status === 409 && /Restore it/.test(error.message),
+      (error: unknown) => error instanceof CrmError && error.code === "archived" && error.status === 409 && /Restore this company first/.test(error.message),
     );
     await assert.rejects(
       setRelationshipOverride(owner, "contact", left, { label: "cold" }, { operation: "set_relationship" }),
-      (error: unknown) => error instanceof CrmError && error.code === "archived" && /This person is archived/.test(error.message),
+      (error: unknown) => error instanceof CrmError && error.code === "archived" && /Restore this contact first/.test(error.message),
     );
     const stored = await getAdminPool().query("select relationship_override from crm.companies where id = $1", [gone]);
     assert.equal(stored.rows[0].relationship_override, null);

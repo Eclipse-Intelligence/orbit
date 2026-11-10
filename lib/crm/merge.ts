@@ -2,7 +2,7 @@ import type { Db } from "@/lib/db/pool";
 import { readCompanyInDb } from "@/lib/crm/companies";
 import { readContactInDb } from "@/lib/crm/contacts";
 import { withActorAfterAppStep } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, notFound, pgFailure } from "@/lib/crm/errors";
 import { isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { canonicalEmail, TAG_LIMIT } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
@@ -95,26 +95,20 @@ function rowsMoved(raw: Record<string, unknown>) {
 
 function mergeFailure(error: unknown): never {
   if (error instanceof CrmError) throw error;
-  if (isPgError(error)) {
-    if (error.code === "P0002") throw new CrmError("not_found", error.message, 404);
-    if (error.code === "22023") throw new CrmError("invalid_input", error.message, 400);
-    if (error.code === "42501") throw new CrmError("forbidden", error.message, 403);
-    if (error.code === "23505") {
-      throw new CrmError("conflict", error.constraint ? "These records clash with another record. Merge or archive it first." : error.message, 409);
-    }
+  if (isPgError(error) && error.code === "23505" && error.constraint) {
+    throw new CrmError("conflict", "These records clash with another record. Merge or archive it first.", 409);
   }
-  throw error;
+  throw pgFailure(error, { P0002: "Record not found.", "23505": "These records clash with another record. Merge or archive it first." }) ?? error;
 }
 
 function actorIds(actor: Actor) {
   return [actor.type === "user" ? actor.userId : null, actor.type === "agent" ? actor.agentId : null];
 }
 
-function assertPair(keepId: string, mergeId: string, noun: "company" | "person") {
-  const label = noun === "company" ? "Company" : "Contact";
-  if (!isUuid(keepId) || !isUuid(mergeId)) throw new CrmError("not_found", `${label} not found.`, 404);
+function assertPair(keepId: string, mergeId: string, noun: "company" | "contact") {
+  if (!isUuid(keepId) || !isUuid(mergeId)) throw notFound(noun);
   if (keepId === mergeId) {
-    throw new CrmError("invalid_input", `Pick a different ${noun} to merge into.`, 400);
+    throw new CrmError("invalid_input", `Choose a different ${noun} to merge into.`, 400);
   }
 }
 
@@ -230,7 +224,7 @@ export async function mergeCompanies(
     async (db) => {
       const keep = await readCompanyInDb(db, keepId, actor.workspaceId);
       const merge = await readCompanyInDb(db, mergeId, actor.workspaceId);
-      if (!keep || !merge) throw new CrmError("not_found", "Company not found.", 404);
+      if (!keep || !merge) throw notFound("company");
       const fills = await fillsFor(db, actor.workspaceId, COMPANY_FILLS, keep, merge);
       const tags = unionTags(keep.tags, merge.tags);
       await archive(db, "companies", actor.workspaceId, mergeId);
@@ -245,7 +239,7 @@ export async function mergeCompanies(
       );
       const kept = await readCompanyInDb(db, keepId, actor.workspaceId);
       const merged = await readCompanyInDb(db, mergeId, actor.workspaceId);
-      if (!kept || !merged) throw new CrmError("not_found", "Company not found.", 404);
+      if (!kept || !merged) throw notFound("company");
       const moved = rowsMoved(raw);
       const cardsCombined = await recordCombinedCards(db, actor, raw, provenance);
       if (cardsCombined > 0) moved.board_cards_combined = cardsCombined;
@@ -294,7 +288,7 @@ export async function mergeContacts(
   provenance: Provenance,
 ): Promise<MergeResult<Contact>> {
   assertScope(actor.scopes, "contacts:write");
-  assertPair(keepId, mergeId, "person");
+  assertPair(keepId, mergeId, "contact");
   let raw: Record<string, unknown> = {};
   return withActorAfterAppStep(
     actor,
@@ -305,7 +299,7 @@ export async function mergeContacts(
     async (db) => {
       const keep = await readContactInDb(db, keepId, actor.workspaceId);
       const merge = await readContactInDb(db, mergeId, actor.workspaceId);
-      if (!keep || !merge) throw new CrmError("not_found", "Contact not found.", 404);
+      if (!keep || !merge) throw notFound("contact");
       const fills = await fillsFor(db, actor.workspaceId, CONTACT_FILLS, keep, merge);
       const tags = unionTags(keep.tags, merge.tags);
       const notes = mergedNotes(keep, merge);
@@ -316,7 +310,7 @@ export async function mergeContacts(
       });
       const kept = await readContactInDb(db, keepId, actor.workspaceId);
       const merged = await readContactInDb(db, mergeId, actor.workspaceId);
-      if (!kept || !merged) throw new CrmError("not_found", "Contact not found.", 404);
+      if (!kept || !merged) throw notFound("contact");
       const moved = rowsMoved(raw);
       const filled = [...fills.map((fill) => fill.field), ...(notes !== null ? ["notes"] : [])];
       await recordAudit(db, actor, "contact.merged", "contact", keepId, provenance, {
@@ -356,7 +350,7 @@ export async function fillCompanyGaps(db: Db, workspaceId: string, keepId: strin
   const from = options.fromWorkspaceId ?? workspaceId;
   const keep = await readCompanyInDb(db, keepId, workspaceId);
   const merge = await readCompanyInDb(db, mergeId, from);
-  if (!keep || !merge) throw new CrmError("not_found", "Company not found.", 404);
+  if (!keep || !merge) throw notFound("company");
   const fills = (await fillsFor(db, workspaceId, COMPANY_FILLS, keep, merge)).filter((fill) => !options.skip?.includes(fill.field));
   const tags = unionTags(keep.tags, merge.tags);
   await copyColumns(
@@ -370,7 +364,7 @@ export async function fillCompanyGaps(db: Db, workspaceId: string, keepId: strin
     from,
   );
   const kept = await readCompanyInDb(db, keepId, workspaceId);
-  if (!kept) throw new CrmError("not_found", "Company not found.", 404);
+  if (!kept) throw notFound("company");
   return {
     filled: fills.map((fill) => fill.field),
     tagsAdded: tags.added,
@@ -383,7 +377,7 @@ export async function fillContactGaps(db: Db, workspaceId: string, keepId: strin
   const from = options.fromWorkspaceId ?? workspaceId;
   const keep = await readContactInDb(db, keepId, workspaceId);
   const merge = await readContactInDb(db, mergeId, from);
-  if (!keep || !merge) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!keep || !merge) throw notFound("contact");
   const fills = (await fillsFor(db, workspaceId, CONTACT_FILLS, keep, merge)).filter((fill) => !options.skip?.includes(fill.field));
   const tags = unionTags(keep.tags, merge.tags);
   const notes = mergedNotes(keep, merge);
@@ -398,7 +392,7 @@ export async function fillContactGaps(db: Db, workspaceId: string, keepId: strin
     from,
   );
   const kept = await readContactInDb(db, keepId, workspaceId);
-  if (!kept) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!kept) throw notFound("contact");
   return {
     filled: [...fills.map((fill) => fill.field), ...(notes !== null ? ["notes"] : [])],
     tagsAdded: tags.added,

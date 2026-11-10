@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   const body = (await readJson(request).catch(() => null)) as { companyId?: unknown; companyIds?: unknown; backfill?: unknown } | null;
   const cost = Array.isArray(body?.companyIds) ? body.companyIds.length : body?.backfill === true ? 5 : 1;
   if (!(await enrichmentAllowed(user.userId, cost))) {
-    return Response.json({ error: "That's a lot of lookups this hour. Try again later." }, { status: 429 });
+    return Response.json({ error: "Hourly lookup limit reached. Try again later." }, { status: 429 });
   }
   try {
     if (body?.backfill === true) {
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
       if (results.some((result) => result.status === "updated")) revalidateEnriched();
       return Response.json({ results }, { headers: { "cache-control": "no-store" } });
     }
-    if (typeof body?.companyId !== "string") return Response.json({ error: "Pick a company." }, { status: 400 });
+    if (typeof body?.companyId !== "string") return Response.json({ error: "Choose a company." }, { status: 400 });
     const result = await enrichCompany(user, body.companyId);
     if (result.status === "updated") revalidateEnriched();
     return Response.json({ result }, { headers: { "cache-control": "no-store" } });

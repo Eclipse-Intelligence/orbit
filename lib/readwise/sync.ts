@@ -464,7 +464,7 @@ export async function syncReaderToKnowledge(viewer: UserActor, options: ReaderSy
   const actor = await actorForWorkspace(viewer, key.workspace_id);
   const token = decryptToken(key);
   if (!token) {
-    const message = "Orbit couldn't read the saved Readwise token. Connect Readwise Reader again.";
+    const message = "Reconnect Readwise Reader.";
     await finish(actor, key.id, message);
     return { ...result, error: message };
   }

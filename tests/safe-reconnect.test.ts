@@ -3,7 +3,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { flagReconnect, flagSyncProblems, readReconnects, reconnectAccounts, clearReconnects } from "@/components/mail/reconnect-store";
 import { calendarConnectError, connectCalendarAccount, disconnectCalendarAccount, SAME_AS_PRIMARY } from "@/lib/crm/calendar-accounts";
 import { CrmError } from "@/lib/crm/errors";
-import { disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
+import { currentToken, disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { graphReconnect, listMailboxes } from "@/lib/mail/accounts";
@@ -17,12 +17,18 @@ import type { ComposeAccount, MailNav } from "@/lib/mail/view";
 import { finishMicrosoftConnect, startMicrosoftConnect } from "@/lib/microsoft/connect-flow";
 import {
   APP_NEEDS_ATTENTION,
+  MicrosoftError,
   MicrosoftTokenError,
+  microsoftProblem,
   microsoftAuthorizationUrl,
+  microsoftErrorText,
   readMicrosoftState,
   sanitizeMicrosoftError,
   signMicrosoftState,
 } from "@/lib/microsoft/oauth";
+import { callErrorText, sanitizeCallError } from "@/lib/microsoft/calls";
+import { CalendarWriteError, createGraphEvent, fetchCalendarView } from "@/lib/microsoft/calendar";
+import { sanitizeTranscriptError, transcriptErrorText } from "@/lib/microsoft/transcripts";
 import { createUser, resetDatabase } from "./helpers";
 
 const MAIN = "mark@geteclipse.co";
@@ -202,7 +208,7 @@ describe("reconnecting Microsoft never swaps or deletes an account", () => {
   });
 
   it("only removes an account with mail when the removal is confirmed for that account", async () => {
-    await assert.rejects(disconnectCalendarAccount(setup.owner, setup.accountId), /Confirm removing mark@markridgeon\.com first/);
+    await assert.rejects(disconnectCalendarAccount(setup.owner, setup.accountId), /Confirm removing mark@markridgeon\.com\. Its mail and sending addresses will be deleted/);
     await assert.rejects(disconnectCalendarAccount(setup.owner, setup.accountId, { email: MAIN }), /Confirm removing/);
     assert.deepEqual(await rows(setup.owner), before_);
     await disconnectCalendarAccount(setup.owner, setup.accountId, { email: EXTRA });
@@ -432,6 +438,82 @@ describe("the connect and callback flow", () => {
 });
 
 describe("what counts as needing a reconnect", () => {
+  it("never passes Microsoft's own error text through", () => {
+    const realConsoleError = console.error;
+    const logged: string[] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    try {
+      const raw = "AADSTS90002: Tenant 'f00' not found. Trace ID: 1c2d Correlation ID: 3e4f Timestamp: 2026-11-10 09:00:00Z";
+      assert.equal(sanitizeMicrosoftError(raw), "Couldn't reach Microsoft. Try again.");
+      assert.equal(sanitizeMicrosoftError("ErrorAccessDenied: Access is denied.", "Couldn't send the email. Try again."), "Couldn't send the email. Try again.");
+      assert.equal(new MicrosoftTokenError("AADSTS50126: Error validating credentials. Trace ID: 1c2d").message, "Couldn't connect Microsoft. Try again.");
+      assert.equal(sanitizeMicrosoftError("Reconnect Microsoft in Settings › Email to send attachments over 3 MB."), "Reconnect Microsoft in Settings › Email to send attachments over 3 MB.");
+      assert.ok(logged.some((line) => line.includes("AADSTS90002")));
+      assert.equal(microsoftErrorText(new Error("fetch failed"), "Couldn't sync the calendar. Try again."), "Couldn't sync the calendar. Try again.");
+      assert.equal(microsoftErrorText(new Error("invalid_grant AADSTS700082: expired")), "Microsoft rejected the mailbox connection. Connect it again.");
+    } finally {
+      console.error = realConsoleError;
+    }
+  });
+
+  it("tests Microsoft's message for a signed-out session, never its error code", async () => {
+    const realConsoleError = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(microsoftProblem("The operation timed out.", "Couldn't sync the calendar. Try again.", "ErrorTimeoutExpired"), "Couldn't sync the calendar. Try again.");
+      assert.equal(microsoftProblem("AADSTS700082: The refresh token has expired.", "x"), "Microsoft rejected the mailbox connection. Connect it again.");
+      assert.equal(microsoftProblem("", "x", "invalid_grant"), "Microsoft rejected the mailbox connection. Connect it again.");
+      assert.equal(microsoftProblem("The backend session expired while waiting.", "Couldn't sync the calendar. Try again.", "ServiceUnavailable", 503), "Couldn't sync the calendar. Try again.");
+      assert.equal(microsoftProblem("The refresh token has expired.", "x", "", 400), "Microsoft rejected the mailbox connection. Connect it again.");
+      const flaky = (async () => Response.json({ error: { code: "ServiceUnavailable", message: "Session expired on the server." } }, { status: 503 })) as typeof fetch;
+      const outage = await fetchCalendarView("token", { start: new Date(), end: new Date() }, { fetchImpl: flaky }).then(() => null, (error: unknown) => error);
+      assert.ok(outage instanceof Error);
+      assert.doesNotMatch(outage.message, /rejected the mailbox connection|connect it again/i);
+      assert.equal(sanitizeCallError("The request failed.", "Couldn't sync Teams calls. Try again.", "TenantThrottleExceeded"), "Couldn't sync Teams calls. Try again.");
+      assert.equal(sanitizeCallError("Tenant guid not found.", "x"), "Microsoft tenant isn't set up.");
+      assert.equal(sanitizeCallError("Insufficient privileges to complete the operation.", "x", "Authorization_RequestDenied"), sanitizeCallError("", "x", "Authorization_RequestDenied"));
+      assert.equal(sanitizeTranscriptError("The request failed.", "x", "GraphAccessToTranscriptsDisabled"), sanitizeTranscriptError("GraphAccessToTranscriptsDisabled", "x"));
+      assert.equal(sanitizeTranscriptError("The request failed.", "Couldn't sync Teams transcripts. Try again.", "ForbiddenTenantRule"), "Couldn't sync Teams transcripts. Try again.");
+      const timeout = (async () => Response.json({ error: { code: "ErrorTimeoutExpired", message: "The operation timed out." } }, { status: 504 })) as typeof fetch;
+      const failure = await fetchCalendarView("token", { start: new Date(), end: new Date() }, { fetchImpl: timeout }).then(() => null, (error: unknown) => error);
+      assert.ok(failure instanceof Error);
+      assert.doesNotMatch(failure.message, /rejected the mailbox connection|connect it again/i);
+    } finally {
+      console.error = realConsoleError;
+    }
+  });
+
+  it("keeps Microsoft's reason for a refused meeting for the assistant only, so pages show a fixed sentence and the assistant doesn't retry", async () => {
+    const realConsoleError = console.error;
+    const logged: string[] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    try {
+      const refused = (async () => Response.json({ error: { code: "ErrorInvalidRequest", message: "The start time must be before the end time." } }, { status: 400 })) as typeof fetch;
+      const failure = await createGraphEvent("token", { subject: "Call" } as Parameters<typeof createGraphEvent>[1], { fetchImpl: refused }).then(() => null, (error: unknown) => error);
+      assert.ok(failure instanceof CalendarWriteError);
+      assert.equal(failure.message, "Couldn't create the meeting.");
+      assert.equal(failure.reason, "Microsoft refused the meeting: The start time must be before the end time. Change it rather than trying again.");
+      assert.doesNotMatch(`${failure.message} ${failure.reason}`, /Try again/);
+      assert.ok(logged.some((line) => line.includes("start time must be before")));
+    } finally {
+      console.error = realConsoleError;
+    }
+  });
+
+  it("keeps the reconnect instruction when the saved connection can't be read", async () => {
+    const failure = await currentToken({ refreshTokenCipher: "not-a-real-cipher", accessTokenCipher: null, accessTokenExpiresAt: null }, fetch).then(() => null, (error: unknown) => error);
+    assert.ok(failure instanceof MicrosoftError);
+    const reconnect = /could not read the saved Microsoft connection/;
+    assert.match(microsoftErrorText(failure, "Couldn't sync the calendar. Try again."), reconnect);
+    assert.match(callErrorText(failure, "Couldn't sync Teams calls. Try again."), reconnect);
+    assert.match(transcriptErrorText(failure, "Couldn't sync Teams transcripts. Try again."), reconnect);
+    assert.equal(reconnectProblem(failure, MAIN), `Reconnect ${MAIN} in Settings › Email.`);
+  });
+
   it("separates expired sign-ins, Orbit's own app and other refusals", () => {
     const expired = new MicrosoftTokenError("invalid_grant AADSTS700082: The refresh token has expired due to inactivity.");
     assert.match(reconnectProblem(expired, MAIN) ?? "", /^Reconnect mark@geteclipse\.co in Settings › Email\.$/);

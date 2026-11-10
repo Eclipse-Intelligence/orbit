@@ -503,7 +503,7 @@ async function sendNotice(actor: UserActor, row: MailRow, mailbox: AgentMailboxR
     const sent = await replyToMessage(mailbox.address, row.message_id, { to: [row.from_address], text: emailText(OFFLINE_NOTICE), html: emailHtml(OFFLINE_NOTICE) }, options.fetchImpl);
     await recordOutbound(actor, mailbox, sent, { to: [row.from_address], subject: row.subject ? `Re: ${row.subject}` : null, text: OFFLINE_NOTICE }).catch(() => undefined);
   } catch (error) {
-    await noteMailboxError(mailbox.id, `Couldn't send the waiting note: ${error instanceof MachineMailError ? error.message : "unknown error"}`);
+    await noteMailboxError(mailbox.id, `Couldn't send the waiting note. ${error instanceof MachineMailError ? error.message : "Try again."}`);
   }
 }
 

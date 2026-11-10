@@ -19,11 +19,12 @@ import {
   appAccessToken,
   configuredTenant,
   fetchPstnCalls,
-  sanitizeCallError,
+  callErrorText,
   tokenClaims,
   type PstnCallRow,
 } from "@/lib/microsoft/calls";
-import type { MicrosoftToken } from "@/lib/microsoft/oauth";
+import { MicrosoftError, type MicrosoftToken } from "@/lib/microsoft/oauth";
+import { notSetUp } from "@/lib/crm/errors";
 import { normalizePhone } from "@/lib/phone";
 
 const CALL_SYNC_GAP_MS = 5 * 60 * 1000;
@@ -202,14 +203,14 @@ export async function syncCalls(
   if (!claim) return idle;
 
   try {
-    const identity = await resolveIdentity(stored, claim, fetchImpl);
+    const identity = await resolveIdentity(stored, claim, fetchImpl, actor);
     const to = new Date();
     const floor = to.getTime() - CALL_MAX_WINDOW_MS;
     const start = claim.lastSyncedAt
       ? new Date(claim.lastSyncedAt).getTime() - CALL_OVERLAP_MS
       : to.getTime() - CALL_LOOKBACK_MS;
     const from = new Date(Math.max(start, floor));
-    const appToken = await appAccessToken(identity.tenantId, fetchImpl);
+    const appToken = await appAccessToken(identity.tenantId, fetchImpl, Date.now(), actor);
     const fetched = await fetchPstnCalls(appToken, from, to, fetchImpl);
     const rows: CallRow[] = [];
     let skipped = 0;
@@ -267,9 +268,7 @@ export async function syncCalls(
     }
     return result;
   } catch (error) {
-    const message = sanitizeCallError(
-      error instanceof Error ? error.message : "Could not sync Teams calls.",
-    );
+    const message = callErrorText(error, "Couldn't sync Teams calls. Try again.");
     await withActor(actor, async (db) => {
       await db.query(
         `update crm.call_sync_state
@@ -311,6 +310,7 @@ async function resolveIdentity(
   stored: StoredConnection,
   claim: Claim,
   fetchImpl: typeof fetch,
+  viewer?: UserActor,
 ) {
   let claims = tokenClaims(readSecret(stored.accessTokenCipher));
   let refreshed: MicrosoftToken | null = null;
@@ -324,9 +324,7 @@ async function resolveIdentity(
   }
   const tenantId = fixed ?? claims?.tenantId ?? claim.tenantId;
   if (!tenantId) {
-    throw new Error(
-      "Orbit could not work out the Microsoft tenant. Set MICROSOFT_TENANT to your tenant id.",
-    );
+    throw new MicrosoftError(notSetUp("Microsoft tenant", "MICROSOFT_TENANT", viewer));
   }
   return { tenantId, objectId: claims?.objectId ?? null, refreshed };
 }
@@ -347,6 +345,7 @@ export async function teamsIdentity(actor: UserActor, fetchImpl: typeof fetch = 
     stored,
     { tenantId: prepared.tenantId, lastSyncedAt: null },
     fetchImpl,
+    actor,
   );
   let { objectId, refreshed } = identity;
   if (!objectId) {
@@ -358,9 +357,7 @@ export async function teamsIdentity(actor: UserActor, fetchImpl: typeof fetch = 
     await withActor(actor, (db) => storeToken(db, stored.id, token));
   }
   if (!objectId) {
-    throw new Error(
-      "Orbit could not work out the Microsoft user for Teams transcripts. Connect Microsoft again.",
-    );
+    throw new MicrosoftError("Reconnect Microsoft to read Teams transcripts.");
   }
   return { tenantId: identity.tenantId, objectId, connectionId: stored.id };
 }

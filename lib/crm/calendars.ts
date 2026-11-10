@@ -14,7 +14,7 @@ import {
 } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
 import { internalAddresses } from "@/lib/crm/conversations";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notFound } from "@/lib/crm/errors";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { readStored } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
@@ -193,7 +193,7 @@ async function updateCalendar(
   column: "is_visible" | "use_for_crm",
   value: boolean,
 ) {
-  if (!isUuid(calendarId)) throw new CrmError("not_found", "That calendar isn't connected.", 404);
+  if (!isUuid(calendarId)) throw notFound("calendar");
   const row = await withActor(actor, async (db) => {
     const result = await db.query<{ last_synced_at: Date | string | null; provider_calendar_id: string }>(
       `update crm.calendars set ${column} = $3
@@ -203,7 +203,7 @@ async function updateCalendar(
     );
     return result.rows[0] ?? null;
   });
-  if (!row) throw new CrmError("not_found", "That calendar isn't connected.", 404);
+  if (!row) throw notFound("calendar");
   const synced = row.last_synced_at ? new Date(row.last_synced_at).getTime() : 0;
   return {
     needsSync: value && row.provider_calendar_id !== DEFAULT_CALENDAR_PLACEHOLDER && Date.now() - synced > STALE_MS,
@@ -391,7 +391,7 @@ export async function listCalendarItems(
 
 export async function createContactFromEvent(actor: UserActor, eventId: string, email: string) {
   const wanted = wantedEmail(email);
-  if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  if (!isUuid(eventId)) throw notFound("meeting");
   const found = await withActor(actor, async (db) => {
     const result = await db.query<{ organizer: unknown; attendees: unknown }>(
       `select organizer, attendees from crm.calendar_events
@@ -405,7 +405,7 @@ export async function createContactFromEvent(actor: UserActor, eventId: string, 
     );
     return { person: person ?? null, own: await ownAddresses(db, actor) };
   });
-  if (!found) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  if (!found) throw notFound("meeting");
   if (!found.person) {
     throw new CrmError("invalid_input", "That person isn't in this meeting.", 400, { field: "email" });
   }

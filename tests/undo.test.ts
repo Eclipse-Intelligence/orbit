@@ -95,8 +95,11 @@ describe("undoing changes", () => {
     await updateCompany(owner, company.id, { industry: "Fintech" });
     const first = await latest(owner, company.id, "company.updated");
     await updateCompany(owner, company.id, { industry: "Health" });
-    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/changed again since: Industry is now Health/));
+    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/^Can't undo: Industry has changed since \(now Health\)\.$/));
     assert.equal((await getCompany(owner, company.id)).industry, "Health");
+    const args = { changeId: first.id };
+    const card = describeAction("undo_change", args, await recordNames(owner, [args], ["undo_change"]));
+    assert.equal(card.lines[1], "Can't undo: Industry has changed since (now Health).");
   });
 
   it("waits for an edit in progress and refuses rather than overwrite it", async () => {
@@ -116,7 +119,7 @@ describe("undoing changes", () => {
       await editor.query("update crm.companies set industry = 'Health' where id = $1", [company.id]);
       await editor.query("commit");
       const error = await undo;
-      assert.ok(refused(/changed again since: Industry is now Health/)(error), `expected a refusal, got ${String(error)}`);
+      assert.ok(refused(/^Can't undo: Industry has changed since \(now Health\)\.$/)(error), `expected a refusal, got ${String(error)}`);
     } finally {
       editor.release();
     }
@@ -288,7 +291,7 @@ describe("undoing changes", () => {
     assert.equal(restoredEvents.rows[0].changes.after.archivedAt, null);
     assert.equal(restoredEvents.rows[0].source, "web");
     const broughtBack = await latest(owner, note.id, "activity.updated");
-    assert.match(broughtBack.summary, /^Brought back Note "Kick-off notes" on /);
+    assert.match(broughtBack.summary, /^Restored Note "Kick-off notes" on /);
     assert.equal(broughtBack.canUndo, true);
 
     const logged = await latest(owner, note.id, "activity.created");
@@ -322,11 +325,11 @@ describe("undoing changes", () => {
     await updateActivity(owner, note.id, { title: "First rename" }, { operation: "update_activity", source: "web" });
     const first = await latest(owner, note.id, "activity.updated");
     await updateActivity(owner, note.id, { title: "Second rename" }, { operation: "update_activity", source: "web" });
-    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/changed again since: Title is now Second rename/));
+    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/^Can't undo: Title has changed since \(now Second rename\)\.$/));
 
     const timed = await latest(owner, note.id, "activity.updated");
     await archiveActivity(owner, note.id, { operation: "archive_activity", source: "web" });
-    await assert.rejects(undoAuditEvent(owner, timed.id, UNDO), refused(/can't be undone while Note "Second rename" on .* is deleted/));
+    await assert.rejects(undoAuditEvent(owner, timed.id, UNDO), refused(/Can't undo: Note "Second rename" on .* is deleted/));
   });
 
   it("waits for an activity edit in progress and refuses rather than overwrite it", async () => {
@@ -347,7 +350,7 @@ describe("undoing changes", () => {
       await editor.query("update crm.activities set title = 'Draft three' where id = $1", [note.id]);
       await editor.query("commit");
       const error = await undo;
-      assert.ok(refused(/changed again since: Title is now Draft three/)(error), `expected a refusal, got ${String(error)}`);
+      assert.ok(refused(/^Can't undo: Title has changed since \(now Draft three\)\.$/)(error), `expected a refusal, got ${String(error)}`);
     } finally {
       editor.release();
     }
@@ -368,7 +371,7 @@ describe("undoing changes", () => {
     const archived = changes.find((item) => item.entityId === duplicate.id && item.type === "company.archived");
     assert.ok(archived);
     assert.equal(archived.canUndo, false);
-    assert.match(archived.reason ?? "", /merge can't be undone/);
+    assert.match(archived.reason ?? "", /Merges can't be undone/);
     assert.match(archived.summary, /merged into Merge Keep Ltd/);
     const twinArchived = changes.find((item) => item.entityId === twin.id && item.type === "contact.archived");
     assert.equal(twinArchived?.canUndo, false);
@@ -384,8 +387,8 @@ describe("undoing changes", () => {
     for (const event of events.rows) {
       const described = await describeUndo(owner, event.id);
       assert.equal(described.canUndo, false, event.event_type);
-      assert.match(described.reason ?? "", /merge can't be undone/, event.event_type);
-      await assert.rejects(() => undoAuditEvent(owner, event.id, UNDO), refused(/merge can't be undone/));
+      assert.match(described.reason ?? "", /Merges can't be undone/, event.event_type);
+      await assert.rejects(() => undoAuditEvent(owner, event.id, UNDO), refused(/Merges can't be undone/));
     }
     assert.ok((await getCompany(owner, duplicate.id)).archivedAt);
   });
@@ -397,8 +400,8 @@ describe("undoing changes", () => {
     const boardEvent = await admin.query<{ id: string }>("select id from crm.audit_events where entity_id = $1 and event_type = 'board.created'", [board.id]);
     const boardDescribed = await describeUndo(owner, boardEvent.rows[0].id);
     assert.equal(boardDescribed.canUndo, false);
-    assert.equal(boardDescribed.reason, "Orbit can't undo this kind of change.");
-    await assert.rejects(undoAuditEvent(owner, boardEvent.rows[0].id, UNDO), refused(/can't undo this kind/));
+    assert.equal(boardDescribed.reason, "This change can't be undone.");
+    await assert.rejects(undoAuditEvent(owner, boardEvent.rows[0].id, UNDO), refused(/This change can't be undone/));
 
     const company = (await createCompany(owner, { name: "Shared", domain: "shared-undo.test" })).body.company;
     await updateCompany(owner, company.id, { industry: "Travel" });
@@ -412,7 +415,7 @@ describe("undoing changes", () => {
        returning id`,
       [owner.workspaceId, company.id, owner.userId],
     );
-    await assert.rejects(undoAuditEvent(owner, odd.rows[0].id, UNDO), refused(/isn't in a shape Orbit can safely reverse/));
+    await assert.rejects(undoAuditEvent(owner, odd.rows[0].id, UNDO), refused(/^This change can't be undone\.$/));
     await assert.rejects(undoAuditEvent(owner, "not-an-id", UNDO), (error: unknown) => error instanceof CrmError && error.code === "not_found");
 
     const stranger = await createUser("undo-stranger@orbit.test", "Stranger");

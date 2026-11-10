@@ -21,9 +21,11 @@ import { GENERIC_ERROR } from "@/lib/utils";
 export default function ClickUpSettings({
   view,
   canAdmin,
+  isOwner,
 }: {
   view: ClickUpSettingsView;
   canAdmin: boolean;
+  isOwner: boolean;
 }) {
   const router = useRouter();
   const [teamId, setTeamId] = useState(view.teamId ?? view.teams[0]?.id ?? "");
@@ -58,7 +60,7 @@ export default function ClickUpSettings({
       <SettingsCard
         id="clickup"
         title="ClickUp"
-        description="Add CLICKUP_API_TOKEN in Vercel (ClickUp › Settings › Apps › API Token), then redeploy."
+        description={isOwner ? "Add CLICKUP_API_TOKEN in Vercel (ClickUp › Settings › Apps › API Token), then redeploy." : "ClickUp isn't set up."}
       />
     );
   }
@@ -84,7 +86,7 @@ export default function ClickUpSettings({
             </span>
           ))}
           {view.teamId && !view.webhookEnabled && !httpsSite && (
-            <span className="text-subtle">Instant sync needs SITE_URL set to Orbit&apos;s https address.</span>
+            <span className="text-subtle">{isOwner ? "Instant sync needs SITE_URL set to Orbit's https address." : "Instant sync isn't set up."}</span>
           )}
           {(view.error || view.lastError) && (
             <span className="text-danger" role="alert">

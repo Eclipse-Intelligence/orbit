@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, tooLong, errorText } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
@@ -22,7 +22,7 @@ import {
   type Provenance,
   type Task,
 } from "@/lib/crm/types";
-import { completeJson, LlmError } from "@/lib/llm";
+import { completeJson } from "@/lib/llm";
 import { appTimeZone, zonedParts, zonedTimeToDate } from "@/lib/time";
 
 export const TRANSCRIPT_MAX_LENGTH = 200_000;
@@ -543,9 +543,7 @@ function actorName(actor: Actor) {
 }
 
 function failureMessage(error: unknown) {
-  if (error instanceof LlmError) return error.message.slice(0, 1000);
-  console.error("Call summary failed", error);
-  return "Could not summarise the call.";
+  return errorText(error, "Couldn't summarise the call. Try again.");
 }
 
 export type ReusedSummary = {
@@ -616,12 +614,12 @@ export async function summariseCall(
   if (!isUuid(activityId)) throw new CrmError("not_found", "Call not found.", 404);
   const source = options.source ?? "manual";
   if (!(CALL_INSIGHT_SOURCES as readonly string[]).includes(source)) {
-    throw new CrmError("invalid_input", "Transcript source is not recognised.", 400, {
+    throw new CrmError("invalid_input", "Unknown transcript source.", 400, {
       field: "source",
     });
   }
   if (transcript.length > RAW_TRANSCRIPT_MAX_LENGTH) {
-    throw new CrmError("invalid_input", "The transcript is too long.", 400, {
+    throw new CrmError("invalid_input", tooLong("the transcript", 200_000), 400, {
       field: "transcript",
     });
   }
@@ -629,7 +627,7 @@ export async function summariseCall(
   if (text.length > TRANSCRIPT_MAX_LENGTH) {
     throw new CrmError(
       "invalid_input",
-      "The transcript is too long. Keep it under 200,000 characters.",
+      tooLong("the transcript", 200_000),
       400,
       { field: "transcript" },
     );
@@ -656,7 +654,7 @@ export async function summariseCall(
         [actor.workspaceId, activityId, call.contact_id, call.company_id, source, text],
       );
       current = await lockInsightWithTranscript(db, activityId, actor.workspaceId);
-      if (!current) throw new CrmError("internal_error", "Call summary was not saved.", 500);
+      if (!current) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
       if (inserted.rows[0]) return { call, insight: mapInsight(current), transcript: text, run: true };
     }
     if (text && text !== current.transcript) {

@@ -99,7 +99,7 @@ export async function importCompaniesCsv(actor: Actor, csv: string): Promise<Imp
     const name = columnValue(row, nameAt);
     const domain = columnValue(row, domainAt);
     if (!name && !domain) {
-      errors.push({ row: index + 1, message: "A company needs a name or a domain." });
+      errors.push({ row: index + 1, message: "Enter a name or domain." });
       continue;
     }
     const item: CompanyWrite = {};
@@ -150,7 +150,7 @@ export async function importContactsCsv(actor: Actor, csv: string): Promise<Impo
     const phone = columnValue(row, pick(["phone"]));
     const linkedin = columnValue(row, pick(["linkedin", "linkedin url"]));
     if (![firstName, lastName, email, phone, linkedin].some((value) => value)) {
-      summary.errors.push({ row: index + 2, message: "A contact needs a name, email, phone, or LinkedIn URL." });
+      summary.errors.push({ row: index + 2, message: "Enter a name, email, phone or LinkedIn profile." });
       continue;
     }
     try {
@@ -195,7 +195,7 @@ export async function importContactsCsv(actor: Actor, csv: string): Promise<Impo
     } catch (error) {
       summary.errors.push({
         row: index + 2,
-        message: error instanceof CrmError ? error.message : "That row could not be imported.",
+        message: error instanceof CrmError ? error.message : "Couldn't import that row.",
       });
     }
   }

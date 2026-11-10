@@ -236,7 +236,7 @@ describe("call insights", () => {
     });
     assert.equal(failing.requests.length, 2);
     assert.equal(failed.status, "failed");
-    assert.match(failed.error ?? "", /did not return JSON/);
+    assert.equal(failed.error, "The AI gave an unusable answer. Try again.");
     assert.equal(failed.summary, null);
     const stored = await getInsightsForActivities(owner, [callId]);
     assert.equal(stored[callId]?.status, "failed");
@@ -270,7 +270,8 @@ describe("call insights", () => {
     });
     assert.equal(denied.requests.length, 1);
     assert.equal(failed.status, "failed");
-    assert.match(failed.error ?? "", /returned 401: invalid api key/);
+    assert.equal(failed.error, "The AI rejected the key.");
+    assert.doesNotMatch(failed.error ?? "", /invalid api key|401/);
 
     const third = await setup("gateway-three@example.com");
     const offline = gateway([new TypeError("fetch failed")]);
@@ -278,7 +279,7 @@ describe("call insights", () => {
       fetchImpl: offline.fetchImpl,
     });
     assert.equal(offline.requests.length, 2);
-    assert.match(unreachable.error ?? "", /Could not reach the LLM gateway/);
+    assert.equal(unreachable.error, "Couldn't reach the AI. Try again.");
 
     const fourth = await setup("gateway-four@example.com");
     delete process.env.LLM_API_KEY;
@@ -288,7 +289,7 @@ describe("call insights", () => {
     });
     assert.equal(unused.requests.length, 0);
     assert.equal(missing.status, "failed");
-    assert.equal(missing.error, "Set LLM_API_KEY in Vercel to use Orbit's AI.");
+    assert.equal(missing.error, "AI isn't set up.");
   });
 
   it("accepts a suggested action as a task exactly once", async () => {

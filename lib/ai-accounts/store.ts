@@ -14,6 +14,7 @@ import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import type { Db } from "@/lib/db/pool";
+import { errorText } from "@/lib/crm/errors";
 
 const REFRESH_EARLY_MS = 2 * 60 * 1000;
 
@@ -48,7 +49,7 @@ function isProvider(value: unknown): value is AiProvider {
 }
 
 function provider(value: unknown) {
-  if (!isProvider(value)) throw new OAuthError("Pick ChatGPT.");
+  if (!isProvider(value)) throw new OAuthError("Choose ChatGPT.");
   return value;
 }
 
@@ -177,7 +178,7 @@ export async function aiAccess(
       await saveTokens(db, actor, which, tokens);
       return { provider: which, token: tokens.access, accountId: tokens.accountId };
     } catch (error) {
-      const message = error instanceof OAuthError ? error.message : `Your ${PROVIDER_NAMES[which]} sign-in couldn't be renewed.`;
+      const message = errorText(error, `Reconnect ${PROVIDER_NAMES[which]} in Settings › Connections.`);
       await db.query("update crm.ai_accounts set last_error = $2 where user_id = $1 and provider = $3", [actor.userId, message, which]);
       return { error: message };
     }

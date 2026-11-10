@@ -171,7 +171,7 @@ export async function readChatFile(actor: UserActor, id: string, offset = 0, fet
     if (isAudio(row.name, row.content_type)) {
       throw new CrmError("invalid_input", `${row.name} is a recording. Orbit can't transcribe it in the chat, but adding it to Knowledge does.`, 400);
     }
-    if (!hasReadableText(row.name, row.content_type)) throw new CrmError("invalid_input", `Orbit can't read text from ${row.name}. ${READABLE} work.`, 400);
+    if (!hasReadableText(row.name, row.content_type)) throw new CrmError("invalid_input", `Can't read text from ${row.name}. Use ${READABLE}.`, 400);
     const text = (await fileText(await fileBytes(row, fetchImpl), row.name, row.content_type))?.trim();
     if (!text) throw new CrmError("invalid_input", `Orbit found no text in ${row.name}. It may be a scan or a picture of text.`, 400);
     content = text.slice(0, CONTENT_LIMIT);

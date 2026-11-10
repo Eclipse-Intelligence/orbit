@@ -84,7 +84,7 @@ describe("Orbit Agent pairing", () => {
     const paired = await redeemPairing(code, "Studio");
     assert.match(paired.token, /^oa_/);
     assert.equal(paired.email, "agent-pair@orbit.test");
-    await assert.rejects(redeemPairing(code, "Again"), /expired or was already used/);
+    await assert.rejects(redeemPairing(code, "Again"), /Code expired or used/);
 
     const auth = await authenticateCompanion(bearer(paired.token));
     assert.equal(auth.actor.userId, owner.userId);
@@ -223,7 +223,7 @@ describe("Orbit Agent turns", () => {
       deadline: deadline(),
     });
     const reply = events.find((event) => event.type === "message" && event.message.role === "assistant") as Extract<AssistantEvent, { type: "message" }>;
-    assert.match(reply.message.content, /^I couldn't finish that\. .*isn't running on your Mac/);
+    assert.match(reply.message.content, /^Couldn't finish: .*isn't running on your Mac/);
     const conversationId = (events.find((event) => event.type === "conversation") as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
     const saved = await getConversation(lonely, conversationId);
     assert.match(saved.messages.at(-1)!.content, /isn't running on your Mac/);
@@ -280,7 +280,7 @@ describe("Orbit Agent turns", () => {
     assert.equal(await nextCompanionJob(stranger, 2_000), null);
     const job = await answer(auth, async () => ({ steps: [{ text: "Hi Mark.", calls: [] }], results: {}, sources: [], model: null, usage: null }));
     await run;
-    await assert.rejects(runCompanionTool(stranger, job.id, { id: "x", name: "list_tags", arguments: "{}" }), /That request is gone/);
+    await assert.rejects(runCompanionTool(stranger, job.id, { id: "x", name: "list_tags", arguments: "{}" }), /Request not found/);
     assert.ok(events.some((event) => event.type === "message" && event.message.content === "Hi Mark."));
   });
 });
@@ -406,7 +406,7 @@ describe("Orbit Agent job lifecycle", () => {
     await nextCompanionJob(mac, 5_000);
     await failCompanionJob(mac, failed, "Claude hit its usage limit");
     assert.equal(await lastReply(failing), failureReply("Claude hit its usage limit"));
-    assert.match(await lastReply(failing), /^I couldn't finish that\. Claude hit its usage limit\. Say "try again"/);
+    assert.match(await lastReply(failing), /^Couldn't finish: Claude hit its usage limit\. Say "try again"/);
   });
 
   it("deletes finished jobs after a day", async () => {

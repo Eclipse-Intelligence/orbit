@@ -129,7 +129,7 @@ describe("nightly learning", () => {
   });
 
   it("gives Grok Bot a token that can only read the watchlist and send market notes", async () => {
-    await assert.rejects(issueMarketAgentToken(sam), /Only an owner or admin/);
+    await assert.rejects(issueMarketAgentToken(sam), /Only owners and admins can connect Grok Bot/);
     assert.equal(await marketAgentStatus(owner), null);
     grokToken = (await issueMarketAgentToken(owner)).token;
     await addWatchItems(owner, [
@@ -252,7 +252,7 @@ describe("nightly learning", () => {
     assert.equal(watch.added.length, 1);
     const linked = (await addWatchItems(owner, [{ kind: "person", label: "Rand Fishkin", url: "x.com/randfish" }]))[0];
     assert.equal(linked.url, "https://x.com/randfish");
-    await assert.rejects(addWatchItems(owner, [{ kind: "person", label: "Bad", url: "not a link at all" }]), /full link/);
+    await assert.rejects(addWatchItems(owner, [{ kind: "person", label: "Bad", url: "not a link at all" }]), /Use an https link/);
     await runTool(owner, "update_watchlist", { remove: [linked.id] });
     assert.deepEqual(await runTool(owner, "update_watchlist", { remove: [watch.added[0].id] }), { added: [], removed: ["Generative engine optimisation"] });
   });
@@ -278,7 +278,7 @@ describe("nightly learning", () => {
     assert.equal(ownerCard.title, "Run learning now");
     assert.deepEqual(ownerCard.lines.slice(0, 3), ["Runs: Business, Market, About you, Morning brief", "Takes up to 4 minutes.", "Uses model calls."]);
     assert.equal((await card(sam, {})).lines[0], "Runs: About you, Morning brief");
-    const shared = "Only owners and admins can run the business and market learning. You can run learning about you, or rebuild your morning brief.";
+    const shared = "Only owners and admins can run business and market learning.";
     assert.deepEqual((await card(sam, { kind: "market" })).lines, [`This will be refused: ${shared}`]);
 
     const deferred: (() => Promise<unknown>)[] = [];
@@ -302,7 +302,7 @@ describe("nightly learning", () => {
     const admin = getAdminPool();
     const running = (await admin.query<{ id: string }>("insert into crm.learning_runs (workspace_id, user_id, kind) values ($1, $2, 'brief') returning id", [owner.workspaceId, owner.userId])).rows[0].id;
     const busy = (await runTool(owner, "run_learning", { kind: "brief" }, { defer })) as { error: string };
-    assert.equal(busy.error, "Orbit is already learning right now. Wait a few minutes for it to finish, then check Settings, Learning.");
+    assert.equal(busy.error, "Learning is already running. Try again in a few minutes.");
     assert.equal(((await runTool(owner, "run_learning", { kind: "brief" }, { defer, deadline: Date.now() + 10_000 })) as { error: string }).error, busy.error);
     await admin.query("delete from crm.learning_runs where id = $1", [running]);
     const late = (await runTool(owner, "run_learning", { kind: "brief" }, { defer, deadline: Date.now() + 10_000 })) as { error: string };

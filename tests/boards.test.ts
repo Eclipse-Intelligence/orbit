@@ -37,8 +37,8 @@ describe("boards", () => {
       full.stages.map((stage) => stage.name),
       ["To start", "In progress", "Done"],
     );
-    await assert.rejects(createBoard(owner, { name: "onboarding" }), /already a board called/);
-    await assert.rejects(createBoard(owner, { name: "  " }), /Give the board a name/);
+    await assert.rejects(createBoard(owner, { name: "onboarding" }), /Onboarding already exists\./);
+    await assert.rejects(createBoard(owner, { name: "  " }), /Enter a board name/);
 
     const renamed = await updateBoard(owner, board.id, { name: "Client onboarding" });
     assert.equal(renamed.name, "Client onboarding");
@@ -90,7 +90,7 @@ describe("boards", () => {
     assert.equal(moved.stageName, "Live");
     await assert.rejects(updateOpportunity(owner, card.id, { stageId: sales.stages[0].id }), /Stage not found/);
     await assert.rejects(updateOpportunity(owner, card.id, { status: "won" }), /no won stage/);
-    await assert.rejects(savePipelineStages(owner, [{ id: full.stages[0].id, name: "Kick-off" }], board.id), /Move cards off a stage/);
+    await assert.rejects(savePipelineStages(owner, [{ id: full.stages[0].id, name: "Kick-off" }], board.id), /Empty the stage before removing it/);
   });
 
   it("makes the company a customer and adds it to boards that ask when a deal is won", async () => {
@@ -143,15 +143,15 @@ describe("boards", () => {
     const loner = (await createContact(owner, { firstName: "Lee", lastName: "Solo" })).body.contact.id;
     await assert.rejects(
       createOpportunity(owner, { companyId: globex, pipelineId: board.id, primaryContactId: jane }),
-      /Jane Doe doesn't work at Globex Boards/,
+      /Jane Doe isn't at Globex Boards/,
     );
     await assert.rejects(
       createOpportunity(owner, { companyId: globex, pipelineId: board.id, primaryContactId: loner }),
-      /Lee Solo doesn't work at Globex Boards/,
+      /Lee Solo isn't at Globex Boards/,
     );
     const card = (await createOpportunity(owner, { companyId: acme, pipelineId: board.id, primaryContactId: jane })).body.opportunity;
     assert.equal(card.primaryContactId, jane);
-    await assert.rejects(updateOpportunity(owner, card.id, { companyId: globex }), /doesn't work at Globex Boards/);
+    await assert.rejects(updateOpportunity(owner, card.id, { companyId: globex }), /isn't at Globex Boards/);
     const cleared = await updateOpportunity(owner, card.id, { companyId: globex, primaryContactId: null });
     assert.equal(cleared.body.opportunity.primaryContactId, null);
     await archiveBoard(owner, board.id);

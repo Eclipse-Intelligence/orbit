@@ -1,3 +1,6 @@
+import { ShownError, notFoundMessage } from "@/lib/crm/errors";
+import { webChecksNotSetUp } from "@/lib/ai-fields/types";
+import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 const DECISIONS_URL = "https://api.parallel.ai/v1/decisions";
 const TIMEOUT_MS = 20_000;
 const QUESTIONS_MAX = 100;
@@ -19,7 +22,7 @@ export type DecisionCitation = { url: string; title: string | null; excerpts: st
 
 export type Decision = { answers: Record<string, DecisionAnswer>; citations: DecisionCitation[]; id: string | null };
 
-export class ParallelError extends Error {
+export class ParallelError extends ShownError {
   status: number | null;
   constructor(message: string, status: number | null = null) {
     super(message);
@@ -34,7 +37,15 @@ export function stopsParallel(error: unknown) {
   return error instanceof ParallelError && error.status !== null && STOPPING_STATUSES.has(error.status);
 }
 
-const MISSING_KEY = "Add PARALLEL_API_KEY in Vercel to run web checks.";
+type Viewer = { type?: string; role?: string } | null;
+
+let missingKeyLogged = false;
+
+function missingKey(viewer?: Viewer) {
+  const log = !missingKeyLogged;
+  missingKeyLogged = true;
+  return new ParallelError(webChecksNotSetUp(viewer, log), 401);
+}
 
 function timeLeft(deadline: number | undefined, wanted: number) {
   if (deadline === undefined) return wanted;
@@ -80,7 +91,7 @@ function checkLimits(questions: Record<string, DecisionQuestion>) {
   if (names.length > QUESTIONS_MAX) throw new ParallelError(`A web check can ask up to ${QUESTIONS_MAX} questions at once.`);
   for (const name of names) {
     const question = questions[name];
-    if (name.length + JSON.stringify(question).length > QUESTION_CHARS_MAX) throw new ParallelError(`The question ${name} is too long for Parallel. Shorten it or its options.`);
+    if (name.length + JSON.stringify(question).length > QUESTION_CHARS_MAX) throw new ParallelError(`${name} is too long. Shorten it or its options.`);
     if (question.type === "choice" && (Object.keys(question.criteria).length < 2 || Object.keys(question.criteria).length > 255)) {
       throw new ParallelError(`The question ${name} needs 2 to 255 options.`);
     }
@@ -95,10 +106,10 @@ function retryable(status: number) {
 export async function decide(
   state: Record<string, unknown>,
   questions: Record<string, DecisionQuestion>,
-  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; excerpts?: boolean; retryPauseMs?: number; deadline?: number } = {},
+  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; excerpts?: boolean; retryPauseMs?: number; deadline?: number; viewer?: Viewer } = {},
 ): Promise<Decision> {
   const key = parallelKey(options.env);
-  if (!key) throw new ParallelError(MISSING_KEY, 401);
+  if (!key) throw missingKey(options.viewer);
   if (Object.keys(questions).length === 0) return { answers: {}, citations: [], id: null };
   checkLimits(questions);
   const send = async () => {
@@ -109,7 +120,8 @@ export async function decide(
         body: JSON.stringify({ state, questions, ...(options.excerpts === false ? { include_excerpts: false } : {}) }),
         signal: AbortSignal.timeout(timeLeft(options.deadline, options.timeoutMs ?? TIMEOUT_MS)),
       });
-    } catch {
+    } catch (error) {
+      logUpstream("Parallel", null, error);
       return null;
     }
   };
@@ -120,7 +132,7 @@ export async function decide(
     await new Promise((resolve) => setTimeout(resolve, pause));
     response = await send();
   }
-  if (!response) throw new ParallelError("Parallel didn't respond. Try again.");
+  if (!response) throw new ParallelError(unreachable("Parallel"), 0);
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     throw new ParallelError(taskFailure(response.status), response.status);
@@ -148,19 +160,18 @@ export type TaskField = { type: "number" | "string"; description: string };
 
 const TASK_STATUSES: TaskStatus[] = ["queued", "action_required", "running", "completed", "failed", "cancelling", "cancelled"];
 
-type TaskOptions = { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; deadline?: number };
+type TaskOptions = { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; deadline?: number; viewer?: Viewer };
 
-function taskKey(env: Record<string, string | undefined> | undefined) {
-  const key = parallelKey(env);
-  if (!key) throw new ParallelError(MISSING_KEY, 401);
+function taskKey(options: TaskOptions) {
+  const key = parallelKey(options.env);
+  if (!key) throw missingKey(options.viewer);
   return key;
 }
 
 function taskFailure(status: number) {
-  if (status === 401 || status === 403) return "Parallel rejected the key.";
+  logUpstream("Parallel", status);
   if (status === 402) return "Parallel is out of credit.";
-  if (status === 429) return "Parallel is rate limiting. Try again shortly.";
-  return `Parallel returned ${status}.`;
+  return upstreamMessage("Parallel", status);
 }
 
 function fatal(status: number) {
@@ -214,14 +225,14 @@ export async function createTaskRun(
   fields: Record<string, TaskField>,
   options: TaskOptions & { processor?: string; metadata?: Record<string, string> } = {},
 ): Promise<TaskRun> {
-  const key = taskKey(options.env);
+  const key = taskKey(options);
   const names = Object.keys(fields);
   if (names.length === 0) throw new ParallelError("A task needs at least one field.");
   if (names.length > 100) throw new ParallelError("A task can fill up to 100 fields at once.");
   const taskSpec = { output_schema: { type: "json", json_schema: taskJsonSchema(fields) } };
   const specLength = JSON.stringify(taskSpec).length;
   if (specLength > TASK_SPEC_CHARS_MAX || specLength + JSON.stringify(input).length > TASK_TOTAL_CHARS_MAX) {
-    throw new ParallelError("These questions are too long for one Parallel task. Shorten them.");
+    throw new ParallelError("These questions are too long. Shorten them.");
   }
   const response = await taskRequest(
     TASK_RUNS_URL,
@@ -232,31 +243,34 @@ export async function createTaskRun(
     },
     options,
   );
-  if (!response) throw new ParallelError("Parallel didn't respond. Try again.");
+  if (!response) throw new ParallelError(unreachable("Parallel"), 0);
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     throw new ParallelError(taskFailure(response.status), response.status);
   }
   const run = readTaskRun(await response.json().catch(() => null));
-  if (!run) throw new ParallelError("Parallel didn't return a run.");
+  if (!run) {
+    logUpstream("Parallel", response.status, "no run in reply");
+    throw new ParallelError("Couldn't start the web check. Try again.");
+  }
   return run;
 }
 
 export async function getTaskRun(runId: string, options: TaskOptions = {}): Promise<TaskRun | null> {
-  const key = taskKey(options.env);
+  const key = taskKey(options);
   const response = await taskRequest(`${TASK_RUNS_URL}/${encodeURIComponent(runId)}`, { headers: { "x-api-key": key } }, options);
   if (!response) return null;
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     if (fatal(response.status)) throw new ParallelError(taskFailure(response.status), response.status);
-    if (response.status === 404) return { runId, status: "failed", active: false, error: "Parallel no longer has this run." };
+    if (response.status === 404) return { runId, status: "failed", active: false, error: notFoundMessage("web check run") };
     return null;
   }
   return readTaskRun(await response.json().catch(() => null));
 }
 
 export async function getTaskResult(runId: string, options: TaskOptions & { waitSeconds?: number } = {}): Promise<TaskResult | null> {
-  const key = taskKey(options.env);
+  const key = taskKey(options);
   const wait = Math.max(1, Math.min(600, Math.round(options.waitSeconds ?? 5)));
   const response = await taskRequest(
     `${TASK_RUNS_URL}/${encodeURIComponent(runId)}/result?timeout=${wait}`,

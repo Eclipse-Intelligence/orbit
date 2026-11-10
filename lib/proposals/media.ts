@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, notSetUp } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { MEDIA_MAX_BYTES, publicObjectUrl, putObject, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
 import { downloadPublic, WebPageError } from "@/lib/web-page";
@@ -18,8 +18,8 @@ function sniffImage(bytes: Uint8Array) {
   return null;
 }
 
-function storageReady() {
-  if (!storageConfigured()) throw new CrmError("invalid_input", "Images need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+function storageReady(actor: UserActor) {
+  if (!storageConfigured()) throw new CrmError("invalid_input", notSetUp("File storage", "SUPABASE_SERVICE_ROLE_KEY", actor), 400);
 }
 
 function imagePath(actor: UserActor, extension: string) {
@@ -27,7 +27,7 @@ function imagePath(actor: UserActor, extension: string) {
 }
 
 export async function prepareProposalImage(actor: UserActor, input: { name?: unknown; size?: unknown; contentType?: unknown }, fetchImpl: typeof fetch = fetch) {
-  storageReady();
+  storageReady(actor);
   const type = typeof input.contentType === "string" ? input.contentType.toLowerCase() : "";
   const extension = IMAGE_TYPES[type];
   if (!extension) throw new CrmError("invalid_input", "Use a JPEG, PNG, WebP or GIF image.", 400, { field: "image" });
@@ -47,7 +47,7 @@ export async function copyProposalImage(
   url: unknown,
   options: { fetchImpl?: typeof fetch; storageFetch?: typeof fetch; lookup?: Parameters<typeof downloadPublic>[1]["lookup"] } = {},
 ) {
-  storageReady();
+  storageReady(actor);
   if (typeof url !== "string" || !/^https?:\/\//i.test(url.trim())) throw new CrmError("invalid_input", "Give an image link starting with https.", 400, { field: "url" });
   let download;
   try {

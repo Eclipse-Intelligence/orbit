@@ -6,6 +6,7 @@ import { connectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { listCalendarGroups } from "@/lib/crm/calendars";
 import { createContact } from "@/lib/crm/contacts";
 import { listSenders, saveMailbox, saveSignature, sendContactEmail } from "@/lib/crm/inbox";
+import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { microsoftAuthorizationUrl, SEND_ACCOUNT_SCOPES, signMicrosoftState } from "@/lib/microsoft/oauth";
@@ -142,6 +143,45 @@ describe("sending from other accounts", () => {
       });
     } finally {
       await admin.query("update crm.calendar_accounts set status = 'connected' where email in ('mark@markridgeon.com', 'mark@zeusvoice.com')");
+    }
+  });
+
+  it("stops a bulk send only on failures every later email would hit", async () => {
+    const realConsoleError = console.error;
+    console.error = () => {};
+    const admin = getAdminPool();
+    const refusal = async (fetchImpl: typeof fetch) => {
+      const error = await sendContactEmail(owner, contactId, { subject: "Bulk", body: "Hi" }, fetchImpl).then(() => null, (failure: unknown) => failure);
+      assert.ok(error instanceof CrmError, String(error));
+      return { message: error.message, stopsRun: error.details?.stopsRun === true };
+    };
+    const graphReply = (status: number, code: string, message = "Something happened.") =>
+      (async () => Response.json({ error: { code, message } }, { status })) as typeof fetch;
+    const tokenReply = (status: number, body: Record<string, unknown>) =>
+      (async (input: RequestInfo | URL) => {
+        assert.match(String(input), /oauth2\/v2\.0\/token/);
+        return Response.json(body, { status });
+      }) as typeof fetch;
+    try {
+      assert.deepEqual(await refusal(graphReply(429, "TooManyRequests")), { message: "Microsoft is busy. Try again in a minute.", stopsRun: true });
+      assert.deepEqual(await refusal(graphReply(503, "ApplicationThrottled")), { message: "Microsoft is busy. Try again in a minute.", stopsRun: true });
+      assert.equal((await refusal(graphReply(401, "InvalidAuthenticationToken"))).stopsRun, true);
+      const timeout = await refusal(graphReply(504, "ErrorTimeoutExpired", "The operation timed out."));
+      assert.equal(timeout.stopsRun, false);
+      assert.doesNotMatch(timeout.message, /reconnect|connect it again/i);
+
+      await admin.query("update crm.mailbox_connections set access_token_expires_at = now() - interval '1 hour' where email = 'mark@geteclipse.co'");
+      const transient = await refusal(tokenReply(503, { error: "temporarily_unavailable", error_description: "AADSTS90033: A transient error has occurred." }));
+      assert.equal(transient.stopsRun, false);
+      assert.doesNotMatch(transient.message, /reconnect/i);
+      const signedOut = await refusal(tokenReply(400, { error: "invalid_grant", error_description: "AADSTS700082: The refresh token has expired due to inactivity." }));
+      assert.equal(signedOut.stopsRun, true);
+      assert.match(signedOut.message, /Reconnect/);
+      const appBroken = await refusal(tokenReply(401, { error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided." }));
+      assert.deepEqual(appBroken, { message: "Orbit's Microsoft app needs attention. Tell the workspace owner.", stopsRun: true });
+    } finally {
+      console.error = realConsoleError;
+      await admin.query("update crm.mailbox_connections set access_token_expires_at = now() + interval '1 hour' where email = 'mark@geteclipse.co'");
     }
   });
 

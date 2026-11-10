@@ -48,7 +48,7 @@ export default async function ConnectionsSettingsPage({
   return (
     <SettingsPage title="Connections">
       <SettingsNotices notice={notice} info={info} />
-      <TeamsCallsSettings configured={microsoftConfigured()} mailbox={mailbox} calls={calls} transcripts={transcripts} />
+      <TeamsCallsSettings configured={microsoftConfigured()} mailbox={mailbox} calls={calls} transcripts={transcripts} isOwner={user.role === "owner"} />
       <GranolaSettings granola={granola} canAdmin={canAdmin} />
       <ReadwiseSettings readwise={readwise} workspaces={workspaces.map((item) => ({ id: item.id, name: item.name }))} />
       <RecallSettings recall={recall} />

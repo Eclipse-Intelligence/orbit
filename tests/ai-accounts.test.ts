@@ -138,9 +138,10 @@ describe("ChatGPT sign-in renewal", () => {
     assert.equal((await aiAccess(owner, "chatgpt")).token, "new-access");
 
     const refused = recorder(() => json({ error: "invalid_grant", error_description: "Refresh token revoked" }, 400));
-    await assert.rejects(aiAccess(owner, "chatgpt", { force: true, fetchImpl: refused.fetchImpl }), /Refresh token revoked.*Reconnect it in Settings/);
+    await assert.rejects(aiAccess(owner, "chatgpt", { force: true, fetchImpl: refused.fetchImpl }), /^OAuthError: Reconnect ChatGPT in Settings › Connections\.$/);
     const chatgpt = (await listAiAccounts(owner)).find((account) => account.provider === "chatgpt")!;
-    assert.match(chatgpt.lastError ?? "", /Refresh token revoked/);
+    assert.equal(chatgpt.lastError, "Reconnect ChatGPT in Settings › Connections.");
+    assert.doesNotMatch(chatgpt.lastError ?? "", /Refresh token revoked|invalid_grant/);
   });
 });
 
