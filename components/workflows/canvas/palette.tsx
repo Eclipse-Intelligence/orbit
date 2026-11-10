@@ -13,7 +13,7 @@ export default function Palette({ onAdd, disabled }: { onAdd: (type: StepType) =
   }
 
   return (
-    <nav aria-label="Nodes" className="flex flex-col gap-4">
+    <nav aria-label="Steps" className="flex flex-col gap-4">
       {PALETTE.map((group) => (
         <section key={group.label} className="flex flex-col gap-1">
           <h3 className="eyebrow-style text-subtle px-2">{group.label}</h3>
@@ -42,7 +42,6 @@ export default function Palette({ onAdd, disabled }: { onAdd: (type: StepType) =
           </ul>
         </section>
       ))}
-      <p className="caption-style text-subtle px-2 leading-[1.45]">Click to add below the selected node, or drag onto the canvas. Connect nodes by dragging from the dot under a node to the next one.</p>
     </nav>
   );
 }

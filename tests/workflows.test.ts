@@ -335,11 +335,11 @@ describe("workflows", () => {
       saveWorkflow(owner, workflow.id, {
         definition: { ...base, edges: [{ source: "trigger", handle: "out", target: "notify_1" }, { source: "trigger", handle: "out", target: "notify_2" }] },
       }),
-      /only connect to one node/,
+      /only connect to one step/,
     );
     await assert.rejects(
       saveWorkflow(owner, workflow.id, { definition: { ...base, edges: [{ source: "notify_1", handle: "true", target: "notify_2" }] } }),
-      /output the node doesn't have/,
+      /output the step doesn't have/,
     );
   });
 
@@ -407,6 +407,6 @@ describe("workflows", () => {
     const { run } = await getRunSteps(owner, started.runId);
     assert.match(run.error ?? "", /send_email_1: This run has no contact to work on/);
     assert.ok((await listNotifications(owner)).some((item) => item.title === "Email the contact failed"));
-    await assert.rejects(setWorkflowStatus(owner, (await createWorkflow(owner, {})).id, "active"), /Connect the trigger to a node/);
+    await assert.rejects(setWorkflowStatus(owner, (await createWorkflow(owner, {})).id, "active"), /Connect the trigger to a step/);
   });
 });

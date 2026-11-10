@@ -616,7 +616,7 @@ async function proposalStep(ctx: Ctx, step: Step): Promise<StepResult> {
   if (!templateId) throw new CrmError("invalid_input", "Choose the proposal template to use.", 400);
   const companyId = (ctx.vars.company as { id?: string } | undefined)?.id ?? null;
   const contactId = (ctx.vars.contact as { id?: string } | undefined)?.id ?? null;
-  if (!companyId || !contactId) throw new CrmError("invalid_input", "A proposal needs the run's contact and their company, and this run is missing one.", 400);
+  if (!companyId || !contactId) throw new CrmError("invalid_input", "This run has no contact or company for the proposal.", 400);
   const currency: Currency = str(config.currency) === "USD" ? "USD" : "GBP";
   const priced = (await listProducts(ctx.actor)).filter((product) => (currency === "USD" ? product.priceUsd : product.priceGbp) !== null);
   let items: { productId: string; quantity: number }[];
@@ -1124,7 +1124,7 @@ export async function executeRun(
   }
   const state: RunState = run.state ?? {};
   if (state.started && state.at === undefined) {
-    await saveRun(actor, run.id, { status: "cancelled", error: "This workflow was rebuilt since the run started. Run it again.", finished_at: new Date().toISOString() });
+    await saveRun(actor, run.id, { status: "cancelled", error: "The workflow changed mid-run. Run it again.", finished_at: new Date().toISOString() });
     return "cancelled" as const;
   }
   if (!state.started) {
@@ -1229,7 +1229,7 @@ export async function executeRun(
       await notify(actor, actor.userId, { title, body: result.details.slice(0, 4000) || null, href, source: "workflow_approval", category: "capture" });
       await pushToUser(
         actor,
-        { title, body: result.details.replace(/\s+/g, " ").trim().slice(0, 300) || "Open Orbit to approve or reject it.", url: href, tag: `approval-${run.id}` },
+        { title, body: result.details.replace(/\s+/g, " ").trim().slice(0, 300) || "Approve or reject in Orbit.", url: href, tag: `approval-${run.id}` },
         { send: options.push },
       ).catch((error) => console.error("Approval push failed", error));
       return "waiting" as const;

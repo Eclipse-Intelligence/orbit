@@ -7,7 +7,7 @@ import { liveMentions, type Mention, type MentionKind } from "@/lib/mentions";
 import { stripMention } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 
-const KIND_LABELS: Record<MentionKind, string> = { contact: "Person", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
+const KIND_LABELS: Record<MentionKind, string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
 
 type Open = { start: number; end: number; query: string };
 
@@ -245,7 +245,7 @@ export default function MentionInput({
           ref={list}
           id={listId}
           role="listbox"
-          aria-label={kinds ? "Tag a person or company" : "Tag a person, company, task, opportunity or proposal"}
+          aria-label={kinds ? "Tag a contact or company" : "Tag a record"}
           style={place}
           className="bg-popover border-line-strong shadow-overlay fixed z-[100] overflow-y-auto overscroll-contain rounded-xl border p-1"
         >

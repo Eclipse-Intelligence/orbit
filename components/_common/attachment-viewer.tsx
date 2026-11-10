@@ -173,7 +173,7 @@ function ViewerBody({ file, onLoaded }: { file: AttachmentFile; onLoaded: (loade
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
       {view.kind === "loading" && (
         <p role="status" className="caption-style text-subtle p-6 text-center">
-          Opening {name}…
+          Opening…
         </p>
       )}
       {view.kind === "error" && (
@@ -182,9 +182,8 @@ function ViewerBody({ file, onLoaded }: { file: AttachmentFile; onLoaded: (loade
         </p>
       )}
       {view.kind === "other" && (
-        <div className="flex flex-col items-center gap-3 p-6 text-center">
-          <p className="text-soft">{name} can&apos;t be shown here.</p>
-          <p className="caption-style text-subtle">Download it to open it in another app.</p>
+        <div className="p-6 text-center">
+          <p className="text-soft">No preview for this file.</p>
         </div>
       )}
       {view.kind === "image" && (
@@ -208,7 +207,7 @@ function ViewerBody({ file, onLoaded }: { file: AttachmentFile; onLoaded: (loade
           ))}
           {!view.done && (
             <p role="status" className="caption-style text-subtle py-3">
-              {view.pages.length === 0 ? `Opening ${name}…` : "Loading more pages…"}
+              {view.pages.length === 0 ? "Opening…" : "Loading more pages…"}
             </p>
           )}
         </div>

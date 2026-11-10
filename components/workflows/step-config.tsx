@@ -101,7 +101,7 @@ function PersonSelect({ id, label, value, onChange, options }: { id: string; lab
   return (
     <Select id={id} label={label} value={value || "owner"} onChange={onChange}>
       <option value="owner">Me</option>
-      <option value="record_owner">The company or contact owner</option>
+      <option value="record_owner">The record&apos;s owner</option>
       {options.members.map((member) => (
         <option key={member.id} value={member.id}>
           {member.name}
@@ -191,7 +191,7 @@ function Outputs({ step, update }: { step: Step; update: (config: Record<string,
   const set = (next: Output[]) => update({ ...step.config, outputs: next });
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="caption-style text-subtle pb-1.5">Answers (later nodes can use these)</legend>
+      <legend className="caption-style text-subtle pb-1.5">Answers</legend>
       {outputs.map((output, index) => (
         <div key={index} className="border-border flex flex-col gap-2 rounded-lg border p-3">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -264,7 +264,7 @@ function Questions({ step, update, variables }: { step: Step; update: (config: R
   };
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="caption-style text-subtle pb-1.5">Questions (later nodes can use the answers)</legend>
+      <legend className="caption-style text-subtle pb-1.5">Questions</legend>
       {questions.map((question, index) => (
         <div key={rowKeys[index]} className="border-border flex flex-col gap-2 rounded-lg border p-3">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -354,17 +354,15 @@ export default function StepConfig({
           <div className="flex flex-col gap-2">
             <label className="caption-style text-subtle flex items-start gap-2">
               <Checkbox className="mt-0.5" checked={c.webSearch === true} onCheckedChange={(value) => update({ ...c, webSearch: value === true })} />
-              <span>
-                Search the web. The AI looks things up (news, LinkedIn, company sites) and lists its sources in a sources answer.
-              </span>
+              <span>Search the web</span>
             </label>
             <label className="caption-style text-subtle flex items-start gap-2">
               <Checkbox className="mt-0.5" checked={c.context === true} onCheckedChange={(value) => update({ ...c, context: value === true })} />
-              <span>Give it what Orbit knows: the record&apos;s details, recent activity, deals and your recent emails with the contact.</span>
+              <span>Include the record&apos;s details, activity, opportunities and emails</span>
             </label>
             <label className="caption-style text-subtle flex items-start gap-2">
               <Checkbox className="mt-0.5" checked={c.linkedin === true} onCheckedChange={(value) => update({ ...c, linkedin: value === true })} />
-              <span>Read their LinkedIn profile now (through Mindcase): headline, location and recent roles, for checking someone&apos;s current job. Needs the contact&apos;s LinkedIn link.</span>
+              <span>Read their LinkedIn profile (needs the contact&apos;s LinkedIn link)</span>
             </label>
           </div>
           <Outputs step={step} update={update} />
@@ -375,8 +373,7 @@ export default function StepConfig({
         <div className="flex flex-col gap-3">
           {field("about", "About (optional)", { rows: 2, placeholder: "{{contact.name}}, {{contact.jobTitle}}" })}
           <Questions key={step.id} step={step} update={update} variables={variables} />
-          <p className="caption-style text-subtle leading-[1.4]">Sends the company&apos;s name and website, the questions and About. Each check costs $0.001.</p>
-          <p className="caption-style text-subtle leading-[1.4]">Email, call and note content can&apos;t be sent.</p>
+          <p className="caption-style text-subtle leading-[1.4]">Sends only the company&apos;s name and website, the questions and About. $0.001 a check.</p>
         </div>
       );
     case "if":
@@ -438,7 +435,7 @@ export default function StepConfig({
           </div>
           {field("dueDate", "Due on (optional)", {
             placeholder: "{{steps.ai_1.followUpOn}}",
-            hint: "A date (YYYY-MM-DD), often from an AI step, used instead of Due in. Weekends, bank holidays, Christmas and full calendar days are always skipped.",
+            hint: "YYYY-MM-DD. Replaces Due in. Skips weekends, bank holidays and full days.",
           })}
           <label className="caption-style text-subtle flex items-center gap-2">
             <Checkbox checked={c.clickup === true} onCheckedChange={(value) => update({ ...c, clickup: value === true })} />
@@ -539,14 +536,12 @@ export default function StepConfig({
     case "send_email":
       return (
         <div className="flex flex-col gap-3">
-          <p className="caption-style text-subtle">Sends to the run&apos;s contact from your Outlook, and logs it on their timeline.</p>
+          <p className="caption-style text-subtle">Sends to the run&apos;s contact from your Outlook.</p>
           {field("subject", "Subject")}
           {field("body", "Email", { rows: 6 })}
           <label className="caption-style text-subtle flex items-start gap-2">
             <Checkbox className="mt-0.5" checked={c.automated === true} onCheckedChange={(value) => update({ ...c, automated: value === true })} />
-            <span>
-              Say it was sent automatically. Adds a closing line saying your workspace&apos;s automated assistant wrote and sent it on your behalf, and that they can reply to reach you.
-            </span>
+            <span>Add a closing line saying it was sent automatically</span>
           </label>
         </div>
       );
@@ -584,7 +579,7 @@ export default function StepConfig({
             </Select>
           </div>
           <fieldset className="flex flex-col gap-1.5">
-            <legend className="caption-style text-subtle pb-1">{object === "company" ? "Lifecycle" : "Their company's lifecycle"} (none ticked means any)</legend>
+            <legend className="caption-style text-subtle pb-1">{object === "company" ? "Lifecycle" : "Company lifecycle"} (any if none ticked)</legend>
             <div className="flex flex-wrap gap-x-4 gap-y-2">
               {options.lifecycles.map((option) => (
                 <label key={option.value} className="flex items-center gap-2 text-[13.5px]">
@@ -600,10 +595,10 @@ export default function StepConfig({
             </div>
           </fieldset>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Select id={`${step.id}-deal`} label="Open deal" value={str(c.openOpportunity) || "any"} onChange={(value) => update({ ...c, openOpportunity: value })}>
+            <Select id={`${step.id}-deal`} label="Open opportunity" value={str(c.openOpportunity) || "any"} onChange={(value) => update({ ...c, openOpportunity: value })}>
               <option value="any">Either way</option>
-              <option value="yes">Has an open deal</option>
-              <option value="no">No open deal</option>
+              <option value="yes">Has an open opportunity</option>
+              <option value="no">No open opportunity</option>
             </Select>
             <Select id={`${step.id}-owner`} label="Owner" value={str(c.owner)} onChange={(value) => update({ ...c, owner: value })}>
               <option value="">Anyone</option>
@@ -626,13 +621,11 @@ export default function StepConfig({
               </label>
               <Input id={`${step.id}-search`} value={str(c.search)} placeholder="Anything" onChange={(event) => update({ ...c, search: event.target.value })} />
             </div>
-            {number("quietDays", "No contact for at least (days)", "Any", 3650)}
+            {number("quietDays", "Quiet for (days)", "Any", 3650)}
             {number("limit", "At most", "25", 100)}
           </div>
-          {number("skipDays", "Skip records this workflow found in the last (days)", "Never skip", 365)}
-          <p className="caption-style text-subtle">
-            Connect this to For each item with the list {`{{steps.${step.id}.records}}`}. Inside the loop, the company and contact steps work on each record in turn. Skipping lets a weekly run work through a long list in batches.
-          </p>
+          {number("skipDays", "Skip if found in the last (days)", "Never skip", 365)}
+          <p className="caption-style text-subtle">Loop over {`{{steps.${step.id}.records}}`} with For each item.</p>
         </div>
       );
     }
@@ -663,24 +656,23 @@ export default function StepConfig({
           )}
           <label className="caption-style text-subtle flex items-center gap-2">
             <Checkbox checked={c.create !== false} onCheckedChange={(value) => update({ ...c, create: value === true })} />
-            Create it if it isn&apos;t in Orbit{object === "company" ? " (new companies are enriched when auto-enrichment is on)" : ""}
+            Create it if it isn&apos;t in Orbit
           </label>
           <label className="caption-style text-subtle flex items-center gap-2">
             <Checkbox checked={c.useInRun === true} onCheckedChange={(value) => update({ ...c, useInRun: value === true })} />
-            Make it the run&apos;s {object} for the steps after this one
+            Use it as the run&apos;s {object} from here
           </label>
-          <p className="caption-style text-subtle">Later steps can use its id, for example to move a contact with Update record, Company set to {`{{steps.${step.id}.id}}`}.</p>
         </div>
       );
     }
     case "webhook":
       return (
         <div className="flex flex-col gap-3">
-          {field("url", "Address (https)", { placeholder: "https://hooks.slack.com/services/…" })}
+          {field("url", "URL", { placeholder: "https://hooks.slack.com/services/…" })}
           {field("body", "Body (optional)", {
             rows: 6,
             placeholder: '{"text": "{{contact.name}} may have moved to {{steps.ai_1.newCompany}}"}',
-            hint: "Leave empty to send the run's company, contact and step results as JSON.",
+            hint: "Empty sends the run's data as JSON.",
           })}
         </div>
       );
@@ -705,7 +697,7 @@ export default function StepConfig({
             </Select>
           </div>
           {options.proposalTemplates.length === 0 && (
-            <p className="caption-style text-subtle leading-[1.4]">Make a proposal template active on the Proposals page to use it here.</p>
+            <p className="caption-style text-subtle leading-[1.4]">No active templates. Activate one in Proposals.</p>
           )}
           <Select id={`${step.id}-products`} label="Products" value={str(c.products) === "fixed" ? "fixed" : "ai"} onChange={(value) => update({ ...c, products: value })}>
             <option value="ai">AI picks from the call</option>
@@ -732,13 +724,10 @@ export default function StepConfig({
             field("guidance", "How to choose (optional)", {
               rows: 3,
               placeholder: "Starter for new clients. Ongoing support when they want more.",
-              hint: `It picks from your ${priced.length} product${priced.length === 1 ? "" : "s"} with ${currency === "USD" ? "dollar" : "pound"} prices, reading the call summary and transcript, and says why.`,
             })
           )}
           {field("title", "Title (optional)", { placeholder: "Proposal for {{company.name}}" })}
-          <p className="caption-style text-subtle leading-[1.4]">
-            Creates a draft for the run&apos;s contact at their company. Nothing is sent: check it on the Proposals page, or add Notify someone with the proposal link.
-          </p>
+          <p className="caption-style text-subtle leading-[1.4]">Creates a draft. Nothing is sent.</p>
         </div>
       );
     }

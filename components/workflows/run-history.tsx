@@ -53,7 +53,7 @@ function StepLog({ step }: { step: RunStepLog }) {
           )}
           {input && (
             <div className="flex flex-col gap-1">
-              <span className="caption-style text-subtle">Settings used</span>
+              <span className="caption-style text-subtle">Input</span>
               <pre className="bg-secondary max-h-48 overflow-auto rounded-md p-2 text-[12px] leading-[1.45] whitespace-pre-wrap">{input}</pre>
             </div>
           )}
@@ -92,7 +92,7 @@ export default function RunHistory({
     };
   }, [selected, runs, onSteps]);
 
-  if (runs.length === 0) return <p className="caption-style text-subtle">No runs yet. Use Test run to try it on a record.</p>;
+  if (runs.length === 0) return <p className="caption-style text-subtle">No runs</p>;
 
   return (
     <ul className="flex flex-col gap-2">
@@ -122,7 +122,7 @@ export default function RunHistory({
                 {run.error && <p className="caption-style text-danger">{run.error}</p>}
                 {run.waitingFor === "approval" && (
                   <Link href={`/workflows?approve=${run.id}#approval-${run.id}`} className="caption-style text-foreground underline underline-offset-2">
-                    Review the approval
+                    Review
                   </Link>
                 )}
                 {(run.companyId || run.contactId) && (

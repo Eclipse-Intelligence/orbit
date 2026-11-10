@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     if (endpoint) await savePushSubscription(actor, { endpoint, keys: body.keys }, request.headers.get("user-agent"));
     const result = await pushToUser(
       actor,
-      { title: "Orbit", body: "Notifications are working on this device.", url: "/mail", tag: "orbit-test" },
+      { title: "Orbit", body: "Notifications are working.", url: "/mail", tag: "orbit-test" },
       { endpoint: endpoint ?? undefined },
     );
     return { ...result, host: endpoint ? new URL(endpoint).host : null };

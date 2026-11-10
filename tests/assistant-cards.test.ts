@@ -116,12 +116,12 @@ describe("assistant approval cards", () => {
     const card = describeAction("send_email", args, await recordNames(owner, [args], ["send_email"]));
     assert.ok(card.lines.includes("To: jane@acme.test"), card.lines.join("\n"));
     assert.ok(card.lines.includes("Bcc: boss@acme.test"), card.lines.join("\n"));
-    assert.ok(card.lines.includes("Reminder: if nobody replies within 2 days"), card.lines.join("\n"));
+    assert.ok(card.lines.includes("Reminder: if no reply within 2 days"), card.lines.join("\n"));
     assert.ok(card.lines.some((line) => /^It was scheduled for .+ \(London time\)\. Approving sends it now instead\.$/.test(line)), card.lines.join("\n"));
 
     const asked = { draftId, body: "Hi Jane", remindAfterDays: 5 };
     const askedCard = describeAction("send_email", asked, await recordNames(owner, [asked], ["send_email"]));
-    assert.ok(askedCard.lines.includes("Reminder: if nobody replies within 5 days"), askedCard.lines.join("\n"));
+    assert.ok(askedCard.lines.includes("Reminder: if no reply within 5 days"), askedCard.lines.join("\n"));
 
     const original = globalThis.fetch;
     const { fetchImpl, calls } = outlook();
@@ -145,7 +145,7 @@ describe("assistant approval cards", () => {
     ).rows[0].id;
     const followUpArgs = { draftId: withFollowUp, body: "Hi Jane" };
     const followUpCard = describeAction("send_email", followUpArgs, await recordNames(owner, [followUpArgs], ["send_email"]));
-    assert.ok(followUpCard.lines.includes("Follow-up: sent in the same thread at 09:00 after 3 working days if nobody replies:"), followUpCard.lines.join("\n"));
+    assert.ok(followUpCard.lines.includes("Follow-up sent after 3 working days if no reply:"), followUpCard.lines.join("\n"));
     assert.ok(followUpCard.lines.includes("Just checking this landed."), followUpCard.lines.join("\n"));
     assert.ok(!followUpCard.lines.some((line) => line.startsWith("Reminder:")), followUpCard.lines.join("\n"));
     await admin.query("delete from crm.mail_drafts where id = $1", [withFollowUp]);
@@ -162,7 +162,7 @@ describe("assistant approval cards", () => {
     await admin.query("delete from crm.mail_drafts where id = $1", [storedReply]);
   });
 
-  it("sends only what the draft card showed when the user chooses Confirm and send", async () => {
+  it("sends only what the draft card showed when the user chooses Send now", async () => {
     const stray = {
       replyToEmailId: messageId,
       cc: ["sam@pulse.test"],
@@ -223,7 +223,7 @@ describe("assistant approval cards", () => {
     };
     const card = describeAction("create_meeting_invite", args, await recordNames(owner, [args], ["create_meeting_invite"]));
     assert.ok(card.lines.includes("Guests: Jane Doe <jane@acme.test>, sam@acme.test"), card.lines.join("\n"));
-    assert.ok(card.lines.includes("Not invited, because their address isn't in the guests: Ola Smith <ola@acme.test>"), card.lines.join("\n"));
+    assert.ok(card.lines.includes("Not invited: Ola Smith <ola@acme.test>"), card.lines.join("\n"));
 
     const broken = { ...args, attendees: [{ email: "not an address" }], contactIds: [] };
     const brokenCard = describeAction("create_meeting_invite", broken, await recordNames(owner, [broken], ["create_meeting_invite"]));

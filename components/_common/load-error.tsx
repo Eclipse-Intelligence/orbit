@@ -17,11 +17,7 @@ export default function LoadError({
         className,
       )}
     >
-      <h1>This page could not be loaded</h1>
-      <p className="text-muted-foreground max-w-[36rem]">
-        Orbit couldn&apos;t load this page. Check your connection, then try
-        again.
-      </p>
+      <h1>Couldn&apos;t load this page</h1>
       <Button variant="primary" size="md" onClick={retry}>
         Try again
       </Button>

@@ -34,7 +34,7 @@ const MAX_TURNS = 40;
 const MCP_OUTPUT_TOKENS = "60000";
 const STEER_EVERY_MS = 3_000;
 
-export const STOPPED = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
+export const STOPPED = "Stopped after a lot of steps. Say \"carry on\" or narrow the question.";
 export const CUT_OFF = "The answer was cut off. Ask me to continue.";
 
 export { PROPOSED };
