@@ -28,7 +28,16 @@ export type WebPage = {
 
 export class WebPageError extends Error {}
 
+type OutsideWebRoute = { fetchImpl: typeof fetch; lookup: Lookup };
+
+let outsideWebRoute: OutsideWebRoute | null = null;
+
+export function routeOutsideWeb(route: OutsideWebRoute | null) {
+  outsideWebRoute = route;
+}
+
 async function systemLookup(hostname: string) {
+  if (outsideWebRoute) return outsideWebRoute.lookup(hostname);
   return (await dnsLookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
 }
 
@@ -98,7 +107,7 @@ const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
 const publicOnly = new Agent({ connect: { lookup: publicOnlyLookup } });
 
 export const publicFetch = ((input: string, init?: RequestInit) =>
-  agentFetch(input, { ...(init as object), dispatcher: publicOnly })) as unknown as typeof fetch;
+  outsideWebRoute ? outsideWebRoute.fetchImpl(input, init) : agentFetch(input, { ...(init as object), dispatcher: publicOnly })) as unknown as typeof fetch;
 
 function privateCause(error: unknown): WebPageError | null {
   for (let current = error; current && typeof current === "object"; current = (current as { cause?: unknown }).cause) {
