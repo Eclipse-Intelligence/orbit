@@ -15,6 +15,7 @@ import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool } from "@/lib/db/pool";
 import { appendToDailyNote } from "@/lib/docs/daily-notes";
 import { createDoc, setAssistantCanEdit } from "@/lib/docs/store";
+import { clipNotes, eventBodyText, joinLink } from "@/lib/meeting-links";
 import { zonedParts, zonedTimeToDate } from "@/lib/time";
 import { createUser } from "@/tests/helpers";
 import type { Fixture, When, WorkspaceKey, WorkspaceSeed, World } from "./types";
@@ -249,9 +250,11 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
       for (const event of seed.events ?? []) {
         const start = new Date(londonInstant(event.start, now));
         const organiser = event.organiser ?? me;
+        const notes = eventBodyText(event.notes, "text");
+        const join = joinLink({ location: event.location, notes });
         const row = await admin.query<{ id: string }>(
-          `insert into crm.calendar_events (workspace_id, connection_id, user_id, calendar_id, provider_event_id, ical_uid, subject, starts_at, ends_at, location, organizer, attendees, response_status)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13) returning id`,
+          `insert into crm.calendar_events (workspace_id, connection_id, user_id, calendar_id, provider_event_id, ical_uid, subject, starts_at, ends_at, location, organizer, attendees, response_status, online_meeting_url)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14) returning id`,
           [
             actor.workspaceId,
             connection.rows[0].id,
@@ -266,8 +269,21 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
             JSON.stringify({ name: organiser.name, email: organiser.email }),
             JSON.stringify([me, ...event.attendees].map((person) => ({ name: person.name, email: person.email, type: "required" }))),
             event.organiser ? "notResponded" : "organizer",
+            join && join.source !== "notes" ? join.url : null,
           ],
         );
+        if (notes) {
+          await admin.query(
+            "insert into crm.calendar_event_notes (event_id, user_id, workspace_id, notes) values ($1, $2, $3, $4)",
+            [row.rows[0].id, actor.userId, actor.workspaceId, clipNotes(notes)],
+          );
+        }
+        if (join?.source === "notes") {
+          await admin.query(
+            "insert into crm.calendar_event_links (event_id, user_id, workspace_id, join_url) values ($1, $2, $3, $4)",
+            [row.rows[0].id, actor.userId, actor.workspaceId, join.url],
+          );
+        }
         ids.set(`event:${event.key}`, row.rows[0].id);
       }
     }

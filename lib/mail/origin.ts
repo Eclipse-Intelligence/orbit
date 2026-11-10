@@ -15,3 +15,9 @@ function publicOrigin(origin: string | null) {
 export function mailOrigin(request?: Request) {
   return publicOrigin(siteOrigin() ?? (request ? originFrom(request) : null));
 }
+
+export function mailOriginFromHeaders(store: { get(name: string): string | null }) {
+  const host = store.get("x-forwarded-host") ?? store.get("host");
+  const proto = store.get("x-forwarded-proto") ?? "http";
+  return publicOrigin(siteOrigin() ?? (host ? `${proto}://${host}` : null));
+}

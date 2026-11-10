@@ -116,6 +116,17 @@ export const BASE: Fixture = {
     events: [
       { key: "quillfeather-review", subject: "Quillfeather proposal review", start: { days: 0, at: "11:00" }, minutes: 60, attendees: [PERSON.felix] },
       { key: "copperleaf-catchup", subject: "Copperleaf catch-up", start: { days: 0, at: "16:30" }, minutes: 30, attendees: [PERSON.ansel] },
+      {
+        key: "driftbox-pricing",
+        subject: "Driftbox pricing call",
+        start: { days: 0, at: "15:00" },
+        minutes: 30,
+        attendees: [],
+        organiser: PERSON.juno,
+        location: "Zoom",
+        notes:
+          "Agenda:\n1. Hosted runner pricing tiers\n2. Annual discount for Eclipse\n\nJoin Zoom Meeting\nhttps://us02web.zoom.us/j/84529173006?pwd=dHJ1c3RlZA.1\n\nMeeting ID: 845 2917 3006\nPasscode: 552190\n\nFind your local number: https://us02web.zoom.us/u/kd8xQ",
+      },
       { key: "vendor-demo", subject: "Metricove product demo", start: { days: 2, at: "13:00" }, minutes: 45, attendees: [], organiser: PERSON.dora },
       { key: "larkspur-planning", subject: "Larkspur retainer planning", start: { nextWeek: 0, at: "10:00" }, minutes: 60, attendees: [PERSON.bram] },
       { key: "fernhill-review", subject: "Fernhill quarterly review", start: { nextWeek: 2, at: "14:00" }, minutes: 60, attendees: [PERSON.odile] },

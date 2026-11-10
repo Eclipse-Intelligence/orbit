@@ -41,7 +41,7 @@ import CompanyHealth from "@/components/companies/detail/company-health";
 import LifecyclePicker from "@/components/companies/lifecycle-picker";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
-import type { Company, CompanyContext, CompanyWrite, Member, TagCount } from "@/lib/crm/types";
+import type { Company, CompanyContext, CompanyWrite, EmailRead, Member, TagCount } from "@/lib/crm/types";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 import type { WorkspaceRef } from "@/lib/crm/workspaces";
 import type { CompanyFit } from "@/lib/enrichment/web-checks";
@@ -75,6 +75,7 @@ function bareUrl(value: string) {
 export default function CompanyRecord({
   viewer,
   context,
+  reads = {},
   members,
   mailboxConnected,
   clickup,
@@ -91,6 +92,7 @@ export default function CompanyRecord({
 }: {
   viewer: Viewer;
   context: CompanyContext;
+  reads?: Record<string, EmailRead>;
   members: Member[];
   mailboxConnected: boolean;
   clickup: ClickUpPicker | null;
@@ -423,6 +425,7 @@ export default function CompanyRecord({
             contacts={context.contacts}
             timeline={context.timeline}
             insights={context.insights}
+            reads={reads}
             mailboxConnected={mailboxConnected}
             viewerId={viewer.id}
             viewerRole={viewer.role}

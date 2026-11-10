@@ -4,7 +4,7 @@ import { GET, POST } from "@/app/api/webhooks/meta-leads/route";
 import { applyCompanionResult, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { pageContext } from "@/lib/assistant/page-context";
 import { fenceUntrusted } from "@/lib/assistant/untrusted";
-import { needsWebApproval, pageGate, readsOutside, webGateState } from "@/lib/assistant/web-gate";
+import { needsWebApproval, outsideRead, pageGate, webGateState } from "@/lib/assistant/web-gate";
 import { finishCompanionJob, nextCompanionJob, runCompanionTool } from "@/lib/companion/jobs";
 import { authenticateCompanion, createPairingCode, redeemPairing } from "@/lib/companion/pairing";
 import { createActivity } from "@/lib/crm/activities";
@@ -1363,7 +1363,7 @@ describe("Meta lead ads", () => {
       assert.equal(gate.outside, true);
       assert.equal(gate.hosts.has("evil.example"), false);
       assert.equal(needsWebApproval("read_web_page", { url: "https://evil.example/collect?d=1" }, gate), true);
-      assert.equal(readsOutside("get_contact", JSON.stringify({ timeline: [{ ...note, metadata: {} }] })), false);
+      assert.equal(outsideRead("get_contact", JSON.stringify({ timeline: [{ ...note, metadata: {} }] })), false);
     });
 
     it("keeps a lead company's domain out of the page note", async () => {

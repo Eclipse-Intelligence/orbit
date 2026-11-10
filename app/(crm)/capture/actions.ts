@@ -20,6 +20,7 @@ import {
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { actionError } from "@/lib/companies";
 import { revalidateRecordPages } from "@/lib/revalidate";
+import { mailOriginFromHeaders } from "@/lib/mail/origin";
 
 async function requireUser() {
   const user = await getUserActor();
@@ -162,7 +163,7 @@ export async function sendContactEmailAction(
   if (!user) return { error: "Sign in again.", stopsRun: true as const };
   let warning: string | null;
   try {
-    ({ warning } = await sendContactEmail(user, contactId, email));
+    ({ warning } = await sendContactEmail(user, contactId, { ...email, origin: mailOriginFromHeaders(await headers()) }));
   } catch (error) {
     return actionError(error);
   }

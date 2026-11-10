@@ -1,7 +1,7 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
 import { untrustedToken } from "@/lib/assistant/untrusted";
-import { needsWebApproval, readsOutside, readTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
+import { needsWebApproval, outsideRead, readTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
@@ -356,7 +356,7 @@ async function noteRead(auth: AuthenticatedCompanion, jobId: string, name: strin
       `update crm.ai_companion_jobs set outside_read = outside_read or $2,
          seen_urls = (select coalesce(array_agg(item), '{}') from (select distinct item from unnest(seen_urls || $3::text[]) as seen(item) limit 5000) as kept)
        where id = $1 and user_id = $4`,
-      [jobId, readsOutside(name, content), readTargets(name, content).slice(0, 2_000), auth.actor.userId],
+      [jobId, outsideRead(name, content), readTargets(name, content).slice(0, 2_000), auth.actor.userId],
     ),
   );
 }

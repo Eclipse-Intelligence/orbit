@@ -172,6 +172,7 @@ type EventSeed = {
   attendees: { name: string; email: string }[];
   organiser?: { name: string; email: string };
   location?: string;
+  notes?: string;
 };
 
 type DocSeed = { key?: string; title: string; content: string; shared?: boolean; byColleague?: boolean; assistantCanEdit?: boolean };

@@ -13,6 +13,8 @@ import {
 import { Checkbox } from "@/components/_ui/checkbox";
 import { DatePicker } from "@/components/_ui/date-picker";
 import Field from "@/components/_ui/field";
+import LinkedText from "@/components/_ui/linked-text";
+import EventNotes from "@/components/crm/event-notes";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import { appTimeZone, dateTimeInputValue, zoneLabel } from "@/lib/time";
 import { contactHref } from "@/lib/crm/hrefs";
@@ -558,7 +560,9 @@ export default function CalendarEventDetails({
             </p>
           ))}
         {item.location && (
-          <p className="caption-style text-subtle">{item.location}</p>
+          <p className="caption-style text-subtle [overflow-wrap:anywhere]">
+            <LinkedText text={item.location} />
+          </p>
         )}
       </div>
       {(links.length > 0 || item.granolaHref) && (
@@ -568,7 +572,7 @@ export default function CalendarEventDetails({
               key={link.label}
               href={link.href}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               data-shortcut={link.label === "Join" ? "join" : undefined}
               title={link.label === "Join" ? "Join (J)" : undefined}
               className={buttonVariants({ variant: link.variant, size: "sm" })}
@@ -590,6 +594,7 @@ export default function CalendarEventDetails({
           <CancelMeeting item={item} />
         </div>
       )}
+      {item.notes && <EventNotes key={item.id} id={item.id} text={item.notes} />}
       {item.organizer && (
         <div className="flex flex-col gap-2">
           <span className="caption-style text-subtle">Organiser</span>
