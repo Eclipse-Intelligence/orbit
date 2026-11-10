@@ -64,7 +64,7 @@ export default function SidebarContent({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-sidebar-border bg-sidebar-accent flex shrink-0 items-center gap-2 border-b p-3">
+      <div className="border-sidebar-border bg-sidebar-accent flex shrink-0 items-center gap-2 border-b p-3 lg:h-(--header-height) lg:py-0">
         <WorkspaceSwitcher
           workspaces={workspace.choices}
           currentId={workspace.id}
