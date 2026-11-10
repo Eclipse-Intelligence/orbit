@@ -46,10 +46,7 @@ export default async function ConnectionsSettingsPage({
   ]);
   const canAdmin = user.role === "owner" || user.role === "admin";
   return (
-    <SettingsPage
-      title="Connections"
-      description={workspaces.length > 1 ? "Services you connect once, as you. They work in every workspace you're in." : "Services you connect once, as you."}
-    >
+    <SettingsPage title="Connections">
       <SettingsNotices notice={notice} info={info} />
       <TeamsCallsSettings configured={microsoftConfigured()} mailbox={mailbox} calls={calls} transcripts={transcripts} />
       <GranolaSettings granola={granola} canAdmin={canAdmin} />

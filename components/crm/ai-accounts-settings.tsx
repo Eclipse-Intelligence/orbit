@@ -43,7 +43,7 @@ function Row({
   title: string;
   status: string;
   on: boolean;
-  detail: string;
+  detail?: string;
   action: ReactNode;
   children?: ReactNode;
 }) {
@@ -53,7 +53,7 @@ function Row({
         <div className="flex min-w-0 flex-col gap-1">
           <span className="text-foreground text-[14px] leading-5 font-medium">{title}</span>
           <Status on={on}>{status}</Status>
-          <span className="caption-style text-subtle">{detail}</span>
+          {detail && <span className="caption-style text-subtle">{detail}</span>}
         </div>
         <div className="flex shrink-0 items-center gap-2">{action}</div>
       </div>
@@ -127,7 +127,6 @@ function ChatGptRow({ account }: { account: AiAccountSummary }) {
       title="ChatGPT"
       on={account.connected}
       status={account.connected ? `Connected${account.label ? ` as ${account.label}` : ""}` : "Not connected"}
-      detail="GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Astra and GPT-6 Luna on your ChatGPT plan"
       action={
         code ? (
           <Button variant="ghost" size="sm" onClick={() => setCode(null)}>
@@ -147,7 +146,7 @@ function ChatGptRow({ account }: { account: AiAccountSummary }) {
       {code && (
         <div className="flex flex-col gap-3 rounded-lg bg-white/[0.03] p-3.5">
           <p className="caption-style text-subtle leading-[1.4]">
-            Open the ChatGPT sign-in page, sign in, and enter this code. This page connects by itself once you approve it.
+            Sign in to ChatGPT and enter this code.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -266,7 +265,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
             ? "Orbit Agent paired, not running"
             : "Not connected"
       }
-      detail="Fable 5.2, Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 through Claude Code on your Mac, on your Claude plan"
+      detail="Through Claude Code on your Mac"
       action={
         pairing ? (
           <Button variant="ghost" size="sm" onClick={() => setPairing(null)}>
@@ -290,7 +289,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
             <CopyLine text={agentCommand(pairing.origin, pairing.code)} />
           </li>
           <li className="caption-style text-subtle leading-[1.4]">
-            3. That&apos;s it: Orbit Agent now runs in the background, starts when you log in and restarts if it stops, so you can close Terminal. This page updates when your Mac connects. The code works for 10 minutes.
+            3. The code works for 10 minutes. You can close Terminal once it connects.
           </li>
         </ol>
       )}
@@ -314,7 +313,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
       {companions.length > 0 && !online && !pairing && (
         <div className="flex flex-col gap-2">
           <span className="caption-style text-subtle leading-[1.4]">
-            To start it and keep it running (it will then start by itself whenever you log in), run this once in Terminal on your Mac:
+            To start it, run this in Terminal on your Mac:
           </span>
           <CopyLine text={agentCommand(origin)} />
         </div>
@@ -330,7 +329,7 @@ export default function AiAccountsSettings({ accounts, companions }: { accounts:
     <SettingsCard
       id="ai-accounts"
       title="AI accounts"
-      description="Use your own Claude or ChatGPT plan in the assistant. Models from a connected account appear in the assistant's model picker, and usage counts against that plan."
+      description="Use your own Claude or ChatGPT plan in the assistant."
     >
       <div className="flex flex-col gap-5">
         <AgentRow companions={companions} />

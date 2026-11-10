@@ -6,7 +6,6 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getHomeActor, getUserActor } from "@/lib/auth/user";
 import { discardAttachments, prepareAttachment, type PreparedAttachment } from "@/lib/crm/email-attachments";
-import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
@@ -62,14 +61,6 @@ export async function syncCallsAction() {
   refreshRecords();
   if (result.error) settingsWith(SETTINGS_PATHS.connections, "error", result.error);
   redirect(SETTINGS_PATHS.connections);
-}
-
-export async function syncCalendarAction() {
-  const user = await requireHomeUser();
-  const result = await syncCalendar(user, { force: true });
-  refreshRecords();
-  if (result.error) settingsWith(SETTINGS_PATHS.email, "error", result.error);
-  redirect(SETTINGS_PATHS.email);
 }
 
 export async function syncGranolaAction() {

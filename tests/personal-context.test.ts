@@ -123,6 +123,9 @@ describe("About you", () => {
     assert.match(prompt, /What they care about, their interests and the views they hold:\nRepeated prompt tests over screenshots\./);
     assert.match(prompt, /Their colleagues in this workspace:\n- Sam Colleague \(sam@about\.test\): Head of delivery/);
     assert.match(aboutYouSection({ ...(await getPersonalContext(sam)), jobTitle: "" }, []), /haven't filled in About you yet/);
+    const empty = { ...(await getPersonalContext(sam)), jobTitle: "", about: "", interests: "", writing: "" };
+    assert.match(aboutYouSection({ ...empty, multiWorkspace: false }, []), /\(Settings, General\)/);
+    assert.match(aboutYouSection({ ...empty, multiWorkspace: true }, []), /Settings, About you, and how they write in Settings, General/);
     assert.equal(aboutYouSection(null), "");
     const note = aboutWriterNote(about, "Mark");
     assert.match(note, /Mark's role: Founder and CEO, Eclipse\./);

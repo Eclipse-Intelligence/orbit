@@ -248,7 +248,7 @@ Recall (recall.it) is a person's own knowledge app; it isn't the `recall` tool, 
 
 Recall returns relevance-ranked chunks, not whole cards: an hour-long video gave about half its transcript. So search results and `recall_read` say they are excerpts, keep the card's notebook (the user's notes and Recall's summaries) apart from its saved content, and put chunks back in order by timestamp or page when every chunk has one. `recall_read` with `full: true` opens the card's `source_url` live instead, through the same reader as `read_web_page` for an article or the Knowledge YouTube transcript code (`readYouTube`) for a video, and stores nothing. Cards without a source link (notes, uploaded files) only have excerpts.
 
-Recall's API filters by tag id and documents no way to list tags. When a key is saved, and at most once a day after that when a tool is given tags, Orbit tries `GET /tags`, `/tags/` and `/cards/tags` and remembers whether one returned a tag list (`tags_path`). If one did, tools accept tag names and resolve them to ids. If not, tag ids still work, a tag name is refused with an explanation, and the Settings card says where to find ids.
+Recall's API filters by tag id and documents no way to list tags. When a key is saved, and at most once a day after that when a tool is given tags, Orbit tries `GET /tags`, `/tags/` and `/cards/tags` and remembers whether one returned a tag list (`tags_path`). If one did, tools accept tag names and resolve them to ids. If not, tag ids still work and a tag name is refused with an explanation.
 
 ## Long documents
 
