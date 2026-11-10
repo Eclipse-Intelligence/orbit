@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import LaterPicker, { type LaterRequest } from "@/components/mail/later-picker";
-import MailComposer, { MODE_LABEL, type ComposerStart, type SendPayload } from "@/components/mail/mail-composer";
+import MailComposer, { MODE_LABEL, type ComposerDraft, type ComposerStart, type SendPayload } from "@/components/mail/mail-composer";
 import { emailRecipientAction } from "@/app/(crm)/quick-add";
 import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, MailDraft } from "@/lib/mail/view";
@@ -21,9 +21,11 @@ type Toast = { message: string; tone?: "status" | "alert"; action?: { label: str
 
 type ShownToast = Toast & { id: number };
 
-type Outgoing = { payload: Promise<SendPayload>; timer: number; onDelivered?: () => void; onUndone?: () => void };
+type SendMeta = { onDelivered?: () => void; onUndone?: () => void; onReleased?: () => void };
 
-type SendMeta = { onDelivered?: () => void; onUndone?: () => void };
+type Outgoing = SendMeta & { payload: Promise<SendPayload>; timer: number };
+
+type SendFailure = Error & { status?: number; detail?: { draftId?: string; maybeSent?: boolean } };
 
 type Card = {
   key: number;
@@ -35,7 +37,7 @@ type Card = {
   onSent?: () => void;
 };
 
-type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: MailDraft; subject?: string; body?: string; onSent?: () => void };
+type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void };
 
 type ComposerContextValue = {
   openComposer: (options?: OpenOptions) => void;
@@ -51,13 +53,15 @@ type ComposerContextValue = {
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status });
+  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status, detail: json });
   return json;
 }
 
-function payloadDraft(payload: SendPayload): MailDraft {
+function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraft {
   return {
-    id: payload.id ?? "",
+    id: failure?.detail?.draftId ?? payload.id ?? "",
+    sendKey: payload.sendKey ?? null,
+    sendProblem: failure?.detail?.maybeSent ? failure.message : null,
     sourceId: payload.sourceId,
     mode: payload.mode,
     messageId: payload.messageId,
@@ -317,18 +321,19 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             setSent((count) => count + 1);
             if (result.warning) showToast({ message: result.warning, tone: "alert" });
           })
-          .catch((error: Error & { status?: number }) => {
-            if (error.status === 409) {
+          .catch((error: SendFailure) => {
+            if (error.status === 409 && !error.detail?.maybeSent) {
+              item.onReleased?.();
               item.onDelivered?.();
               showToast({ message: error.message, tone: "alert" });
               return;
             }
             item.onUndone?.();
             showToast({
-              message: `“${payload.subject || "Your email"}” didn't send. ${error.message}`,
+              message: error.detail?.maybeSent ? error.message : `“${payload.subject || "Your email"}” didn't send. ${error.message}`,
               tone: "alert",
               duration: 15_000,
-              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(payload) }) },
+              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(payload, error) }) },
             });
           }),
       );

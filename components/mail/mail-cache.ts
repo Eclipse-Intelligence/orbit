@@ -40,12 +40,20 @@ export function statusProblem(status: number) {
   return `Orbit's server refused that (${status}). Try again.`;
 }
 
+export const REFRESH_RETRYING = "Mail didn't refresh. Orbit will try again shortly.";
+
+export type MailRequestError = Error & { status?: number };
+
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init }).catch(() => null);
   if (!response) throw new Error(OFFLINE);
   const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? statusProblem(response.status));
+  if (!response.ok) throw Object.assign(new Error(body.error ?? statusProblem(response.status)), { status: response.status });
   return body;
+}
+
+export function refreshFailure(error: unknown) {
+  return error instanceof Error && error.message === OFFLINE ? OFFLINE : REFRESH_RETRYING;
 }
 
 const PROBLEM_REPEAT_MS = 5 * 60_000;
@@ -83,29 +91,43 @@ export function restoreToList(origin: ListQuery, thread: ThreadSummary) {
   lists.set(listKey(origin), { ...cached, threads });
 }
 
-const queuedDrafts = new Set<string>();
+const queuedDrafts = new Map<string, Set<string>>();
 
 function withoutQueued(detail: ThreadDetail) {
-  if (!detail.drafts?.some((draft) => queuedDrafts.has(draft.id))) return detail;
+  const hidden = detail.drafts?.filter((draft) => queuedDrafts.has(draft.id)) ?? [];
+  if (hidden.length === 0) return detail;
+  for (const draft of hidden) queuedDrafts.get(draft.id)!.add(detail.key);
   return { ...detail, drafts: detail.drafts.filter((draft) => !queuedDrafts.has(draft.id)) };
 }
 
 function hideDraft(id: string | null | undefined) {
   if (!id) return;
-  queuedDrafts.add(id);
+  if (!queuedDrafts.has(id)) queuedDrafts.set(id, new Set());
   for (const [key, detail] of details) {
     const kept = withoutQueued(detail);
     if (kept !== detail) details.set(key, kept);
   }
 }
 
+function showDraft(id: string | null | undefined) {
+  const touched = id ? queuedDrafts.get(id) : undefined;
+  if (!id || !touched) return;
+  queuedDrafts.delete(id);
+  for (const key of touched) {
+    details.delete(key);
+    void loadThread(key, true).catch(() => null);
+  }
+}
+
 export function holdQueuedDraft(current: string | null, payload: Promise<{ id: string | null }>) {
   hideDraft(current);
-  void payload.then((value) => hideDraft(value.id)).catch(() => undefined);
-  return () => {
-    if (current) queuedDrafts.delete(current);
-    void payload.then((value) => value.id && queuedDrafts.delete(value.id)).catch(() => undefined);
-  };
+  const settled = payload.then((value) => value.id, () => null);
+  void settled.then((id) => hideDraft(id));
+  return () =>
+    settled.then((id) => {
+      showDraft(current);
+      showDraft(id);
+    });
 }
 
 export function newSendKey() {
@@ -117,7 +139,7 @@ export function newSendKey() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function unscheduleDraft(id: string) {
+export function unscheduleDraft(id: string): Promise<{ draft: MailDraft | null }> {
   return getJson<{ draft: MailDraft | null }>(`/api/mail/drafts/schedule?id=${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
@@ -208,7 +230,7 @@ export function fetchScheduled() {
 }
 
 export function syncNow() {
-  return getJson<{ stored: number; removed: number; problem?: string | null }>("/api/mail/sync", { method: "POST" });
+  return getJson<{ stored: number; removed: number; problems?: string[] }>("/api/mail/sync", { method: "POST" });
 }
 
 export function loadSummary(key: string, latestId: string) {

@@ -70,6 +70,7 @@ export type MailSyncReport = {
   backfilling: number;
   paused: boolean;
   errors: string[];
+  reconnect: string[];
   arrived: string[];
   routed: number;
   filed: number;
@@ -98,6 +99,14 @@ async function storageFull(db: Db) {
 
 export const MAIL_HARD_STOP =
   "Mail sync is paused because the database is nearly full. Upgrade Supabase to Pro and raise MAIL_STORAGE_LIMIT_MB to keep syncing.";
+export const SYNC_PAUSED = "Mail sync is paused because storage is full.";
+export const SYNC_RETRYING = "Mail didn't refresh. Orbit will try again shortly.";
+
+export function syncProblems(report: Pick<MailSyncReport, "paused" | "errors" | "reconnect">) {
+  if (report.paused) return [SYNC_PAUSED];
+  if (report.reconnect.length) return [...new Set(report.reconnect)];
+  return report.errors.length ? [SYNC_RETRYING] : [];
+}
 
 async function loadSources(actor: UserActor): Promise<Source[]> {
   return withActor(actor, async (db) => {
@@ -563,7 +572,7 @@ export async function syncMail(
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, moved: 0, backfilling: 0, paused: false, errors: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, moved: 0, backfilling: 0, paused: false, errors: [], reconnect: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {
@@ -618,6 +627,7 @@ export async function syncMail(
       const reconnect = reconnectProblem(error, source.email);
       lastError = reconnect ?? (error instanceof GraphMailError || error instanceof Error ? error.message.slice(0, 500) : "Mail sync failed.");
       report.errors.push(reconnect ?? `${source.email}: ${lastError}`);
+      if (reconnect) report.reconnect.push(reconnect);
     } finally {
       await withActor(actor, (db) =>
         db.query(

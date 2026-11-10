@@ -97,7 +97,7 @@ type DraftRow = {
   sent_internet_id: string | null;
 };
 
-type Target ={ id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string };
+type Target = { id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string };
 
 function cleanList(list: unknown, label: string): MailAddress[] {
   if (!Array.isArray(list)) return [];
@@ -357,7 +357,7 @@ async function writeDraft(
     await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl);
   } catch (error) {
     if (!(error instanceof GraphMailError && error.status === 404 && existing)) graphProblem(error, target.email);
-    if (existing.send_attempted_at) throw new CrmError("conflict", MAYBE_SENT, 409);
+    if (existing.send_attempted_at) throw maybeSent();
     await withActor(actor, (db) => db.query("delete from crm.mail_drafts where id = $1", [existing.id]));
     row = await createDraft(actor, input, target, token, options.origin, options.fetchImpl);
     await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl).catch((retry) =>
@@ -530,11 +530,13 @@ type SendOptions = {
   storedFiles: StoredFiles;
   logOnTimeline?: boolean;
   claimed?: boolean;
+  force?: boolean;
 };
 
 export const ALREADY_SENDING = "This email was already sending, so Orbit didn't send it again. Check Sent in Mail.";
 export const DRAFT_GONE = "This draft was already sent or deleted.";
-export const MAYBE_SENT = "This email may already have been sent. Check Sent before sending it again.";
+export const MAYBE_SENT = "This email may already have been sent. Check Sent, and if it isn't there, use Send anyway.";
+export const SEND_FAILED = "The email didn't send. Try again.";
 export const SEND_UNCONFIRMED = "Outlook didn't confirm the email was sent. Check Sent before sending it again.";
 export const ALREADY_SENT_WARNING = "Outlook had already sent this email, so Orbit didn't send it again.";
 const RESEND_AFTER_MS = 2 * 60_000;
@@ -616,16 +618,25 @@ export async function sendMailDraft(
       },
     });
   } catch (error) {
+    const problem = await sendProblem(actor, error, current);
     if (!options.claimed && current) {
-      const settle =
-        claim === "scheduled"
-          ? failDueDraft(actor, current, error instanceof Error ? error.message : "The email didn't send.")
-          : releaseDraft(actor, current);
+      const settle = claim === "scheduled" ? failDueDraft(actor, current, problem.message) : releaseDraft(actor, current);
       await settle.catch(() => undefined);
     }
     if (sendKey && !current) await dropSendKey(actor, sendKey).catch(() => undefined);
-    throw error;
+    throw problem;
   }
+}
+
+function maybeSent() {
+  return new CrmError("conflict", MAYBE_SENT, 409, { maybeSent: true });
+}
+
+async function sendProblem(actor: UserActor, error: unknown, draftId: string | null) {
+  if (error instanceof CrmError) return draftId ? new CrmError(error.code, error.message, error.status, { ...error.details, draftId }) : error;
+  console.error("mail send failed", error);
+  const marked = draftId ? Boolean(await attemptedDraft(actor, draftId).catch(() => null)) : false;
+  return new CrmError("send_failed", marked ? SEND_UNCONFIRMED : SEND_FAILED, marked ? 502 : 500, draftId ? { draftId } : null);
 }
 
 async function attemptedDraft(actor: UserActor, id: string) {
@@ -655,15 +666,25 @@ async function settleEarlierSend(actor: UserActor, row: DraftRow, fetchImpl: typ
     const token = await mailSourceToken(actor, row.source_id, fetchImpl);
     const [state, copy] = await Promise.all([
       fetchDraftState(token, row.provider_draft_id, fetchImpl),
-      findSentCopy(token, { internetMessageId: row.sent_internet_id, conversationId: row.thread_key, subject: row.subject, since: attempted }, fetchImpl),
+      findSentCopy(
+        token,
+        {
+          internetMessageId: row.sent_internet_id,
+          conversationId: row.thread_key,
+          subject: row.subject,
+          recipients: [...(row.to_recipients ?? []), ...(row.cc_recipients ?? []), ...(row.bcc_recipients ?? [])].map((item) => item.address),
+          since: attempted,
+        },
+        fetchImpl,
+      ),
     ]);
     found = { state, copy };
   } catch {
-    throw new CrmError("conflict", MAYBE_SENT, 409);
+    throw maybeSent();
   }
   if (found.copy || found.state === "sent") return "sent";
   const unsent = found.state === "draft" && !row.identity_id && Date.now() - attempted.getTime() >= RESEND_AFTER_MS;
-  if (!unsent) throw new CrmError("conflict", MAYBE_SENT, 409);
+  if (!unsent) throw maybeSent();
   await clearAttempt(actor, row.id);
   return "unsent";
 }
@@ -777,7 +798,8 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
   const fetchImpl = options.fetchImpl ?? fetch;
   const ids = await draftFileList(actor, input, options.storedFiles);
   const earlier = input.id ? await attemptedDraft(actor, input.id) : null;
-  if (earlier && (await settleEarlierSend(actor, earlier, fetchImpl)) === "sent") return finishEarlierSend(actor, input, earlier, ids, options);
+  if (earlier && options.force) await clearAttempt(actor, earlier.id);
+  else if (earlier && (await settleEarlierSend(actor, earlier, fetchImpl)) === "sent") return finishEarlierSend(actor, input, earlier, ids, options);
   const inline = await inlineImages(actor, input.body, ids);
   const [attached, written, identity] = await Promise.all([
     loadAttachments(actor, ids, fetchImpl),
@@ -831,7 +853,7 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
     if (error.kind === "unconfirmed") throw new CrmError("upstream_error", SEND_UNCONFIRMED, 502);
     const marked = await attemptedDraft(actor, draft.id);
     if (marked && (await settleEarlierSend(actor, marked, fetchImpl)) === "sent") return finishEarlierSend(actor, input, marked, ids, options);
-    throw new CrmError("conflict", MAYBE_SENT, 409);
+    throw maybeSent();
   };
   try {
     await deliver(row);

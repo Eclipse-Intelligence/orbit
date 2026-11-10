@@ -9,6 +9,7 @@ import {
   ALREADY_SENDING,
   ALREADY_SENT_WARNING,
   MAYBE_SENT,
+  SEND_FAILED,
   readDraftInput,
   saveMailDraft,
   scheduleMailDraft,
@@ -20,7 +21,9 @@ import {
 import { processDueMail, REMINDER_ATTEMPTS } from "@/lib/mail/due";
 import { GraphMailError, reconnectProblem, sendOutcomeUnknown } from "@/lib/mail/microsoft";
 import { attachmentBlock } from "@/lib/mail/send-ready";
-import { mailSourceToken, syncMail } from "@/lib/mail/sync";
+import { mailSourceToken, syncMail, SYNC_PAUSED, SYNC_RETRYING, syncProblems } from "@/lib/mail/sync";
+import { saveIdentity } from "@/lib/mail/identities";
+import { CrmError } from "@/lib/crm/errors";
 import { mailNav } from "@/lib/mail/threads";
 import { MicrosoftTokenError } from "@/lib/microsoft/oauth";
 import { listNotifications } from "@/lib/workflows/store";
@@ -46,9 +49,10 @@ import { createUser, resetDatabase } from "./helpers";
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const ORIGIN = "https://orbit.test";
 
-type SendMode = "ok" | "lost-answer" | "no-answer" | "gateway" | "vanished" | "sent-elsewhere" | "refused";
+type SendMode = "ok" | "lost-answer" | "no-answer" | "gateway" | "bad-gateway" | "vanished" | "sent-elsewhere" | "refused";
 type Call = { method: string; url: string };
-type Draft = { isDraft: boolean; internetMessageId: string; conversationId: string; subject: string };
+type Draft = { isDraft: boolean; internetMessageId: string; conversationId: string; subject: string; recipients: string[] };
+type Patch = { subject?: string; toRecipients?: { emailAddress: { address: string } }[]; ccRecipients?: { emailAddress: { address: string } }[]; bccRecipients?: { emailAddress: { address: string } }[] };
 
 function outlook(send: SendMode = "ok") {
   const calls: Call[] = [];
@@ -69,13 +73,15 @@ function outlook(send: SendMode = "ok") {
     if (method === "POST" && url === `${GRAPH}/me/messages`) {
       count += 1;
       const made = `draft-${randomUUID()}`;
-      drafts.set(made, { isDraft: true, internetMessageId: `<${made}@outlook.test>`, conversationId: `conv-${made}`, subject: "" });
+      drafts.set(made, { isDraft: true, internetMessageId: `<${made}@outlook.test>`, conversationId: `conv-${made}`, subject: "", recipients: [] });
       return Response.json({ id: made, conversationId: `conv-${made}`, subject: "" }, { status: 201 });
     }
     if (method === "PATCH" && id) {
       const draft = drafts.get(id);
       if (!draft) return notFound();
-      draft.subject = String((JSON.parse(String(init?.body ?? "{}")) as { subject?: string }).subject ?? "");
+      const patch = JSON.parse(String(init?.body ?? "{}")) as Patch;
+      draft.subject = String(patch.subject ?? "");
+      draft.recipients = [...(patch.toRecipients ?? []), ...(patch.ccRecipients ?? []), ...(patch.bccRecipients ?? [])].map((item) => item.emailAddress.address);
       return Response.json({ id });
     }
     if (method === "POST" && url.endsWith("/send")) {
@@ -90,6 +96,7 @@ function outlook(send: SendMode = "ok") {
       }
       if (send === "no-answer") throw new TypeError("fetch failed");
       if (send === "gateway") return new Response("<html>Gateway Timeout</html>", { status: 504 });
+      if (send === "bad-gateway") return new Response("<html>Bad Gateway</html>", { status: 502 });
       if (send === "vanished") {
         drafts.delete(id);
         return notFound();
@@ -99,6 +106,9 @@ function outlook(send: SendMode = "ok") {
         return notFound();
       }
       return Response.json({ error: { code: "ErrorInvalidRecipients", message: "At least one recipient isn't valid." } }, { status: 400 });
+    }
+    if (method === "GET" && id && url.endsWith("/$value")) {
+      return drafts.has(id) ? new Response(`Message-ID: <${id}@mime.test>\r\nFrom: Mark <mark@eclipse.test>\r\nTo: sam@acme.test\r\nSubject: Hello\r\n\r\nHi`) : notFound();
     }
     if (method === "GET" && id && url.includes("$select=internetMessageId")) {
       const draft = drafts.get(id);
@@ -114,7 +124,7 @@ function outlook(send: SendMode = "ok") {
     }
     if (method === "GET" && url.startsWith(`${GRAPH}/me/mailFolders/sentitems/messages?$filter=`)) {
       const wanted = decodeURIComponent(url).match(/conversationId eq '([^']+)'/)?.[1];
-      return Response.json({ value: sent.filter((item) => item.conversationId === wanted).map((item) => ({ id: item.internetMessageId, subject: item.subject, sentDateTime: item.sentDateTime, isDraft: false })) });
+      return Response.json({ value: sent.filter((item) => item.conversationId === wanted).map((item) => ({ id: item.internetMessageId, subject: item.subject, sentDateTime: item.sentDateTime, isDraft: false, toRecipients: item.recipients.map((address) => ({ emailAddress: { address } })) })) });
     }
     const named = url.match(/\/me\/mailFolders\/(inbox|sentitems|drafts|archive|deleteditems|junkemail|outbox)\?\$select=id$/);
     if (named) return Response.json({ id: `f-${named[1]}` });
@@ -180,6 +190,90 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     retry.sent.push(...box.sent);
     assert.equal((await sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: retry.fetchImpl })).warning, ALREADY_SENT_WARNING);
     assert.equal(retry.sends(), 0);
+  });
+
+  it("doesn't mistake an earlier reply in the same thread for this one", async () => {
+    const box = outlook("bad-gateway");
+    const { input, id } = await draftFor(box, "RE: Pricing");
+    await assert.rejects(() => sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl }), { message: SEND_UNCONFIRMED });
+    const [provider, draft] = [...box.drafts.entries()][0];
+    const earlier = { ...draft, isDraft: false, internetMessageId: "<reply-a@outlook.test>", sentDateTime: new Date(Date.now() - 60_000).toISOString() };
+
+    const retry = outlook("ok");
+    retry.drafts.set(provider, { ...draft });
+    retry.sent.push(earlier);
+    await assert.rejects(() => sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: retry.fetchImpl }), { message: MAYBE_SENT });
+    assert.ok(await draftRow(id));
+
+    await getAdminPool().query("update crm.mail_drafts set sent_internet_id = null where id = $1", [id]);
+    await assert.rejects(() => sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: retry.fetchImpl }), { message: MAYBE_SENT });
+    retry.sent.push({ ...earlier, sentDateTime: new Date(Date.now() + 1_000).toISOString(), recipients: ["someone@else.test"] });
+    await assert.rejects(() => sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: retry.fetchImpl }), { message: MAYBE_SENT });
+    assert.equal(retry.sends(), 0);
+
+    for (const item of retry.sent) item.sentDateTime = new Date(Date.now() - 6 * 60_000).toISOString();
+    await getAdminPool().query("update crm.mail_drafts set send_attempted_at = now() - interval '5 minutes' where id = $1", [id]);
+    assert.equal((await sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: retry.fetchImpl })).warning, null);
+    assert.equal(retry.sends(), 1);
+  });
+
+  it("offers Send anyway for a draft that vanished, and remakes it when forced", async () => {
+    const box = outlook("vanished");
+    const { input, id } = await draftFor(box, "Vanished, then forced");
+    const refused = await sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl }).then(
+      () => null,
+      (error: CrmError) => error,
+    );
+    assert.equal(refused?.status, 409);
+    assert.deepEqual(refused?.details, { maybeSent: true, draftId: id });
+    await assert.rejects(() => sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook("ok").fetchImpl }), { message: MAYBE_SENT });
+
+    const forced = outlook("ok");
+    assert.equal((await sendMailDraft(owner, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: forced.fetchImpl, force: true })).warning, null);
+    assert.equal(forced.created(), 1);
+    assert.equal(forced.sends(), 1);
+    assert.equal(await draftRow(id), null);
+  });
+
+  it("lets an unsure send from another address go again with Send anyway", async () => {
+    const identity = await saveIdentity(owner, { email: "mark@ridgeon.test", sourceId, password: "secret", provider: "neo", displayName: "Mark Ridgeon" }, { check: async () => undefined });
+    const box = outlook("ok");
+    const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "From the other address", body: "Hi", identityId: identity.id });
+    const draft = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    const sending = { ...input, id: draft.id };
+    const dropped = Object.assign(new Error("socket hang up"), { code: "ECONNRESET", command: "DATA" });
+    await assert.rejects(
+      () => sendMailDraft(owner, sending, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl, smtp: async () => Promise.reject(dropped), saveSent: async () => undefined }),
+      /didn't confirm the email was sent/,
+    );
+    assert.ok((await draftRow(draft.id))?.send_attempted_at);
+    await getAdminPool().query("update crm.mail_drafts set send_attempted_at = now() - interval '5 minutes' where id = $1", [draft.id]);
+    const smtpSends: string[] = [];
+    const smtp = async () => void smtpSends.push("sent");
+    await assert.rejects(() => sendMailDraft(owner, sending, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl, smtp, saveSent: async () => undefined }), { message: MAYBE_SENT });
+    assert.equal(smtpSends.length, 0);
+    await sendMailDraft(owner, sending, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl, smtp, saveSent: async () => undefined, force: true });
+    assert.equal(smtpSends.length, 1);
+    await getAdminPool().query("delete from crm.send_identities where id = $1", [identity.id]);
+  });
+
+  it("says plainly that an unmarked send didn't go, and names the draft", async () => {
+    const box = outlook("ok");
+    const { input, id } = await draftFor(box, "Broke before sending");
+    const failed = await sendMailDraft(owner, input, {
+      storedFiles: "keep",
+      origin: ORIGIN,
+      fetchImpl: box.fetchImpl,
+      onDraftRow: () => {
+        throw new Error("connection terminated");
+      },
+    }).then(
+      () => null,
+      (error: CrmError) => error,
+    );
+    assert.equal(failed?.message, SEND_FAILED);
+    assert.deepEqual(failed?.details, { draftId: id });
+    assert.equal(box.sends(), 0);
   });
 
   it("refuses to send again while it can't tell, then sends once the draft is clearly unsent", async () => {
@@ -353,8 +447,8 @@ describe("send readiness and the Mail cache", () => {
 
   it("blocks Send while an attachment is uploading or after one failed", () => {
     assert.equal(attachmentBlock([{ name: "deck.pdf", status: "ready" }]), null);
-    assert.equal(attachmentBlock([{ name: "deck.pdf", status: "uploading" }]), "Wait for deck.pdf to finish uploading.");
-    assert.equal(attachmentBlock([{ name: "a.pdf", status: "uploading" }, { name: "b.pdf", status: "uploading" }]), "Wait for 2 attachments to finish uploading.");
+    assert.equal(attachmentBlock([{ name: "deck.pdf", status: "uploading" }]), "Wait for deck.pdf to finish uploading, or remove it.");
+    assert.equal(attachmentBlock([{ name: "a.pdf", status: "uploading" }, { name: "b.pdf", status: "uploading" }]), "Wait for 2 attachments to finish uploading, or remove them.");
     assert.equal(attachmentBlock([{ name: "deck.pdf", status: "failed" }, { name: "b.pdf", status: "uploading" }]), "deck.pdf didn't upload. Remove it or attach it again to send.");
   });
 
@@ -414,9 +508,24 @@ describe("send readiness and the Mail cache", () => {
     assert.deepEqual(cachedThread("t-draft")?.drafts.map((draft) => draft.id), []);
     storeThread(detail);
     assert.deepEqual(cachedThread("t-draft")?.drafts.map((draft) => draft.id), []);
-    release();
-    await new Promise((done) => setImmediate(done));
-    storeThread(detail);
+    const asked: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      asked.push(String(url));
+      return Response.json(detail);
+    }) as typeof fetch;
+    await release();
+    assert.equal(cachedThread("t-draft"), null);
+    for (let wait = 0; wait < 10 && !cachedThread("t-draft"); wait += 1) await new Promise((done) => setImmediate(done));
+    assert.deepEqual(asked, ["/api/mail/thread?key=t-draft"]);
     assert.deepEqual(cachedThread("t-draft")?.drafts.map((draft) => draft.id), ["d-1", "d-2"]);
+  });
+
+  it("shows only plain sync problems, one per account that needs reconnecting", () => {
+    assert.deepEqual(syncProblems({ paused: true, errors: [], reconnect: [] }), [SYNC_PAUSED]);
+    assert.deepEqual(syncProblems({ paused: false, errors: ["a@x.test: Microsoft answered 500."], reconnect: [] }), [SYNC_RETRYING]);
+    const reconnect = ["Reconnect a@x.test in Settings › Email. Microsoft has signed Orbit out of it.", "Reconnect b@x.test in Settings › Email. Microsoft has signed Orbit out of it."];
+    assert.deepEqual(syncProblems({ paused: false, errors: [...reconnect, "c@x.test: fetch failed"], reconnect }), reconnect);
+    assert.deepEqual(syncProblems({ paused: false, errors: [], reconnect: [] }), []);
+    assert.equal(reconnectProblem(new Error("The sync state expired."), "a@x.test"), null);
   });
 });

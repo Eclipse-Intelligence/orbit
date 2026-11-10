@@ -33,6 +33,7 @@ import {
   noteDwellRead,
   postAction,
   prefetchThreads,
+  refreshFailure,
   refreshProblem,
   restoreToList,
   sameList,
@@ -320,14 +321,14 @@ export default function MailScreen({
     const target = latest.current.query;
     const token = request.current;
     setSyncing(true);
-    let problem: string | null = null;
+    let problems: string[] = [];
     (sync
       ? syncNow().then(
           (result) => {
-            problem = result.problem ?? null;
+            problems = result.problems ?? [];
           },
-          (error: Error) => {
-            problem = `Mail didn't sync. ${error.message}`;
+          (error: unknown) => {
+            problems = [refreshFailure(error)];
           },
         )
       : Promise.resolve()
@@ -355,13 +356,12 @@ export default function MailScreen({
           };
         });
       })
-      .catch((error: Error) => {
-        problem = problem ?? `Mail didn't refresh. ${error.message}`;
+      .catch((error: unknown) => {
+        if (problems.length === 0) problems = [refreshFailure(error)];
       })
       .finally(() => {
         setSyncing(false);
-        const shown = refreshProblem(problem);
-        if (shown) showToast({ message: shown, tone: "alert" });
+        if (refreshProblem(problems.length ? problems.join("\n") : null)) for (const message of problems) showToast({ message, tone: "alert" });
       });
   }
 

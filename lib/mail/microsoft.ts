@@ -86,7 +86,7 @@ export class GraphMailError extends Error {
 
 const SETTINGS = "Settings › Email";
 const ADMIN_CONSENT = /AADSTS(50020|700016|65001|90094|50194|90008|500011)\b|consent_required|admin (approval|consent)|need admin|unauthorized_client/i;
-const SIGNED_OUT = /invalid_grant|interaction_required|AADSTS(70008|50173|700082|50076|50079|50078|54005)\b|expired|revoked|rejected the mailbox connection/i;
+const SIGNED_OUT = /invalid_grant|interaction_required|AADSTS(70008|50173|700082|50076|50079|50078|54005)\b|token (has )?expired|expired (refresh |access )?token|token (was |has been )?revoked|rejected the mailbox connection/i;
 const UNREADABLE = /could not read the saved Microsoft connection/i;
 
 export function disconnectedMessage(email: string) {
@@ -402,33 +402,43 @@ export async function fetchDraftState(token: string, draftId: string, fetchImpl:
   }
 }
 
-const SENT_LOOKBACK_MS = 60_000;
-
 function sameSubject(left: string | null | undefined, right: string | null | undefined) {
   const clean = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
   return clean(left) === clean(right);
 }
 
+function sameRecipients(found: GraphRecipient[], wanted: string[]) {
+  const have = new Set(addresses(found).map((item) => item.address));
+  const want = new Set(wanted.map((item) => item.trim().toLowerCase()));
+  return want.size > 0 && have.size === want.size && [...want].every((item) => have.has(item));
+}
+
+type SentItem = Pick<GraphMessage, "id" | "subject" | "sentDateTime" | "isDraft" | "toRecipients" | "ccRecipients" | "bccRecipients">;
+
 export async function findSentCopy(
   token: string,
-  match: { internetMessageId: string | null; conversationId: string | null; subject: string | null; since: Date },
+  match: { internetMessageId: string | null; conversationId: string | null; subject: string | null; recipients: string[]; since: Date },
   fetchImpl: typeof fetch = fetch,
 ) {
   if (match.internetMessageId) {
     const filter = encodeURIComponent(`internetMessageId eq '${match.internetMessageId.replace(/'/g, "''")}'`);
     const page = await graphJson<{ value?: { id: string; isDraft?: boolean }[] }>(`${GRAPH}/me/messages?$filter=${filter}&$select=id,isDraft&$top=10`, token, fetchImpl);
-    if ((page.value ?? []).some((message) => message.isDraft === false)) return true;
+    return (page.value ?? []).some((message) => message.isDraft === false);
   }
   if (!match.conversationId) return false;
   const filter = encodeURIComponent(`conversationId eq '${match.conversationId.replace(/'/g, "''")}'`);
-  const page = await graphJson<{ value?: { id: string; subject?: string | null; sentDateTime?: string | null; isDraft?: boolean }[] }>(
-    `${GRAPH}/me/mailFolders/sentitems/messages?$filter=${filter}&$select=id,subject,sentDateTime,isDraft&$top=50`,
+  const page = await graphJson<{ value?: SentItem[] }>(
+    `${GRAPH}/me/mailFolders/sentitems/messages?$filter=${filter}&$select=id,subject,sentDateTime,isDraft,toRecipients,ccRecipients,bccRecipients&$top=50`,
     token,
     fetchImpl,
   );
-  const since = match.since.getTime() - SENT_LOOKBACK_MS;
+  const since = Math.floor(match.since.getTime() / 1000) * 1000;
   return (page.value ?? []).some(
-    (message) => message.isDraft !== true && sameSubject(message.subject, match.subject) && new Date(message.sentDateTime ?? 0).getTime() >= since,
+    (message) =>
+      message.isDraft !== true &&
+      sameSubject(message.subject, match.subject) &&
+      new Date(message.sentDateTime ?? 0).getTime() >= since &&
+      sameRecipients([...(message.toRecipients ?? []), ...(message.ccRecipients ?? []), ...(message.bccRecipients ?? [])], match.recipients),
   );
 }
 

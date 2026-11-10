@@ -517,6 +517,7 @@ export default function ThreadReader({
   const [draftError, setDraftError] = useState<string | null>(null);
   const [hiddenPrepared, setHiddenPrepared] = useState<Set<string>>(() => new Set());
   const [cancelledFollowUp, setCancelledFollowUp] = useState<string | null>(null);
+  const [reminderError, setReminderError] = useState<string | null>(null);
   const [invite, setInvite] = useState<{ prefill: InvitePrefill; setup: InviteSetup; at: number } | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -560,7 +561,7 @@ export default function ThreadReader({
   });
   const followUp = detail?.followUp && detail.followUp.id !== cancelledFollowUp ? detail.followUp : null;
 
-  async function preparedAction(id: string, action: "use" | "dismiss" | "cancel_reminder") {
+  async function preparedAction(id: string, action: "use" | "dismiss") {
     const response = await fetch("/api/mail/prepared", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -967,16 +968,21 @@ export default function ThreadReader({
                         onClick={() => {
                           const id = followUp.id;
                           setCancelledFollowUp(id);
-                          setNotice(null);
+                          setReminderError(null);
                           cancelReminder(id).catch((problem: Error) => {
                             setCancelledFollowUp((current) => (current === id ? null : current));
-                            setNotice(problem.message);
+                            setReminderError(problem.message);
                           });
                         }}
                       >
                         Don&apos;t remind me
                       </Button>
                     </div>
+                  )}
+                  {reminderError && (
+                    <p role="alert" className="caption-style text-danger px-4">
+                      {reminderError}
+                    </p>
                   )}
                   </>
                 )

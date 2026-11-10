@@ -6,7 +6,7 @@ import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/
 import BodyEditor, { type BodyEditorHandle } from "@/components/mail/body-editor";
 import { useComposer } from "@/components/mail/compose-dock";
 import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from "@/components/mail/follow-up-composer";
-import { holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi } from "@/components/mail/mail-cache";
+import { holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { useShortcutHint, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
@@ -43,7 +43,10 @@ export type SendPayload = {
   replaces?: string | null;
   identityId?: string | null;
   sendKey?: string | null;
+  force?: boolean;
 };
+
+export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null };
 
 export type ComposerStart = {
   mode: DraftMode;
@@ -52,7 +55,7 @@ export type ComposerStart = {
   to: MailAddress[];
   cc: MailAddress[];
   subject: string;
-  draft: MailDraft | null;
+  draft: ComposerDraft | null;
   replaces?: string | null;
   fromId?: string | null;
 };
@@ -133,7 +136,9 @@ export default function MailComposer({
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
   const discarded = useRef(false);
-  const sendKey = useRef<string | null>(null);
+  const sendKey = useRef<string | null>(draft?.sendKey ?? null);
+  const queued = useRef(false);
+  const [sendProblem, setSendProblem] = useState(draft?.sendProblem ?? null);
   const editor = useRef<BodyEditorHandle>(null);
   const [formats, setFormats] = useState({ bold: false, italic: false });
   const payload = useRef({
@@ -301,23 +306,25 @@ export default function MailComposer({
     return true;
   }
 
-  function handOver(): Promise<SendPayload> {
+  function handOver(force = false): Promise<SendPayload> {
     const snapshot = { ...payload.current, attachments: attachments.ids, files: attachments.files };
     dirty.current = false;
     const pending = chain.current.catch(() => null);
-    return pending.then(() => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current }));
+    return pending.then(() => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current, ...(force ? { force } : {}) }));
   }
 
-  function send(event?: FormEvent) {
+  function send(event?: FormEvent, force = false) {
     event?.preventDefault();
-    if (sendKey.current || !ready()) return;
-    sendKey.current = newSendKey();
-    const handed = handOver();
+    if (queued.current || !ready()) return;
+    queued.current = true;
+    sendKey.current ??= newSendKey();
+    const handed = handOver(force);
     const release = holdQueuedDraft(draftId.current, handed);
     queueSend(handed, {
       onDelivered,
+      onReleased: () => void release(),
       onUndone: () => {
-        release();
+        void release();
         onUndone?.();
       },
     });
@@ -349,7 +356,8 @@ export default function MailComposer({
     try {
       await unscheduleDraft(current);
     } catch (problem) {
-      setScheduledFor(previous);
+      const status = (problem as MailRequestError).status;
+      if (status !== 404 && status !== 409) setScheduledFor(previous);
       setError(problem instanceof Error ? problem.message : "Orbit couldn't unschedule the email. Try again.");
     }
   }
@@ -593,10 +601,26 @@ export default function MailComposer({
           {error}
         </p>
       )}
-      {!error && attachments.blocked && (
+      {attachments.blocked && (
         <p id={`${id}-send-blocked`} role="status" className="caption-style text-subtle">
           {attachments.blocked}
         </p>
+      )}
+      {sendProblem && (
+        <div role="alert" className="caption-style text-danger flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>{sendProblem}</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={Boolean(attachments.blocked)}
+            onClick={() => {
+              setSendProblem(null);
+              send(undefined, true);
+            }}
+          >
+            Send anyway
+          </Button>
+        </div>
       )}
       <div className="flex items-center gap-1 pt-2">
         <Button
@@ -605,7 +629,7 @@ export default function MailComposer({
           data-shortcut-submit
           title={`Send (${sendHint})`}
           disabled={Boolean(attachments.blocked)}
-          aria-describedby={!error && attachments.blocked ? `${id}-send-blocked` : undefined}
+          aria-describedby={attachments.blocked ? `${id}-send-blocked` : undefined}
         >
           {scheduledFor ? "Send now" : "Send"}
         </Button>
