@@ -132,7 +132,7 @@ export function FollowUpBlock({ days, body, onBody, onRemove }: { days: number; 
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="text-foreground flex min-w-[13rem] flex-1 items-center gap-2 py-1.5 text-[13px] leading-5">
           <FollowUpIcon aria-hidden className="text-primary-foreground size-3.5 shrink-0" />
-          Follow-up in {when} if no reply
+          Follow-up sent in {when} if no reply
         </span>
         <span className="flex items-center gap-1 max-sm:-ml-2">
           {!expanded && (

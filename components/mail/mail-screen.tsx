@@ -1352,7 +1352,7 @@ export default function MailScreen({
             </div>
             {query.query && (
               <p role="status" className="caption-style text-subtle px-1">
-                {loading && threads.length === 0 ? "Searching…" : `Results for “${query.query}” in all folders`}
+                {loading && threads.length === 0 ? "Searching…" : `Results for “${query.query}” in all folders${query.account ? ` of ${accountLabel}` : ""}`}
               </p>
             )}
           </div>

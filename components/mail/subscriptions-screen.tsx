@@ -283,7 +283,7 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
             })}
           </nav>
           {shown.length === 0 ? (
-            <p className="text-subtle px-4 py-12 text-center">{senders.length === 0 ? "No subscriptions" : "Nothing here."}</p>
+            <p className="text-subtle px-4 py-12 text-center">No subscriptions</p>
           ) : (
             <ul className="divide-border flex flex-col divide-y">
               {shown.map((sender) => (
@@ -317,7 +317,7 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
         open={confirmBulk}
         onOpenChange={setConfirmBulk}
         title={`Unsubscribe from ${plural(unopened.length, "sender", "senders")}?`}
-        description={`Not opened in ${days} days. Their existing mail is archived.`}
+        description={`Not opened in ${days} days. Their existing mail is archived. Contacts and companies you work with are left out.`}
         confirmLabel="Unsubscribe"
         tone="neutral"
         onConfirm={runBulk}

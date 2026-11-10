@@ -164,7 +164,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
                 {busy === "save" ? "Saving…" : "Save"}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setEditing(null)} disabled={busy !== null}>
-                Discard
+                Discard changes
               </Button>
             </>
           ) : (

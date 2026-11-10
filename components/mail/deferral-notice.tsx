@@ -40,6 +40,7 @@ export default function DeferralNotice({ deferral }: { deferral: DeferredFollowU
     const now = Date.now();
     pickLater({
       title: "Change date",
+      description: "The task moves too.",
       options: deferral.options.filter((option) => new Date(option.at).getTime() > now),
       now,
       onPick: (picked) => {
@@ -83,7 +84,7 @@ export default function DeferralNotice({ deferral }: { deferral: DeferredFollowU
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1 rounded-xl bg-white/[0.035] py-1 pr-1 pl-3">
         <p role="status" className="text-soft mr-auto flex min-w-0 items-center gap-2 py-1.5 text-[13px] leading-5">
           <ClockIcon aria-hidden className="text-primary-foreground size-3.5 shrink-0" />
-          Follow-up draft on {dayLabel(at)}
+          Follow-up draft on {dayLabel(at)} if no reply
         </p>
         <span className="flex items-center gap-1 max-sm:-ml-2">
           <Button variant="ghost" size="sm" disabled={busy} onClick={changeDate}>

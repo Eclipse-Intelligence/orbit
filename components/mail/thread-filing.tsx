@@ -42,7 +42,7 @@ export default function ThreadFilingMenu({
   threadKey: string;
   filing: ThreadFiling;
   onChange: (filing: ThreadFiling) => void;
-  onMessage: (message: { text: string; error: boolean } | null) => void;
+  onMessage: (message: { text: string; error: boolean; quiet?: boolean } | null) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const filed = filing.workspaces.filter((item) => filing.filedIn.includes(item.id));
@@ -68,7 +68,7 @@ export default function ThreadFilingMenu({
     const chosen = names(filing.workspaces.filter((item) => ids.includes(item.id)));
     const kept = result.kept?.length ? ` Earlier emails stay in ${result.kept.join(" and ")}.` : "";
     if (rule) onMessage({ text: `@${filing.domain} now files in ${chosen}.${kept}`, error: false });
-    else if (kept) onMessage({ text: kept.trim(), error: false });
+    else onMessage(kept ? { text: kept.trim(), error: false } : { text: `Filed in ${chosen}.`, error: false, quiet: true });
   }
 
   return (

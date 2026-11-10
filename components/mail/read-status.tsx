@@ -6,8 +6,7 @@ import { afterSending, mailFullWhen, personName } from "@/lib/mail/format";
 import type { MailAddress } from "@/lib/mail/types";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
 
-function readLabel(opens: { at: string }[], recipients: MailAddress[]) {
-  if (opens.length === 0) return "Unread";
+function readLabel(recipients: MailAddress[]) {
   return recipients.length === 1 ? `Read by ${personName(recipients[0])}` : "Read";
 }
 
@@ -52,7 +51,7 @@ export default function ReadStatus({
           className="ease-power3-out text-status inline-flex cursor-pointer items-center gap-1.5 rounded-sm text-[13px] transition-colors duration-150 outline-none hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <EyeIcon aria-hidden className="size-3.5" />
-          {readLabel(opens, recipients)}
+          {readLabel(recipients)}
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[18rem] p-1" onMouseEnter={show} onMouseLeave={hide}>

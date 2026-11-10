@@ -511,7 +511,7 @@ function SenderNotice({
 }) {
   const line =
     subscription.status === "ignored"
-      ? `Ignored your unsubscribe on ${shortDay(subscription.unsubscribedAt)}. Their mail is archived.`
+      ? `Unsubscribe ignored on ${shortDay(subscription.unsubscribedAt)}. Their mail is archived.`
       : subscription.status === "blocked"
         ? "Blocked. Their mail is archived."
         : subscription.status === "research"
@@ -1141,7 +1141,7 @@ export default function ThreadReader({
                   {followUp && followUp.action !== "send" && (
                     <div role="status" className="caption-style text-subtle flex flex-wrap items-center gap-x-2 px-4">
                       <span>
-                        Reminder {mailFullWhen(followUp.at)} if no reply.
+                        Reminder {mailFullWhen(followUp.at)} if no reply
                       </span>
                       <Button
                         variant="ghost"

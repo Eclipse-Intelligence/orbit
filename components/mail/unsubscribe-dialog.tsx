@@ -58,7 +58,10 @@ export function unsubscribeToast(done: UnsubscribeDone): { message: string; tone
     case "unsubscribed":
       return { message: `Unsubscribed${blocked} from ${who}.${moved}${failedMove}`, tone };
     case "requested":
-      return { message: `Unsubscribe requested from ${who}${blocked}.${moved}${failedMove}`, tone };
+      return {
+        message: done.result.method === "mailto" ? `Unsubscribe email sent to ${who}${blocked}.${moved}${failedMove}` : `Unsubscribe requested from ${who}${blocked}.${moved}${failedMove}`,
+        tone,
+      };
     case "needs_you":
       return { message: `Needs you: finish on ${who}'s page.${moved}${failedMove}`, tone, url: done.opened ? null : done.result.url };
     case "none":
@@ -74,7 +77,7 @@ function describe(preview: UnsubscribePreview, mode: UnsubscribeMode) {
   const block = mode === "both" ? " Their new mail is archived." : "";
   switch (preview.method) {
     case "one_click":
-      return block.trim();
+      return preview.mailto ? `If that fails, sends an unsubscribe email from ${preview.account}.${block}` : block.trim();
     case "mailto":
       return `Sends an unsubscribe email from ${preview.account}.${block}`;
     case "page":
@@ -93,9 +96,8 @@ function primaryLabel(preview: UnsubscribePreview | null, mode: UnsubscribeMode)
   const anyway = preview?.protection ? " anyway" : "";
   if (blockOnly(preview, mode)) return `Block${anyway}`;
   if (mode === "both") return `Unsubscribe and block${anyway}`;
-  if (anyway) return "Unsubscribe anyway";
-  if (preview?.method === "page") return "Open their page";
-  return "Unsubscribe";
+  if (preview?.method === "page") return `Open their page${anyway}`;
+  return `Unsubscribe${anyway}`;
 }
 
 export default function UnsubscribeDialog({
@@ -207,7 +209,7 @@ export default function UnsubscribeDialog({
   return (
     <Dialog open onOpenChange={(next) => !next && close()}>
       <DialogContent
-        {...(description ? {} : { "aria-describedby": undefined })}
+        {...(description || warning ? {} : { "aria-describedby": undefined })}
         aria-busy={busy || (!preview && !error)}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
@@ -223,8 +225,12 @@ export default function UnsubscribeDialog({
         <form ref={formRef} tabIndex={-1} onSubmit={submit} className="outline-none">
           <DialogHeader className="pr-12">
             <DialogTitle className="break-words">{title}</DialogTitle>
-            {description && <DialogDescription>{description}</DialogDescription>}
-            {warning && (
+            {description ? (
+              <DialogDescription>{description}</DialogDescription>
+            ) : (
+              warning && <DialogDescription className="text-warning">{warning}</DialogDescription>
+            )}
+            {description && warning && (
               <p role="status" className="caption-style text-warning">
                 {warning}
               </p>

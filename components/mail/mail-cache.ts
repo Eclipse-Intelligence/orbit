@@ -44,7 +44,6 @@ export function statusProblem(status: number) {
   return `Server error (${status}). Try again.`;
 }
 
-
 export type MailRequestError = Error & { status?: number };
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {

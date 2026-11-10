@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AttachmentDownload, AttachmentLink } from "@/components/_common/attachment-viewer";
 import Button from "@/components/_ui/button";
 import { cachedAttachments, loadAttachments } from "@/components/mail/mail-cache";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { addAttachmentToKnowledgeAction } from "@/app/(crm)/knowledge";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import BookIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
@@ -99,6 +99,7 @@ export default function MessageAttachments({ messageId, companies = [], workspac
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel className="caption-style text-subtle px-2 py-1.5 font-normal">Add to Knowledge</DropdownMenuLabel>
                     {companies.map((company) => (
                       <DropdownMenuItem key={company.id} onSelect={() => void addToKnowledge(item, { companyId: company.id }, company.name)}>
                         <span className="truncate">{company.name}</span>

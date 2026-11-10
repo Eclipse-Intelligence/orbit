@@ -510,7 +510,7 @@ export default function MailComposer({
     >
       <div data-composer-scroll="" className={card ? "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-4 pt-1" : "contents"}>
       {!card && (
-        <div className="flex items-center justify-between gap-3 pb-1">
+        <div className={fromChoices.length > 1 && !status ? "sr-only" : "flex items-center justify-between gap-3 pb-1"}>
           {fromChoices.length <= 1 && (
             <span className="caption-style text-subtle">
               {MODE_LABEL[start.mode]} from {account?.email ?? "your mailbox"}
