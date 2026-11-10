@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import Asset from "@/components/_ui/asset";
 import Button from "@/components/_ui/button";
@@ -13,7 +13,6 @@ import CompanyActivity from "@/components/companies/detail/company-activity";
 import CompanyEditor from "@/components/companies/detail/company-editor";
 import DetailSection from "@/components/companies/detail/detail-section";
 import RelationshipPanel from "@/components/companies/detail/relationship-panel";
-import { useListHref } from "@/components/crm/list-memory";
 import MeetingsCard from "@/components/crm/meetings-card";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
 import MergeRecordMenu from "@/components/crm/merge-record";
@@ -34,6 +33,7 @@ import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import { archiveCompanyAction, patchCompanyAction, setCompanyLifecycleAction } from "@/app/(crm)/actions";
+import { unarchiveCompaniesAction } from "@/app/(crm)/bulk";
 import InlineField from "@/components/crm/inline-field";
 import ExternalIcon from "@/public/assets/images/booking/external.svg";
 import { formatDate, lifecycleLabel } from "@/lib/companies";
@@ -106,11 +106,11 @@ export default function CompanyRecord({
   moveTargets?: WorkspaceRef[];
 }) {
   const router = useRouter();
-  const listHref = useListHref("companies");
   const [editing, setEditing] = useState(false);
   const [fresh, setFresh] = useState<Company | null>(null);
-  const archiveHold = useRef<HTMLSpanElement>(null);
   const [archiving, setArchiving] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [archiveState, setArchiveState] = useState<{ id: string; archived: boolean } | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const company =
@@ -118,7 +118,9 @@ export default function CompanyRecord({
       ? fresh
       : context.company;
   useQuickAddRecord({ type: "company", id: company.id, name: company.name });
-  useShortcut("record-archive", () => archiveHold.current?.querySelector("button")?.focus(), !company.archivedAt && !editing);
+  const archived = archiveState?.id === company.id ? archiveState.archived : Boolean(company.archivedAt);
+  const undoable = archiveState?.id === company.id && archiveState.archived;
+  useShortcut("record-archive", () => void archive(), !archived && !editing && !archiving);
 
   async function patch(input: CompanyWrite) {
     const result = await patchCompanyAction(company.id, input);
@@ -146,15 +148,32 @@ export default function CompanyRecord({
   }
 
   async function archive() {
+    if (archiving) return;
     setArchiveError(null);
     setArchiving(true);
-    const result = await archiveCompanyAction(company.id);
+    const result = await archiveCompanyAction(company.id).catch(() => ({ error: "Couldn't archive. Try again." }));
+    setArchiving(false);
     if (result.error) {
-      setArchiving(false);
       setArchiveError(result.error);
       return;
     }
-    router.push(listHref);
+    setArchiveState({ id: company.id, archived: true });
+    router.refresh();
+  }
+
+  async function restore() {
+    if (restoring) return;
+    setArchiveError(null);
+    setRestoring(true);
+    const result = await unarchiveCompaniesAction([company.id]).catch(() => ({ error: "Couldn't restore. Try again." }));
+    setRestoring(false);
+    const failure = "error" in result ? result.error : result.results.flatMap((item) => (item.ok ? [] : [item.error]))[0];
+    if (failure) {
+      setArchiveError(failure);
+      return;
+    }
+    setArchiveState({ id: company.id, archived: false });
+    router.refresh();
   }
 
   return (
@@ -166,14 +185,27 @@ export default function CompanyRecord({
         list="companies"
         action={
           <div className="flex items-center gap-1">
-            {!company.archivedAt && <RunWorkflowButton object="company" recordId={company.id} workflows={workflows} />}
-            {!company.archivedAt && <MergeRecordMenu kind="company" id={company.id} name={company.name} moveTargets={moveTargets} workspaceName={viewer.workspaceName} />}
-            {!company.archivedAt && (
-              <span ref={archiveHold} className="contents">
-                <HoldButton tone="neutral" disabled={editing || archiving} onConfirm={() => void archive()}>
-                  {archiving ? "Archiving…" : "Hold to archive"}
-                </HoldButton>
-              </span>
+            {!archived && <RunWorkflowButton object="company" recordId={company.id} workflows={workflows} />}
+            {!archived && <MergeRecordMenu kind="company" id={company.id} name={company.name} moveTargets={moveTargets} workspaceName={viewer.workspaceName} />}
+            {!archived && (
+              <HoldButton tone="neutral" disabled={editing || archiving} onConfirm={() => void archive()}>
+                {archiving ? "Archiving…" : "Hold to archive"}
+              </HoldButton>
+            )}
+            {archived && undoable && (
+              <>
+                <span role="status" className="ui-style text-subtle px-1">
+                  Archived
+                </span>
+                <Button variant="secondary" size="sm" disabled={restoring} data-shortcut="bulk-undo" title="Undo (Z)" onClick={() => void restore()}>
+                  {restoring ? "Restoring…" : "Undo"}
+                </Button>
+              </>
+            )}
+            {archived && !undoable && (
+              <Button variant="secondary" size="sm" disabled={restoring} onClick={() => void restore()}>
+                {restoring ? "Restoring…" : "Restore"}
+              </Button>
             )}
             {!editing && (
               <Button

@@ -125,7 +125,7 @@ export default function ActionsScreen({
       {view === "none" ? (
         <RecordList
           count={companies.length}
-          empty="No companies"
+          empty="No companies without tasks"
         >
           {companies.map((company) => (
             <RecordRow

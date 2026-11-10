@@ -370,7 +370,7 @@ export default function ContactRecord({
               className="shadow-[inset_0_1px_0_var(--line-strong)]"
             >
               {tasks.length === 0 ? (
-                <p className="caption-style text-subtle">No open tasks.</p>
+                <p className="caption-style text-subtle">No tasks</p>
               ) : (
                 <ul className="flex flex-col gap-3">
                   {tasks.map((task) => (

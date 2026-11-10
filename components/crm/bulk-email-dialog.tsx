@@ -201,7 +201,7 @@ export default function BulkEmailDialog({
         <div className="flex flex-col gap-4 px-6 py-5">
           {tooMany && (
             <p role="alert" className="caption-style text-danger">
-              Select {BULK_EMAIL_LIMIT} people or fewer.
+              Select {BULK_EMAIL_LIMIT} people or fewer. Send the rest in another batch.
             </p>
           )}
           {sendable.length === 0 && (

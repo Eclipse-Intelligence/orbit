@@ -43,7 +43,7 @@ export function bulkFindSummary(results: ContactEnrichment[], field: ContactFiel
   const failed = results.filter((result) => result.status === "failed");
   const searched = results.length - skipped;
   const parts = [`Found ${found} of ${searched} ${PLURALS[field][searched === 1 ? 0 : 1]}`];
-  if (skipped > 0) parts.push(`${skipped} skipped`);
+  if (skipped > 0) parts.push(`${skipped} skipped (already filled in or missing a name or company)`);
   if (failed.length > 0) parts.push(`${failed.length} couldn't be searched: ${failed[0].message}`);
   return { message: parts.join(". "), tone: failed.length > 0 && found === 0 ? ("error" as const) : ("status" as const) };
 }
@@ -73,7 +73,7 @@ export default function FindDetailButton({
   const status = outcome?.status ?? lookup?.status ?? null;
   const missing = status === "not_found";
   const failed = status === "failed" || status === "skipped";
-  const title = outcome?.title ?? (missing ? "Search again" : `Find ${noun}`);
+  const title = outcome?.title ?? (missing ? `Search for ${noun} again` : `Find ${noun}`);
 
   async function run(event: React.MouseEvent) {
     event.preventDefault();

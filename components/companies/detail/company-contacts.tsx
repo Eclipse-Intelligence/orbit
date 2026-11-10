@@ -58,16 +58,34 @@ export default function CompanyContacts({
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [removed, setRemoved] = useState<{ id: string; name: string } | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
-  async function remove(contactId: string) {
+  async function remove(contact: Contact) {
     setError(null);
-    setRemoving(contactId);
-    const result = await unlinkCompanyContactAction(companyId, contactId);
+    setRemoved(null);
+    setRemoving(contact.id);
+    const result = await unlinkCompanyContactAction(companyId, contact.id);
     setRemoving(null);
     if (result.error) {
       setError(result.error);
       return;
     }
+    setRemoved({ id: contact.id, name: contact.name });
+    router.refresh();
+  }
+
+  async function undoRemove() {
+    if (!removed || restoring) return;
+    setError(null);
+    setRestoring(true);
+    const result = await linkCompanyContactAction(companyId, removed.id);
+    setRestoring(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setRemoved(null);
     router.refresh();
   }
 
@@ -81,7 +99,10 @@ export default function CompanyContacts({
           aria-expanded={adding}
           data-shortcut="add-person"
           title="Add contact (A)"
-          onClick={() => setAdding((current) => !current)}
+          onClick={() => {
+            setRemoved(null);
+            setAdding((current) => !current);
+          }}
         >
           {adding ? "Close" : "Add contact"}
         </Button>
@@ -101,6 +122,16 @@ export default function CompanyContacts({
           {error}
         </p>
       )}
+      {removed && (
+        <div className="flex items-center justify-between gap-3">
+          <p role="status" className="caption-style text-soft min-w-0 [overflow-wrap:anywhere]">
+            Removed {removed.name}
+          </p>
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={restoring} onClick={() => void undoRemove()}>
+            {restoring ? "Restoring…" : "Undo"}
+          </Button>
+        </div>
+      )}
       {contacts.length === 0 ? (
         <p className="caption-style text-subtle">No contacts</p>
       ) : (
@@ -116,7 +147,7 @@ export default function CompanyContacts({
                     {contact.name}
                   </Link>
                   {contact.email || !findEmail ? (
-                    <span className="caption-style text-subtle">
+                    <span className="caption-style text-subtle [overflow-wrap:anywhere]">
                       {[contact.jobTitle, contact.email]
                         .filter(Boolean)
                         .join(" · ") || "No email"}
@@ -134,7 +165,7 @@ export default function CompanyContacts({
                     </span>
                   )}
                 </div>
-                <HoldButton className="shrink-0" disabled={removing !== null} onConfirm={() => void remove(contact.id)}>
+                <HoldButton className="shrink-0" disabled={removing !== null} onConfirm={() => void remove(contact)}>
                   {removing === contact.id ? (
                     "Removing…"
                   ) : (
@@ -278,7 +309,7 @@ function ContactPicker({
             disabled={pending !== null}
             onClick={create}
           >
-            {pending === "create" ? "Creating…" : "Create"}
+            {pending === "create" ? "Adding…" : "Add contact"}
           </Button>
           <Button
             variant="ghost"

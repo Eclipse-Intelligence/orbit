@@ -97,7 +97,7 @@ export default function MeetingsCard({
             href="/api/microsoft/connect"
             className={buttonVariants({ variant: "secondary", size: "sm" })}
           >
-            Reconnect Microsoft
+            Reconnect Microsoft to see meetings
           </a>
         </p>
       )}

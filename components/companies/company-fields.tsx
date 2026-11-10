@@ -99,9 +99,7 @@ export default function CompanyFields({
             placeholder="acme.com"
             autoComplete="off"
             aria-invalid={errors?.domain ? true : undefined}
-            aria-describedby={
-              errors?.domain ? `${idPrefix}-domain-error` : `${idPrefix}-domain-hint`
-            }
+            aria-describedby={errors?.domain ? `${idPrefix}-domain-error` : undefined}
             className="aria-invalid:border-danger"
           />
         </Field>

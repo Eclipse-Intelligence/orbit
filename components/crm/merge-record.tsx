@@ -64,11 +64,6 @@ export default function MergeRecordMenu({
 
   return (
     <>
-      {busy && (
-        <span role="status" className="ui-style whitespace-nowrap text-subtle">
-          Merging…
-        </span>
-      )}
       {notice && (
         <span role="status" className="ui-style max-w-[16em] truncate text-subtle">
           {notice}
@@ -84,6 +79,7 @@ export default function MergeRecordMenu({
           <DropdownMenuItem
             onSelect={() => {
               setError(null);
+              setTarget(null);
               setPicking(true);
             }}
           >
@@ -110,7 +106,7 @@ export default function MergeRecordMenu({
           <div className="flex flex-col gap-2 px-6 py-5">
             <Label htmlFor={pickerId}>Keep</Label>
             <RecordPicker id={pickerId} kind={kind} value={target} onChange={setTarget} placeholder={CHOOSE[kind]} excludeId={id} />
-            {target && <p className="caption-style text-soft">Everything on {name} moves to {target.name}.</p>}
+            {target && <p className="caption-style text-soft">Everything on {name} moves to {target.name}. Details {target.name} already has are kept.</p>}
             {error && (
               <p role="alert" className="caption-style text-danger">
                 {error}

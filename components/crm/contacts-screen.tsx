@@ -121,7 +121,7 @@ export default function ContactsScreen({
         ? {
             confirm: (ids: string[]) => ({
               title: `Find phone numbers for ${ids.length} ${ids.length === 1 ? "contact" : "contacts"}?`,
-              description: `Enrow charges 40 credits per number found (about $0.35 to $0.68), so up to ${ids.length * 40} credits.`,
+              description: `Enrow charges 40 credits per number found (about $0.35 to $0.68), so up to ${ids.length * 40} credits. Nothing is charged when no number is found, and contacts who already have a phone are skipped.`,
               action: "Find phones",
             }),
           }

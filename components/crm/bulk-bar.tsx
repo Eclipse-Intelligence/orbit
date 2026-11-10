@@ -175,7 +175,7 @@ export default function BulkActions({
   const ids = selection.selectedIds;
 
   useEffect(() => {
-    if (!notice || notice.tone === "error") return;
+    if (!notice || notice.tone === "error" || notice.undo) return;
     const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
     return () => window.clearTimeout(timer);
   }, [notice]);
