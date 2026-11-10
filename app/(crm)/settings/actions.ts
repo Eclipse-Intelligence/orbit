@@ -381,7 +381,7 @@ export async function removeGranolaKeyAction(): Promise<{ error?: string }> {
 export async function connectLinearAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
-    await connectLinear(user);
+    await connectLinear(user, { operation: "connect_linear", source: "web" });
     revalidatePath(SETTINGS_PATHS.tools);
     return {};
   } catch (error) {
@@ -392,7 +392,7 @@ export async function connectLinearAction(): Promise<{ error?: string }> {
 export async function disconnectLinearAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
-    await disconnectLinear(user);
+    await disconnectLinear(user, { operation: "disconnect_linear", source: "web" });
     revalidatePath(SETTINGS_PATHS.tools);
     return {};
   } catch (error) {

@@ -45,10 +45,16 @@ async function joinAs(email: string, name: string, workspace: UserActor, role: "
   return { ...person, workspaceId: workspace.workspaceId, workspaceName: workspace.workspaceName, role, scopes: scopesForRole(role) };
 }
 
+const ECLIPSE_CLIENTS = [{ id: 1, name: "Eclipse" }, { id: 2, name: "Mark Ridgeon" }];
+
 function gateway() {
   const requests: Record<string, unknown>[] = [];
-  const fetchImpl = (async (_url: string, init?: RequestInit) => {
-    requests.push(JSON.parse(String(init?.body)));
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    if (String(url).includes("geteclipse")) {
+      return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify({ clients: ECLIPSE_CLIENTS }) }] } });
+    }
+    requests.push(body);
     return Response.json({ model: "claude-sonnet-5-5", choices: [{ message: { role: "assistant", content: "Done." } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   }) as typeof fetch;
   return { fetchImpl, requests };
@@ -210,14 +216,11 @@ describe("brand profile permissions", () => {
 
 describe("assistant in each workspace", () => {
   it("gives the Eclipse workspace its own context, and both workspaces the Eclipse app tools with their own client", async () => {
-    const original = globalThis.fetch;
     process.env.ECLIPSE_MCP_TOKEN = "ecl_pat_test";
     clearEclipseToolCache();
-    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      const clients = [{ id: 1, name: "Eclipse" }, { id: 2, name: "Mark Ridgeon" }];
-      return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify({ clients }) }] } });
-    }) as typeof fetch;
+    const pool = getAdminPool();
+    await pool.query("update crm.workspace_brands set eclipse_client_id = '1' where workspace_id = $1", [eclipse.workspaceId]);
+    await pool.query("insert into crm.workspace_brands (workspace_id, eclipse_client_id) values ($1, '2') on conflict (workspace_id) do update set eclipse_client_id = '2'", [ridgeon.workspaceId]);
     try {
       const seeded = await turn(eclipse);
       assert.match(seeded.system, /the CRM Eclipse uses for its own sales and relationships/);
@@ -244,7 +247,6 @@ describe("assistant in each workspace", () => {
       assert.match(empty.system, /Always read cold_email_playbook first/);
       assert.ok(empty.tools.includes("cold_email_playbook"));
     } finally {
-      globalThis.fetch = original;
       delete process.env.ECLIPSE_MCP_TOKEN;
       clearEclipseToolCache();
     }

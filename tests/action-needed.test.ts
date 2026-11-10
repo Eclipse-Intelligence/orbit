@@ -545,8 +545,8 @@ describe("Capture after review", () => {
 
   before(async () => {
     mark = await createUser("mark@eclipse-review.test", "Mark Ridgeon");
-    const created = await createWorkspace(mark, { name: "Mark Ridgeon" });
-    personal = { ...mark, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
+    const created = await createWorkspace(mark, { name: "Ridgeon Review" });
+    personal = { ...mark, workspaceId: created.id, workspaceName: "Ridgeon Review", role: "owner", scopes: scopesForRole("owner") };
     box = await mailbox(mark);
   });
 

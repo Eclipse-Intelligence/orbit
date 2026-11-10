@@ -408,7 +408,7 @@ export function LinearSettings({
     >
       <LinearWorkspace connected={connection.here} canAdmin={canAdmin} workspaceName={workspaceName}>
         {!connection.here ? (
-          <Status tone="off">Not connected to a workspace</Status>
+          <Status tone="off">Not connected</Status>
         ) : linear.configured ? (
           <>
             <Status tone={linear.error ? "error" : "on"}>

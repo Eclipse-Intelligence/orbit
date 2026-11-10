@@ -15,7 +15,8 @@ import {
   searchLinearIssues,
   updateLinearIssue,
 } from "@/lib/linear";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createWorkspace } from "@/lib/crm/workspaces";
 
 type Call = { query: string; variables: Record<string, unknown>; authorization: string | null };
 
@@ -177,6 +178,7 @@ describe("linear in the assistant", () => {
     await resetDatabase();
     owner = await createUser("linear@orbit.test", "Mark Ridgeon");
     companyId = (await createCompany(owner, { name: "Acme Linear", domain: "acme-linear.test" })).body.company.id;
+    await getAdminPool().query("insert into crm.workspace_brands (workspace_id, eclipse_tools) values ($1, true) on conflict (workspace_id) do update set eclipse_tools = true", [owner.workspaceId]);
     await connectLinear(owner);
   });
 
@@ -299,12 +301,37 @@ describe("linear in the assistant", () => {
     await assert.rejects(disconnectLinear(member), /Only workspace owners and admins/);
 
     await disconnectLinear(owner);
-    assert.deepEqual(await linearConnection(other), { here: false, claimable: true });
-    await connectLinear(other);
+    assert.deepEqual(await linearConnection(other), { here: false, claimable: false });
+    await assert.rejects(connectLinear(other), /can't be connected here/);
+    assert.deepEqual(await linearConnection(owner), { here: false, claimable: true });
+    const second = await createWorkspace(owner, { name: "Linear Second" });
+    const elsewhere = { ...owner, workspaceId: second.id, workspaceName: "Linear Second" };
+    await connectLinear(elsewhere);
     assert.deepEqual(await linearConnection(owner), { here: false, claimable: false });
-    assert.ok(Array.isArray(((await runTool(other, "linear_search_issues", { query: "x" })) as { issues: unknown[] }).issues));
-    await disconnectLinear(other);
+    assert.ok(Array.isArray(((await runTool(elsewhere, "linear_search_issues", { query: "x" })) as { issues: unknown[] }).issues));
+    await disconnectLinear(elsewhere);
     await connectLinear(owner);
+    const audit = await getAdminPool().query<{ event_type: string; workspace_id: string }>(
+      "select event_type, workspace_id from crm.audit_events where entity_type = 'integration' order by created_at, id",
+    );
+    assert.deepEqual(
+      audit.rows.map((row) => `${row.event_type}:${row.workspace_id === owner.workspaceId ? "first" : "second"}`),
+      ["integration.connected:first", "integration.disconnected:first", "integration.connected:second", "integration.disconnected:second", "integration.connected:first"],
+    );
+
+    const attempt = (userId: string, text: string, values: unknown[]) => queryAsUser(userId, text, values);
+    await assert.rejects(
+      attempt(other.userId, "insert into crm.integration_settings (integration, workspace_id, connected_by) values ('linear', $1, $2)", [other.workspaceId, owner.userId]),
+      /row-level security/,
+    );
+    await assert.rejects(
+      attempt(other.userId, "insert into crm.integration_settings (integration, workspace_id, connected_by) values ('linear', $1, $2)", [owner.workspaceId, other.userId]),
+      /row-level security/,
+    );
+    assert.deepEqual(await attempt(other.userId, "select workspace_id from crm.integration_settings", []), []);
+    assert.deepEqual(await attempt(other.userId, "delete from crm.integration_settings returning integration", []), []);
+    await assert.rejects(attempt(owner.userId, "update crm.integration_settings set workspace_id = $1", [other.workspaceId]), /permission denied/);
+    assert.equal((await getAdminPool().query("select 1 from crm.integration_settings where workspace_id = $1", [owner.workspaceId])).rowCount, 1);
   });
 
   it("connects Linear to the workspace that owns the Eclipse brand when the migration first runs, and the migration runs twice", async () => {

@@ -137,6 +137,7 @@ describe("workflows", () => {
   before(async () => {
     await resetDatabase();
     owner = await createUser("mark@flows.test", "Mark Ridgeon");
+    await getAdminPool().query("insert into crm.workspace_brands (workspace_id, eclipse_tools) values ($1, true) on conflict (workspace_id) do update set eclipse_tools = true", [owner.workspaceId]);
     await connectLinear(owner);
     companyId = (await createCompany(owner, { name: "Acme Flows", domain: "acme-flows.test", ownerId: owner.userId })).body.company.id;
     contactId = (await createContact(owner, { firstName: "Jane", lastName: "Doe", companyId, email: "jane@acme-flows.test", jobTitle: "COO" })).body.contact.id;

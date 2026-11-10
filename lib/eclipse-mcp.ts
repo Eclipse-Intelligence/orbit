@@ -13,11 +13,10 @@ let clientList: { at: number; clients: EclipseClient[] } | null = null;
 
 export type EclipseClient = { id: string | number; name: string };
 
-export type EclipseScope = { clientId: string | number | null; only: boolean; refused: Set<string> };
+export type EclipseScope = { clientId: string | number; only: boolean; refused: Set<string>; refusedNames: Set<string>; known: Map<string, string | number> };
 
 const CLIENTS_TTL_MS = 5 * 60_000;
 const CLIENT_KEY = /^client_?id$/i;
-const CLIENT_LIST_KEY = /^client_?ids$/i;
 export const OUT_OF_SCOPE = "That Eclipse client isn't available in this workspace. Use this workspace's own client.";
 
 export function eclipseMcpConfigured() {
@@ -118,17 +117,26 @@ export async function findEclipseTools(query: string, options: { fetchImpl?: typ
   };
 }
 
+function clientOf(item: unknown): EclipseClient | null {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const record = item as Record<string, unknown>;
+  const id = record.id ?? record.clientId ?? record.client_id;
+  const name = record.name ?? record.clientName ?? record.client_name;
+  return (typeof id === "string" || typeof id === "number") && typeof name === "string" ? { id, name } : null;
+}
+
+function clientArray(value: unknown): EclipseClient[] | null {
+  if (!Array.isArray(value)) return null;
+  const clients = value.map(clientOf);
+  return clients.every(Boolean) ? (clients as EclipseClient[]) : null;
+}
+
 function clientsIn(value: unknown, depth = 0): EclipseClient[] | null {
   if (depth > 5 || !value || typeof value !== "object") return null;
+  const direct = clientArray(value);
+  if (direct && direct.length > 0) return direct;
   if (Array.isArray(value)) {
-    const clients = value.flatMap((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-      const record = item as Record<string, unknown>;
-      const id = record.id ?? record.clientId ?? record.client_id;
-      const name = record.name ?? record.clientName ?? record.client_name;
-      return (typeof id === "string" || typeof id === "number") && typeof name === "string" ? [{ id, name }] : [];
-    });
-    if (clients.length > 0 || value.length === 0) return clients;
+    if (value.length === 0) return [];
     for (const item of value) {
       const found = clientsIn(item, depth + 1);
       if (found) return found;
@@ -140,6 +148,14 @@ function clientsIn(value: unknown, depth = 0): EclipseClient[] | null {
     if (found) return found;
   }
   return null;
+}
+
+export function readClients(body: unknown): EclipseClient[] | null {
+  if (body && typeof body === "object" && !Array.isArray(body) && "clients" in body) {
+    const listed = clientArray((body as { clients: unknown }).clients);
+    if (listed) return listed;
+  }
+  return clientsIn(body);
 }
 
 function parsedBody(result: Record<string, unknown>) {
@@ -160,15 +176,24 @@ function parsedBody(result: Record<string, unknown>) {
 export async function eclipseClients(options: { fetchImpl?: typeof fetch } = {}) {
   if (clientList && Date.now() - clientList.at < CLIENTS_TTL_MS) return clientList.clients;
   const result = await rpc("tools/call", { name: "list_clients", arguments: {} }, options.fetchImpl ?? fetch);
-  const clients = result.isError === true ? null : clientsIn(parsedBody(result));
+  const clients = result.isError === true ? null : readClients(parsedBody(result));
   if (!clients) throw new EclipseMcpError("Couldn't read Eclipse's client list.");
   clientList = { at: Date.now(), clients };
   return clients;
 }
 
+export function nameKey(value: string) {
+  return value
+    .normalize("NFKC")
+    .replace(/[​-‍⁠﻿­]/g, "")
+    .replace(/[‘’‛′`´ʼ]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 export function sameName(left: string, right: string) {
-  const clean = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
-  return clean(left) !== "" && clean(left) === clean(right);
+  return nameKey(left) !== "" && nameKey(left) === nameKey(right);
 }
 
 export function clientParam(tool: EclipseTool) {
@@ -176,47 +201,86 @@ export function clientParam(tool: EclipseTool) {
   return Object.keys(properties).find((key) => CLIENT_KEY.test(key)) ?? null;
 }
 
-export function scopedArguments(tool: EclipseTool, args: Record<string, unknown>, scope: EclipseScope) {
-  const allowed = (value: unknown) => {
-    const id = String(value);
-    if (scope.refused.has(id)) return false;
-    return !scope.only || (scope.clientId !== null && id === String(scope.clientId));
-  };
-  const out = { ...args };
-  for (const [key, value] of Object.entries(args)) {
-    if (value === undefined || value === null || value === "") continue;
-    if (CLIENT_KEY.test(key) && !allowed(value)) throw new EclipseMcpError(OUT_OF_SCOPE);
-    if (CLIENT_LIST_KEY.test(key) && (!Array.isArray(value) || !value.every(allowed))) throw new EclipseMcpError(OUT_OF_SCOPE);
+const EXEMPT_TOOLS: ReadonlySet<string> = new Set(["list_clients", "get_operation"]);
+const CLIENT_FIELD = /client/i;
+const ARGUMENT_DEPTH = 12;
+
+export function canonicalClient(value: unknown, scope: EclipseScope) {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  return scope.known.get(String(value)) === undefined ? null : String(value);
+}
+
+function allowedClient(value: unknown, scope: EclipseScope) {
+  const id = canonicalClient(value, scope);
+  if (id === null || scope.refused.has(id)) return false;
+  return !scope.only || id === String(scope.clientId);
+}
+
+function checkClientFields(value: unknown, scope: EclipseScope, depth = 0) {
+  if (depth > ARGUMENT_DEPTH) throw new EclipseMcpError(OUT_OF_SCOPE);
+  if (Array.isArray(value)) {
+    for (const item of value) checkClientFields(item, scope, depth + 1);
+    return;
   }
+  if (!value || typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (item === undefined || item === null) continue;
+    if (CLIENT_FIELD.test(key) || key.toLowerCase() === "brandid") {
+      const values = Array.isArray(item) && /ids$/i.test(key) ? item : [item];
+      if (!values.every((entry) => allowedClient(entry, scope))) throw new EclipseMcpError(OUT_OF_SCOPE);
+      continue;
+    }
+    checkClientFields(item, scope, depth + 1);
+  }
+}
+
+export function scopedArguments(tool: EclipseTool, args: Record<string, unknown>, scope: EclipseScope) {
+  checkClientFields(args, scope);
+  const out = { ...args };
   const param = clientParam(tool);
-  if (param && (out[param] === undefined || out[param] === null || out[param] === "") && scope.clientId !== null) out[param] = scope.clientId;
-  if (scope.only && !param && tool.name !== "list_clients" && !/^get_operation/.test(tool.name)) {
+  if (param && (out[param] === undefined || out[param] === null)) out[param] = scope.clientId;
+  if (scope.only && !param && !EXEMPT_TOOLS.has(tool.name)) {
     throw new EclipseMcpError("This Eclipse tool isn't tied to one client, so it can't be used in this workspace.");
   }
   return out;
 }
 
-function withoutClients(value: unknown, keep: (client: EclipseClient) => boolean, depth = 0): unknown {
-  if (depth > 6 || !value || typeof value !== "object") return value;
-  if (Array.isArray(value)) {
-    const listed = clientsIn(value, 5);
-    if (listed && listed.length > 0) {
-      return value.filter((item) => {
-        const found = clientsIn([item], 5);
-        return !found || found.length === 0 || keep(found[0]);
-      });
-    }
-    return value.map((item) => withoutClients(item, keep, depth + 1));
-  }
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, withoutClients(item, keep, depth + 1)]));
+function refusedItem(item: unknown, scope: EclipseScope) {
+  const client = clientOf(item);
+  if (client && (scope.refused.has(String(client.id)) || scope.refusedNames.has(nameKey(client.name)))) return true;
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  return Object.entries(item as Record<string, unknown>).some(
+    ([key, value]) =>
+      (CLIENT_FIELD.test(key) || key.toLowerCase() === "brandid") &&
+      (typeof value === "string" || typeof value === "number") &&
+      (scope.refused.has(String(value)) || scope.refusedNames.has(nameKey(String(value)))),
+  );
 }
 
-function filteredClients(result: Record<string, unknown>, scope: EclipseScope): Record<string, unknown> {
+function withoutRefused(value: unknown, scope: EclipseScope, keepOnly: string | null, depth = 0): unknown {
+  if (depth > 8 || !value || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => {
+        if (refusedItem(item, scope)) return false;
+        if (keepOnly === null) return true;
+        const client = clientOf(item);
+        return !client || String(client.id) === keepOnly;
+      })
+      .map((item) => withoutRefused(item, scope, keepOnly, depth + 1));
+  }
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, withoutRefused(item, scope, keepOnly, depth + 1)]));
+}
+
+function filteredResult(name: string, tool: EclipseTool, result: Record<string, unknown>, scope: EclipseScope): Record<string, unknown> {
+  if (result.isError === true) return result;
+  const listing = name === "list_clients";
+  if (!listing && (scope.only || clientParam(tool))) return result;
   const body = parsedBody(result);
-  if (!clientsIn(body)) throw new EclipseMcpError("Couldn't read Eclipse's client list.");
-  const keep = (client: EclipseClient) =>
-    !scope.refused.has(String(client.id)) && (!scope.only || (scope.clientId !== null && String(client.id) === String(scope.clientId)));
-  return { content: [{ type: "text", text: JSON.stringify(withoutClients(body, keep)) }], isError: result.isError };
+  if (listing && !readClients(body)) throw new EclipseMcpError("Couldn't read Eclipse's client list.");
+  if (body === null) return result;
+  const keepOnly = listing && scope.only ? String(scope.clientId) : null;
+  return { content: [{ type: "text", text: JSON.stringify(withoutRefused(body, scope, keepOnly)) }], isError: result.isError };
 }
 
 function resultText(result: Record<string, unknown>) {
@@ -249,7 +313,7 @@ export async function callEclipseTool(
     params = { ...rest, confirm: true, idempotencyKey: options.idempotencyKey ?? randomUUID() };
   }
   const raw = await rpc("tools/call", { name, arguments: params }, options.fetchImpl ?? fetch);
-  const result = options.scope && name === "list_clients" && raw.isError !== true ? filteredClients(raw, options.scope) : raw;
+  const result = options.scope ? filteredResult(name, tool, raw, options.scope) : raw;
   return {
     tool: name,
     preview: mode === "read" && confirmGated(tool) ? "This was a preview only. Nothing ran and nothing was charged. Use eclipse_action to run it after the user approves." : undefined,

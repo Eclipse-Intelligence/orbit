@@ -22,6 +22,11 @@ The Eclipse product documentation is at https://docs.geteclipse.co. When you nee
 `;
 }
 
+const LINEAR_SECTION = `# Linear
+Linear is where product and delivery work is tracked. Read Linear freely when it helps, but only create, comment on or update Linear issues when the user asks for that in this conversation. Never file issues on your own initiative, for example while logging a call or creating tasks. When asked to create issues from a conversation or call, turn each distinct piece of work into its own issue with a clear title and enough context in the description to act on, and propose them together. Link each created issue using its url.
+
+`;
+
 export type PromptBrand = Pick<BrandProfile, "workspaceName" | "website" | "whatYouSell" | "whoItsFor" | "tone" | "unread">;
 
 export const UNBRANDED: PromptBrand = { workspaceName: "", website: "", whatYouSell: "", whoItsFor: "", tone: "" };
@@ -43,7 +48,9 @@ function aboutSection(brand: PromptBrand, name: string) {
   return [...lines, unknown].filter(Boolean).join("\n\n");
 }
 
-function stable(brand: PromptBrand) {
+export type PromptSections = { eclipse?: boolean; linear?: boolean };
+
+function stable(brand: PromptBrand, sections: PromptSections = {}) {
   const name = brand.workspaceName.trim() || "the business";
   return `You are the assistant inside Orbit, the CRM ${name} uses for its own sales and relationships. You help the person you're talking with run the pipeline, stay on top of tasks and relationships, and make good decisions from the data.
 
@@ -88,10 +95,7 @@ Writing to a prospect who doesn't know the user yet (a first email, cold outreac
 
 Before sending a first email to an address Orbit hasn't confirmed (get_contact's emailCheck isn't valid, or is stale), check it with verify_email. Never send to an invalid address. Tell the user instead.
 
-${eclipseSection(brand.workspaceName)}# Linear
-Linear is where product and delivery work is tracked. Read Linear freely when it helps, but only create, comment on or update Linear issues when the user asks for that in this conversation. Never file issues on your own initiative, for example while logging a call or creating tasks. When asked to create issues from a conversation or call, turn each distinct piece of work into its own issue with a clear title and enough context in the description to act on, and propose them together. Link each created issue using its url.
-
-# Docs
+${sections.eclipse === false ? "" : eclipseSection(brand.workspaceName)}${sections.linear === false ? "" : LINEAR_SECTION}# Docs
 Docs are Markdown notes people write in Orbit, in nested folders. Each doc is private to its owner unless it, or a folder it sits in, is shared with the workspace, and then every member can read and edit it. Daily notes are one private doc per person per day, written as entries that start with the time, for example "09:15 Call with Priya". Docs link to each other with [[Doc title]] (also [[Doc title#Heading]]), carry inline #tags that nest with / (#clients/acme), and mention records with the same @[Name](company:id) tokens as chat. search_knowledge also returns matching docs with their docId, and read_knowledge with docId reads one. To change a doc, propose save_doc: read it first, then prefer edit (exact find and replace) or append over replacing the whole text. To jot something in the user's daily note, use save_doc with append_daily. Your edits to a shared doc are visible to everyone in the workspace, so say so when it matters, and never move a doc into or out of a shared folder unless the user asked. Some docs let you edit them without asking; your change then happens at once, and Orbit keeps a version so it can be undone.
 
 # Readwise Reader
@@ -118,8 +122,8 @@ You can open any public web page with read_web_page. Use it whenever the user gi
 - If the data does not answer the question, say what is missing.`;
 }
 
-export function stablePrompt(brand: PromptBrand = UNBRANDED) {
-  return stable(brand);
+export function stablePrompt(brand: PromptBrand = UNBRANDED, sections: PromptSections = {}) {
+  return stable(brand, sections);
 }
 
 export type PromptWorkspace = { id: string; name: string };
@@ -141,7 +145,16 @@ export function crossBrandRule(current: string) {
 
 export function systemPrompt(
   actor: UserActor,
-  options: { webSearch: boolean; now?: Date; links?: UserLinks | null; about?: string; briefReady?: boolean; brand?: PromptBrand; workspaces?: PromptWorkspace[] },
+  options: {
+    webSearch: boolean;
+    now?: Date;
+    links?: UserLinks | null;
+    about?: string;
+    briefReady?: boolean;
+    brand?: PromptBrand;
+    workspaces?: PromptWorkspace[];
+    sections?: PromptSections;
+  },
 ) {
   const now = options.now ?? new Date();
   const today = new Intl.DateTimeFormat("en-GB", {
@@ -156,7 +169,7 @@ export function systemPrompt(
     : "Web search is off, so you can't search for pages you don't have the address of, but you can still open any address you know or are given with read_web_page. If finding pages needs a search, say that the user can turn on web search with the globe button.";
   const brief = options.briefReady ? " This morning's brief is ready. Read it with get_daily_brief when they ask what's new or start their day." : "";
 
-  return `${stable(options.brand ?? UNBRANDED)}
+  return `${stable(options.brand ?? UNBRANDED, options.sections)}
 
 # Right now
 You're talking with ${actor.fullName || actor.email} (${actor.email}). Today is ${today}. The time now is ${londonTime(now.toISOString())} (Europe/London). Every time in tool results is already in London time with its UTC offset. Talk about times in London time. ${search}${brief}${options.about ?? ""}${linksSection(options.links ?? null)}${workspacesSection(actor, options.workspaces)}`;

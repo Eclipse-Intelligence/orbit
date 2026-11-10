@@ -1,6 +1,7 @@
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
-import type { UserActor } from "@/lib/crm/types";
+import { recordAudit } from "@/lib/crm/mutate";
+import type { Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
 export const LINEAR_ELSEWHERE = "Linear isn't connected in this workspace.";
@@ -14,11 +15,20 @@ export async function linearHere(actor: UserActor) {
   });
 }
 
+async function ownsEclipseBrand(actor: UserActor) {
+  const result = await query<{ owns: boolean }>("select private.owns_eclipse_brand($1) as owns", [actor.userId]);
+  return result.rows[0]?.owns === true;
+}
+
+function isAdmin(actor: UserActor) {
+  return actor.role === "owner" || actor.role === "admin";
+}
+
 export async function linearConnection(actor: UserActor): Promise<LinearConnection> {
   const here = await linearHere(actor);
-  if (here) return { here, claimable: false };
+  if (here || !isAdmin(actor)) return { here, claimable: false };
   const claimed = await query<{ claimed: boolean }>("select private.integration_claimed('linear') as claimed");
-  return { here: false, claimable: !claimed.rows[0]?.claimed && (actor.role === "owner" || actor.role === "admin") };
+  return { here: false, claimable: !claimed.rows[0]?.claimed && (await ownsEclipseBrand(actor)) };
 }
 
 export async function assertLinearHere(actor: UserActor) {
@@ -26,21 +36,31 @@ export async function assertLinearHere(actor: UserActor) {
 }
 
 function requireAdmin(actor: UserActor) {
-  if (actor.role !== "owner" && actor.role !== "admin") throw new CrmError("forbidden", "Only workspace owners and admins can change where Linear is connected.", 403);
+  if (!isAdmin(actor)) throw new CrmError("forbidden", "Only workspace owners and admins can change where Linear is connected.", 403);
 }
 
-export async function connectLinear(actor: UserActor) {
+export async function connectLinear(actor: UserActor, provenance?: Provenance) {
   requireAdmin(actor);
-  const added = await withActor(actor, (db) =>
-    db.query(
+  if (!(await ownsEclipseBrand(actor))) throw new CrmError("forbidden", "Linear can't be connected here.", 403);
+  const added = await withActor(actor, async (db) => {
+    const inserted = await db.query(
       "insert into crm.integration_settings (integration, workspace_id, connected_by) values ('linear', $1, $2) on conflict (integration) do nothing",
       [actor.workspaceId, actor.userId],
-    ),
-  );
-  if ((added.rowCount ?? 0) === 0 && !(await linearHere(actor))) throw new CrmError("conflict", "Linear can't be connected here.", 409);
+    );
+    if ((inserted.rowCount ?? 0) > 0) {
+      await recordAudit(db, actor, "integration.connected", "integration", actor.workspaceId, provenance ?? { operation: "connect_linear" }, { integration: "linear" });
+    }
+    return (inserted.rowCount ?? 0) > 0;
+  });
+  if (!added && !(await linearHere(actor))) throw new CrmError("conflict", "Linear can't be connected here.", 409);
 }
 
-export async function disconnectLinear(actor: UserActor) {
+export async function disconnectLinear(actor: UserActor, provenance?: Provenance) {
   requireAdmin(actor);
-  await withActor(actor, (db) => db.query("delete from crm.integration_settings where integration = 'linear' and workspace_id = $1", [actor.workspaceId]));
+  await withActor(actor, async (db) => {
+    const removed = await db.query("delete from crm.integration_settings where integration = 'linear' and workspace_id = $1", [actor.workspaceId]);
+    if ((removed.rowCount ?? 0) > 0) {
+      await recordAudit(db, actor, "integration.disconnected", "integration", actor.workspaceId, provenance ?? { operation: "disconnect_linear" }, { integration: "linear" });
+    }
+  });
 }

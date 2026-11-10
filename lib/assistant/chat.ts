@@ -11,7 +11,6 @@ import {
   crossWorkspaceRefusal,
   describeAction,
   findTool,
-  isExternalTool,
   matchWorkspace,
   recordNames,
   runTool,
@@ -41,7 +40,7 @@ import {
 import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
-import { memoryBriefing } from "@/lib/learning/memories";
+import { briefingHasOutside, memoryBriefing } from "@/lib/learning/memories";
 import { BRIEF_MESSAGE_MODEL, latestBrief } from "@/lib/learning/nightly";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
@@ -573,20 +572,39 @@ const CROSS_BRAND_NOUNS: Record<string, string> = {
   send_proposal: "proposal",
   create_proposal_template: "proposal template",
   update_proposal_template: "proposal template",
+  create_meeting_invite: "invite",
+  log_activity: "activity",
+  remember: "note",
+  eclipse_action: "Eclipse action",
+  linear_create_issue: "issue",
 };
 
-export async function crossBrandWorkspaces(actor: UserActor, rows: Pick<MessageRow, "role" | "tool_calls">[]) {
+function memoryWorkspaces(content: string) {
+  try {
+    const parsed = JSON.parse(content) as { memories?: { workspaceId?: unknown }[] };
+    return (parsed.memories ?? []).map((memory) => memory.workspaceId).filter((id): id is string => typeof id === "string");
+  } catch {
+    return [];
+  }
+}
+
+export async function crossBrandWorkspaces(actor: UserActor, rows: Pick<MessageRow, "role" | "tool_calls" | "content" | "tool_name">[]) {
   const wanted = rows
     .flatMap((row) => (row.role === "assistant" ? (row.tool_calls ?? []) : []))
     .filter((call) => WORKSPACE_READ_TOOLS.has(call.function.name))
     .map((call) => parseArgs(call.function.arguments).workspace)
     .filter((value): value is string => typeof value === "string" && value.trim() !== "");
-  if (wanted.length === 0) return [];
+  const remembered = rows.flatMap((row) => (row.role === "tool" && row.tool_name === "recall" ? memoryWorkspaces(row.content) : []));
+  if (wanted.length === 0 && remembered.length === 0) return [];
   const actors = await workspaceActors(actor);
   const names = new Set<string>();
   for (const value of wanted) {
     const found = value.trim().toLowerCase() === "all" ? actors : [matchWorkspace(actors, value)];
     for (const item of found) if (item && item.workspaceId !== actor.workspaceId) names.add(item.workspaceName);
+  }
+  for (const id of remembered) {
+    const found = actors.find((item) => item.workspaceId === id);
+    if (found && found.workspaceId !== actor.workspaceId) names.add(found.workspaceName);
   }
   return [...names];
 }
@@ -604,8 +622,8 @@ function cardFor(call: ToolCall, names: Map<string, string>, web: boolean, cross
   return warning ? { ...described, lines: [...described.lines, warning] } : described;
 }
 
-function webStateOf(rows: MessageRow[]) {
-  return webGateState(rows, isExternalTool);
+function webStateOf(rows: MessageRow[], learnedOutside: boolean) {
+  return webGateState(rows, { outside: learnedOutside });
 }
 
 function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
@@ -700,7 +718,7 @@ export async function isBriefConversation(actor: UserActor, conversationId: stri
   });
 }
 
-async function promptFor(actor: UserActor, conversation: ConversationRow, options: { headless?: boolean } = {}) {
+async function promptFor(actor: UserActor, conversation: ConversationRow, options: { headless?: boolean; fetchImpl?: typeof fetch } = {}) {
   const [links, about, colleagues, brief, briefChat, focus, brand, workspaces, eclipse, linear] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
@@ -721,14 +739,23 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
     workspaceActors(actor)
       .then((list) => list.map((item) => ({ id: item.workspaceId, name: item.workspaceName })))
       .catch(() => []),
-    eclipseAvailable(actor),
+    eclipseAvailable(actor, { fetchImpl: options.fetchImpl }),
     linearHere(actor).catch(() => false),
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   const shown = options.headless ? [] : workspaces;
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces: shown }),
+    system: systemPrompt(actor, {
+      webSearch: conversation.web_search,
+      links,
+      about: aboutYouSection(about, colleagues),
+      briefReady: Boolean(brief) && !briefChat,
+      brand,
+      workspaces: shown,
+      sections: { eclipse, linear },
+    }),
     learned,
+    learnedOutside: briefingHasOutside(learned),
     tools: { multiWorkspace: shown.length > 1, eclipse, linear } satisfies ToolOptions,
   };
 }
@@ -748,12 +775,13 @@ async function runCompanionTurn(
   deadline: number,
   signal?: AbortSignal,
   headless?: HeadlessTurn,
+  fetchImpl?: typeof fetch,
 ) {
   const online = (await companionOnline(actor)) || (await companionWorking(actor));
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, tools } = await promptFor(actor, conversation, { headless: Boolean(headless) });
+  const { system, learned, tools } = await promptFor(actor, conversation, { headless: Boolean(headless), fetchImpl });
   const transcript = buildPrompt(history(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
@@ -914,9 +942,9 @@ function draftEmitter(emit: Emit) {
 async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
-  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
+  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, fetchImpl);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, tools: toolOptions } = await promptFor(actor, conversation);
+  const { system, learned, learnedOutside, tools: toolOptions } = await promptFor(actor, conversation, { fetchImpl });
   const tools = toolDefinitions(toolOptions);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
@@ -963,7 +991,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       return;
     }
     emit({ type: "message", message: display(saved) });
-    const webState = webStateOf(rows);
+    const webState = webStateOf([...rows, saved], learnedOutside);
     const gated = new Set(
       result.toolCalls
         .filter((call) => {

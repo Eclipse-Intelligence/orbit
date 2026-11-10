@@ -5430,10 +5430,6 @@ export function dropStrayNulls(value: unknown, schema: unknown): unknown {
   return out;
 }
 
-export function isExternalTool(name: string) {
-  return EXTERNAL_TOOLS.has(resolveTool(name)?.tool.name ?? name);
-}
-
 function marked(name: string, output: unknown) {
   if (!EXTERNAL_TOOLS.has(name) || !output || typeof output !== "object" || Array.isArray(output) || "error" in (output as object)) return output;
   return { notice: EXTERNAL_NOTICE, ...(output as Record<string, unknown>) };

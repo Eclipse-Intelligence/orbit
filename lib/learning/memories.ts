@@ -7,9 +7,20 @@ export const MEMORY_SCOPES = ["personal", "business", "market"] as const;
 export type MemoryScope = (typeof MEMORY_SCOPES)[number];
 export type Confidence = "low" | "medium" | "high";
 export type MemorySource = { label: string; url?: string };
-export const NOTE_ORIGINS = ["chat", "manual", "crm", "email", "call", "web", "market"] as const;
+export const NOTE_ORIGINS = ["manual", "chat", "crm", "learned", "call", "email", "market", "web"] as const;
 export type NoteOrigin = (typeof NOTE_ORIGINS)[number];
-export const OUTSIDE_ORIGINS: ReadonlySet<NoteOrigin> = new Set(["email", "call", "web", "market"]);
+export const OUTSIDE_ORIGINS: ReadonlySet<NoteOrigin> = new Set(["learned", "call", "email", "market", "web"]);
+
+export function lessTrusted(...origins: (NoteOrigin | null | undefined)[]): NoteOrigin {
+  const rank = (origin: NoteOrigin) => NOTE_ORIGINS.indexOf(origin);
+  return origins.filter((origin): origin is NoteOrigin => Boolean(origin) && NOTE_ORIGINS.includes(origin!)).reduce<NoteOrigin>((least, origin) => (rank(origin) > rank(least) ? origin : least), "manual");
+}
+
+const OUTSIDE_NOTE = /\[[^\]\n]*, outside content, [^\]\n]*\]/;
+
+export function briefingHasOutside(text: string) {
+  return OUTSIDE_NOTE.test(text);
+}
 
 const STOP_WORDS = new Set(
   "about above after again against also among another anything around because been before being below between both cannot could does doing down during each either else even every from further have having here hers herself himself into itself just last made make many more most much must myself need never next only other ours ourselves over same shall should since some still such than that their theirs them themselves then there these they this those through today tomorrow under until upon very want were what when where which while whom whose will with within without would your yours yourself yourselves yesterday really thanks thank please hello regards best mark email emails call calls note notes said says week weeks month months year years time times".split(" "),
@@ -155,7 +166,7 @@ function cleanDraft(draft: MemoryDraft) {
 export function defaultSource(scope: MemoryScope, origin: Memory["origin"]): NoteOrigin {
   if (origin === "manual") return "manual";
   if (origin === "assistant") return "chat";
-  return scope === "market" ? "market" : scope === "business" ? "crm" : "chat";
+  return scope === "market" ? "market" : scope === "business" ? "learned" : "chat";
 }
 
 export async function insertMemory(db: Db, actor: UserActor, scope: MemoryScope, draft: MemoryDraft, origin: Memory["origin"], source: NoteOrigin = defaultSource(scope, origin)) {
@@ -198,7 +209,7 @@ export async function reviseMemory(
   const result = await db.query<Row>(
     `update crm.memories set title = $2, body = $3, confidence = $4, sources = $5::jsonb, pinned = $6, observed_at = case when $7 then now() else observed_at end, all_workspaces = $8, source = $9
      where id = $1 returning ${COLUMNS}`,
-    [id, title, body, patch.confidence ?? row.confidence, JSON.stringify(sources), patch.pinned ?? row.pinned, patch.body !== undefined || patch.title !== undefined, allWorkspaces, patch.source ?? row.source],
+    [id, title, body, patch.confidence ?? row.confidence, JSON.stringify(sources), patch.pinned ?? row.pinned, patch.body !== undefined || patch.title !== undefined, allWorkspaces, lessTrusted(row.source, patch.source)],
   );
   return mapMemory(result.rows[0]);
 }
@@ -330,6 +341,7 @@ const SOURCE_LABEL: Record<NoteOrigin, string> = {
   chat: "from chats with the user",
   manual: "written by the user",
   crm: "from Orbit records",
+  learned: "learned before sources were kept",
   email: "from emails",
   call: "from calls",
   web: "from the web",
