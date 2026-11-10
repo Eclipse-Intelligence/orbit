@@ -12,7 +12,7 @@ export function SettingsPage({
   wide,
 }: {
   title: string;
-  description: string;
+  description?: string;
   action?: ReactNode;
   children: ReactNode;
   wide?: boolean;
@@ -24,10 +24,10 @@ export function SettingsPage({
         wide ? "max-w-[72em]" : "max-w-[47.5em]",
       )}
     >
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className={cn("flex flex-wrap justify-between gap-3", description ? "items-end" : "items-center")}>
         <div className="flex min-w-0 flex-col gap-2">
           <h2 className="leading-6">{title}</h2>
-          <p className="text-subtle text-[14px] leading-5">{description}</p>
+          {description && <p className="text-subtle text-[14px] leading-5">{description}</p>}
         </div>
         {action}
       </div>

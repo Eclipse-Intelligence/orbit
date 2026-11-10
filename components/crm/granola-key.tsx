@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { removeGranolaKeyAction, saveGranolaKeyAction } from "@/app/(crm)/settings/actions";
 
@@ -29,10 +30,10 @@ export default function GranolaKey({ connected, hint }: { connected: boolean; hi
     <div className="flex flex-col gap-2">
       {connected ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-[14px] leading-5">Your Granola is connected{hint ? ` · key ending ${hint}` : ""}</span>
-          <Button variant="ghost" size="sm" disabled={pending} onClick={() => void run(removeGranolaKeyAction)}>
-            Disconnect
-          </Button>
+          <span className="text-[14px] leading-5">Connected{hint ? ` · key ending ${hint}` : ""}</span>
+          <HoldButton tone="neutral" disabled={pending} onConfirm={() => void run(removeGranolaKeyAction)}>
+            Hold to disconnect
+          </HoldButton>
         </div>
       ) : (
         <form
@@ -45,11 +46,11 @@ export default function GranolaKey({ connected, hint }: { connected: boolean; hi
           <Input
             type="password"
             autoComplete="off"
-            aria-label="Your Granola API key"
-            placeholder="Your Granola API key"
+            aria-label="Granola API key"
+            placeholder="Granola API key"
             value={key}
             onChange={(event) => setKey(event.target.value)}
-            className="flex-1"
+            className="sm:flex-1"
           />
           <Button variant="secondary" size="sm" type="submit" className="h-9" disabled={pending || !key.trim()}>
             {pending ? "Checking…" : "Connect"}
@@ -61,10 +62,9 @@ export default function GranolaKey({ connected, hint }: { connected: boolean; hi
           {error}
         </p>
       )}
-      <p className="caption-style text-subtle leading-[1.4]">
-        Each person connects their own Granola so their meetings are filed under their name. Create a key in Granola under
-        Settings, API. Only you can see it.
-      </p>
+      {!connected && (
+        <p className="caption-style text-subtle leading-[1.4]">Create a key in Granola under Settings, API. Only you can see it.</p>
+      )}
     </div>
   );
 }

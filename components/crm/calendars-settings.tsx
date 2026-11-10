@@ -6,7 +6,7 @@ import Button, { buttonVariants } from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
 import RemoveAccountButton from "@/components/crm/remove-account-button";
-import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
+import { SettingsCard } from "@/components/crm/settings-ui";
 import {
   addCalendarFeedAction,
   disconnectCalendarAccountAction,
@@ -34,7 +34,7 @@ function needsReconnect(group: CalendarGroup) {
 }
 
 function sourceLine(group: CalendarGroup) {
-  if (group.kind === "primary") return "Main account · from Email · calendar, mail and invites";
+  if (group.kind === "primary") return "Main account";
   if (group.provider === "ics") return "Calendar link · read-only";
   if (group.canSend) return group.canInvite ? "Calendar, mail and invites" : "Calendar and mail";
   return "Calendar only";
@@ -148,11 +148,11 @@ export default function CalendarsSettings({
     <SettingsCard
       id="calendars"
       title="Your calendars"
-      description="Show any calendar on the Calendar page. Meetings cards and People you’ve met only use calendars marked Use for CRM."
+      description="Only calendars marked Use for CRM feed Meetings and People you’ve met."
     >
       {connectedEmail && (
         <p role="status" className="caption-style text-soft">
-          Connected {connectedEmail}. Its calendars appear here in a moment.
+          Connected {connectedEmail}.
         </p>
       )}
       {connectError && (
@@ -162,11 +162,11 @@ export default function CalendarsSettings({
       )}
       {!primary && configured && (
         <p className="caption-style text-subtle">
-          Your main calendar comes from the Microsoft account connected in{" "}
+          Connect Microsoft in{" "}
           <Button variant="link" size="none" href="/settings/email">
-            Email
-          </Button>
-          .
+            Settings › Email
+          </Button>{" "}
+          for your main calendar.
         </p>
       )}
       {groups.map((group) => (
@@ -331,8 +331,7 @@ export default function CalendarsSettings({
             </li>
             <li>iCloud: icloud.com/calendar › the calendar&apos;s info button › Public Calendar › Copy.</li>
             <li>
-              Read-only. Google&apos;s link can lag a few hours behind. Orbit keeps the link encrypted and only shows
-              its host.
+              Read-only. Google&apos;s link can lag a few hours.
             </li>
           </ul>
           {feedError && (
@@ -361,7 +360,7 @@ export default function CalendarsSettings({
       <div className="flex flex-wrap items-center gap-2">
         {configured && (
           <a href={CONNECT_ACCOUNT} className={buttonVariants({ variant: "secondary", size: "sm" })}>
-            Connect another Microsoft account
+            Add Microsoft account
           </a>
         )}
         {!adding && (
@@ -378,17 +377,6 @@ export default function CalendarsSettings({
           {message}
         </p>
       </div>
-      {configured && (
-        <SettingsDisclosure
-          title="Connecting other Microsoft accounts"
-          summary="Accounts outside your organisation need the app registration to allow them."
-        >
-          <p className="caption-style text-subtle leading-[1.4]">
-            Accounts from other organisations or personal Microsoft accounts need Orbit&apos;s app registration to allow
-            them (Entra › Supported account types).
-          </p>
-        </SettingsDisclosure>
-      )}
     </SettingsCard>
   );
 }

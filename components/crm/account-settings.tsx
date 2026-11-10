@@ -52,7 +52,6 @@ export default function AccountSettings({
     <SettingsCard
       id="account"
       title="Account"
-      description="Who you're signed in as."
       action={
         <form action={signOutAction}>
           <Button variant="secondary" size="sm" type="submit">
@@ -84,7 +83,7 @@ export default function AccountSettings({
               <Input name="password" type="password" autoComplete="new-password" minLength={8} required />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="caption-style text-soft">Repeat it</span>
+              <span className="caption-style text-soft">Repeat password</span>
               <Input name="confirm" type="password" autoComplete="new-password" minLength={8} required />
             </label>
             <div className="flex gap-2">

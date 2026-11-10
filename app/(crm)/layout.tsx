@@ -139,6 +139,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
             }}
             notifications={notifications}
             brief={brief}
+            multi={workspaces.length > 1}
           >
             {children}
           </CrmChrome>

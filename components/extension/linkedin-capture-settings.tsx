@@ -118,7 +118,7 @@ function BrowserRow({ browser, workspaces }: { browser: BrowserRowView; workspac
             })
           }
         >
-          Hold to revoke<span className="sr-only"> {browser.name}</span>
+          Hold to remove<span className="sr-only"> {browser.name}</span>
         </HoldButton>
       </span>
       {editing && <WorkspacePicker browser={browser} workspaces={workspaces} onDone={() => setEditing(false)} />}
@@ -144,7 +144,6 @@ export default function LinkedinCaptureSettings({
     <SettingsCard
       id="linkedin-capture"
       title="LinkedIn capture"
-      description="A Chrome extension that saves people and companies from LinkedIn and Sales Navigator, and logs conversations when you press Log. Each browser is connected as you."
       action={
         <a href={extensionUrl} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "secondary", size: "sm" })}>
           Get the extension
@@ -159,11 +158,9 @@ export default function LinkedinCaptureSettings({
           ))}
         </ul>
       )}
-      <p className="caption-style text-subtle leading-[1.4]">
-        {browsers.length > 0
-          ? "To connect another browser, install the extension and press Connect. Revoking signs that browser out straight away."
-          : "No browsers connected yet. Install the extension, open it on LinkedIn and press Connect."}
-      </p>
+      {browsers.length === 0 && (
+        <p className="caption-style text-subtle leading-[1.4]">No browsers connected. Install the extension and press Connect on LinkedIn.</p>
+      )}
     </SettingsCard>
   );
 }

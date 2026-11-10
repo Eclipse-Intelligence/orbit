@@ -55,20 +55,20 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
   return (
     <SettingsCard
       id="personal-tokens"
-      title="Your mail in Claude"
-      description="A personal token lets Claude, or any app that speaks MCP, use Orbit as you: the CRM, plus your own email to search, read, ask about and save drafts for you to send. It can never send email. Anyone with the token can read your mail, so keep it private and revoke it if it leaks."
+      title="Personal tokens"
+      description="Lets Claude or any MCP app use Orbit as you, including reading your mail. It can't send email. Keep it private."
     >
       <div className="flex flex-col gap-4">
         <form onSubmit={create} className="flex flex-wrap items-end gap-2">
           <label className="flex min-w-[12em] flex-1 flex-col gap-1.5">
-            <span className="caption-style text-subtle">Token name</span>
+            <span className="caption-style text-subtle">Name</span>
             <input name="name" required maxLength={80} placeholder="Claude on my Mac" className={field} />
           </label>
           <Button type="submit" variant="primary" disabled={pending}>
             Create token
           </Button>
         </form>
-        {workspaceName && <p className="caption-style text-subtle">New tokens work in {workspaceName}. Switch workspace to make one for another.</p>}
+        {workspaceName && <p className="caption-style text-subtle">New tokens work only in {workspaceName}.</p>}
         {fresh && (
           <div role="status" className="flex flex-col gap-2 rounded-xl bg-white/[0.035] px-3 py-3">
             <p className="text-[14px] leading-5">Copy it now. Orbit won&apos;t show it again.</p>
@@ -83,7 +83,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
                 Copy token
               </Button>
               <Button variant="secondary" size="sm" onClick={() => void copy(command)}>
-                Copy Claude Code command
+                Copy command
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setFresh(null)}>
                 Done

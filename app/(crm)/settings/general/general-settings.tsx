@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { YouSettings } from "@/components/crm/about-you-settings";
+import { ProfileSettings, YouSettings } from "@/components/crm/about-you-settings";
 import AccountSettings from "@/components/crm/account-settings";
 import MeetingLinkSettings from "@/components/crm/meeting-link-settings";
 import ShortcutSettings from "@/components/crm/shortcut-settings";
@@ -20,8 +20,9 @@ export default async function GeneralSettings() {
     getPersonalContext(user),
     getWorkspaceChoices(),
   ]);
+  const you = { linkedinUrl: about.linkedinUrl, interests: about.interests, writing: about.writing };
   return (
-    <SettingsPage title="General" description="Your account and what Orbit knows about you.">
+    <SettingsPage title="General">
       <AccountSettings
         name={user.fullName || user.email}
         email={user.email}
@@ -29,16 +30,15 @@ export default async function GeneralSettings() {
         workspaceName={user.workspaceName}
         passwords={supabaseConfigured()}
       />
-      <YouSettings
-        you={{ linkedinUrl: about.linkedinUrl, interests: about.interests, writing: about.writing }}
-        website={about.website}
-        multi={workspaces.length > 1}
-      />
+      {workspaces.length > 1 ? (
+        <YouSettings you={you} website={about.website} />
+      ) : (
+        <ProfileSettings about={{ jobTitle: about.jobTitle, about: about.about }} you={you} website={about.website} />
+      )}
       <NotificationSettings
         initialMail={notifications.mail}
         initialCalendarMinutes={notifications.calendarMinutes}
         initialReads={notifications.reads}
-        devices={notifications.devices}
       />
       <MeetingLinkSettings meetingLink={meetingLink} />
       <ShortcutSettings />

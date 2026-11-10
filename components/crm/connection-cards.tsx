@@ -3,7 +3,6 @@ import Button from "@/components/_ui/button";
 import {
   disconnectInboxAction,
   enableGranolaWebhookAction,
-  syncCalendarAction,
   syncCallsAction,
   syncGranolaAction,
   syncInboxAction,
@@ -29,14 +28,7 @@ import { ReadwiseSync, ReadwiseToken, ReadwiseWorkspace } from "@/components/crm
 import type { ReadwiseStatus } from "@/lib/readwise/keys";
 import RecallKey from "@/components/crm/recall-settings";
 import type { RecallStatus } from "@/lib/recall/keys";
-import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
-
-const RECALL_TAGS: Record<RecallStatus["tags"], string> = {
-  names: "Tags: the assistant can use your Recall tag names.",
-  ids: "Tags: Recall's API filters by tag id, not name, and Orbit can't list your tags. An assistant connected to Recall's own MCP can list ids (explore_kb, list_tags).",
-  unknown: "Tags: not checked yet. Orbit checks when the assistant first filters by tag.",
-};
 
 function syncedLine(lastSyncedAt: string | null) {
   return lastSyncedAt
@@ -117,7 +109,7 @@ export function SettingsNotices({
     <div className="flex flex-col gap-2">
       {connected && (
         <p role="status" className="caption-style text-soft rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
-          Microsoft is connected. New mail is filed onto the matching contact, and you can send from a contact.
+          Microsoft connected
         </p>
       )}
       {notice && (
@@ -219,7 +211,6 @@ export function MicrosoftSettings({
     <SettingsCard
       id="microsoft"
       title="Microsoft 365"
-      description="Outlook mail is filed onto the matching contact, and you can send from a contact. The main calendar and Teams calls come from the main account."
       action={
         configured && !main ? (
           <Button variant="primary" size="sm" href="/api/microsoft/connect">
@@ -244,34 +235,17 @@ export function MicrosoftSettings({
       {configured && main && (
         <Actions>
           <Button variant="secondary" size="sm" href={addAccountHref()}>
-            Connect another Microsoft account
+            Add Microsoft account
           </Button>
         </Actions>
       )}
-      {main?.connected && configured && calendar && (
+      {main?.connected && configured && calendar?.scopeMissing && (
         <div className="border-border flex flex-col gap-2 border-t pt-3">
-          <h4 className="text-[14px] leading-5">Outlook calendar</h4>
-          {calendar.scopeMissing ? (
-            <Status tone="error">{`Reconnect ${main.email} to include your calendar. Mail keeps working in the meantime.`}</Status>
-          ) : (
-            <>
-              <Status tone={calendar.lastError ? "error" : "on"}>{syncedLine(calendar.lastSyncedAt)}</Status>
-              <span className="caption-style text-subtle">Meetings from the last 30 days and the next 60</span>
-              {calendar.lastError && (
-                <span role="alert" className="caption-style text-danger leading-[1.4]">
-                  {calendar.lastError}
-                </span>
-              )}
-            </>
-          )}
+          <Status tone="error">{`Reconnect ${main.email} to include your calendar.`}</Status>
           <Actions>
-            {calendar.scopeMissing ? (
-              <Button variant="primary" size="sm" href={main.reconnectHref} aria-label={`Reconnect ${main.email}`}>
-                Reconnect
-              </Button>
-            ) : (
-              <SyncButton action={syncCalendarAction} label="Sync calendar" />
-            )}
+            <Button variant="primary" size="sm" href={main.reconnectHref} aria-label={`Reconnect ${main.email}`}>
+              Reconnect
+            </Button>
           </Actions>
         </div>
       )}
@@ -287,18 +261,6 @@ export function MicrosoftSettings({
           <p className="caption-style text-subtle leading-[1.4] break-all">Redirect URI: {redirectUri}</p>
         </SettingsDisclosure>
       )}
-      <p className="caption-style text-subtle leading-[1.4]">
-        Calendar-only accounts and calendar links are in{" "}
-        <Button
-          variant="link"
-          size="none"
-          href={SETTINGS_PATHS.calendars}
-          className="caption-style"
-        >
-          Calendars
-        </Button>
-        .
-      </p>
     </SettingsCard>
   );
 }
@@ -316,11 +278,7 @@ export function TeamsCallsSettings({
 }) {
   const live = mailbox?.status === "connected";
   return (
-    <SettingsCard
-      id="teams"
-      title="Teams calls"
-      description="Teams phone calls are logged on the contact with the matching phone number. Start a call from a contact with Call in Teams."
-    >
+    <SettingsCard id="teams" title="Teams calls">
       {live && configured ? (
         <div className="flex flex-col gap-1.5">
           <Status tone={calls?.lastError ? "error" : "on"}>
@@ -344,7 +302,7 @@ export function TeamsCallsSettings({
         </div>
       ) : (
         <Status tone="off">
-          {configured ? "Connect Microsoft in Email to log Teams calls" : "Needs the Microsoft app set up on this server"}
+          {configured ? "Connect Microsoft in Settings › Email to log Teams calls" : "Needs the Microsoft app set up on this server"}
         </Status>
       )}
       {live && configured && transcripts && (
@@ -364,31 +322,17 @@ export function TeamsCallsSettings({
           </Actions>
         </div>
       )}
-      <SettingsDisclosure
-        title="Permissions for calls and transcripts"
-        summary="Teams call logs need application permissions with admin consent."
-      >
-        <p className="caption-style text-subtle leading-[1.4]">
-          To log Teams calls and their transcripts, add the
-          CallRecords.Read.All and CallTranscripts.Read.All application
-          permissions to Orbit&apos;s Microsoft Entra app, with admin consent.
-        </p>
-      </SettingsDisclosure>
     </SettingsCard>
   );
 }
 
 export function GranolaSettings({ granola, canAdmin }: { granola: GranolaStatus; canAdmin: boolean }) {
   return (
-    <SettingsCard
-      id="granola"
-      title="Granola"
-      description="Granola meeting notes and transcripts are filed onto the people who were in the meeting."
-    >
+    <SettingsCard id="granola" title="Granola">
       {granola.configured && (
         <div className="flex flex-col gap-1.5">
           <Status tone={granola.lastError ? "error" : "on"}>
-            {`${syncedLine(granola.lastSyncedAt)}${granola.webhookEnabled ? " · Instant sync on" : " · Checked every 10 minutes"}`}
+            {`${syncedLine(granola.lastSyncedAt)}${granola.webhookEnabled ? " · Instant sync on" : ""}`}
           </Status>
           {granola.lastError && (
             <span role="alert" className="caption-style text-danger leading-[1.4]">
@@ -411,12 +355,12 @@ export function ReadwiseSettings({ readwise, workspaces }: { readwise: ReadwiseS
     <SettingsCard
       id="readwise"
       title="Readwise Reader"
-      description="Documents you tag orbit in Reader are added to Knowledge with their highlights. The assistant can read your Reader when you ask. Orbit never changes anything in Reader. If you disconnect, items already in Knowledge stay."
+      description="Documents tagged orbit in Reader are added to Knowledge."
     >
       {readwise.connected && (
         <ReadwiseSync lastError={readwise.lastError}>
           <Status tone={readwise.lastError ? "error" : "on"}>
-            {`${readwise.documents} ${readwise.documents === 1 ? "document" : "documents"} in Knowledge · ${syncedLine(readwise.lastSyncedAt)} · Checked every 10 minutes`}
+            {`${readwise.documents} ${readwise.documents === 1 ? "document" : "documents"} in Knowledge · ${syncedLine(readwise.lastSyncedAt)}`}
           </Status>
           {readwise.lastError && (
             <span className="caption-style text-danger leading-[1.4]">
@@ -433,17 +377,12 @@ export function ReadwiseSettings({ readwise, workspaces }: { readwise: ReadwiseS
 
 export function RecallSettings({ recall }: { recall: RecallStatus }) {
   return (
-    <SettingsCard
-      id="recall"
-      title="Recall"
-      description="The assistant can search and read your Recall when you ask. Nothing is copied into Orbit."
-    >
+    <SettingsCard id="recall" title="Recall" description="Nothing is copied into Orbit.">
       <RecallKey connected={recall.connected}>
         <Status tone={recall.connected ? "on" : "off"}>
           {recall.connected ? `Connected${recall.hint ? ` · key ending ${recall.hint}` : ""}` : "Not connected"}
         </Status>
       </RecallKey>
-      {recall.connected && <p className="caption-style text-subtle leading-[1.4]">{RECALL_TAGS[recall.tags]}</p>}
     </SettingsCard>
   );
 }
@@ -461,11 +400,7 @@ export function LinearSettings({
 }) {
   if (!connection.here && !connection.claimable) return null;
   return (
-    <SettingsCard
-      id="linear"
-      title="Linear"
-      description="The assistant can read Linear issues and, when you ask it to, create, comment on and update them. It never files issues on its own."
-    >
+    <SettingsCard id="linear" title="Linear">
       <LinearWorkspace connected={connection.here} canAdmin={canAdmin} workspaceName={workspaceName}>
         {!connection.here ? (
           <Status tone="off">Not connected</Status>
@@ -478,7 +413,7 @@ export function LinearSettings({
           </>
         ) : (
           <Status tone="off">
-            {`Connected in ${workspaceName}. Set LINEAR_API_KEY (a personal API key from Linear, Settings, Security and access) in the server environment, then redeploy Orbit`}
+            Set LINEAR_API_KEY (a personal API key from Linear) in the server environment, then redeploy.
           </Status>
         )}
       </LinearWorkspace>
