@@ -12,7 +12,7 @@ import type { PushSender } from "@/lib/push";
 import { prepareNudge, storeNudge, writeNudge } from "@/lib/mail/prepare";
 import { firstReply, FOLLOW_UP_ROW_COLUMNS, hasStuckFollowUps, recoverStuckFollowUps, sendDueFollowUp, type SendFollowUpRow } from "@/lib/mail/follow-up";
 
-type DueReport = { sent: number; failed: number; returned: number; followUps: number; followUpsSent: number; stuck: number };
+type DueReport = { sent: number; failed: number; returned: number; followUps: number; followUpsSent: number; stuck: number; reminderErrors: number };
 
 type ReminderRow = SendFollowUpRow & { kind: "snooze" | "follow_up"; action: "remind" | "send"; automatic: boolean; deferral: boolean };
 
@@ -112,7 +112,7 @@ export async function processDueMail(
   actor: UserActor,
   options: { fetchImpl?: typeof fetch; origin?: string | null; send?: PushSender; deadline?: number } = {},
 ): Promise<DueReport> {
-  const report: DueReport = { sent: 0, failed: 0, returned: 0, followUps: 0, followUpsSent: 0, stuck: 0 };
+  const report: DueReport = { sent: 0, failed: 0, returned: 0, followUps: 0, followUpsSent: 0, stuck: 0, reminderErrors: 0 };
   if (!(await anythingDue(actor))) return report;
   const deadline = options.deadline ?? Date.now() + DEFAULT_BUDGET_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -168,15 +168,44 @@ export async function processDueMail(
       }
     } catch (error) {
       console.error("mail reminder failed", error);
-      await withActor(actor, (db) =>
-        db.query(
-          "update crm.mail_reminders set state = 'waiting', due_at = now() + interval '5 minutes' where id = $1 and state not in ('sending', 'sent')",
-          [reminder.id],
-        ),
-      );
+      report.reminderErrors += 1;
+      const message = (error instanceof Error ? error.message : "The reminder didn't run.").slice(0, 500);
+      const outcome = await failReminder(actor, reminder.id, message).catch(() => null);
+      if (outcome === "flagged") await flagReminder(actor, reminder, message, options.send).catch(() => undefined);
     }
   }
   return report;
+}
+
+export const REMINDER_ATTEMPTS = 5;
+
+export async function failReminder(actor: UserActor, id: string, message: string): Promise<"retry" | "flagged" | null> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ attempts: number }>(
+      `update crm.mail_reminders
+       set attempts = attempts + 1, last_error = $2,
+         state = case when attempts + 1 >= $3 then 'due' else 'waiting' end,
+         surfaced_at = case when attempts + 1 >= $3 then now() else surfaced_at end,
+         due_at = case when attempts + 1 >= $3 then due_at else now() + make_interval(mins => 5 * (attempts + 1)) end
+       where id = $1 and state not in ('sending', 'sent', 'done', 'cancelled', 'replied')
+       returning attempts`,
+      [id, message, REMINDER_ATTEMPTS],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return row.attempts >= REMINDER_ATTEMPTS ? "flagged" : "retry";
+  });
+}
+
+async function flagReminder(actor: UserActor, reminder: ReminderRow, message: string, send?: PushSender) {
+  const subject = reminder.subject?.trim() || "(no subject)";
+  const href = mailHref(reminder.source_id, reminder.thread_key);
+  const title = reminder.kind === "snooze" ? `Orbit couldn't bring back: ${subject}` : `Orbit couldn't check this follow-up: ${subject}`;
+  const body =
+    reminder.kind === "snooze"
+      ? `It's still in Snoozed. Orbit tried ${REMINDER_ATTEMPTS} times and stopped. ${message}`
+      : `Orbit tried ${REMINDER_ATTEMPTS} times and stopped. Check the conversation yourself. ${message}`;
+  await sendAlert(actor, { key: `reminder-failed:${reminder.id}`, title, body, url: href, tag: `${reminder.source_id}|${reminder.thread_key}`, bell: { title, body, href } }, { send });
 }
 
 export async function processAllDueMail(deadline: number) {

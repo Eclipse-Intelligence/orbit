@@ -166,7 +166,7 @@ const OWN = `own as (
 export function routedSql(filter: string) {
   return `with ${OWN},
   recent as (
-    select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.internet_message_id, m.subject, m.snippet, m.body_text,
+    select m.id, m.source_id, m.thread_key as tk, m.internet_message_id, m.subject, m.snippet, m.body_text,
       m.from_email, m.to_recipients, m.cc_recipients, m.has_attachments, s.email as account, f.role as folder_role,
       coalesce(m.sent_at, m.received_at, m.created_at) as at,
       lower(coalesce(m.from_email, '')) in (select email from own) as mine
@@ -380,7 +380,7 @@ export async function captureWorkspaces(db: Db, actor: UserActor, homes: Address
   const result = await db.query<{ id: string; workspace_id: string }>(
     `select n.id, ${capture.workspace} as workspace_id
      from (
-       select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.from_email, m.to_recipients, m.cc_recipients,
+       select m.id, m.source_id, m.thread_key as tk, m.from_email, m.to_recipients, m.cc_recipients,
          s.email as account, s.workspace_id as source_workspace
        from crm.mail_messages m join crm.mail_sources s on s.id = m.source_id
        where m.user_id = $1 and m.id = any($2::uuid[])
@@ -421,7 +421,7 @@ export async function effectiveFilingInDb(
   if (filedIn.length === 0) {
     basis = "matched";
     const matched = await db.query<{ workspace_id: string }>(
-      `${routedSql("m.source_id = $6 and coalesce(m.thread_key, 'm:' || m.id::text) = $7")}
+      `${routedSql("m.source_id = $6 and m.thread_key = $7")}
        select distinct x.workspace_id from matched x`,
       routedParams(actor, workspaceIds, [sourceId, key]),
     );

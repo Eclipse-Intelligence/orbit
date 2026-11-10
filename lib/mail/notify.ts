@@ -38,7 +38,7 @@ export async function notifyNewMail(actor: UserActor, messageIds: string[], opti
     const result = await db.query<Arrival>(
       `select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, ${splitCase("n")} as split
        from (
-         select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.snippet, m.from_email, m.from_name,
+         select m.id, m.source_id, m.thread_key as tk, m.subject, m.snippet, m.from_email, m.from_name,
            m.focused, coalesce(m.received_at, m.sent_at, m.created_at) as at
          from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
          where m.user_id = $1 and m.id = any($2::uuid[]) and f.role = 'inbox' and not m.is_read and not m.is_draft

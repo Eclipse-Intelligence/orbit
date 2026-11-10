@@ -78,7 +78,7 @@ async function queueIn(actor: UserActor, messageIds: string[]) {
          exists (
            select 1 from crm.mail_messages earlier join crm.mail_folders ef on ef.id = earlier.folder_id
            where earlier.source_id = m.source_id and ef.role = 'sent'
-             and coalesce(earlier.thread_key, 'm:' || earlier.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+             and earlier.thread_key = m.thread_key
              and coalesce(earlier.sent_at, earlier.created_at) < coalesce(m.received_at, m.created_at)
          ) as replying
        from crm.mail_messages m

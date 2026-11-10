@@ -67,7 +67,7 @@ async function latestInThread(db: Db, actor: UserActor, sourceId: string, key: s
     `select m.id, lower(coalesce(m.from_email, '')) = any (select * from ${ownMailAddresses("$1", "$4")} as own(email)) as own,
        coalesce(m.received_at, m.sent_at, m.created_at) as at, m.internet_message_id, m.to_recipients, m.cc_recipients
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-     where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
+     where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
        and not m.is_draft and f.role not in ('drafts', 'outbox', 'junk')
      order by coalesce(m.received_at, m.sent_at, m.created_at) desc, m.id desc
      limit 1`,

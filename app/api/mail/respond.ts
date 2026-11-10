@@ -24,7 +24,7 @@ export async function mailResponse<T>(run: (actor: UserActor) => Promise<T>) {
   try {
     return Response.json(await run(actor), { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
-    if (error instanceof CrmError) return Response.json({ error: error.message }, { status: error.status });
+    if (error instanceof CrmError) return Response.json({ ...error.details, error: error.message }, { status: error.status });
     console.error("mail request failed", error);
     return Response.json({ error: "Mail didn't load. Try again." }, { status: 500 });
   }

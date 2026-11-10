@@ -2,13 +2,15 @@
 
 import { useEffect, useId, useRef, useState, type DragEvent, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
 import BodyEditor, { type BodyEditorHandle } from "@/components/mail/body-editor";
 import { useComposer } from "@/components/mail/compose-dock";
 import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from "@/components/mail/follow-up-composer";
-import { writeWithAi } from "@/components/mail/mail-cache";
+import { holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
+import { MODE_LABEL } from "@/lib/mail/format";
 import { useShortcutHint, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, DraftFile, DraftMode, MailDraft } from "@/lib/mail/view";
@@ -22,7 +24,6 @@ import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
 const SAVE_DELAY_MS = 1500;
 const FILE_LINK_ERROR = "That's a link to a file on your computer, which no one else can open. Drag the screenshot itself, or copy it and paste it here.";
-export const MODE_LABEL: Record<DraftMode, string> = { new: "New email", reply: "Reply", reply_all: "Reply all", forward: "Forward" };
 
 export type SendPayload = {
   id: string | null;
@@ -42,7 +43,11 @@ export type SendPayload = {
   files: DraftFile[];
   replaces?: string | null;
   identityId?: string | null;
+  sendKey?: string | null;
+  force?: boolean;
 };
+
+export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null };
 
 export type ComposerStart = {
   mode: DraftMode;
@@ -51,7 +56,7 @@ export type ComposerStart = {
   to: MailAddress[];
   cc: MailAddress[];
   subject: string;
-  draft: MailDraft | null;
+  draft: ComposerDraft | null;
   replaces?: string | null;
   fromId?: string | null;
 };
@@ -81,7 +86,9 @@ export default function MailComposer({
   onUndone,
   onScheduled,
   onDiscard,
+  passive = false,
 }: {
+  passive?: boolean;
   start: ComposerStart;
   accounts: ComposeAccount[];
   variant: "inline" | "card";
@@ -132,6 +139,9 @@ export default function MailComposer({
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
   const discarded = useRef(false);
+  const sendKey = useRef<string | null>(draft?.sendKey ?? null);
+  const queued = useRef(false);
+  const [sendProblem, setSendProblem] = useState(draft?.sendProblem ?? null);
   const editor = useRef<BodyEditorHandle>(null);
   const [formats, setFormats] = useState({ bold: false, italic: false });
   const payload = useRef({
@@ -181,12 +191,18 @@ export default function MailComposer({
     dirty.current = true;
   }, [fileKey]);
 
+  const subjectListener = useRef(onSubject);
   useEffect(() => {
-    onSubject?.(subject);
-  }, [subject, onSubject]);
+    subjectListener.current = onSubject;
+  });
 
-  const opening = useRef({ card, recipientsFirst: !draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0)) });
   useEffect(() => {
+    subjectListener.current?.(subject);
+  }, [subject]);
+
+  const opening = useRef({ card, passive, recipientsFirst: !draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0)) });
+  useEffect(() => {
+    if (opening.current.passive && window.matchMedia("(max-width: 639px)").matches) return;
     if (!opening.current.card) editor.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     if (!opening.current.recipientsFirst) editor.current?.focus();
   }, []);
@@ -283,10 +299,7 @@ export default function MailComposer({
   }
 
   function ready() {
-    if (attachments.uploading) {
-      setError("Wait for the attachments to finish uploading.");
-      return false;
-    }
+    if (attachments.blocked) return false;
     if (to.length + cc.length + bcc.length === 0) {
       setError("Add at least one person to send to.");
       return false;
@@ -302,17 +315,28 @@ export default function MailComposer({
     return true;
   }
 
-  function handOver(): Promise<SendPayload> {
+  function handOver(force = false): Promise<SendPayload> {
     const snapshot = { ...payload.current, attachments: attachments.ids, files: attachments.files };
     dirty.current = false;
     const pending = chain.current.catch(() => null);
-    return pending.then(() => ({ ...snapshot, id: draftId.current }));
+    return pending.then(() => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current, ...(force ? { force } : {}) }));
   }
 
-  function send(event?: FormEvent) {
+  function send(event?: FormEvent, force = false) {
     event?.preventDefault();
-    if (!ready()) return;
-    queueSend(handOver(), { onDelivered, onUndone });
+    if (queued.current || !ready()) return;
+    queued.current = true;
+    sendKey.current ??= newSendKey();
+    const handed = handOver(force);
+    const release = holdQueuedDraft(draftId.current, handed);
+    queueSend(handed, {
+      onDelivered,
+      onReleased: () => void release(),
+      onUndone: () => {
+        void release();
+        onUndone?.();
+      },
+    });
     onSent(body, [...to, ...cc]);
   }
 
@@ -335,8 +359,16 @@ export default function MailComposer({
   async function unschedule() {
     const current = draftId.current;
     if (!current) return;
+    const previous = scheduledFor;
     setScheduledFor(null);
-    await fetch(`/api/mail/drafts/schedule?id=${encodeURIComponent(current)}`, { method: "DELETE" }).catch(() => null);
+    setError(null);
+    try {
+      await unscheduleDraft(current);
+    } catch (problem) {
+      const status = (problem as MailRequestError).status;
+      if (status !== 404 && status !== 409) setScheduledFor(previous);
+      setError(problem instanceof Error ? problem.message : "Orbit couldn't unschedule the email. Try again.");
+    }
   }
 
   async function discard() {
@@ -392,9 +424,10 @@ export default function MailComposer({
       aria-label={MODE_LABEL[start.mode]}
       className={cn(
         "flex min-h-0 flex-col gap-1",
-        card ? "flex-1 px-4 pt-1 pb-3" : "animate-rise-in rounded-2xl bg-white/[0.035] px-4 pt-3 pb-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]",
+        card ? "flex-1" : "animate-rise-in bg-surface-field rounded-2xl px-4 pt-3 pb-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]",
       )}
     >
+      <div data-composer-scroll="" className={card ? "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-4 pt-1" : "contents"}>
       {!card && (
         <div className="flex items-center justify-between gap-3 pb-1">
           <span className="caption-style text-subtle">
@@ -434,13 +467,9 @@ export default function MailComposer({
         autoFocus={!draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0))}
         trailing={
           !showCopies && (
-            <button
-              type="button"
-              onClick={() => setShowCopies(true)}
-              className="caption-style text-subtle hover:text-foreground shrink-0 cursor-pointer rounded-full px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-            >
+            <Button variant="ghost" size="sm" onClick={() => setShowCopies(true)} aria-label="Add Cc and Bcc" className="font-normal">
               Cc Bcc
-            </button>
+            </Button>
           )
         }
       />
@@ -510,16 +539,17 @@ export default function MailComposer({
         <p className="caption-style text-subtle flex items-center gap-2 pt-2">
           <SparkleIcon aria-hidden className="size-3" />
           Written with AI. Check it before you send.
-          <button
-            type="button"
+          <Button
+            variant="link"
+            size="none"
             onClick={() => {
               change(setBody)(aiUndo);
               setAiUndo(null);
             }}
-            className="text-foreground cursor-pointer underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="font-normal"
           >
             Undo
-          </button>
+          </Button>
         </p>
       )}
       <BodyEditor
@@ -538,13 +568,9 @@ export default function MailComposer({
           <p className={cn("caption-style min-w-0 flex-1 whitespace-pre-wrap", withSignature ? "text-subtle" : "text-faint line-through")}>
             {account.signature}
           </p>
-          <button
-            type="button"
-            onClick={() => change(setWithSignature)(!withSignature)}
-            className="caption-style text-subtle hover:text-foreground shrink-0 cursor-pointer rounded-full px-2 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-          >
+          <Button variant="ghost" size="sm" onClick={() => change(setWithSignature)(!withSignature)} className="-my-1 font-normal">
             {withSignature ? "Remove signature" : "Add signature"}
-          </button>
+          </Button>
         </div>
       )}
       <AttachmentList items={attachments.items} onRemove={attachments.remove} />
@@ -564,13 +590,9 @@ export default function MailComposer({
         <p className="caption-style text-soft flex items-center gap-2">
           <ClockIcon aria-hidden className="text-primary size-3.5" />
           Scheduled for {laterDetail(scheduledFor, Date.parse(draft?.savedAt || scheduledFor))}. Changes here go out with it.
-          <button
-            type="button"
-            onClick={() => void unschedule()}
-            className="text-foreground cursor-pointer underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-          >
+          <Button variant="link" size="none" onClick={() => void unschedule()} className="font-normal">
             Unschedule
-          </button>
+          </Button>
         </p>
       )}
       {error && (
@@ -578,8 +600,37 @@ export default function MailComposer({
           {error}
         </p>
       )}
-      <div className="flex items-center gap-1 pt-2">
-        <Button variant="primary" type="submit" data-shortcut-submit title={`Send (${sendHint})`}>
+      {attachments.blocked && (
+        <p id={`${id}-send-blocked`} role="status" className="caption-style text-subtle">
+          {attachments.blocked}
+        </p>
+      )}
+      {sendProblem && (
+        <div role="alert" className="caption-style text-danger flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>{sendProblem}</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={Boolean(attachments.blocked)}
+            onClick={() => {
+              setSendProblem(null);
+              send(undefined, true);
+            }}
+          >
+            Send anyway
+          </Button>
+        </div>
+      )}
+      </div>
+      <div role="group" aria-label="Email actions" className={cn("flex items-center gap-1 pt-2", card && "shrink-0 px-4 pb-3")}>
+        <Button
+          variant="primary"
+          type="submit"
+          data-shortcut-submit
+          title={`Send (${sendHint})`}
+          disabled={Boolean(attachments.blocked)}
+          aria-describedby={attachments.blocked ? `${id}-send-blocked` : undefined}
+        >
           {scheduledFor ? "Send now" : "Send"}
         </Button>
         <Button variant="ghost" size="icon" aria-label="Send later" title="Send later" onClick={sendLater}>
@@ -627,9 +678,21 @@ export default function MailComposer({
             {status}
           </span>
         )}
-        <Button variant="ghost" size="icon" aria-label="Discard draft" title="Discard draft" onClick={() => void discard()} className="ml-auto">
-          <TrashIcon aria-hidden className="size-3.5" />
-        </Button>
+        <HoldButton
+          onConfirm={() => void discard()}
+          holding={
+            <span className="flex items-center gap-1.5">
+              <TrashIcon aria-hidden className="size-3.5" />
+              <span className="max-sm:sr-only">Keep holding</span>
+            </span>
+          }
+          className="ml-auto sm:w-[8.25rem]"
+        >
+          <span className="flex items-center gap-1.5">
+            <TrashIcon aria-hidden className="size-3.5" />
+            <span className="max-sm:sr-only">Hold to discard</span>
+          </span>
+        </HoldButton>
       </div>
     </form>
   );

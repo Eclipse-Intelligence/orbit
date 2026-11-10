@@ -34,7 +34,6 @@ type SidebarContentProps = {
   boards: BoardSummary[];
   companyCount: number;
   openActionCount: number;
-  mailUnread: number;
   capture: CaptureStatus | null;
   workspace: SidebarWorkspace;
   settingsHref?: string;
@@ -44,7 +43,6 @@ export default function SidebarContent({
   boards,
   companyCount,
   openActionCount,
-  mailUnread,
   capture,
   workspace,
   settingsHref = SETTINGS_ROOT,
@@ -52,7 +50,7 @@ export default function SidebarContent({
   const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
   const liveMailUnread = useCompaniesStore((state) => state.mailUnread);
-  const unreadMail = liveMailUnread ?? mailUnread;
+  const unreadMail = liveMailUnread ?? 0;
   const liveCapture = useCompaniesStore((state) => state.capture);
   const captureCleared = useCompaniesStore((state) => state.captureCleared);
   const captureSeen = useCompaniesStore((state) => state.captureSeen);

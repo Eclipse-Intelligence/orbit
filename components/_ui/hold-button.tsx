@@ -17,7 +17,7 @@ export default function HoldButton({
 }: {
   onConfirm: () => void;
   children: ReactNode;
-  holding?: string;
+  holding?: ReactNode;
   tone?: "danger" | "neutral";
   disabled?: boolean;
   className?: string;
