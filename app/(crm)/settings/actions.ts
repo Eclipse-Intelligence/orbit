@@ -22,6 +22,7 @@ import {
   syncClickUpFor,
 } from "@/lib/crm/clickup";
 import { CrmError } from "@/lib/crm/errors";
+import { addHeldLeads, linkMetaPage, unlinkMetaPage } from "@/lib/crm/meta-leads";
 import { connectLinear, disconnectLinear } from "@/lib/crm/linear-connection";
 import { removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { saveMeetingLink } from "@/lib/crm/invites";
@@ -397,5 +398,40 @@ export async function disconnectLinearAction(): Promise<{ error?: string }> {
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Linear." };
+  }
+}
+
+export type MetaLeadActionState = { error?: string; message?: string };
+
+export async function linkMetaPageAction(pageId: string): Promise<MetaLeadActionState> {
+  const user = await requireUser();
+  try {
+    const linked = await linkMetaPage(user, pageId);
+    revalidatePath(SETTINGS_PATHS.tools);
+    return { message: linked.released > 0 ? "Linked. Held leads are being added." : "Linked" };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't link the Page. Try again." };
+  }
+}
+
+export async function unlinkMetaPageAction(id: string): Promise<MetaLeadActionState> {
+  const user = await requireUser();
+  try {
+    await unlinkMetaPage(user, id);
+    revalidatePath(SETTINGS_PATHS.tools);
+    return { message: "Removed" };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't remove the Page. Try again." };
+  }
+}
+
+export async function addHeldLeadsAction(pageId: string): Promise<MetaLeadActionState> {
+  const user = await requireUser();
+  try {
+    await addHeldLeads(user, pageId);
+    revalidatePath(SETTINGS_PATHS.tools);
+    return { message: "Held leads are being added." };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't add the held leads. Try again." };
   }
 }
