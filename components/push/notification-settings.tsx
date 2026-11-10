@@ -8,18 +8,18 @@ import { disablePush, enablePush, isAppleMobile, pushState, sendPushTest, type P
 import type { NotifyMail } from "@/lib/mail/notify";
 import { Radio } from "@/components/_ui/radio";
 
-const LEVELS: { id: NotifyMail; label: string; detail: string }[] = [
+const LEVELS: { id: NotifyMail; label: string; detail?: string }[] = [
   { id: "important", label: "Important only", detail: "People you know and conversations you're in, plus calendar replies." },
-  { id: "all", label: "All new mail", detail: "Everything that lands in your inbox." },
-  { id: "none", label: "Off", detail: "No mail notifications on any device." },
+  { id: "all", label: "All new mail" },
+  { id: "none", label: "Off" },
 ];
 
 const STATE_TEXT: Record<PushState, string> = {
   unsupported: "This browser can't show Orbit notifications.",
-  install: "On iPhone, add Orbit to your Home Screen first: tap Share, then Add to Home Screen, and open Orbit from there.",
-  blocked: "Notifications are blocked for Orbit on this device. Allow them in Settings › Notifications.",
-  off: "Notifications are off on this device.",
-  on: "Notifications are on for this device.",
+  install: "On iPhone, add Orbit to your Home Screen first (Share, then Add to Home Screen).",
+  blocked: "Blocked on this device. Allow them in your device settings.",
+  off: "Off on this device",
+  on: "On for this device",
 };
 
 const CALENDAR_CHOICES: { value: string; label: string }[] = [
@@ -35,12 +35,10 @@ export default function NotificationSettings({
   initialMail,
   initialCalendarMinutes,
   initialReads,
-  devices,
 }: {
   initialMail: NotifyMail;
   initialCalendarMinutes: number | null;
   initialReads: boolean;
-  devices: number;
 }) {
   const [calendar, setCalendar] = useState(initialCalendarMinutes === null ? "off" : String(initialCalendarMinutes));
   const [reads, setReads] = useState(initialReads);
@@ -101,18 +99,14 @@ export default function NotificationSettings({
   }
 
   return (
-    <SettingsCard
-      id="notifications"
-      title="Notifications"
-      description={`Orbit can notify you about new mail and meetings on your phone and computer, even when it isn't open. ${devices === 1 ? "1 device is" : `${devices} devices are`} set up.`}
-    >
+    <SettingsCard id="notifications" title="Notifications">
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-[14px] leading-5">{state ? STATE_TEXT[state] : "Checking this device…"}</p>
           <div className="flex gap-2">
             {state === "off" && (
-              <Button variant="primary" disabled={busy} onClick={() => void run(enablePush, "Notifications are on. Try Send a test.")}>
-                Turn on for this device
+              <Button variant="primary" disabled={busy} onClick={() => void run(enablePush, "Notifications are on")}>
+                Turn on
               </Button>
             )}
             {state === "on" && (
@@ -125,7 +119,7 @@ export default function NotificationSettings({
                       const result = await sendPushTest();
                       const failure = result.failures[0];
                       if (failure?.status === 404 || failure?.status === 410) {
-                        throw new Error("This device's notification setup had expired, so Orbit removed it. Press Turn on for this device, then try again.");
+                        throw new Error("This device's setup had expired. Turn notifications on again.");
                       }
                       if (!result.sent) {
                         const code = failure ? [failure.status, failure.reason].filter(Boolean).join(" ") : "";
@@ -135,16 +129,13 @@ export default function NotificationSettings({
                             : "Orbit couldn't find this device. Turn notifications off and on again.",
                         );
                       }
-                      const service = result.host?.includes("apple") ? "Apple" : "The push service";
-                      return isAppleMobile()
-                        ? "Test sent to this device. It should arrive in a few seconds."
-                        : `${service} accepted the test for this device, so it should appear in a few seconds. If it doesn't on a Mac, open System Settings › Notifications, choose Orbit (or your browser), turn on Allow notifications with Banners or Alerts, and check Focus or Do Not Disturb is off.`;
+                      return isAppleMobile() ? "Test sent" : "Test sent. If nothing appears on a Mac, check System Settings › Notifications and Focus.";
                     }, "Test sent.")
                   }
                 >
-                  Send a test
+                  Send test
                 </Button>
-                <Button variant="ghost" disabled={busy} onClick={() => void run(disablePush, "Notifications are off on this device.")}>
+                <Button variant="ghost" disabled={busy} onClick={() => void run(disablePush, "Off on this device")}>
                   Turn off
                 </Button>
               </>
@@ -152,7 +143,7 @@ export default function NotificationSettings({
           </div>
         </div>
         <fieldset className="flex flex-col gap-2">
-          <legend className="caption-style text-subtle pb-1">Notify me about</legend>
+          <legend className="caption-style text-subtle pb-1">New mail</legend>
           {LEVELS.map((level) => (
             <label key={level.id} className="flex cursor-pointer items-start gap-3 rounded-lg px-1 py-1">
               <Radio
@@ -164,15 +155,14 @@ export default function NotificationSettings({
               />
               <span className="flex flex-col">
                 <span className="text-[14px]">{level.label}</span>
-                <span className="caption-style text-subtle">{level.detail}</span>
+                {level.detail && <span className="caption-style text-subtle">{level.detail}</span>}
               </span>
             </label>
           ))}
         </fieldset>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label htmlFor="notify-calendar" className="flex flex-col">
-            <span className="text-[14px]">Meetings</span>
-            <span className="caption-style text-subtle">A reminder before each meeting in your calendars, with the join link.</span>
+          <label htmlFor="notify-calendar" className="text-[14px]">
+            Meetings
           </label>
           <select
             id="notify-calendar"
@@ -188,15 +178,9 @@ export default function NotificationSettings({
           </select>
         </div>
         <div className="flex items-center justify-between gap-3">
-          <span className="flex flex-col">
-            <span className="text-[14px]">When someone reads my email</span>
-            <span className="caption-style text-subtle">The first time each email you send from Orbit is opened.</span>
-          </span>
+          <span className="text-[14px]">When someone reads my email</span>
           <Switch checked={reads} onChange={chooseReads} label="Notify me when someone reads my email" />
         </div>
-        <p className="caption-style text-subtle">
-          Orbit also lets you know when a workflow needs your approval, when a scheduled email can&apos;t send, when nobody has replied by your reminder, and when a snoozed email comes back.
-        </p>
         {message && (
           <p role={message.tone} className={message.tone === "alert" ? "caption-style text-danger" : "caption-style text-subtle"}>
             {message.text}

@@ -56,7 +56,7 @@ export default function SendingAddressesSettings({
       return;
     }
     setOpen(false);
-    setNotice(`${body?.email} is ready. Choose it in From, and replies to mail sent to it will use it automatically.`);
+    setNotice(`${body?.email} added.`);
     router.refresh();
   }
 
@@ -101,12 +101,12 @@ export default function SendingAddressesSettings({
   return (
     <SettingsCard
       id="sending-addresses"
-      title="Send from other addresses"
-      description="Send from an address that isn't a Microsoft account, such as Neo, using its own mail server. Its mail should already arrive in one of your connected mailboxes (for example by forwarding)."
+      title="Sending addresses"
+      description="For addresses that aren't Microsoft accounts, such as Neo. Their mail must already arrive in a connected mailbox."
       action={
         !open && (
           <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
-            Add an address
+            Add address
           </Button>
         )
       }
@@ -168,8 +168,8 @@ export default function SendingAddressesSettings({
               <input name="email" type="email" required autoComplete="off" placeholder="you@yourdomain.com" className={field} />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="caption-style text-subtle">Name people see</span>
-              <input name="displayName" placeholder="Mark Ridgeon" className={field} />
+              <span className="caption-style text-subtle">Display name</span>
+              <input name="displayName" placeholder="Your name" className={field} />
             </label>
             <label className="flex flex-col gap-1">
               <span className="caption-style text-subtle">Password (or app password)</span>
@@ -178,7 +178,7 @@ export default function SendingAddressesSettings({
             {provider === "other" && (
               <div className="grid grid-cols-[1fr_6rem] gap-2">
                 <label className="flex flex-col gap-1">
-                  <span className="caption-style text-subtle">Outgoing (SMTP) server</span>
+                  <span className="caption-style text-subtle">SMTP server</span>
                   <input name="smtpHost" required placeholder="smtp.example.com" className={field} />
                 </label>
                 <label className="flex flex-col gap-1">
@@ -186,15 +186,15 @@ export default function SendingAddressesSettings({
                   <input name="smtpPort" inputMode="numeric" defaultValue="465" className={field} />
                 </label>
                 <label className="flex flex-col gap-1">
-                  <span className="caption-style text-subtle">Incoming (IMAP) server, to keep a copy in Sent</span>
-                  <input name="imapHost" placeholder="imap.example.com (optional)" className={field} />
+                  <span className="caption-style text-subtle">IMAP server (optional, keeps a copy in Sent)</span>
+                  <input name="imapHost" placeholder="imap.example.com" className={field} />
                 </label>
                 <label className="flex flex-col gap-1">
                   <span className="caption-style text-subtle">Port</span>
                   <input name="imapPort" inputMode="numeric" defaultValue="993" className={field} />
                 </label>
                 <label className="col-span-2 flex flex-col gap-1">
-                  <span className="caption-style text-subtle">Username, if it isn&apos;t the email address</span>
+                  <span className="caption-style text-subtle">Username (optional)</span>
                   <input name="username" autoComplete="off" className={field} />
                 </label>
               </div>
@@ -211,7 +211,7 @@ export default function SendingAddressesSettings({
             </label>
             <div className="flex gap-2">
               <Button variant="primary" type="submit" disabled={busy}>
-                {busy ? "Checking…" : "Check and save"}
+                {busy ? "Checking…" : "Save"}
               </Button>
               <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
                 Cancel

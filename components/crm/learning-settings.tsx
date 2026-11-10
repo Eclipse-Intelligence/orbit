@@ -7,7 +7,7 @@ import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import Tag from "@/components/_ui/tag";
-import { SettingsCard } from "@/components/crm/settings-ui";
+import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import {
   addMemoryAction,
   addWatchAction,
@@ -30,11 +30,10 @@ const SELECT = selectClass;
 
 const SCOPE_LABELS: Record<MemoryScope, string> = { personal: "You", business: "Business", market: "Market" };
 const SCOPE_HINTS: Record<MemoryScope, string> = {
-  personal: "Private to you: your preferences, corrections and how you work, learned from your conversations, decisions and draft edits.",
-  business: "Shared with your team: customers, ICP, objections, competitors and what works, learned from deals, calls and replies.",
-  market: "Shared with your team: themes, competitor moves and buying signals, learned from the market notes Grok Bot sends.",
+  personal: "Private to you.",
+  business: "Shared with your team.",
+  market: "Shared with your team.",
 };
-const PERSONAL_HINT_MANY = "Private to you: your preferences, corrections and how you work. A note applies in every workspace or only in the one it names.";
 const KIND_LABELS: Record<LearningKind, string> = { personal: "About you", business: "Business", market: "Market", brief: "Morning brief" };
 const WATCH_LABELS: Record<WatchKind, string> = { topic: "Topic", competitor: "Competitor", person: "Person", account: "Target account", source: "Source" };
 
@@ -76,7 +75,7 @@ export function LearningStatusCard({ statuses, canRunShared }: { statuses: Learn
   async function run() {
     setPending(true);
     setError(null);
-    setMessage("Learning from today. This can take a couple of minutes.");
+    setMessage("This can take a couple of minutes.");
     const result = await learnNowAction();
     setPending(false);
     if (result.error || !result.result) {
@@ -88,16 +87,12 @@ export function LearningStatusCard({ statuses, canRunShared }: { statuses: Learn
       .filter(([, value]) => value?.error)
       .map(([kind]) => KIND_LABELS[kind as LearningKind].toLowerCase());
     const named = failed.length > 1 ? `${failed.slice(0, -1).join(", ")} and ${failed.at(-1)}` : failed[0];
-    setMessage(failed.length ? `Finished, but ${named} failed. See above.` : "Done. The assistant uses it from your next message.");
+    setMessage(failed.length ? `Finished, but ${named} failed. See above.` : "Done");
     router.refresh();
   }
 
   return (
-    <SettingsCard
-      id="learning"
-      title="How Orbit learns"
-      description="Every night Orbit reads what happened that day and keeps short notes the assistant carries into every conversation: about you, about the business, and about the market. You can see, edit and forget everything below."
-    >
+    <SettingsCard id="learning" title="Nightly learning">
       <div className="flex flex-col gap-4">
         <ul className="divide-sidebar-border flex flex-col divide-y">
           {kinds.map((kind) => {
@@ -116,7 +111,6 @@ export function LearningStatusCard({ statuses, canRunShared }: { statuses: Learn
           <Button variant="secondary" size="sm" disabled={pending} onClick={() => void run()}>
             {pending ? "Learning…" : "Learn now"}
           </Button>
-          <span className="caption-style text-subtle">Runs automatically overnight. Use this to catch up straight away.</span>
         </div>
         {error && (
           <p role="alert" className="caption-style text-danger">
@@ -211,7 +205,7 @@ function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }
           )}
           <div className="flex gap-2">
             <Button variant="primary" size="sm" type="submit" disabled={busy}>
-              {busy ? "Saving…" : "Save note"}
+              {busy ? "Saving…" : "Save"}
             </Button>
             <Button
               variant="ghost"
@@ -325,7 +319,7 @@ export function MemoriesCard({
   }
 
   return (
-    <SettingsCard id={id} title={heading} description={scope === "personal" && !manyWorkspaces ? SCOPE_HINTS.personal : scope === "personal" ? PERSONAL_HINT_MANY : SCOPE_HINTS[scope]}>
+    <SettingsCard id={id} title={heading} description={SCOPE_HINTS[scope]}>
       <div className="flex flex-col gap-3">
         {scopes.length > 1 && (
           <div role="group" aria-label="Which notes" className="flex flex-wrap gap-1">
@@ -343,7 +337,7 @@ export function MemoriesCard({
           <Input id="memory-search" type="search" value={search} placeholder="Search notes" onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1" />
           {scope !== "market" && (
             <Button variant="secondary" size="sm" onClick={() => setAdding((open) => !open)} aria-expanded={adding} className="h-9">
-              Add a note
+              Add note
             </Button>
           )}
         </div>
@@ -352,8 +346,8 @@ export function MemoriesCard({
             <Field label="Title" htmlFor="new-memory-title">
               <Input id="new-memory-title" value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} placeholder={scope === "personal" ? "Keep first emails short" : "Agencies ask for a pilot first"} />
             </Field>
-            <Field label="Note" htmlFor="new-memory-body" hint={scope === "personal" ? "Only you and your assistant see this." : "Every member's assistant sees this."}>
-              <textarea id="new-memory-body" rows={3} value={body} maxLength={1200} onChange={(event) => setBody(event.target.value)} className={AREA} aria-describedby="new-memory-body-hint" />
+            <Field label="Note" htmlFor="new-memory-body">
+              <textarea id="new-memory-body" rows={3} value={body} maxLength={1200} onChange={(event) => setBody(event.target.value)} className={AREA} />
             </Field>
             {scope === "personal" && manyWorkspaces && (
               <Field label="Applies in" htmlFor="new-memory-place">
@@ -362,7 +356,7 @@ export function MemoriesCard({
             )}
             <div className="flex gap-2">
               <Button variant="primary" size="sm" type="submit" disabled={busy || !body.trim()}>
-                {busy ? "Saving…" : "Save note"}
+                {busy ? "Saving…" : "Save"}
               </Button>
               <Button variant="ghost" size="sm" type="button" onClick={() => setAdding(false)}>
                 Cancel
@@ -383,7 +377,7 @@ export function MemoriesCard({
           </ul>
         ) : (
           <p className="caption-style text-subtle py-2">
-            {search ? "No notes match." : scope === "personal" ? "Nothing learned yet. It fills in after the first nightly run." : "Nothing learned here yet. It fills in after the first nightly run, or press Learn now."}
+            {search ? "No notes match." : "No notes yet"}
           </p>
         )}
       </div>
@@ -423,7 +417,7 @@ export function WatchlistCard({ items }: { items: WatchItem[] }) {
   }
 
   return (
-    <SettingsCard id="watchlist" title="Watchlist" description="What Grok Bot researches every night: topics, competitors, people, target accounts and sources. The assistant can change it too.">
+    <SettingsCard id="watchlist" title="Watchlist" description="What Grok Bot researches each night.">
       <div className="flex flex-col gap-4">
         <form className="grid gap-3 sm:grid-cols-[10rem_1fr]" onSubmit={add} noValidate>
           <Field label="Kind" htmlFor="watch-kind">
@@ -441,12 +435,12 @@ export function WatchlistCard({ items }: { items: WatchItem[] }) {
           <Field label="Link (optional)" htmlFor="watch-url" error={error?.field === "url" ? error.message : undefined} className="sm:col-start-2">
             <Input id="watch-url" type="url" inputMode="url" value={url} placeholder="https://x.com/acme" onChange={(event) => setUrl(event.target.value)} aria-invalid={error?.field === "url" ? true : undefined} />
           </Field>
-          <Field label="Why it's watched (optional)" htmlFor="watch-notes" className="sm:col-start-2">
+          <Field label="Note (optional)" htmlFor="watch-notes" className="sm:col-start-2">
             <Input id="watch-notes" value={notes} maxLength={500} placeholder="Closest competitor" onChange={(event) => setNotes(event.target.value)} />
           </Field>
           <div className="sm:col-start-2">
             <Button variant="secondary" size="sm" type="submit" disabled={busy || !label.trim()}>
-              {busy ? "Adding…" : "Add to watchlist"}
+              {busy ? "Adding…" : "Add"}
             </Button>
           </div>
         </form>
@@ -481,7 +475,7 @@ export function WatchlistCard({ items }: { items: WatchItem[] }) {
             ))}
           </ul>
         ) : (
-          <p className="caption-style text-subtle">Nothing on the watchlist yet. Add your competitors, the people you follow and your target accounts.</p>
+          <p className="caption-style text-subtle">Nothing on the watchlist</p>
         )}
       </div>
     </SettingsCard>
@@ -492,7 +486,7 @@ export function MarketNotesCard({ notes }: { notes: MarketNote[] }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   return (
-    <SettingsCard id="market-notes" title="Market notes received" description="The latest findings Grok Bot sent in. Orbit turns them into market notes overnight and puts the important ones in your morning brief.">
+    <SettingsCard id="market-notes" title="Market notes">
       {notes.length ? (
         <ul className="divide-sidebar-border flex flex-col divide-y">
           {notes.map((note) => (
@@ -527,7 +521,7 @@ export function MarketNotesCard({ notes }: { notes: MarketNote[] }) {
           ))}
         </ul>
       ) : (
-        <p className="caption-style text-subtle">No market notes yet. Connect Grok Bot below and its first run will appear here.</p>
+        <p className="caption-style text-subtle">No market notes</p>
       )}
       {error && (
         <p role="alert" className="caption-style text-danger">
@@ -563,66 +557,89 @@ export function GrokCard({ status, mcpUrl, routine, canConnect }: { status: Mark
     router.refresh();
   }
 
+  const collapsed = Boolean(status) && !token;
+  const connectSteps = (
+    <>
+      <li className="flex flex-col gap-2">
+        <span>
+          In Grok Bot, open Settings, then Plugins, and add a custom MCP server named Orbit with this address and the header <code className="font-mono text-[12px]">Authorization: Bearer</code> followed by the token.
+        </span>
+        <span className="flex flex-wrap items-center gap-2">
+          <code className="text-foreground rounded bg-white/[0.04] px-2 py-1 font-mono text-[12px] break-all">{mcpUrl}</code>
+          <Button variant="ghost" size="sm" onClick={() => void copy(mcpUrl, "url")}>
+            {copied === "url" ? "Copied" : "Copy address"}
+          </Button>
+        </span>
+      </li>
+      <li className="flex flex-col gap-2">
+        <span>Create a routine in Grok Bot that runs nightly with these instructions:</span>
+        <label className="sr-only" htmlFor="grok-routine">
+          Routine instructions
+        </label>
+        <textarea id="grok-routine" readOnly rows={8} value={routine} className={cn(AREA, "text-[13px]")} />
+        <span>
+          <Button variant="ghost" size="sm" onClick={() => void copy(routine, "routine")}>
+            {copied === "routine" ? "Copied" : "Copy instructions"}
+          </Button>
+        </span>
+      </li>
+    </>
+  );
+
   return (
     <SettingsCard
       id="grok"
       title="Grok Bot"
-      description="Grok Bot researches X and your news sources every night and sends what it finds here. Its token can only read the watchlist and send market notes."
+      description="Its token can only read the watchlist and send market notes."
     >
       <div className="flex flex-col gap-4 text-[14px] leading-5">
         <p className={cn("caption-style", status ? "text-soft" : "text-subtle")}>
-          {status ? `Connected ${when(status.connectedAt)}. Last used ${when(status.lastUsedAt)}.` : "Not connected yet."}
+          {status ? `Connected ${when(status.connectedAt)}. Last used ${when(status.lastUsedAt)}.` : "Not connected"}
         </p>
-        <ol className="text-soft flex list-decimal flex-col gap-3 pl-5">
-          <li>
-            {canConnect ? (
-              <span className="flex flex-col gap-2">
-                <span>Create a token for Grok Bot. {status ? "Creating a new one stops the old one working." : ""}</span>
-                <span>
-                  <Button variant="secondary" size="sm" disabled={busy} onClick={() => void connect()}>
-                    {busy ? "Creating…" : status ? "Replace token" : "Create token"}
-                  </Button>
-                </span>
-                {token && (
-                  <span className="flex flex-col gap-2 rounded-lg bg-white/[0.04] p-3">
-                    <span className="text-foreground">Copy it now. Orbit won&apos;t show it again.</span>
-                    <code className="text-foreground block font-mono text-[12px] break-all">{token}</code>
-                    <span>
-                      <Button variant="secondary" size="sm" onClick={() => void copy(token, "token")}>
-                        {copied === "token" ? "Copied" : "Copy token"}
-                      </Button>
-                    </span>
-                  </span>
-                )}
-              </span>
-            ) : (
-              "Ask an owner or admin to create a Grok Bot token."
+        {collapsed ? (
+          <>
+            {canConnect && (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button variant="secondary" size="sm" disabled={busy} onClick={() => void connect()}>
+                  {busy ? "Creating…" : "Replace token"}
+                </Button>
+                <span className="caption-style text-subtle">Creating a new one stops the old one working.</span>
+              </div>
             )}
-          </li>
-          <li className="flex flex-col gap-2">
-            <span>
-              In Grok Bot, open Settings, then Plugins, and add a custom MCP server named Orbit with this address and the header <code className="font-mono text-[12px]">Authorization: Bearer</code> followed by the token.
-            </span>
-            <span className="flex flex-wrap items-center gap-2">
-              <code className="text-foreground rounded bg-white/[0.04] px-2 py-1 font-mono text-[12px] break-all">{mcpUrl}</code>
-              <Button variant="ghost" size="sm" onClick={() => void copy(mcpUrl, "url")}>
-                {copied === "url" ? "Copied" : "Copy address"}
-              </Button>
-            </span>
-          </li>
-          <li className="flex flex-col gap-2">
-            <span>Create a routine in Grok Bot that runs nightly with these instructions:</span>
-            <label className="sr-only" htmlFor="grok-routine">
-              Routine instructions
-            </label>
-            <textarea id="grok-routine" readOnly rows={8} value={routine} className={cn(AREA, "text-[13px]")} />
-            <span>
-              <Button variant="ghost" size="sm" onClick={() => void copy(routine, "routine")}>
-                {copied === "routine" ? "Copied" : "Copy instructions"}
-              </Button>
-            </span>
-          </li>
-        </ol>
+            <SettingsDisclosure title="Set up">
+              <ol className="text-soft flex list-decimal flex-col gap-3 pl-5 text-[14px] leading-5">{connectSteps}</ol>
+            </SettingsDisclosure>
+          </>
+        ) : (
+          <ol className="text-soft flex list-decimal flex-col gap-3 pl-5">
+            <li>
+              {canConnect ? (
+                <span className="flex flex-col gap-2">
+                  <span>Create a token for Grok Bot. {status ? "Creating a new one stops the old one working." : ""}</span>
+                  <span>
+                    <Button variant="secondary" size="sm" disabled={busy} onClick={() => void connect()}>
+                      {busy ? "Creating…" : status ? "Replace token" : "Create token"}
+                    </Button>
+                  </span>
+                  {token && (
+                    <span className="flex flex-col gap-2 rounded-lg bg-white/[0.04] p-3">
+                      <span className="text-foreground">Copy it now. Orbit won&apos;t show it again.</span>
+                      <code className="text-foreground block font-mono text-[12px] break-all">{token}</code>
+                      <span>
+                        <Button variant="secondary" size="sm" onClick={() => void copy(token, "token")}>
+                          {copied === "token" ? "Copied" : "Copy token"}
+                        </Button>
+                      </span>
+                    </span>
+                  )}
+                </span>
+              ) : (
+                "Ask an owner or admin to create a Grok Bot token."
+              )}
+            </li>
+            {connectSteps}
+          </ol>
+        )}
         {error && (
           <p role="alert" className="caption-style text-danger">
             {error}

@@ -38,7 +38,7 @@ export default async function ToolsSettingsPage() {
   const origin = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
   const canAdmin = user.role === "owner" || user.role === "admin";
   return (
-    <SettingsPage title="Tools" description="Services your team shares, and how agents and your own services reach Orbit.">
+    <SettingsPage title="Tools">
       <ClickUpSettings view={clickup} canAdmin={canAdmin} />
       <EnrichmentSettingsCard
         settings={enrichment}

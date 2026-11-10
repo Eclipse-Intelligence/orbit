@@ -90,7 +90,7 @@ export async function saveOtherEmailsAction(
     revalidatePath("/capture");
     return { emails: saved };
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Could not save your email addresses." };
+    return { error: error instanceof CrmError ? error.message : "Couldn't save your email addresses." };
   }
 }
 
@@ -102,7 +102,7 @@ export async function saveAboutYouAction(input: unknown): Promise<{ error?: stri
     return { saved };
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
-    return { error: "Could not save About you." };
+    return { error: "Couldn't save." };
   }
 }
 
@@ -114,7 +114,7 @@ export async function saveYouAction(input: unknown): Promise<{ error?: string; f
     return { saved };
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
-    return { error: "Could not save." };
+    return { error: "Couldn't save." };
   }
 }
 
@@ -125,7 +125,7 @@ export async function draftAboutYouAction(input: { linkedinUrl: string; websiteU
     return { draft: await draftPersonalContext(user, input, { deadline: Date.now() + 100_000, multiWorkspace }) };
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
-    return { error: "Could not draft About you. Try again, or fill it in yourself." };
+    return { error: "Couldn't draft. Try again." };
   }
 }
 
@@ -140,7 +140,7 @@ export async function saveMeetingLinkAction(
     revalidatePath("/(crm)/contacts/[id]", "page");
     return { meetingLink };
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Could not save the meeting link." };
+    return { error: error instanceof CrmError ? error.message : "Couldn't save the meeting link." };
   }
 }
 
@@ -158,7 +158,7 @@ export async function saveBookingPageAction(
       return { error: error.message, field };
     }
     console.error("Booking page save failed", error);
-    return { error: "Could not save the booking page." };
+    return { error: "Couldn't save the booking page." };
   }
 }
 
@@ -361,7 +361,7 @@ export async function runHeldAgentMailAction(id: string): Promise<AgentMailboxAc
       void work();
     }
     revalidatePath(SETTINGS_PATHS.tools);
-    return { message: "Orbit is working on it. The reply comes back in the same thread." };
+    return { message: "Started. The reply comes back in the thread." };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't run that email." };
   }

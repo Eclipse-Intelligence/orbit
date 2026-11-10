@@ -19,10 +19,7 @@ export default async function CalendarSettingsPage({
     listCalendarGroups(user),
   ]);
   return (
-    <SettingsPage
-      title="Calendars"
-      description="Choose which calendars appear on the Calendar page and which ones Orbit uses for meetings."
-    >
+    <SettingsPage title="Calendars">
       <CalendarsSettings
         groups={groups}
         configured={microsoftConfigured()}

@@ -16,7 +16,8 @@ export default async function LearningSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
   const canAdmin = user.role === "owner" || user.role === "admin";
-  const [business, market, watchlist, notes, statuses, grok, headerStore, workspaces] = await Promise.all([
+  const [personal, business, market, watchlist, notes, statuses, grok, headerStore, workspaces] = await Promise.all([
+    listMemories(user, { scope: "personal", limit: 200, allWorkspaces: true }),
     listMemories(user, { scope: "business", limit: 200 }),
     listMemories(user, { scope: "market", limit: 200 }),
     listWatchlist(user),
@@ -27,20 +28,18 @@ export default async function LearningSettingsPage() {
     workspaceActors(user).catch(() => [user]),
   ]);
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
+  const manyWorkspaces = workspaces.length > 1;
   const mcpUrl = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}/api/mcp`;
   return (
-    <SettingsPage
-      title="Learning"
-      description="What Orbit's assistant has learned about the business and the market, the watchlist Grok Bot researches, and the market notes it sends."
-    >
+    <SettingsPage title="Learning">
       <LearningStatusCard statuses={statuses} canRunShared={canAdmin} />
       <MemoriesCard
         id="notes"
-        heading="What Orbit has learned"
-        scopes={["business", "market"]}
-        memories={{ business, market }}
+        heading="Notes"
+        scopes={manyWorkspaces ? ["business", "market"] : ["personal", "business", "market"]}
+        memories={{ personal, business, market }}
         workspaceName={user.workspaceName}
-        manyWorkspaces={workspaces.length > 1}
+        manyWorkspaces={manyWorkspaces}
       />
       <WatchlistCard items={watchlist} />
       <MarketNotesCard notes={notes} />

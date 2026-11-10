@@ -13,13 +13,18 @@ import { PERSONAL_LIMITS, type AboutYouInput, type YouInput } from "@/lib/person
 import { GENERIC_ERROR } from "@/lib/utils";
 
 type Pending = "save" | "draft" | null;
+type ProfileField = keyof AboutYouInput | keyof YouInput | "websiteUrl";
+type FieldErrors = Partial<Record<ProfileField, string>>;
 
 function same<T extends Record<string, string>>(left: T, right: T) {
   return Object.keys(left).every((key) => left[key].trim() === right[key].trim());
 }
 
+function describedBy(id: string, error: string | undefined) {
+  return error ? `${id}-error` : `${id}-hint`;
+}
+
 function SaveRow({
-  label,
   pending,
   busy,
   dirty,
@@ -27,7 +32,6 @@ function SaveRow({
   status,
   onUndo,
 }: {
-  label: string;
   pending: boolean;
   busy: boolean;
   dirty: boolean;
@@ -44,11 +48,11 @@ function SaveRow({
       )}
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="primary" size="sm" type="submit" disabled={busy || !dirty}>
-          {pending ? "Saving…" : label}
+          {pending ? "Saving…" : "Save"}
         </Button>
         {dirty && !busy && (
           <Button variant="ghost" size="sm" type="button" onClick={onUndo}>
-            Undo changes
+            Undo
           </Button>
         )}
         <p role="status" className="caption-style text-subtle">
@@ -59,22 +63,139 @@ function SaveRow({
   );
 }
 
+function DraftButton({ pending, disabled, describedBy, onDraft }: { pending: boolean; disabled: boolean; describedBy?: string; onDraft: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button variant="secondary" size="sm" type="button" disabled={disabled} aria-describedby={describedBy} onClick={onDraft}>
+        {pending ? "Drafting…" : "Draft from LinkedIn and website"}
+      </Button>
+    </div>
+  );
+}
+
+function RoleField({ value, error, onChange }: { value: string; error?: string; onChange: (value: string) => void }) {
+  return (
+    <Field label="Your role" htmlFor="about-role" error={error} hint="Shown to your team.">
+      <Input
+        id="about-role"
+        autoComplete="organization-title"
+        maxLength={PERSONAL_LIMITS.jobTitle}
+        value={value}
+        placeholder="Founder and CEO, Acme"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy("about-role", error)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
+function AboutField({ value, error, hint, onChange }: { value: string; error?: string; hint: string; onChange: (value: string) => void }) {
+  return (
+    <Field label="About you" htmlFor="about-about" error={error} hint={hint}>
+      <Textarea
+        id="about-about"
+        rows={4}
+        maxLength={PERSONAL_LIMITS.about}
+        value={value}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy("about-about", error)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
+function WebsiteField({ value, error, onChange }: { value: string; error?: string; onChange: (value: string) => void }) {
+  return (
+    <Field label="Website" htmlFor="about-website" error={error} hint="Read when drafting. Not saved.">
+      <Input
+        id="about-website"
+        type="url"
+        inputMode="url"
+        autoComplete="url"
+        spellCheck={false}
+        maxLength={PERSONAL_LIMITS.url}
+        value={value}
+        placeholder="yourcompany.com"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy("about-website", error)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
+function LinkedinField({ value, error, onChange }: { value: string; error?: string; onChange: (value: string) => void }) {
+  return (
+    <Field label="LinkedIn profile" htmlFor="about-linkedin" error={error}>
+      <Input
+        id="about-linkedin"
+        type="url"
+        inputMode="url"
+        autoComplete="url"
+        spellCheck={false}
+        maxLength={PERSONAL_LIMITS.url}
+        value={value}
+        placeholder="linkedin.com/in/your-name"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? "about-linkedin-error" : undefined}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
+function WritingField({ value, error, onChange }: { value: string; error?: string; onChange: (value: string) => void }) {
+  return (
+    <Field label="How you write" htmlFor="about-writing" error={error} hint={`Tone, length, sign-off, words to avoid. ${value.length}/${PERSONAL_LIMITS.writing}`}>
+      <Textarea
+        id="about-writing"
+        rows={3}
+        maxLength={PERSONAL_LIMITS.writing}
+        value={value}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy("about-writing", error)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
+function InterestsField({ value, error, onChange }: { value: string; error?: string; onChange: (value: string) => void }) {
+  return (
+    <Field label="What you care about" htmlFor="about-interests" error={error} hint={`${value.length}/${PERSONAL_LIMITS.interests}`}>
+      <Textarea
+        id="about-interests"
+        rows={5}
+        maxLength={PERSONAL_LIMITS.interests}
+        value={value}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy("about-interests", error)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
+function draftedStatus(notes: string[]) {
+  return `Drafted. Check it, then save.${notes.length ? ` ${notes.join(" ")}` : ""}`;
+}
+
 export function AboutYouSettings({
   about: initialAbout,
   linkedinUrl,
   website: initialWebsite,
-  workspaceName,
 }: {
   about: AboutYouInput;
   linkedinUrl: string;
   website: string;
-  workspaceName: string | null;
 }) {
   const router = useRouter();
   const [savedAbout, setSavedAbout] = useState(initialAbout);
   const [about, setAbout] = useState(initialAbout);
   const [website, setWebsite] = useState(initialWebsite);
-  const [errors, setErrors] = useState<Partial<Record<keyof AboutYouInput | "websiteUrl", string>>>({});
+  const [errors, setErrors] = useState<FieldErrors>({});
   const [aboutError, setAboutError] = useState<string | null>(null);
   const [aboutStatus, setAboutStatus] = useState<string | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -82,7 +203,7 @@ export function AboutYouSettings({
   const aboutDirty = !same(about, savedAbout);
   const busy = pending !== null;
 
-  function clear(key: keyof AboutYouInput | "websiteUrl") {
+  function clear(key: ProfileField) {
     setErrors((current) => ({ ...current, [key]: undefined }));
   }
 
@@ -102,13 +223,13 @@ export function AboutYouSettings({
     setPending(null);
     if (result.error || !result.saved) {
       if (result.field === "jobTitle" || result.field === "about") setErrors({ [result.field]: result.error });
-      else setAboutError(result.error ?? "Could not save About you.");
+      else setAboutError(result.error ?? "Couldn't save.");
       return;
     }
     const next = { jobTitle: result.saved.jobTitle, about: result.saved.about };
     setSavedAbout(next);
     setAbout(next);
-    setAboutStatus("Saved. The assistant uses this from your next message.");
+    setAboutStatus("Saved");
     router.refresh();
   }
 
@@ -116,93 +237,45 @@ export function AboutYouSettings({
     setPending("draft");
     setDraftError(null);
     setAboutError(null);
-    setAboutStatus("Reading your LinkedIn and website. This takes up to a minute.");
+    setAboutStatus("This takes up to a minute.");
     const result = await draftAboutYouAction({ linkedinUrl, websiteUrl: website }).catch(() => ({ error: GENERIC_ERROR, field: undefined, draft: undefined }));
     setPending(null);
     if (result.error || !result.draft) {
       setAboutStatus(null);
       if (result.field === "linkedinUrl") setDraftError(result.error ?? "Check your LinkedIn link.");
       else if (result.field === "websiteUrl") setErrors({ websiteUrl: result.error });
-      else setAboutError(result.error ?? "Could not draft About you.");
+      else setAboutError(result.error ?? "Couldn't draft. Try again.");
       return;
     }
     const { draft: drafted, notes } = result.draft;
     setAbout((current) => ({ jobTitle: drafted.jobTitle || current.jobTitle, about: drafted.about || current.about }));
-    setAboutStatus(`Drafted. Check it, change anything that isn't right, then save.${notes.length ? ` ${notes.join(" ")}` : ""}`);
+    setAboutStatus(draftedStatus(notes));
   }
 
   return (
-    <SettingsCard
-      id="about-you"
-      title="About you"
-      description={
-        workspaceName
-          ? `For ${workspaceName}. The assistant and Mail use it here. Your role is shown to your team in ${workspaceName}, and About you is private to you.`
-          : "Orbit's assistant reads this so it knows who it's helping, and Mail uses it when drafting for you. Your role is shown to your team. About you is private to you."
-      }
-    >
+    <SettingsCard id="about-you" title="About you">
       <form className="flex flex-col gap-4" noValidate onSubmit={saveAbout}>
-        <Field label="Your role" htmlFor="about-role" error={errors.jobTitle} hint="Shown to your team.">
-          <Input
-            id="about-role"
-            autoComplete="organization-title"
-            maxLength={PERSONAL_LIMITS.jobTitle}
-            value={about.jobTitle}
-            placeholder="Founder and CEO, Acme"
-            aria-invalid={errors.jobTitle ? true : undefined}
-            aria-describedby={errors.jobTitle ? "about-role-error" : "about-role-hint"}
-            onChange={(event) => updateAbout("jobTitle", event.target.value)}
-          />
-        </Field>
-        <Field
-          label="About you"
-          htmlFor="about-about"
+        <RoleField value={about.jobTitle} error={errors.jobTitle} onChange={(value) => updateAbout("jobTitle", value)} />
+        <AboutField
+          value={about.about}
           error={errors.about}
-          hint={`What you do, what you're responsible for and who you work with. ${about.about.length}/${PERSONAL_LIMITS.about}`}
-        >
-          <Textarea
-            id="about-about"
-            rows={4}
-            maxLength={PERSONAL_LIMITS.about}
-            value={about.about}
-            aria-invalid={errors.about ? true : undefined}
-            aria-describedby={errors.about ? "about-about-error" : "about-about-hint"}
-            onChange={(event) => updateAbout("about", event.target.value)}
-          />
-        </Field>
-        <Field label="Website" htmlFor="about-website" error={errors.websiteUrl} hint="Read when drafting. Not saved.">
-          <Input
-            id="about-website"
-            type="url"
-            inputMode="url"
-            autoComplete="url"
-            spellCheck={false}
-            maxLength={PERSONAL_LIMITS.url}
-            value={website}
-            placeholder="yourcompany.com"
-            aria-invalid={errors.websiteUrl ? true : undefined}
-            aria-describedby={errors.websiteUrl ? "about-website-error" : "about-website-hint"}
-            onChange={(event) => {
-              setWebsite(event.target.value);
-              clear("websiteUrl");
-            }}
-          />
-        </Field>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            disabled={busy || (!linkedinUrl.trim() && !website.trim())}
-            aria-describedby={draftError ? "about-draft-caption about-draft-error" : "about-draft-caption"}
-            onClick={() => void draft()}
-          >
-            {pending === "draft" ? "Drafting…" : "Draft from my LinkedIn and website"}
-          </Button>
-          <span id="about-draft-caption" className="caption-style text-subtle">
-            Fills in this card for you to check. Nothing is saved until you save.
-          </span>
-        </div>
+          hint={`Private to you. ${about.about.length}/${PERSONAL_LIMITS.about}`}
+          onChange={(value) => updateAbout("about", value)}
+        />
+        <WebsiteField
+          value={website}
+          error={errors.websiteUrl}
+          onChange={(value) => {
+            setWebsite(value);
+            clear("websiteUrl");
+          }}
+        />
+        <DraftButton
+          pending={pending === "draft"}
+          disabled={busy || (!linkedinUrl.trim() && !website.trim())}
+          describedBy={draftError ? "about-draft-error" : undefined}
+          onDraft={() => void draft()}
+        />
         {draftError && (
           <p id="about-draft-error" role="alert" className="caption-style text-danger">
             {draftError}{" "}
@@ -213,7 +286,6 @@ export function AboutYouSettings({
           </p>
         )}
         <SaveRow
-          label="Save About you"
           pending={pending === "save"}
           busy={busy}
           dirty={aboutDirty}
@@ -221,23 +293,16 @@ export function AboutYouSettings({
           status={aboutStatus}
           onUndo={() => setAbout(savedAbout)}
         />
-        <p className="caption-style text-subtle">
-          Your LinkedIn, how you write and what you care about are in{" "}
-          <Button variant="link" size="none" href={`${SETTINGS_PATHS.general}#you`} className="caption-style">
-            General
-          </Button>
-          .
-        </p>
       </form>
     </SettingsCard>
   );
 }
 
-export function YouSettings({ you: initialYou, website, multi }: { you: YouInput; website: string; multi: boolean }) {
+export function YouSettings({ you: initialYou, website }: { you: YouInput; website: string }) {
   const router = useRouter();
   const [savedYou, setSavedYou] = useState(initialYou);
   const [you, setYou] = useState(initialYou);
-  const [errors, setErrors] = useState<Partial<Record<keyof YouInput, string>>>({});
+  const [errors, setErrors] = useState<FieldErrors>({});
   const [youError, setYouError] = useState<string | null>(null);
   const [youStatus, setYouStatus] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending>(null);
@@ -260,110 +325,181 @@ export function YouSettings({ you: initialYou, website, multi }: { you: YouInput
     setPending(null);
     if (result.error || !result.saved) {
       if (result.field && result.field in you) setErrors({ [result.field]: result.error });
-      else setYouError(result.error ?? "Could not save.");
+      else setYouError(result.error ?? "Couldn't save.");
       return;
     }
     const next = { linkedinUrl: result.saved.linkedinUrl, interests: result.saved.interests, writing: result.saved.writing };
     setSavedYou(next);
     setYou(next);
-    setYouStatus("Saved. The assistant uses this from your next message.");
+    setYouStatus("Saved");
     router.refresh();
   }
 
   async function draft() {
     setPending("draft");
     setYouError(null);
-    setYouStatus("Reading your LinkedIn and website. This takes up to a minute.");
+    setYouStatus("This takes up to a minute.");
     const result = await draftAboutYouAction({ linkedinUrl: you.linkedinUrl, websiteUrl: website }).catch(() => ({ error: GENERIC_ERROR, field: undefined, draft: undefined }));
     setPending(null);
     if (result.error || !result.draft) {
       setYouStatus(null);
       if (result.field === "linkedinUrl") setErrors({ linkedinUrl: result.error });
-      else setYouError(result.error ?? "Could not draft from your LinkedIn and website.");
+      else setYouError(result.error ?? "Couldn't draft. Try again.");
       return;
     }
     const { draft: drafted, notes } = result.draft;
     setYou((current) => ({ ...current, interests: drafted.interests || current.interests, writing: drafted.writing || current.writing }));
-    setYouStatus(`Drafted. Check it, then save.${notes.length ? ` ${notes.join(" ")}` : ""}`);
+    setYouStatus(draftedStatus(notes));
   }
 
   return (
-    <SettingsCard
-      id="you"
-      title="You"
-      description={multi ? "The same in every workspace. Private to you, and used whenever Orbit writes for you." : "Private to you, and used whenever Orbit writes for you."}
-    >
+    <SettingsCard id="you" title="You" description="Private to you.">
       <form className="flex flex-col gap-4" noValidate onSubmit={saveYou}>
-        <Field label="LinkedIn profile" htmlFor="about-linkedin" error={errors.linkedinUrl}>
-          <Input
-            id="about-linkedin"
-            type="url"
-            inputMode="url"
-            autoComplete="url"
-            spellCheck={false}
-            maxLength={PERSONAL_LIMITS.url}
-            value={you.linkedinUrl}
-            placeholder="linkedin.com/in/your-name"
-            aria-invalid={errors.linkedinUrl ? true : undefined}
-            aria-describedby={errors.linkedinUrl ? "about-linkedin-error" : undefined}
-            onChange={(event) => updateYou("linkedinUrl", event.target.value)}
-          />
-        </Field>
-        <Field
-          label="How you write"
-          htmlFor="about-writing"
-          error={errors.writing}
-          hint={`Tone, length, how you open and sign off, words you'd never use. ${you.writing.length}/${PERSONAL_LIMITS.writing}`}
-        >
-          <Textarea
-            id="about-writing"
-            rows={3}
-            maxLength={PERSONAL_LIMITS.writing}
-            value={you.writing}
-            aria-invalid={errors.writing ? true : undefined}
-            aria-describedby={errors.writing ? "about-writing-error" : "about-writing-hint"}
-            onChange={(event) => updateYou("writing", event.target.value)}
-          />
-        </Field>
-        <Field
-          label="What you care about"
-          htmlFor="about-interests"
-          error={errors.interests}
-          hint={`Your interests, and the views you hold and are known for. ${you.interests.length}/${PERSONAL_LIMITS.interests}`}
-        >
-          <Textarea
-            id="about-interests"
-            rows={5}
-            maxLength={PERSONAL_LIMITS.interests}
-            value={you.interests}
-            aria-invalid={errors.interests ? true : undefined}
-            aria-describedby={errors.interests ? "about-interests-error" : "about-interests-hint"}
-            onChange={(event) => updateYou("interests", event.target.value)}
-          />
-        </Field>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            disabled={busy || (!you.linkedinUrl.trim() && !website.trim())}
-            aria-describedby="you-draft-caption"
-            onClick={() => void draft()}
-          >
-            {pending === "draft" ? "Drafting…" : "Draft from my LinkedIn and website"}
-          </Button>
-          <span id="you-draft-caption" className="caption-style text-subtle">
-            Fills in how you write and what you care about for you to check. Nothing is saved until you save.
-          </span>
-        </div>
+        <LinkedinField value={you.linkedinUrl} error={errors.linkedinUrl} onChange={(value) => updateYou("linkedinUrl", value)} />
+        <WritingField value={you.writing} error={errors.writing} onChange={(value) => updateYou("writing", value)} />
+        <InterestsField value={you.interests} error={errors.interests} onChange={(value) => updateYou("interests", value)} />
+        <DraftButton pending={pending === "draft"} disabled={busy || (!you.linkedinUrl.trim() && !website.trim())} onDraft={() => void draft()} />
         <SaveRow
-          label="Save"
           pending={pending === "save"}
           busy={busy}
           dirty={youDirty}
           error={youError}
           status={youStatus}
           onUndo={() => setYou(savedYou)}
+        />
+      </form>
+    </SettingsCard>
+  );
+}
+
+export function ProfileSettings({
+  about: initialAbout,
+  you: initialYou,
+  website: initialWebsite,
+}: {
+  about: AboutYouInput;
+  you: YouInput;
+  website: string;
+}) {
+  const router = useRouter();
+  const [savedAbout, setSavedAbout] = useState(initialAbout);
+  const [about, setAbout] = useState(initialAbout);
+  const [savedYou, setSavedYou] = useState(initialYou);
+  const [you, setYou] = useState(initialYou);
+  const [website, setWebsite] = useState(initialWebsite);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [pending, setPending] = useState<Pending>(null);
+  const aboutDirty = !same(about, savedAbout);
+  const youDirty = !same(you, savedYou);
+  const busy = pending !== null;
+
+  function touch(key: ProfileField) {
+    setErrors((current) => ({ ...current, [key]: undefined }));
+    setError(null);
+    setStatus(null);
+  }
+
+  function updateAbout(key: keyof AboutYouInput, value: string) {
+    setAbout((current) => ({ ...current, [key]: value }));
+    touch(key);
+  }
+
+  function updateYou(key: keyof YouInput, value: string) {
+    setYou((current) => ({ ...current, [key]: value }));
+    touch(key);
+  }
+
+  function failed(result: { error?: string; field?: string }) {
+    const field = result.field as ProfileField | undefined;
+    if (field && (field in about || field in you)) setErrors({ [field]: result.error });
+    else setError(result.error ?? "Couldn't save.");
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending("save");
+    setError(null);
+    setStatus(null);
+    if (youDirty) {
+      const result = await saveYouAction(you).catch(() => ({ error: GENERIC_ERROR, field: undefined, saved: undefined }));
+      if (result.error || !result.saved) {
+        setPending(null);
+        failed(result);
+        return;
+      }
+      const next = { linkedinUrl: result.saved.linkedinUrl, interests: result.saved.interests, writing: result.saved.writing };
+      setSavedYou(next);
+      setYou(next);
+    }
+    if (aboutDirty) {
+      const result = await saveAboutYouAction(about).catch(() => ({ error: GENERIC_ERROR, field: undefined, saved: undefined }));
+      if (result.error || !result.saved) {
+        setPending(null);
+        failed(result);
+        router.refresh();
+        return;
+      }
+      const next = { jobTitle: result.saved.jobTitle, about: result.saved.about };
+      setSavedAbout(next);
+      setAbout(next);
+    }
+    setPending(null);
+    setStatus("Saved");
+    router.refresh();
+  }
+
+  async function draft() {
+    setPending("draft");
+    setError(null);
+    setStatus("This takes up to a minute.");
+    const result = await draftAboutYouAction({ linkedinUrl: you.linkedinUrl, websiteUrl: website }).catch(() => ({ error: GENERIC_ERROR, field: undefined, draft: undefined }));
+    setPending(null);
+    if (result.error || !result.draft) {
+      setStatus(null);
+      if (result.field === "linkedinUrl" || result.field === "websiteUrl") setErrors({ [result.field]: result.error });
+      else setError(result.error ?? "Couldn't draft. Try again.");
+      return;
+    }
+    const { draft: drafted, notes } = result.draft;
+    setAbout((current) => ({ jobTitle: drafted.jobTitle || current.jobTitle, about: drafted.about || current.about }));
+    setYou((current) => ({ ...current, interests: drafted.interests || current.interests, writing: drafted.writing || current.writing }));
+    setStatus(draftedStatus(notes));
+  }
+
+  return (
+    <SettingsCard id="you" title="About you" description="Private to you, except your role.">
+      <form className="flex flex-col gap-4" noValidate onSubmit={save}>
+        <RoleField value={about.jobTitle} error={errors.jobTitle} onChange={(value) => updateAbout("jobTitle", value)} />
+        <AboutField
+          value={about.about}
+          error={errors.about}
+          hint={`${about.about.length}/${PERSONAL_LIMITS.about}`}
+          onChange={(value) => updateAbout("about", value)}
+        />
+        <LinkedinField value={you.linkedinUrl} error={errors.linkedinUrl} onChange={(value) => updateYou("linkedinUrl", value)} />
+        <WebsiteField
+          value={website}
+          error={errors.websiteUrl}
+          onChange={(value) => {
+            setWebsite(value);
+            touch("websiteUrl");
+          }}
+        />
+        <WritingField value={you.writing} error={errors.writing} onChange={(value) => updateYou("writing", value)} />
+        <InterestsField value={you.interests} error={errors.interests} onChange={(value) => updateYou("interests", value)} />
+        <DraftButton pending={pending === "draft"} disabled={busy || (!you.linkedinUrl.trim() && !website.trim())} onDraft={() => void draft()} />
+        <SaveRow
+          pending={pending === "save"}
+          busy={busy}
+          dirty={aboutDirty || youDirty}
+          error={error}
+          status={status}
+          onUndo={() => {
+            setAbout(savedAbout);
+            setYou(savedYou);
+          }}
         />
       </form>
     </SettingsCard>

@@ -26,7 +26,6 @@ function GroupHeading({ group, workspace, phone }: { group: SettingsNavGroup; wo
         )}
         <span className="truncate">{group.heading}</span>
       </h2>
-      {group.caption && <p className="caption-style text-subtle">{group.caption}</p>}
     </div>
   );
 }

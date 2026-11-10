@@ -23,6 +23,8 @@ const STATUS_LABELS: Record<string, string> = {
   sent: "Sent",
 };
 
+const FAILED = new Set(["failed", "ignored", "refused"]);
+
 type SenderDraft = { key: number; address: string; userId: string; problem: string | null };
 
 function draftsFrom(view: AgentMailboxView): SenderDraft[] {
@@ -72,10 +74,10 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
     setNextKey((key) => key + 1);
   }
 
-  const last = view.lastMessage;
+  const last = view.lastMessage && FAILED.has(view.lastMessage.status) ? view.lastMessage : null;
   const description = (
     <span className="flex flex-col gap-1.5">
-      <span>Email Orbit to give it work. Replies come back in the thread.</span>
+      <span>Email Orbit to give it work.</span>
       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="flex min-w-0 items-center gap-1.5">
           <WorkspaceTile id={view.workspaceId} name={view.workspaceName} className="size-4 rounded-[5px] text-[9px]" />
@@ -92,12 +94,6 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
         )}
         {view.setUp && <span>{view.lastReceivedAt ? `Last email ${formatWhen(view.lastReceivedAt)}` : "No email yet"}</span>}
       </span>
-      {last && (
-        <span className="wrap-anywhere">
-          {`${last.from ?? "Unknown sender"}: ${last.subject?.trim() || "(no subject)"} · ${STATUS_LABELS[last.status] ?? last.status}`}
-          {last.reason && (last.status === "ignored" || last.status === "refused") ? `. ${last.reason}` : ""}
-        </span>
-      )}
       {view.lastError && (
         <span className="text-danger" role="alert">
           {view.lastError}
@@ -106,12 +102,19 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
     </span>
   );
 
+  const lastFailure = last ? (
+    <p className="caption-style text-subtle wrap-anywhere">
+      {`${last.from ?? "Unknown sender"}: ${last.subject?.trim() || "(no subject)"} · ${STATUS_LABELS[last.status] ?? last.status}`}
+      {last.reason ? `. ${last.reason}` : ""}
+    </p>
+  ) : null;
+
   const held =
     view.held.length > 0 ? (
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-1">
           <h4 className="text-foreground leading-5">Held by MachineMail</h4>
-          <p className="caption-style text-subtle">Emails from your own addresses that MachineMail filtered. Run one only if you sent it.</p>
+          <p className="caption-style text-subtle">Filtered by MachineMail. Run one only if you sent it.</p>
         </div>
         <ul className="flex flex-col gap-2">
           {view.held.map((item) => (
@@ -128,7 +131,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
                 disabled={pending !== null}
                 onClick={() => void run(`held:${item.id}`, () => runHeldAgentMailAction(item.id))}
               >
-                {pending === `held:${item.id}` ? "Starting…" : "Run it anyway"}
+                {pending === `held:${item.id}` ? "Starting…" : "Run anyway"}
               </Button>
             </li>
           ))}
@@ -149,11 +152,12 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
             {outcome.message}
           </p>
         )}
+        {lastFailure}
         {held}
         {view.senders.length > 0 ? (
-          <p className="caption-style text-subtle">{`Your work comes from ${view.senders.map((sender) => sender.address).join(", ")}.`}</p>
+          <p className="caption-style text-subtle">{`Mail from ${view.senders.map((sender) => sender.address).join(", ")} runs as you.`}</p>
         ) : (
-          <p className="caption-style text-subtle">Only owners and admins can set it up or change who can give it work.</p>
+          <p className="caption-style text-subtle">Only owners and admins can change this.</p>
         )}
       </SettingsCard>
     );
@@ -188,6 +192,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           {outcome.message}
         </p>
       )}
+      {lastFailure}
       {held}
       {!view.setUp && (
         <label className="flex flex-col gap-2" htmlFor="agent-mailbox-address">
@@ -204,7 +209,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           />
         </label>
       )}
-      {view.setUp ? (
+      {view.setUp && (
         <form
           className="flex flex-col gap-3"
           onSubmit={(event) => {
@@ -214,7 +219,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
         >
           <div className="flex flex-col gap-1">
             <h4 className="text-foreground leading-5">Who can give it work</h4>
-            <p className="caption-style text-subtle">Mail from these addresses runs as the person beside it. Other mail is kept but never acted on.</p>
+            <p className="caption-style text-subtle">Mail from these addresses runs as the person beside it. Other mail is ignored.</p>
           </div>
           {senders.length === 0 && <p className="caption-style text-subtle">Nobody yet.</p>}
           <ul className="flex flex-col gap-4 sm:gap-2">
@@ -275,8 +280,6 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
             </Button>
           </div>
         </form>
-      ) : (
-        <p className="caption-style text-subtle">After setup, mail from your own addresses runs as you. Change it afterwards.</p>
       )}
     </SettingsCard>
   );

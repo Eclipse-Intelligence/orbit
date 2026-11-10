@@ -6,7 +6,6 @@ import SignaturesSettings from "@/components/crm/signatures-settings";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import MailHelpSettings from "@/components/mail/mail-help-settings";
 import MailRoutingSettings from "@/components/mail/mail-routing-settings";
-import ReadStatusSettings from "@/components/mail/read-status-settings";
 import SendingAddressesSettings from "@/components/mail/sending-addresses-settings";
 import { getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { getCalendarStatus } from "@/lib/crm/calendar";
@@ -66,7 +65,7 @@ export default async function EmailSettingsPage({
   ];
   const multi = workspaces.length > 1;
   return (
-    <SettingsPage title="Email" description="Your mailboxes, the addresses you send from, signatures and help with replies.">
+    <SettingsPage title="Email">
       <SettingsNotices notice={notice} info={info} connected={connected} add={add} />
       {multi && (homes.length > 0 || rules.length > 0) && (
         <MailRoutingSettings homes={homes} rules={rules} workspaces={workspaces.map((item) => ({ id: item.id, name: item.name }))} />
@@ -81,8 +80,7 @@ export default async function EmailSettingsPage({
       <SendingAddressesSettings identities={identities} sources={sources} suggestedSource={null} holdCalendars={holdCalendars} />
       <MyEmailsSettings emails={myEmails} />
       <SignaturesSettings senders={allSenders} />
-      <MailHelpSettings initial={help} />
-      <ReadStatusSettings initial={readStatuses} />
+      <MailHelpSettings initial={help} readStatuses={readStatuses} />
     </SettingsPage>
   );
 }

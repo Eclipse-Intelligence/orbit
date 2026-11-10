@@ -47,7 +47,7 @@ export default function MeetingLinkSettings({ meetingLink }: { meetingLink: stri
     <SettingsCard
       id="meeting-link"
       title="Meeting link"
-      description="Your Whereby room, or any other https link. Orbit adds it to the invites you send as the location and a Join link."
+      description="Added to the invites you send."
     >
       <form className="flex flex-col gap-2" noValidate onSubmit={save}>
         <label className="sr-only" htmlFor="meeting-link-input">
@@ -72,7 +72,7 @@ export default function MeetingLinkSettings({ meetingLink }: { meetingLink: stri
             }}
           />
           <Button variant="secondary" size="sm" type="submit" disabled={pending || !dirty}>
-            {pending ? "Saving…" : "Save link"}
+            {pending ? "Saving…" : "Save"}
           </Button>
         </div>
         {error && (

@@ -372,14 +372,14 @@ export default function BookingPageSettings({
     }).catch((error: unknown) => ({
       error: reloadIfStaleDeploy(error)
         ? "Orbit was just updated. Reloading…"
-        : "Could not save the booking page. Check your connection and try again.",
+        : "Couldn't save. Try again.",
       field: undefined,
       page: undefined,
     }));
     setPending(false);
     if (result.error || !result.page) {
       const field = result.field === "inviteSender" && setup.senders.length <= 1 ? "form" : (result.field ?? "form");
-      setErrors({ [field]: result.error ?? "Could not save the booking page." });
+      setErrors({ [field]: result.error ?? "Couldn't save the booking page." });
       return;
     }
     setMessage(result.page.enabled ? "Saved. Your page is live." : "Saved. Your page is off.");
@@ -434,9 +434,9 @@ export default function BookingPageSettings({
   if (!setup.meetingLink) {
     warnings.push(
       <>
-        No meeting link is set, so invites won&apos;t include a video call.{" "}
+        No meeting link, so invites won&apos;t include a video call.{" "}
         <a href={`${SETTINGS_PATHS.general}#meeting-link`} className="underline underline-offset-2">
-          Add your Whereby link in General
+          Add one in General
         </a>
         .
       </>,
@@ -477,13 +477,7 @@ export default function BookingPageSettings({
       <SettingsCard
         id="booking-link"
         title="Public page"
-        description={
-          page.exists
-            ? page.enabled
-              ? "Your page is live. Anyone with the link can book time with you."
-              : "Your page is off. Visitors see a not-found page."
-            : "Choose a link, then save to create your page."
-        }
+        description={page.exists ? (page.enabled ? "Anyone with the link can book you." : "Visitors see a not-found page.") : undefined}
         action={
           <label className="flex items-center gap-2 text-[14px] leading-none">
             <span className="text-soft">{draft.enabled ? "On" : "Off"}</span>
@@ -563,7 +557,7 @@ export default function BookingPageSettings({
         )}
       </SettingsCard>
 
-      <SettingsCard title="What people see" description="Shown at the top of the page, next to your photo.">
+      <SettingsCard title="What people see">
         <Field label="Title" htmlFor="booking-title" error={errors.title}>
           <Input
             id="booking-title"
@@ -608,9 +602,83 @@ export default function BookingPageSettings({
           }
           onChanged={() => router.refresh()}
         />
+        <Field
+          label="Video link"
+          htmlFor="booking-video"
+          error={errors.videoUrl}
+          hint="A direct https link to an .mp4 you host. Stock-site links often stop working."
+        >
+          <div className="flex gap-2">
+            <Input
+              id="booking-video"
+              type="url"
+              inputMode="url"
+              spellCheck={false}
+              maxLength={BOOKING_VIDEO_URL_MAX}
+              value={draft.videoUrl}
+              placeholder="https://…/loop.mp4"
+              aria-describedby={errors.videoUrl ? "booking-video-error" : "booking-video-hint"}
+              onChange={(event) => {
+                update("videoUrl", event.target.value);
+                setPreviewError(false);
+              }}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!checkVideoUrl(draft.videoUrl).ok || !draft.videoUrl.trim()}
+              aria-expanded={preview}
+              aria-controls="booking-video-preview"
+              onClick={() => {
+                setPreview((value) => !value);
+                setPreviewError(false);
+              }}
+            >
+              {preview ? "Hide preview" : "Preview"}
+            </Button>
+          </div>
+        </Field>
+        {preview && draft.videoUrl.trim() && (
+          <div id="booking-video-preview" className="flex flex-col gap-2">
+            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black outline-1 -outline-offset-1 outline-white/10">
+              {!previewError && (
+                <video
+                  key={draft.videoUrl}
+                  src={draft.videoUrl.trim()}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  onError={() => setPreviewError(true)}
+                  className="absolute inset-0 size-full object-cover"
+                />
+              )}
+              {previewError && (
+                <p className="text-soft absolute inset-0 flex items-center justify-center px-6 text-center text-[13px] leading-5">
+                  This link didn&apos;t play. It must open the video file directly.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+        <ImagePicker
+          kind="poster"
+          title="Still image"
+          hint={
+            page.exists
+              ? "Shown while the video loads or when there's no video. Up to 1 MB."
+              : "Save the page first, then add a still image."
+          }
+          has={page.hasPoster}
+          version={page.version}
+          disabled={!page.exists}
+          round={false}
+          fallback={<div aria-hidden className="bg-muted aspect-video w-24 shrink-0 rounded-lg" />}
+          onChanged={() => router.refresh()}
+        />
       </SettingsCard>
 
-      <SettingsCard title="Availability" description="When people can book you. All times are London time.">
+      <SettingsCard title="Availability" description="London time.">
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Meeting length" htmlFor="booking-duration">
             <ChoiceSelect
@@ -641,10 +709,9 @@ export default function BookingPageSettings({
             />
           </Field>
           <Field
-            label="Book up to"
+            label="Days ahead (up to 90)"
             htmlFor="booking-horizon"
             error={errors.horizonDays}
-            hint="Days ahead, up to 90."
           >
             <Input
               id="booking-horizon"
@@ -653,7 +720,7 @@ export default function BookingPageSettings({
               min={1}
               max={BOOKING_HORIZON_MAX}
               value={draft.horizonDays}
-              aria-describedby={errors.horizonDays ? "booking-horizon-error" : "booking-horizon-hint"}
+              aria-describedby={errors.horizonDays ? "booking-horizon-error" : undefined}
               onChange={(event) => update("horizonDays", event.target.value)}
             />
           </Field>
@@ -712,86 +779,6 @@ export default function BookingPageSettings({
         </fieldset>
       </SettingsCard>
 
-      <SettingsCard
-        title="Background"
-        description="A looping, muted video behind the booking panel. Without one, the page shows a soft animated gradient."
-      >
-        <Field
-          label="Video link"
-          htmlFor="booking-video"
-          error={errors.videoUrl}
-          hint="Paste a direct https link to an .mp4 you host, for example on Vercel Blob, S3 or Cloudflare R2. Stock sites like Pixabay block playback on other websites, so their links can stop working without warning."
-        >
-          <div className="flex gap-2">
-            <Input
-              id="booking-video"
-              type="url"
-              inputMode="url"
-              spellCheck={false}
-              maxLength={BOOKING_VIDEO_URL_MAX}
-              value={draft.videoUrl}
-              placeholder="https://…/loop.mp4"
-              aria-describedby={errors.videoUrl ? "booking-video-error" : "booking-video-hint"}
-              onChange={(event) => {
-                update("videoUrl", event.target.value);
-                setPreviewError(false);
-              }}
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!checkVideoUrl(draft.videoUrl).ok || !draft.videoUrl.trim()}
-              aria-expanded={preview}
-              aria-controls="booking-video-preview"
-              onClick={() => {
-                setPreview((value) => !value);
-                setPreviewError(false);
-              }}
-            >
-              {preview ? "Hide preview" : "Preview"}
-            </Button>
-          </div>
-        </Field>
-        {preview && draft.videoUrl.trim() && (
-          <div id="booking-video-preview" className="flex flex-col gap-2">
-            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black outline-1 -outline-offset-1 outline-white/10">
-              {!previewError && (
-                <video
-                  key={draft.videoUrl}
-                  src={draft.videoUrl.trim()}
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
-                  onError={() => setPreviewError(true)}
-                  className="absolute inset-0 size-full object-cover"
-                />
-              )}
-              {previewError && (
-                <p className="text-soft absolute inset-0 flex items-center justify-center px-6 text-center text-[13px] leading-5">
-                  This link didn&apos;t play. Check it opens the video file directly and allows other sites to show it.
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-        <ImagePicker
-          kind="poster"
-          title="Still image"
-          hint={
-            page.exists
-              ? "Optional. Shown while the video loads, for visitors who prefer less motion, and instead of the gradient when there's no video. Up to 1 MB."
-              : "Save the page first, then add a still image."
-          }
-          has={page.hasPoster}
-          version={page.version}
-          disabled={!page.exists}
-          round={false}
-          fallback={<div aria-hidden className="bg-muted aspect-video w-24 shrink-0 rounded-lg" />}
-          onChanged={() => router.refresh()}
-        />
-      </SettingsCard>
-
       <div className="flex flex-wrap items-center justify-end gap-3">
         {errors.form && (
           <p role="alert" className="caption-style text-danger mr-auto">
@@ -809,7 +796,7 @@ export default function BookingPageSettings({
           data-shortcut="save"
           title="Save (⌘S)"
         >
-          {pending ? "Saving…" : page.exists ? "Save changes" : "Create page"}
+          {pending ? "Saving…" : page.exists ? "Save" : "Create page"}
         </Button>
       </div>
     </form>

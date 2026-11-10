@@ -59,7 +59,7 @@ export function ReadwiseWorkspace({ current, workspaces }: { current: string; wo
       return;
     }
     const name = workspaces.find((item) => item.id === workspaceId)?.name ?? "that workspace";
-    setNote({ error: false, text: `New documents go to Knowledge in ${name} from the next sync. Items already in Knowledge stay where they are.` });
+    setNote({ error: false, text: `New documents go to ${name}. Existing ones stay where they are.` });
     router.refresh();
   }
 
@@ -113,7 +113,7 @@ export function ReadwiseToken({ connected, hint }: { connected: boolean; hint: s
     <div className="flex flex-col gap-2">
       {connected ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-[14px] leading-5">Your Reader is connected{hint ? ` · token ending ${hint}` : ""}</span>
+          <span className="text-[14px] leading-5">Connected{hint ? ` · token ending ${hint}` : ""}</span>
           <HoldButton tone="neutral" disabled={pending} onConfirm={() => void run(removeReadwiseTokenAction)}>
             Hold to disconnect
           </HoldButton>
@@ -129,8 +129,8 @@ export function ReadwiseToken({ connected, hint }: { connected: boolean; hint: s
           <Input
             type="password"
             autoComplete="off"
-            aria-label="Your Readwise access token"
-            placeholder="Your Readwise access token"
+            aria-label="Readwise access token"
+            placeholder="Readwise access token"
             value={token}
             onChange={(event) => setToken(event.target.value)}
             className="sm:flex-1"
@@ -145,18 +145,20 @@ export function ReadwiseToken({ connected, hint }: { connected: boolean; hint: s
           {error}
         </p>
       )}
-      <p className="caption-style text-subtle leading-[1.4]">
-        Each person connects their own Reader. Get your token at{" "}
-        <a
-          href="https://readwise.io/access_token"
-          target="_blank"
-          rel="noreferrer"
-          className={cn(buttonVariants({ variant: "link", size: "none" }), "caption-style")}
-        >
-          readwise.io/access_token
-        </a>
-        . Only you can see it.
-      </p>
+      {!connected && (
+        <p className="caption-style text-subtle leading-[1.4]">
+          Get your token at{" "}
+          <a
+            href="https://readwise.io/access_token"
+            target="_blank"
+            rel="noreferrer"
+            className={cn(buttonVariants({ variant: "link", size: "none" }), "caption-style")}
+          >
+            readwise.io/access_token
+          </a>
+          . Only you can see it.
+        </p>
+      )}
     </div>
   );
 }

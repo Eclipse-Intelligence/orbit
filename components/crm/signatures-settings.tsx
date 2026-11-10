@@ -63,7 +63,6 @@ export default function SignaturesSettings({ senders }: { senders: Sender[] }) {
     <SettingsCard
       id="signatures"
       title="Signatures"
-      description="Added below every email you send from that address, from a contact, in bulk or by the assistant. You can remove it from a single email while writing it."
     >
       {senders.length === 0 ? (
         <p className="caption-style text-subtle">Connect Microsoft above to add a signature.</p>

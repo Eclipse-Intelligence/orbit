@@ -5,6 +5,7 @@ import { NativeSelect } from "@/components/_ui/native-select";
 import Switch from "@/components/_ui/switch";
 import { setMailHelpAction } from "@/app/(crm)/mail/actions";
 import { SettingsCard } from "@/components/crm/settings-ui";
+import ReadStatusRow from "@/components/mail/read-status-settings";
 import type { MailHelpSettings as Settings } from "@/lib/mail/prepare";
 
 const REMIND_CHOICES = [
@@ -22,7 +23,7 @@ const PITCH_CHOICES: { value: Settings["coldPitches"]; label: string }[] = [
   { value: "archive", label: "Archive" },
 ];
 
-export default function MailHelpSettings({ initial }: { initial: Settings }) {
+export default function MailHelpSettings({ initial, readStatuses }: { initial: Settings; readStatuses: boolean }) {
   const [settings, setSettings] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
@@ -49,14 +50,11 @@ export default function MailHelpSettings({ initial }: { initial: Settings }) {
     <SettingsCard
       id="mail-help"
       title="Prepared replies and reminders"
-      description="Orbit reads new email in Important and gets a reply ready when someone is waiting on you, in your voice and using what the CRM knows. Nothing is sent until you press Send."
+      description="Nothing is sent until you press Send."
     >
       <div className="flex flex-col gap-5">
         <div className="flex items-center justify-between gap-4">
-          <span className="flex flex-col">
-            <span className="text-[14px] leading-5">Prepare replies</span>
-            <span className="caption-style text-subtle">Drafts learn from the changes you make before sending.</span>
-          </span>
+          <span className="text-[14px] leading-5">Prepare replies</span>
           <Switch
             checked={settings.prepareReplies}
             onChange={(value) => save({ ...settings, prepareReplies: value }, { prepareReplies: value })}
@@ -64,9 +62,8 @@ export default function MailHelpSettings({ initial }: { initial: Settings }) {
           />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label htmlFor="auto-remind" className="flex flex-col">
-            <span className="text-[14px] leading-5">Remind me when nobody replies</span>
-            <span className="caption-style text-subtle">For emails you send that ask something. Weekends don&apos;t count.</span>
+          <label htmlFor="auto-remind" className="text-[14px] leading-5">
+            Remind me when nobody replies
           </label>
           <select
             id="auto-remind"
@@ -87,7 +84,7 @@ export default function MailHelpSettings({ initial }: { initial: Settings }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <label htmlFor="cold-pitches" className="flex flex-col">
             <span className="text-[14px] leading-5">Cold pitches</span>
-            <span className="caption-style text-subtle">Sales emails from people who aren&apos;t in Orbit and have never written to you.</span>
+            <span className="caption-style text-subtle">Sales email from strangers.</span>
           </label>
           <NativeSelect
             id="cold-pitches"
@@ -105,6 +102,7 @@ export default function MailHelpSettings({ initial }: { initial: Settings }) {
             ))}
           </NativeSelect>
         </div>
+        <ReadStatusRow initial={readStatuses} />
       </div>
       {error && (
         <p role="alert" className="caption-style text-danger mt-2">
