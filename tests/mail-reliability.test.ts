@@ -33,6 +33,7 @@ import {
   dwellReadDue,
   forgetDwellRead,
   holdQueuedDraft,
+  loadThread,
   noteDwellRead,
   OFFLINE,
   refreshProblem,
@@ -518,6 +519,21 @@ describe("send readiness and the Mail cache", () => {
     for (let wait = 0; wait < 10 && !cachedThread("t-draft"); wait += 1) await new Promise((done) => setImmediate(done));
     assert.deepEqual(asked, ["/api/mail/thread?key=t-draft"]);
     assert.deepEqual(cachedThread("t-draft")?.drafts.map((draft) => draft.id), ["d-1", "d-2"]);
+  });
+
+  it("keeps a draft being sent hidden when a conversation load lands afterwards", async () => {
+    const detail = { key: "t-late", drafts: [{ id: "d-late" }, { id: "d-kept" }], messages: [] } as unknown as ThreadDetail;
+    let answer: (response: Response) => void = () => undefined;
+    globalThis.fetch = (() => new Promise<Response>((done) => (answer = done))) as typeof fetch;
+    const loading = loadThread("t-late");
+    const release = holdQueuedDraft("d-late", Promise.resolve({ id: "d-late" }));
+    answer(Response.json(detail));
+    assert.deepEqual((await loading).drafts.map((draft) => draft.id), ["d-kept"]);
+    assert.deepEqual(cachedThread("t-late")?.drafts.map((draft) => draft.id), ["d-kept"]);
+    globalThis.fetch = (async () => Response.json(detail)) as typeof fetch;
+    await release();
+    for (let wait = 0; wait < 10 && !cachedThread("t-late"); wait += 1) await new Promise((done) => setImmediate(done));
+    assert.deepEqual(cachedThread("t-late")?.drafts.map((draft) => draft.id), ["d-late", "d-kept"]);
   });
 
   it("shows only plain sync problems, one per account that needs reconnecting", () => {

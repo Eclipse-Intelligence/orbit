@@ -113,11 +113,15 @@ function hideDraft(id: string | null | undefined) {
   }
 }
 
-function showDraft(id: string | null | undefined) {
-  const touched = id ? queuedDrafts.get(id) : undefined;
-  if (!id || !touched) return;
-  queuedDrafts.delete(id);
-  for (const key of touched) {
+function showDrafts(ids: (string | null | undefined)[]) {
+  const keys = new Set<string>();
+  for (const id of ids) {
+    const touched = id ? queuedDrafts.get(id) : undefined;
+    if (!id || !touched) continue;
+    queuedDrafts.delete(id);
+    for (const key of touched) keys.add(key);
+  }
+  for (const key of keys) {
     forgetThread(key);
     void loadThread(key, true).catch(() => null);
   }
@@ -127,11 +131,7 @@ export function holdQueuedDraft(current: string | null, payload: Promise<{ id: s
   hideDraft(current);
   const settled = payload.then((value) => value.id, () => null);
   void settled.then((id) => hideDraft(id));
-  return () =>
-    settled.then((id) => {
-      showDraft(current);
-      showDraft(id);
-    });
+  return () => settled.then((id) => showDrafts([current, id]));
 }
 
 export function newSendKey() {
