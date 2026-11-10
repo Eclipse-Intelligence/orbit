@@ -26,15 +26,11 @@ export const LOST_MESSAGE = "I couldn't finish that. Orbit Agent on your Mac sto
 
 type ToolEvent = { type: "tool"; id: string; name: string; label: string; status: "running" | "done" };
 
-type SteeredEvent = { type: "steered"; ids: string[] };
-
-type JobEvent = ToolEvent | SteeredEvent;
-
 type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 type JobState = {
   status: JobStatus;
-  events: JobEvent[];
+  events: ToolEvent[];
   result: { messageIds: string[] } | null;
   error: string | null;
   draft: string | null;
@@ -62,6 +58,7 @@ async function expireStale(db: Db, actor: UserActor) {
     [actor.userId],
   );
   await closeJobs(db, actor, expired.rows.map((row) => row.conversation_id), EXPIRED_MESSAGE);
+  answerLater(actor, expired.rows.map((row) => row.conversation_id));
   const lost = await db.query<{ conversation_id: string }>(
     `update crm.ai_companion_jobs j set status = 'cancelled', finished_at = now()
      where j.user_id = $1 and j.status = 'running'
@@ -70,6 +67,16 @@ async function expireStale(db: Db, actor: UserActor) {
     [actor.userId],
   );
   await closeJobs(db, actor, lost.rows.map((row) => row.conversation_id), LOST_MESSAGE);
+  answerLater(actor, lost.rows.map((row) => row.conversation_id));
+}
+
+function answerLater(actor: UserActor, conversationIds: string[]) {
+  if (conversationIds.length === 0) return;
+  void import("@/lib/assistant/chat")
+    .then(({ continueSteersLater }) => {
+      for (const conversationId of new Set(conversationIds)) continueSteersLater(actor, conversationId);
+    })
+    .catch(() => undefined);
 }
 
 async function pruneFinished(actor: UserActor) {
@@ -230,8 +237,8 @@ export async function nextCompanionJob(auth: AuthenticatedCompanion, waitMs: num
 async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
   if (!isUuid(jobId)) throw new CrmError("not_found", "That request is gone.", 404);
   const job = await withActor(auth.actor, async (db) => {
-    const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string; switches: JobSwitches | null }>(
-      "select status, companion_id, conversation_id, request -> 'switches' as switches from crm.ai_companion_jobs where id = $1 and user_id = $2",
+    const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string; switches: JobSwitches | null; email: boolean }>(
+      "select status, companion_id, conversation_id, request -> 'switches' as switches, agent_mail_id is not null as email from crm.ai_companion_jobs where id = $1 and user_id = $2",
       [jobId, auth.actor.userId],
     );
     return result.rows[0];
@@ -242,18 +249,8 @@ async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
 }
 
 export async function companionJobConversation(auth: AuthenticatedCompanion, jobId: string) {
-  return (await runningJob(auth, jobId)).conversation_id;
-}
-
-export async function noteSteered(auth: AuthenticatedCompanion, jobId: string, ids: string[]) {
-  if (ids.length === 0) return;
-  await withActor(auth.actor, async (db) => {
-    const result = await db.query<{ events: JobEvent[] }>("select events from crm.ai_companion_jobs where id = $1 and user_id = $2 for update", [jobId, auth.actor.userId]);
-    const known = new Set((result.rows[0]?.events ?? []).flatMap((event) => (event.type === "steered" ? event.ids : [])));
-    const fresh = ids.filter((id) => !known.has(id));
-    if (fresh.length === 0) return;
-    await db.query("update crm.ai_companion_jobs set events = events || $2::jsonb, updated_at = now() where id = $1", [jobId, JSON.stringify([{ type: "steered", ids: fresh }])]);
-  });
+  const job = await runningJob(auth, jobId);
+  return { conversationId: job.conversation_id, email: job.email };
 }
 
 async function addEvent(auth: AuthenticatedCompanion, jobId: string, event: ToolEvent) {

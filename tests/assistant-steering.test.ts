@@ -10,8 +10,12 @@ import {
   resumeConversation,
   sendMessage,
   stopConversation,
+  sweepWaitingSteers,
   type AssistantEvent,
 } from "@/lib/assistant/chat";
+import { POST as postMessages } from "@/app/api/companion/jobs/[id]/messages/route";
+import { POST as postComplete } from "@/app/api/companion/jobs/[id]/complete/route";
+import { POST as postFail } from "@/app/api/companion/jobs/[id]/fail/route";
 import { finishCompanionJob, nextCompanionJob, readCompanionResult } from "@/lib/companion/jobs";
 import { authenticateCompanion, createPairingCode, redeemPairing, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { buildPrompt } from "@/lib/companion/transcript";
@@ -415,6 +419,7 @@ describe("steering Orbit Agent", () => {
 
   it("feeds steering messages into a running Claude Code turn and reports which it read", async () => {
     const prompts: string[] = [];
+    const composed: boolean[] = [];
     let release = () => undefined as void;
     const steerArrived = new Promise<void>((resolve) => {
       release = resolve;
@@ -435,6 +440,7 @@ describe("steering Orbit Agent", () => {
           await steerArrived;
           const second = await input.next();
           prompts.push(String((second.value as SDKUserMessage).message.content));
+          composed.push((second.value as SDKUserMessage).client_composed === true, (first.value as SDKUserMessage).client_composed === true);
           yield { type: "user", parent_tool_use_id: null, session_id: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "found" }] } } as unknown as SDKMessage;
           yield { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start" } } as unknown as SDKMessage;
           yield { type: "assistant", parent_tool_use_id: null, uuid: "a2", session_id: "s", message: { id: "m2", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Two in London." }] } } as unknown as SDKMessage;
@@ -462,6 +468,7 @@ describe("steering Orbit Agent", () => {
       },
     );
     assert.deepEqual(prompts, ["Find offices", "Only London"]);
+    assert.deepEqual(composed, [true, false]);
     assert.deepEqual(result.steered, [{ id: steerId, step: 1 }]);
     assert.equal(result.steps.length, 2);
   });
@@ -514,5 +521,344 @@ describe("steering Orbit Agent", () => {
     assert.match(prompt, /approved or cancelled the actions you proposed[\s\S]*While you were working, the user also wrote:\n<user>\nMake it Friday\n<\/user>$/);
     assert.ok(!prompt.includes("The user's latest message"));
     assert.equal(PROPOSED.length > 0, true);
+  });
+});
+
+describe("steering safeguards", () => {
+  let owner: UserActor;
+
+  before(async () => {
+    owner = await createUser("steering-guards@orbit.test", "Mark Ridgeon");
+  });
+
+  async function finished(message: string, fetchImpl: typeof fetch) {
+    const events: AssistantEvent[] = [];
+    await sendMessage(owner, { message, model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), { deadline: deadline(), fetchImpl });
+    return conversationOf(events);
+  }
+
+  it("holds the lease while approved changes run, so a message sent then waits for their results", async () => {
+    let conversationId = "";
+    let leaseSeen: string | null = null;
+    const fake = model([{ content: "Adding it.", calls: [{ id: "call_hold", name: "create_task", args: { title: "Call Initech" } }] }, { content: "Done, and due Friday." }], async (index) => {
+      if (index !== 2) return;
+      leaseSeen = (await getAdminPool().query("select turn_runner from crm.assistant_conversations where id = $1", [conversationId])).rows[0].turn_runner;
+    });
+    const events: AssistantEvent[] = [];
+    await sendMessage(owner, { message: "Add a task to call Initech", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    conversationId = conversationOf(events);
+    const card = (await rowsOf(conversationId)).find((row) => row.role === "assistant")!;
+    await getAdminPool().query(`update crm.assistant_messages set actions = jsonb_set(actions, '{0,status}', '"running"') where id = $1`, [card.id]);
+    await steer(owner, conversationId, "Make it due Friday", fake.fetchImpl);
+    await resumeConversation(owner, conversationId, () => undefined, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.equal(fake.bodies.length, 1);
+    assert.equal((await rowsOf(conversationId)).at(-1)!.steering, "waiting");
+    await getAdminPool().query(`update crm.assistant_messages set actions = jsonb_set(actions, '{0,status}', '"pending"') where id = $1`, [card.id]);
+
+    await decideActions(owner, { conversationId, decisions: [{ id: "call_hold", approve: true }] }, () => undefined, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.ok(leaseSeen);
+    assert.deepEqual(fake.bodies[1].messages.slice(-3).map((message) => message.role), ["assistant", "tool", "user"]);
+    const lease = await getAdminPool().query("select turn_runner from crm.assistant_conversations where id = $1", [conversationId]);
+    assert.equal(lease.rows[0].turn_runner, null);
+  });
+
+  it("keeps each tool result with its call whatever order the rows were saved in", () => {
+    const at = new Date().toISOString();
+    const base = { tool_calls: null, tool_call_id: null, tool_name: null, actions: null, sources: null, provider_state: null, created_at: at };
+    const call = (id: string, name: string) => ({ id, type: "function" as const, function: { name, arguments: "{}" } });
+    const rows = [
+      { ...base, id: "u1", role: "user" as const, content: "Search", steering: null },
+      { ...base, id: "a1", role: "assistant" as const, content: "", tool_calls: [call("c1", "search_records"), call("c2", "list_tasks")] },
+      { ...base, id: "t2", role: "tool" as const, content: "two", tool_call_id: "c2" },
+      { ...base, id: "s1", role: "user" as const, content: "Stop that", steering: null },
+      { ...base, id: "t1", role: "tool" as const, content: "one", tool_call_id: "c1" },
+    ];
+    assert.deepEqual(
+      history(rows).map((message) => [message.role, message.role === "tool" ? message.tool_call_id : messageText(message.content)]),
+      [
+        ["user", "Search"],
+        ["assistant", ""],
+        ["tool", "c2"],
+        ["tool", "c1"],
+        ["user", "Stop that"],
+      ],
+    );
+  });
+
+  it("saves a message sent after Stop as an ordinary one and doesn't answer it", async () => {
+    const fake = model([{ content: "First." }]);
+    const conversationId = await finished("Start something", fake.fetchImpl);
+    await stopConversation(owner, conversationId);
+    const events = await steer(owner, conversationId, "And another thing", fake.fetchImpl);
+    assert.equal(fake.bodies.length, 1);
+    const user = events.find((event) => event.type === "user") as Extract<AssistantEvent, { type: "user" }>;
+    assert.equal(user.message.waiting, undefined);
+    assert.equal((await rowsOf(conversationId)).at(-1)!.steering, null);
+  });
+
+  it("leaves messages waiting while an Orbit Agent job is queued or running", async () => {
+    const fake = model([{ content: "First." }, { content: "Should not run." }]);
+    const conversationId = await finished("Hello Mac", fake.fetchImpl);
+    const job = await getAdminPool().query<{ id: string }>(
+      `insert into crm.ai_companion_jobs (workspace_id, user_id, conversation_id, request, status) values ($1, $2, $3, '{}'::jsonb, 'running') returning id`,
+      [owner.workspaceId, owner.userId, conversationId],
+    );
+    await steer(owner, conversationId, "Only London", fake.fetchImpl);
+    await resumeConversation(owner, conversationId, () => undefined, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.equal(fake.bodies.length, 1);
+    const status = await getAdminPool().query("select status from crm.ai_companion_jobs where id = $1", [job.rows[0].id]);
+    assert.equal(status.rows[0].status, "running");
+    assert.equal((await rowsOf(conversationId)).at(-1)!.steering, "waiting");
+    await getAdminPool().query("update crm.ai_companion_jobs set status = 'cancelled' where id = $1", [job.rows[0].id]);
+  });
+
+  it("never picks a message up for a run that has lost the lease", async () => {
+    let conversationId = "";
+    const fake = model([{ content: "", calls: [{ id: "call_lost", name: "search_records", args: { query: "Acme" } }] }, { content: "Should not run." }], async (index) => {
+      if (index !== 1) return;
+      await getAdminPool().query("update crm.assistant_conversations set turn_runner = gen_random_uuid(), turn_until = now() + interval '5 minutes' where id = $1", [conversationId]);
+      await steer(owner, conversationId, "Only the London ones", fake.fetchImpl);
+    });
+    await sendMessage(owner, { message: "Search Acme", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => {
+      if (event.type === "conversation") conversationId = event.conversation.id;
+    }, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.equal(fake.bodies.length, 1);
+    assert.equal((await rowsOf(conversationId)).find((row) => row.content === "Only the London ones")!.steering, "waiting");
+  });
+
+  it("takes over an expired lease to answer a message", async () => {
+    const fake = model([{ content: "First." }, { content: "Answered." }]);
+    const conversationId = await finished("Hello lease", fake.fetchImpl);
+    await getAdminPool().query("update crm.assistant_conversations set turn_runner = gen_random_uuid(), turn_until = now() - interval '1 minute' where id = $1", [conversationId]);
+    await steer(owner, conversationId, "Still there?", fake.fetchImpl);
+    assert.equal(fake.bodies.length, 2);
+    assert.equal((await rowsOf(conversationId)).at(-1)!.content, "Answered.");
+  });
+
+  it("leaves a message for the dock to resume when the turn is nearly out of time", async () => {
+    let conversationId = "";
+    const fake = model([{ content: "Quick answer." }, { content: "Now the London ones." }], async (index) => {
+      if (index === 1) await steer(owner, conversationId, "Only London", fake.fetchImpl);
+    });
+    await sendMessage(owner, { message: "Quick one", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => {
+      if (event.type === "conversation") conversationId = event.conversation.id;
+    }, { deadline: Date.now() + 40_000, fetchImpl: fake.fetchImpl });
+    assert.equal(fake.bodies.length, 1);
+    assert.equal((await rowsOf(conversationId)).find((row) => row.content === "Only London")!.steering, "waiting");
+    await resumeConversation(owner, conversationId, () => undefined, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.equal(fake.bodies.length, 2);
+    assert.equal((await rowsOf(conversationId)).at(-1)!.content, "Now the London ones.");
+  });
+
+  it("answers messages nothing else is answering from the cron sweep", async () => {
+    const fake = model([{ content: "First." }, { content: "Swept." }]);
+    const conversationId = await finished("Hello sweep", fake.fetchImpl);
+    await getAdminPool().query(
+      `insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content, steering, created_at)
+       values ($1, $2, $3, 'user', 'Left behind', 'waiting', now() - interval '2 minutes')`,
+      [conversationId, owner.workspaceId, owner.userId],
+    );
+    const answered = await sweepWaitingSteers(Date.now() + 200_000, { fetchImpl: fake.fetchImpl });
+    assert.ok(answered >= 1);
+    assert.deepEqual(
+      (await rowsOf(conversationId)).slice(-2).map((row) => [row.content, row.steering]),
+      [
+        ["Left behind", null],
+        ["Swept.", null],
+      ],
+    );
+  });
+
+  it("doesn't move the chat up the list when only the lease changes", async () => {
+    const fake = model([{ content: "First." }]);
+    const conversationId = await finished("Hello order", fake.fetchImpl);
+    const read = async () => (await getAdminPool().query("select updated_at from crm.assistant_conversations where id = $1", [conversationId])).rows[0].updated_at;
+    const before = await read();
+    await resumeConversation(owner, conversationId, () => undefined, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.equal(new Date(await read()).getTime(), new Date(before).getTime());
+  });
+
+  it("keeps the page and file notes of each message sent while Orbit works", async () => {
+    let conversationId = "";
+    const file = await getAdminPool().query<{ id: string }>(
+      "insert into crm.chat_files (workspace_id, user_id, name, content_type, size) values ($1, $2, 'Offices.pdf', 'application/pdf', 2048) returning id",
+      [owner.workspaceId, owner.userId],
+    );
+    const fake = model([{ content: "", calls: [{ id: "call_notes", name: "search_records", args: { query: "Acme" } }] }, { content: "Read it." }], async (index) => {
+      if (index !== 1) return;
+      await sendMessage(
+        owner,
+        { conversationId, message: "Use this list", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false, steer: true, files: [file.rows[0].id], page: { path: "/tasks" } },
+        () => undefined,
+        { deadline: deadline(), fetchImpl: fake.fetchImpl },
+      );
+    });
+    await sendMessage(owner, { message: "Find the offices", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => {
+      if (event.type === "conversation") conversationId = event.conversation.id;
+    }, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.match(messageText(fake.bodies[1].messages.at(-1)!.content), /^Use this list\n\n\[Orbit note: the user attached this file[\s\S]*Offices\.pdf[\s\S]*<page_context>/);
+  });
+});
+
+describe("Orbit Agent steering routes", () => {
+  let owner: UserActor;
+  let token = "";
+
+  before(async () => {
+    owner = await createUser("steering-routes@orbit.test", "Mark Ridgeon");
+    const { code } = await createPairingCode(owner);
+    token = (await redeemPairing(code.toLowerCase(), "Route Mac")).token;
+  });
+
+  const call = (handler: typeof postMessages, jobId: string, body: unknown, bearer = token) =>
+    handler(
+      new Request(`https://orbit.test/api/companion/jobs/${jobId}/x`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ id: jobId }) },
+    );
+
+  const mac = () => authenticateCompanion(new Request("https://orbit.test/api/companion/me", { headers: { authorization: `Bearer ${token}` } }));
+
+  async function claimJob() {
+    const job = await nextCompanionJob(await mac(), 15_000);
+    assert.ok(job);
+    return job;
+  }
+
+  it("serves waiting messages to the job's own Mac, places what it read on /complete and answers the rest after /fail", async () => {
+    let conversationId = "";
+    const turn = sendMessage(owner, { message: "Count the offices", model: "claude/claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => {
+      if (event.type === "conversation") conversationId = event.conversation.id;
+    }, { deadline: deadline() });
+    const job = await claimJob();
+    const saved = await steer(owner, conversationId, "Only London", (async () => Response.json({})) as unknown as typeof fetch);
+    const steerId = (saved.find((event) => event.type === "user") as Extract<AssistantEvent, { type: "user" }>).message.id;
+
+    const stranger = await createUser("steering-routes-stranger@orbit.test", "Someone Else");
+    const { code } = await createPairingCode(stranger);
+    const strangerToken = (await redeemPairing(code.toLowerCase(), "Other Mac")).token;
+    assert.equal((await call(postMessages, job.id, {}, strangerToken)).status, 404);
+
+    const served = (await (await call(postMessages, job.id, {})).json()) as { messages: { id: string; text: string }[] };
+    assert.deepEqual(served.messages.map((message) => message.id), [steerId]);
+    const done = await call(postComplete, job.id, {
+      steps: [
+        { text: "Looking.", calls: [] },
+        { text: "Two in London.", calls: [] },
+      ],
+      results: {},
+      sources: [],
+      model: null,
+      usage: null,
+      steered: [{ id: steerId, step: 1 }],
+    });
+    assert.equal(done.status, 200);
+    await turn;
+    assert.deepEqual(
+      (await rowsOf(conversationId)).map((row) => [row.content, row.steering]),
+      [
+        ["Count the offices", null],
+        ["Looking.", null],
+        ["Only London", "folded"],
+        ["Two in London.", null],
+      ],
+    );
+
+    const second = sendMessage(owner, { conversationId, message: "And Paris?", model: "claude/claude-sonnet-5-5", reasoning: "low", webSearch: false }, () => undefined, { deadline: deadline() });
+    const failing = await claimJob();
+    await steer(owner, conversationId, "Skip Paris, do Berlin", (async () => Response.json({})) as unknown as typeof fetch);
+    assert.equal((await call(postFail, failing.id, { error: "Claude Code crashed." })).status, 200);
+    const followUp = await claimJob();
+    assert.match(followUp.request.prompt, /The user's latest message:\nSkip Paris, do Berlin/);
+    await finishCompanionJob(await mac(), followUp.id, (actor, id) => applyCompanionResult(actor, id, { steps: [{ text: "Berlin has one.", calls: [] }], results: {}, sources: [], model: null, usage: null }));
+    await second;
+  });
+
+  it("gives email jobs no messages from the dock", async () => {
+    const quiet = model([{ content: "Hi." }]);
+    const events: AssistantEvent[] = [];
+    await sendMessage(owner, { message: "Email chat", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), { deadline: deadline(), fetchImpl: quiet.fetchImpl });
+    const conversationId = conversationOf(events);
+    await getAdminPool().query(`insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content, steering) values ($1, $2, $3, 'user', 'From the dock', 'waiting')`, [
+      conversationId,
+      owner.workspaceId,
+      owner.userId,
+    ]);
+    const auth = await mac();
+    const job = await getAdminPool().query<{ id: string }>(
+      `insert into crm.ai_companion_jobs (workspace_id, user_id, conversation_id, request, status, companion_id, claimed_at) values ($1, $2, $3, '{}'::jsonb, 'running', $4, now()) returning id`,
+      [owner.workspaceId, owner.userId, conversationId, auth.companionId],
+    );
+    const jobId = job.rows[0].id;
+    assert.equal((await companionSteers(auth, jobId)).length, 1);
+    await getAdminPool().query(`begin; set local session_replication_role = replica; update crm.ai_companion_jobs set agent_mail_id = gen_random_uuid() where id = '${jobId}'; commit;`);
+    assert.deepEqual(await companionSteers(auth, jobId), []);
+    await getAdminPool().query("update crm.ai_companion_jobs set status = 'cancelled' where id = $1", [jobId]);
+  });
+});
+
+describe("Orbit Agent turn endings", () => {
+  function sdkWith(frames: (firstId: string) => SDKMessage[]) {
+    return {
+      tool: () => ({}),
+      createSdkMcpServer: () => ({}),
+      query: ({ prompt }: { prompt: AsyncIterable<SDKUserMessage> }) => {
+        async function* stream(): AsyncGenerator<SDKMessage> {
+          const input = prompt[Symbol.asyncIterator]();
+          const first = await input.next();
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          for (const frame of frames((first.value as SDKUserMessage).uuid ?? "")) yield frame;
+        }
+        return stream();
+      },
+    } as unknown as Sdk;
+  }
+
+  const request = { model: "claude-sonnet-5-5", effort: "low" as const, webSearch: false, system: "", prompt: "Hi", tools: [] };
+  const deps = (sdk: Sdk, steerId: string) => ({
+    sdk,
+    cwd: "/tmp",
+    env: {},
+    callTool: async () => ({ content: "", isError: false }),
+    steerEveryMs: 5,
+    steers: async () => [{ id: steerId, text: "Also this" }],
+  });
+
+  it("never counts a message as read when Claude Code doesn't confirm it", async () => {
+    const steerId = "8f1c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f";
+    const sdk = sdkWith(
+      () =>
+        [
+          { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start" } },
+          { type: "assistant", parent_tool_use_id: null, uuid: "a1", session_id: "s", message: { id: "m1", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Done." }] } },
+          { type: "result", subtype: "success", is_error: false, result: "", usage: {}, uuid: "r", session_id: "s" },
+        ] as unknown as SDKMessage[],
+    );
+    const result = await runTurn(request, deps(sdk, steerId));
+    assert.equal(result.steered, undefined);
+  });
+
+  it("places a message where an assistant frame says it was read, and ends the job from its last turn", async () => {
+    const steerId = "9f1c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f";
+    const sdk = sdkWith(
+      (firstId) =>
+        [
+          { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start" } },
+          { type: "assistant", parent_tool_use_id: null, uuid: "a1", session_id: "s", message: { id: "m1", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Working." }] } },
+          { type: "result", subtype: "error_max_turns", is_error: true, errors: [], usage: {}, uuid: "r1", session_id: "s", user_message_uuids: [firstId], queued_turn_count: 1 },
+          { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start" } },
+          { type: "assistant", parent_tool_use_id: null, uuid: "a2", session_id: "s", user_message_uuids: [steerId], message: { id: "m2", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Also done." }] } },
+          { type: "result", subtype: "success", is_error: false, result: "", usage: {}, uuid: "r2", session_id: "s", user_message_uuids: [steerId], queued_turn_count: 0 },
+        ] as unknown as SDKMessage[],
+    );
+    const result = await runTurn(request, deps(sdk, steerId));
+    assert.deepEqual(result.steered, [{ id: steerId, step: 1 }]);
+    assert.deepEqual(
+      result.steps.map((step) => step.text),
+      ["Working.", "Also done."],
+    );
   });
 });

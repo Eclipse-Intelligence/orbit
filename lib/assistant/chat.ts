@@ -43,10 +43,9 @@ import {
   companionWorking,
   enqueueCompanionJob,
   failureReply,
-  noteSteered,
   readCompanionJob,
 } from "@/lib/companion/jobs";
-import { companionOfflineMessage, companionOnline, listCompanions, type AuthenticatedCompanion } from "@/lib/companion/pairing";
+import { actorFor, companionOfflineMessage, companionOnline, listCompanions, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
@@ -58,7 +57,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
-import type { Db } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 
 export const MAX_ROUNDS = 40;
 export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
@@ -480,15 +479,25 @@ export function history(all: MessageRow[], budget = HISTORY_BUDGET, context = ""
   const anchor = anchorOf(rows);
   const lastUser = anchor ? rows.indexOf(anchor) : -1;
   const messages: ChatMessage[] = [];
+  const results = new Map<string, number[]>();
+  rows.forEach((row, index) => {
+    if (row.role === "tool" && row.tool_call_id) results.set(row.tool_call_id, [...(results.get(row.tool_call_id) ?? []), index]);
+  });
+  const called = new Set(rows.flatMap((row) => (row.role === "assistant" ? (row.tool_calls ?? []).map((call) => call.id) : [])));
+  const placed = new Set<string>();
+  const result = (index: number): ChatMessage => {
+    const row = rows[index];
+    return { role: "tool", tool_call_id: row.tool_call_id!, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) };
+  };
   let anchorAt = -1;
   rows.forEach((row, index) => {
     if (row.role === "user") {
       if (index === lastUser) anchorAt = messages.length;
       messages.push({ role: "user", content: index === lastUser && context ? `${userContent(row)}\n\n${context}` : userContent(row) });
     } else if (row.role === "tool" && row.tool_call_id) {
-      messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
+      if (!called.has(row.tool_call_id)) messages.push(result(index));
     } else if (row.role === "assistant") {
-      const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id));
+      const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id) && !placed.has(call.id));
       if (calls.length === 0 && !row.content.trim()) return;
       const state = row.provider_state ?? null;
       messages.push(
@@ -496,6 +505,9 @@ export function history(all: MessageRow[], budget = HISTORY_BUDGET, context = ""
           ? { role: "assistant", content: row.content || null, tool_calls: calls, state }
           : { role: "assistant", content: row.content || "", state },
       );
+      for (const call of calls) placed.add(call.id);
+      const answers = calls.flatMap((call) => results.get(call.id) ?? []).sort((first, second) => first - second);
+      for (const at of answers) messages.push(result(at));
     }
   });
   if (messages[0]?.role === "assistant") {
@@ -590,7 +602,8 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
 const LEASE_SLACK_MS = 15_000;
 const DETACHED_MS = 120_000;
 const FOLLOW_ON_MS = 45_000;
-const PENDING_ACTION = JSON.stringify([{ status: "pending" }]);
+const BLOCKED = `exists (select 1 from crm.assistant_messages b where b.conversation_id = $1 and (b.actions @> '[{"status":"pending"}]'::jsonb or b.actions @> '[{"status":"running"}]'::jsonb))
+  or exists (select 1 from crm.ai_companion_jobs j where j.conversation_id = $1 and j.status in ('queued', 'running'))`;
 
 async function moveWaiting(db: Db, conversationId: string, as: Steering | null, ids?: string[]) {
   const waiting = await db.query<{ id: string }>(
@@ -603,11 +616,15 @@ async function moveWaiting(db: Db, conversationId: string, as: Steering | null, 
   return waiting.rows.map((row) => row.id);
 }
 
-async function takeWaiting(actor: UserActor, conversationId: string, as: Steering | null, options: { unlessPending?: boolean } = {}) {
+async function takeWaiting(actor: UserActor, conversationId: string, as: Steering | null, options: { unlessBlocked?: boolean; runner?: string } = {}) {
   return withActor(actor, async (db) => {
-    if (options.unlessPending) {
-      const pending = await db.query("select 1 from crm.assistant_messages where conversation_id = $1 and actions @> $2::jsonb limit 1", [conversationId, PENDING_ACTION]);
-      if (pending.rowCount) return [];
+    if (options.runner) {
+      const lease = await db.query<{ turn_runner: string | null }>("select turn_runner from crm.assistant_conversations where id = $1 for update", [conversationId]);
+      if (lease.rows[0]?.turn_runner !== options.runner) return null;
+    }
+    if (options.unlessBlocked) {
+      const blocked = await db.query<{ blocked: boolean }>(`select (${BLOCKED}) as blocked`, [conversationId]);
+      if (blocked.rows[0]?.blocked) return [];
     }
     return moveWaiting(db, conversationId, as);
   });
@@ -617,8 +634,8 @@ async function steersReady(actor: UserActor, conversationId: string) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ ready: boolean }>(
       `select exists (select 1 from crm.assistant_messages where conversation_id = $1 and role = 'user' and steering = 'waiting')
-         and not exists (select 1 from crm.assistant_messages where conversation_id = $1 and actions @> $2::jsonb) as ready`,
-      [conversationId, PENDING_ACTION],
+         and not (${BLOCKED}) as ready`,
+      [conversationId],
     );
     return result.rows[0]?.ready === true;
   });
@@ -644,26 +661,30 @@ async function releaseTurn(actor: UserActor, conversationId: string, runner: str
 
 type Opening = "turn" | "steers";
 
-async function runTurns(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions, opening: Opening) {
+async function runTurns(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions, opening: Opening, held?: string) {
   if (options.headless) {
     await runLoop(actor, conversation, emit, options);
     return true;
   }
-  const runner = randomUUID();
+  const runner = held ?? randomUUID();
+  const owned = { ...options, runner };
   let next = opening;
   let ran = false;
+  let claimed = Boolean(held);
   for (;;) {
-    if (!(await claimTurn(actor, conversation.id, runner, options.deadline + LEASE_SLACK_MS, next === "turn"))) return ran;
+    if (!claimed && !(await claimTurn(actor, conversation.id, runner, options.deadline + LEASE_SLACK_MS, next === "turn"))) return ran;
+    claimed = false;
     let carryOn = false;
     try {
       for (;;) {
         if (next === "steers") {
-          const ids = await takeWaiting(actor, conversation.id, null, { unlessPending: true });
+          const ids = await takeWaiting(actor, conversation.id, null, { unlessBlocked: true, runner });
+          if (!ids) return ran;
           if (ids.length === 0) break;
           emit({ type: "steered", ids });
         }
         ran = true;
-        const finished = await runLoop(actor, conversation, emit, options);
+        const finished = await runLoop(actor, conversation, emit, owned);
         next = "steers";
         if (!finished || options.detach || options.deadline - Date.now() < FOLLOW_ON_MS) return ran;
       }
@@ -874,7 +895,8 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
 const STEERS_PER_FETCH = 20;
 
 export async function companionSteers(auth: AuthenticatedCompanion, jobId: string): Promise<CompanionSteer[]> {
-  const conversationId = await companionJobConversation(auth, jobId);
+  const { conversationId, email } = await companionJobConversation(auth, jobId);
+  if (email) return [];
   const rows = await withActor(auth.actor, async (db) => {
     const result = await db.query<MessageRow>(
       `select ${MESSAGE_COLUMNS} from crm.assistant_messages
@@ -883,7 +905,6 @@ export async function companionSteers(auth: AuthenticatedCompanion, jobId: strin
     );
     return result.rows;
   });
-  await noteSteered(auth, jobId, rows.map((row) => row.id));
   return rows.map((row) => ({ id: row.id, text: userContent(row) }));
 }
 
@@ -1042,7 +1063,7 @@ async function runCompanionTurn(
 
 export type HeadlessTurn = { agentMailId: string; queued?: (job: { jobId: string; online: boolean }) => void };
 
-type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn; detach?: boolean };
+type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn; detach?: boolean; runner?: string };
 
 export const HEADLESS_MODEL_ERROR = "Email jobs only run on Orbit Agent, so they need a Claude account model.";
 
@@ -1145,12 +1166,14 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
   const pickUp = async () => {
-    if (options.headless) return;
-    const ids = await takeWaiting(actor, conversation.id, "folded");
+    if (options.headless || !options.runner) return true;
+    const ids = await takeWaiting(actor, conversation.id, "folded", { runner: options.runner });
+    if (!ids) return false;
     if (ids.length > 0) emit({ type: "steered", ids });
+    return true;
   };
   if (chosen?.source === "claude") {
-    await pickUp();
+    if (!(await pickUp())) return;
     return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, fetchImpl, options.detach);
   }
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
@@ -1169,7 +1192,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       emit({ type: "message", message: display(paused) });
       return;
     }
-    await pickUp();
+    if (!(await pickUp())) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
     const tools = toolsFor(rows, toolOptions);
     const fence = turnFence(rows, conversation.id);
@@ -1237,6 +1260,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
         const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches });
+        if (signal?.aborted) return;
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
@@ -1339,9 +1363,10 @@ export async function sendMessage(
     const conversation = await withActor(actor, (db) => readConversation(db, actor, input.conversationId!));
     emit({ type: "conversation", conversation: summary(conversation) });
     const page = await readPage(actor, input.page);
-    const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page, steering: "waiting" });
+    const stopped = await stoppedTurn(actor, conversation);
+    const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page, steering: stopped ? null : "waiting" });
     emit({ type: "user", message: display(user) });
-    await runTurns(actor, conversation, emit, options, "steers");
+    if (!stopped) await runTurns(actor, conversation, emit, options, "steers");
     emit({ type: "done" });
     return;
   }
@@ -1370,7 +1395,7 @@ export async function sendMessage(
   if (!input.keepPending) await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
   const page = await readPage(actor, input.page);
   if (!options.headless) {
-    const earlier = await takeWaiting(actor, conversation.id, null);
+    const earlier = (await takeWaiting(actor, conversation.id, null)) ?? [];
     if (earlier.length > 0) emit({ type: "steered", ids: earlier });
   }
   const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page });
@@ -1394,12 +1419,48 @@ export async function resumeConversation(actor: UserActor, conversationId: strin
   emit({ type: "done" });
 }
 
+async function stoppedTurn(actor: UserActor, conversation: ConversationRow) {
+  if (!conversation.stopped_at) return false;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ stopped: boolean }>(
+      `select coalesce(max(created_at) <= $2, false) as stopped from crm.assistant_messages
+       where conversation_id = $1 and role = 'user' and steering is null`,
+      [conversation.id, new Date(conversation.stopped_at!)],
+    );
+    return result.rows[0]?.stopped === true;
+  });
+}
+
+async function answerWaiting(actor: UserActor, conversationId: string, deadline: number, onlyClaude: boolean, fetchImpl?: typeof fetch) {
+  const conversation = await withActor(actor, (db) => readConversation(db, actor, conversationId));
+  const claude = assistantModel(conversation.model)?.source === "claude";
+  if ((onlyClaude && !claude) || conversation.email) return false;
+  if (!(await steersReady(actor, conversationId))) return false;
+  return runTurns(actor, conversation, () => undefined, { deadline, detach: claude, fetchImpl }, "steers");
+}
+
+const SWEEP_TURN_MS = 240_000;
+const SWEEP_START_MS = 90_000;
+
+export async function sweepWaitingSteers(until: number, options: { fetchImpl?: typeof fetch } = {}) {
+  const found = await query<{ conversation_id: string; workspace_id: string; user_id: string }>("select * from private.assistant_waiting_conversations($1)", [10]);
+  let answered = 0;
+  for (const row of found.rows) {
+    if (until - Date.now() < SWEEP_START_MS) break;
+    const actor = await actorFor(row.user_id, row.workspace_id).catch(() => null);
+    if (!actor) continue;
+    const ran = await answerWaiting(actor, row.conversation_id, Math.min(until, Date.now() + SWEEP_TURN_MS), false, options.fetchImpl).catch((error) => {
+      console.error("Couldn't answer messages left waiting", error instanceof Error ? error.message : error);
+      return false;
+    });
+    if (ran) answered += 1;
+  }
+  return answered;
+}
+
 export function continueSteersLater(actor: UserActor, conversationId: string) {
   const work = async () => {
-    const conversation = await withActor(actor, (db) => readConversation(db, actor, conversationId));
-    if (assistantModel(conversation.model)?.source !== "claude" || conversation.email) return;
-    if (!(await steersReady(actor, conversationId))) return;
-    await runTurns(actor, conversation, () => undefined, { deadline: Date.now() + DETACHED_MS, detach: true }, "steers");
+    await answerWaiting(actor, conversationId, Date.now() + DETACHED_MS, true);
   };
   const guarded = () => work().catch((error) => console.error("Couldn't answer the messages sent while Orbit Agent was working", error instanceof Error ? error.message : error));
   try {
@@ -1437,56 +1498,64 @@ export async function decideActions(
     strict: true,
     extra: { startedAt: new Date().toISOString() },
   });
-  let actions = claim.actions;
-  emit({ type: "actions", messageId: owner.id, actions });
-  const update = async (id: string, patch: Partial<AssistantAction>) => {
-    actions = await patchAction(actor, owner.id, id, patch);
+  const runner = options.headless ? undefined : randomUUID();
+  if (runner) await claimTurn(actor, conversation.id, runner, options.deadline + LEASE_SLACK_MS, true);
+  let handed = false;
+  try {
+    let actions = claim.actions;
     emit({ type: "actions", messageId: owner.id, actions });
-  };
-  for (const action of claim.claimed) {
-    const call = callFor(action.id);
-    if (!runs(action) || !call) {
+    const update = async (id: string, patch: Partial<AssistantAction>) => {
+      actions = await patchAction(actor, owner.id, id, patch);
+      emit({ type: "actions", messageId: owner.id, actions });
+    };
+    for (const action of claim.claimed) {
+      const call = callFor(action.id);
+      if (!runs(action) || !call) {
+        await insertMessage(actor, conversation.id, {
+          role: "tool",
+          content: toolJson({ declined: true, message: "The user declined this action." }),
+          toolCallId: action.id,
+          toolName: action.name,
+        });
+        continue;
+      }
+      const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
+      const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
+      const callArgs = parseArgs(call.function.arguments);
+      const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, chosenAlternative ? chosenAlternative.args(callArgs) : callArgs, {
+        deadline: options.deadline - 20_000,
+        callId: call.id,
+        approval: action.name === "save_doc" ? approvalFor(action) : undefined,
+        source: options.headless ? "email" : undefined,
+        fence,
+      })) as Record<string, unknown> | null;
+      const failed = Boolean(output && typeof output === "object" && "error" in output);
       await insertMessage(actor, conversation.id, {
         role: "tool",
-        content: toolJson({ declined: true, message: "The user declined this action." }),
+        content: toolJson({
+          approved,
+          ...(output && typeof output === "object" && !Array.isArray(output) ? output : { result: output }),
+          ...(chosenAlternative ? { note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` } : {}),
+        }),
         toolCallId: action.id,
         toolName: action.name,
       });
-      continue;
+      await update(action.id, {
+        status: failed ? "failed" : "done",
+        result: failed ? String((output as { error: unknown }).error) : null,
+        ...(chosenAlternative && !failed ? { chose: chosenAlternative.key, title: chosenAlternative.title(action.title), lines: chosenAlternative.lines(action.lines) } : {}),
+      });
     }
-    const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
-    const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
-    const callArgs = parseArgs(call.function.arguments);
-    const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, chosenAlternative ? chosenAlternative.args(callArgs) : callArgs, {
-      deadline: options.deadline - 20_000,
-      callId: call.id,
-      approval: action.name === "save_doc" ? approvalFor(action) : undefined,
-      source: options.headless ? "email" : undefined,
-      fence,
-    })) as Record<string, unknown> | null;
-    const failed = Boolean(output && typeof output === "object" && "error" in output);
-    await insertMessage(actor, conversation.id, {
-      role: "tool",
-      content: toolJson({
-        approved,
-        ...(output && typeof output === "object" && !Array.isArray(output) ? output : { result: output }),
-        ...(chosenAlternative ? { note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` } : {}),
-      }),
-      toolCallId: action.id,
-      toolName: action.name,
-    });
-    await update(action.id, {
-      status: failed ? "failed" : "done",
-      result: failed ? String((output as { error: unknown }).error) : null,
-      ...(chosenAlternative && !failed ? { chose: chosenAlternative.key, title: chosenAlternative.title(action.title), lines: chosenAlternative.lines(action.lines) } : {}),
-    });
-  }
-  if (actions.some((entry) => entry.status === "pending")) {
+    if (actions.some((entry) => entry.status === "pending")) {
+      emit({ type: "done" });
+      return;
+    }
+    handed = true;
+    await runTurns(actor, conversation, emit, options, "turn", runner);
     emit({ type: "done" });
-    return;
+  } finally {
+    if (runner && !handed) await releaseTurn(actor, conversation.id, runner).catch(() => undefined);
   }
-  await runTurns(actor, conversation, emit, options, "turn");
-  emit({ type: "done" });
 }
 
 export function readDecisions(body: Record<string, unknown>): ActionDecision[] | null {

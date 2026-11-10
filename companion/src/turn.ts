@@ -98,8 +98,19 @@ function collectSources(value: unknown, into: Map<string, CompanionSource>, dept
   for (const nested of Object.values(record)) collectSources(nested, into, depth + 1);
 }
 
-function userMessage(id: string, text: string): SDKUserMessage {
-  return { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null, uuid: id as SDKUserMessage["uuid"] };
+function userMessage(id: string, text: string, composed = false): SDKUserMessage {
+  return {
+    type: "user",
+    message: { role: "user", content: text },
+    parent_tool_use_id: null,
+    uuid: id as SDKUserMessage["uuid"],
+    ...(composed ? { client_composed: true as const } : {}),
+  };
+}
+
+function echoedIds(message: unknown) {
+  const ids = (message as { user_message_uuids?: unknown }).user_message_uuids;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
 }
 
 function inbox(first: SDKUserMessage) {
@@ -163,13 +174,13 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
   let failure: string | null = null;
   let stopped = false;
   let cutOff = false;
+  let turnCut = false;
 
   let draft = "";
   const input = deps.steers ? inbox(userMessage(randomUUID(), request.prompt)) : null;
   const pushed: CompanionSteered[] = [];
   const seenSteers = new Set<string>();
   const consumed = new Set<string>();
-  let reported = false;
   let started = 0;
   let polling = false;
   const poll = async () => {
@@ -179,7 +190,7 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
       for (const steer of await deps.steers()) {
         if (seenSteers.has(steer.id) || input.closed) continue;
         seenSteers.add(steer.id);
-        if (input.push(userMessage(steer.id, steer.text))) pushed.push({ id: steer.id, step: started });
+        if (input.push(userMessage(steer.id, steer.text, true))) pushed.push({ id: steer.id, step: started });
       }
     } catch {
       return;
@@ -208,7 +219,12 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
         const step = steps.get(id) ?? { text: "", calls: [] };
         steps.set(id, step);
         model = message.message.model ?? model;
-        if (message.error === "max_output_tokens") cutOff = true;
+        if (message.error === "max_output_tokens") turnCut = true;
+        for (const echoed of echoedIds(message)) {
+          const entry = pushed.find((item) => item.id === echoed);
+          if (entry && !consumed.has(echoed)) entry.step = [...steps.keys()].indexOf(id);
+          consumed.add(echoed);
+        }
         for (const block of message.message.content ?? []) {
           if (block.type === "text" && block.text) {
             step.text = step.text ? `${step.text}\n\n${block.text}` : block.text;
@@ -234,15 +250,14 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
         }
       } else if (message.type === "result") {
         usage = (message.usage as unknown as Record<string, unknown>) ?? null;
-        if (message.stop_reason === "max_tokens") cutOff = true;
-        if (message.subtype === "error_max_turns") stopped = true;
+        cutOff = turnCut || message.stop_reason === "max_tokens";
+        turnCut = false;
+        stopped = message.subtype === "error_max_turns";
+        failure = null;
+        if (stopped) failure = null;
         else if (message.subtype !== "success") failure = message.errors.join(" ") || "Claude Code stopped before finishing.";
         else if (message.is_error && !cutOff) failure = message.result || "Claude Code couldn't answer.";
-        const echoed = (message as { user_message_uuids?: unknown }).user_message_uuids;
-        if (Array.isArray(echoed)) {
-          reported = true;
-          for (const id of echoed) if (typeof id === "string") consumed.add(id);
-        }
+        for (const echoed of echoedIds(message)) consumed.add(echoed);
         const queued = (message as { queued_turn_count?: unknown }).queued_turn_count;
         if (!(typeof queued === "number" && queued > 0)) input?.close();
       }
@@ -254,6 +269,6 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
   if (failure) throw new Error(failure);
   const ending = stopped ? STOPPED : cutOff ? CUT_OFF : null;
   const finished = ending ? [...steps.values(), { text: ending, calls: [] }] : [...steps.values()];
-  const steered = pushed.filter((entry) => (reported ? consumed.has(entry.id) : entry.step < started));
+  const steered = pushed.filter((entry) => consumed.has(entry.id));
   return { steps: finished, results, sources: [...sources.values()], model, usage, ...(steered.length > 0 ? { steered } : {}) };
 }

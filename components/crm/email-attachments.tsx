@@ -104,6 +104,13 @@ export function useEmailAttachments(onDraft: DraftFile[] = [], uploads: Uploads 
     blocked: attachmentBlock(items),
     add,
     remove,
+    restore: (files: DraftFile[]) =>
+      setItems((current) => [
+        ...current,
+        ...files
+          .filter((file) => !current.some((item) => item.id === file.id))
+          .map((file): Item => ({ key: `restored-${file.id}`, id: file.id, name: file.name, size: file.size, contentType: file.contentType, status: "ready" })),
+      ]),
     clear: () => setItems([]),
   };
 }

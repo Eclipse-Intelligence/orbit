@@ -63,6 +63,8 @@ const CHAT_PARAM = "chat";
 
 type LiveTool = { id: string; label: string; status: "running" | "done" };
 
+type Unsent = { typed: string; mentions: Mention[]; files: DisplayMessage["files"] };
+
 const STARTERS: { match: RegExp; prompts: string[] }[] = [
   { match: /^\/mail/, prompts: ["What needs a reply from me today?", "Summarise what customers emailed this week", "Draft a follow-up to anyone who hasn't replied"] },
   { match: /^\/companies\/|^\/contacts\//, prompts: ["Summarise where we are with them", "What should my next step be?", "Draft a check-in email"] },
@@ -646,6 +648,9 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const pickedUp = useRef(new Set<string>());
   const shownMessages = useRef<DisplayMessage[]>([]);
   const resumedFor = useRef<string | null>(null);
+  const steerEpoch = useRef(0);
+  const steerCount = useRef(0);
+  const unsent = useRef(new Map<string, Unsent>());
   const [connected, setConnected] = useState<ModelSource[] | null>(null);
   const [dragging, setDragging] = useState(false);
   const files = useEmailAttachments([], CHAT_UPLOADS);
@@ -812,56 +817,67 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
 
   function resumeWaiting(list: DisplayMessage[], id: string | null) {
     const held = list.filter((message) => message.waiting && !message.id.startsWith("local-"));
-    if (!id || held.length === 0 || list.some((message) => message.actions.some((action) => action.status === "pending"))) return;
+    if (!id || held.length === 0 || list.some((message) => message.actions.some((action) => action.status === "pending" || action.status === "running"))) return;
     const key = held.map((message) => message.id).join(",");
     if (resumedFor.current === key) return;
     resumedFor.current = key;
     void run({ conversationId: id, resume: true });
   }
 
-  async function stream(body: Record<string, unknown>, mine: number, onSaved?: (saved: boolean) => void) {
+  async function stream(body: Record<string, unknown>, mine: number, kind: "run" | "steer", onSaved?: (saved: boolean, reason?: string) => void) {
     const current = () => view.current === mine;
     const controller = new AbortController();
     streams.current.add(controller);
     setBusy(true);
     let clean = true;
+    let echoed = false;
+    let reason: string | undefined;
     try {
       await streamAssistant(
         body,
         (event) => {
           if (!current()) return;
-          onEvent(event);
-          if (event.type === "user") onSaved?.(true);
           if (event.type === "error") clean = false;
+          if (event.type === "error" && kind === "steer" && !echoed) {
+            reason = event.message;
+            return;
+          }
+          onEvent(event);
+          if (event.type === "user") {
+            echoed = true;
+            onSaved?.(true);
+          }
         },
         controller.signal,
       );
     } catch (caught) {
       clean = false;
-      if (!current()) return;
-      if (!(caught instanceof Error && caught.name === "AbortError")) {
+      if (kind === "steer" && !(caught instanceof TypeError) && caught instanceof Error && caught.name !== "AbortError") reason = caught.message;
+      if (current() && kind === "run" && !(caught instanceof Error && caught.name === "AbortError")) {
         const dropped = caught instanceof TypeError;
         if (dropped && conversationId.current) {
           setNotice("Connection lost. Still working.");
-          void follow(conversationId.current);
+          const id = conversationId.current;
+          void follow(id).then((list) => list && resumeWaiting(list, id));
         } else {
           setError(caught instanceof Error ? caught.message : "The assistant is unavailable right now.");
         }
       }
     } finally {
-      onSaved?.(false);
+      onSaved?.(false, reason);
       streams.current.delete(controller);
+      if (!clean && body.resume) resumedFor.current = null;
       const last = streams.current.size === 0;
       if (current() && last) {
         setBusy(false);
         setLive([]);
         setStreamed(null);
       }
-      if (current() && last && waiting.current && conversationId.current) {
+      if (current() && last && kind === "run" && waiting.current && conversationId.current) {
         waiting.current = false;
         const id = conversationId.current;
         void follow(id).then((list) => list && resumeWaiting(list, id));
-      } else if (current() && last && clean) {
+      } else if (current() && last && kind === "run" && clean) {
         resumeWaiting(shownMessages.current, conversationId.current);
       }
       if (changed.current) {
@@ -880,34 +896,52 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     setNotice(null);
     setLive([]);
     setStreamed(null);
-    await stream(body, mine);
+    await stream(body, mine, "run");
   }
 
-  function steer(message: string, attached: typeof files.files) {
+  function putBack(entries: Unsent[]) {
+    if (entries.length === 0) return;
+    setDraft((current) => [...entries.map((entry) => entry.typed), current].filter((text) => text.trim()).join("\n\n"));
+    setMentions((current) => [...entries.flatMap((entry) => entry.mentions), ...current]);
+    files.restore(entries.flatMap((entry) => entry.files));
+  }
+
+  function steer(entry: Unsent, message: string) {
     const id = conversationId.current;
     if (!id) return;
     const mine = view.current;
+    const epoch = steerEpoch.current;
+    steerCount.current += 1;
+    const local = `local-steer-${steerCount.current}`;
+    unsent.current.set(local, entry);
     setMessages((current) => [
       ...current,
-      { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], files: attached, createdAt: new Date().toISOString(), waiting: true },
+      { id: local, role: "user", content: message, tools: [], actions: [], sources: [], files: entry.files, createdAt: new Date().toISOString(), waiting: true },
     ]);
-    const body = { conversationId: id, message, files: attached.map((file) => file.id), page: pageSnapshot(), steer: true };
+    const body = { conversationId: id, message, files: entry.files.map((file) => file.id), page: pageSnapshot(), steer: true };
+    const dropLocal = () => setMessages((current) => current.filter((item) => item.id !== local));
     steerQueue.current = steerQueue.current.then(
       () =>
         new Promise<void>((resolve) => {
-          if (view.current !== mine) {
+          if (view.current !== mine || steerEpoch.current !== epoch) {
             resolve();
             return;
           }
           let settled = false;
-          void stream(body, mine, (saved) => {
+          void stream(body, mine, "steer", (saved, reason) => {
             if (settled) return;
             settled = true;
-            if (!saved && view.current === mine) {
+            const held = unsent.current.get(local);
+            unsent.current.delete(local);
+            if (saved) {
               setMessages((current) => {
-                const unsent = current.findIndex((message) => message.id.startsWith("local-") && message.waiting);
-                return unsent < 0 ? current : current.filter((_, index) => index !== unsent);
+                const index = current.findIndex((item) => item.id === local);
+                return index < 0 ? current : current.filter((_, position) => position !== index);
               });
+            } else if (view.current === mine && steerEpoch.current === epoch && held) {
+              dropLocal();
+              putBack([held]);
+              setError(`${reason ? `${reason} ` : ""}That message wasn't sent. It's back in the message box.`);
             }
             resolve();
           });
@@ -918,14 +952,16 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   function send(text: string) {
     const typed = text.trim();
     const attached = files.files;
-    if ((!typed && attached.length === 0) || files.uploading || (busy && !conversationId.current)) return;
+    const steering = busy || Boolean(working);
+    if ((!typed && attached.length === 0) || files.uploading || (steering && !conversationId.current)) return;
     const message = typed ? encodeMentions(typed, liveMentions(typed, mentions)) : "";
     pinned.current = true;
     setDraft("");
     setMentions([]);
     files.clear();
-    if (busy) {
-      steer(message, attached);
+    if (steering) {
+      setError(null);
+      steer({ typed, mentions: liveMentions(typed, mentions), files: attached }, message);
       return;
     }
     setMessages((current) => [
@@ -1020,11 +1056,18 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   }
 
   function stopTurn() {
+    steerEpoch.current += 1;
+    steerQueue.current = Promise.resolve();
     abortStreams();
     recovering.current += 1;
     waiting.current = false;
     setNotice(null);
-    setMessages((current) => current.map((message) => (message.waiting ? { ...message, waiting: false } : message)));
+    const queued = shownMessages.current.filter((message) => message.waiting && message.id.startsWith("local-"));
+    putBack(queued.flatMap((message) => unsent.current.get(message.id) ?? []));
+    unsent.current.clear();
+    setMessages((current) =>
+      current.filter((message) => !(message.waiting && message.id.startsWith("local-"))).map((message) => (message.waiting ? { ...message, waiting: false } : message)),
+    );
     if (conversationId.current) void stopConversationAction(conversationId.current);
   }
 
@@ -1361,8 +1404,8 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                   setReasoning(settingsFor(next, reasoning).reasoning);
                 }}
               >
-                <SelectTrigger aria-label="Model" className="-ml-2.5 h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
-                  <SelectValue>
+                <SelectTrigger aria-label="Model" className="-ml-2.5 h-7 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
+                  <SelectValue className="min-w-0 truncate">
                     {chosen.label}
                     {chosen.source !== "orbit" && <span className="text-subtle"> · {chosen.source === "claude" ? "Claude" : "ChatGPT"}</span>}
                   </SelectValue>
@@ -1395,8 +1438,8 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                   setReasoning(next as ReasoningLevel);
                 }}
               >
-                <SelectTrigger aria-label="Reasoning" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
-                  <SelectValue>{REASONING_LABELS[active.reasoning]}</SelectValue>
+                <SelectTrigger aria-label="Reasoning" className="h-7 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
+                  <SelectValue className="min-w-0 truncate">{REASONING_LABELS[active.reasoning]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent side="top" align="start">
                   {chosen.reasoning.map((level) => (
@@ -1412,7 +1455,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                 onClick={() => setWebSearch((current) => !current)}
                 title={webSearch ? "Web search on" : "Web search off"}
                 className={cn(
-                  "focus-visible:ring-ring/60 ease-power3-out flex h-7 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12.5px] transition-colors duration-150 outline-none focus-visible:ring-2",
+                  "focus-visible:ring-ring/60 ease-power3-out flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12.5px] transition-colors duration-150 outline-none focus-visible:ring-2",
                   webSearch ? "bg-white/[0.08] text-foreground" : "text-subtle hover:text-foreground hover:bg-white/5",
                 )}
               >
@@ -1422,22 +1465,21 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               <AttachButton compact id="assistant-files" onFiles={(picked) => void files.add(picked)} />
               <span className="flex-1" />
               {busy && (
-                <Button variant="secondary" size="icon" type="button" aria-label="Stop" onClick={stopTurn}>
+                <Button variant="secondary" size="icon" type="button" aria-label="Stop" className="shrink-0" onClick={stopTurn}>
                   <StopIcon aria-hidden className="size-3.5" />
                 </Button>
               )}
-              {(!busy || canSend) && (
-                <Button
-                  variant="primary"
-                  size="icon"
-                  type="submit"
-                  aria-label="Send"
-                  title={files.uploading ? "Wait for the files to upload" : busy ? "Send now. Orbit takes it into account as it works" : `Send (Enter). New line: ${mac ? "⇧" : "Shift"}+Enter`}
-                  disabled={!canSend || (busy && !conversation)}
-                >
-                  <ArrowUpIcon aria-hidden className="size-3.5" />
-                </Button>
-              )}
+              <Button
+                variant="primary"
+                size="icon"
+                type="submit"
+                aria-label="Send"
+                className="shrink-0"
+                title={files.uploading ? "Wait for the files to upload" : busy || working ? "Send now. Orbit takes it into account as it works" : `Send (Enter). New line: ${mac ? "⇧" : "Shift"}+Enter`}
+                disabled={!canSend || ((busy || Boolean(working)) && !conversation)}
+              >
+                <ArrowUpIcon aria-hidden className="size-3.5" />
+              </Button>
             </div>
           </div>
         </form>
