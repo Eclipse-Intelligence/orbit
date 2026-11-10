@@ -370,10 +370,10 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     const thread = await threadFor("conv-tool");
     const args = { replyToEmailId: thread.latestId, body: "Hi Jane,\n\nHere's the pilot.\n\nMark", followUp: { afterDays: 4, body: "Hi Jane, one more on this.\n\nMark" } };
     const card = describeAction("send_email", args, await recordNames(owner, [args]));
-    assert.ok(card.lines.includes("Follow-up: sent in the same thread at 09:00 after 4 working days if nobody replies:"));
+    assert.ok(card.lines.includes("Follow-up after 4 working days if no reply:"));
     assert.ok(card.lines.includes("Hi Jane, one more on this.\n\nMark"));
     const unwritten = describeAction("send_email", { ...args, followUp: { afterDays: 1 } }, await recordNames(owner, [args]));
-    assert.ok(unwritten.lines.includes("Follow-up: sent in the same thread at 09:00 after 1 working day if nobody replies. Orbit writes it then, in your voice."));
+    assert.ok(unwritten.lines.includes("Follow-up after 1 working day if no reply. Orbit writes it then."));
 
     const env = outlook();
     const original = globalThis.fetch;
@@ -568,7 +568,7 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     );
     const args = { draftId: draft.id, body: "Hi Jane,\n\nHere's the pilot.\n\nMark" };
     const card = describeAction("send_email", args, await recordNames(owner, [args]));
-    assert.ok(card.lines.includes("Follow-up: sent in the same thread at 09:00 after 2 working days if nobody replies:"));
+    assert.ok(card.lines.includes("Follow-up after 2 working days if no reply:"));
     assert.ok(card.lines.includes("Any thoughts on the pilot?"));
     const env = outlook();
     const original = globalThis.fetch;

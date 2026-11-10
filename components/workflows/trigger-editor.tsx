@@ -112,7 +112,7 @@ export default function TriggerEditor({
                   )}
                 </select>
               </Labelled>
-              <Labelled id="trigger-to" label="Changes to (optional)">
+              <Labelled id="trigger-to" label="Changes to">
                 {trigger.field === "lifecycle" ? (
                   <select
                     id="trigger-to"
@@ -280,12 +280,10 @@ export default function TriggerEditor({
                 checked={trigger.fromContactsOnly !== false}
                 onCheckedChange={(value) => onChange({ ...trigger, fromContactsOnly: value === true })}
               />
-              Only from people who are contacts in Orbit
+              Only from contacts
             </label>
           )}
-          <p className="caption-style text-subtle">
-            Runs on new email in your inbox, privately for you. {trigger.kind === "bounce" ? "The contact is the person whose address bounced." : "The contact is the sender."}
-          </p>
+          <p className="caption-style text-subtle">Runs on your own inbox only.</p>
         </div>
       )}
 
@@ -321,13 +319,13 @@ export default function TriggerEditor({
       )}
 
       {trigger.type === "manual" && (
-        <p className="caption-style text-subtle">Adds a Run workflow button to {trigger.object === "company" ? "company" : "contact"} pages once it&apos;s on.</p>
+        <p className="caption-style text-subtle">Run it from a {trigger.object === "company" ? "company" : "contact"} page.</p>
       )}
 
       {trigger.type !== "manual" && trigger.type !== "schedule" && trigger.type !== "email_received" && trigger.type !== "proposal_event" && (
         <label className="caption-style text-subtle flex items-center gap-2">
           <Checkbox checked={Boolean(trigger.mine)} onCheckedChange={(value) => onChange({ ...trigger, mine: value === true })} />
-          Only when it&apos;s mine (my call, my change or my task)
+          Only my own changes
         </label>
       )}
     </div>

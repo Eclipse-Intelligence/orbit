@@ -194,7 +194,7 @@ describe("workflow web checks", () => {
       message: "decide_1: momentum: give 2 to 10 levels.",
     });
     await assert.rejects(save([{ key: "Hiring", type: "yes_no", question: "Hiring?" }]), {
-      message: "decide_1: Hiring: start the key with a lowercase letter and use only letters, numbers and underscores.",
+      message: "decide_1: Hiring: use a lowercase letter first, then letters, numbers or underscores.",
     });
     await assert.rejects(save([{ key: "sources", type: "yes_no", question: "Any?" }]), { message: "decide_1: sources: use a different key, this one is already taken." });
     await assert.rejects(

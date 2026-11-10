@@ -342,7 +342,7 @@ export default function WorkflowEditor({
             size="sm"
             onClick={() => setPanel(tab)}
           >
-            {tab === "node" ? "Node" : `Runs${runs.length ? ` (${runs.length})` : ""}`}
+            {tab === "node" ? "Step" : `Runs${runs.length ? ` (${runs.length})` : ""}`}
           </Button>
         ))}
       </div>
@@ -389,53 +389,53 @@ export default function WorkflowEditor({
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="secondary" size="sm" className="lg:hidden" onClick={() => setPaletteOpen(true)}>
                 <PlusIcon aria-hidden className="size-3" />
-                Add node
+                Add step
               </Button>
               <label className="caption-style text-subtle flex items-center gap-2">
                 <Switch checked={active} onChange={(on) => void toggle(on)} label={active ? "Turn off" : "Turn on"} />
                 {active ? "On" : "Off"}
               </label>
-              <Popover open={testOpen} onOpenChange={setTestOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="secondary" size="sm" disabled={busy !== null}>
-                    {busy === "test" ? "Testing…" : "Test run"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="end" className="w-[min(340px,calc(100vw-2rem))]">
-                  <div className="flex flex-col gap-3 p-4">
-                    <p className="caption-style text-subtle leading-[1.45]">
-                      Runs the AI and logic for real, but only shows what actions would do. Nothing is changed or sent.
-                    </p>
-                    {definition.trigger.type !== "schedule" && (
-                      <>
-                        <select
-                          aria-label="Record type"
-                          value={testKind}
-                          onChange={(event) => {
-                            setTestKind(event.target.value as "company" | "contact");
-                            setTestId("");
-                          }}
-                          className={recordSelectClass}
-                        >
-                          <option value="company">A company</option>
-                          <option value="contact">A contact</option>
-                        </select>
-                        <select aria-label="Record" value={testId} onChange={(event) => setTestId(event.target.value)} className={recordSelectClass}>
-                          <option value="">Choose…</option>
-                          {recordChoices.map((record) => (
-                            <option key={record.id} value={record.id}>
-                              {record.name}
-                            </option>
-                          ))}
-                        </select>
-                      </>
-                    )}
-                    <Button variant="primary" size="sm" className="self-start" disabled={busy !== null} onClick={() => void test()}>
-                      Run test
+              {definition.trigger.type === "schedule" ? (
+                <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => void test()}>
+                  {busy === "test" ? "Testing…" : "Test run"}
+                </Button>
+              ) : (
+                <Popover open={testOpen} onOpenChange={setTestOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant="secondary" size="sm" disabled={busy !== null}>
+                      {busy === "test" ? "Testing…" : "Test run"}
                     </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-[min(340px,calc(100vw-2rem))]">
+                    <div className="flex flex-col gap-3 p-4">
+                      <p className="caption-style text-subtle leading-[1.45]">AI steps run for real. Nothing is changed or sent.</p>
+                      <select
+                        aria-label="Record type"
+                        value={testKind}
+                        onChange={(event) => {
+                          setTestKind(event.target.value as "company" | "contact");
+                          setTestId("");
+                        }}
+                        className={recordSelectClass}
+                      >
+                        <option value="company">Company</option>
+                        <option value="contact">Contact</option>
+                      </select>
+                      <select aria-label="Record" value={testId} onChange={(event) => setTestId(event.target.value)} className={recordSelectClass}>
+                        <option value="">Choose…</option>
+                        {recordChoices.map((record) => (
+                          <option key={record.id} value={record.id}>
+                            {record.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Button variant="primary" size="sm" className="self-start" disabled={busy !== null} onClick={() => void test()}>
+                        Test run
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
               <Button variant="primary" size="sm" disabled={!dirty || busy !== null} data-shortcut="save" title="Save (⌘S)" onClick={() => void save()}>
                 {busy === "save" ? "Saving…" : dirty ? "Save" : "Saved"}
               </Button>
@@ -478,7 +478,7 @@ export default function WorkflowEditor({
       )}
       <div className="flex min-h-0 flex-1">
         {editable && (
-          <aside aria-label="Add nodes" className="border-border hidden w-56 shrink-0 overflow-auto border-r p-3 lg:block">
+          <aside aria-label="Add steps" className="border-border hidden w-56 shrink-0 overflow-auto border-r p-3 lg:block">
             <Palette onAdd={(type) => addNode(type)} />
           </aside>
         )}
@@ -510,8 +510,8 @@ export default function WorkflowEditor({
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent side="right" className="flex flex-col md:hidden">
           <SheetHeader>
-            <SheetTitle>{panel === "runs" ? "Runs" : "Node"}</SheetTitle>
-            <SheetDescription className="sr-only">Settings for the selected node, or recent runs</SheetDescription>
+            <SheetTitle>{panel === "runs" ? "Runs" : "Step"}</SheetTitle>
+            <SheetDescription className="sr-only">Settings for the selected step, or recent runs</SheetDescription>
             <SheetCloseButton />
           </SheetHeader>
           {sidePanel}
@@ -520,8 +520,8 @@ export default function WorkflowEditor({
       <Sheet open={paletteOpen} onOpenChange={setPaletteOpen}>
         <SheetContent side="left" className="lg:hidden">
           <SheetHeader>
-            <SheetTitle>Add a node</SheetTitle>
-            <SheetDescription className="sr-only">Choose a node to add after the selected one</SheetDescription>
+            <SheetTitle>Add step</SheetTitle>
+            <SheetDescription className="sr-only">Choose a step to add after the selected one</SheetDescription>
             <SheetCloseButton />
           </SheetHeader>
           <div className="overflow-auto p-3">
@@ -531,7 +531,7 @@ export default function WorkflowEditor({
       </Sheet>
       {undo && (
         <div role="status" className="bg-popover border-line-strong shadow-overlay fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]">
-          Node deleted
+          Step deleted
           <Button variant="ghost" size="sm" onClick={restore} title="Undo (⌘Z)">
             Undo
           </Button>
@@ -541,7 +541,7 @@ export default function WorkflowEditor({
         open={leaving !== null}
         onOpenChange={(open) => !open && setLeaving(null)}
         title="Leave without saving?"
-        description="Your changes to this workflow will be lost."
+        description="Unsaved changes will be lost."
         confirmLabel="Leave"
         onConfirm={() => {
           const target = leaving;
@@ -553,8 +553,8 @@ export default function WorkflowEditor({
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title={`Delete ${workflow.name}?`}
-        description="It stops running straight away. Past runs stay in the history."
-        confirmLabel="Delete workflow"
+        description="It stops running. Past runs are kept."
+        confirmLabel="Delete"
         onConfirm={() => void remove()}
       />
     </section>

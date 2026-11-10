@@ -202,11 +202,11 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
   }
   if (type === "stage_changed" || type === "added_to_board") {
     options.push(
-      { path: "deal.name", label: "Name", group: "Deal or card" },
-      { path: "deal.stage", label: "Stage", group: "Deal or card" },
-      { path: "deal.previousStage", label: "Previous stage", group: "Deal or card" },
-      { path: "deal.board", label: "Board", group: "Deal or card" },
-      { path: "deal.value", label: "Value", group: "Deal or card" },
+      { path: "deal.name", label: "Name", group: "Opportunity or card" },
+      { path: "deal.stage", label: "Stage", group: "Opportunity or card" },
+      { path: "deal.previousStage", label: "Previous stage", group: "Opportunity or card" },
+      { path: "deal.board", label: "Board", group: "Opportunity or card" },
+      { path: "deal.value", label: "Value", group: "Opportunity or card" },
     );
   }
   if (type === "field_changed") {

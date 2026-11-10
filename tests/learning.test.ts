@@ -270,12 +270,12 @@ describe("nightly learning", () => {
     assert.equal(briefCard.title, "Rebuild the morning brief");
     assert.deepEqual(briefCard.lines, [
       "Runs: Morning brief",
-      "Takes up to about 1 minute in the background. You can keep chatting.",
-      "Uses a model call and replaces today's brief with one covering everything since yesterday's.",
+      "Takes up to 1 minute.",
+      "Replaces today's brief.",
     ]);
     const ownerCard = await card(owner, {});
     assert.equal(ownerCard.title, "Run learning now");
-    assert.deepEqual(ownerCard.lines.slice(0, 2), ["Runs: Business, Market, About you, Morning brief", "Takes up to about 4 minutes in the background. You can keep chatting."]);
+    assert.deepEqual(ownerCard.lines.slice(0, 2), ["Runs: Business, Market, About you, Morning brief", "Takes up to 4 minutes."]);
     assert.equal((await card(sam, {})).lines[0], "Runs: About you, Morning brief");
     const shared = "Only owners and admins can run the business and market learning. You can run learning about you, or rebuild your morning brief.";
     assert.deepEqual((await card(sam, { kind: "market" })).lines, [`This will be refused: ${shared}`]);

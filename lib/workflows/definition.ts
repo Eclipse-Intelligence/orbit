@@ -58,8 +58,8 @@ export type EmailKind = (typeof EMAIL_KINDS)[number];
 export const EMAIL_KIND_LABELS: Record<EmailKind, string> = {
   any: "Any email from a contact",
   reply: "A reply to an email I sent",
-  bounce: "A bounce (couldn't be delivered)",
-  auto_reply: "An automatic reply (out of office or left the company)",
+  bounce: "A bounce",
+  auto_reply: "An automatic reply",
 };
 
 export const PROPOSAL_EVENTS = ["sent", "viewed", "signed", "completed", "declined"] as const;
@@ -76,9 +76,9 @@ export const PROPOSAL_EVENT_LABELS: Record<ProposalEvent, string> = {
 export const AI_OUTPUT_TYPES = ["text", "number", "boolean", "list", "choice"] as const;
 
 export const AI_MODELS = [
-  { id: "claude-haiku-5-5", label: "Claude Haiku 5.5 (fast)" },
-  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5 (strongest)" },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5 (fast)" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+  { id: "claude-opus-5-5", label: "Opus 5.5 (strongest)" },
 ] as const;
 
 export const FIELD_OPTIONS: Record<RecordObject, { key: string; label: string }[]> = {
@@ -219,19 +219,19 @@ export const HANDLE_LABELS: Record<string, string> = { true: "Yes", false: "No",
 
 export function graphProblem(definition: WorkflowDefinition): string | null {
   const ids = new Set(definition.nodes.map((node) => node.id));
-  if (ids.size !== definition.nodes.length) return "Two nodes share the same id.";
-  if (ids.has(TRIGGER_NODE)) return "A node can't be called trigger.";
+  if (ids.size !== definition.nodes.length) return "Two steps share the same id.";
+  if (ids.has(TRIGGER_NODE)) return "A step can't be called trigger.";
   const types = new Map<string, StepType | typeof TRIGGER_NODE>(definition.nodes.map((node) => [node.id, node.type]));
   types.set(TRIGGER_NODE, TRIGGER_NODE);
   const used = new Set<string>();
   for (const edge of definition.edges) {
     const type = types.get(edge.source);
-    if (!type) return "A connection starts from a node that doesn't exist.";
-    if (!ids.has(edge.target)) return "A connection goes to a node that doesn't exist.";
-    if (edge.source === edge.target) return "A node can't connect to itself.";
-    if (!outputHandles(type).includes(edge.handle)) return "A connection uses an output the node doesn't have.";
+    if (!type) return "A connection starts from a step that doesn't exist.";
+    if (!ids.has(edge.target)) return "A connection goes to a step that doesn't exist.";
+    if (edge.source === edge.target) return "A step can't connect to itself.";
+    if (!outputHandles(type).includes(edge.handle)) return "A connection uses an output the step doesn't have.";
     const key = `${edge.source}:${edge.handle}`;
-    if (used.has(key)) return "An output can only connect to one node.";
+    if (used.has(key)) return "An output can only connect to one step.";
     used.add(key);
   }
   const next = new Map<string, string[]>();
@@ -270,7 +270,7 @@ export function webQuestionProblem(value: unknown): string | null {
     const key = typeof item?.key === "string" ? item.key.trim() : "";
     const type = WEB_QUESTION_TYPES.find((entry) => entry === item?.type);
     const count = webQuestionOptions(item).length;
-    if (!WEB_QUESTION_KEY.test(key)) return `${key || `Question ${index + 1}`}: start the key with a lowercase letter and use only letters, numbers and underscores.`;
+    if (!WEB_QUESTION_KEY.test(key)) return `${key || `Question ${index + 1}`}: use a lowercase letter first, then letters, numbers or underscores.`;
     if (seen.has(key) || seen.has(`${key}Confidence`)) return `${key}: use a different key, this one is already taken.`;
     if (!type) return `${key}: choose Yes or no, Pick one or Score.`;
     if (type === "choice" && (count < 2 || count > 50)) return `${key}: give 2 to 50 options.`;
@@ -365,7 +365,7 @@ export const TRIGGER_LABELS: Record<TriggerType, string> = {
   call_summary_ready: "A call summary is ready",
   record_created: "A record is created",
   field_changed: "A field changes",
-  stage_changed: "A deal or card changes stage",
+  stage_changed: "An opportunity or card changes stage",
   added_to_board: "A company is added to a board",
   activity_logged: "An activity is logged",
   task_completed: "A task is completed",
@@ -396,25 +396,15 @@ export const STEP_LABELS: Record<StepType, string> = {
   create_proposal: "New proposal",
 };
 
-export const STEP_HINTS: Record<StepType, string> = {
-  ai: "Prompt an LLM and get back named fields you can use in later steps.",
-  decide: "Ask the live web yes or no, pick-one or score questions and branch on the answers.",
-  if: "Go one way or another depending on a condition.",
+export const STEP_HINTS: Partial<Record<StepType, string>> = {
+  ai: "Returns named answers for later steps.",
+  decide: "Answers questions from the live web.",
   filter: "Stop here unless a condition is true.",
-  loop: "Repeat steps for each item in a list, such as each risk the AI found.",
-  delay: "Pause for minutes, hours or days.",
-  approval: "Pause until you approve or reject in Orbit.",
-  create_task: "Create a task, optionally in ClickUp.",
-  add_note: "Log a note on the company or contact.",
-  update_record: "Change a field on the company or contact.",
-  board: "Put the company on a board, or move its card to a stage.",
+  loop: "Repeats steps for each item in a list.",
   notify: "Send an in-app notification.",
-  send_email: "Email the contact from your mailbox.",
-  linear_issue: "Create an issue in Linear.",
-  find_records: "List companies or contacts that match filters, to go through with For each item.",
-  upsert_record: "Find a company or contact, or create it if it isn't in Orbit yet.",
-  webhook: "Post the run's data to another app, such as Slack, Zapier or Make.",
-  create_proposal: "Draft a proposal for the run's contact, with products the AI picks from the call or ones you choose.",
+  find_records: "Lists matching records for For each item.",
+  webhook: "Posts the run's data to another app.",
+  create_proposal: "Drafts a proposal. Nothing is sent.",
 };
 
 export function safeDefinition(value: unknown): WorkflowDefinition | null {

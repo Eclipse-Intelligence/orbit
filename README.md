@@ -644,7 +644,7 @@ Proposed changes appear as cards under the reply, each with a title and the fiel
 - **One change:** a card with Confirm and Cancel.
 - **Several changes:** one "N changes" card. Every change starts ticked; untick any you want to skip. Confirm all (or Confirm N) runs the ticked ones and cancels the rest. Cancel all cancels everything. The card shows the first five changes, and Show all lists the rest.
 
-Approved changes run one after another on the server. Each shows Done, Didn't work (with the reason) or Cancelled. Once nothing is left waiting, the model gets the results and carries on, usually with a short summary. If you send a new message instead, the waiting changes are cancelled and the model is told you moved on.
+Approved changes run one after another on the server. Each shows Done, Failed (with the reason) or Cancelled. Once nothing is left waiting, the model gets the results and carries on, usually with a short summary. If you send a new message instead, the waiting changes are cancelled and the model is told you moved on.
 
 ### Reading web pages, Eclipse articles and docs
 
@@ -827,14 +827,14 @@ Workflows automate work around your records. Each person builds their own on the
 
 Tasks that Orbit or a workflow creates on its own get a working-day due date. A date that falls on a Saturday, Sunday, an England and Wales bank holiday or 24 December to 1 January moves to the next working morning (09:00), and when the task is yours, days where your calendar has less than an hour free between 09:00 and 17:30 are skipped and the due time is set to your first free half hour. The task notes say why the date moved. A workflow's Create task step can also take a Due on date, such as one an AI step worked out from the email ("early January" becomes the first working Monday), which is used instead of Due in.
 
-A workflow is built on a canvas, like n8n. It always starts with a When node (the trigger). The list on the left holds every other node: click one to add it below the selected node (already connected), or drag it onto the canvas. Connect nodes by dragging from the dot under a node to the next one. If has a Yes and a No output, and For each item has Each item and Done. Click a node to edit just that node in the panel on the right; Backspace or Delete removes the selected node or connection. Nodes can be dragged anywhere, and the canvas pans and zooms. On a phone, Add node opens the list and a node's settings open in a sheet.
+A workflow is built on a canvas, like n8n. It always starts with a When step (the trigger). The list on the left holds every other step: click one to add it below the selected step (already connected), or drag it onto the canvas. Connect steps by dragging from the dot under a step to the next one. If has a Yes and a No output, and For each item has Each item and Done. Click a step to edit just that step in the panel on the right; Backspace or Delete removes the selected step or connection. Steps can be dragged anywhere, and the canvas pans and zooms. On a phone, Add step opens the list and a step's settings open in a sheet.
 
 | Trigger | Fires when |
 | --- | --- |
 | A call summary is ready | A call or meeting summary finishes (Granola, Teams, or a pasted transcript) |
 | A record is created | A company or contact is created |
 | A field changes | A chosen company or contact field changes, optionally to a set value |
-| A deal or card changes stage | On Opportunities or a board, optionally to a chosen stage |
+| An opportunity or card changes stage | On Opportunities or a board, optionally to a chosen stage |
 | A company is added to a board | A card is added to the chosen board |
 | An activity is logged | Optionally of one type (call, email, meeting, note) |
 | A task is completed | Any task you can see |
@@ -843,29 +843,29 @@ A workflow is built on a canvas, like n8n. It always starts with a When node (th
 | A proposal changes | A proposal or NDA is sent, opened for the first time, signed by the client, fully signed or declined, optionally only for proposals or only for NDAs. It gives the proposal's title, value, status, links and who signed. |
 | An email arrives | A new email in your inbox: any email from a contact, a reply to an email you sent, a bounce (the contact is the person whose address bounced), or an automatic reply such as out of office or "I've left". It runs privately for you and gives the email's subject, sender, text and link. |
 
-"Only when it's mine" limits a trigger to your own calls, changes and tasks. Email triggers are always yours alone: another member's workflows never see your mail.
+"Only my own changes" limits a trigger to your own calls, changes and tasks. Email triggers are always yours alone: another member's workflows never see your mail.
 
-| Node | What it does |
+| Step | What it does |
 | --- | --- |
-| Ask AI | Sends a prompt to the LLM API with the model you choose and returns the named answers you define (text, number, yes or no, list, or one of a set of choices). Each answer becomes a field for later steps. Search the web lets it look things up (news, LinkedIn, company sites) and adds a sources answer with the addresses it used. Give it what Orbit knows adds the record's details, recent activity, deals and your recent emails with the contact. Read their LinkedIn profile adds the contact's current LinkedIn profile, read through Mindcase. Emails and web pages are treated as material to read, never as instructions. |
+| Ask AI | Sends a prompt to the LLM API with the model you choose and returns the named answers you define (text, number, yes or no, list, or one of a set of choices). Each answer becomes a field for later steps. Search the web lets it look things up (news, LinkedIn, company sites) and adds a sources answer with the addresses it used. Include the record's details, activity, opportunities and emails adds what Orbit knows: the record's details, recent activity, opportunities and your recent emails with the contact. Read their LinkedIn profile adds the contact's current LinkedIn profile, read through Mindcase. Emails and web pages are treated as material to read, never as instructions. |
 | Check the web | Asks the live web through Parallel (with `PARALLEL_API_KEY`), for $0.001 a check. Each question is yes or no (how likely, 0 to 100), pick one of your options (the option, or empty when the evidence doesn't settle it, plus its confidence) or a score on your levels (0 for the first level, to one decimal), and becomes a field for later steps, such as an If on the likelihood. A question with no answer is empty. It sends the run's company name, domain and website, the questions and the optional About text, and also gives the sources it used. It runs in test runs too. |
 | If, Continue only if | Branch on a condition, or stop this path unless it is true (is, is not, contains, is empty, more than, less than). |
-| For each item | Runs the nodes connected to Each item once per item of a list, then carries on from Done. |
+| For each item | Runs the steps connected to Each item once per item of a list, then carries on from Done. |
 | Wait | Pauses for minutes, hours or days. |
 | Wait for approval | Optional. Pauses until you approve or reject it in Capture or on the Workflows page; rejecting stops the run. The approval waits in Capture under Approvals and comes as a push notification on every device with notifications on; tapping it opens the approval. |
-| Find records | Lists up to 100 companies or contacts by lifecycle, tag, owner, open deal, how long since you were last in touch and a search, ordered by longest since last contact, oldest, newest or name. Skip records found in the last N days so a weekly or monthly run works through a long list in batches. Give its records to For each item, and inside the loop the company and contact nodes act on each record in turn. |
-| Find or create record | Finds a company (by domain, then name) or a contact (by email), or creates it. New companies are enriched when auto-enrichment is on. Its id lets later nodes use it, for example Update record setting a contact's Company to `{{steps.upsert_record_1.id}}` to move them; it can also become the run's company or contact. |
+| Find records | Lists up to 100 companies or contacts by lifecycle, tag, owner, open opportunity, how long since you were last in touch and a search, ordered by longest since last contact, oldest, newest or name. Skip records found in the last N days so a weekly or monthly run works through a long list in batches. Give its records to For each item, and inside the loop the company and contact steps act on each record in turn. |
+| Find or create record | Finds a company (by domain, then name) or a contact (by email), or creates it. New companies are enriched when auto-enrichment is on. Its id lets later steps use it, for example Update record setting a contact's Company to `{{steps.upsert_record_1.id}}` to move them; it can also become the run's company or contact. |
 | Create task, Add note, Update record | Act on the run's company or contact. Tasks can go to ClickUp too. Update record covers lifecycle, health, owner, industry, size, source, description, name, domain, website, LinkedIn and phone on companies, and owner, job title, company, source, notes, name, email, phone, LinkedIn, location and Sales Navigator lead on contacts. |
 | Add to or move on a board | Puts the company on a board or moves its card. |
 | Notify someone | Sends an in-app notification to you, the record's owner, or a member. |
 | Send email | Emails the run's contact from your mailbox and logs it. |
 | New proposal | Drafts a proposal for the run's contact at their company from an active template, in pounds or dollars. With AI picks from the call, it reads the call summary and transcript (or the record's recent history) and picks products and quantities from your live product list, with optional guidance on how to choose, so there is no product list to keep up to date in a prompt. Or, with Always the products I tick, it uses those. It outputs the proposal link, title, total, products and why it chose them, for a Notify someone step. If nothing fits, it stops without a draft. Nothing is sent, and test runs create nothing. |
 | Create Linear issue | Creates an issue in the Linear team. |
-| Send to a webhook | Posts to an https address, such as a Slack incoming webhook, Zapier or Make: your own body with fields, or the run's company, contact and node results as JSON. Private and local addresses are refused. |
+| Send to a webhook | Posts to an https address, such as a Slack incoming webhook, Zapier or Make: your own body with fields, or the run's company, contact and step results as JSON. Private and local addresses are refused. |
 
-Every text field has Insert field, which adds a value such as `{{company.name}}`, `{{call.summary}}`, `{{steps.ai_1.health}}` or `{{loop.item}}`, from the trigger and the nodes above it. Lists are written one item per line. A path simply ends at a node with nothing connected below it.
+Every text field has Insert field, which adds a value such as `{{company.name}}`, `{{call.summary}}`, `{{steps.ai_1.health}}` or `{{loop.item}}`, from the trigger and the steps above it. Lists are written one item per line. A path simply ends at a step with nothing connected below it.
 
-Test run runs a workflow against a record you choose: AI and logic run for real, and actions only show what they would have done. The Runs tab lists runs; selecting one marks each node on the canvas as Done, Failed or Waiting and shows every node's result. Failed runs notify you with the reason. A workflow's own changes never trigger it again, and runs set off by other workflows stop three levels deep.
+Test run runs a workflow against a record you choose (a scheduled workflow runs straight away, with no record to choose): AI and logic run for real, and actions only show what they would have done. The Runs tab lists runs; selecting one marks each step on the canvas as Done, Failed or Waiting and shows every step's result. Failed runs notify you with the reason. A workflow's own changes never trigger it again, and runs set off by other workflows stop three levels deep.
 
 Event triggers run straight away; email triggers start when the mail arrives (Outlook tells Orbit about new mail within seconds, and the five-minute mail job catches the rest). Waits, approvals and schedules continue when someone uses Orbit and on every `/api/cron/sync` call (every 10 minutes in production), so they can be up to ten minutes late. `/api/cron/workflows` runs only workflows if you want them more often.
 
