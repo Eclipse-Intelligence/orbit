@@ -53,11 +53,18 @@ import UnsubscribeIcon from "@/public/assets/images/mail/unsubscribe.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import type { UnsubscribeMode } from "@/components/mail/unsubscribe-dialog";
 
-const loadComposer = () => import("@/components/mail/mail-composer");
-const MailComposer = dynamic(loadComposer, { ssr: false, loading: () => <ComposerLoading /> });
+const MailComposer = dynamic(() => import("@/components/mail/mail-composer"), { ssr: false, loading: () => <ComposerLoading /> });
 const InviteDialog = dynamic(() => import("@/components/crm/invite-dialog"), { ssr: false });
 
 const UNDO_DELETE_MS = 8_000;
+const DRAFT_DELETE_FAILED = "Outlook didn't delete the draft. Try again.";
+
+async function sendDraftDelete(id: string, keepalive: boolean) {
+  const response = await fetch(`/api/mail/draft-message?id=${encodeURIComponent(id)}`, { method: "DELETE", keepalive }).catch(() => null);
+  if (response?.ok) return null;
+  const body = (await response?.json().catch(() => ({}))) as { error?: string } | undefined;
+  return body?.error ?? DRAFT_DELETE_FAILED;
+}
 
 function minuteNow() {
   return Math.floor(Date.now() / 60_000) * 60_000;
@@ -599,7 +606,8 @@ export default function ThreadReader({
   const [invite, setInvite] = useState<{ prefill: InvitePrefill; setup: InviteSetup; at: number } | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const { showToast } = useComposer();
-  const pendingDeletes = useRef(new Map<string, () => void>());
+  const pendingDeletes = useRef(new Map<string, number>());
+  const deleteFailed = useRef<(id: string, problem: string) => void>(() => undefined);
   const replyHint = useShortcutHint("mail-reply");
   const replyAllHint = useShortcutHint("mail-reply-all");
   const forwardHint = useShortcutHint("mail-forward");
@@ -758,41 +766,26 @@ export default function ThreadReader({
     setDraftError(null);
     setRemovedDrafts((existing) => new Set(existing).add(message.id));
     const id = message.id;
-    const leave = () => {
-      window.clearTimeout(timer);
-      pendingDeletes.current.delete(id);
-      void removeDraftNow(id, true);
-    };
+    const pending = pendingDeletes.current;
     const timer = window.setTimeout(() => {
-      window.removeEventListener("pagehide", leave);
-      pendingDeletes.current.delete(id);
-      void removeDraftNow(id, false);
+      if (!pending.delete(id)) return;
+      void sendDraftDelete(id, false).then((problem) => problem && deleteFailed.current(id, problem));
     }, UNDO_DELETE_MS);
-    window.addEventListener("pagehide", leave, { once: true });
-    pendingDeletes.current.set(id, () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("pagehide", leave);
-    });
+    pending.set(id, timer);
     showToast({
       message: "Draft deleted.",
-      duration: UNDO_DELETE_MS,
+      duration: UNDO_DELETE_MS - 500,
       action: {
         label: "Undo",
         run: () => {
-          pendingDeletes.current.get(id)?.();
-          pendingDeletes.current.delete(id);
+          const waiting = pending.get(id);
+          if (waiting === undefined) return;
+          window.clearTimeout(waiting);
+          pending.delete(id);
           restoreDraft(id);
         },
       },
     });
-  }
-
-  async function removeDraftNow(id: string, leaving: boolean) {
-    const response = await fetch(`/api/mail/draft-message?id=${encodeURIComponent(id)}`, { method: "DELETE", keepalive: leaving }).catch(() => null);
-    if (response?.ok || leaving || !alive.current) return;
-    const body = (await response?.json().catch(() => ({}))) as { error?: string } | undefined;
-    restoreDraft(id);
-    setDraftError(body?.error ?? "Outlook didn't delete the draft. Try again.");
   }
 
   function closeComposer() {
@@ -858,10 +851,36 @@ export default function ThreadReader({
   }, [swipe]);
 
   useEffect(() => {
-    const idle = window.requestIdleCallback ?? ((run: () => void) => window.setTimeout(run, 1200));
-    const cancel = window.cancelIdleCallback ?? window.clearTimeout;
-    const handle = idle(() => void loadComposer().catch(() => null));
-    return () => cancel(handle);
+    deleteFailed.current = (id, problem) => {
+      if (alive.current) {
+        restoreDraft(id);
+        setDraftError(problem);
+      } else {
+        showToast({ message: problem, tone: "alert" });
+      }
+    };
+  });
+
+  useEffect(() => {
+    const pending = pendingDeletes.current;
+    const failed = deleteFailed;
+    const flush = () => {
+      for (const [id, timer] of pending) {
+        window.clearTimeout(timer);
+        pending.delete(id);
+        void sendDraftDelete(id, true).then((problem) => problem && failed.current(id, problem));
+      }
+    };
+    const hidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", hidden);
+      flush();
+    };
   }, []);
 
   const composeStarted = useRef(false);
@@ -914,7 +933,7 @@ export default function ThreadReader({
         entered && "animate-in fade-in slide-in-from-right-12 ease-power3-out duration-200",
       )}
     >
-      <div role="toolbar" aria-label="Conversation actions" className="@container flex shrink-0 items-center gap-1 px-3 py-2 sm:px-5">
+      <div role="group" aria-label="Conversation actions" className="@container flex shrink-0 items-center gap-1 px-3 py-2 sm:px-5">
         <Button
           variant="ghost"
           size="icon"
@@ -937,7 +956,7 @@ export default function ThreadReader({
             </ToolButton>
           )}
           {view !== "snoozed" && (
-            <ToolButton label="Snooze" hint={snoozeHint} onClick={() => onAction("snooze")}>
+            <ToolButton label="Remind me" hint={snoozeHint} onClick={() => onAction("snooze")}>
               <ClockIcon aria-hidden className="size-3.5" />
             </ToolButton>
           )}

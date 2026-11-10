@@ -84,12 +84,13 @@ function payloadDraft(payload: SendPayload): MailDraft {
 
 const ComposerContext = createContext<ComposerContextValue | null>(null);
 
-const MailComposer = dynamic(() => import("@/components/mail/mail-composer"), { ssr: false, loading: () => <ComposerLoading fill /> });
+const loadComposer = () => import("@/components/mail/mail-composer");
+const MailComposer = dynamic(loadComposer, { ssr: false, loading: () => <ComposerLoading fill /> });
 const LaterPicker = dynamic(() => import("@/components/mail/later-picker"), { ssr: false });
 
 const NO_ACCOUNTS: ComposeAccount[] = [];
 
-const SHEET_QUERY = "(max-width: 639px), (pointer: coarse)";
+const SHEET_QUERY = "(max-width: 639px)";
 
 function watchSheet(notify: () => void) {
   const query = window.matchMedia(SHEET_QUERY);
@@ -104,7 +105,6 @@ function useSheet() {
     () => false,
   );
 }
-
 
 export function useComposer() {
   const value = useContext(ComposerContext);
@@ -274,6 +274,13 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     cardsRef.current = cards;
   });
+
+  useEffect(() => {
+    const idle = window.requestIdleCallback ?? ((run: () => void) => window.setTimeout(run, 1500));
+    const cancel = window.cancelIdleCallback ?? window.clearTimeout;
+    const handle = idle(() => void loadComposer().catch(() => null));
+    return () => cancel(handle);
+  }, []);
 
   useEffect(() => {
     const resize = () => setViewport(window.innerWidth);
@@ -484,7 +491,6 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
     },
     [update],
   );
-
 
   const value = useMemo(
     () => ({ openComposer, sent, queueSend, scheduleSend, pickLater: setLater, showToast, dismissToast: dismiss, undoLatest }),

@@ -199,9 +199,9 @@ function frameScript(hideQuotes: boolean) {
     }, { passive: false });
     document.addEventListener("dblclick", function () { if (zoom > 1) zoomTo(1, 0); });
     document.addEventListener("load", fit, true);
-    window.addEventListener("resize", fit);
     window.addEventListener("load", report);
-    if (typeof ResizeObserver !== "undefined") {
+    if (typeof ResizeObserver === "undefined") window.addEventListener("resize", fit);
+    else {
       new ResizeObserver(function () { height(false); }).observe(document.body);
       new ResizeObserver(function () {
         if (root.clientWidth === lastWidth) return;
@@ -334,7 +334,10 @@ export default function EmailFrame({
         referrerPolicy="no-referrer"
         srcDoc={source}
         suppressHydrationWarning
-        onLoad={ask}
+        onLoad={() => {
+          heard.current = false;
+          ask();
+        }}
         aria-busy={!measured && !gaveUp}
         className={cn(
           "ease-power3-out block w-full border-0 transition-opacity duration-200 motion-reduce:transition-none",

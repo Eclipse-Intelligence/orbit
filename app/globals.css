@@ -265,9 +265,7 @@
   --padding-section-md: 2rem;
   --padding-section-lg: 2.75rem;
   --padding-section-page: 6rem;
-  --z-chrome: 40;
   --z-compose: 41;
-  --z-overlay: 50;
 }
 
 @variant sm {

@@ -195,7 +195,7 @@ export default function MailComposer({
 
   const opening = useRef({ card, passive, recipientsFirst: !draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0)) });
   useEffect(() => {
-    if (opening.current.passive && window.matchMedia("(pointer: coarse)").matches) return;
+    if (opening.current.passive && window.matchMedia("(max-width: 639px)").matches) return;
     if (!opening.current.card) editor.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     if (!opening.current.recipientsFirst) editor.current?.focus();
   }, []);
@@ -578,7 +578,7 @@ export default function MailComposer({
         </p>
       )}
       </div>
-      <div role="toolbar" aria-label="Email actions" className={cn("flex items-center gap-1 pt-2", card && "shrink-0 px-4 pb-3")}>
+      <div role="group" aria-label="Email actions" className={cn("flex items-center gap-1 pt-2", card && "shrink-0 px-4 pb-3")}>
         <Button variant="primary" type="submit" data-shortcut-submit title={`Send (${sendHint})`}>
           {scheduledFor ? "Send now" : "Send"}
         </Button>
@@ -627,7 +627,16 @@ export default function MailComposer({
             {status}
           </span>
         )}
-        <HoldButton onConfirm={() => void discard()} className="ml-auto">
+        <HoldButton
+          onConfirm={() => void discard()}
+          holding={
+            <span className="flex items-center gap-1.5">
+              <TrashIcon aria-hidden className="size-3.5" />
+              <span className="max-sm:sr-only">Keep holding</span>
+            </span>
+          }
+          className="ml-auto sm:w-[8.25rem]"
+        >
           <span className="flex items-center gap-1.5">
             <TrashIcon aria-hidden className="size-3.5" />
             <span className="max-sm:sr-only">Hold to discard</span>
