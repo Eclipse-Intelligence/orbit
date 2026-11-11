@@ -31,6 +31,7 @@ export default function MessageList({
   hasNewer,
   focusId,
   bottomSignal = 0,
+  loadError = null,
   header,
   empty,
   label,
@@ -49,6 +50,7 @@ export default function MessageList({
   hasNewer: boolean;
   focusId: string | null;
   bottomSignal?: number;
+  loadError?: string | null;
   header?: ReactNode;
   empty?: ReactNode;
   label: string;
@@ -119,7 +121,7 @@ export default function MessageList({
     if (bottomSignal !== signal.current) {
       signal.current = bottomSignal;
       toBottom.current = true;
-    }
+    } else if (loadError) toBottom.current = false;
     if (hidden(node)) {
       bottomRef.current(false);
       return;
@@ -151,7 +153,7 @@ export default function MessageList({
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
     if (hasOlder && node.scrollTop < EDGE_PX) edges.current.onOlder();
     if (hasNewer && distance < EDGE_PX) edges.current.onNewer();
-  }, [messages, first, last, ready, focusId, dividerId, viewer.id, hasNewer, hasOlder, bottomSignal, report, place]);
+  }, [messages, first, last, ready, focusId, dividerId, viewer.id, hasNewer, hasOlder, bottomSignal, loadError, report, place]);
 
   useEffect(() => {
     const node = scroller.current;

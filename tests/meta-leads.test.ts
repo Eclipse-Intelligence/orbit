@@ -30,6 +30,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { fetchMetaLead, listMetaLeadsPage, metaSignature, verifyMetaSignature } from "@/lib/meta";
 import { savePushSubscription, type PushSender } from "@/lib/push";
+import { listNotifications } from "@/lib/workflows/store";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const SECRET = "test-meta-app-secret";
@@ -605,6 +606,7 @@ describe("Meta lead ads", () => {
       assert.ok(notes.every((note) => decodeURIComponent(note.href).includes(`/contacts/${row.contact_id}`)));
       assert.equal(push.sent.length, 1);
       assert.deepEqual([push.sent[0].endpoint, push.sent[0].payload.title, push.sent[0].payload.body], ["https://fcm.googleapis.com/fcm/send/mark-phone", "New lead: Pia Push", "Spring launch"]);
+      assert.ok((await listNotifications(ownerInOther, 20)).some((note) => note.title === "New lead: Pia Push"));
     });
 
     it("stores a repeated leadgen id once", async () => {

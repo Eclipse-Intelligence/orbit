@@ -103,6 +103,7 @@ export default function ThreadPanel({
           pane="thread"
           align="start"
           bottomSignal={bottomSignal}
+          loadError={timeline?.error ?? null}
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={null}
@@ -128,6 +129,7 @@ export default function ThreadPanel({
           label="Reply in thread"
           sendLabel="Send reply"
           autoFocus
+          onEscape={onClose}
           disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
           onSend={(text, mentions) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions }) : Promise.resolve(null))}
           onEditLast={() => {

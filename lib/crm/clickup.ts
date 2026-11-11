@@ -41,6 +41,7 @@ import {
   type ClickUpUser,
 } from "@/lib/clickup";
 import { appTimeZone, zonedParts, zonedTimeToDate } from "@/lib/time";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 const SYNC_GAP_MS = 5 * 60 * 1000;
 const OVERLAP_MS = 5 * 60 * 1000;
@@ -402,9 +403,14 @@ async function readSyncRow(db: Db, workspaceId: string, id: string, lock = false
   return result.rows[0] ?? null;
 }
 
+async function linkedElsewhere(workspaceId: string, clickupTaskId: string) {
+  const result = await query<{ linked: boolean }>("select private.clickup_task_linked($1, $2) as linked", [workspaceId, clickupTaskId]);
+  return Boolean(result.rows[0]?.linked);
+}
+
 async function linkedRow(db: Db, workspaceId: string, clickupTaskId: string) {
   const result = await db.query<SyncRow>(
-    `select ${SYNC_COLUMNS} ${SYNC_FROM} where t.workspace_id = $1 and t.clickup_task_id = $2`,
+    `select ${SYNC_COLUMNS} ${SYNC_FROM} where t.workspace_id = $1 and t.clickup_task_id = $2 and ${directTaskSql("t")}`,
     [workspaceId, clickupTaskId],
   );
   return result.rows[0] ?? null;
@@ -757,6 +763,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
       return changed ? "updated" : "unchanged";
     }
     if (!listId || !watched.has(listId)) return "ignored";
+    if (await linkedElsewhere(s.actor.workspaceId, taskId)) return "ignored";
     const creating = await db.query<{ id: string }>(
       `select id from crm.tasks
        where workspace_id = $1 and clickup_task_id is null and clickup_list_id = $2 and title = $3
@@ -800,9 +807,9 @@ function watchedSet(state: ClickUpState) {
 async function linkedLists(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ clickup_list_id: string }>(
-      `select distinct clickup_list_id from crm.tasks
-       where workspace_id = $1 and clickup_task_id is not null and clickup_list_id is not null
-         and archived_at is null
+      `select distinct t.clickup_list_id from crm.tasks t
+       where t.workspace_id = $1 and t.clickup_task_id is not null and t.clickup_list_id is not null
+         and t.archived_at is null and ${directTaskSql("t")}
        limit $2`,
       [actor.workspaceId, MAX_POLL_LISTS],
     );
@@ -814,7 +821,7 @@ async function pushQueue(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ id: string }>(
       `select t.id from crm.tasks t
-       where t.workspace_id = $1 and t.archived_at is null and t.clickup_list_id is not null
+       where t.workspace_id = $1 and t.archived_at is null and t.clickup_list_id is not null and ${directTaskSql("t")}
          and (t.clickup_task_id is null or ${DIRTY_SQL})
        order by t.clickup_synced_at asc nulls first, t.updated_at asc
        limit $2`,
@@ -828,7 +835,7 @@ async function staleLinks(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<SyncRow>(
       `select ${SYNC_COLUMNS} ${SYNC_FROM}
-       where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null
+       where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null and ${directTaskSql("t")}
          and t.clickup_task_id is not null
          and (t.clickup_synced_at is null or t.clickup_synced_at < now() - make_interval(secs => $2::double precision))
        order by t.clickup_synced_at asc nulls first

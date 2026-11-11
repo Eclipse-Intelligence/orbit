@@ -18,6 +18,7 @@ import {
 import { docsData, refreshDocsActivity, resetDocsConnection } from "@/lib/docs/connection";
 import { clearDraft, readDraft, setDraftScope, writeDraft } from "@/lib/docs/drafts";
 import { entryCount, excerptFrom, parseTags, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
+import { memberTagCount } from "@/lib/docs/people-tags";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import type { LiveStatus } from "@/lib/docs/live/session";
 import { listKey } from "@/lib/docs/routes";
@@ -74,13 +75,13 @@ type DocsState = {
   liveSaved: (id: string, summary: PageSummary, revision: number) => void;
   remoteTitle: (id: string, title: string) => void;
   setUnavailable: (id: string, value: boolean) => void;
-  replaceBody: (page: Page) => void;
+  replaceBody: (page: Page, options?: { untracked?: boolean }) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
   visit: (id: string) => void;
   createNote: (input?: CreateInput) => Promise<Page | null>;
   openDaily: (date: string) => Promise<Page | null>;
   move: (id: string, folderId: string | null, allowVisibilityChange?: boolean) => Promise<void>;
-  share: (target: ShareTarget, visibility: Visibility) => Promise<string | null>;
+  share: (target: ShareTarget, visibility: Visibility, onShared?: () => void) => Promise<string | null>;
   archive: (id: string) => Promise<void>;
   setAssistantCanEdit: (id: string, value: boolean) => Promise<void>;
   createFolder: (name: string, parentId: string | null) => Promise<Folder | null>;
@@ -126,6 +127,11 @@ const uncertain = new Map<string, NoteText>();
 const resetHandlers = new Set<() => void>();
 const liveNotes = new Map<string, LiveHooks>();
 const holds = new Map<string, Hold>();
+const untracked = new Set<string>();
+
+export function takeUntracked(id: string) {
+  return untracked.delete(id);
+}
 
 type Hold = { owed: Reader | null; drafted: boolean };
 type LiveHooks = { flush: (keepalive: boolean) => Promise<void>; leave: () => void };
@@ -372,7 +378,9 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     });
   },
 
-  replaceBody(page) {
+  replaceBody(page, options) {
+    if (options?.untracked) untracked.add(page.id);
+    else untracked.delete(page.id);
     acked.set(page.id, acknowledgedFrom(page));
     uncertain.delete(page.id);
     set((state) => ({
@@ -503,10 +511,15 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     }
   },
 
-  async share(target, visibility) {
+  async share(target, visibility, onShared) {
     const current = session;
     try {
       await docsData().share(target, visibility);
+      try {
+        onShared?.();
+      } catch (error) {
+        console.error("After sharing failed", error);
+      }
       const ids = affectedBy(target);
       const fresh = await Promise.all(ids.map((id) => docsData().getPage(id).catch(() => null)));
       if (current !== session) return null;
@@ -973,6 +986,9 @@ function acknowledge(id: string, sent: Queued, previous: Acknowledged, saved: Pa
   if (renamedFrom) refreshLinked(id, renamedFrom, saved.title);
   if (navChanged || saved.kind === "daily") void store.refreshNav();
   if (queued.has(id)) return flush(id);
+  if (saved.body !== sent.body && memberTagCount(saved.body) < memberTagCount(sent.body) && !liveNotes.has(id) && !readers.has(id) && !inflight.has(id) && !holds.has(id)) {
+    store.replaceBody(saved, { untracked: true });
+  }
   if (!readers.has(id)) store.setSave(id, "saved");
   return Promise.resolve();
 }

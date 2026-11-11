@@ -104,7 +104,7 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 
 ## Open follow-ups
 
-- **Meta Lead Ads setup.** Set `META_APP_SECRET`, `META_VERIFY_TOKEN` and `META_ACCESS_TOKEN` in Vercel, connect the webhook in the Meta app, link the Page in Settings › Tools and test with Meta's Lead Ads Testing Tool.
+- **Meta Lead Ads** is live for the Ridgeon Consultancy Page (webhook on the app's Page object, `leadgen` subscribed, Page subscribed to the app). `META_ACCESS_TOKEN` must be a long-lived Page token or System User token; a Graph Explorer token expires within hours.
 - **Meta lead behaviour:**
   - Phone-only resubmissions create a new contact each time.
   - The held-Page list stops at 50.

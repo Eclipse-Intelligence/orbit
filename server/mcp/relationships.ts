@@ -373,12 +373,13 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "create_next_action",
     {
-      description: "Create a task, with an optional due date and company, contact, or opportunity.",
+      description: "Create a task, with an optional due date, assignee (ownerId, a workspace member) and company, contact, or opportunity. The assignee is told.",
       inputSchema: {
         title: z.string(),
         description: z.string().nullable().optional(),
         dueAt: z.string().nullable().optional(),
         priority: z.enum(TASK_PRIORITIES).optional(),
+        ownerId: z.uuid().nullable().optional(),
         companyId: z.uuid().nullable().optional(),
         contactId: z.uuid().nullable().optional(),
         opportunityId: z.uuid().nullable().optional(),
@@ -394,6 +395,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
             description: args.description,
             dueAt: args.dueAt,
             priority: args.priority,
+            ownerId: args.ownerId,
             companyId: args.companyId,
             contactId: args.contactId,
             opportunityId: args.opportunityId,

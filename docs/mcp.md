@@ -129,8 +129,8 @@ claude mcp add --transport http orbit https://orbit.geteclipse.co/api/mcp --head
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |
 | `get_due_actions` | Tasks for a view, up to 100: `all` (every open task, overdue first, undated last), `overdue`, `today` (the default, undated included), `upcoming`, `completed` (last 14 days), or `none` (companies with no open task). | `view` | `crm:read` | No | Both |
-| `create_next_action` | Creates a task. An agent's task is unowned; a personal token's belongs to that person. | `title`, `description`, `dueAt`, `priority` (`low`, `normal`, `high`), `companyId`, `contactId`, `opportunityId`, provenance | `tasks:write` | Yes | Both |
-| `update_next_action` | Partial update of a task. `completed: true` marks it done, `false` reopens it. | `id`, `title`, `description`, `dueAt`, `priority`, `completed`, `companyId`, `contactId`, `opportunityId`, provenance | `tasks:write` | Yes | Both |
+| `create_next_action` | Creates a task. An agent's task is unowned and a personal token's belongs to that person, unless `ownerId` names a workspace member, who is then told. | `title`, `description`, `dueAt`, `priority` (`low`, `normal`, `high`), `ownerId`, `companyId`, `contactId`, `opportunityId`, provenance | `tasks:write` | Yes | Both |
+| `update_next_action` | Partial update of a task. `completed: true` marks it done, `false` reopens it. `ownerId` reassigns it: whoever assigns a task to someone else stays tagged on it, and the new assignee is told. A personal token can read a task it is only tagged in, but changing, completing, reassigning or archiving it returns `forbidden`, and task lists leave such tasks out. | `id`, `title`, `description`, `dueAt`, `priority`, `ownerId`, `completed`, `companyId`, `contactId`, `opportunityId`, provenance | `tasks:write` | Yes | Both |
 | `complete_next_action` | Marks a task done, keeping an existing completion time. | `id`, provenance | `tasks:write` | Yes | Both |
 | `archive_next_action` | Archives a task without completing it. | `id`, provenance | `tasks:write` | Yes | Both |
 
@@ -171,7 +171,7 @@ No tool sends or signs. A person sends from the proposal in Orbit (or approves t
 
 ### Docs
 
-Docs are Markdown notes in nested folders (see `docs/architecture.md`, Docs). Reads need `docs:read` and changes `docs:write`; personal tokens have both through their role. Agent tokens only ever see docs shared with the workspace. Every change goes through the same save path as the app: links (`[[Title]]`), tags (`#tag`) and record mentions are re-indexed, a version is saved before and after every agent edit, and changes to shared docs are audited as `page.*` and `page_folder.*` events with the token as the actor.
+Docs are Markdown notes in nested folders (see `docs/architecture.md`, Docs). Reads need `docs:read` and changes `docs:write`; personal tokens have both through their role. Agent tokens only ever see docs shared with the workspace. Every change goes through the same save path as the app: links (`[[Title]]`), tags (`#tag`) and record mentions are re-indexed, a version is saved before and after every agent edit, and changes to shared docs are audited as `page.*` and `page_folder.*` events with the token as the actor. A teammate tag (`@[Name](member:<user id>)`) is kept only in a shared note and only for a member of its workspace; anywhere else it is saved as plain `@Name`. A newly tagged teammate gets a bell alert and a push naming the person, or the agent for an agent token.
 
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |

@@ -77,6 +77,7 @@ export function NewRoomDialog({ open, onOpenChange, onCreated }: { open: boolean
   return (
     <Dialog open={open} onOpenChange={reset}>
       <DialogContent
+        className="pointer-coarse:[&>button[aria-label=Close]]:top-2 pointer-coarse:[&>button[aria-label=Close]]:right-2 pointer-coarse:[&>button[aria-label=Close]]:size-11"
         onEscapeKeyDown={(event) => {
           if (pickerOpen()) event.preventDefault();
         }}
@@ -188,7 +189,7 @@ export function NewMessageDialog({ open, onOpenChange, onOpened }: { open: boole
 
   return (
     <Dialog open={open} onOpenChange={reset}>
-      <DialogContent>
+      <DialogContent className="pointer-coarse:[&>button[aria-label=Close]]:top-2 pointer-coarse:[&>button[aria-label=Close]]:right-2 pointer-coarse:[&>button[aria-label=Close]]:size-11">
         <DialogHeader className="pr-12">
           <DialogTitle>New message</DialogTitle>
           <DialogDescription>Message anyone who shares a workspace with you.</DialogDescription>

@@ -6,6 +6,7 @@ import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseCha
 import {
   appendCards,
   chatReducer,
+  loadsLatestFirst,
   needsCatchUp,
   newerCursor,
   refreshCards,
@@ -421,6 +422,13 @@ describe("chat review fixes", () => {
       [newest.id, echo.id],
     );
     assert.equal(state.threads[root.id].timeline.hasNewer, false);
+  });
+
+  it("loads the latest page before taking your own message only when later messages are unloaded", () => {
+    assert.equal(loadsLatestFirst(undefined), false);
+    assert.equal(loadsLatestFirst(loaded([message({ at: "2026-11-11T08:00:00.000Z" })]).timelines[ROOM]), false);
+    assert.equal(loadsLatestFirst(loaded([message({ at: "2026-11-11T08:00:00.000Z" })], { hasNewer: true }).timelines[ROOM]), true);
+    assert.equal(loadsLatestFirst(chatReducer(EMPTY_CHAT, { type: "loading", conversationId: ROOM }).timelines[ROOM]), false);
   });
 });
 

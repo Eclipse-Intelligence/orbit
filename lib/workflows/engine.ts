@@ -302,7 +302,7 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
     companyId = document.companyId;
     contactId = document.contactId;
   } else if (trigger.type === "task_completed") {
-    const task = event.entityId ? await maybe(() => getTask(actor, event.entityId!)) : null;
+    const task = event.entityId ? await maybe(() => getTask(actor, event.entityId!, { direct: true })) : null;
     if (!task) return { vars, matches: false };
     vars.task = { id: task.id, title: task.title, completedAt: task.completedAt, dueAt: task.dueAt };
     companyId = task.companyId;

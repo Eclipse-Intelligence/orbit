@@ -125,13 +125,14 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "update_next_action",
     {
-      description: "Update a task. Omitted fields stay unchanged. completed true marks it done.",
+      description: "Update a task. Omitted fields stay unchanged. completed true marks it done. ownerId reassigns it; the assignee can hand it on and stays tagged.",
       inputSchema: {
         id: z.uuid(),
         title: z.string().optional(),
         description: z.string().nullable().optional(),
         dueAt: z.string().nullable().optional(),
         priority: z.enum(TASK_PRIORITIES).optional(),
+        ownerId: z.uuid().nullable().optional(),
         completed: z.boolean().optional(),
         companyId: z.uuid().nullable().optional(),
         contactId: z.uuid().nullable().optional(),
@@ -150,6 +151,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               description: args.description,
               dueAt: args.dueAt,
               priority: args.priority,
+              ownerId: args.ownerId,
               completed: args.completed,
               companyId: args.companyId,
               contactId: args.contactId,

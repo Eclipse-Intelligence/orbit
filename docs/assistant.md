@@ -435,7 +435,7 @@ These are list prices; the gateway's own prices and caching decide the real figu
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_tasks` | Lists tasks by view (`all`, `overdue`, `today`, `upcoming`, `completed`), with due date, reminder, links and ClickUp status. `mine` limits it to the user's own and unassigned ones. Takes `workspace`. | No | Yes | Default 100, up to 100. A member sees only tasks they own or created. |
+| `list_tasks` | Lists tasks by view (`all`, `overdue`, `today`, `upcoming`, `completed`), with due date, reminder, links and ClickUp status. `mine` limits it to the user's own and unassigned ones. Takes `workspace`. | No | Yes | Default 100, up to 100. A member sees only tasks they own or created; tasks they are only tagged in are left out. |
 | `create_task` | Creates a task, owned by the user unless `ownerId` is set, and sends it to the default ClickUp list unless `sendToClickUp` is false. | Yes | No | A reminder needs a due date. |
 | `update_task` | Changes a task's title, detail, due date, reminder, priority or assignee, marks it done (`completed: true`) or reopens it (`false`), and ClickUp. | Yes | No | |
 

@@ -415,7 +415,7 @@ export default function CompanyRecord({
 
             {!company.archivedAt && <KnowledgePanel key={company.id} target={{ companyId: company.id }} initial={knowledge} />}
 
-            <RelationshipPanel context={context} clickup={clickup} findEmail={enrichment.email} viewerId={viewer.id} />
+            <RelationshipPanel context={context} clickup={clickup} findEmail={enrichment.email} viewerId={viewer.id} members={members} />
           </>
         }
         activity={

@@ -19,6 +19,10 @@ export function useDocsNav() {
   return live ?? context?.nav ?? null;
 }
 
+export function useDocsWorkspaceName() {
+  return useContext(DocsContext)?.seed.workspaceName || null;
+}
+
 export function useDocsNow() {
   const context = useContext(DocsContext);
   const live = useDocsStore((state) => (state.ready ? state.now : null));

@@ -203,6 +203,7 @@ export default function RoomView({
           days
           pane="room"
           bottomSignal={bottomSignal}
+          loadError={timeline?.error ?? null}
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={focusId}

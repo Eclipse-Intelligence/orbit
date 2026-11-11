@@ -176,6 +176,10 @@ function withPage(current: Timeline | undefined, page: { messages: ChatMessage[]
   };
 }
 
+export function loadsLatestFirst(timeline: Timeline | undefined) {
+  return Boolean(timeline && timeline.status === "ready" && timeline.hasNewer);
+}
+
 export function needsCatchUp(timeline: Timeline | undefined) {
   return Boolean(timeline && timeline.status === "ready" && timeline.stale && !timeline.hasNewer);
 }

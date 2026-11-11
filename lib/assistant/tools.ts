@@ -127,6 +127,7 @@ import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
 import { archiveTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { directTaskSql } from "@/lib/crm/task-access";
 import { logActivity } from "@/lib/crm/activities";
 import {
   ACTIVITY_TYPES,
@@ -6008,13 +6009,13 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       `select c.id::text, c.domain as label, to_char(c.created_at at time zone 'Europe/London', 'FMDD Mon YYYY') as created,
          (select count(*)::int from crm.activities a where a.company_id = c.id) as activities,
          (select count(*)::int from crm.opportunities o where o.company_id = c.id and o.archived_at is null) as deals,
-         (select count(*)::int from crm.tasks t where t.company_id = c.id and t.archived_at is null) as tasks
+         (select count(*)::int from crm.tasks t where t.company_id = c.id and t.archived_at is null and ${directTaskSql("t")}) as tasks
        from crm.companies c where c.id = any($1::uuid[]) and c.workspace_id = $2
        union all
        select p.id::text, p.email, to_char(p.created_at at time zone 'Europe/London', 'FMDD Mon YYYY'),
          (select count(*)::int from crm.activities a where a.contact_id = p.id),
          (select count(*)::int from crm.opportunities o where o.primary_contact_id = p.id and o.archived_at is null),
-         (select count(*)::int from crm.tasks t where t.contact_id = p.id and t.archived_at is null)
+         (select count(*)::int from crm.tasks t where t.contact_id = p.id and t.archived_at is null and ${directTaskSql("t")})
        from crm.contacts p where p.id = any($1::uuid[]) and p.workspace_id = $2`,
       [merging, actor.workspaceId],
     );

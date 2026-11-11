@@ -25,6 +25,7 @@ import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
 const LONG_PRESS_MS = 450;
 const MOVE_SLOP = 10;
+const CLICK_GUARD_MS = 700;
 
 type Props = {
   message: ChatMessage;
@@ -125,11 +126,15 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
-    if (event.pointerType !== "touch" || isEditing) return;
+    if (!event.currentTarget.contains(event.target as Node)) return;
     pressed.current = false;
+    if (event.pointerType !== "touch" || isEditing) return;
     const timer = window.setTimeout(() => {
       press.current = null;
       pressed.current = true;
+      window.setTimeout(() => {
+        pressed.current = false;
+      }, CLICK_GUARD_MS);
       setMenu(true);
     }, LONG_PRESS_MS);
     press.current = { timer, x: event.clientX, y: event.clientY };
@@ -171,7 +176,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
       onPointerUp={endPress}
       onPointerCancel={endPress}
       onClickCapture={(event) => {
-        if (!pressed.current) return;
+        if (!pressed.current || !event.currentTarget.contains(event.target as Node)) return;
         pressed.current = false;
         event.preventDefault();
         event.stopPropagation();

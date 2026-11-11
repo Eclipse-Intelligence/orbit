@@ -13,6 +13,7 @@ export default function ConfirmDialog({
   confirmLabel,
   tone = "danger",
   onConfirm,
+  onCloseAutoFocus,
   children,
 }: {
   open: boolean;
@@ -22,11 +23,12 @@ export default function ConfirmDialog({
   confirmLabel: string;
   tone?: "danger" | "neutral";
   onConfirm: () => void;
+  onCloseAutoFocus?: (event: Event) => void;
   children?: ReactNode;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent {...(description ? {} : { "aria-describedby": undefined })}>
+      <DialogContent onCloseAutoFocus={onCloseAutoFocus} {...(description ? {} : { "aria-describedby": undefined })}>
         <DialogHeader className="pr-12">
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}

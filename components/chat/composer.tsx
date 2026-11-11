@@ -35,6 +35,7 @@ export default function Composer({
   restoreOnFailure,
   onSend,
   onEditLast,
+  onEscape,
   onTyping,
 }: {
   id: string;
@@ -49,6 +50,7 @@ export default function Composer({
   restoreOnFailure?: boolean;
   onSend: (text: string, mentions: Mention[]) => Promise<string | null>;
   onEditLast?: () => boolean;
+  onEscape?: () => void;
   onTyping?: (typing: boolean) => void;
 }) {
   const { viewer } = useChat();
@@ -125,6 +127,11 @@ export default function Composer({
             onSubmit={send}
             onBlur={() => onTyping?.(false)}
             onKeyDown={(event) => {
+              if (event.key === "Escape" && value === "" && onEscape) {
+                event.preventDefault();
+                onEscape();
+                return;
+              }
               if (event.key === "ArrowUp" && !event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && value === "" && onEditLast?.()) {
                 event.preventDefault();
               }

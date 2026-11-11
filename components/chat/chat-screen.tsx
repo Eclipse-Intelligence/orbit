@@ -18,7 +18,7 @@ import { memberIds, messageBody, useChatActions } from "@/components/chat/use-ch
 import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
 import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
-import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, newestServerId, type ChatState } from "@/lib/chat/timeline";
+import { chatReducer, EMPTY_CHAT, loadsLatestFirst, localMessage, needsCatchUp, newestServerId, type ChatState } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
@@ -210,13 +210,14 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       });
       dispatch({ type: "pending", message });
       const timeline = latest.current.state.timelines[input.conversationId];
-      if (!input.parentId && timeline?.hasNewer) {
+      const open = latest.current.location;
+      if (!input.parentId && loadsLatestFirst(timeline)) {
         loadMessages(input.conversationId, "latest");
-        setBottomSignal((value) => value + 1);
+        if (open.view.kind === "room" && open.view.id === input.conversationId) setBottomSignal((value) => value + 1);
       }
-      if (input.parentId && latest.current.state.threads[input.parentId]?.timeline.hasNewer) {
+      if (input.parentId && loadsLatestFirst(latest.current.state.threads[input.parentId]?.timeline)) {
         loadThread(input.parentId, "latest");
-        setThreadBottomSignal((value) => value + 1);
+        if (open.thread === input.parentId) setThreadBottomSignal((value) => value + 1);
       }
       return deliver(message).then((error) => {
         if (error && input.discardOnFailure) dispatch({ type: "discard", message });

@@ -7,11 +7,12 @@ import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import ActionTask from "@/components/beautifui/action-task";
+import type { AssignableMember } from "@/components/crm/assignee-picker";
 import TaskPad from "@/components/crm/task-pad";
 import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
-import { completeTaskAction } from "@/app/(crm)/records";
+import { assignTaskAction, completeTaskAction } from "@/app/(crm)/records";
 import { relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { companyHref } from "@/lib/crm/hrefs";
@@ -37,6 +38,9 @@ export default function ActionsScreen({
   now,
   who = "mine",
   shared = false,
+  members = [],
+  tagged = {},
+  taggedCount = 0,
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -45,17 +49,24 @@ export default function ActionsScreen({
   companies: Company[];
   clickup: ClickUpPicker | null;
   now: number;
-  who?: "mine" | "everyone";
+  who?: "mine" | "tagged" | "everyone";
   shared?: boolean;
+  members?: AssignableMember[];
+  tagged?: Record<string, string[]>;
+  taggedCount?: number;
 }) {
+  const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
     const base = tasksHref(target);
-    if (!shared || person === "mine") return base;
-    return `${base}${base.includes("?") ? "&" : "?"}who=everyone`;
+    if (person === "mine" || (person === "everyone" && !shared) || (person === "tagged" && !team)) return base;
+    return `${base}${base.includes("?") ? "&" : "?"}who=${person}`;
   };
+  const views = who === "tagged" ? VIEWS.filter((item) => item.id !== "none") : VIEWS;
+  const admin = viewer.role === "owner" || viewer.role === "admin";
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState<Set<string>>(() => new Set());
+  const [assigningIds, setAssigningIds] = useState<Set<string>>(() => new Set());
 
   async function complete(id: string) {
     setDone((current) => new Set(current).add(id));
@@ -73,6 +84,35 @@ export default function ActionsScreen({
     router.refresh();
   }
 
+  async function assign(id: string, ownerId: string) {
+    if (assigningIds.has(id)) return;
+    setMessage(null);
+    setAssigningIds((current) => new Set(current).add(id));
+    const result = await assignTaskAction(id, ownerId);
+    setAssigningIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+    if (result.error) {
+      setMessage(result.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  function assigning(task: Task) {
+    if (!team) return undefined;
+    return {
+      members,
+      viewerId: viewer.id,
+      tagged: tagged[task.id] ?? [],
+      canAssign: admin || task.ownerId === viewer.id || task.createdByUserId === viewer.id,
+      pending: assigningIds.has(task.id),
+      onAssign: (ownerId: string) => void assign(task.id, ownerId),
+    };
+  }
+
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <SectionHeader
@@ -80,19 +120,30 @@ export default function ActionsScreen({
         viewer={viewer}
         action={
           <span className="flex items-center gap-1">
-            {shared && (
+            {team && (
               <>
                 <Button variant={who === "mine" ? "secondary" : "ghost"} size="sm" href={href(view, "mine")} aria-current={who === "mine" ? "page" : undefined}>
                   Mine
                 </Button>
                 <Button
-                  variant={who === "everyone" ? "secondary" : "ghost"}
+                  variant={who === "tagged" ? "secondary" : "ghost"}
                   size="sm"
-                  href={href(view, "everyone")}
-                  aria-current={who === "everyone" ? "page" : undefined}
+                  href={href(view === "none" ? "all" : view, "tagged")}
+                  aria-current={who === "tagged" ? "page" : undefined}
                 >
-                  Everyone
+                  Tagged
+                  {taggedCount > 0 && <span className="text-subtle tabular-nums">{taggedCount}</span>}
                 </Button>
+                {shared && (
+                  <Button
+                    variant={who === "everyone" ? "secondary" : "ghost"}
+                    size="sm"
+                    href={href(view, "everyone")}
+                    aria-current={who === "everyone" ? "page" : undefined}
+                  >
+                    Everyone
+                  </Button>
+                )}
               </>
             )}
             <RecordTransfer resource="tasks" />
@@ -100,7 +151,7 @@ export default function ActionsScreen({
         }
       />
       <div className="flex flex-wrap gap-2 px-4 pt-4">
-        {VIEWS.map((item, index) => (
+        {views.map((item, index) => (
           <Button
             key={item.id}
             variant={item.id === view ? "secondary" : "ghost"}
@@ -115,7 +166,7 @@ export default function ActionsScreen({
           </Button>
         ))}
       </div>
-      <TaskPad clickup={clickup} className="border-border border-b px-4 py-3" />
+      <TaskPad clickup={clickup} members={members} viewerId={viewer.id} className="border-border border-b px-4 py-3" />
       {message && (
         <p role="alert" className="caption-style text-danger px-4 pt-3">
           {message}
@@ -145,7 +196,7 @@ export default function ActionsScreen({
           ))}
         </RecordList>
       ) : (
-        <RecordList count={tasks.length} empty="No tasks">
+        <RecordList count={tasks.length} empty={who === "tagged" ? "No tasks you're tagged in" : "No tasks"}>
           {tasks.map((task) => (
             <ActionTask
               key={task.id}
@@ -153,7 +204,8 @@ export default function ActionsScreen({
               completed={view === "completed" || done.has(task.id)}
               dueBadge={view === "all"}
               now={now}
-              onComplete={view === "completed" ? undefined : () => complete(task.id)}
+              onComplete={view === "completed" || (who === "tagged" && !admin && task.createdByUserId !== viewer.id) ? undefined : () => complete(task.id)}
+              assigning={assigning(task)}
             />
           ))}
         </RecordList>
