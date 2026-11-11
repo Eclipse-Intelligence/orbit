@@ -1,5 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { alertMembersAfterCommit } from "@/lib/alerts";
+import { taskPanelHref } from "@/lib/chat/discussions";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
@@ -203,7 +204,7 @@ function taskAlerts(db: Db, actor: Actor, before: Task | null, task: Task, prove
       key: `task:${task.id}:owner:${task.ownerId}:${task.updatedAt}`,
       title: handed ? `${name} handed you a task` : `${name} assigned you a task`,
       body: task.title,
-      href: TASKS_PATH,
+      href: taskPanelHref(task.id),
       tag: `task:${task.id}`,
       workspaceId: task.workspaceId,
     });
@@ -214,7 +215,7 @@ function taskAlerts(db: Db, actor: Actor, before: Task | null, task: Task, prove
       key: `task:${task.id}:done`,
       title: `Done by ${name}`,
       body: task.title,
-      href: `${TASKS_PATH}?view=completed`,
+      href: `${TASKS_PATH}?view=completed&task=${task.id}`,
       tag: `task:${task.id}`,
       workspaceId: task.workspaceId,
     });
@@ -732,8 +733,6 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
   });
 }
 
-export const TAGGED_TASKS_PATH = `${TASKS_PATH}?who=tagged`;
-
 export async function listTaskParticipants(actor: UserActor, taskIds: string[]): Promise<Record<string, string[]>> {
   assertScope(actor.scopes, "crm:read");
   const ids = [...new Set(taskIds.filter(isUuid))];
@@ -752,7 +751,7 @@ export async function listTaskParticipants(actor: UserActor, taskIds: string[]):
   });
 }
 
-export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: string, userIds: string[], provenance?: Provenance) {
+export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: string, userIds: string[], provenance?: Provenance, options: { alert?: boolean } = {}) {
   const task = await readTask(db, taskId);
   if (!task) throw notFound("task");
   const wanted = [...new Set(userIds.filter(isUuid).map((id) => id.toLowerCase()))].filter((id) => id !== task.owner_id);
@@ -765,13 +764,13 @@ export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: 
     throw new CrmError("invalid_input", "Choose people in this workspace.", 400, { field: "userIds" });
   }
   const fresh = await tagInDb(db, actor, { id: task.id, title: task.title }, wanted, provenance);
-  if (fresh.length > 0) {
+  if (fresh.length > 0 && options.alert !== false) {
     alertMembersAfterCommit(db, actor, fresh, {
       source: "task",
       key: `task:${taskId}:tagged:${Date.now()}`,
       title: `${actorName(actor)} tagged you in a task`,
       body: task.title,
-      href: TAGGED_TASKS_PATH,
+      href: taskPanelHref(taskId, { tagged: true }),
       tag: `task:${taskId}`,
       workspaceId: task.workspace_id,
     });

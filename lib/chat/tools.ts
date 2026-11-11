@@ -11,6 +11,13 @@ type PostOptions = { charge?: () => Promise<void> };
 
 const NO_TEAMMATE = () => new CrmError("not_found", "Couldn't find that teammate.", 404, { field: "person" });
 
+const NOT_CHAT = () => new CrmError("not_found", "Conversation not found. Task and doc discussions aren't reachable here.", 404, { field: "conversationId" });
+
+function chatOnly<T extends { kind: string }>(conversation: T) {
+  if (conversation.kind !== "room" && conversation.kind !== "dm") throw NOT_CHAT();
+  return conversation;
+}
+
 const KEY_USED = () => new CrmError("conflict", "That message key was already used for another message.", 409, { field: "clientKey" });
 
 function given(value: unknown): value is string {
@@ -72,6 +79,7 @@ export async function readChat(actor: UserActor, input: ChatReadInput) {
   if (given(input.threadId)) {
     if (input.fromUnread) throw new CrmError("invalid_input", "from_unread works only with a conversation id.", 400, { field: "fromUnread" });
     const thread = await listThread(actor, input.threadId, { before: input.before, after: input.after, limit: input.limit });
+    chatOnly(thread.conversation);
     return {
       conversation: chatConversation(thread.conversation),
       root: chatMessage(thread.root),
@@ -81,7 +89,7 @@ export async function readChat(actor: UserActor, input: ChatReadInput) {
       following: thread.following,
     };
   }
-  const conversation = await getConversation(actor, input.conversationId!);
+  const conversation = chatOnly(await getConversation(actor, input.conversationId!));
   const around = !input.before && !input.after && input.fromUnread ? "unread" : null;
   const page = await listMessages(actor, conversation.id, { before: input.before, after: input.after, around, limit: input.limit });
   return {
@@ -122,10 +130,12 @@ async function chatTarget(actor: UserActor, input: ChatTargetInput, key: string 
   if (chatTargetCount(input) !== 1) throw new CrmError("invalid_input", "Pass one of a conversation id, a person or a thread id.", 400, { field: "conversationId" });
   if (given(input.threadId)) {
     const thread = await listThread(actor, input.threadId, { limit: 1 });
+    chatOnly(thread.conversation);
     return { conversationId: thread.root.conversationId, parentId: thread.root.id, charge: options.charge };
   }
   if (given(input.person)) return { ...(await dmTarget(actor, input.person, key, options)), parentId: null };
-  return { conversationId: input.conversationId!, parentId: null, charge: options.charge };
+  const conversation = chatOnly(await getConversation(actor, input.conversationId!));
+  return { conversationId: conversation.id, parentId: null, charge: options.charge };
 }
 
 export async function postChat(actor: UserActor, input: ChatTargetInput & { text: unknown; key?: unknown }, options: PostOptions = {}) {

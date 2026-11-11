@@ -410,6 +410,10 @@ function chatTargetName(name: Names, key: string, fallback: string) {
   return found === key ? fallback : found;
 }
 
+function isChatRoomOrDm(kind: string) {
+  return kind === "room" || kind === "dm";
+}
+
 async function chatCardDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   const threadId = str(args.threadId);
@@ -417,13 +421,13 @@ async function chatCardDetails(actor: UserActor, args: Args): Promise<Record<str
   const person = str(args.person);
   if (threadId) {
     const thread = await listChatThread(actor, threadId, { limit: 1 }).catch(() => null);
-    if (thread) {
+    if (thread && isChatRoomOrDm(thread.conversation.kind)) {
       out[`${threadId}:where`] = chatConversation(thread.conversation).name;
       out[`${threadId}:root`] = thread.root.deletedAt ? "Deleted message" : clipText(thread.root.body.replace(/\s+/g, " "), 140);
     }
   } else if (conversationId) {
     const conversation = await getChatConversation(actor, conversationId).catch(() => null);
-    if (conversation) out[`${conversationId}:where`] = chatConversation(conversation).name;
+    if (conversation && isChatRoomOrDm(conversation.kind)) out[`${conversationId}:where`] = chatConversation(conversation).name;
   } else if (person) {
     const id = await chatPersonId(actor, person).catch(() => null);
     const found = id ? (await listChatPeople(actor).catch(() => [])).find((item) => item.id === id) : null;

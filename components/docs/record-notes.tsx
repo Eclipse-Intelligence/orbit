@@ -79,7 +79,7 @@ function NoteRow({ hit, now, compact }: { hit: SearchHit; now: string; compact: 
   const meta = `${hit.page.updatedBy.name} · ${whenLabel(hit.page.updatedAt, now)}`;
   return (
     <li>
-      <Link href={pageHref(hit.page.id)} className="group focus-visible:ring-ring/60 flex min-w-0 items-start gap-2.5 rounded-md outline-none focus-visible:ring-2">
+      <Link href={pageHref(hit.page.id)} className={cn("group focus-visible:ring-ring/60 flex min-w-0 items-start gap-2.5 rounded-md outline-none focus-visible:ring-2", compact && "[@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:items-center")}>
         <Icon aria-hidden className="text-subtle mt-[3px] size-3.5 shrink-0" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -146,7 +146,14 @@ export default function RecordNotes({ record, className, compact = false }: { re
   const note = useNewNote(record);
   const title = noteCountTitle(list);
   const action = (
-    <Button variant={compact ? "ghost" : "secondary"} size="sm" disabled={note.creating} aria-label={`New note about ${record.name}`} onClick={() => void note.create()}>
+    <Button
+      variant={compact ? "ghost" : "secondary"}
+      size="sm"
+      disabled={note.creating}
+      aria-label={`New note about ${record.name}`}
+      onClick={() => void note.create()}
+      className={cn(compact && "[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11")}
+    >
       New note
     </Button>
   );
@@ -159,7 +166,7 @@ export default function RecordNotes({ record, className, compact = false }: { re
   if (compact) {
     return (
       <section aria-label={`Notes about ${record.name}`} className={cn("flex flex-col gap-2", className)}>
-        <div className="flex h-7 items-center justify-between gap-2">
+        <div className="flex min-h-7 items-center justify-between gap-2">
           <h4 className="eyebrow-style text-subtle font-normal">{title}</h4>
           {action}
         </div>

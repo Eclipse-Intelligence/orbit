@@ -49,8 +49,9 @@ function outsideDescription(content: string) {
 
 function ownChatPost(content: string) {
   try {
-    const parsed = JSON.parse(content) as { posted?: unknown } | null;
-    return Boolean(parsed && typeof parsed === "object" && typeof parsed.posted === "boolean");
+    const parsed = JSON.parse(content) as { posted?: unknown; declined?: unknown; error?: unknown } | null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    return typeof parsed.posted === "boolean" || parsed.declined === true || "error" in parsed;
   } catch {
     return false;
   }

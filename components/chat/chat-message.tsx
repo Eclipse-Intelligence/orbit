@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useId, useRef, useState, type PointerEvent } from "react";
+import { flushSync } from "react-dom";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import Tag from "@/components/_ui/tag";
@@ -165,10 +166,25 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
     run();
   }
 
+  const row = useRef<HTMLDivElement>(null);
+  const editRequested = useRef(false);
+
+  function focusEdit() {
+    row.current?.querySelector<HTMLTextAreaElement>("textarea[aria-label='Edit message']")?.focus({ preventScroll: true });
+  }
+
+  function startEdit() {
+    editRequested.current = true;
+    setMenu(false);
+    flushSync(() => setEditing({ id: message.id, pane }));
+    focusEdit();
+  }
+
   const stamp = fullStamp ? stampWhen(message.createdAt, now) : clockTime(message.createdAt);
 
   return (
     <div
+      ref={row}
       data-chat-message={message.id}
       data-chat-own={own ? "" : undefined}
       data-chat-conversation={message.conversationId}
@@ -295,7 +311,16 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         onConfirm={() => void remove(message)}
       />
       <Sheet open={menu} onOpenChange={setMenu}>
-        <SheetContent side="bottom" className="gap-1 px-2 pt-2">
+        <SheetContent
+          side="bottom"
+          className="gap-1 px-2 pt-2"
+          onCloseAutoFocus={(event) => {
+            if (!editRequested.current) return;
+            editRequested.current = false;
+            event.preventDefault();
+            focusEdit();
+          }}
+        >
           <SheetTitle className="sr-only">Message actions</SheetTitle>
           <SheetDescription className="sr-only">Actions for this message</SheetDescription>
           {canReply && (
@@ -317,7 +342,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             </SheetAction>
           )}
           {canEdit && (
-            <SheetAction onClick={() => act(() => setEditing({ id: message.id, pane }))} icon={<EditIcon aria-hidden className="size-4" />}>
+            <SheetAction onClick={startEdit} icon={<EditIcon aria-hidden className="size-4" />}>
               Edit
             </SheetAction>
           )}

@@ -8,8 +8,9 @@ import { needsEmailConfirm } from "@/lib/assistant/email-policy";
 import { outsideRead } from "@/lib/assistant/web-gate";
 import { createPersonalToken } from "@/lib/auth/personal";
 import { MCP_CHAT_POSTS_PER_MINUTE } from "@/lib/auth/rate-limit";
-import { chatWorkSettled, createRoom, listMessages, listThread, postMessage } from "@/lib/crm/chat";
+import { chatWorkSettled, createRoom, listMessages, listThread, openDiscussion, postMessage } from "@/lib/crm/chat";
 import { createHook, deleteHook, postViaHook } from "@/lib/crm/chat-hooks";
+import { createTask } from "@/lib/crm/tasks";
 import type { Actor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
@@ -273,6 +274,24 @@ describe("Chat over MCP and in the assistant", () => {
       }
     });
 
+    it("keeps task discussions out of list, read and post, for MCP and the assistant", async () => {
+      const task = (await createTask(mark, { title: "Chase the pilot", ownerId: mark.userId })).body.task;
+      const { conversationId } = await openDiscussion(mark, { kind: "task", id: task.id });
+      const root = await postMessage(mark, { conversationId, body: "Discussing the task" });
+      const listed = await ok<{ conversations: { id: string }[] }>(mark, "chat_list");
+      assert.ok(!listed.conversations.some((item) => item.id === conversationId));
+      const notChat = "not_found: Conversation not found. Task and doc discussions aren't reachable here.";
+      assert.equal(await refused(mark, "chat_read", { conversation_id: conversationId }), notChat);
+      assert.equal(await refused(mark, "chat_read", { thread_id: root.message.id }), notChat);
+      assert.equal(await refused(mark, "chat_post", { conversation_id: conversationId, text: "Via MCP" }), notChat);
+      assert.equal(await refused(mark, "chat_post", { thread_id: root.message.id, text: "Via MCP" }), notChat);
+      assert.deepEqual(await runTool(mark, "team_chat", { action: "post", conversationId, text: "Via the assistant" }), { error: "Conversation not found. Task and doc discussions aren't reachable here.", field: "conversationId" });
+      assert.deepEqual(await runTool(mark, "team_chat", { action: "read", threadId: root.message.id }), { error: "Conversation not found. Task and doc discussions aren't reachable here.", field: "conversationId" });
+      assert.equal((await sql("select 1 from crm.chat_messages where conversation_id = $1", [conversationId])).rowCount, 1);
+      const card = describeAction("team_chat", { action: "post", conversationId, text: "Hi" }, await recordNames(mark, [{ action: "post", conversationId, text: "Hi" }], ["team_chat"]));
+      assert.equal(card.title, "Post in a conversation Orbit can't find");
+    });
+
     it("refuses bad text, keys and ids with the documented codes", async () => {
       assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "x".repeat(10_001) }), /^invalid_input: Keep messages to 10,000 characters\.$/);
       assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "Hi", idempotency_key: "   " }), /^invalid_input: /);
@@ -322,6 +341,9 @@ describe("Chat over MCP and in the assistant", () => {
       assert.equal(posted.posted, true);
       assert.equal(outsideRead("team_chat", JSON.stringify(posted)), false);
       assert.equal(outsideRead("team_chat", JSON.stringify(read)), true);
+      assert.equal(outsideRead("team_chat", JSON.stringify({ declined: true, message: "The user declined this action." })), false);
+      assert.equal(outsideRead("team_chat", JSON.stringify({ error: "Couldn't find that teammate.", field: "person" })), false);
+      assert.equal(outsideRead("team_chat", JSON.stringify({ approved: "now", error: "Conversation not found." })), false);
       const replied = (await runTool(mark, "team_chat", { action: "post", threadId: posted.message.id, text: "And a reply" })) as { message: { threadId: string } };
       assert.equal(replied.message.threadId, posted.message.id);
       assert.equal((await listThread(sam, posted.message.id)).replies.length, 1);

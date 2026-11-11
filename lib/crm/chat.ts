@@ -10,6 +10,7 @@ import {
   CHAT_ROOM_NAME_MAX,
   EMPTY_HOOK_CARD,
   type ChatConversation,
+  type ChatDiscussion,
   type ChatHookCard,
   type ChatKind,
   type ChatLiveEvent,
@@ -22,14 +23,19 @@ import {
   type ChatRoot,
   type ChatSearchResult,
   type ChatSidebar,
+  type ChatSubject,
+  type ChatSubjectKind,
   type ChatThread,
   type ChatThreadCard,
   type ChatThreads,
 } from "@/lib/chat/types";
+import { discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
+import { assertScope } from "@/lib/crm/scopes";
+import { addTaskParticipantsInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import { publishLiveBatch, type LiveMessage } from "@/lib/docs/live/broadcast";
@@ -72,6 +78,9 @@ type ConversationRow = {
   last_read_at: Stamp;
   unread: number;
   mentions: number;
+  task_id?: string | null;
+  page_id?: string | null;
+  subject_workspace_id?: string | null;
 };
 
 type MemberRow = { user_id: string; last_read_at: Stamp };
@@ -328,15 +337,48 @@ function broadcastAfterCommit(db: Db, userIds: string[], event: ChatLiveEvent) {
   afterChatCommit(db, () => broadcast(userIds, event));
 }
 
+const SUBJECT_SQL = `
+  select c.id, c.kind, coalesce(t.title, p.title, '') as name, null::uuid as workspace_id, null::text as workspace_name, c.created_at, c.created_by,
+    now() as last_read_at, null::timestamptz as last_message_at, null::uuid as dm_user_id, null::text as dm_name, 0 as unread, 0 as mentions,
+    c.task_id, c.page_id, coalesce(t.workspace_id, p.workspace_id) as subject_workspace_id
+  from crm.chat_conversations c
+  left join crm.tasks t on c.kind = 'task' and t.id = c.task_id
+  left join crm.pages p on c.kind = 'doc' and p.id = c.page_id
+  where c.kind in ('task', 'doc') and c.archived_at is null`;
+
+const SUBJECT_AUDIENCE_SQL = `
+  select wm.user_id, now() as last_read_at
+  from crm.chat_conversations c
+  join crm.tasks t on t.id = c.task_id
+  join crm.workspace_members wm on wm.workspace_id = t.workspace_id
+  where c.id = $1 and c.kind = 'task'
+    and (
+      wm.user_id = t.owner_id
+      or wm.user_id = t.created_by_user_id
+      or wm.role in ('owner', 'admin')
+      or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = wm.user_id)
+    )
+  union
+  select wm.user_id, now() as last_read_at
+  from crm.chat_conversations c
+  join crm.pages p on p.id = c.page_id
+  join crm.workspace_members wm on wm.workspace_id = p.workspace_id
+  where c.id = $1 and c.kind = 'doc' and p.effective_shared and p.kind = 'note'`;
+
 async function readConversation(db: Db, actor: UserActor, id: string) {
   const result = await db.query<ConversationRow>(`${CONVERSATIONS_SQL} and c.id = $2`, [actor.userId, id]);
-  const row = result.rows[0];
+  const row = result.rows[0] ?? (await db.query<ConversationRow>(`${SUBJECT_SQL} and c.id = $1`, [id])).rows[0];
   if (!row) throw notFound("conversation");
   return row;
 }
 
 async function memberIds(db: Db, conversationId: string) {
-  const result = await db.query<MemberRow>("select user_id, last_read_at from crm.chat_members where conversation_id = $1", [conversationId]);
+  const result = await db.query<MemberRow>(
+    `select user_id, last_read_at from crm.chat_members where conversation_id = $1
+     union all
+     select a.user_id, a.last_read_at from (${SUBJECT_AUDIENCE_SQL}) a`,
+    [conversationId],
+  );
   return result.rows;
 }
 
@@ -937,6 +979,7 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
       const conversation = await readConversation(db, actor, conversationId);
       const earlier = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
       if (earlier) return earlier;
+      const tagged = await tagFromDiscussion(db, actor, conversation, mentions);
       if (conversation.kind === "dm") {
         const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
         if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
@@ -965,11 +1008,11 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
         );
       }
       const members = await memberIds(db, conversationId);
-      const jobs = conversation.kind === "room" || conversation.kind === "dm" ? postAlerts(actor, conversation, members, message) : [];
+      const jobs = conversation.kind === "room" || conversation.kind === "dm" ? postAlerts(actor, conversation, members, message) : subjectAlerts(actor, conversation, message, tagged);
       afterPost(
         db,
         members.map((member) => member.user_id),
-        { type: "message", conversationId, message, root },
+        { type: "message", conversationId, message, root, ...(subjectOf(conversation) ? { subject: subjectOf(conversation)! } : {}) },
         jobs,
       );
       return { message, root, duplicate: false };
@@ -1018,12 +1061,18 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
       const current = await ownMessage(db, actor, messageId);
       if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
       const conversation = await readConversation(db, actor, current.conversationId);
+      const before = new Set(current.mentions);
+      const tagged = await tagFromDiscussion(
+        db,
+        actor,
+        conversation,
+        mentions.filter((person) => !before.has(person)),
+      );
       const updated = await db.query("update crm.chat_messages set body = $2, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId]);
       if ((updated.rowCount ?? 0) === 0) throw notFound("message");
       const message = (await readMessage(db, messageId, actor.userId))!;
       const members = await memberIds(db, current.conversationId);
       const memberSet = new Set(members.map((member) => member.user_id));
-      const before = new Set(current.mentions);
       const added =
         conversation.kind === "room"
           ? message.mentions.filter((person) => !before.has(person) && person !== actor.userId && memberSet.has(person) && !followersBefore.has(person))
@@ -1032,7 +1081,9 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
         db,
         members.map((member) => member.user_id),
         { type: "edit", conversationId: current.conversationId, message },
-        mentionAlert(actor, conversation, message, added),
+        conversation.kind === "room" || conversation.kind === "dm"
+          ? mentionAlert(actor, conversation, message, added)
+          : subjectAlerts(actor, conversation, { ...message, parentId: null, mentions: message.mentions.filter((person) => !before.has(person)) }, tagged),
       );
       return message;
     });
@@ -1132,5 +1183,165 @@ export async function markThreadRead(actor: UserActor, rootId: string, upTo?: st
     const lastReadAt = iso(row.last_read_at);
     broadcastAfterCommit(db, [actor.userId], { type: "thread-read", conversationId: root.conversationId, messageId: id, lastReadAt });
     return { lastReadAt };
+  });
+}
+
+function subjectOf(conversation: ConversationRow): ChatSubject | null {
+  if (conversation.kind === "task" && conversation.task_id) return { kind: "task", id: conversation.task_id };
+  if (conversation.kind === "doc" && conversation.page_id) return { kind: "doc", id: conversation.page_id };
+  return null;
+}
+
+async function tagFromDiscussion(db: Db, actor: UserActor, conversation: ConversationRow, people: string[]) {
+  if (conversation.kind !== "task" || !conversation.task_id) return [];
+  const wanted = [...new Set(people.filter((person) => person !== actor.userId))];
+  if (wanted.length === 0) return [];
+  const seeing = await db.query<{ user_id: string }>(
+    `select wm.user_id from crm.tasks t
+     join crm.workspace_members wm on wm.workspace_id = t.workspace_id
+     where t.id = $1 and wm.user_id = any($2::uuid[])
+       and (
+         wm.user_id = t.owner_id
+         or wm.user_id = t.created_by_user_id
+         or wm.role in ('owner', 'admin')
+         or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = wm.user_id)
+       )`,
+    [conversation.task_id, wanted],
+  );
+  const already = new Set(seeing.rows.map((row) => row.user_id));
+  const fresh = wanted.filter((person) => !already.has(person));
+  if (fresh.length === 0) return [];
+  assertScope(actor.scopes, "tasks:write");
+  try {
+    return await addTaskParticipantsInDb(db, actor, conversation.task_id, fresh, { operation: "tag_task", source: "chat" }, { alert: false });
+  } catch (error) {
+    if (error instanceof CrmError && error.code === "invalid_input") {
+      throw new CrmError("invalid_input", "Tag people in this task's workspace.", 400, { field: "body" });
+    }
+    throw error;
+  }
+}
+
+function subjectAlerts(actor: UserActor, conversation: ConversationRow, message: ChatMessage, tagged: string[]): AlertJob[] {
+  const subject = subjectOf(conversation);
+  const workspaceId = conversation.subject_workspace_id ?? null;
+  if (!subject || !workspaceId) return [];
+  const task = subject.kind === "task";
+  const name = task ? actor.fullName?.trim() || actor.email || "A teammate" : firstName(actor);
+  const base = { source: subject.kind, href: discussionHref(subject), tag: `${subject.kind}:${subject.id}`, body: task ? conversation.name : null, workspaceId };
+  const fresh = new Set(tagged);
+  const mentioned = message.mentions.filter((person) => person !== actor.userId && !fresh.has(person));
+  const jobs: AlertJob[] = [];
+  if (tagged.length > 0) {
+    jobs.push(async () => {
+      await alertMembers(actor, tagged, {
+        ...base,
+        href: taskPanelHref(subject.id, { tagged: true }),
+        key: `task:discussion:${message.id}:tagged`,
+        title: `${name} tagged you in a task`,
+      });
+    });
+  }
+  if (mentioned.length > 0) {
+    jobs.push(async () => {
+      await alertMembers(actor, mentioned, {
+        ...base,
+        key: `${subject.kind}:discussion:${message.id}`,
+        title: task ? `${name} mentioned you in a task` : `${name} mentioned you in a doc`,
+      });
+    });
+  }
+  const rootId = message.parentId;
+  if (!rootId) return jobs;
+  const skip = new Set([actor.userId, ...message.mentions, ...tagged]);
+  jobs.push(async () => {
+    const followers = await query<{ user_id: string; last_read_at: Stamp }>("select user_id, last_read_at from private.chat_subject_followers($1, $2)", [actor.userId, rootId]);
+    const byKey = new Map<string, string[]>();
+    for (const follower of followers.rows) {
+      if (skip.has(follower.user_id)) continue;
+      const key = `chat:thread:${rootId}:${millis(follower.last_read_at)}`;
+      byKey.set(key, [...(byKey.get(key) ?? []), follower.user_id]);
+    }
+    for (const [key, recipients] of byKey) {
+      await alertMembers(actor, recipients, { ...base, key, title: task ? `${name} replied in a thread on a task` : `${name} replied in a thread on a doc` }, VERIFIED);
+    }
+  });
+  return jobs;
+}
+
+function checkSubject(input: unknown): ChatSubject {
+  const subject = readSubject(input);
+  if (!subject) throw notFound("discussion");
+  return subject;
+}
+
+async function assertDiscussable(db: Db, subject: ChatSubject) {
+  if (subject.kind === "task") {
+    const task = await db.query("select 1 from crm.tasks where id = $1", [subject.id]);
+    if ((task.rowCount ?? 0) === 0) throw notFound("task");
+    return;
+  }
+  const page = await db.query<{ kind: string; effective_shared: boolean }>("select kind, effective_shared from crm.pages where id = $1", [subject.id]);
+  const row = page.rows[0];
+  if (!row) throw notFound("doc");
+  if (row.kind !== "note") throw new CrmError("invalid_input", "Daily notes don't have a discussion.", 400);
+  if (!row.effective_shared) throw new CrmError("forbidden", "Share this doc with the workspace to discuss it.", 403);
+}
+
+const SUBJECT_COLUMN: Record<ChatSubjectKind, "task_id" | "page_id"> = { task: "task_id", doc: "page_id" };
+
+async function findDiscussion(db: Db, subject: ChatSubject) {
+  const column = SUBJECT_COLUMN[subject.kind];
+  const found = await db.query<{ id: string }>(`select id from crm.chat_conversations where kind = $1 and ${column} = $2`, [subject.kind, subject.id]);
+  return found.rows[0]?.id ?? null;
+}
+
+export async function openDiscussion(actor: UserActor, input: unknown): Promise<{ conversationId: string }> {
+  const subject = checkSubject(input);
+  const column = SUBJECT_COLUMN[subject.kind];
+  try {
+    return await withActor(actor, async (db) => {
+      await assertDiscussable(db, subject);
+      await db.query(
+        `insert into crm.chat_conversations (kind, ${column}, created_by) values ($1, $2, $3)
+         on conflict (${column}) where ${column} is not null do nothing`,
+        [subject.kind, subject.id, actor.userId],
+      );
+      const conversationId = await findDiscussion(db, subject);
+      if (!conversationId) throw notFound("discussion");
+      return { conversationId };
+    });
+  } catch (error) {
+    chatFailure(error);
+  }
+}
+
+export async function getDiscussion(actor: UserActor, input: unknown, options: PageOptions = {}): Promise<ChatDiscussion> {
+  const subject = checkSubject(input);
+  const found = await withActor(actor, async (db) => {
+    await assertDiscussable(db, subject);
+    const conversationId = await findDiscussion(db, subject);
+    if (!conversationId) return { conversationId: null, count: 0 };
+    const counted = await db.query<{ count: number }>("select count(*)::integer as count from crm.chat_messages where conversation_id = $1 and deleted_at is null", [conversationId]);
+    return { conversationId, count: counted.rows[0]?.count ?? 0 };
+  });
+  const page = found.conversationId ? await listMessages(actor, found.conversationId, options) : null;
+  return { subject, conversationId: found.conversationId, count: found.count, page };
+}
+
+export async function discussionCounts(actor: UserActor, kind: ChatSubjectKind, ids: string[]): Promise<Record<string, number>> {
+  const wanted = [...new Set(ids.filter((id) => isUuid(id)).map((id) => id.toLowerCase()))];
+  if (wanted.length === 0) return {};
+  const column = SUBJECT_COLUMN[kind];
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ subject_id: string; count: number }>(
+      `select c.${column} as subject_id, count(m.id)::integer as count
+       from crm.chat_conversations c
+       join crm.chat_messages m on m.conversation_id = c.id and m.deleted_at is null
+       where c.kind = $1 and c.${column} = any($2::uuid[])
+       group by c.${column}`,
+      [kind, wanted],
+    );
+    return Object.fromEntries(result.rows.map((row) => [row.subject_id, row.count]));
   });
 }
