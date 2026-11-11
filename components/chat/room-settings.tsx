@@ -64,12 +64,12 @@ export default function RoomSettings({
   const [hookSecrets, setHookSecrets] = useState<{ roomId: string; secrets: Record<string, string> }>({ roomId: conversation.id, secrets: {} });
   const secrets: HookSecrets = {
     secrets: hookSecrets.roomId === conversation.id ? hookSecrets.secrets : {},
-    set: (hookId, secret) =>
+    set: (roomId, hookId, secret) =>
       setHookSecrets((current) => {
-        const kept = current.roomId === conversation.id ? { ...current.secrets } : {};
+        const kept = current.roomId === roomId ? { ...current.secrets } : {};
         if (secret) kept[hookId] = secret;
         else delete kept[hookId];
-        return { roomId: conversation.id, secrets: kept };
+        return { roomId, secrets: kept };
       }),
   };
   if (seen.open !== open || seen.id !== conversation.id || seen.name !== conversation.name || seen.workspaceId !== conversation.workspaceId) {

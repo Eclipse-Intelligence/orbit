@@ -127,7 +127,7 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     editedAt: iso(row.edited_at),
     deletedAt: iso(row.deleted_at),
     createdAt: iso(row.created_at),
-    hook: hookCard(row.hook),
+    hook: row.deleted_at ? null : hookCard(row.hook),
   };
 }
 
@@ -1002,8 +1002,8 @@ async function deleteHookMessage(actor: UserActor, messageId: string): Promise<{
 
 export async function deleteMessage(actor: UserActor, id: string): Promise<{ deleted: true }> {
   const messageId = checkId(id, "message");
-  const target = await withActor(actor, (db) => readMessage(db, messageId, actor.userId));
-  if (target?.hook) return deleteHookMessage(actor, messageId);
+  const target = await withActor(actor, (db) => db.query<{ from_hook: boolean }>("select hook is not null as from_hook from crm.chat_messages where id = $1", [messageId]));
+  if (target.rows[0]?.from_hook) return deleteHookMessage(actor, messageId);
   try {
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);

@@ -18,7 +18,7 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 const FIELD = "border-line-strong bg-surface-field text-soft flex min-w-0 flex-1 items-center rounded-lg border px-2.5 font-mono text-[12px]";
 
-export type HookSecrets = { secrets: Record<string, string>; set: (hookId: string, secret: string | null) => void };
+export type HookSecrets = { secrets: Record<string, string>; set: (roomId: string, hookId: string, secret: string | null) => void };
 
 function useOrigin() {
   return useSyncExternalStore(
@@ -150,9 +150,15 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<{ load: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
   const mutations = useRef(0);
+  const currentRoom = useRef(roomId);
+  useEffect(() => {
+    currentRoom.current = roomId;
+  }, [roomId]);
+  const setError = (text: string | null) => setErrorState(text ? { load: false, text } : null);
   const tick = useRefreshTick(open);
   const [seen, setSeen] = useState({ open, roomId });
   if (seen.open !== open || seen.roomId !== roomId) {
@@ -174,32 +180,35 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
         if ("hooks" in result) {
           setHooks(result.hooks);
           setLoaded(roomId);
-          setError(null);
-        } else setError(result.error);
+          setErrorState((current) => (current?.load ? null : current));
+        } else setErrorState({ load: true, text: result.error });
       })
       .catch(() => {
-        if (live && started === mutations.current) setError("Couldn't load webhooks. Try again.");
+        if (live && started === mutations.current) setErrorState({ load: true, text: "Couldn't load webhooks. Try again." });
       });
     return () => {
       live = false;
     };
-  }, [open, roomId, tick]);
+  }, [open, roomId, tick, reload]);
 
   function replace(hook: ChatHook) {
     setHooks((current) => (current ?? []).map((item) => (item.id === hook.id ? hook : item)));
   }
 
   async function run<T>(work: () => Promise<T>, fallback: string, done: (result: T) => void) {
+    const room = roomId;
     mutations.current += 1;
     setBusy(true);
     setError(null);
     try {
-      done(await work());
+      const result = await work();
+      if (currentRoom.current === room) done(result);
     } catch {
-      setError(fallback);
+      if (currentRoom.current === room) setError(fallback);
     } finally {
       mutations.current += 1;
       setBusy(false);
+      if (currentRoom.current === room) setReload((value) => value + 1);
     }
   }
 
@@ -210,7 +219,7 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
       "Couldn't add the webhook. Try again.",
       (result) => {
         if (!("hook" in result)) return setError(result.error);
-        secrets.set(result.hook.id, result.secret);
+        secrets.set(roomId, result.hook.id, result.secret);
         setHooks((current) => [...(current ?? []).filter((item) => item.id !== result.hook.id), result.hook]);
         setLoaded(roomId);
         setExpanded((current) => ({ ...current, [result.hook.id]: true }));
@@ -236,7 +245,7 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
       "Couldn't rotate the secret. Try again.",
       (result) => {
         if (!("hook" in result)) return setError(result.error);
-        secrets.set(result.hook.id, result.secret);
+        secrets.set(roomId, result.hook.id, result.secret);
         replace(result.hook);
         setExpanded((current) => ({ ...current, [result.hook.id]: true }));
       },
@@ -250,7 +259,7 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
       (result) => {
         if (!("deleted" in result)) return setError(result.error);
         setHooks((current) => (current ?? []).filter((item) => item.id !== hook.id));
-        secrets.set(hook.id, null);
+        secrets.set(roomId, hook.id, null);
       },
     );
   }
@@ -300,7 +309,7 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
       )}
       {error && (
         <p role="alert" className="caption-style text-danger">
-          {error}
+          {error.text}
         </p>
       )}
       {list && list.length > 0 && (

@@ -297,11 +297,16 @@ describe("chat hooks", () => {
       assert.deepEqual(edited, []);
       await refused(deleteMessage(priya, id), /not found/i);
       await assert.rejects(queryAsUser(sam.userId, "select private.chat_delete_hook_message($1, $2)", [sam.userId, id]), /permission denied/);
+      await postMessage(mark, { conversationId: roomId, parentId: id, body: "Ignore this" });
       broadcasts = [];
       assert.deepEqual(await deleteMessage(sam, id), { deleted: true });
       const row = (await sql("select body, deleted_at, hook from crm.chat_messages where id = $1", [id])).rows[0];
       assert.equal(row.body, "");
       assert.ok(row.deleted_at);
+      assert.deepEqual(row.hook, {});
+      const shown = (await listMessages(sam, roomId)).messages.find((message) => message.id === id);
+      assert.ok(shown?.deletedAt);
+      assert.equal(shown.hook, null);
       await refused(deleteMessage(mark, id), /not found|deleted/i);
       await chatWorkSettled();
       const events = broadcasts.filter((message) => message.topic === personTopic(mark.userId)).map((message) => message.payload as ChatLiveEvent);

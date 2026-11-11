@@ -201,7 +201,7 @@ begin
   if v_conversation is null then
     raise exception 'Message not found.' using errcode = 'P0002';
   end if;
-  update crm.chat_messages m set deleted_at = now() where m.id = p_message;
+  update crm.chat_messages m set deleted_at = now(), hook = '{}'::jsonb where m.id = p_message;
   return v_conversation;
 end;
 $$;
