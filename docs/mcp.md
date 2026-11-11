@@ -171,7 +171,7 @@ No tool sends or signs. A person sends from the proposal in Orbit (or approves t
 
 ### Docs
 
-Docs are Markdown notes in nested folders (see `docs/architecture.md`, Docs). Reads need `docs:read` and changes `docs:write`; personal tokens have both through their role. Agent tokens only ever see docs shared with the workspace. Every change goes through the same save path as the app: links (`[[Title]]`), tags (`#tag`) and record mentions are re-indexed, a version is saved before and after every agent edit, and changes to shared docs are audited as `page.*` and `page_folder.*` events with the token as the actor.
+Docs are Markdown notes in nested folders (see `docs/architecture.md`, Docs). Reads need `docs:read` and changes `docs:write`; personal tokens have both through their role. Agent tokens only ever see docs shared with the workspace. Every change goes through the same save path as the app: links (`[[Title]]`), tags (`#tag`) and record mentions are re-indexed, a version is saved before and after every agent edit, and changes to shared docs are audited as `page.*` and `page_folder.*` events with the token as the actor. A teammate tag (`@[Name](member:<user id>)`) is kept only in a shared note and only for a member of its workspace; anywhere else it is saved as plain `@Name`. A newly tagged teammate gets a bell alert and a push naming the person, or the agent for an agent token.
 
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |

@@ -1,4 +1,5 @@
 import * as Y from "yjs";
+import { alertMembersAfterCommit } from "@/lib/alerts";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -27,6 +28,7 @@ import {
   type LiveCopy,
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
+import { pageHref } from "@/lib/docs/routes";
 import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import {
   DOC_CONTENT_MAX,
@@ -284,6 +286,61 @@ async function repointMergedMentions(db: Db, content: string, mentions: DocMenti
   return rewritten + content.slice(last);
 }
 
+const MEMBER_TAG = /@\[([^[\]\n]{1,200})\]\(member:([0-9a-f-]{36})\)/g;
+const TAG_DAY_ZONE = "Europe/London";
+
+export function tagsPeople(page: { kind: DocKind; effective_shared: boolean }) {
+  return page.kind === "note" && page.effective_shared;
+}
+
+async function workspaceMembers(db: Db, workspaceId: string, ids: string[]) {
+  const wanted = [...new Set(ids.filter((id) => isUuid(id)))];
+  if (wanted.length === 0) return new Set<string>();
+  const result = await db.query<{ user_id: string }>("select user_id::text from crm.workspace_members where workspace_id = $1 and user_id = any($2::uuid[])", [
+    workspaceId,
+    wanted,
+  ]);
+  return new Set(result.rows.map((row) => row.user_id));
+}
+
+export async function keepMemberTags(db: Db, page: { workspace_id: string; kind: DocKind; effective_shared: boolean }, content: string) {
+  if (!content.includes("](member:")) return content;
+  const found = [...maskCode(content).matchAll(MEMBER_TAG)];
+  if (found.length === 0) return content;
+  const members = tagsPeople(page) ? await workspaceMembers(db, page.workspace_id, found.map((match) => match[2])) : new Set<string>();
+  let output = "";
+  let last = 0;
+  for (const match of found) {
+    if (members.has(match[2])) continue;
+    output += `${content.slice(last, match.index)}@${match[1].trim()}`;
+    last = match.index + match[0].length;
+  }
+  return last === 0 ? content : output + content.slice(last);
+}
+
+async function newlyTagged(db: Db, page: { id: string; kind: DocKind; effective_shared: boolean }, plan: LinkPlan) {
+  if (!tagsPeople(page)) return [];
+  const tagged = plan.mentions.filter((mention) => mention.kind === "member").map((mention) => mention.id);
+  if (tagged.length === 0) return [];
+  const before = await db.query<{ id: string }>("select target_record_id::text as id from crm.page_links where page_id = $1 and target_kind = 'member'", [page.id]);
+  const known = new Set(before.rows.map((row) => row.id));
+  return tagged.filter((id) => !known.has(id));
+}
+
+function alertTagged(db: Db, actor: Actor, page: { id: string; workspace_id: string }, people: string[], now: Date) {
+  if (people.length === 0) return;
+  const name = actor.type === "user" ? actor.fullName?.trim() || actor.email : actor.agentName;
+  const day = now.toLocaleDateString("en-CA", { timeZone: TAG_DAY_ZONE });
+  alertMembersAfterCommit(db, actor, people, {
+    source: "doc",
+    key: `doc-tag:${page.id}:${day}`,
+    title: `${name} tagged you in a doc`,
+    href: pageHref(page.id),
+    tag: `doc:${page.id}`,
+    workspaceId: page.workspace_id,
+  });
+}
+
 async function planLinks(
   db: Db,
   page: LinkedPage,
@@ -459,9 +516,10 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
   if (page.kind === "daily" && next.title !== page.title) {
     throw new CrmError("invalid_input", "A daily note is named after its date, so it can't be renamed.", 400, { field: "title" });
   }
-  const contentChanged = next.content !== page.content;
-  const plan = contentChanged ? await planLinks(db, page, next.content, 0, actor.workspaceId) : null;
-  const content = plan?.content ?? next.content;
+  const cleaned = await keepMemberTags(db, page, next.content);
+  const contentChanged = cleaned !== page.content;
+  const plan = contentChanged ? await planLinks(db, page, cleaned, 0, actor.workspaceId) : null;
+  const content = plan?.content ?? cleaned;
   const titleChanged = next.title !== page.title;
   if (!titleChanged && content === page.content && options.live === undefined) return { changed: false, versioned: false };
   const now = options.now ?? new Date();
@@ -518,7 +576,11 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
     if (options.publish) options.publish.push(change);
     else afterCommit(db, () => publishLiveChange(change));
   }
-  if (plan) await writeIndex(db, page, plan);
+  if (plan) {
+    const tagged = await newlyTagged(db, page, plan);
+    await writeIndex(db, page, plan);
+    alertTagged(db, actor, page, tagged, now);
+  }
   if (takeVersion) {
     const reason = options.reason ?? (titleChanged ? "renamed" : "edited");
     await snapshot(db, page, { title: next.title, content }, reason, options.stamp, options.summary ?? (titleChanged ? `Renamed from ${page.title || "Untitled"}` : null));
@@ -728,9 +790,11 @@ export async function createDoc(actor: Actor, input: DocCreateInput, provenance?
     );
     const row = await loadPage(db, actor, inserted.rows[0].id, { lock: true });
     if (content) {
-      const plan = await planLinks(db, row, content);
+      const plan = await planLinks(db, row, await keepMemberTags(db, row, content));
       await db.query("update crm.pages set content = $2, word_count = $3, versioned_at = now() where id = $1", [row.id, plan.content, wordCount(plan.content)]);
+      const tagged = await newlyTagged(db, row, plan);
       await writeIndex(db, row, plan);
+      alertTagged(db, actor, row, tagged, new Date());
       await snapshot(db, row, { title, content: plan.content }, "created", stamp, null);
     }
     await auditDoc(db, actor, "page.created", row, provenance, { folderId: row.folder_id, editor: stamp.editor });
@@ -866,6 +930,25 @@ function checkRevision(page: FullPageRow, baseRevision: number | undefined) {
       revision: page.revision,
     });
   }
+}
+
+export async function untagPrivatePages(db: Db, actor: Actor, provenance?: Provenance) {
+  if (actor.type !== "user") return 0;
+  const hidden = await db.query<{ id: string }>(
+    `select p.id from crm.pages p
+     where ${pageInScope("p", 1, 2)} and not (p.effective_shared and p.kind = 'note')
+       and exists (select 1 from crm.page_links l where l.page_id = p.id and l.target_kind = 'member')`,
+    [actor.workspaceId, actor.userId],
+  );
+  for (const row of hidden.rows) {
+    const page = await loadPage(db, actor, row.id, { lock: true });
+    await commitPage(db, actor, page, { title: page.title, content: page.content }, {
+      stamp: stampFor(actor, provenance),
+      provenance,
+      summary: "Turned people tags into text because it's private",
+    });
+  }
+  return hidden.rows.length;
 }
 
 async function rewriteLinksTo(db: Db, actor: Actor, pageId: string, title: string, stamp: Stamp, provenance?: Provenance) {
@@ -1023,6 +1106,7 @@ async function moveIn(db: Db, actor: Actor, page: FullPageRow, input: { folderId
   if ((page.folder_id ?? null) !== (folder?.id ?? null)) {
     await db.query("update crm.pages set folder_id = $2 where id = $1", [page.id, folder?.id ?? null]);
     await auditDoc(db, actor, "page.moved", { ...page, effective_shared: afterShared }, provenance, { folderId: folder?.id ?? null, previousFolderId: page.folder_id, visibility: after }, page.effective_shared);
+    if (!afterShared) await untagPrivatePages(db, actor, provenance);
   }
   return { visibility: change };
 }
@@ -1052,8 +1136,9 @@ async function shareIn(db: Db, actor: Actor, page: FullPageRow, shared: boolean,
     );
   }
   await db.query("update crm.pages set shared = $2 where id = $1", [page.id, shared]);
-  const after = await loadPage(db, actor, page.id);
+  let after = await loadPage(db, actor, page.id);
   await auditDoc(db, actor, "page.shared", after, provenance, { shared, visibility: visibilityOf(after.shared, after.effective_shared) }, page.effective_shared);
+  if (!after.effective_shared && (await untagPrivatePages(db, actor, provenance)) > 0) after = await loadPage(db, actor, page.id);
   return { after, visibility: visibilityChange(before, visibilityOf(after.shared, after.effective_shared)) };
 }
 

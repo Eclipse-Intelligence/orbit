@@ -3,7 +3,7 @@ import { CrmError, isPgError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { assertDocsRead, assertDocsWrite, placeableFolder, visibilityError, visibilityOf } from "@/lib/docs/store";
+import { assertDocsRead, assertDocsWrite, placeableFolder, untagPrivatePages, visibilityError, visibilityOf } from "@/lib/docs/store";
 import { FOLDER_NAME_MAX, type DocFolder, type FolderMoveResult, type FolderSharing, type VisibilityChange } from "@/lib/docs/types";
 
 type FolderRow = {
@@ -178,6 +178,7 @@ export async function moveFolder(
     await placeAmongSiblings(db, actor, folder.id, parent?.id ?? null, input.index);
     const moved = await loadFolder(db, actor, id);
     if (moving) await auditFolder(db, actor, "page_folder.moved", moved, provenance, { parentId: moved.parent_id, previousParentId: folder.parent_id, visibility: after }, folder.effective_shared);
+    if (folder.effective_shared && !moved.effective_shared) await untagPrivatePages(db, actor, provenance);
     return { folder: mapFolder(actor, moved), visibility: change };
   });
 }
@@ -241,6 +242,7 @@ export async function shareFolder(actor: Actor, id: string, shared: boolean, pro
       }
       const after = await loadFolder(db, actor, id);
       await auditFolder(db, actor, "page_folder.shared", after, provenance, { shared, docs: before.docs, folders: before.folders }, folder.effective_shared);
+      if (folder.effective_shared && !after.effective_shared) await untagPrivatePages(db, actor, provenance);
       return { folder: mapFolder(actor, after), sharing: { ...before, shared: after.shared, effectiveShared: after.effective_shared } };
     }
     return { folder: mapFolder(actor, folder), sharing: await sharing(db, folder) };

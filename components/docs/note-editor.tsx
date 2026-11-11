@@ -3,16 +3,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import NotePicker, { type PickerHandle } from "@/components/docs/note-picker";
 import PhoneToolbar from "@/components/docs/phone-toolbar";
 import StaticNote from "@/components/docs/static-note";
-import { useDocsNavigate, useMedia } from "@/components/docs/use-docs";
-import type { Page, PageFilter, Presence } from "@/lib/docs/client-types";
+import { useDocsNavigate, useDocsWorkspaceName, useMedia } from "@/components/docs/use-docs";
+import type { Page, PageFilter, Presence, RecordRef } from "@/lib/docs/client-types";
 import { clearDraft, draftToRestore, readDraft } from "@/lib/docs/drafts";
 import type { CachedLive } from "@/lib/docs/live/client";
 import { refreshPreview } from "@/lib/docs/editor/preview";
 import { setPresence } from "@/lib/docs/editor/presence";
-import { bridge, external, noteExtensions, type ActiveTrigger } from "@/lib/docs/editor/setup";
+import { applyMention, bridge, external, insertAtCursor, noteExtensions, type ActiveTrigger } from "@/lib/docs/editor/setup";
 import { createStateCache } from "@/lib/docs/editor/state-cache";
 import { headingsIn } from "@/lib/docs/markdown";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
@@ -185,10 +186,45 @@ export default function NoteEditor({
   const latest = useRef({ page, list, pageTitles, onEscape, onTitleFocus });
   const seenEpoch = useRef(epoch);
   const dismissed = useRef<number | null>(null);
+  const share = useDocsStore((state) => state.share);
+  const workspaceName = useDocsWorkspaceName();
+  const [tagging, setTagging] = useState<{ person: RecordRef; trigger: ActiveTrigger; typed: string; pageId: string } | null>(null);
+  const [asking, setAsking] = useState(false);
   const closePicker = () => {
     dismissed.current = trigger?.at ?? null;
     setTrigger(null);
   };
+
+  function askToShare(person: RecordRef) {
+    const view = liveView;
+    if (!view || !trigger || liveId !== page.id) return;
+    setTagging({ person, trigger, typed: view.state.sliceDoc(trigger.at, trigger.head), pageId: page.id });
+    setAsking(true);
+    closePicker();
+  }
+
+  const taggedName = tagging ? tagging.person.name.trim().split(/\s+/)[0] || tagging.person.name : "";
+
+  function refocus() {
+    requestAnimationFrame(() => liveView?.focus());
+  }
+
+  async function shareAndTag() {
+    const asked = tagging;
+    if (!asked) return;
+    const failed = await share({ kind: "page", id: asked.pageId }, "shared");
+    const view = liveView;
+    if (failed) {
+      notify(failed, { tone: "alert" });
+      refocus();
+      return;
+    }
+    if (!view || liveId !== asked.pageId) return;
+    const { at, head } = asked.trigger;
+    if (head <= view.state.doc.length && view.state.sliceDoc(at, head) === asked.typed) applyMention(view, asked.trigger, asked.person);
+    else insertAtCursor(view, `@[${asked.person.name.replace(/[[\]\n]/g, " ").trim()}](member:${asked.person.id}) `);
+    refocus();
+  }
 
   useLayoutEffect(() => {
     latest.current = { page, list, pageTitles, onEscape, onTitleFocus };
@@ -327,12 +363,24 @@ export default function NoteEditor({
     <div className="relative">
       {!mounted && <StaticNote body={page.body} daily={daily} />}
       <div ref={host} className={mounted ? undefined : "hidden"} />
-      {mounted && liveView && trigger && !phone && <NotePicker ref={picker} view={liveView} trigger={trigger} page={page} onClose={closePicker} />}
+      {mounted && liveView && trigger && !phone && <NotePicker ref={picker} view={liveView} trigger={trigger} page={page} onClose={closePicker} onShareToTag={askToShare} />}
       {mounted && liveView && phone && focused && (
         <PhoneToolbar view={liveView}>
-          {trigger && <NotePicker ref={picker} view={liveView} trigger={trigger} page={page} onClose={closePicker} sheet />}
+          {trigger && <NotePicker ref={picker} view={liveView} trigger={trigger} page={page} onClose={closePicker} onShareToTag={askToShare} sheet />}
         </PhoneToolbar>
       )}
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={(open) => {
+          setAsking(open);
+          if (!open) refocus();
+        }}
+        title={`Share this doc with the workspace to tag ${taggedName}?`}
+        description={`Everyone in ${workspaceName ?? "the workspace"} can then read and edit it, and ${taggedName} is told they were tagged.`}
+        confirmLabel="Share and tag"
+        tone="neutral"
+        onConfirm={() => void shareAndTag()}
+      />
     </div>
   );
 }

@@ -61,8 +61,14 @@ function RecordIcon({ kind }: { kind: RecordRef["kind"] }) {
   return <UsersIcon aria-hidden className="size-3.5" />;
 }
 
-const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveTrigger; page: Page; onClose: () => void; sheet?: boolean }>(function NotePicker(
-  { view, trigger, page, onClose, sheet = false },
+export function sharesToTag(page: Page, viewerId: string | undefined) {
+  return page.kind === "note" && page.visibility !== "shared" && Boolean(viewerId) && page.owner.id === viewerId;
+}
+
+const NotePicker = forwardRef<
+  PickerHandle,
+  { view: EditorView; trigger: ActiveTrigger; page: Page; onClose: () => void; onShareToTag?: (person: RecordRef) => void; sheet?: boolean }
+>(function NotePicker({ view, trigger, page, onClose, onShareToTag, sheet = false },
   ref,
 ) {
   const nav = useDocsNav();
@@ -77,7 +83,8 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
   const query = trigger.query.trim();
   const key = `${trigger.kind}:${trigger.query}`;
   const highlight = highlightState.key === key ? highlightState.index : 0;
-  const tagsPeople = page.kind === "note" && page.shared;
+  const askToShare = Boolean(onShareToTag) && sharesToTag(page, viewerId);
+  const tagsPeople = page.kind === "note" && (page.visibility === "shared" || askToShare);
   const setHighlight = (index: number) => setHighlightState({ key, index });
 
   const tagOptions = useMemo<Option[]>(() => {
@@ -194,7 +201,10 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
     if (index >= options.length) return create();
     const option = options[index];
     if (option.type === "tag") applyTag(view, trigger, option.path);
-    else if (option.type === "record") applyMention(view, trigger, option.record);
+    else if (option.type === "record" && option.record.kind === "member" && page.visibility !== "shared") {
+      if (askToShare && onShareToTag) onShareToTag(option.record);
+      return;
+    } else if (option.type === "record") applyMention(view, trigger, option.record);
     else if (option.type === "title") applyLink(view, trigger, option.note.title);
     else {
       const target = option.target;
