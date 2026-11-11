@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { ParticipantAvatar } from "@/components/docs/presence";
@@ -46,6 +46,12 @@ export default function AssigneePicker({
   const needle = search.trim().toLowerCase();
   const shown = needle ? members.filter((member) => member.name.toLowerCase().includes(needle)) : members;
   const active = shown.length > 0 ? Math.min(highlight, shown.length - 1) : -1;
+  const list = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    if (!open || active < 0) return;
+    list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
 
   function close() {
     setOpen(false);
@@ -111,19 +117,20 @@ export default function AssigneePicker({
             className="h-8 text-[13px]"
           />
         </div>
-        <ul id={`${id}-list`} role="listbox" aria-label="Workspace members" className="flex max-h-64 flex-col overflow-y-auto">
+        <ul ref={list} id={`${id}-list`} role="listbox" aria-label="Workspace members" className="flex max-h-64 flex-col overflow-y-auto">
           {shown.map((member, index) => {
             const selected = member.id === value;
             return (
               <li
                 key={member.id}
                 id={`${id}-option-${index}`}
+                data-index={index}
                 role="option"
                 aria-selected={selected}
                 onMouseEnter={() => setHighlight(index)}
                 onClick={() => choose(member.id)}
                 className={cn(
-                  "ui-style text-soft flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left",
+                  "ui-style text-soft flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left [@media(pointer:coarse)]:min-h-11",
                   index === active && "text-foreground bg-white/5",
                   selected && "text-foreground",
                 )}

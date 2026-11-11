@@ -313,7 +313,7 @@ export async function createTaskInDb(
     if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     const task = mapTask(saved);
     await recordAudit(db, actor, "task.created", "task", task.id, provenance, { after: task });
-    await keepAssignerTagged(db, actor, task, null, task.ownerId, provenance);
+    if (!silent(provenance)) await keepAssignerTagged(db, actor, task, null, task.ownerId, provenance);
     taskAlerts(db, actor, null, task, provenance);
     return task;
   } catch (error) {
@@ -337,6 +337,7 @@ async function applyTask(
   current: TaskRow,
   write: PreparedTask,
   provenance: Provenance | undefined,
+  options: { restoring?: boolean } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const links = await resolveLinks(
@@ -371,8 +372,13 @@ async function applyTask(
   ]);
   const before = mapTask(current);
   if (change.sets.length === 0) return { task: before, changed: false };
-  if (write.ownerId !== undefined && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
-    await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, write.ownerId ?? null, provenance);
+  const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
+  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
+  if (reassigning) {
+    if (!options.restoring && !silent(provenance)) {
+      await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
+    }
+    if (nextOwner) await db.query("delete from crm.task_participants where task_id = $1 and user_id = $2", [current.id, nextOwner]);
   }
   change.values.push(current.id);
   let updated = 0;
@@ -390,6 +396,9 @@ async function applyTask(
   const saved = await readTask(db, current.id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
+  if (reassigning && options.restoring && actor.type === "user" && canChangeTask(actor, task)) {
+    await db.query("delete from crm.task_participants where task_id = $1 and user_id = $2", [current.id, actor.userId]);
+  }
   const event =
     before.completedAt !== task.completedAt
       ? task.completedAt
@@ -664,7 +673,7 @@ export async function restoreTaskInDb(
   if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;
-  return applyTask(db, actor, current, write, provenance);
+  return applyTask(db, actor, current, write, provenance, { restoring: true });
 }
 
 export type DueReminder = {

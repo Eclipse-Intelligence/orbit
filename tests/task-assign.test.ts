@@ -30,7 +30,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import { createCrmMcpServer } from "@/server/mcp/server";
 import { removeMember } from "@/lib/crm/team";
-import { describeUndo, undoAuditEvent } from "@/lib/crm/undo";
+import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, listRuns, saveWorkflow, setWorkflowStatus } from "@/lib/workflows/store";
 import type { WorkflowDefinition } from "@/lib/workflows/definition";
@@ -276,6 +276,9 @@ describe("task assignment and tagging", () => {
     assert.deepEqual(await alertsFor(sam), []);
     assert.deepEqual(await alertsFor(priya), []);
     assert.deepEqual(await alertsFor(mark), []);
+    assert.deepEqual(await listTaskParticipants(mark, [imported.id, completedBySam.id]), {});
+    const tagEvents = await sql("select 1 from crm.audit_events where entity_id = any($1::uuid[]) and event_type like 'task.participant_%'", [[imported.id, completedBySam.id]]);
+    assert.deepEqual(tagEvents, []);
   });
 
   it("lets the owner, creator, admins and the person themselves remove someone", async () => {
@@ -456,5 +459,33 @@ describe("task access edges", () => {
     assert.deepEqual(await sql("select 1 from crm.task_participants where user_id = $1", [rhea.userId]), []);
     await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, rhea.userId]);
     await assert.rejects(getTask(rhea, task.id), /not found/i);
+  });
+
+  it("untags the new assignee, and undoing a reassignment removes the tag it added", async () => {
+    const task = (await createTask(sam, { title: "Admin reassigns then undoes" })).body.task;
+    await updateTask(ada, task.id, { ownerId: priya.userId });
+    assert.deepEqual((await listTaskParticipants(ada, [task.id]))[task.id], [ada.userId]);
+    const event = await lastEvent(task.id, ada, "task.updated");
+    await undoAuditEvent(ada, event, { operation: "undo_change" });
+    assert.equal((await getTask(ada, task.id)).ownerId, sam.userId);
+    assert.deepEqual(await listTaskParticipants(ada, [task.id]), {});
+    const recent = await listRecentChanges(ada);
+    assert.ok(!recent.some((change) => change.type.startsWith("task.participant_")));
+
+    const passed = (await createTask(mark, { title: "Back and forth", ownerId: sam.userId })).body.task;
+    await updateTask(sam, passed.id, { ownerId: priya.userId });
+    await updateTask(priya, passed.id, { ownerId: sam.userId });
+    assert.deepEqual((await listTaskParticipants(mark, [passed.id]))[passed.id], [mark.userId, priya.userId]);
+    assert.ok(!(await listTasks(sam, { tagged: true })).data.some((item) => item.id === passed.id));
+  });
+
+  it("drops tags for people outside the workspace a task moves to", async () => {
+    const other = await createUser("owner@ridgeon.test", "Ridgeon Owner");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member'), ($1, $3, 'member')", [other.workspaceId, mark.userId, ada.userId]);
+    const task = (await createTask(mark, { title: "Moving across" })).body.task;
+    await addTaskParticipants(mark, task.id, [ada.userId, priya.userId]);
+    await sql("update crm.tasks set workspace_id = $2 where id = $1", [task.id, other.workspaceId]);
+    const left = await sql<{ user_id: string }>("select user_id from crm.task_participants where task_id = $1 order by user_id", [task.id]);
+    assert.deepEqual(left.map((row) => row.user_id), [ada.userId]);
   });
 });

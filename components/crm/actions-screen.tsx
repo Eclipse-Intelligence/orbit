@@ -132,7 +132,7 @@ export default function ActionsScreen({
                   aria-current={who === "tagged" ? "page" : undefined}
                 >
                   Tagged
-                  <span className="text-subtle tabular-nums">{taggedCount}</span>
+                  {taggedCount > 0 && <span className="text-subtle tabular-nums">{taggedCount}</span>}
                 </Button>
                 {shared && (
                   <Button

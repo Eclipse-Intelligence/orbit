@@ -814,6 +814,12 @@ describe("clickup sync", () => {
     const byId = Object.fromEntries(owners.rows.map((row) => [row.clickup_task_id, row.owner_id]));
     assert.equal(byId.forsam, sam);
     assert.equal(byId.nobody, owner.userId);
+    const imported = await db.query("select 1 from crm.task_participants p join crm.tasks t on t.id = p.task_id where t.clickup_task_id = 'forsam'");
+    assert.equal(imported.rowCount, 0);
+    const tagged = await db.query(
+      "select 1 from crm.audit_events e join crm.tasks t on t.id = e.entity_id where t.clickup_task_id = 'forsam' and e.event_type like 'task.participant_%'",
+    );
+    assert.equal(tagged.rowCount, 0);
     await db.query("delete from crm.workspace_members where user_id = any($1::uuid[])", [[sam, ola]]);
   });
 
