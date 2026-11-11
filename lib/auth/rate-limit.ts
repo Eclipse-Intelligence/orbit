@@ -31,3 +31,19 @@ async function charge(key: string, cost: number) {
 export async function consumeRateLimitFor(key: string, cost = 1) {
   if (!(await charge(key, cost))) throw new CrmError("rate_limited", "Too many requests.", 429);
 }
+
+export const MCP_SENDS_PER_HOUR = 60;
+const HOUR_MS = 3_600_000;
+
+export async function consumeMailSendLimit(userId: string, now = Date.now()) {
+  const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`mail-send:${userId}`, MCP_SENDS_PER_HOUR, HOUR_MS / 1000]);
+  if (result.rows[0]?.allowed) return;
+  const retryAt = new Date((Math.floor(now / HOUR_MS) + 1) * HOUR_MS);
+  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }).format(retryAt);
+  throw new CrmError(
+    "rate_limited",
+    `${MCP_SENDS_PER_HOUR} emails have been sent or scheduled through MCP this hour, the most Orbit allows. Try again after ${time} London time.`,
+    429,
+    { retryAt: retryAt.toISOString() },
+  );
+}

@@ -8,7 +8,7 @@ import { moveTargets } from "@/lib/crm/move-workspace";
 import { createCrmMcpServer } from "@/server/mcp/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function POST(request: Request) {
   try {
@@ -26,7 +26,10 @@ export async function POST(request: Request) {
     }
     if (!read.ok) return jsonRpcError(read.status, read.code, read.message);
     const actor = personal?.actor ?? agent!;
-    const server = createCrmMcpServer(actor, { workspaces: await moveTargets(actor) });
+    const server = createCrmMcpServer(actor, {
+      workspaces: await moveTargets(actor),
+      personal: personal ? { tokenId: personal.tokenId, canSend: personal.canSend } : undefined,
+    });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
