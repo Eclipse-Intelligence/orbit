@@ -1,5 +1,5 @@
 import type { ChatPerson } from "@/lib/chat/types";
-import type { MailSharePerson, SharedThreadSummary } from "@/lib/mail/share-types";
+import type { MailShareCandidate, MailSharePerson, SharedThreadSummary } from "@/lib/mail/share-types";
 
 export const SHARED_VIEW = "shared";
 
@@ -54,4 +54,34 @@ export function sharedListPerson(thread: Pick<SharedThreadSummary, "counterpart"
 
 export function readShareParam(value: string | null | undefined) {
   return value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+const ROLE_LABELS = { owner: "Owner", admin: "Admin", member: "Member" } as const;
+
+export function candidateDetail(person: Pick<MailShareCandidate, "role" | "email">) {
+  return person.role ? ROLE_LABELS[person.role] : person.email;
+}
+
+export const NO_ACCESS = "You no longer have access to this thread.";
+
+export type MailListQuery = { view: string; account: string | null; query: string };
+
+export const HOME_VIEW = "inbox";
+
+export function isSharedView(query: MailListQuery) {
+  return !query.query && query.view === SHARED_VIEW;
+}
+
+export function mailUrl(query: MailListQuery, thread: string | null) {
+  const params = new URLSearchParams();
+  if (query.query) params.set("q", query.query);
+  else if (query.view !== HOME_VIEW) params.set("view", query.view);
+  if (query.account) params.set("account", query.account);
+  if (thread) params.set(isSharedView(query) ? "shared" : "thread", thread);
+  const text = params.toString();
+  return text ? `/mail?${text}` : "/mail";
+}
+
+export function listForThread(query: MailListQuery): MailListQuery | null {
+  return isSharedView(query) ? { view: HOME_VIEW, account: query.account, query: "" } : null;
 }

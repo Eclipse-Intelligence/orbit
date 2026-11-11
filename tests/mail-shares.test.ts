@@ -24,7 +24,7 @@ import {
   sharesLostOnLeaving,
   shareThread,
 } from "@/lib/mail/shares";
-import { moveMessages } from "@/lib/mail/actions";
+import { applyMailAction, moveMessages } from "@/lib/mail/actions";
 import { syncMail } from "@/lib/mail/sync";
 import { threadKey } from "@/lib/mail/threads";
 import { createUser, resetDatabase } from "./helpers";
@@ -257,6 +257,27 @@ describe("sharing a thread", () => {
     assert.deepEqual(shareEventsFor(mark), [{ type: "people", shareId }]);
     await removeFromShare(mark, shareId, priya.userId);
   });
+
+  it("lists people added at the same moment in a stable order", async () => {
+    const other = threadKey(sourceId, "conv-2");
+    const [share] = await sql<{ id: string }>("insert into crm.mail_shares (owner_user_id, source_id, thread_key) values ($1, $2, 'conv-2') returning id", [mark.userId, sourceId]);
+    try {
+      await sql(
+        "insert into crm.mail_share_members (share_id, user_id, added_by, created_at) select $1, unnest($2::uuid[]), $3, '2026-11-01T09:00:00Z'",
+        [share.id, [priya.userId, sam.userId], mark.userId],
+      );
+      const expected = [sam.userId, priya.userId].sort();
+      for (let round = 0; round < 3; round += 1) {
+        const people = (await getThreadShare(mark, other)).people;
+        assert.deepEqual(
+          people.map((person) => person.id),
+          [mark.userId, ...expected],
+        );
+      }
+    } finally {
+      await sql("delete from crm.mail_shares where id = $1", [share.id]);
+    }
+  });
 });
 
 describe("reading a shared thread", () => {
@@ -286,7 +307,7 @@ describe("reading a shared thread", () => {
     assert.equal(thread.viewerIsOwner, false);
     assert.equal(thread.threadKey, null);
     const json = JSON.stringify(thread);
-    for (const hidden of ["secret@hidden.test", "m-draft", "m-trash", "m-junk", "m-other", "Something private", "outlook.office.com", "conv-1", "bcc", "webLink"]) {
+    for (const hidden of ["secret@hidden.test", "m-draft", "m-trash", "m-junk", "m-other", "Something private", "outlook.office.com", "conv-1", "\"bcc\":", "bccRecipients", "bcc_recipients", "webLink"]) {
       assert.ok(!json.includes(hidden), hidden);
     }
     assert.match(thread.messages[0].html ?? "", /Body m-1/);
@@ -468,6 +489,12 @@ describe("notes on a shared thread", () => {
       assert.deepEqual(error.details?.needsShare, { people: [{ id: olly.userId, name: "Someone" }], canAdd: false });
       return true;
     });
+    await sql("update crm.profiles set full_name = '' where id = $1", [mark.userId]);
+    try {
+      await refused(postMessage(sam, { conversationId, body: `${tag(priya)} can you check?` }), /^Priya Nair isn't in this thread\. Only the owner can add people\.$/);
+    } finally {
+      await sql("update crm.profiles set full_name = 'Mark Ridgeon' where id = $1", [mark.userId]);
+    }
     assert.equal((await getDiscussion(mark, { kind: "mail_thread", id: shareId })).count, 1);
     assert.equal((await listMessages(mark, conversationId)).messages[0].body, "Setup fee waiver is fine on our side.");
     assert.deepEqual(await listSharedThreads(priya), []);
@@ -556,6 +583,7 @@ describe("live updates from sync", () => {
       broadcasts = [];
       const result = await moveMessages(mark, sourceId, [message], target, fetchImpl);
       assert.equal(result.error, null);
+      await chatWorkSettled();
       return shareEventsFor(sam);
     };
     assert.deepEqual(await moved("trash"), [{ type: "message", shareId }]);
@@ -564,6 +592,27 @@ describe("live updates from sync", () => {
     assert.equal((await getSharedThread(sam, shareId)).messages.length, 5);
     assert.deepEqual(await moved("archive"), []);
     assert.equal((await getSharedThread(sam, shareId)).messages.length, 5);
+  });
+
+  it("announces in the background when the owner bins or restores the whole thread from the reader", async () => {
+    const shareId = (await getThreadShare(mark, key)).shareId!;
+    const placed = await sql<{ id: string; folder_id: string }>("select id, folder_id from crm.mail_messages where user_id = $1 and thread_key = 'conv-1'", [mark.userId]);
+    const shown = (await getSharedThread(sam, shareId)).messages.length;
+    try {
+      broadcasts = [];
+      const binned = await applyMailAction(mark, { thread: key, action: "trash", view: { role: "inbox" } }, fetchImpl);
+      assert.ok(binned.changed > 0);
+      await chatWorkSettled();
+      assert.deepEqual(shareEventsFor(sam), [{ type: "message", shareId }]);
+      assert.equal((await getSharedThread(sam, shareId)).messages.length, shown - binned.changed);
+      broadcasts = [];
+      await applyMailAction(mark, { thread: key, action: "inbox", view: { role: "trash" } }, fetchImpl);
+      await chatWorkSettled();
+      assert.deepEqual(shareEventsFor(sam), [{ type: "message", shareId }]);
+    } finally {
+      for (const row of placed) await sql("update crm.mail_messages set folder_id = $2 where id = $1", [row.id, row.folder_id]);
+    }
+    assert.equal((await getSharedThread(sam, shareId)).messages.length, shown);
   });
 });
 

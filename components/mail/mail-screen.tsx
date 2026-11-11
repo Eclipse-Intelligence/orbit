@@ -81,11 +81,9 @@ import MailShareLive, { useMailShareEvents } from "@/components/mail/share-live"
 import { fetchSharedList } from "@/components/mail/share-client";
 import SharedList from "@/components/mail/shared-list";
 import SharedReader from "@/components/mail/shared-reader";
-import { SHARED_VIEW, sharedCountLabel, sortShared, stepShare } from "@/lib/mail/share-view";
+import { HOME_VIEW, SHARED_VIEW, isSharedView as sharedView, listForThread, mailUrl, sharedCountLabel, sortShared, stepShare } from "@/lib/mail/share-view";
 import type { SharedThreadSummary } from "@/lib/mail/share-types";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
-
-const HOME_VIEW = "inbox";
 
 const MORE_VIEWS = [
   { id: "inbox", label: "All inbox" },
@@ -97,10 +95,6 @@ const MORE_VIEWS = [
   { id: "trash", label: "Trash" },
   { id: "junk", label: "Junk" },
 ] as const;
-
-function sharedView(query: ListQuery) {
-  return !query.query && query.view === SHARED_VIEW;
-}
 
 function inInbox(view: string) {
   return view === "inbox" || view.startsWith("inbox:");
@@ -161,16 +155,6 @@ function ComposeButton({ onCompose }: { onCompose: () => void }) {
     </span>,
     slot,
   );
-}
-
-function mailUrl(query: ListQuery, thread: string | null) {
-  const params = new URLSearchParams();
-  if (query.query) params.set("q", query.query);
-  else if (query.view !== HOME_VIEW) params.set("view", query.view);
-  if (query.account) params.set("account", query.account);
-  if (thread) params.set(sharedView(query) ? "shared" : "thread", thread);
-  const text = params.toString();
-  return text ? `/mail?${text}` : "/mail";
 }
 
 type OutgoingThread = { thread: ThreadSummary | null; origin: ListQuery; left: boolean; cleared: boolean };
@@ -236,7 +220,9 @@ export default function MailScreen({
   initialShared = null,
   initialNotes = false,
   linkedShare = null,
+  noMailbox = false,
 }: {
+  noMailbox?: boolean;
   linkedShare?: string | null;
   initialShared?: string | null;
   initialNotes?: boolean;
@@ -339,6 +325,7 @@ export default function MailScreen({
   const inShared = sharedView(query);
   const sharedCount = sharedList?.length ?? 0;
   const sharedTab = sharedCount > 0 || inShared;
+  const mailboxless = nav.partial ? noMailbox : nav.accounts.length === 0;
   const sharedSummary = inShared && cursor ? (sharedList?.find((thread) => thread.shareId === cursor) ?? null) : null;
   const current = threads.find((thread) => thread.key === cursor) ?? null;
   const currentIndex = current ? threads.indexOf(current) : -1;
@@ -485,12 +472,25 @@ export default function MailScreen({
     const token = request.current;
     loadShared();
     if (sharedView(target)) {
-      if (poll) return Promise.resolve();
       setSyncing(true);
-      return (sync ? syncNow().catch(() => null) : Promise.resolve(null))
+      let failures: string[] = [];
+      return (sync
+        ? syncNow().then(
+            (result) => {
+              failures = flagSyncProblems(result.problems ?? [], navAccounts.current);
+            },
+            (error: unknown) => {
+              failures = [refreshFailure(error)];
+            },
+          )
+        : Promise.resolve()
+      )
         .then(() => fetchNav().then(setNav))
         .catch(() => null)
-        .finally(() => setSyncing(false));
+        .finally(() => {
+          setSyncing(false);
+          if (refreshProblem(failures.length ? failures.join("\n") : null)) for (const message of failures) showToast({ message, tone: "alert" });
+        });
     }
     setSyncing(true);
     let problems: string[] = [];
@@ -919,7 +919,7 @@ export default function MailScreen({
       if (!detail?.thread) return;
       const current = latest.current.query;
       if (detail.view && (detail.view !== current.view || current.query)) showRef.current({ view: detail.view, account: current.account, query: "" });
-      else if (sharedView(current)) showRef.current({ view: HOME_VIEW, account: current.account, query: "" });
+      else if (listForThread(current)) showRef.current(listForThread(current)!);
       selectRef.current(detail.thread, true);
     };
     window.addEventListener(OPEN_THREAD_EVENT, onOpen);
@@ -958,9 +958,9 @@ export default function MailScreen({
   });
 
   useEffect(() => {
-    if (!initialThread || !new URL(window.location.href).searchParams.has("shared")) return;
-    window.history.replaceState(window.history.state, "", mailUrl(initialQuery, initialThread.key));
-  }, [initialThread, initialQuery]);
+    if (initialShared || !new URL(window.location.href).searchParams.has("shared")) return;
+    window.history.replaceState(window.history.state, "", mailUrl(initialQuery, initialThread?.key ?? null));
+  }, [initialThread, initialShared, initialQuery]);
 
   useEffect(() => {
     const initialKey = initialThread?.key ?? initialShared;
@@ -1214,6 +1214,12 @@ export default function MailScreen({
     visibleSearch()?.select();
   });
 
+  function openFromAsk(key: string) {
+    const list = listForThread(latest.current.query);
+    if (list) show(list);
+    select(key, true);
+  }
+
   function runAsk(question: string) {
     const token = ++askToken.current;
     setAsk({ question, result: null, error: null });
@@ -1308,9 +1314,10 @@ export default function MailScreen({
       ? "Inbox zero"
       : "Nothing here";
 
-  if (nav.accounts.length === 0 && !nav.partial && !sharedTab) {
+  if (mailboxless && sharedList?.length === 0 && !cursor) {
     return (
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <MailShareLive />
         <SectionHeader title="Mail" viewer={viewer} />
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <h2>No mailbox connected</h2>
@@ -1337,10 +1344,11 @@ export default function MailScreen({
         heading={
           <div className="flex min-w-0 items-center gap-5">
             <h1 className="shrink-0">Mail</h1>
-            <div className="hidden min-w-0 flex-1 lg:flex">{searchForm("header")}</div>
+            {!mailboxless && <div className="hidden min-w-0 flex-1 lg:flex">{searchForm("header")}</div>}
           </div>
         }
         action={
+          mailboxless ? null : (
           <>
             <Button variant="primary" onClick={() => openComposer()} shortcut={["C", "M"]} className="max-md:hidden">
               Compose
@@ -1393,6 +1401,7 @@ export default function MailScreen({
               <RefreshIcon aria-hidden className={cn("size-3.5", syncing && "animate-spin [animation-direction:reverse]")} />
             </Button>
           </>
+          )
         }
       />
       <ReconnectNotices accounts={nav.accounts} className="shrink-0 px-3 pt-2 lg:pt-3" onReturn={() => fetchNav().then(setNav).catch(() => null)} />
@@ -1409,14 +1418,23 @@ export default function MailScreen({
         >
           <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-1.5 lg:pt-3">
             <PushPrompt />
-            <div className="lg:hidden">{searchForm("list")}</div>
+            {mailboxless ? (
+              <p className="caption-style text-subtle flex flex-wrap items-center gap-x-1.5 px-1">
+                No mailbox connected.
+                <Button variant="link" size="none" href="/settings/email" className="caption-style font-normal">
+                  Connect Microsoft
+                </Button>
+              </p>
+            ) : (
+              <div className="lg:hidden">{searchForm("list")}</div>
+            )}
             <div className="relative">
               <p role="status" className="sr-only">
                 {selectionLabel}
               </p>
               <nav aria-label="Mail folders" inert={selectedThreads.length > 0} className="-mx-1 flex items-center gap-1">
                 <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1 pr-5 [mask-image:linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] [scrollbar-width:none]">
-                  {splitTabs.map((tab) => {
+                  {!mailboxless && splitTabs.map((tab) => {
                     const active = !query.query && query.view === tab.id;
                     return (
                       <FilterChip
@@ -1444,6 +1462,7 @@ export default function MailScreen({
                     </FilterChip>
                   )}
                 </div>
+                {!mailboxless && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <FilterChip
@@ -1492,6 +1511,7 @@ export default function MailScreen({
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+                )}
               </nav>
               {selectedThreads.length > 0 && (
                 <div
@@ -1556,7 +1576,7 @@ export default function MailScreen({
             </span>
             <div ref={listBody}>
             {ask ? (
-              <AskPanel ask={ask} now={now} onOpen={(key) => select(key, true)} />
+              <AskPanel ask={ask} now={now} onOpen={openFromAsk} />
             ) : inShared ? (
               <SharedList
                 threads={sharedList}
@@ -1691,7 +1711,7 @@ export default function MailScreen({
         onClose={() => setUnsubscribing(null)}
         onDone={finishUnsubscribe}
       />
-      {!open && <ComposeButton onCompose={() => openComposer()} />}
+      {!open && !mailboxless && <ComposeButton onCompose={() => openComposer()} />}
     </section>
   );
 }

@@ -128,6 +128,7 @@ export function DiscussionComposer({
   const { viewer, setEditing } = useChat();
   const messages = parentId ? (discussion.thread?.timeline.messages ?? []) : (discussion.timeline?.messages ?? []);
   const root = parentId ? discussion.thread?.root : null;
+  const prompting = Boolean(discussion.needsShare) && discussion.needsShare?.parentId === parentId;
   return (
     <Composer
       key={discussion.composerVersion}
@@ -139,9 +140,9 @@ export function DiscussionComposer({
       sendLabel={parentId ? "Send reply" : noun === "note" ? "Send note" : "Send comment"}
       compact
       restoreOnFailure
-      hideFailure={discussion.needsShare?.parentId === parentId}
+      hideFailure={prompting}
       autoFocus={autoFocus}
-      disabled={Boolean(parentId) && (!root || Boolean(root.deletedAt && root.replyCount === 0))}
+      disabled={prompting || (Boolean(parentId) && (!root || Boolean(root.deletedAt && root.replyCount === 0)))}
       onEscape={onEscape}
       onSend={(text, mentions) =>
         discussion.context.send({

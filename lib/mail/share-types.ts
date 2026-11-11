@@ -43,10 +43,15 @@ export type SharedThread = {
   messages: SharedMessage[];
 };
 
-export type MailShareControl = {
+export type MailShareCandidate = ChatPerson & { email: string | null; role: "owner" | "admin" | "member" | null };
+
+export type MailSharePeople = {
   shareId: string | null;
   people: MailSharePerson[];
-  candidates: (ChatPerson & { email: string | null })[];
+};
+
+export type MailShareControl = MailSharePeople & {
+  candidates: MailShareCandidate[];
 };
 
 export type MailShareLiveEvent =

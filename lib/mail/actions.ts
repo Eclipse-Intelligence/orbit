@@ -1,3 +1,4 @@
+import { chatBackground } from "@/lib/crm/chat";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -158,9 +159,11 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
   return [...touched];
 }
 
-async function announceMoves(actor: UserActor, sourceId: string, threadKeys: string[]) {
+function announceMoves(actor: UserActor, sourceId: string, threadKeys: string[]) {
   if (threadKeys.length === 0) return;
-  await announceSharedThreads(actor.userId, sourceId, threadKeys).catch((error) => console.error("Couldn't announce shared thread changes", error instanceof Error ? error.name : "unknown"));
+  chatBackground(() =>
+    announceSharedThreads(actor.userId, sourceId, threadKeys).catch((error) => console.error("Couldn't announce shared thread changes", error instanceof Error ? error.name : "unknown")),
+  );
 }
 
 async function sourceEmail(actor: UserActor, sourceId: string) {
@@ -245,7 +248,7 @@ export async function applyMailAction(
       }
       return [];
     });
-    await announceMoves(actor, sourceId, touched);
+    announceMoves(actor, sourceId, touched);
   }
   if (failures.length > 0) {
     throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
@@ -292,7 +295,7 @@ export async function moveMessages(
       }
       return keys;
     });
-    await announceMoves(actor, sourceId, touched);
+    announceMoves(actor, sourceId, touched);
   }
   return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };
 }

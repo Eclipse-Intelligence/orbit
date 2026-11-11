@@ -13,14 +13,16 @@ import { TextBody, When } from "@/components/mail/thread-reader";
 import type { ChatPerson } from "@/lib/chat/types";
 import { personName, recipientList, snippetCore } from "@/lib/mail/format";
 import type { SharedMessage, SharedThread, SharedThreadSummary } from "@/lib/mail/share-types";
-import { peopleLine, removedLine, sharedByLabel } from "@/lib/mail/share-view";
+import { NO_ACCESS, peopleLine, removedLine, sharedByLabel } from "@/lib/mail/share-view";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 
 const FOCUS_GAP_MS = 5_000;
 
-type Loaded = { shareId: string; thread: SharedThread | null; error: string | null; removed: boolean };
+type Gone = "removed" | "lost" | null;
+
+type Loaded = { shareId: string; thread: SharedThread | null; error: string | null; gone: Gone };
 
 function SharedMessageCard({
   shareId,
@@ -107,6 +109,12 @@ function SharedMessages({ thread }: { thread: SharedThread }) {
   const last = messages.length - 1;
   const [open, setOpen] = useState<Set<string>>(() => new Set(last >= 0 ? [messages[last].id] : []));
   const [showAll, setShowAll] = useState(messages.length <= 4);
+  const lastId = messages.at(-1)?.id ?? null;
+  const [seenLast, setSeenLast] = useState(lastId);
+  if (lastId !== seenLast) {
+    setSeenLast(lastId);
+    if (lastId) setOpen((current) => new Set(current).add(lastId));
+  }
   const hidden = showAll ? 0 : messages.length - 3;
   const visible = showAll ? messages : [messages[0], ...messages.slice(-2)];
   if (messages.length === 0) return <p className="text-subtle px-4">Nothing to show in this thread yet.</p>;
@@ -161,7 +169,8 @@ export default function SharedReader({
   const body = useRef<HTMLDivElement>(null);
   const loaded = state?.shareId === shareId ? state : null;
   const thread = loaded?.thread ?? null;
-  const removed = Boolean(loaded?.removed);
+  const gone = loaded?.gone ?? null;
+  const removed = Boolean(gone);
   const layout = useNotesLayout(body, Boolean(thread) && !removed);
   const owner = thread?.owner ?? summary?.owner ?? null;
   const latest = useRef({ onOwner, onGone, loaded });
@@ -177,20 +186,19 @@ export default function SharedReader({
           latest.current.onOwner(fresh.threadKey);
           return;
         }
-        setState({ shareId: asked, thread: fresh, error: null, removed: false });
+        setState({ shareId: asked, thread: fresh, error: null, gone: null });
       })
       .catch((error: unknown) => {
         const status = error instanceof ShareRequestError ? error.status : 0;
-        const had = latest.current.loaded?.shareId === asked && Boolean(latest.current.loaded.thread);
-        if (status === 404 && had) {
-          setState((current) => (current?.shareId === asked ? { ...current, removed: true } : current));
+        if (status === 404) {
+          setState((current) => (current?.shareId === asked ? { ...current, gone: current.gone ?? "lost" } : { shareId: asked, thread: null, error: null, gone: "lost" }));
           latest.current.onGone();
           return;
         }
         setState((current) =>
           current?.shareId === asked && current.thread
             ? current
-            : { shareId: asked, thread: null, error: error instanceof Error ? error.message : "Couldn't load the thread. Try again.", removed: false },
+            : { shareId: asked, thread: null, error: error instanceof Error ? error.message : "Couldn't load the thread. Try again.", gone: null },
         );
       });
   }, [shareId]);
@@ -202,7 +210,7 @@ export default function SharedReader({
   useEffect(() => {
     let last = Date.now();
     const onFocus = () => {
-      if (document.visibilityState !== "visible" || Date.now() - last < FOCUS_GAP_MS || latest.current.loaded?.removed) return;
+      if (document.visibilityState !== "visible" || Date.now() - last < FOCUS_GAP_MS || latest.current.loaded?.gone) return;
       last = Date.now();
       load();
     };
@@ -217,7 +225,7 @@ export default function SharedReader({
   useMailShareEvents((event) => {
     if (event.shareId !== shareId) return;
     if (event.type === "removed") {
-      setState((current) => (current?.shareId === shareId ? { ...current, removed: true } : { shareId, thread: null, error: null, removed: true }));
+      setState((current) => (current?.shareId === shareId ? { ...current, gone: "removed" } : { shareId, thread: null, error: null, gone: "removed" }));
       latest.current.onGone();
       return;
     }
@@ -244,7 +252,7 @@ export default function SharedReader({
         </span>
         {people.length > 0 && !removed && (
           <span className="caption-style text-subtle flex min-w-0 shrink items-center gap-1.5">
-            <PeopleStack people={[...others, ...people.filter((person) => person.id === viewer.id)]} viewerId={viewer.id} />
+            <PeopleStack people={[...people.filter((person) => person.owner), ...others, ...people.filter((person) => person.id === viewer.id && !person.owner)]} viewerId={viewer.id} />
             <span className="truncate max-sm:sr-only">{peopleLine(people, viewer.id)}</span>
           </span>
         )}
@@ -255,11 +263,11 @@ export default function SharedReader({
             <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
             {removed ? (
               <p role="status" className="text-soft px-4">
-                {owner ? removedLine(owner) : "You were removed from this thread."}
+                {gone === "removed" && owner ? removedLine(owner) : NO_ACCESS}
               </p>
             ) : thread ? (
               <>
-                <SharedMessages key={`${thread.shareId}:${thread.messages.length}:${thread.messages.at(-1)?.id ?? ""}`} thread={thread} />
+                <SharedMessages key={thread.shareId} thread={thread} />
                 {layout === "below" && <ThreadNotes shareId={shareId} viewer={viewer} layout="below" reveal={notes} />}
               </>
             ) : loaded?.error ? (

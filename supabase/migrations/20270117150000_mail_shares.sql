@@ -22,6 +22,7 @@ create table if not exists crm.mail_share_members (
 
 create index if not exists mail_share_members_user_idx on crm.mail_share_members (user_id);
 create index if not exists mail_share_members_added_by_idx on crm.mail_share_members (added_by);
+drop index if exists crm.mail_shares_owner_idx;
 
 alter table crm.mail_shares enable row level security;
 alter table crm.mail_shares force row level security;
@@ -220,13 +221,13 @@ stable
 security definer
 set search_path = ''
 as $$
-  select p.id, coalesce(nullif(btrim(p.full_name), ''), 'Teammate'),
+  select p.id, coalesce(nullif(btrim(p.full_name), ''), 'Someone'),
     case when p.id = p_user or private.chat_shares_workspace(p_user, p.id) then p.email end,
     true, s.created_at
   from crm.mail_shares s join crm.profiles p on p.id = s.owner_user_id
   where s.id = p_share and private.mail_share_open_to(p_share, p_user)
   union all
-  select p.id, coalesce(nullif(btrim(p.full_name), ''), 'Teammate'),
+  select p.id, coalesce(nullif(btrim(p.full_name), ''), 'Someone'),
     case when p.id = p_user or s.owner_user_id = p_user or private.chat_shares_workspace(p_user, p.id) then p.email end,
     false, m.created_at
   from crm.mail_share_members m
@@ -257,7 +258,7 @@ stable
 security definer
 set search_path = ''
 as $$
-  select s.id, s.owner_user_id, coalesce(nullif(btrim(p.full_name), ''), p.email, 'Teammate'), sm.created_at,
+  select s.id, s.owner_user_id, coalesce(nullif(btrim(p.full_name), ''), p.email, 'Someone'), sm.created_at,
     latest.subject, latest.at, latest.snippet, coalesce(them.name, latest.to_name), coalesce(them.address, latest.to_address),
     stats.n, stats.attachments
   from crm.mail_share_members sm

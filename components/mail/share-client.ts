@@ -1,6 +1,6 @@
 "use client";
 
-import type { MailShareControl, MailShareLiveEvent, SharedThread, SharedThreadSummary } from "@/lib/mail/share-types";
+import type { MailShareControl, MailShareLiveEvent, MailSharePeople, SharedThread, SharedThreadSummary } from "@/lib/mail/share-types";
 
 const OFFLINE = "You're offline. Try again.";
 
@@ -12,8 +12,11 @@ export class ShareRequestError extends Error {
   }
 }
 
-async function getJson<T>(url: string, fallback: string): Promise<T> {
-  const response = await fetch(url, { cache: "no-store", credentials: "same-origin" }).catch(() => null);
+async function getJson<T>(url: string, fallback: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { cache: "no-store", credentials: "same-origin", signal }).catch((error: unknown) => {
+    if (signal?.aborted) throw error;
+    return null;
+  });
   if (!response) throw new ShareRequestError(OFFLINE, 0);
   const body = (await response.json().catch(() => ({}))) as T & { error?: string };
   if (!response.ok) throw new ShareRequestError(body.error || fallback, response.status);
@@ -28,19 +31,48 @@ export function fetchSharedThread(shareId: string) {
   return getJson<SharedThread>(`/api/mail/shared/${encodeURIComponent(shareId)}`, "Couldn't load the thread. Try again.");
 }
 
-const controls = new Map<string, MailShareControl>();
+const known = new Map<string, MailSharePeople>();
+const asking = new Map<string, { request: Promise<MailSharePeople>; controller: AbortController; waiting: number }>();
+const SHARE_FAILED = "Couldn't load who can see this thread. Try again.";
 
-export function cachedShareControl(threadKey: string) {
-  return controls.get(threadKey) ?? null;
+export function cachedSharePeople(threadKey: string) {
+  return known.get(threadKey) ?? null;
 }
 
-export function storeShareControl(threadKey: string, control: MailShareControl) {
-  controls.set(threadKey, control);
+export function storeSharePeople(threadKey: string, people: MailSharePeople) {
+  known.set(threadKey, { shareId: people.shareId, people: people.people });
+}
+
+export function fetchSharePeople(threadKey: string, signal?: AbortSignal) {
+  let entry = asking.get(threadKey);
+  if (!entry) {
+    const controller = new AbortController();
+    const request = getJson<MailSharePeople>(`/api/mail/share?thread=${encodeURIComponent(threadKey)}&people=1`, SHARE_FAILED, controller.signal)
+      .then((people) => {
+        storeSharePeople(threadKey, people);
+        return people;
+      })
+      .finally(() => {
+        if (asking.get(threadKey)?.request === request) asking.delete(threadKey);
+      });
+    entry = { request, controller, waiting: 0 };
+    asking.set(threadKey, entry);
+  }
+  const current = entry;
+  current.waiting += 1;
+  signal?.addEventListener("abort", () => {
+    current.waiting -= 1;
+    if (current.waiting <= 0) {
+      current.controller.abort();
+      if (asking.get(threadKey) === current) asking.delete(threadKey);
+    }
+  });
+  return current.request;
 }
 
 export function fetchShareControl(threadKey: string) {
-  return getJson<MailShareControl>(`/api/mail/share?thread=${encodeURIComponent(threadKey)}`, "Couldn't load who can see this thread. Try again.").then((control) => {
-    controls.set(threadKey, control);
+  return getJson<MailShareControl>(`/api/mail/share?thread=${encodeURIComponent(threadKey)}`, SHARE_FAILED).then((control) => {
+    storeSharePeople(threadKey, control);
     return control;
   });
 }

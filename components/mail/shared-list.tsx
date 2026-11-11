@@ -71,7 +71,7 @@ export default function SharedList({
 
   return (
     <div className="flex flex-col pb-24 max-md:pb-[var(--floating-clearance)]">
-      <ul ref={list} role="listbox" aria-label="Shared conversations" className="flex flex-col gap-px px-2">
+      <ul ref={list} role="listbox" aria-label="Shared threads" className="flex flex-col gap-px px-2">
         {threads.map((thread) => {
           const active = thread.shareId === cursor;
           const shared = sharedByLabel(thread.owner);

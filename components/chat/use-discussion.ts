@@ -5,7 +5,7 @@ import { openDiscussionAction } from "@/app/(crm)/discussions";
 import type { ChatContextValue, ChatEditing } from "@/components/chat/chat-context";
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
-import { draftKey, newClientKey, writeDraft } from "@/lib/chat/client";
+import { draftKey, newClientKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
 import type { ChatLocation } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, type ChatAction, type ChatState, type ThreadState, type Timeline } from "@/lib/chat/timeline";
@@ -298,7 +298,9 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       if (!refused) return null;
       refusals.current.delete(message.clientKey!);
       dispatch({ type: "discard", message });
-      if (latest.current.subjectKey === asked && refused.canAdd) setNeedsShare({ ...refused, parentId: input.parentId, text: input.text, mentions: input.mentions });
+      if (latest.current.subjectKey !== asked) return error;
+      writeDraft(draftKey(viewer.id, draftSubjectKey(subject), input.parentId), { text: input.text, mentions: input.mentions });
+      if (refused.canAdd) setNeedsShare({ ...refused, parentId: input.parentId, text: input.text, mentions: input.mentions });
       return error;
     },
     [deliver, ensureConversation, subject, viewer],
@@ -307,11 +309,13 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
   const settleNeedsShare = useCallback(
     (added: boolean) => {
       const prompt = needsShare;
-      setNeedsShare(null);
       if (!prompt) return;
-      writeDraft(draftKey(viewer.id, draftSubjectKey(subject), prompt.parentId), added ? { text: "", mentions: [] } : { text: prompt.text, mentions: prompt.mentions });
+      setNeedsShare(null);
+      const key = draftKey(viewer.id, draftSubjectKey(subject), prompt.parentId);
+      const current = readDraft(key);
+      if (added) writeDraft(key, { text: "", mentions: [] });
       setComposerVersion((version) => version + 1);
-      if (added) void send({ parentId: prompt.parentId, text: prompt.text, mentions: prompt.mentions });
+      if (added && current.text.trim()) void send({ parentId: prompt.parentId, text: current.text, mentions: current.mentions });
     },
     [needsShare, send, subject, viewer.id],
   );

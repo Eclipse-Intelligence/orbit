@@ -17,6 +17,11 @@ function subscribeNothing() {
   return () => {};
 }
 
+export function caretToEnd(area: HTMLTextAreaElement | null | undefined) {
+  if (!area || document.activeElement !== area) return;
+  area.setSelectionRange(area.value.length, area.value.length);
+}
+
 export function focusComposer(from: Element | null) {
   const scope = from?.closest("[data-chat-room-pane], [data-chat-thread-pane]") ?? document;
   scope.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea")?.focus({ preventScroll: true });
@@ -100,6 +105,7 @@ export default function Composer({
       setFailure(error);
       setValue((current) => (current ? current : text));
       setMentions((current) => (current.length ? current : sent));
+      window.requestAnimationFrame(() => caretToEnd(input.current));
     });
   }
 
@@ -148,7 +154,7 @@ export default function Composer({
           disabled={!value.trim() || disabled || over}
           onMouseDown={(event) => event.preventDefault()}
           onClick={send}
-          className="max-md:size-11"
+          className={cn("max-md:size-11", compact && "pointer-coarse:size-11")}
         >
           <ArrowUpIcon aria-hidden className="size-3.5" />
         </Button>

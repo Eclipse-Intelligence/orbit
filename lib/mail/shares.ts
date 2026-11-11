@@ -1,5 +1,6 @@
 import { alertMembers } from "@/lib/alerts";
 import { chatBackground, listChatPeople } from "@/lib/crm/chat";
+import { listMembers } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
@@ -16,6 +17,7 @@ import {
   SHARE_PEOPLE_MAX,
   sharedThreadHref,
   type MailShareControl,
+  type MailSharePeople,
   type MailSharePerson,
   type SharedMessage,
   type SharedThread,
@@ -94,14 +96,30 @@ async function ownThread(actor: UserActor, key: string) {
   return { sourceId, tk };
 }
 
-export async function getThreadShare(actor: UserActor, key: string): Promise<MailShareControl> {
-  const { sourceId, tk } = await ownThread(actor, key);
+async function sharePeople(actor: UserActor, sourceId: string, tk: string): Promise<MailSharePeople> {
   const found = await query<{ id: string | null }>("select private.mail_share_for_thread($1, $2, $3) as id", [actor.userId, sourceId, tk]);
   const shareId = found.rows[0]?.id ?? null;
-  const people = shareId ? await readPeople(actor.userId, shareId) : [];
+  return { shareId, people: shareId ? await readPeople(actor.userId, shareId) : [] };
+}
+
+export async function getThreadSharePeople(actor: UserActor, key: string): Promise<MailSharePeople> {
+  const { sourceId, key: tk } = parseThreadKey(key);
+  return sharePeople(actor, sourceId, tk);
+}
+
+export async function getThreadShare(actor: UserActor, key: string): Promise<MailShareControl> {
+  const { sourceId, tk } = await ownThread(actor, key);
+  const [{ shareId, people }, everyone, members] = await Promise.all([sharePeople(actor, sourceId, tk), listChatPeople(actor), listMembers(actor).catch(() => [])]);
   const inside = new Set([actor.userId, ...people.map((person) => person.id)]);
-  const candidates = (await listChatPeople(actor)).filter((person) => !inside.has(person.id));
+  const roles = new Map(members.map((member) => [member.id, member.role]));
+  const candidates = everyone.filter((person) => !inside.has(person.id)).map((person) => ({ ...person, role: roles.get(person.id) ?? null }));
   return { shareId, people, candidates };
+}
+
+export async function ownSharedThreadKey(actor: UserActor, shareId: string): Promise<string | null> {
+  if (!isUuid(shareId)) return null;
+  const thread = await query<{ source_id: string; thread_key: string }>("select source_id, thread_key from private.mail_share_thread($1, $2)", [actor.userId, shareId.toLowerCase()]);
+  return thread.rows[0] ? threadKey(thread.rows[0].source_id, thread.rows[0].thread_key) : null;
 }
 
 export async function shareThread(actor: UserActor, key: string, userIds: unknown, options: { send?: PushSender } = {}): Promise<{ share: MailShareControl; added: string[] }> {

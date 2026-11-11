@@ -53,7 +53,8 @@ import UnsubscribeIcon from "@/public/assets/images/mail/unsubscribe.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import type { UnsubscribeMode } from "@/components/mail/unsubscribe-dialog";
 import { shareThreadAction } from "@/app/(crm)/mail/share-actions";
-import ShareControl, { useThreadShare } from "@/components/mail/share-control";
+import ShareControl, { shareLabel, useThreadShare } from "@/components/mail/share-control";
+import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 import ThreadNotes, { useNotesLayout } from "@/components/mail/thread-notes";
 import type { ChatPerson } from "@/lib/chat/types";
 
@@ -940,7 +941,9 @@ export default function ThreadReader({
 
   const shareKey = detail && target ? detail.key : null;
   const share = useThreadShare(shareKey);
-  const shareId = share.control?.shareId ?? null;
+  const shareId = share.state?.shareId ?? null;
+  const [shareOpen, setShareOpen] = useState(false);
+  const shareMembers = share.state?.people.filter((person) => !person.owner) ?? [];
   const body = useRef<HTMLDivElement>(null);
   const notesLayout = useNotesLayout(body, Boolean(shareId));
 
@@ -1065,10 +1068,17 @@ export default function ThreadReader({
               reason={!detail ? "Still loading" : inviteBusy ? "Reading the meeting" : null}
               onSelect={() => void makeInvite()}
             />
+            {shareKey && (
+              <DropdownMenuItem onSelect={() => setShareOpen(true)} className="sm:hidden pointer-coarse:py-2.5">
+                <UsersIcon aria-hidden className="size-3.5 shrink-0" />
+                <span className="flex-1">{shareMembers.length ? "Shared" : "Share"}</span>
+                <span className="sr-only">{shareLabel(shareMembers)}</span>
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         <span className="ml-auto flex min-w-0 items-center gap-2">
-          {shareKey && <ShareControl threadKey={shareKey} viewer={viewer} share={share} />}
+          {shareKey && <ShareControl threadKey={shareKey} viewer={viewer} share={share} open={shareOpen} onOpenChange={setShareOpen} />}
           {summary?.split && sender && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

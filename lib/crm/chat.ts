@@ -1227,7 +1227,8 @@ async function refuseOutsiders(db: Db, actor: UserActor, shareId: string, people
   const canAdd = ownerId === actor.userId && outside.every((id) => names.has(id));
   const who = outsiders.length === 1 ? outsiders[0].name : `${outsiders.length} people you tagged`;
   const verb = outsiders.length === 1 ? "isn't" : "aren't";
-  const ownerName = ownerId ? (names.get(ownerId) || "The owner").split(/\s+/)[0] : "The owner";
+  const ownerFirst = ownerId ? names.get(ownerId)?.split(/\s+/)[0] : undefined;
+  const ownerName = ownerFirst || "the owner";
   const message = canAdd ? `${who} ${verb} in this thread. Add them first.` : `${who} ${verb} in this thread. Only ${ownerName} can add people.`;
   throw new CrmError("conflict", message, 409, { field: "body", needsShare: { people: outsiders, canAdd } });
 }

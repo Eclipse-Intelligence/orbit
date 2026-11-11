@@ -4,8 +4,12 @@ import { SHORTCUT_BY_ID, comboMatches } from "@/lib/shortcuts";
 import type { SharedThreadSummary } from "@/lib/mail/share-types";
 import {
   SHARE_REACH,
+  NO_ACCESS,
   addPeopleQuestion,
+  candidateDetail,
   joinNames,
+  listForThread,
+  mailUrl,
   peopleLine,
   personFirstName,
   readShareParam,
@@ -114,5 +118,31 @@ describe("share shortcut", () => {
     assert.ok(share.combos!.some((combo) => comboMatches(combo, shiftS, true)));
     assert.ok(!share.combos!.some((combo) => comboMatches(combo, plainS, true)));
     assert.ok(!flag.combos!.some((combo) => comboMatches(combo, shiftS, true)));
+  });
+});
+
+describe("mail links and the Ask path", () => {
+  const shared = { view: "shared", account: null, query: "" };
+  const inbox = { view: "inbox", account: null, query: "" };
+
+  it("writes a share id as shared= in the Shared tab and a thread as thread= elsewhere", () => {
+    assert.equal(mailUrl(shared, MARK), `/mail?view=shared&shared=${MARK}`);
+    assert.equal(mailUrl(shared, null), "/mail?view=shared");
+    assert.equal(mailUrl({ ...shared, account: SAM }, MARK), `/mail?view=shared&account=${SAM}&shared=${MARK}`);
+    assert.equal(mailUrl(inbox, "source|conv"), "/mail?thread=source%7Cconv");
+    assert.equal(mailUrl({ view: "shared", account: null, query: "pricing" }, "source|conv"), "/mail?q=pricing&thread=source%7Cconv");
+  });
+
+  it("leaves the Shared tab before opening one of your own threads, from Ask or a push", () => {
+    assert.deepEqual(listForThread(shared), inbox);
+    assert.deepEqual(listForThread({ ...shared, account: SAM }), { ...inbox, account: SAM });
+    assert.equal(listForThread(inbox), null);
+    assert.equal(listForThread({ view: "shared", account: null, query: "pricing" }), null);
+  });
+
+  it("describes people to add by their role here, or their address when they aren't in this workspace", () => {
+    assert.equal(candidateDetail({ role: "admin", email: "sam@eclipse.test" }), "Admin");
+    assert.equal(candidateDetail({ role: null, email: "sam@eclipse.test" }), "sam@eclipse.test");
+    assert.equal(NO_ACCESS, "You no longer have access to this thread.");
   });
 });

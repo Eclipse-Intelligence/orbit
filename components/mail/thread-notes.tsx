@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import Button from "@/components/_ui/button";
 import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread } from "@/components/chat/discussion";
+import { caretToEnd } from "@/components/chat/composer";
 import { useDiscussion, type Discussion } from "@/components/chat/use-discussion";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import type { ChatPerson } from "@/lib/chat/types";
@@ -31,7 +32,18 @@ function AddPrompt({ discussion, onAdd }: { discussion: Discussion; onAdd: AddPe
   const prompt = discussion.needsShare;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const box = useRef<HTMLDivElement>(null);
   if (!prompt) return null;
+
+  function settle(added: boolean) {
+    const pane = box.current?.closest("[data-chat-room-pane]") ?? null;
+    discussion.settleNeedsShare(added);
+    window.setTimeout(() => {
+      const area = pane?.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea");
+      area?.focus({ preventScroll: true });
+      caretToEnd(area);
+    }, 0);
+  }
   const question = addPeopleQuestion(prompt.people);
 
   async function add() {
@@ -41,11 +53,11 @@ function AddPrompt({ discussion, onAdd }: { discussion: Discussion; onAdd: AddPe
     const problem = await onAdd(prompt.people.map((person) => person.id));
     setBusy(false);
     if (problem) setError(problem);
-    else discussion.settleNeedsShare(true);
+    else settle(true);
   }
 
   return (
-    <div role="group" aria-label={question} className="bg-surface-raised border-line-subtle flex flex-col gap-2 rounded-xl border px-3.5 py-3">
+    <div ref={box} role="group" aria-label={question} className="bg-surface-raised border-line-subtle flex flex-col gap-2 rounded-xl border px-3.5 py-3">
       <p role="status" className="ui-style text-foreground">
         {question}
       </p>
@@ -56,7 +68,7 @@ function AddPrompt({ discussion, onAdd }: { discussion: Discussion; onAdd: AddPe
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={() => discussion.settleNeedsShare(false)} className="pointer-coarse:h-11 pointer-coarse:px-4">
+        <Button variant="ghost" size="sm" onClick={() => settle(false)} className="pointer-coarse:h-11 pointer-coarse:px-4">
           Cancel
         </Button>
         <Button variant="primary" size="sm" onClick={() => void add()} disabled={busy} className="pointer-coarse:h-11 pointer-coarse:px-4">
