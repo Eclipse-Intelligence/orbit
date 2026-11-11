@@ -278,8 +278,8 @@ Every call except `pair`, `pair/redeem`, `me`, `lookup` and `revoke` names its w
 
 `POST /api/chat/hooks/<hook id>` posts into a Chat room from tools like Zapier or Make. It isn't part of the agent API and takes no Orbit token: a member of the room adds the hook in Room settings › Incoming webhooks and gets its URL and a secret, shown once (see Incoming webhooks in `docs/architecture.md`).
 
-- `Authorization: Bearer <secret>`. A secret in the query string is refused with `400`.
-- Body (JSON, up to 32 KB): `{ "text", "title"?, "url"? }` posts a card. `text` up to 10,000 characters, `title` up to 200, `url` http or https. Any other JSON is posted as a formatted block, cut at 8,000 characters.
+- `Authorization: Bearer <secret>`, checked before the body is parsed. A secret in the query string (`key`, `secret`, `token`) is refused with `400`.
+- Body (JSON, up to 32 KB): `{ "text", "title"?, "url"? }` posts a card. `text` up to 10,000 characters, `title` up to 200, `url` http or https without a username or password. Any other JSON (nested at most 20 levels) is posted as a formatted block, cut at 8,000 characters.
 - `Idempotency-Key` (optional): a repeat key for the same hook answers `200` with the first message's id and `"duplicate": true` and posts nothing.
-- `201` returns `{ "ok": true, "id", "conversationId", "duplicate": false }`. Errors are `{ "error" }`: `400` invalid body, `401` wrong or missing secret, `404` unknown or deleted hook, `409` paused, `413` too large, `429` more than 30 posts a minute from that hook. Every response is `no-store`.
-- Hook messages never carry mentions and never alert anyone; they count as unread like any other room message.
+- `201` returns `{ "ok": true, "id", "conversationId", "duplicate": false }`. Errors are `{ "error" }`: `400` invalid body, `401` wrong or missing secret, `404` unknown or deleted hook or archived room, `409` paused, `413` too large, `429` more than 30 posts a minute from that hook. Every response is `no-store`.
+- Hook messages never carry mentions and never alert anyone; they count as unread like any other room message. Any room member can delete one.

@@ -96,7 +96,7 @@ Chat is one place for talking to teammates, the same in every workspace. Rooms a
 
 ### Incoming webhooks
 
-A room can take posts from other tools, for example Google Analytics alerts into #alerts through Zapier or Make. Anyone in the room can set one up in Room settings › Incoming webhooks: press **Add incoming webhook**, name it, and copy the URL and the secret (shown once). Pause stops posts without losing the URL, Rotate secret replaces the secret at once, and Hold to delete removes the hook (its messages stay).
+A room can take posts from other tools, for example Google Analytics alerts into #alerts through Zapier or Make. Anyone in the room can set one up in Room settings › Incoming webhooks: press **Add incoming webhook**, name it, and copy the URL and the secret (shown once). Pause stops posts without losing the URL, Rotate secret replaces the secret at once, and Hold to delete deletes the hook (its messages stay). Anyone in the room can delete a hook message from its menu.
 
 Point the tool at the URL with a POST, a JSON body and the secret as a Bearer token. In Zapier use **Webhooks by Zapier › Custom Request**; in Make use **HTTP › Make a request**. Add an `Idempotency-Key` header with the trigger's id so retries don't post twice.
 
@@ -108,7 +108,7 @@ curl -X POST https://<your-orbit>/api/chat/hooks/<hook id> \
   -d '{"title": "Weekly traffic", "text": "Sessions 4,812, up 12% on last week.", "url": "https://analytics.google.com/"}'
 ```
 
-`text` is required (up to 10,000 characters); `title` (up to 200) and `url` (http or https) are optional. Any other JSON is shown as a formatted block. Bodies are capped at 32 KB and each hook can post 30 messages a minute. Hook messages never tag or alert anyone; they count as unread like any other message. Errors are JSON `{ "error" }`: 401 wrong or missing secret, 404 unknown or deleted hook, 409 paused, 413 too large, 429 too many posts.
+`text` is required (up to 10,000 characters); `title` (up to 200) and `url` (http or https) are optional. Any other JSON is shown as a formatted block. Bodies are capped at 32 KB and each hook can post 30 messages a minute. Hook messages never tag or alert anyone; they count as unread like any other message. Errors are JSON `{ "error" }`: 400 invalid body (not JSON, nested more than 20 levels, bad fields, or a secret in the URL), 401 wrong or missing secret, 404 unknown or deleted hook or archived room, 409 paused, 413 too large, 429 too many posts. The secret is checked before the body is read as JSON.
 
 ## Settings
 

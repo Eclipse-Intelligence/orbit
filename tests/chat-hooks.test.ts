@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { POST as hookRoute } from "@/app/api/chat/hooks/[id]/route";
 import type { ChatLiveEvent } from "@/lib/chat/types";
-import { chatWorkSettled, createRoom, listConversations, listMessages, postMessage } from "@/lib/crm/chat";
+import { chatWorkSettled, createRoom, deleteMessage, editMessage, listConversations, listMessages, openDm, postMessage } from "@/lib/crm/chat";
 import { createHook, deleteHook, listHooks, parseHookBody, postViaHook, rotateHookSecret, setHookPaused } from "@/lib/crm/chat-hooks";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
@@ -30,6 +30,12 @@ function bearer(secret: string) {
 
 async function json(response: Response) {
   return (await response.json()) as Record<string, unknown>;
+}
+
+async function deleteHookMessageAsMember(actor: UserActor, messageId: string) {
+  return getPool().query("select private.chat_delete_hook_message($1, $2)", [actor.userId, messageId]).catch((error: Error) => {
+    throw new CrmError("not_found", error.message, 404);
+  });
 }
 
 async function refused(work: Promise<unknown>, pattern: RegExp) {
@@ -184,6 +190,8 @@ describe("chat hooks", () => {
       assert.equal((await send("not-a-uuid", text, bearer(secret))).status, 404);
       assert.equal((await send("8f1c3a1e-0000-4000-8000-000000000000", text, bearer(secret))).status, 404);
       assert.equal((await send(hook.id, text, {}, `?key=${secret}`)).status, 400);
+      assert.equal((await send(hook.id, text, bearer(secret), `?secret=${secret}`)).status, 400);
+      assert.equal((await send(hook.id, text, bearer(secret), `?token=${secret}`)).status, 400);
       await setHookPaused(mark, hook.id, true);
       const paused = await send(hook.id, text, bearer(secret));
       assert.equal(paused.status, 409);
@@ -224,6 +232,9 @@ describe("chat hooks", () => {
       assert.equal((await send(hook.id, JSON.stringify({ text: "   " }), bearer(secret))).status, 400);
       assert.equal((await send(hook.id, JSON.stringify({ text: "x".repeat(10_001) }), bearer(secret))).status, 400);
       assert.equal((await send(hook.id, JSON.stringify({ text: "x", url: "javascript:alert(1)" }), bearer(secret))).status, 400);
+      assert.equal((await send(hook.id, JSON.stringify({ text: "x", url: "https://user:pass@example.com/" }), bearer(secret))).status, 400);
+      assert.equal((await send(hook.id, JSON.stringify({ text: "x", url: "https://user@example.com/" }), bearer(secret))).status, 400);
+      assert.equal((await send(hook.id, JSON.stringify({ text: "x", url: `https://example.com/${"é".repeat(400)}` }), bearer(secret))).status, 400);
       assert.equal((await send(hook.id, JSON.stringify({ text: "x", title: 5 }), bearer(secret))).status, 400);
       assert.equal((await send(hook.id, JSON.stringify({ text: "x", title: "t".repeat(201) }), bearer(secret))).status, 400);
       assert.equal((await sql("select count(*)::int as n from crm.chat_messages")).rows[0].n, 0);
@@ -242,6 +253,61 @@ describe("chat hooks", () => {
       assert.equal(long.block, true);
       assert.ok(long.text.length <= 8002);
       assert.ok(long.text.endsWith("\n…"));
+      const emoji = parseHookBody(JSON.stringify({ note: "\u{1F600}".repeat(9000) }));
+      assert.equal(Array.from(emoji.text).length, 8002);
+      assert.doesNotMatch(emoji.text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    });
+
+    it("checks the secret before parsing, and refuses deep JSON", async () => {
+      const { hook, secret } = await createHook(mark, roomId, "Deep");
+      const deep = `${"[".repeat(5000)}${"]".repeat(5000)}`;
+      assert.equal((await send(hook.id, deep, bearer("ohk_wrong"))).status, 401);
+      assert.equal((await send(hook.id, "not json", bearer("ohk_wrong"))).status, 401);
+      const refusedDeep = await send(hook.id, deep, bearer(secret));
+      assert.equal(refusedDeep.status, 400);
+      assert.match(String((await json(refusedDeep)).error), /20 levels/);
+      const nested = JSON.stringify({ a: { b: { c: [1, [2, [3]]] } } });
+      assert.equal((await send(hook.id, nested, bearer(secret))).status, 201);
+      let twentyOne: unknown = 1;
+      for (let level = 0; level < 21; level += 1) twentyOne = [twentyOne];
+      assert.equal((await send(hook.id, JSON.stringify(twentyOne), bearer(secret))).status, 400);
+    });
+
+    it("refuses hooks in archived rooms and DMs", async () => {
+      const archived = (await createRoom(mark, { name: "old", memberIds: [sam.userId] })).id;
+      const { hook, secret } = await createHook(mark, archived, "Old");
+      await sql("update crm.chat_conversations set archived_at = now() where id = $1", [archived]);
+      assert.equal((await send(hook.id, JSON.stringify({ text: "x" }), bearer(secret))).status, 404);
+      await refused(listHooks(mark, archived), /Room not found\./);
+      await refused(createHook(mark, archived, "New"), /Room not found\./);
+      const dm = await openDm(mark, sam.userId);
+      await refused(createHook(mark, dm.id, "DM hook"), /Room not found\./);
+      await assert.rejects(
+        queryAsUser(mark.userId, "insert into crm.chat_hooks (conversation_id, name, secret_hash, created_by) values ($1, 'x', repeat('a', 64), $2)", [dm.id, mark.userId]),
+        /row-level security/,
+      );
+    });
+
+    it("lets any member delete a hook message, but not edit it", async () => {
+      const { hook, secret } = await createHook(mark, roomId, "Spam");
+      const posted = await json(await send(hook.id, JSON.stringify({ text: "Buy now" }), bearer(secret)));
+      const id = String(posted.id);
+      await refused(editMessage(sam, id, "Edited"), /You can only change your own messages\./);
+      const edited = await queryAsUser(sam.userId, "update crm.chat_messages set body = 'x' where id = $1 returning id", [id]);
+      assert.deepEqual(edited, []);
+      await refused(deleteMessage(priya, id), /not found/i);
+      await assert.rejects(queryAsUser(sam.userId, "select private.chat_delete_hook_message($1, $2)", [sam.userId, id]), /permission denied/);
+      broadcasts = [];
+      assert.deepEqual(await deleteMessage(sam, id), { deleted: true });
+      const row = (await sql("select body, deleted_at, hook from crm.chat_messages where id = $1", [id])).rows[0];
+      assert.equal(row.body, "");
+      assert.ok(row.deleted_at);
+      await refused(deleteMessage(mark, id), /not found|deleted/i);
+      await chatWorkSettled();
+      const events = broadcasts.filter((message) => message.topic === personTopic(mark.userId)).map((message) => message.payload as ChatLiveEvent);
+      assert.ok(events.some((event) => event.type === "delete" && event.messageId === id));
+      const own = await postMessage(sam, { conversationId: roomId, body: "Mine" });
+      await refused(deleteHookMessageAsMember(mark, own.message.id), /not found/i);
     });
 
     it("dedupes on the Idempotency-Key header", async () => {
@@ -269,15 +335,15 @@ describe("chat hooks", () => {
     it("rate limits each hook, after the dedupe check", async () => {
       const { hook, secret } = await createHook(mark, roomId, "Burst");
       const other = await createHook(mark, roomId, "Calm");
-      const payload = (text: string) => parseHookBody(JSON.stringify({ text }));
+      const payload = (text: string) => JSON.stringify({ text });
       const options = { perMinute: 2, windowSeconds: 3600 };
       const authorization = `Bearer ${secret}`;
-      await postViaHook({ hookId: hook.id, authorization, idempotencyKey: "a", payload: payload("1") }, options);
-      await postViaHook({ hookId: hook.id, authorization, payload: payload("2") }, options);
-      await refused(postViaHook({ hookId: hook.id, authorization, payload: payload("3") }, options), /30 messages a minute/);
-      const repeat = await postViaHook({ hookId: hook.id, authorization, idempotencyKey: "a", payload: payload("1") }, options);
+      await postViaHook({ hookId: hook.id, authorization, idempotencyKey: "a", body: payload("1") }, options);
+      await postViaHook({ hookId: hook.id, authorization, body: payload("2") }, options);
+      await refused(postViaHook({ hookId: hook.id, authorization, body: payload("3") }, options), /30 messages a minute/);
+      const repeat = await postViaHook({ hookId: hook.id, authorization, idempotencyKey: "a", body: payload("1") }, options);
       assert.equal(repeat.duplicate, true);
-      await postViaHook({ hookId: other.hook.id, authorization: `Bearer ${other.secret}`, payload: payload("calm") }, options);
+      await postViaHook({ hookId: other.hook.id, authorization: `Bearer ${other.secret}`, body: payload("calm") }, options);
       await sql("update private.rate_limit_buckets set request_count = 1000, window_start = to_timestamp(floor(extract(epoch from clock_timestamp()) / 60) * 60) where bucket_key = $1", [
         `chat-hook:${hook.id}`,
       ]);

@@ -31,7 +31,7 @@ export function HookCardBody({ card, body, className }: { card: ChatHookCard; bo
         <pre className="text-soft max-h-[24em] overflow-auto font-mono text-[12px] leading-[18px] whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</pre>
       ) : (
         <p className="ui-style text-soft whitespace-pre-wrap [overflow-wrap:anywhere]">
-          <LinkedText text={body} markdown={false} />
+          <LinkedText text={body} />
         </p>
       )}
       {card.url && (

@@ -13,6 +13,7 @@ export const HOOK_POSTS_PER_MINUTE = 30;
 export const HOOK_TITLE_MAX = 200;
 export const HOOK_URL_MAX = 2000;
 export const HOOK_BLOCK_MAX = 8000;
+export const HOOK_DEPTH_MAX = 20;
 
 type Stamp = Date | string;
 
@@ -145,24 +146,40 @@ function cleanUrl(value: unknown) {
   try {
     parsed = new URL(text);
   } catch {}
-  if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:") || text.length > HOOK_URL_MAX) {
-    throw new CrmError("invalid_input", "url must be an http or https link up to 2,000 characters.", 400, { field: "url" });
+  const normal = parsed?.toString() ?? "";
+  if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.username || parsed.password || normal.length > HOOK_URL_MAX) {
+    throw new CrmError("invalid_input", "url must be an http or https link up to 2,000 characters, without a username or password.", 400, { field: "url" });
   }
-  return parsed.toString();
+  return normal;
+}
+
+function tooDeep(value: unknown) {
+  const stack: [unknown, number][] = [[value, 1]];
+  while (stack.length > 0) {
+    const [item, depth] = stack.pop()!;
+    if (!item || typeof item !== "object") continue;
+    if (depth > HOOK_DEPTH_MAX) return true;
+    for (const child of Object.values(item)) stack.push([child, depth + 1]);
+  }
+  return false;
 }
 
 function block(value: unknown) {
   const pretty = cleanText(JSON.stringify(value, null, 2) ?? "");
-  return pretty.length > HOOK_BLOCK_MAX ? `${pretty.slice(0, HOOK_BLOCK_MAX)}\n…` : pretty;
+  const points = Array.from(pretty);
+  return points.length > HOOK_BLOCK_MAX ? `${points.slice(0, HOOK_BLOCK_MAX).join("")}\n…` : pretty;
 }
+
+const NOT_JSON = "Send a JSON body, for example {\"text\": \"Hello\"}.";
 
 export function parseHookBody(raw: string): HookPayload {
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    throw new CrmError("invalid_input", "Send a JSON body, for example {\"text\": \"Hello\"}.", 400);
+    throw new CrmError("invalid_input", NOT_JSON, 400);
   }
+  if (tooDeep(value)) throw new CrmError("invalid_input", `Keep JSON nesting to ${HOOK_DEPTH_MAX} levels.`, 400);
   if (value && typeof value === "object" && !Array.isArray(value) && typeof (value as { text?: unknown }).text === "string") {
     const input = value as { text: string; title?: unknown; url?: unknown };
     const text = cleanText(input.text);
@@ -172,8 +189,13 @@ export function parseHookBody(raw: string): HookPayload {
     if (title.length > HOOK_TITLE_MAX) throw new CrmError("invalid_input", "Keep title to 200 characters.", 400, { field: "title" });
     return { text, title: title || null, url: cleanUrl(input.url), block: false };
   }
-  const text = block(value);
-  if (!text) throw new CrmError("invalid_input", "Send a JSON body, for example {\"text\": \"Hello\"}.", 400);
+  let text: string;
+  try {
+    text = block(value);
+  } catch {
+    throw new CrmError("invalid_input", NOT_JSON, 400);
+  }
+  if (!text) throw new CrmError("invalid_input", NOT_JSON, 400);
   return { text, title: null, url: null, block: true };
 }
 
@@ -196,20 +218,25 @@ const REFUSALS = {
 };
 
 export async function postViaHook(
-  input: { hookId: string; authorization: string | null; idempotencyKey?: string | null; payload: HookPayload },
+  input: { hookId: string; authorization: string | null; idempotencyKey?: string | null; body: string },
   options: { perMinute?: number; windowSeconds?: number } = {},
 ): Promise<HookPostResult> {
   if (!isUuid(input.hookId)) throw REFUSALS.not_found();
   const secret = bearerSecret(input.authorization);
+  const hash = secret ? hashToken(secret) : null;
+  const auth = await query<{ status: PostRow["status"] }>("select private.chat_hook_auth($1, $2) as status", [input.hookId.toLowerCase(), hash]);
+  const status = auth.rows[0]?.status ?? "not_found";
+  if (status !== "ok") throw REFUSALS[status]();
+  const payload = parseHookBody(input.body);
   const result = await query<PostRow>(
     "select status, message_id, conversation_id, author_name, body, hook, created_at, duplicate, member_ids::text[] as member_ids from private.chat_hook_post($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     [
       input.hookId.toLowerCase(),
-      secret ? hashToken(secret) : null,
-      input.payload.title,
-      input.payload.text,
-      input.payload.url,
-      input.payload.block,
+      hash,
+      payload.title,
+      payload.text,
+      payload.url,
+      payload.block,
       idempotencyKey(input.idempotencyKey ?? null),
       options.perMinute ?? HOOK_POSTS_PER_MINUTE,
       options.windowSeconds ?? 60,

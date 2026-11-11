@@ -1,4 +1,4 @@
-import { HOOK_BODY_MAX_BYTES, parseHookBody, postViaHook } from "@/lib/crm/chat-hooks";
+import { HOOK_BODY_MAX_BYTES, postViaHook } from "@/lib/crm/chat-hooks";
 import { CrmError } from "@/lib/crm/errors";
 
 export const dynamic = "force-dynamic";
@@ -38,12 +38,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (url.searchParams.has("key") || url.searchParams.has("secret") || url.searchParams.has("token")) {
       throw new CrmError("invalid_input", "Send the secret as Authorization: Bearer <secret>, not in the URL.", 400);
     }
-    const payload = parseHookBody(await cappedText(request));
+    const body = await cappedText(request);
     const result = await postViaHook({
       hookId: id,
       authorization: request.headers.get("authorization"),
       idempotencyKey: request.headers.get("idempotency-key"),
-      payload,
+      body,
     });
     return Response.json({ ok: true, ...result }, { status: result.duplicate ? 200 : 201, headers: NO_STORE });
   } catch (error) {

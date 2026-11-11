@@ -68,7 +68,7 @@ create policy chat_hooks_delete on crm.chat_hooks
 revoke all on crm.chat_hooks from anon, authenticated, crm_agent;
 grant select (id, conversation_id, name, created_by, paused_at, last_used_at, created_at) on crm.chat_hooks to authenticated;
 grant insert (conversation_id, name, secret_hash, created_by) on crm.chat_hooks to authenticated;
-grant update (name, secret_hash, paused_at) on crm.chat_hooks to authenticated;
+grant update (secret_hash, paused_at) on crm.chat_hooks to authenticated;
 grant delete on crm.chat_hooks to authenticated;
 
 create or replace function private.chat_hook_post(
@@ -125,9 +125,6 @@ begin
     return;
   end if;
   if v_key is not null then
-    if length(v_key) > 100 then
-      v_key := md5(v_key);
-    end if;
     select m.id into v_id from crm.chat_messages m where m.via_hook_id = v_hook.id and m.client_key = v_key;
     if v_id is not null then
       return query
@@ -160,5 +157,56 @@ $$;
 
 revoke all on function private.chat_hook_post(uuid, text, text, text, text, boolean, text, integer, integer) from public;
 grant execute on function private.chat_hook_post(uuid, text, text, text, text, boolean, text, integer, integer) to crm_app;
+
+create or replace function private.chat_hook_auth(p_hook uuid, p_secret_hash text)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case
+    when h.id is null then 'not_found'
+    when p_secret_hash is null or h.secret_hash <> p_secret_hash then 'unauthorised'
+    when h.paused_at is not null then 'paused'
+    else 'ok'
+  end
+  from (select 1) one
+  left join lateral (
+    select x.id, x.secret_hash, x.paused_at
+    from crm.chat_hooks x
+    join crm.chat_conversations c on c.id = x.conversation_id and c.kind = 'room' and c.archived_at is null
+    where x.id = p_hook
+  ) h on true
+$$;
+
+revoke all on function private.chat_hook_auth(uuid, text) from public;
+grant execute on function private.chat_hook_auth(uuid, text) to crm_app;
+
+create or replace function private.chat_delete_hook_message(p_user uuid, p_message uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_conversation uuid;
+begin
+  select m.conversation_id into v_conversation
+    from crm.chat_messages m
+    join crm.chat_conversations c on c.id = m.conversation_id and c.kind = 'room' and c.archived_at is null
+    where m.id = p_message and m.hook is not null and m.deleted_at is null
+      and exists (select 1 from crm.chat_members cm where cm.conversation_id = m.conversation_id and cm.user_id = p_user)
+    for update of m;
+  if v_conversation is null then
+    raise exception 'Message not found.' using errcode = 'P0002';
+  end if;
+  update crm.chat_messages m set deleted_at = now() where m.id = p_message;
+  return v_conversation;
+end;
+$$;
+
+revoke all on function private.chat_delete_hook_message(uuid, uuid) from public;
+grant execute on function private.chat_delete_hook_message(uuid, uuid) to crm_app;
 
 reset lock_timeout;

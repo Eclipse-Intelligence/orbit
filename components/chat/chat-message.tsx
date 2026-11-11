@@ -124,7 +124,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const mentionsMe = !own && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
   const canReply = !inThread && !local && !deleted;
   const canEdit = own && !local && !deleted;
-  const canDelete = own && !deleted;
+  const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted;
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {

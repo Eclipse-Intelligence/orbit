@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import CopyButton from "@/components/_ui/copy-button";
@@ -16,7 +16,9 @@ import { cn } from "@/lib/utils";
 import ChevronIcon from "@/public/assets/images/_common/chevron-right.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
-const FIELD = "border-line-strong bg-surface-field text-soft flex h-8 min-w-0 flex-1 items-center truncate rounded-lg border px-2.5 font-mono text-[12px] max-md:h-11";
+const FIELD = "border-line-strong bg-surface-field text-soft flex min-w-0 flex-1 items-center rounded-lg border px-2.5 font-mono text-[12px]";
+
+export type HookSecrets = { secrets: Record<string, string>; set: (hookId: string, secret: string | null) => void };
 
 function useOrigin() {
   return useSyncExternalStore(
@@ -24,6 +26,23 @@ function useOrigin() {
     () => window.location.origin,
     () => "",
   );
+}
+
+function useRefreshTick(open: boolean) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => {
+      if (document.visibilityState === "visible") setTick((value) => value + 1);
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [open]);
+  return tick;
 }
 
 function lastPost(iso: string | null, now: number) {
@@ -82,7 +101,7 @@ function HookRow({
       {expanded && (
         <div id={panel} className="flex flex-col gap-2 px-3.5 pb-3.5">
           <div className="flex items-center gap-2">
-            <code className={FIELD} title={url}>
+            <code className={cn(FIELD, "h-8 truncate max-md:h-11")} title={url}>
               {url}
             </code>
             <CopyButton text={url} label="Copy URL" className="max-md:h-11" />
@@ -91,7 +110,7 @@ function HookRow({
             <div className="flex flex-col gap-2 rounded-xl border border-(--tag-amber-border) bg-(--tag-amber-bg) p-3">
               <span className="ui-style font-medium text-(--tag-amber-text)">Secret</span>
               <div className="flex items-center gap-2">
-                <code className={cn(FIELD, "bg-black/25")}>{secret}</code>
+                <code className={cn(FIELD, "min-h-8 bg-black/25 py-1.5 leading-[18px] break-all")}>{secret}</code>
                 <CopyButton text={secret} label="Copy secret" className="max-md:h-11" />
               </div>
               <span className="caption-style text-soft">
@@ -103,11 +122,11 @@ function HookRow({
             <Button variant="ghost" size="sm" disabled={busy} onClick={onPause} aria-label={`${paused ? "Resume" : "Pause"} ${hook.name}`} className="max-md:h-11">
               {paused ? "Resume" : "Pause"}
             </Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setRotating(true)} className="max-md:h-11">
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setRotating(true)} aria-label={`Rotate secret for ${hook.name}`} className="max-md:h-11">
               Rotate secret
             </Button>
             <HoldButton onConfirm={onDelete} disabled={busy} className="ml-auto max-md:h-11">
-              Hold to delete
+              Hold to delete<span className="sr-only"> {hook.name}</span>
             </HoldButton>
           </div>
         </div>
@@ -124,23 +143,23 @@ function HookRow({
   );
 }
 
-export default function RoomHooks({ open, roomId, roomName }: { open: boolean; roomId: string; roomName: string }) {
+export default function RoomHooks({ open, roomId, roomName, secrets }: { open: boolean; roomId: string; roomName: string; secrets: HookSecrets }) {
   const ids = { heading: useId(), name: useId() };
   const [hooks, setHooks] = useState<ChatHook[] | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [secret, setSecret] = useState<{ hookId: string; value: string } | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const mutations = useRef(0);
+  const tick = useRefreshTick(open);
   const [seen, setSeen] = useState({ open, roomId });
   if (seen.open !== open || seen.roomId !== roomId) {
     setSeen({ open, roomId });
     setAdding(false);
     setName("");
-    setExpanded(null);
-    setSecret(null);
+    setExpanded({});
     setError(null);
     if (seen.roomId !== roomId) setHooks(null);
   }
@@ -148,27 +167,30 @@ export default function RoomHooks({ open, roomId, roomName }: { open: boolean; r
   useEffect(() => {
     if (!open) return;
     let live = true;
+    const started = mutations.current;
     void listHooksAction(roomId)
       .then((result) => {
-        if (!live) return;
+        if (!live || started !== mutations.current) return;
         if ("hooks" in result) {
           setHooks(result.hooks);
           setLoaded(roomId);
+          setError(null);
         } else setError(result.error);
       })
       .catch(() => {
-        if (live) setError("Couldn't load webhooks. Try again.");
+        if (live && started === mutations.current) setError("Couldn't load webhooks. Try again.");
       });
     return () => {
       live = false;
     };
-  }, [open, roomId]);
+  }, [open, roomId, tick]);
 
   function replace(hook: ChatHook) {
     setHooks((current) => (current ?? []).map((item) => (item.id === hook.id ? hook : item)));
   }
 
   async function run<T>(work: () => Promise<T>, fallback: string, done: (result: T) => void) {
+    mutations.current += 1;
     setBusy(true);
     setError(null);
     try {
@@ -176,6 +198,7 @@ export default function RoomHooks({ open, roomId, roomName }: { open: boolean; r
     } catch {
       setError(fallback);
     } finally {
+      mutations.current += 1;
       setBusy(false);
     }
   }
@@ -187,9 +210,10 @@ export default function RoomHooks({ open, roomId, roomName }: { open: boolean; r
       "Couldn't add the webhook. Try again.",
       (result) => {
         if (!("hook" in result)) return setError(result.error);
-        setHooks((current) => [...(current ?? []), result.hook]);
-        setSecret({ hookId: result.hook.id, value: result.secret });
-        setExpanded(result.hook.id);
+        secrets.set(result.hook.id, result.secret);
+        setHooks((current) => [...(current ?? []).filter((item) => item.id !== result.hook.id), result.hook]);
+        setLoaded(roomId);
+        setExpanded((current) => ({ ...current, [result.hook.id]: true }));
         setAdding(false);
         setName("");
       },
@@ -212,8 +236,9 @@ export default function RoomHooks({ open, roomId, roomName }: { open: boolean; r
       "Couldn't rotate the secret. Try again.",
       (result) => {
         if (!("hook" in result)) return setError(result.error);
+        secrets.set(result.hook.id, result.secret);
         replace(result.hook);
-        setSecret({ hookId: result.hook.id, value: result.secret });
+        setExpanded((current) => ({ ...current, [result.hook.id]: true }));
       },
     );
   }
@@ -225,7 +250,7 @@ export default function RoomHooks({ open, roomId, roomName }: { open: boolean; r
       (result) => {
         if (!("deleted" in result)) return setError(result.error);
         setHooks((current) => (current ?? []).filter((item) => item.id !== hook.id));
-        if (secret?.hookId === hook.id) setSecret(null);
+        secrets.set(hook.id, null);
       },
     );
   }
@@ -285,10 +310,10 @@ export default function RoomHooks({ open, roomId, roomName }: { open: boolean; r
               key={hook.id}
               hook={hook}
               roomName={roomName}
-              expanded={expanded === hook.id}
-              secret={secret?.hookId === hook.id ? secret.value : null}
+              expanded={expanded[hook.id] ?? Boolean(secrets.secrets[hook.id])}
+              secret={secrets.secrets[hook.id] ?? null}
               busy={busy}
-              onToggle={() => setExpanded((current) => (current === hook.id ? null : hook.id))}
+              onToggle={() => setExpanded((current) => ({ ...current, [hook.id]: !(current[hook.id] ?? Boolean(secrets.secrets[hook.id])) }))}
               onPause={() => pause(hook)}
               onRotate={() => rotate(hook)}
               onDelete={() => remove(hook)}

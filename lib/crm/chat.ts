@@ -982,8 +982,28 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
   }
 }
 
+async function deleteHookMessage(actor: UserActor, messageId: string): Promise<{ deleted: true }> {
+  try {
+    const result = await query<{ conversation_id: string }>("select private.chat_delete_hook_message($1, $2) as conversation_id", [actor.userId, messageId]);
+    const conversationId = result.rows[0].conversation_id;
+    await withActor(actor, async (db) => {
+      const members = await memberIds(db, conversationId);
+      broadcastAfterCommit(
+        db,
+        members.map((member) => member.user_id),
+        { type: "delete", conversationId, messageId, parentId: null, root: null },
+      );
+    });
+    return { deleted: true as const };
+  } catch (error) {
+    chatFailure(error);
+  }
+}
+
 export async function deleteMessage(actor: UserActor, id: string): Promise<{ deleted: true }> {
   const messageId = checkId(id, "message");
+  const target = await withActor(actor, (db) => readMessage(db, messageId, actor.userId));
+  if (target?.hook) return deleteHookMessage(actor, messageId);
   try {
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
