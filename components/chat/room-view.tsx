@@ -17,7 +17,7 @@ const HEADER_AVATARS = 4;
 
 function firstUnread(messages: ChatMessage[], lastReadAt: string | null, viewerId: string) {
   if (!lastReadAt) return null;
-  return messages.find((message) => !isLocal(message) && !message.deletedAt && message.author.id !== viewerId && message.createdAt > lastReadAt)?.id ?? null;
+  return messages.find((message) => !isLocal(message) && !message.deletedAt && (message.author.id !== viewerId || message.via) && message.createdAt > lastReadAt)?.id ?? null;
 }
 
 export function useVisible() {

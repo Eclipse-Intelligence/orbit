@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
-import { chatWorkSettled, createRoom, leaveRoom, listMessages, postMessage } from "@/lib/crm/chat";
+import { chatWorkSettled, createRoom, deleteMessage, editMessage, leaveRoom, listConversations, listMessages, markConversationRead, postMessage } from "@/lib/crm/chat";
 import { createCompany } from "@/lib/crm/companies";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import type { WorkflowDefinition, WorkflowNode } from "@/lib/workflows/definition";
-import { chatPostKey, runWorkflowTick } from "@/lib/workflows/engine";
-import { createWorkflow, getRunSteps, listNotifications, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
+import { chatBody, chatPostKey, runWorkflowTick } from "@/lib/workflows/engine";
+import { createWorkflow, getRunSteps, getWorkflow, listNotifications, saveWorkflow, setWorkflowStatus, setWorkflowTemplate, settleChatRooms, startRun } from "@/lib/workflows/store";
 import { createUser, resetDatabase } from "./helpers";
 
 async function sql(text: string, values: unknown[] = []) {
   return getAdminPool().query(text, values);
+}
+
+function aiReply(reply: Record<string, unknown>): typeof fetch {
+  return async (_input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    return Response.json({ model: body.model, choices: [{ message: { role: "assistant", content: JSON.stringify(reply) }, finish_reason: "stop" }] });
+  };
 }
 
 function definition(nodes: Omit<WorkflowNode, "position">[], edges: WorkflowDefinition["edges"]): WorkflowDefinition {
@@ -41,6 +48,7 @@ describe("Post to Chat workflow step", () => {
   });
 
   beforeEach(async () => {
+    process.env.LLM_API_KEY = "test-llm-key";
     setLiveTesting({ batch: async () => undefined });
     await sql("truncate crm.push_log, crm.notifications");
   });
@@ -51,6 +59,7 @@ describe("Post to Chat workflow step", () => {
   });
 
   after(async () => {
+    delete process.env.LLM_API_KEY;
     await getPool().end();
   });
 
@@ -87,7 +96,7 @@ describe("Post to Chat workflow step", () => {
     assert.equal((step.output as { room: string }).room, "#sales");
     assert.match((step.output as { url: string }).url, new RegExp(`/chat/${roomId}\\?message=${posted.id}$`));
     await chatWorkSettled();
-    assert.ok((await sql("select title from crm.notifications where user_id = $1", [sam.userId])).rows.some((row) => row.title === "Mark mentioned you in #sales"));
+    assert.ok((await sql("select title from crm.notifications where user_id = $1", [sam.userId])).rows.some((row) => row.title === "Mark via Won deals mentioned you in #sales"));
 
     await sql("delete from crm.workflows where id = $1", [workflowId]);
     const kept = (await roomMessages(sam)).find((message) => message.id === posted.id)!;
@@ -112,29 +121,103 @@ describe("Post to Chat workflow step", () => {
     assert.equal((steps.filter((step) => step.stepId === "post_to_chat_1").at(-1)!.output as { duplicate: boolean }).duplicate, true);
   });
 
-  it("posts once per loop item", async () => {
+  it("posts once per item in each of two loops that share the step", async () => {
     const workflow = await createWorkflow(mark, { name: "Each item" });
     await saveWorkflow(mark, workflow.id, {
       definition: definition(
         [
-          { id: "loop_1", type: "loop", config: { items: "{{company.name}}", limit: 5 } },
-          { id: "post_to_chat_1", type: "post_to_chat", config: { roomId, roomName: "sales", body: "Item {{loop.index}}" } },
+          { id: "ai_1", type: "ai", config: { model: "claude-haiku-5-5", prompt: "List things", outputs: [{ key: "items", type: "list", description: "" }] } },
+          { id: "loop_1", type: "loop", config: { items: "{{steps.ai_1.items}}", limit: 5 } },
+          { id: "loop_2", type: "loop", config: { items: "{{steps.ai_1.items}}", limit: 5 } },
+          { id: "post_to_chat_1", type: "post_to_chat", config: { roomId, roomName: "sales", body: "Item {{loop.item}}" } },
         ],
         [
-          { source: "trigger", handle: "out", target: "loop_1" },
+          { source: "trigger", handle: "out", target: "ai_1" },
+          { source: "ai_1", handle: "out", target: "loop_1" },
           { source: "loop_1", handle: "each", target: "post_to_chat_1" },
+          { source: "loop_1", handle: "done", target: "loop_2" },
+          { source: "loop_2", handle: "each", target: "post_to_chat_1" },
         ],
       ),
     });
     await setWorkflowStatus(mark, workflow.id, "active");
-    const started = await startRun(mark, workflow.id, { test: false, record: { type: "company", id: companyId } });
+    const started = await startRun(mark, workflow.id, { test: false, record: { type: "company", id: companyId }, fetchImpl: aiReply({ items: ["a", "b", "c"] }) });
     assert.equal(started.status, "succeeded");
-    const keys = (await sql("select client_key from crm.chat_messages where via_workflow_id = $1", [workflow.id])).rows.map((row) => row.client_key);
-    assert.deepEqual(keys, [chatPostKey(started.runId, "post_to_chat_1", [{ index: 0 }])]);
-    assert.notEqual(chatPostKey(started.runId, "post_to_chat_1", [{ index: 0 }]), chatPostKey(started.runId, "post_to_chat_1", [{ index: 1 }]));
-    const long = chatPostKey(started.runId, "a_very_long_step_identifier_of_forty_ch", Array.from({ length: 12 }, (_, index) => ({ index: index + 10 })));
+    const rows = (await sql("select client_key, body from crm.chat_messages where via_workflow_id = $1 order by created_at", [workflow.id])).rows;
+    assert.deepEqual(
+      rows.map((row) => row.body),
+      ["Item a", "Item b", "Item c", "Item a", "Item b", "Item c"],
+    );
+    assert.deepEqual(
+      rows.map((row) => row.client_key),
+      [0, 1, 2].map((index) => chatPostKey(started.runId, "post_to_chat_1", [{ id: "loop_1", index }])).concat(
+        [0, 1, 2].map((index) => chatPostKey(started.runId, "post_to_chat_1", [{ id: "loop_2", index }])),
+      ),
+    );
+    const long = chatPostKey(started.runId, "a_very_long_step_identifier_of_forty_ch", Array.from({ length: 12 }, (_, index) => ({ id: "loop_1", index: index + 10 })));
     assert.ok(long.length <= 100);
     assert.match(long, /^wf:[A-Za-z0-9_-]{43}$/);
+  });
+
+  it("counts a workflow post as unread for its owner and alerts them when it tags them", async () => {
+    await markConversationRead(mark, roomId);
+    const workflowId = await flow("Tag me", { roomId, roomName: "sales", body: `Look at {{company.name}}, @[Mark Ridgeon](member:${mark.userId})` });
+    assert.equal((await startRun(mark, workflowId, { test: false, record: { type: "company", id: companyId } })).status, "succeeded");
+    const posted = (await roomMessages(mark)).at(-1)!;
+    const sidebar = (await listConversations(mark)).conversations.find((conversation) => conversation.id === roomId)!;
+    assert.equal(sidebar.unread, 1);
+    assert.equal(sidebar.mentions, 1);
+    assert.equal((await listMessages(mark, roomId)).firstUnreadId, posted.id);
+    await chatWorkSettled();
+    assert.ok((await sql("select title from crm.notifications where user_id = $1", [mark.userId])).rows.some((row) => row.title === "Mark via Tag me mentioned you in #sales"));
+    await assert.rejects(editMessage(mark, posted.id, "Changed"), /Messages sent by a workflow can't be edited\./);
+    await deleteMessage(mark, posted.id);
+  });
+
+  it("only lets tags typed in the template alert", () => {
+    const typed = "member:11111111-1111-4111-8111-111111111111";
+    const data = "member:22222222-2222-4222-8222-222222222222";
+    assert.equal(chatBody(`Hi @[Sam](${typed}) about {{email.text}}`, { email: { text: `ask @[Priya](${data}) and @[Sam](${typed})` } }), `Hi @[Sam](${typed}) about ask @Priya and @[Sam](${typed})`);
+  });
+
+  it("picks the room linked to this workspace when names repeat, and asks to pick otherwise", async () => {
+    await createRoom(mark, { name: "ops", memberIds: [sam.userId] });
+    const linked = (await createRoom(mark, { name: "ops", workspaceId: mark.workspaceId, memberIds: [sam.userId] })).id;
+    const ops = await flow("Ops", { roomName: "ops", body: "To the linked one" });
+    assert.equal((await startRun(mark, ops, { test: false, record: { type: "company", id: companyId } })).status, "succeeded");
+    assert.ok((await roomMessages(mark, linked)).some((message) => message.body === "To the linked one"));
+
+    await createRoom(mark, { name: "dupe" });
+    await createRoom(mark, { name: "dupe" });
+    const dupe = await flow("Dupe", { roomName: "dupe", body: "Which one?" });
+    const failed = await startRun(mark, dupe, { test: false, record: { type: "company", id: companyId } });
+    assert.equal(failed.status, "failed");
+    assert.match((await getRunSteps(mark, failed.runId)).run.error ?? "", /Couldn't post to Chat: more than one of your rooms is called #dupe\. Pick it in the step\./);
+  });
+
+  it("clears the room id when only the name changes, and hides rooms from everyone but the owner", async () => {
+    const workflowId = await flow("Renamed", { roomId, roomName: "sales", body: "Hi" });
+    const step = (definition: WorkflowDefinition) => definition.nodes.find((node) => node.id === "post_to_chat_1")!.config;
+    const current = (await getWorkflow(mark, workflowId)).definition;
+    const renamed = settleChatRooms(current, { ...current, nodes: current.nodes.map((node) => ({ ...node, config: { ...node.config, roomName: "ops" } })) });
+    assert.deepEqual(step(renamed), { roomId: "", roomName: "ops", body: "Hi" });
+    const moved = settleChatRooms(current, { ...current, nodes: current.nodes.map((node) => ({ ...node, config: { ...node.config, roomId: "x", roomName: "ops" } })) });
+    assert.equal(step(moved).roomId, "x");
+    assert.equal(step(settleChatRooms(current, current)).roomId, roomId);
+
+    await setWorkflowTemplate(mark, workflowId, true);
+    assert.deepEqual(step((await getWorkflow(sam, workflowId)).definition), { roomId: "", roomName: "", body: "Hi" });
+    assert.equal(step((await getWorkflow(mark, workflowId)).definition).roomName, "sales");
+  });
+
+  it("keeps ordinary posting working if the workflow column grant goes missing", async () => {
+    await sql("revoke insert (via_workflow_id) on crm.chat_messages from authenticated");
+    try {
+      const posted = await postMessage(sam, { conversationId: roomId, body: "Still fine" });
+      assert.equal(posted.message.via, null);
+    } finally {
+      await sql("grant insert (via_workflow_id) on crm.chat_messages to authenticated");
+    }
   });
 
   it("skips posting in test runs", async () => {

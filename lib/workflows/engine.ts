@@ -31,7 +31,8 @@ import { completeJson, LlmError } from "@/lib/llm";
 import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
 import { siteOrigin } from "@/lib/site-url";
 import { alertLink } from "@/lib/crm/workspaces";
-import { findMyRoom, postMessage } from "@/lib/crm/chat";
+import { findMyRooms, postMessage } from "@/lib/crm/chat";
+import { mentionsIn, splitMentions } from "@/lib/mentions";
 import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX } from "@/lib/chat/types";
 import { appTimeZone } from "@/lib/time";
 import { dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
@@ -817,23 +818,47 @@ async function assigneeFor(ctx: Ctx, value: unknown) {
 
 const SIDE_EFFECTS = new Set(["create_task", "add_note", "update_record", "board", "notify", "post_to_chat", "send_email", "linear_issue", "upsert_record", "webhook"]);
 
-export function chatPostKey(runId: string, stepId: string, frames: Pick<LoopFrame, "index">[] = []) {
-  const key = ["wf", runId, stepId, ...(frames.length ? [frames.map((frame) => frame.index).join(".")] : [])].join(":");
+export function chatPostKey(runId: string, stepId: string, frames: Pick<LoopFrame, "id" | "index">[] = []) {
+  const key = ["wf", runId, stepId, ...frames.map((frame) => `${frame.id}.${frame.index}`)].join(":");
   return key.length <= CHAT_CLIENT_KEY_MAX ? key : `wf:${createHash("sha256").update(key).digest("base64url")}`;
 }
 
-async function chatStep(ctx: Ctx, step: Step): Promise<StepResult> {
-  const roomName = str(step.config.roomName).trim().replace(/^#+/, "");
-  const roomId = str(step.config.roomId).trim();
+export function chatBody(template: unknown, vars: Vars) {
+  const typed = new Set(
+    mentionsIn(str(template))
+      .filter((mention) => mention.kind === "member")
+      .map((mention) => mention.id.toLowerCase()),
+  );
+  return splitMentions(render(template, vars))
+    .map((piece) => {
+      if ("text" in piece) return piece.text;
+      const { kind, id, name } = piece.mention;
+      return kind === "member" && !typed.has(id.toLowerCase()) ? `@${name}` : `@[${name}](${kind}:${id})`;
+    })
+    .join("")
+    .trim();
+}
+
+async function chatRoom(ctx: Ctx, roomId: string, roomName: string) {
   const shown = roomName ? `#${roomName}` : "that room";
-  if (!roomId && !roomName) throw new CrmError("invalid_input", "Couldn't post to Chat: choose a room.", 400);
-  const body = render(step.config.body, ctx.vars).trim();
-  if (!body) throw new CrmError("invalid_input", "Couldn't post to Chat: the message is empty.", 400);
-  if (body.length > CHAT_BODY_MAX) throw new CrmError("invalid_input", "Couldn't post to Chat: keep the message to 10,000 characters.", 400);
-  const room = await findMyRoom(ctx.actor, { id: roomId || null, name: roomId ? null : roomName });
-  if (!room) {
+  const rooms = await findMyRooms(ctx.actor, { id: roomId || null, name: roomId ? null : roomName });
+  if (rooms.length === 0) {
     throw new CrmError("forbidden", roomId ? `Couldn't post to Chat: you're no longer in ${shown}.` : `Couldn't post to Chat: you're not in a room called ${shown}.`, 403);
   }
+  if (rooms.length === 1) return rooms[0];
+  const linked = rooms.filter((room) => room.workspaceId === ctx.actor.workspaceId);
+  if (linked.length === 1) return linked[0];
+  throw new CrmError("invalid_input", `Couldn't post to Chat: more than one of your rooms is called ${shown}. Pick it in the step.`, 400);
+}
+
+async function chatStep(ctx: Ctx, step: Step): Promise<StepResult> {
+  const roomName = str(step.config.roomName).trim().replace(/^#+/, "").trim();
+  const roomId = str(step.config.roomId).trim();
+  if (!roomId && !roomName) throw new CrmError("invalid_input", "Couldn't post to Chat: choose a room.", 400);
+  const body = chatBody(step.config.body, ctx.vars);
+  if (!body) throw new CrmError("invalid_input", "Couldn't post to Chat: the message is empty.", 400);
+  if (body.length > CHAT_BODY_MAX) throw new CrmError("invalid_input", "Couldn't post to Chat: keep the message to 10,000 characters.", 400);
+  const room = await chatRoom(ctx, roomId, roomName);
   const posted = await postMessage(
     ctx.actor,
     { conversationId: room.id, body, clientKey: chatPostKey(ctx.run.id, step.id, ctx.state.frames ?? []) },

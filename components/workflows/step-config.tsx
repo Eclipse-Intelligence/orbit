@@ -49,6 +49,8 @@ const OP_LABELS: Record<string, string> = {
   less_than: "is less than",
 };
 
+const NAMED_ROOM = "named";
+
 const TYPE_LABELS: Record<string, string> = { text: "Text", number: "Number", boolean: "Yes or no", list: "List", choice: "One of" };
 
 const QUESTION_TYPES = [
@@ -537,26 +539,31 @@ export default function StepConfig({
     case "post_to_chat": {
       const rooms = options.chatRooms ?? [];
       const roomId = str(c.roomId);
-      const roomName = str(c.roomName).replace(/^#+/, "");
-      const gone = Boolean(roomId) && !rooms.some((room) => room.id === roomId);
+      const roomName = str(c.roomName).trim().replace(/^#+/, "").trim();
+      const named = roomName ? rooms.filter((room) => room.name.toLowerCase() === roomName.toLowerCase()) : [];
+      const selected = roomId || (named.length === 1 ? named[0].id : roomName ? NAMED_ROOM : "");
+      const missing = selected === NAMED_ROOM || (Boolean(roomId) && !rooms.some((room) => room.id === roomId));
       return (
         <div className="flex flex-col gap-3">
           <Select
             id={`${step.id}-room`}
             label="Room"
-            value={roomId}
-            onChange={(value) => update({ ...c, roomId: value, roomName: rooms.find((room) => room.id === value)?.name ?? "" })}
+            value={selected}
+            onChange={(value) => {
+              if (missing && value === selected) return;
+              update({ ...c, roomId: value, roomName: rooms.find((room) => room.id === value)?.name ?? "" });
+            }}
             className="sm:w-72"
           >
             <option value="">Choose a room</option>
-            {gone && <option value={roomId}>#{roomName || "Room"} (you&apos;re no longer in it)</option>}
+            {missing && <option value={selected}>{roomName ? `#${roomName} (not one of your rooms)` : "A room you're not in"}</option>}
             {rooms.map((room) => (
               <option key={room.id} value={room.id}>
                 #{room.name}
               </option>
             ))}
           </Select>
-          {rooms.length === 0 && !roomId && <p className="caption-style text-subtle leading-[1.4]">You&apos;re not in any rooms. Create one in Chat.</p>}
+          {rooms.length === 0 && !missing && <p className="caption-style text-subtle leading-[1.4]">You&apos;re not in any rooms. Create one in Chat.</p>}
           {field("body", "Message", { rows: 4, placeholder: "{{company.name}} just signed." })}
           <p className="caption-style text-subtle leading-[1.4]">Posts as you, marked as sent by this workflow.</p>
         </div>
