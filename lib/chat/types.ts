@@ -1,4 +1,8 @@
-export type ChatKind = "room" | "dm";
+export type ChatKind = "room" | "dm" | "task" | "doc";
+
+export type ChatSubjectKind = "task" | "doc";
+
+export type ChatSubject = { kind: ChatSubjectKind; id: string };
 
 export type ChatPerson = { id: string; name: string };
 
@@ -104,7 +108,7 @@ export type ChatSearchResult = { messages: ChatMessage[] };
 export type ChatPost = { message: ChatMessage; root: ChatRoot | null; duplicate: boolean };
 
 export type ChatLiveEvent =
-  | { type: "message"; conversationId: string; message: ChatMessage; root: ChatRoot | null }
+  | { type: "message"; conversationId: string; message: ChatMessage; root: ChatRoot | null; subject?: ChatSubject }
   | { type: "edit"; conversationId: string; message: ChatMessage }
   | { type: "delete"; conversationId: string; messageId: string; parentId: string | null; root: ChatRoot | null }
   | { type: "read"; conversationId: string; lastReadAt: string }
@@ -113,5 +117,12 @@ export type ChatLiveEvent =
   | { type: "removed"; conversationId: string };
 
 export type ChatTyping = { conversationId: string; user: ChatPerson; typing: boolean };
+
+export type ChatDiscussion = {
+  subject: ChatSubject;
+  conversationId: string | null;
+  count: number;
+  page: ChatPage | null;
+};
 
 export type ChatResult<T> = ({ ok: true } & T) | { ok?: false; error: string };

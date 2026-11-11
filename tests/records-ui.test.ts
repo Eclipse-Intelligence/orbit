@@ -143,6 +143,8 @@ describe("tasks page links", () => {
     assert.deepEqual(taskDueState("2026-10-05T22:59:00Z", at, zone), { kind: "today", label: "Today" });
     assert.deepEqual(taskDueState("2026-10-08T09:00:00Z", at, zone), { kind: "later", label: "Thu 8 Oct" });
     assert.deepEqual(taskDueState("2027-01-12T09:00:00Z", at, zone), { kind: "later", label: "12 Jan 2027" });
+    assert.deepEqual(taskDueState("2027-09-14T09:00:00Z", at, zone), { kind: "later", label: "14 Sep 2027" });
+    assert.deepEqual(taskDueState("2026-12-31T23:30:00Z", at, zone), { kind: "later", label: "Thu 31 Dec" });
   });
 });
 

@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
+import { useDiscussion } from "@/components/chat/use-discussion";
+import { DiscussionButton, DocDiscussionPanel, PhoneDiscussionSheet } from "@/components/docs/doc-discussion";
 import { HistoryRail, VersionBanner, VersionPreview, useVersions, type Selected } from "@/components/docs/history";
 import JotLine from "@/components/docs/jot-line";
 import MoreMenu from "@/components/docs/more-menu";
@@ -18,6 +21,7 @@ import type { Meeting, Page, PageFilter, PageSummary, Participant, Presence } fr
 import { docsData } from "@/lib/docs/connection";
 import { shiftDate } from "@/lib/docs/daily";
 import { clockTime, createdLabel, editedLabel, longDay, shortDay } from "@/lib/docs/format";
+import { DISCUSSION_PARAM } from "@/lib/chat/discussions";
 import { dailyHref, listHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -31,6 +35,8 @@ import HashIcon from "@/public/assets/images/docs/hash.svg";
 import HistoryIcon from "@/public/assets/images/docs/history.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
+
+const ROOMY_DISCUSSION_PX = 1060;
 
 function ToolButton({ label, pressed, onClick, children, shortcut }: { label: string; pressed?: boolean; onClick: () => void; children: ReactNode; shortcut?: string }) {
   return (
@@ -325,6 +331,60 @@ export default function NoteView({
   const versions = useVersions(pageId, historyOpen ? (page?.revision ?? 0) : -1);
   const detailsPressed = railChosen ? rail === "details" : wide;
   const daily = (page?.kind ?? summary?.kind) === "daily";
+  const discussable = Boolean(page && viewer && !daily && summary?.shared);
+  const discussion = useDiscussion("doc", pageId, { id: viewer?.id ?? "", name: viewer?.name ?? "" }, { enabled: discussable });
+  const discussionAsked = useSearchParams().get(DISCUSSION_PARAM) === "1";
+  const [bodyWidth, setBodyWidth] = useState(0);
+  const observer = useRef<ResizeObserver | null>(null);
+  const bodyRef = useCallback((node: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    setBodyWidth(node.clientWidth);
+    observer.current = new ResizeObserver(() => setBodyWidth(node.clientWidth));
+    observer.current.observe(node);
+  }, []);
+  const roomy = bodyWidth >= ROOMY_DISCUSSION_PX;
+  const discussionOpen = discussable && discussionAsked;
+  const discussionPushed = useRef(false);
+
+  useEffect(() => {
+    if (!discussionAsked) discussionPushed.current = false;
+  }, [discussionAsked]);
+
+  const undiscussable = discussionAsked && Boolean(page && summary) && !discussable;
+  useEffect(() => {
+    if (!undiscussable) return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete(DISCUSSION_PARAM);
+    const query = params.toString();
+    discussionPushed.current = false;
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+  }, [undiscussable]);
+
+  function setDiscussing(open: boolean) {
+    const params = new URLSearchParams(window.location.search);
+    if (open) {
+      if (params.get(DISCUSSION_PARAM) === "1") return;
+      params.set(DISCUSSION_PARAM, "1");
+      discussionPushed.current = true;
+      window.history.pushState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+      return;
+    }
+    if (params.get(DISCUSSION_PARAM) !== "1") return;
+    if (discussionPushed.current) {
+      discussionPushed.current = false;
+      window.history.back();
+      return;
+    }
+    params.delete(DISCUSSION_PARAM);
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+  }
+
+  function toggleDiscussion() {
+    setDiscussing(!discussionOpen);
+  }
 
   useEffect(() => {
     if (!pageId) return;
@@ -350,11 +410,13 @@ export default function NoteView({
   }, [live, viewer]);
 
   function toggleDetails() {
-    setRail(detailsPressed ? null : "details");
+    setDiscussing(false);
+    setRail(detailsPressed && !discussionOpen ? null : "details");
   }
 
   function toggleHistory() {
-    if (historyOpen) {
+    setDiscussing(false);
+    if (historyOpen && !discussionOpen) {
       setSelected(null);
       setRail(wide ? "details" : null);
     } else setRail("history");
@@ -411,7 +473,7 @@ export default function NoteView({
     <NoteRail page={page} />
   ) : null;
 
-  const railVisible = !focus && !phone && (railChosen ? Boolean(rail) : true);
+  const railVisible = !focus && !phone && !discussionOpen && (railChosen ? Boolean(rail) : true);
 
   if (empty) {
     return (
@@ -440,6 +502,7 @@ export default function NoteView({
         <span className="flex-1" />
         {!focus && <PresenceStack participants={stack} max={3} />}
         {!focus && summary && <PageShare summary={summary} compact />}
+        {!focus && discussable && <DiscussionButton discussion={discussion} pressed={discussionOpen} compact onClick={toggleDiscussion} />}
         {focus ? (
           <Button variant="secondary" size="icon" aria-label="Leave focus mode" onClick={() => setFocus(false)}>
             <CollapseIcon aria-hidden className="size-3.5" />
@@ -496,12 +559,13 @@ export default function NoteView({
             </span>
           )}
           {!daily && summary && !focus && <PageShare summary={summary} />}
+          {!focus && discussable && <DiscussionButton discussion={discussion} pressed={discussionOpen} onClick={toggleDiscussion} />}
           {!focus && (
             <>
-              <ToolButton label="Version history" pressed={historyOpen} onClick={toggleHistory}>
+              <ToolButton label="Version history" pressed={historyOpen && !discussionOpen} onClick={toggleHistory}>
                 <HistoryIcon aria-hidden className="size-3.5" />
               </ToolButton>
-              <ToolButton label="Backlinks and details" pressed={detailsPressed && !historyOpen} onClick={toggleDetails} shortcut="⌘\">
+              <ToolButton label="Backlinks and details" pressed={detailsPressed && !historyOpen && !discussionOpen} onClick={toggleDetails} shortcut="⌘\">
                 <SidebarPanelIcon aria-hidden className="size-3.5 -scale-x-100" />
               </ToolButton>
             </>
@@ -535,7 +599,7 @@ export default function NoteView({
         />
       )}
 
-      <div className="relative flex min-h-0 flex-1">
+      <div ref={bodyRef} className="relative flex min-h-0 flex-1">
         <div ref={scroller} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto px-5 pt-5 pb-40 md:px-12 md:pt-7">
           <div className={cn("note-surface mx-auto w-full", daily ? "max-w-[calc(38em+4.75rem)]" : "note-measure")}>
             {page ? (
@@ -602,7 +666,21 @@ export default function NoteView({
             {railContent}
           </aside>
         )}
+        {discussionOpen && !focus && !phone && (
+          <aside
+            aria-label="Discussion"
+            data-quick-add-hide=""
+            className={cn(
+              "flex min-h-0 w-[22rem] shrink-0 flex-col border-l border-white/[0.05]",
+              !roomy && "bg-background absolute inset-y-0 right-0 z-10 max-w-[calc(100%-2rem)] shadow-[-24px_0_48px_rgba(0,0,0,0.45)]",
+            )}
+          >
+            <DocDiscussionPanel discussion={discussion} title={title} onClose={() => setDiscussing(false)} />
+          </aside>
+        )}
       </div>
+
+      <PhoneDiscussionSheet open={phone && discussionOpen} discussion={discussion} title={title} onClose={() => setDiscussing(false)} />
 
       <Sheet open={phone && railChosen && Boolean(rail)} onOpenChange={(open) => !open && setRail(null)}>
         <SheetContent side="bottom" className="bg-popover border-line-strong max-h-[80dvh] overflow-y-auto rounded-t-2xl">
