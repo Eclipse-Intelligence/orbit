@@ -206,10 +206,22 @@ export async function saveGranolaKey(actor: UserActor, key: string, options: Gra
       [home, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
     ),
   );
+  await restartGranolaLookback(await actorForWorkspace(actor, home));
 }
 
 export async function removeGranolaKey(actor: UserActor) {
+  const row = await readPersonalKey(actor);
   await withActor(actor, (db) => db.query("delete from crm.granola_keys where user_id = $1", [actor.userId]));
+  if (row) await restartGranolaLookback(await actorForWorkspace(actor, row.workspace_id));
+}
+
+async function restartGranolaLookback(owner: UserActor) {
+  await withActor(owner, (db) =>
+    db.query(
+      "update crm.integration_state set last_synced_at = null where workspace_id = $1 and source = 'granola' and connection_id is null",
+      [owner.workspaceId],
+    ),
+  );
 }
 
 export async function getGranolaStatus(actor: UserActor): Promise<GranolaStatus> {
