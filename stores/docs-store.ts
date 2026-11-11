@@ -75,7 +75,7 @@ type DocsState = {
   liveSaved: (id: string, summary: PageSummary, revision: number) => void;
   remoteTitle: (id: string, title: string) => void;
   setUnavailable: (id: string, value: boolean) => void;
-  replaceBody: (page: Page) => void;
+  replaceBody: (page: Page, options?: { untracked?: boolean }) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
   visit: (id: string) => void;
   createNote: (input?: CreateInput) => Promise<Page | null>;
@@ -127,6 +127,11 @@ const uncertain = new Map<string, NoteText>();
 const resetHandlers = new Set<() => void>();
 const liveNotes = new Map<string, LiveHooks>();
 const holds = new Map<string, Hold>();
+const untracked = new Set<string>();
+
+export function takeUntracked(id: string) {
+  return untracked.delete(id);
+}
 
 type Hold = { owed: Reader | null; drafted: boolean };
 type LiveHooks = { flush: (keepalive: boolean) => Promise<void>; leave: () => void };
@@ -373,7 +378,9 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     });
   },
 
-  replaceBody(page) {
+  replaceBody(page, options) {
+    if (options?.untracked) untracked.add(page.id);
+    else untracked.delete(page.id);
     acked.set(page.id, acknowledgedFrom(page));
     uncertain.delete(page.id);
     set((state) => ({
@@ -980,7 +987,7 @@ function acknowledge(id: string, sent: Queued, previous: Acknowledged, saved: Pa
   if (navChanged || saved.kind === "daily") void store.refreshNav();
   if (queued.has(id)) return flush(id);
   if (saved.body !== sent.body && memberTagCount(saved.body) < memberTagCount(sent.body) && !liveNotes.has(id) && !readers.has(id) && !inflight.has(id) && !holds.has(id)) {
-    store.replaceBody(saved);
+    store.replaceBody(saved, { untracked: true });
   }
   if (!readers.has(id)) store.setSave(id, "saved");
   return Promise.resolve();

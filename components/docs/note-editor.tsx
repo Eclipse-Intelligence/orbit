@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import NotePicker, { type PickerHandle } from "@/components/docs/note-picker";
@@ -19,7 +19,7 @@ import { applyMention, bridge, external, insertAtCursor, noteExtensions, type Ac
 import { createStateCache } from "@/lib/docs/editor/state-cache";
 import { headingsIn } from "@/lib/docs/markdown";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
-import { adoptDraft, commitNow, holdClassicSaves, onDocsReset, scheduleSave, useDocsStore } from "@/stores/docs-store";
+import { adoptDraft, commitNow, holdClassicSaves, onDocsReset, scheduleSave, takeUntracked, useDocsStore } from "@/stores/docs-store";
 
 type Cached = { state: EditorState; live: CachedLive | null };
 type LiveModule = typeof import("@/lib/docs/live/client");
@@ -344,14 +344,16 @@ export default function NoteEditor({
     const view = liveView;
     if (!view || liveId !== page.id || epoch === seenEpoch.current) return;
     seenEpoch.current = epoch;
+    const untracked = takeUntracked(page.id);
     if (liveModule?.isLive(page.id)) {
       liveModule.pullLive(page.id);
       titles.set(page.id, page.title);
       return;
     }
-    if (view.state.doc.toString() === page.body) return;
-    const changes = textEdits(view.state.doc.toString(), page.body).map((edit) => ({ from: edit.at, to: edit.at + edit.remove, insert: edit.insert }));
-    view.dispatch({ changes, annotations: external.of(true) });
+    const body = page.body.replace(/\r\n?/g, "\n");
+    if (view.state.doc.toString() === body) return;
+    const changes = textEdits(view.state.doc.toString(), body).map((edit) => ({ from: edit.at, to: edit.at + edit.remove, insert: edit.insert }));
+    view.dispatch({ changes, annotations: untracked ? [external.of(true), Transaction.addToHistory.of(false)] : external.of(true) });
     titles.set(page.id, page.title);
     clearDraft(page.id);
   }, [epoch, page]);
