@@ -80,7 +80,9 @@ const SEARCH_LIMIT = 30;
 const MENTION_MAX = 50;
 const FORMER = "Former teammate";
 const NUL = /\u0000/g;
-const INVISIBLE = /[\u0000\u200B-\u200D\u2060\uFEFF]/g;
+const CONTROLS = /[\u0000\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/g;
+const FILLERS = /[\u115F\u1160\u3164\uFFA0\u2800]/g;
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
 function iso(value: Stamp): string;
 function iso(value: Stamp | null): string | null;
@@ -160,8 +162,7 @@ const CONVERSATIONS_SQL = `
     case when c.kind = 'dm' then coalesce(
       ${MEMBER_NAME("other", "p")},
       (select a.author_name from crm.chat_messages a
-       where a.conversation_id = c.id and a.author_user_id is not null and a.author_user_id is distinct from me.user_id
-         and (other.user_id is null or a.author_user_id = other.user_id)
+       where a.conversation_id = c.id and a.author_user_id = partner.id
        order by a.created_at desc limit 1)
     ) end as dm_name,
     counts.unread, mentioned.mentions
@@ -176,7 +177,10 @@ const CONVERSATIONS_SQL = `
   left join lateral (
     select o.user_id, o.name from crm.chat_members o where o.conversation_id = c.id and o.user_id <> me.user_id limit 1
   ) other on c.kind = 'dm'
-  left join crm.profiles p on p.id = other.user_id
+  left join lateral (
+    select coalesce(other.user_id, (case when split_part(c.dm_key, ':', 1) = me.user_id::text then split_part(c.dm_key, ':', 2) else split_part(c.dm_key, ':', 1) end)::uuid) as id
+  ) partner on c.kind = 'dm'
+  left join crm.profiles p on p.id = partner.id
   cross join lateral (
     select count(*)::integer as unread
     from (
@@ -228,8 +232,8 @@ function memberMentions(body: string) {
 }
 
 function cleanRoomName(name: unknown) {
-  const text = typeof name === "string" ? name.replace(INVISIBLE, "").trim().replace(/^#+/, "").replace(/\s+/g, " ").trim() : "";
-  if (!text) throw new CrmError("invalid_input", "Give the room a name.", 400, { field: "name" });
+  const text = typeof name === "string" ? name.replace(CONTROLS, "").trim().replace(/^#+/, "").replace(/\s+/g, " ").trim() : "";
+  if (!LETTER_OR_DIGIT.test(text.replace(FILLERS, ""))) throw new CrmError("invalid_input", "Give the room a name.", 400, { field: "name" });
   if (text.length > CHAT_ROOM_NAME_MAX) throw new CrmError("invalid_input", "Keep the room name to 80 characters.", 400, { field: "name" });
   return text;
 }
@@ -753,15 +757,18 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
   const search = typeof text === "string" ? text.replace(NUL, "").trim().slice(0, 200) : "";
   if (!search) return { messages: [] };
   const limit = Math.min(SEARCH_LIMIT, pageSize(options.limit, SEARCH_LIMIT));
+  let ids: string[];
+  try {
+    const found = await query<{ id: string }>("select id from private.chat_search($1, $2, $3, $4)", [actor.userId, conversationId, likePattern(search), limit]);
+    ids = found.rows.map((row) => row.id);
+  } catch (error) {
+    chatFailure(error);
+  }
+  if (ids.length === 0) return { messages: [] };
   return withActor(actor, async (db) => {
-    await readConversation(db, actor, conversationId);
-    const result = await db.query<MessageRow>(
-      `select ${messageColumns()} from crm.chat_messages m
-       where m.conversation_id = $1 and m.deleted_at is null and m.body ilike $2
-       order by m.created_at desc, m.id desc limit ${limit}`,
-      [conversationId, likePattern(search)],
-    );
-    return { messages: result.rows.map((row) => toMessage(row, actor.userId)) };
+    const result = await db.query<MessageRow>(`select ${messageColumns()} from crm.chat_messages m where m.id = any($1::uuid[]) and m.conversation_id = $2`, [ids, conversationId]);
+    const byId = new Map(result.rows.map((row) => [row.id, row]));
+    return { messages: ids.flatMap((messageId) => (byId.has(messageId) ? [toMessage(byId.get(messageId)!, actor.userId)] : [])) };
   });
 }
 
@@ -927,12 +934,11 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
   const text = cleanBody(body);
   const mentions = memberMentions(text);
   try {
+    const followed = await query<{ user_id: string }>("select user_id from private.chat_message_followers($1, $2)", [actor.userId, messageId]);
+    const followersBefore = new Set(followed.rows.map((row) => row.user_id));
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
       const conversation = await readConversation(db, actor, current.conversationId);
-      const followersBefore = current.parentId
-        ? new Set((await query<{ user_id: string }>("select user_id from private.chat_thread_followers($1, $2)", [actor.userId, current.parentId])).rows.map((row) => row.user_id))
-        : new Set<string>();
       const updated = await db.query("update crm.chat_messages set body = $2, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId]);
       if ((updated.rowCount ?? 0) === 0) throw notFound("message");
       const message = (await readMessage(db, messageId, actor.userId))!;

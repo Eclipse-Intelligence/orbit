@@ -455,6 +455,10 @@ describe("chat", () => {
       const markDm = (await listConversations(mark)).conversations.find((conversation) => conversation.id === dm.id)!;
       assert.equal(markDm.name, "Sam Okafor");
       await refused(postMessage(mark, { conversationId: dm.id, body: "Are you there?" }), /no longer share a workspace/);
+      await refused(openDm(samHome, mark.userId), /share a workspace with you/);
+      assert.equal((await openDm(mark, sam.userId)).id, dm.id);
+      assert.equal((await sql("select count(*)::int as n from crm.chat_members where conversation_id = $1 and user_id = $2", [dm.id, sam.userId])).rows[0].n, 0);
+      await refused(listMessages(samHome, dm.id), /Conversation not found\./);
       const room = await getRoom(mark, bridged.id);
       assert.equal(room.members.find((member) => member.id === olly.userId)?.name, "Olly Outside");
       await postMessage(mark, { conversationId: bridged.id, body: `${tag(olly)} welcome`, clientKey: "leave-3" });
@@ -906,7 +910,7 @@ describe("chat", () => {
           settled = true;
           return posted;
         });
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        await until(async () => (await sql("select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted")).rows[0].n === 1, "the second post waits for the first");
         assert.equal(settled, false);
         await client.query("commit");
         const posted = await second;
@@ -915,6 +919,43 @@ describe("chat", () => {
       } finally {
         client.release();
       }
+    });
+  });
+
+  describe("review round 4", () => {
+    it("needs a letter or digit in a room name", async () => {
+      for (const name of ["ㅤ", "­­", "⠀ ⠀", "‮", "️", "#ㅤ‮"]) {
+        await refused(createRoom(mark, { name }), /Give the room a name\./);
+        await assert.rejects(sql("select private.chat_room_name($1)", [name]), /Give the room a name\./);
+      }
+      for (const name of ["über", "営業", "2027", "❤️ team"]) {
+        assert.equal((await sql("select private.chat_room_name($1) as name", [name])).rows[0].name, name);
+      }
+      assert.equal((await createRoom(mark, { name: "‮ops​" })).name, "ops");
+    });
+
+    it("searches through the member check and returns messages newest first", async () => {
+      const room = (await createRoom(mark, { name: "lookup", memberIds: [sam.userId] })).id;
+      for (let index = 0; index < 3; index += 1) await postMessage(sam, { conversationId: room, body: `Pricing ${index}`, clientKey: `lookup-${index}` });
+      assert.deepEqual(
+        (await searchMessages(mark, room, "pricing")).messages.map((message) => message.body),
+        ["Pricing 2", "Pricing 1", "Pricing 0"],
+      );
+      await assert.rejects(sql("select * from private.chat_search($1, $2, '%', 10)", [priya.userId, room]), /Conversation not found\./);
+      await refused(searchMessages(priya, room, "pricing"), /Conversation not found\./);
+    });
+
+    it("upgrades a database that ran an earlier version of the migration", async () => {
+      const admin = getAdminPool();
+      await admin.query("alter table crm.chat_members drop column opened");
+      await admin.query("alter table crm.chat_messages drop constraint chat_messages_body_present");
+      await admin.query(readFileSync("supabase/migrations/20270116120000_chat.sql", "utf8"));
+      const shape = await admin.query(
+        `select
+           exists (select 1 from information_schema.columns where table_schema = 'crm' and table_name = 'chat_members' and column_name = 'opened') as opened,
+           exists (select 1 from pg_constraint where conname = 'chat_messages_body_present') as body_present`,
+      );
+      assert.deepEqual(shape.rows[0], { opened: true, body_present: true });
     });
   });
 });

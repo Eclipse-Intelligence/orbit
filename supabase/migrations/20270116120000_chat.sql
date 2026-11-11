@@ -36,6 +36,9 @@ create table if not exists crm.chat_members (
   primary key (conversation_id, user_id)
 );
 
+alter table crm.chat_members add column if not exists name text not null default '';
+alter table crm.chat_members add column if not exists opened boolean not null default false;
+
 create index if not exists chat_members_user_idx on crm.chat_members (user_id, conversation_id);
 
 create table if not exists crm.chat_messages (
@@ -58,6 +61,17 @@ create table if not exists crm.chat_messages (
   constraint chat_messages_mentions_check check (cardinality(mentions) <= 50),
   constraint chat_messages_author_client_key unique (author_user_id, client_key)
 );
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'chat_messages_body_present' and conrelid = 'crm.chat_messages'::regclass) then
+    alter table crm.chat_messages add constraint chat_messages_body_present check (deleted_at is not null or length(btrim(body, E' \t\n')) > 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'chat_messages_mentions_check' and conrelid = 'crm.chat_messages'::regclass) then
+    alter table crm.chat_messages add constraint chat_messages_mentions_check check (cardinality(mentions) <= 50);
+  end if;
+end;
+$$;
 
 create index if not exists chat_messages_conversation_idx on crm.chat_messages (conversation_id, created_at desc, id desc) where deleted_at is null;
 create index if not exists chat_messages_roots_idx on crm.chat_messages (conversation_id, created_at desc, id desc) where parent_id is null;
@@ -488,9 +502,12 @@ immutable
 set search_path = ''
 as $$
 declare
-  v_name text := regexp_replace(regexp_replace(coalesce(p_name, ''), E'[\\u200B-\\u200D\\u2060\\uFEFF]', '', 'g'), E'^[[:space:]]+|[[:space:]]+$', '', 'g');
+  v_name text := regexp_replace(
+    regexp_replace(coalesce(p_name, ''), E'[\\u00AD\\u061C\\u180E\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF]', '', 'g'),
+    E'^[[:space:]]+|[[:space:]]+$', '', 'g'
+  );
 begin
-  if length(v_name) = 0 then
+  if regexp_replace(v_name, E'[\\u115F\\u1160\\u3164\\uFFA0\\u2800]', '', 'g') !~ '[[:alnum:]]' then
     raise exception 'Give the room a name.' using errcode = '22023';
   end if;
   if length(v_name) > 80 then
@@ -542,6 +559,7 @@ as $$
 declare
   v_key text;
   v_id uuid;
+  v_shared boolean;
 begin
   if p_user is null or p_other is null then
     raise exception 'Pick a teammate.' using errcode = '22023';
@@ -550,10 +568,11 @@ begin
     raise exception 'Pick a teammate other than yourself.' using errcode = '22023';
   end if;
   v_key := least(p_user::text, p_other::text) || ':' || greatest(p_user::text, p_other::text);
+  perform 1 from crm.workspace_members m where m.user_id in (p_user, p_other) order by m.workspace_id, m.user_id for share;
+  v_shared := private.chat_shares_workspace(p_user, p_other);
   select c.id into v_id from crm.chat_conversations c where c.dm_key = v_key;
   if v_id is null then
-    perform 1 from crm.workspace_members m where m.user_id in (p_user, p_other) order by m.workspace_id, m.user_id for share;
-    if not private.chat_shares_workspace(p_user, p_other) then
+    if not v_shared then
       raise exception 'You can only message people who share a workspace with you.' using errcode = '42501';
     end if;
     insert into crm.chat_conversations (kind, dm_key, created_by)
@@ -563,10 +582,14 @@ begin
     if v_id is null then
       select c.id into v_id from crm.chat_conversations c where c.dm_key = v_key;
     end if;
+  elsif not v_shared and not exists (select 1 from crm.chat_members m where m.conversation_id = v_id and m.user_id = p_user) then
+    raise exception 'You can only message people who share a workspace with you.' using errcode = '42501';
   end if;
-  insert into crm.chat_members (conversation_id, user_id, added_by)
-    select v_id, x.id, p_user from unnest(array[p_user, p_other]) as x(id) order by x.id
-    on conflict do nothing;
+  if v_shared then
+    insert into crm.chat_members (conversation_id, user_id, added_by)
+      select v_id, x.id, p_user from unnest(array[p_user, p_other]) as x(id) order by x.id
+      on conflict do nothing;
+  end if;
   update crm.chat_members m set opened = true where m.conversation_id = v_id and m.user_id = p_user and not m.opened;
   return v_id;
 end;
@@ -702,6 +725,44 @@ $$;
 
 revoke all on function private.chat_thread_followers(uuid, uuid) from public;
 grant execute on function private.chat_thread_followers(uuid, uuid) to crm_app;
+
+create or replace function private.chat_message_followers(p_user uuid, p_message uuid)
+returns table (user_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select f.user_id
+  from crm.chat_messages m
+  cross join lateral private.chat_thread_followers(p_user, m.parent_id) f
+  where m.id = p_message and m.parent_id is not null
+$$;
+
+revoke all on function private.chat_message_followers(uuid, uuid) from public;
+grant execute on function private.chat_message_followers(uuid, uuid) to crm_app;
+
+create or replace function private.chat_search(p_user uuid, p_conversation uuid, p_pattern text, p_limit integer)
+returns table (id uuid)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from crm.chat_members m where m.conversation_id = p_conversation and m.user_id = p_user) then
+    raise exception 'Conversation not found.' using errcode = 'P0002';
+  end if;
+  return query
+    select x.id from crm.chat_messages x
+    where x.conversation_id = p_conversation and x.deleted_at is null and x.body ilike p_pattern
+    order by x.created_at desc, x.id desc
+    limit greatest(1, least(coalesce(p_limit, 30), 50));
+end;
+$$;
+
+revoke all on function private.chat_search(uuid, uuid, text, integer) from public;
+grant execute on function private.chat_search(uuid, uuid, text, integer) to crm_app;
 
 create or replace function private.chat_leave_workspace()
 returns trigger
