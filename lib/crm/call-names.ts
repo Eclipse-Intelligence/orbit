@@ -25,7 +25,7 @@ export type NameQuery = { key: string; words: string; skeleton: string; latin: b
 export type NameLookup = { candidates: NameCandidate[]; complete: boolean };
 
 function squash(value: string | null | undefined) {
-  return value?.replace(/\s+/g, " ").trim() ?? "";
+  return value?.replace(/\p{Cf}+/gu, "").replace(/\s+/g, " ").trim() ?? "";
 }
 
 export function foldName(value: string | null | undefined) {

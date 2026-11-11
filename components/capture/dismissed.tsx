@@ -7,7 +7,7 @@ import { OFFLINE, postCapture, SAVE_FAILED } from "@/components/capture/capture-
 import { useComposer } from "@/components/mail/compose-dock";
 import { listDismissedAction } from "@/app/(crm)/capture/actions";
 import { formatMeetingWhen } from "@/lib/companies";
-import { dayLabel } from "@/lib/crm/capture-format";
+import { dayLabel, pageRequests } from "@/lib/crm/capture-format";
 import type { DismissedImport } from "@/lib/crm/conversations";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -48,8 +48,9 @@ export default function Dismissed({
   const listRef = useRef<HTMLUListElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
   const focusFrom = useRef<number | null>(null);
+  const wanted = useRef(0);
+  const restores = useRef(0);
   const [open, setOpen] = useState(false);
-  const [want, setWant] = useState(0);
   const [extra, setExtra] = useState<DismissedImport[]>([]);
   const [known, setKnown] = useState(total);
   const [restoredSince, setRestoredSince] = useState(0);
@@ -65,25 +66,28 @@ export default function Dismissed({
   }
 
   useEffect(() => {
-    if (want === 0) return;
+    if (wanted.current === 0) return;
     let live = true;
-    listDismissedAction(workspaceId, items.length, want)
-      .then((result) => {
-        if (!live) return;
-        if (result.error || !result.page) {
-          showToast({ message: result.error ?? MORE_FAILED, tone: "alert" });
-          return;
-        }
-        setExtra(result.page.items);
-        setKnown(result.page.total);
-        setRestoredSince(0);
-      })
-      .catch(() => live && showToast({ message: MORE_FAILED, tone: "alert" }))
-      .finally(() => live && setLoading(false));
+    const at = restores.current;
+    (async () => {
+      const rows: DismissedImport[] = [];
+      let latest: number | null = null;
+      for (const request of pageRequests(items.length, wanted.current)) {
+        const result = await listDismissedAction(workspaceId, request.offset, request.limit);
+        if (!live || result.error || !result.page) return;
+        rows.push(...result.page.items);
+        latest = result.page.total;
+        if (result.page.items.length < request.limit) break;
+      }
+      if (!live || latest === null) return;
+      setExtra(rows);
+      setKnown(latest);
+      setRestoredSince(restores.current - at);
+    })().catch(() => undefined);
     return () => {
       live = false;
     };
-  }, [items, want, workspaceId, showToast]);
+  }, [items, workspaceId]);
 
   const loaded = [...items, ...extra.filter((item) => !items.some((first) => first.id === item.id))];
   const left = loaded.filter((item) => !restored.has(item.id));
@@ -126,6 +130,7 @@ export default function Dismissed({
       focusAfter(pressed);
       setRestored((current) => new Set(current).add(item.id));
       setRestoredSince((current) => current + 1);
+      restores.current += 1;
       onRestored(item.id);
       showToast({ message: "Restored" });
     } catch (error) {
@@ -137,11 +142,31 @@ export default function Dismissed({
     }
   }
 
-  function showMore() {
+  async function showMore() {
     if (loading) return;
     focusFrom.current = left.length;
     setLoading(true);
-    setWant((current) => current + PAGE);
+    const at = restores.current;
+    const held = extra.filter((item) => !restored.has(item.id) && !items.some((first) => first.id === item.id));
+    try {
+      const result = await listDismissedAction(workspaceId, items.length + held.length, PAGE);
+      if (result.error || !result.page) {
+        focusFrom.current = null;
+        showToast({ message: result.error ?? MORE_FAILED, tone: "alert" });
+        return;
+      }
+      const fresh = result.page.items.filter((item) => !held.some((other) => other.id === item.id) && !items.some((first) => first.id === item.id));
+      const next = [...held, ...fresh];
+      wanted.current = next.length;
+      setExtra(next);
+      setKnown(result.page.total);
+      setRestoredSince(restores.current - at);
+    } catch {
+      focusFrom.current = null;
+      showToast({ message: MORE_FAILED, tone: "alert" });
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -194,7 +219,7 @@ export default function Dismissed({
               size="sm"
               className="text-subtle -ml-2 self-start"
               aria-disabled={loading || undefined}
-              onClick={showMore}
+              onClick={() => void showMore()}
             >
               Show more<span className="sr-only"> dismissed calls</span>
             </Button>

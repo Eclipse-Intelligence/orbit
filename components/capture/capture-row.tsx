@@ -57,6 +57,10 @@ const pointer = { down: false, watching: false };
 const RELEASE_EVENTS = ["pointerup", "pointercancel", "contextmenu", "dragstart", "blur"] as const;
 const RELEASE_FALLBACK_MS = 3_000;
 
+function released(event: Event) {
+  return event.type !== "blur" || event.target === window;
+}
+
 function watchPointer() {
   if (pointer.watching) return;
   pointer.watching = true;
@@ -64,8 +68,8 @@ function watchPointer() {
     pointer.down = true;
   }, true);
   for (const name of RELEASE_EVENTS) {
-    window.addEventListener(name, () => {
-      pointer.down = false;
+    window.addEventListener(name, (event) => {
+      if (released(event)) pointer.down = false;
     }, true);
   }
 }
@@ -76,8 +80,8 @@ function afterPointerRelease(run: () => void) {
     return;
   }
   let finished = false;
-  const done = () => {
-    if (finished) return;
+  const done = (event?: Event) => {
+    if (finished || (event && !released(event))) return;
     finished = true;
     window.clearTimeout(fallback);
     for (const name of RELEASE_EVENTS) window.removeEventListener(name, done, true);

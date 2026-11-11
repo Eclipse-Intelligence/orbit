@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { foldName, nameKey, titleNames } from "@/lib/crm/call-names";
 import { moveImport } from "@/lib/crm/call-routing";
-import { pruneHidden } from "@/lib/crm/capture-format";
+import { pageRequests, pruneHidden } from "@/lib/crm/capture-format";
 import { listToFile } from "@/lib/crm/capture";
 import { readCaptureAction, runCaptureAction } from "@/lib/crm/capture-actions";
 import { createContact } from "@/lib/crm/contacts";
@@ -486,7 +486,7 @@ describe("calls matched by name", () => {
     assert.equal(item.suggestedBy, "title");
   });
 
-  it("checks names in a workspace where a colleague already holds the note before filing elsewhere", async () => {
+  it("checks names in a workspace where a colleague already holds the note, and still gives the person their own copy", async () => {
     const homeKit = (await createContact(home, { firstName: "Kit", lastName: "Lane", email: "kit@home.test" })).body.contact.id;
     await createContact(eclipse, { firstName: "Kit", lastName: "Lane", email: "kit@eclipse.test" });
     const id = noteId("kitlane");
@@ -501,6 +501,12 @@ describe("calls matched by name", () => {
     assert.equal(found.some((row) => row.status === "filed" || row.contact_id === homeKit), false);
     const activity = await getAdminPool().query("select 1 from crm.activities where contact_id = $1", [homeKit]);
     assert.equal(activity.rowCount, 0);
+    const mine = found.filter((row) => row.workspace_id === home.workspaceId);
+    assert.deepEqual(mine.map((row) => row.status), ["unfiled"]);
+    const item = (await listToFile(home)).unfiled.find((entry) => entry.id === mine[0].id)!;
+    assert.deepEqual(item.suggestions.map((entry) => entry.contactId), [homeKit]);
+    await sync();
+    assert.equal((await rows(id)).length, found.length);
   });
 
   it("files on the one word for word match even when a run-together namesake exists", async () => {
@@ -602,6 +608,56 @@ describe("calls matched by name", () => {
     const kept = pruneHidden(hidden, [], ["import:a"]);
     assert.deepEqual([...kept], ["import:a"]);
     assert.deepEqual([...pruneHidden(kept, [], [])], []);
+  });
+
+  it("treats names with invisible characters as the same name, so a hidden namesake still blocks filing", async () => {
+    const cases = [
+      ["zerowidth", "Pat", "Pa\u200bt"],
+      ["softhyphen", "Kim", "Ki\u00adm"],
+    ] as const;
+    for (const [label, first, hidden] of cases) {
+      await createContact(home, { firstName: first, lastName: "Doe", email: `${label}@home.test` });
+      await createContact(eclipse, { firstName: hidden, lastName: "Doe", email: `${label}@eclipse.test` });
+      const id = noteId(`hidden${label}`);
+      notes.set(id, makeNote(id, home, { attendees: [{ name: `${first} Doe`, email: null }] }));
+      await sync();
+      const found = await rows(id);
+      assert.deepEqual(found.map((row) => [row.status, row.contact_id]), [["unfiled", null]], label);
+    }
+    assert.equal(foldName("Pa\u200bt Doe"), "pat doe");
+    assert.equal(foldName("Pa\u00adt Doe"), "pat doe");
+  });
+
+  it("reaches every dismissed call past 220, a page at a time", async () => {
+    const admin = getAdminPool();
+    await admin.query(
+      `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, title, status)
+       select $1, $2, 'granola', 'not_bulk' || lpad(n::text, 10, '0'), 'meeting', 'Bulk ' || n, 'ignored'
+       from generate_series(1, 240) n`,
+      [eclipse.workspaceId, home.userId],
+    );
+    const first = await listDismissedImports(eclipse);
+    assert.equal(first.items.length, 20);
+    const seen = new Set(first.items.map((item) => item.id));
+    let offset = first.items.length;
+    while (offset < first.total) {
+      const page = await listDismissedImports(eclipse, { offset, limit: 20 });
+      assert.ok(page.items.length > 0, `stuck at ${offset}`);
+      for (const item of page.items) seen.add(item.id);
+      offset += page.items.length;
+    }
+    assert.equal(seen.size, first.total);
+    assert.ok(seen.size >= 240);
+    const requests = pageRequests(20, 230);
+    assert.deepEqual(requests, [
+      { offset: 20, limit: 200 },
+      { offset: 220, limit: 30 },
+    ]);
+    const reloaded = new Set<string>();
+    for (const request of pageRequests(20, first.total - 20)) {
+      for (const item of (await listDismissedImports(eclipse, request)).items) reloaded.add(item.id);
+    }
+    assert.equal(reloaded.size, first.total - 20);
   });
 
   it("moves a Teams transcript to the workspace of the person named in it and suggests them", async () => {

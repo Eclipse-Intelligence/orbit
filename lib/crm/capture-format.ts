@@ -71,3 +71,9 @@ export function pruneHidden(hidden: Set<string>, present: Iterable<string>, acti
   const next = new Set([...hidden].filter((id) => keep.has(id)));
   return next.size === hidden.size ? hidden : next;
 }
+
+export function pageRequests(offset: number, count: number, size = 200) {
+  const requests: { offset: number; limit: number }[] = [];
+  for (let done = 0; done < count; done += size) requests.push({ offset: offset + done, limit: Math.min(size, count - done) });
+  return requests;
+}

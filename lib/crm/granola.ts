@@ -284,10 +284,6 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       added += 1;
     }
     if (added > 0) route = await routeCallInDb(db, owner, open, participants, routing);
-    if (route.targets.length === 0 && known) {
-      if (placeholder) await dropPlaceholder(db, placeholder.id);
-      return "skipped";
-    }
     const byTitle = route.targets.length === 0 && route.suggested.length === 0;
     const suggested = byTitle
       ? await suggestByTitleInDb(db, owner, open.map((item) => item.workspaceId), [title, note.calendar_event?.event_title], ownNames)
