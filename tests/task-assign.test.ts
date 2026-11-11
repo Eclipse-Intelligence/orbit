@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { PATCH as restUpdateTask } from "@/app/api/v1/tasks/[id]/route";
 import { POST as restCreateTask } from "@/app/api/v1/tasks/route";
 import { runTool } from "@/lib/assistant/tools";
 import { createTaskWithClickUp } from "@/lib/crm/clickup";
@@ -461,7 +462,7 @@ describe("task access edges", () => {
     await assert.rejects(getTask(rhea, task.id), /not found/i);
   });
 
-  it("untags the new assignee, and undoing a reassignment removes the tag it added", async () => {
+  it("never shows the assignee as tagged, and undoing a reassignment removes only the tag it added", async () => {
     const task = (await createTask(sam, { title: "Admin reassigns then undoes" })).body.task;
     await updateTask(ada, task.id, { ownerId: priya.userId });
     assert.deepEqual((await listTaskParticipants(ada, [task.id]))[task.id], [ada.userId]);
@@ -469,8 +470,25 @@ describe("task access edges", () => {
     await undoAuditEvent(ada, event, { operation: "undo_change" });
     assert.equal((await getTask(ada, task.id)).ownerId, sam.userId);
     assert.deepEqual(await listTaskParticipants(ada, [task.id]), {});
+    const untagged = await sql<{ n: number }>("select count(*)::int as n from crm.audit_events where entity_id = $1 and event_type = 'task.participant_removed' and actor_user_id = $2", [task.id, ada.userId]);
+    assert.equal(untagged[0].n, 1);
     const recent = await listRecentChanges(ada);
     assert.ok(!recent.some((change) => change.type.startsWith("task.participant_")));
+
+    const followed = (await createTask(sam, { title: "Ada already follows" })).body.task;
+    await addTaskParticipants(ada, followed.id, [ada.userId]);
+    await updateTask(ada, followed.id, { ownerId: priya.userId });
+    await undoAuditEvent(ada, await lastEvent(followed.id, ada, "task.updated"), { operation: "undo_change" });
+    assert.deepEqual((await listTaskParticipants(ada, [followed.id]))[followed.id], [ada.userId]);
+
+    const follower = (await createTask(mark, { title: "Follower becomes assignee", ownerId: sam.userId })).body.task;
+    await addTaskParticipants(mark, follower.id, [priya.userId]);
+    await updateTask(mark, follower.id, { ownerId: priya.userId });
+    assert.ok(!((await listTaskParticipants(mark, [follower.id]))[follower.id] ?? []).includes(priya.userId));
+    assert.ok(!(await listTasks(priya, { tagged: true })).data.some((item) => item.id === follower.id));
+    await updateTask(mark, follower.id, { ownerId: sam.userId });
+    assert.equal((await getTask(priya, follower.id)).ownerId, sam.userId);
+    assert.ok((await listTasks(priya, { tagged: true })).data.some((item) => item.id === follower.id));
 
     const passed = (await createTask(mark, { title: "Back and forth", ownerId: sam.userId })).body.task;
     await updateTask(sam, passed.id, { ownerId: priya.userId });
@@ -487,5 +505,32 @@ describe("task access edges", () => {
     await sql("update crm.tasks set workspace_id = $2 where id = $1", [task.id, other.workspaceId]);
     const left = await sql<{ user_id: string }>("select user_id from crm.task_participants where task_id = $1 order by user_id", [task.id]);
     assert.deepEqual(left.map((row) => row.user_id), [ada.userId]);
+  });
+
+  it("lets agents reassign tasks over REST and MCP", async () => {
+    const issued = await createAgent(mark.workspaceId, [...SCOPES].filter((scope) => scope !== "admin"), "Reassigner");
+    const task = (await createTask(mark, { title: "Agent moves this", ownerId: sam.userId })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    const response = await restUpdateTask(
+      new Request(`http://crm.test/api/v1/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${issued.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ ownerId: priya.userId }),
+      }),
+      { params: Promise.resolve({ id: task.id }) },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { task: { ownerId: string } }).task.ownerId, priya.userId);
+
+    const client = await mcp(issued.actor);
+    try {
+      const moved = (await client.call("update_next_action", { id: task.id, ownerId: sam.userId })).task as { ownerId: string };
+      assert.equal(moved.ownerId, sam.userId);
+    } finally {
+      await client.close();
+    }
+    assert.ok((await listTasks(priya, { tagged: true })).data.some((item) => item.id === task.id));
+    const alerts = await waitForAlerts(priya, 1);
+    assert.ok(alerts.some((alert) => alert.title === "Reassigner assigned you a task"));
   });
 });

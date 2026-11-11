@@ -337,7 +337,7 @@ async function applyTask(
   current: TaskRow,
   write: PreparedTask,
   provenance: Provenance | undefined,
-  options: { restoring?: boolean } = {},
+  options: { restoring?: boolean; since?: string | null } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const links = await resolveLinks(
@@ -378,7 +378,6 @@ async function applyTask(
     if (!options.restoring && !silent(provenance)) {
       await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
     }
-    if (nextOwner) await db.query("delete from crm.task_participants where task_id = $1 and user_id = $2", [current.id, nextOwner]);
   }
   change.values.push(current.id);
   let updated = 0;
@@ -396,8 +395,19 @@ async function applyTask(
   const saved = await readTask(db, current.id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
-  if (reassigning && options.restoring && actor.type === "user" && canChangeTask(actor, task)) {
-    await db.query("delete from crm.task_participants where task_id = $1 and user_id = $2", [current.id, actor.userId]);
+  if (reassigning && options.restoring && options.since && actor.type === "user" && canChangeTask(actor, task) && !silent(provenance)) {
+    const untagged = await db.query(
+      `delete from crm.task_participants
+       where task_id = $1 and user_id = $2 and added_by = $2 and created_at >= $3::timestamptz
+       returning user_id`,
+      [current.id, actor.userId, options.since],
+    );
+    if ((untagged.rowCount ?? 0) > 0) {
+      await recordAudit(db, actor, "task.participant_removed", "task", current.id, provenance, {
+        after: { title: task.title },
+        participant: { userId: actor.userId, removedBy: actor.userId },
+      });
+    }
   }
   const event =
     before.completedAt !== task.completedAt
@@ -668,12 +678,13 @@ export async function restoreTaskInDb(
   input: TaskWrite,
   completedAt: string | null | undefined,
   provenance: Provenance,
+  since: string | null = null,
 ) {
   const current = await readTask(db, id);
   if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;
-  return applyTask(db, actor, current, write, provenance, { restoring: true });
+  return applyTask(db, actor, current, write, provenance, { restoring: true, since });
 }
 
 export type DueReminder = {
@@ -726,7 +737,8 @@ export async function listTaskParticipants(actor: UserActor, taskIds: string[]):
   return withActor(actor, async (db) => {
     const result = await db.query<{ task_id: string; user_id: string }>(
       `select p.task_id, p.user_id from crm.task_participants p
-       where p.task_id = any($1::uuid[])
+       join crm.tasks t on t.id = p.task_id
+       where p.task_id = any($1::uuid[]) and p.user_id is distinct from t.owner_id
        order by p.created_at, p.user_id`,
       [ids],
     );
