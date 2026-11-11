@@ -2,9 +2,13 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
+import { holdEscape } from "@/components/chat/discussion";
+import { useDiscussion } from "@/components/chat/use-discussion";
+import { DiscussionButton, DocDiscussionPanel } from "@/components/docs/doc-discussion";
 import { HistoryRail, VersionBanner, VersionPreview, useVersions, type Selected } from "@/components/docs/history";
 import JotLine from "@/components/docs/jot-line";
 import MoreMenu from "@/components/docs/more-menu";
@@ -18,6 +22,7 @@ import type { Meeting, Page, PageFilter, PageSummary, Participant, Presence } fr
 import { docsData } from "@/lib/docs/connection";
 import { shiftDate } from "@/lib/docs/daily";
 import { clockTime, createdLabel, editedLabel, longDay, shortDay } from "@/lib/docs/format";
+import { DISCUSSION_PARAM } from "@/lib/chat/discussions";
 import { dailyHref, listHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -325,6 +330,20 @@ export default function NoteView({
   const versions = useVersions(pageId, historyOpen ? (page?.revision ?? 0) : -1);
   const detailsPressed = railChosen ? rail === "details" : wide;
   const daily = (page?.kind ?? summary?.kind) === "daily";
+  const discussable = Boolean(page && viewer && !daily && summary?.shared);
+  const discussion = useDiscussion("doc", pageId, { id: viewer?.id ?? "", name: viewer?.name ?? "" }, { enabled: discussable });
+  const [discussing, setDiscussing] = useState<string | null>(null);
+  const askedDiscussion = useSearchParams().get(DISCUSSION_PARAM) === "1";
+  const [askedFor, setAskedFor] = useState<string | null>(null);
+  if (askedDiscussion && pageId && askedFor !== pageId) {
+    setAskedFor(pageId);
+    setDiscussing(pageId);
+  }
+  const discussionOpen = discussable && discussing === pageId;
+
+  function toggleDiscussion() {
+    setDiscussing(discussionOpen ? null : pageId);
+  }
 
   useEffect(() => {
     if (!pageId) return;
@@ -350,10 +369,12 @@ export default function NoteView({
   }, [live, viewer]);
 
   function toggleDetails() {
-    setRail(detailsPressed ? null : "details");
+    setDiscussing(null);
+    setRail(detailsPressed && !discussionOpen ? null : "details");
   }
 
   function toggleHistory() {
+    setDiscussing(null);
     if (historyOpen) {
       setSelected(null);
       setRail(wide ? "details" : null);
@@ -411,7 +432,7 @@ export default function NoteView({
     <NoteRail page={page} />
   ) : null;
 
-  const railVisible = !focus && !phone && (railChosen ? Boolean(rail) : true);
+  const railVisible = !focus && !phone && !discussionOpen && (railChosen ? Boolean(rail) : true);
 
   if (empty) {
     return (
@@ -440,6 +461,7 @@ export default function NoteView({
         <span className="flex-1" />
         {!focus && <PresenceStack participants={stack} max={3} />}
         {!focus && summary && <PageShare summary={summary} compact />}
+        {!focus && discussable && <DiscussionButton discussion={discussion} pressed={discussionOpen} compact onClick={toggleDiscussion} />}
         {focus ? (
           <Button variant="secondary" size="icon" aria-label="Leave focus mode" onClick={() => setFocus(false)}>
             <CollapseIcon aria-hidden className="size-3.5" />
@@ -496,12 +518,13 @@ export default function NoteView({
             </span>
           )}
           {!daily && summary && !focus && <PageShare summary={summary} />}
+          {!focus && discussable && <DiscussionButton discussion={discussion} pressed={discussionOpen} onClick={toggleDiscussion} />}
           {!focus && (
             <>
-              <ToolButton label="Version history" pressed={historyOpen} onClick={toggleHistory}>
+              <ToolButton label="Version history" pressed={historyOpen && !discussionOpen} onClick={toggleHistory}>
                 <HistoryIcon aria-hidden className="size-3.5" />
               </ToolButton>
-              <ToolButton label="Backlinks and details" pressed={detailsPressed && !historyOpen} onClick={toggleDetails} shortcut="⌘\">
+              <ToolButton label="Backlinks and details" pressed={detailsPressed && !historyOpen && !discussionOpen} onClick={toggleDetails} shortcut="⌘\">
                 <SidebarPanelIcon aria-hidden className="size-3.5 -scale-x-100" />
               </ToolButton>
             </>
@@ -602,7 +625,30 @@ export default function NoteView({
             {railContent}
           </aside>
         )}
+        {discussionOpen && !focus && !phone && (
+          <aside
+            aria-label="Discussion"
+            data-quick-add-hide=""
+            className="max-[90rem]:bg-background flex min-h-0 w-[22rem] shrink-0 flex-col border-l border-white/[0.05] max-[90rem]:absolute max-[90rem]:inset-y-0 max-[90rem]:right-0 max-[90rem]:z-10 max-[90rem]:shadow-[-24px_0_48px_rgba(0,0,0,0.45)]"
+          >
+            <DocDiscussionPanel discussion={discussion} title={title} onClose={() => setDiscussing(null)} />
+          </aside>
+        )}
       </div>
+
+      <Sheet open={phone && discussionOpen} onOpenChange={(open) => !open && setDiscussing(null)}>
+        <SheetContent
+          side="right"
+          className="w-full"
+          aria-describedby={undefined}
+          onEscapeKeyDown={(event) => {
+            if (holdEscape(discussion)) event.preventDefault();
+          }}
+        >
+          <SheetTitle className="sr-only">Discussion</SheetTitle>
+          <DocDiscussionPanel discussion={discussion} title={title} phone onClose={() => setDiscussing(null)} />
+        </SheetContent>
+      </Sheet>
 
       <Sheet open={phone && railChosen && Boolean(rail)} onOpenChange={(open) => !open && setRail(null)}>
         <SheetContent side="bottom" className="bg-popover border-line-strong max-h-[80dvh] overflow-y-auto rounded-t-2xl">

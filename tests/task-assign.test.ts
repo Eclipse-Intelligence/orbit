@@ -140,7 +140,7 @@ describe("task assignment and tagging", () => {
 
     const alerts = await waitForAlerts(priya, 1);
     assert.deepEqual(alerts, [
-      { user_id: priya.userId, workspace_id: mark.workspaceId, title: "Sam Member tagged you in a task", body: "Send Halden the revised pricing", href: opened("/tasks?who=tagged"), source: "task" },
+      { user_id: priya.userId, workspace_id: mark.workspaceId, title: "Sam Member tagged you in a task", body: "Send Halden the revised pricing", href: opened(`/tasks?who=tagged&task=${task.id}`), source: "task" },
     ]);
 
     const participant = await addTaskParticipants(priya, task.id, [ada.userId]);
@@ -192,7 +192,7 @@ describe("task assignment and tagging", () => {
     await assert.rejects(completeTask(sam, task.id), /Only the assignee/);
 
     const alerts = await waitForAlerts(priya, 1);
-    assert.deepEqual(alerts.map((alert) => [alert.title, alert.href, alert.workspace_id]), [["Sam Member handed you a task", opened("/tasks"), mark.workspaceId]]);
+    assert.deepEqual(alerts.map((alert) => [alert.title, alert.href, alert.workspace_id]), [["Sam Member handed you a task", opened(`/tasks?task=${task.id}`), mark.workspaceId]]);
     const back = await updateTask(priya, task.id, { ownerId: sam.userId });
     assert.equal(back.body.task.ownerId, sam.userId);
     assert.ok(!(await listTasks(sam, { tagged: true })).data.some((item) => item.id === task.id));
@@ -260,7 +260,7 @@ describe("task assignment and tagging", () => {
     await settle();
     assert.deepEqual(
       (await alertsFor(mark)).map((alert) => [alert.title, alert.body, alert.href, alert.source]),
-      [["Done by Sam Member", "Send Halden the contract", "/tasks?view=completed", "task"]],
+      [["Done by Sam Member", "Send Halden the contract", `/tasks?view=completed&task=${forSam.id}`, "task"]],
     );
     assert.equal(alerts[0].workspace_id, mark.workspaceId);
     assert.deepEqual((await alertsFor(sam)).map((alert) => alert.title), ["Mark Ridgeon assigned you a task"]);

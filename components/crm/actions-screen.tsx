@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
@@ -9,12 +9,14 @@ import KeyboardList from "@/components/shortcuts/keyboard-list";
 import ActionTask from "@/components/beautifui/action-task";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import TaskPad from "@/components/crm/task-pad";
+import TaskPanel from "@/components/crm/task-panel";
 import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, completeTaskAction } from "@/app/(crm)/records";
 import { relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
+import { TASK_PARAM } from "@/lib/chat/discussions";
 import { companyHref } from "@/lib/crm/hrefs";
 import { tasksHref } from "@/lib/crm/task-views";
 import type { Company, Task, TaskView } from "@/lib/crm/types";
@@ -41,6 +43,8 @@ export default function ActionsScreen({
   members = [],
   tagged = {},
   taggedCount = 0,
+  discussions = {},
+  openTask = null,
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -54,6 +58,8 @@ export default function ActionsScreen({
   members?: AssignableMember[];
   tagged?: Record<string, string[]>;
   taggedCount?: number;
+  discussions?: Record<string, number>;
+  openTask?: Task | null;
 }) {
   const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
@@ -67,6 +73,30 @@ export default function ActionsScreen({
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState<Set<string>>(() => new Set());
   const [assigningIds, setAssigningIds] = useState<Set<string>>(() => new Set());
+  const search = useSearchParams();
+  const panelId = search.get(TASK_PARAM);
+  const listed = panelId ? (tasks.find((task) => task.id === panelId) ?? (openTask?.id === panelId ? openTask : null)) : null;
+  const [kept, setKept] = useState<Task | null>(null);
+  if (listed && listed !== kept) setKept(listed);
+  const panelTask = listed ?? (kept && kept.id === panelId ? kept : null);
+
+  const openPanel = useCallback((id: string) => {
+    const params = new URLSearchParams(window.location.search);
+    params.set(TASK_PARAM, id);
+    window.history.pushState({ taskPanel: true }, "", `${window.location.pathname}?${params.toString()}`);
+  }, []);
+
+  const closePanel = useCallback(() => {
+    const state = window.history.state as Record<string, unknown> | null;
+    if (state?.taskPanel === true) {
+      window.history.back();
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    params.delete(TASK_PARAM);
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }, []);
 
   async function complete(id: string) {
     setDone((current) => new Set(current).add(id));
@@ -205,12 +235,24 @@ export default function ActionsScreen({
               dueBadge={view === "all"}
               now={now}
               onComplete={view === "completed" || (who === "tagged" && !admin && task.createdByUserId !== viewer.id) ? undefined : () => complete(task.id)}
+              onOpen={() => openPanel(task.id)}
+              comments={discussions[task.id] ?? 0}
               assigning={assigning(task)}
             />
           ))}
         </RecordList>
       )}
       </KeyboardList>
+      <TaskPanel
+        task={panelTask ?? kept}
+        open={Boolean(panelTask)}
+        onOpenChange={(open) => {
+          if (!open) closePanel();
+        }}
+        viewer={viewer}
+        members={members}
+        tagged={tagged[(panelTask ?? kept)?.id ?? ""] ?? []}
+      />
     </section>
   );
 }
