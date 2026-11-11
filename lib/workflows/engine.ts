@@ -833,7 +833,7 @@ export function chatBody(template: unknown, vars: Vars) {
       .filter((mention) => mention.kind === "member")
       .map((mention) => mention.id.toLowerCase()),
   );
-  let body = render(template, vars);
+  let body = render(template, vars).replace(/\u0000/g, "").replace(/\r\n?/g, "\n");
   for (let pass = 0; pass < 20 && untrustedTags(body, typed); pass += 1) {
     body = splitMentions(body)
       .map((piece) => {

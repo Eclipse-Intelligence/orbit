@@ -191,6 +191,9 @@ describe("Post to Chat workflow step", () => {
       assert.deepEqual(tagged(nested), [], nested);
     }
     assert.equal(chatBody("{{x}}", { x: `@[[x](${data})](${other})` }), `@x](${other})`);
+    assert.deepEqual(tagged(`@[x\u0000](${data})`), []);
+    assert.deepEqual(tagged(`@[[x\r](${data})](${other})`), []);
+    assert.equal(chatBody("a\r\nb\rc{{x}}", { x: "\u0000d" }), "a\nb\ncd");
   });
 
   it("picks the room linked to this workspace when names repeat, and asks to pick otherwise", async () => {
