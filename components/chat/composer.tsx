@@ -33,6 +33,7 @@ export default function Composer({
   compact,
   disabled,
   restoreOnFailure,
+  hideFailure,
   onSend,
   onEditLast,
   onEscape,
@@ -48,6 +49,7 @@ export default function Composer({
   compact?: boolean;
   disabled?: boolean;
   restoreOnFailure?: boolean;
+  hideFailure?: boolean;
   onSend: (text: string, mentions: Mention[]) => Promise<string | null>;
   onEditLast?: () => boolean;
   onEscape?: () => void;
@@ -156,7 +158,7 @@ export default function Composer({
           Messages can be up to {CHAT_BODY_MAX.toLocaleString("en-GB")} characters. This one is {length.toLocaleString("en-GB")}.
         </p>
       )}
-      {failure && (
+      {failure && !hideFailure && (
         <p role="alert" className="caption-style text-danger px-1">
           {failure}
         </p>

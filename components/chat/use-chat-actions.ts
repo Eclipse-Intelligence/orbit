@@ -5,7 +5,7 @@ import { deleteMessageAction, editMessageAction, postMessageAction } from "@/app
 import { chatJoined, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { isLocal, newerCursor, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
-import type { ChatMessage } from "@/lib/chat/types";
+import type { ChatMessage, ChatNeedsShare } from "@/lib/chat/types";
 import { encodeMentions, mentionsIn, type Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
 
@@ -31,12 +31,20 @@ export function messageBody(text: string, mentions: Mention[]) {
   return encodeMentions(text, mentions).trim();
 }
 
-export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState, userId: string, onError: (message: string) => void): ChatTimelineActions {
+export function useChatActions(
+  dispatch: Dispatch<ChatAction>,
+  state: ChatState,
+  userId: string,
+  onError: (message: string) => void,
+  onNeedsShare?: (clientKey: string, needs: ChatNeedsShare) => void,
+): ChatTimelineActions {
   const latest = useRef(state);
   const errorRef = useRef(onError);
+  const needsRef = useRef(onNeedsShare);
   useLayoutEffect(() => {
     latest.current = state;
     errorRef.current = onError;
+    needsRef.current = onNeedsShare;
   });
   const inflight = useRef(new Set<string>());
   const reads = useRef(new Map<string, string | null>());
@@ -122,6 +130,7 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
         return null;
       }
       const error = "error" in result ? result.error : SEND_FAILED;
+      if ("needsShare" in result && result.needsShare) needsRef.current?.(clientKey, result.needsShare);
       dispatch({ type: "failed", clientKey, error });
       return error;
     },

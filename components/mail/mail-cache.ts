@@ -234,26 +234,34 @@ export function loadThread(key: string, fresh = false) {
   return requestThread(key);
 }
 
-export function cachedAttachments(messageId: string) {
-  return attachmentLists.get(messageId) ?? null;
+function attachmentKey(messageId: string, shareId: string | null) {
+  return shareId ? `${shareId}|${messageId}` : messageId;
 }
 
-export function loadAttachments(messageId: string) {
-  const hit = attachmentRequests.get(messageId);
+export function cachedAttachments(messageId: string, shareId: string | null = null) {
+  return attachmentLists.get(attachmentKey(messageId, shareId)) ?? null;
+}
+
+export function loadAttachments(messageId: string, shareId: string | null = null) {
+  const key = attachmentKey(messageId, shareId);
+  const hit = attachmentRequests.get(key);
   if (hit) return hit;
-  const request = fetch(`/api/mail/attachments?message=${encodeURIComponent(messageId)}`, { cache: "no-store" })
+  const url = shareId
+    ? `/api/mail/shared/${encodeURIComponent(shareId)}/attachments?message=${encodeURIComponent(messageId)}`
+    : `/api/mail/attachments?message=${encodeURIComponent(messageId)}`;
+  const request = fetch(url, { cache: "no-store" })
     .then(async (response) => {
       const body = (await response.json().catch(() => ({}))) as { attachments?: MailAttachmentMeta[]; error?: string };
       if (!response.ok) throw new Error(body.error ?? "Attachments didn't load.");
       const items = body.attachments ?? [];
-      attachmentLists.set(messageId, items);
+      attachmentLists.set(key, items);
       return items;
     })
     .catch((error: unknown) => {
-      attachmentRequests.delete(messageId);
+      attachmentRequests.delete(key);
       throw error;
     });
-  attachmentRequests.set(messageId, request);
+  attachmentRequests.set(key, request);
   return request;
 }
 
