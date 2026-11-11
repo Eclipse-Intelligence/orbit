@@ -32,6 +32,7 @@ export type Discussion = {
   subject: ChatSubject;
   needsShare: NeedsSharePrompt | null;
   composerVersion: number;
+  keptDraft: { parentId: string | null; text: string; mentions: Mention[] } | null;
   settleNeedsShare: (added: boolean) => void;
   context: ChatContextValue;
   conversationId: string | null;
@@ -84,6 +85,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
   const [now, setNow] = useState(() => Date.now());
   const [needsShare, setNeedsShare] = useState<NeedsSharePrompt | null>(null);
   const [composerVersion, setComposerVersion] = useState(0);
+  const [keptDraft, setKeptDraft] = useState<Discussion["keptDraft"]>(null);
   const refusals = useRef(new Map<string, ChatNeedsShare>());
   const noteRefusal = useCallback((clientKey: string, needs: ChatNeedsShare) => {
     refusals.current.set(clientKey, needs);
@@ -102,6 +104,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
     setThreadId(null);
     setEditing(null);
     setNeedsShare(null);
+    setKeptDraft(null);
     dispatch({ type: "reset" });
   }
   const latest = useRef({ conversationId, threadId, subjectKey });
@@ -289,6 +292,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       });
       dispatch({ type: "pending", message });
       setNeedsShare(null);
+      setKeptDraft(null);
       const error = await deliver(message);
       if (error === null) {
         sent.current?.(message);
@@ -312,8 +316,10 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       if (!prompt) return;
       setNeedsShare(null);
       const key = draftKey(viewer.id, draftSubjectKey(subject), prompt.parentId);
-      const current = readDraft(key);
-      if (added) writeDraft(key, { text: "", mentions: [] });
+      const stored = readDraft(key);
+      const current = stored.text.trim() ? stored : { text: prompt.text, mentions: prompt.mentions };
+      writeDraft(key, added ? { text: "", mentions: [] } : current);
+      setKeptDraft(added ? null : { parentId: prompt.parentId, ...current });
       setComposerVersion((version) => version + 1);
       if (added && current.text.trim()) void send({ parentId: prompt.parentId, text: current.text, mentions: current.mentions });
     },
@@ -370,6 +376,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
     subject,
     needsShare,
     composerVersion,
+    keptDraft,
     settleNeedsShare,
     context,
     conversationId,

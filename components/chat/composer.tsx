@@ -39,6 +39,7 @@ export default function Composer({
   disabled,
   restoreOnFailure,
   hideFailure,
+  fallbackDraft,
   onSend,
   onEditLast,
   onEscape,
@@ -55,6 +56,7 @@ export default function Composer({
   disabled?: boolean;
   restoreOnFailure?: boolean;
   hideFailure?: boolean;
+  fallbackDraft?: { text: string; mentions: Mention[] } | null;
   onSend: (text: string, mentions: Mention[]) => Promise<string | null>;
   onEditLast?: () => boolean;
   onEscape?: () => void;
@@ -69,7 +71,8 @@ export default function Composer({
   const [loaded, setLoaded] = useState<string | null>(null);
   const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
   if (hydrated && loaded !== key) {
-    const draft = readDraft(key);
+    const stored = readDraft(key);
+    const draft = !stored.text.trim() && fallbackDraft?.text.trim() ? fallbackDraft : stored;
     setLoaded(key);
     setValue(draft.text);
     setMentions(draft.mentions);

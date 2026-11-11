@@ -943,6 +943,11 @@ export default function ThreadReader({
   const share = useThreadShare(shareKey);
   const shareId = share.state?.shareId ?? null;
   const [shareOpen, setShareOpen] = useState(false);
+  const [shareFor, setShareFor] = useState(shareKey);
+  if (shareFor !== shareKey) {
+    setShareFor(shareKey);
+    setShareOpen(false);
+  }
   const shareMembers = share.state?.people.filter((person) => !person.owner) ?? [];
   const body = useRef<HTMLDivElement>(null);
   const notesLayout = useNotesLayout(body, Boolean(shareId));

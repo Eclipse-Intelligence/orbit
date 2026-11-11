@@ -45,17 +45,20 @@ export default async function MailPage({
   const ownerKeyPromise = shared ? ownSharedThreadKey(user, shared).catch(() => null) : Promise.resolve(null);
   const list = () => listThreads(user, { view, sourceId: account, query });
   const [page, thread, accounts, ownerKey] = await Promise.all([
-    scheduledView || askedShared ? Promise.resolve(empty) : shared ? ownerKeyPromise.then((key) => (key ? list() : empty)) : list(),
+    scheduledView || askedShared ? Promise.resolve(empty) : shared && !query ? ownerKeyPromise.then((key) => (key ? list() : empty)) : list(),
     ownerKeyPromise.then((key) => {
       const wanted = key ?? (shared ? "" : text(resolved.thread));
       return wanted ? getThread(user, wanted, { reader: true }).catch(() => null) : null;
     }),
-    composeAccounts(user).catch(() => []),
+    composeAccounts(user).catch((error) => {
+      console.error("Mail accounts failed", error);
+      return null;
+    }),
     ownerKeyPromise,
   ]);
   const sharedOpen = shared && !ownerKey ? shared : null;
-  const noMailbox = accounts.length === 0;
-  const sharedView = !query && !ownerKey && (Boolean(sharedOpen) || askedShared || noMailbox);
+  const noMailbox = accounts !== null && accounts.length === 0;
+  const sharedView = !query && !ownerKey && !thread && (Boolean(sharedOpen) || askedShared || noMailbox);
 
   return (
     <MailScreen
@@ -77,7 +80,7 @@ export default async function MailPage({
       noMailbox={noMailbox}
       initialNotes={notes}
       initialNow={requestTime()}
-      accounts={accounts}
+      accounts={accounts ?? []}
     />
   );
 }

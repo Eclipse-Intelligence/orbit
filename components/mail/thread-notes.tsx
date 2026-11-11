@@ -68,7 +68,7 @@ function AddPrompt({ discussion, onAdd }: { discussion: Discussion; onAdd: AddPe
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={() => settle(false)} className="pointer-coarse:h-11 pointer-coarse:px-4">
+        <Button variant="ghost" size="sm" onClick={() => settle(false)} disabled={busy} className="pointer-coarse:h-11 pointer-coarse:px-4">
           Cancel
         </Button>
         <Button variant="primary" size="sm" onClick={() => void add()} disabled={busy} className="pointer-coarse:h-11 pointer-coarse:px-4">

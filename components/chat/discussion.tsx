@@ -141,6 +141,7 @@ export function DiscussionComposer({
       compact
       restoreOnFailure
       hideFailure={prompting}
+      fallbackDraft={discussion.keptDraft?.parentId === parentId ? discussion.keptDraft : null}
       autoFocus={autoFocus}
       disabled={prompting || (Boolean(parentId) && (!root || Boolean(root.deletedAt && root.replyCount === 0)))}
       onEscape={onEscape}

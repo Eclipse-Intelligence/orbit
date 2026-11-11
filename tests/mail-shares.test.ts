@@ -17,9 +17,11 @@ import type { MailShareLiveEvent } from "@/lib/mail/share-types";
 import {
   getSharedThread,
   getThreadShare,
+  getThreadSharePeople,
   listSharedAttachments,
   listSharedThreads,
   openSharedAttachment,
+  ownSharedThreadKey,
   removeFromShare,
   sharesLostOnLeaving,
   shareThread,
@@ -234,6 +236,20 @@ describe("sharing a thread", () => {
     assert.equal(again.share.shareId, first.share.shareId);
     assert.equal((await getThreadShare(mark, key)).shareId, first.share.shareId);
     await refused(getThreadShare(sam, key), /Conversation not found/);
+  });
+
+  it("answers the light lookups without telling a member anything about the owner's mailbox", async () => {
+    const shareId = (await getThreadShare(mark, key)).shareId!;
+    assert.deepEqual(await getThreadSharePeople(sam, key), { shareId: null, people: [] });
+    assert.deepEqual(await getThreadSharePeople(sam, threadKey(sourceId, "conv-missing")), { shareId: null, people: [] });
+    const own = await getThreadSharePeople(mark, key);
+    assert.equal(own.shareId, shareId);
+    assert.deepEqual(
+      own.people.map((person) => person.id),
+      [mark.userId, sam.userId],
+    );
+    assert.equal(await ownSharedThreadKey(sam, shareId), null);
+    assert.equal(await ownSharedThreadKey(mark, shareId), key);
   });
 
   it("tells the new person with a generic alert that isn't wrapped in a workspace switch", async () => {
