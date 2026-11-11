@@ -17,6 +17,7 @@ import {
   ClearContext,
   type ClearInstead,
 } from "@/components/capture/capture-items";
+import Dismissed from "@/components/capture/dismissed";
 import NotShown from "@/components/capture/not-shown";
 import { OFFLINE, postCapture } from "@/components/capture/capture-post";
 import { CaptureListContext, COLLAPSE_MS } from "@/components/capture/capture-row";
@@ -30,7 +31,7 @@ import { closeFollowUpAction } from "@/app/(crm)/capture/actions";
 import type { OthersApproval, WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
 import type { MetPerson } from "@/lib/crm/calendar";
 import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
-import type { UnfiledImport } from "@/lib/crm/conversations";
+import type { DismissedImport, UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { SkippedEmail } from "@/lib/mail/capture-filter";
@@ -69,6 +70,7 @@ export type CaptureData = {
   notShown: SkippedEmail[];
   unfiled: UnfiledImport[];
   people: MetPerson[];
+  dismissed: DismissedImport[];
 };
 
 type Entry = { id: string; section: CaptureSectionId; node: ReactNode };
@@ -137,6 +139,7 @@ export default function CaptureScreen({
   data,
   toFileTotal,
   notShownTotal,
+  dismissedTotal,
   sorting,
   rules,
   failed,
@@ -150,6 +153,7 @@ export default function CaptureScreen({
   data: CaptureData;
   toFileTotal: number;
   notShownTotal: number;
+  dismissedTotal: number;
   sorting: number;
   rules: SenderRule[];
   failed: CaptureSectionId[];
@@ -464,6 +468,7 @@ export default function CaptureScreen({
   const othersShown = data.others.length > 0 && (view === "all" || view === "approvals");
   const nothing = total === 0 && unread.size === 0;
   const notShownHere = (notShownTotal > 0 || rules.length > 0 || sorting > 0) && (view === "all" || view === "toFile");
+  const dismissedHere = dismissedTotal > 0 && (view === "all" || view === "toFile");
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -547,7 +552,12 @@ export default function CaptureScreen({
                 })}
                 {othersShown && !showing.includes("approvals") && <OthersApprovals items={data.others} />}
               </KeyboardList>
-              {notShownHere && <NotShown items={data.notShown} total={notShownTotal} sorting={sorting} rules={rules} workspaceId={workspaceId} />}
+              {(notShownHere || dismissedHere) && (
+                <div className="flex flex-col gap-1">
+                  {notShownHere && <NotShown items={data.notShown} total={notShownTotal} sorting={sorting} rules={rules} workspaceId={workspaceId} />}
+                  {dismissedHere && <Dismissed items={data.dismissed} total={dismissedTotal} now={now} workspaceId={workspaceId} />}
+                </div>
+              )}
             </ClearContext.Provider>
           </CaptureListContext.Provider>
         </div>

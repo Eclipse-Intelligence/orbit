@@ -11,6 +11,8 @@ export const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 
 export type GranolaUser = { name: string | null; email: string };
 
+export type GranolaAttendee = { name?: string | null; email?: string | null };
+
 export type GranolaNoteSummary = {
   id: string;
   title: string | null;
@@ -36,7 +38,7 @@ export type GranolaTranscriptItem = {
 
 export type GranolaCalendarEvent = {
   event_title: string | null;
-  invitees: { email: string }[];
+  invitees: { email?: string | null }[];
   organiser: string | null;
   calendar_event_id: string | null;
   scheduled_start_time: string | null;
@@ -46,7 +48,7 @@ export type GranolaCalendarEvent = {
 export type GranolaNote = GranolaNoteSummary & {
   web_url: string;
   calendar_event: GranolaCalendarEvent | null;
-  attendees: GranolaUser[];
+  attendees: GranolaAttendee[];
   summary_text: string;
   summary_markdown: string | null;
   transcript: GranolaTranscriptItem[] | null;

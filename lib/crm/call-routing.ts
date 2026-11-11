@@ -1,3 +1,12 @@
+import {
+  contactsByName,
+  excludedNameKeys,
+  inKeyOrder,
+  onePerson,
+  titleNames,
+  usableNameKeys,
+  type NameCandidate,
+} from "@/lib/crm/call-names";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { internalAddresses, type Participant } from "@/lib/crm/conversations";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
@@ -17,7 +26,7 @@ const RULE_GRACE_MS = 5 * 60 * 1000;
 
 export type CallTarget = { actor: UserActor; match: PartyMatch };
 export type RuledPerson = { workspaceId: string; email: string; name: string | null };
-export type CallRoute = { targets: CallTarget[]; ruled: RuledPerson[] };
+export type CallRoute = { targets: CallTarget[]; ruled: RuledPerson[]; suggested: NameCandidate[] };
 
 type Rule = { domain: string; workspaceIds: string[]; updatedAt: number };
 
@@ -60,48 +69,12 @@ function domainOf(email: string) {
   return email.split("@")[1]?.toLowerCase() ?? "";
 }
 
-function personName(person: Participant) {
-  const name = person.name?.replace(/\s+/g, " ").trim() ?? "";
-  if (!name || canonicalEmail(name) || name.split(" ").length < 2 || name.length > 160) return null;
-  return name.toLowerCase();
-}
-
-async function memberNames(db: Db, workspaceId: string) {
-  const result = await db.query<{ name: string | null }>(
-    `select lower(regexp_replace(btrim(p.full_name), '\\s+', ' ', 'g')) as name
-     from crm.workspace_members m join crm.profiles p on p.id = m.user_id
-     where m.workspace_id = $1 and p.full_name is not null`,
-    [workspaceId],
-  );
-  return new Set(result.rows.map((row) => row.name).filter((name): name is string => Boolean(name)));
-}
-
-async function matchByName(db: Db, workspaceId: string, names: string[]): Promise<PartyMatch | null> {
-  for (const name of names) {
-    const result = await db.query<{ id: string; company_id: string | null; name: string }>(
-      `select c.id, c.company_id, coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email) as name
-       from crm.contacts c
-       where c.workspace_id = $1 and c.archived_at is null
-         and lower(regexp_replace(btrim(concat_ws(' ', c.first_name, c.last_name)), '\\s+', ' ', 'g')) = $2
-       limit 2`,
-      [workspaceId, name],
-    );
-    if (result.rows.length !== 1) continue;
-    const contact = result.rows[0];
-    const company = contact.company_id
-      ? (await db.query<{ name: string }>("select name from crm.companies where id = $1", [contact.company_id])).rows[0]?.name ?? null
-      : null;
-    return { contactId: contact.id, contactName: contact.name, companyId: contact.company_id, companyName: company };
-  }
-  return null;
-}
-
 export async function routeCallInDb(
   db: Db,
   owner: UserActor,
   actors: UserActor[],
   people: Participant[],
-  options: { own?: Set<string>; occurredAt?: string | null; names?: boolean } = {},
+  options: { own?: Set<string>; occurredAt?: string | null; names?: boolean; ownNames?: (string | null | undefined)[] } = {},
 ): Promise<CallRoute> {
   const workspaceIds = actors.map((item) => item.workspaceId);
   const own = options.own ?? (await ownCallAddresses(db, owner));
@@ -116,9 +89,13 @@ export async function routeCallInDb(
     emails.push({ email, name: person.name?.trim() || null });
   }
   const names = options.names
-    ? [...new Set(people.filter((person) => !person.email).map(personName).filter((name): name is string => Boolean(name)))]
+    ? usableNameKeys(
+        people.filter((person) => !person.email).map((person) => person.name),
+        await excludedNameKeys(db, workspaceIds, [owner.fullName, ...(options.ownNames ?? [])]),
+      )
     : [];
-  const targets: CallTarget[] = [];
+  const matched = new Map<string, CallTarget>();
+  const unmatched: UserActor[] = [];
   const ruled: RuledPerson[] = [];
   for (const actor of actors) {
     const internal = await internalAddresses(db, actor.workspaceId, [...own]);
@@ -127,11 +104,7 @@ export async function routeCallInDb(
       const rule = rules.get(domainOf(item.email));
       return !rule || rule.workspaceIds.includes(actor.workspaceId);
     });
-    let match = await matchParties(db, actor.workspaceId, allowed.map((item) => item.email));
-    if (!match.contactId && !match.companyId && names.length > 0) {
-      const members = await memberNames(db, actor.workspaceId);
-      match = (await matchByName(db, actor.workspaceId, names.filter((name) => !members.has(name)))) ?? match;
-    }
+    const match = await matchParties(db, actor.workspaceId, allowed.map((item) => item.email));
     for (const item of allowed) {
       const domain = domainOf(item.email);
       const rule = rules.get(domain);
@@ -143,9 +116,39 @@ export async function routeCallInDb(
       );
       if (!known.rowCount) ruled.push({ workspaceId: actor.workspaceId, email: item.email, name: item.name });
     }
-    if (match.contactId || match.companyId) targets.push({ actor, match });
+    if (match.contactId || match.companyId) matched.set(actor.workspaceId, { actor, match });
+    else unmatched.push(actor);
   }
-  return { targets, ruled };
+  let suggested: NameCandidate[] = [];
+  if (names.length > 0 && unmatched.length > 0) {
+    const found = await contactsByName(db, unmatched.map((item) => item.workspaceId), names);
+    const confident = names.filter((key) => onePerson(found.filter((candidate) => candidate.key === key)));
+    for (const actor of unmatched) {
+      const hit = inKeyOrder(found, confident).find((candidate) => candidate.workspaceId === actor.workspaceId);
+      if (hit) matched.set(actor.workspaceId, { actor, match: hit });
+    }
+    if (matched.size === 0) suggested = inKeyOrder(found, names);
+  }
+  const targets = actors.map((actor) => matched.get(actor.workspaceId)).filter((target): target is CallTarget => Boolean(target));
+  return { targets, ruled, suggested };
+}
+
+export async function suggestByTitleInDb(
+  db: Db,
+  owner: UserActor,
+  workspaceIds: string[],
+  titles: (string | null | undefined)[],
+  ownNames: (string | null | undefined)[] = [],
+) {
+  const names = [...new Set(titles.flatMap((title) => titleNames(title)))];
+  if (names.length === 0) return [];
+  const keys = usableNameKeys(names, await excludedNameKeys(db, workspaceIds, [owner.fullName, ...ownNames]));
+  return inKeyOrder(await contactsByName(db, workspaceIds, keys), keys);
+}
+
+export function suggestedWorkspace(suggested: NameCandidate[], fallback: string) {
+  if (suggested.length === 0 || suggested.some((candidate) => candidate.workspaceId === fallback)) return fallback;
+  return suggested[0].workspaceId;
 }
 
 export async function captureWorkspaceInDb(

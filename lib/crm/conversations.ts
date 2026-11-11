@@ -13,6 +13,15 @@ import {
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
+import {
+  asSuggestion,
+  contactsByName,
+  excludedNameKeys,
+  inKeyOrder,
+  titleNames,
+  usableNameKeys,
+  type ContactSuggestion,
+} from "@/lib/crm/call-names";
 import { CrmError, errorText, notFound } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { hasCalendarAccounts, hasCalendarFeeds } from "@/lib/crm/calendar-accounts";
@@ -549,7 +558,11 @@ export async function lockImportKey(db: Db, scope: string, source: ConversationS
 }
 
 type NewPerson = { name: string | null; email: string };
-export type UnfiledImport = ConversationImport & { newPeople: NewPerson[] };
+export type UnfiledImport = ConversationImport & { newPeople: NewPerson[]; suggestions: ContactSuggestion[] };
+export type DismissedImport = ConversationImport & { dismissedAt: string };
+
+const MAX_SUGGESTIONS = 3;
+const DISMISSED_DAYS = 30;
 
 function personName(person: Participant) {
   const name = person.name?.trim();
@@ -586,10 +599,19 @@ async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImpo
             )
           ).rows.map((row) => row.normalized_email),
         );
+  const excluded = await excludedNameKeys(db, [actor.workspaceId], [actor.fullName]);
+  const keys = imports.map((item) => suggestionKeys(item, excluded));
+  const found = await contactsByName(db, [actor.workspaceId], [...new Set(keys.flat())]);
   return imports.map((item, index) => ({
     ...item,
     newPeople: candidates[index].filter((person) => !existing.has(person.email)),
+    suggestions: inKeyOrder(found, keys[index]).slice(0, MAX_SUGGESTIONS).map(asSuggestion),
   }));
+}
+
+function suggestionKeys(item: ConversationImport, excluded: Set<string>) {
+  const names = item.participants.filter((person) => !person.email).map((person) => person.name);
+  return usableNameKeys(item.participants.length > 0 ? names : titleNames(item.title), excluded);
 }
 
 export async function listUnfiledImports(actor: UserActor, limit = 50, options: { mine?: boolean } = {}): Promise<UnfiledImport[]> {
@@ -926,6 +948,40 @@ export async function ignoreImport(actor: UserActor, importId: string) {
       "update crm.conversation_imports set status = 'ignored' where id = $1",
       [row.id],
     );
+  });
+}
+
+export async function restoreImport(actor: UserActor, importId: string) {
+  assertScope(actor.scopes, "activities:write");
+  if (!isUuid(importId)) throw notFound("conversation");
+  await withActor(actor, async (db) => {
+    const row = await lockImport(db, actor, importId);
+    if (!row) throw notFound("conversation");
+    if (row.status === "filed") throw new CrmError("conflict", "This conversation is already filed.", 409);
+    if (row.status !== "ignored") throw new CrmError("conflict", "This call is already back in Capture.", 409);
+    await db.query("update crm.conversation_imports set status = 'unfiled' where id = $1", [row.id]);
+  });
+}
+
+export async function listDismissedImports(actor: UserActor, limit = 50): Promise<{ items: DismissedImport[]; total: number }> {
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, async (db) => {
+    const where = `i.workspace_id = $1 and i.user_id = $2 and i.status = 'ignored'
+       and i.updated_at > now() - make_interval(days => $3)`;
+    const values = [actor.workspaceId, actor.userId, DISMISSED_DAYS];
+    const result = await db.query<ImportRow & { dismissed_at: Date | string }>(
+      `select ${IMPORT_COLUMNS}, i.updated_at as dismissed_at
+       from crm.conversation_imports i
+       where ${where}
+       order by i.updated_at desc
+       limit $4`,
+      [...values, Math.min(Math.max(limit, 1), 200)],
+    );
+    const total = await db.query<{ total: number }>(`select count(*)::int as total from crm.conversation_imports i where ${where}`, values);
+    return {
+      items: result.rows.map((row) => ({ ...mapImport(row), dismissedAt: iso(row.dismissed_at) ?? new Date(0).toISOString() })),
+      total: total.rows[0]?.total ?? 0,
+    };
   });
 }
 
