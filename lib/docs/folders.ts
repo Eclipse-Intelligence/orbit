@@ -3,7 +3,7 @@ import { CrmError, isPgError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { assertDocsRead, assertDocsWrite, placeableFolder, visibilityError, visibilityOf } from "@/lib/docs/store";
+import { assertDocsRead, assertDocsWrite, placeableFolder, untagFolderPagesAfterCommit, untagPrivatePages, visibilityError, visibilityOf } from "@/lib/docs/store";
 import { FOLDER_NAME_MAX, type DocFolder, type FolderMoveResult, type FolderSharing, type VisibilityChange } from "@/lib/docs/types";
 
 type FolderRow = {
@@ -167,6 +167,7 @@ export async function moveFolder(
     }
     if (change.changed && !input.allowVisibilityChange) throw visibilityError(after, parent ? parent.name : "the top level");
     const moving = (folder.parent_id ?? null) !== (parent?.id ?? null);
+    const subtree = moving && folder.effective_shared && !afterShared ? await folderTree(db, folder.id) : [];
     if (moving) {
       try {
         await db.query("update crm.page_folders set parent_id = $2 where id = $1", [folder.id, parent?.id ?? null]);
@@ -178,6 +179,10 @@ export async function moveFolder(
     await placeAmongSiblings(db, actor, folder.id, parent?.id ?? null, input.index);
     const moved = await loadFolder(db, actor, id);
     if (moving) await auditFolder(db, actor, "page_folder.moved", moved, provenance, { parentId: moved.parent_id, previousParentId: folder.parent_id, visibility: after }, folder.effective_shared);
+    if (folder.effective_shared && !moved.effective_shared) {
+      await untagPrivatePages(db, actor, provenance);
+      untagFolderPagesAfterCommit(db, subtree);
+    }
     return { folder: mapFolder(actor, moved), visibility: change };
   });
 }
@@ -187,6 +192,19 @@ function busyError(error: unknown) {
     return new CrmError("conflict", "Folders changed at the same time. Try again.", 409);
   }
   return error;
+}
+
+async function folderTree(db: Db, folderId: string) {
+  const result = await db.query<{ id: string }>(
+    `with recursive tree as (
+       select f.id from crm.page_folders f where f.id = $1
+       union all
+       select c.id from crm.page_folders c join tree t on c.parent_id = t.id
+     )
+     select id::text from tree`,
+    [folderId],
+  );
+  return result.rows.map((row) => row.id);
 }
 
 async function sharing(db: Db, folder: FolderRow): Promise<FolderSharing> {
@@ -234,6 +252,7 @@ export async function shareFolder(actor: Actor, id: string, shared: boolean, pro
         );
       }
       const before = await sharing(db, folder);
+      const subtree = !shared && folder.effective_shared ? await folderTree(db, folder.id) : [];
       try {
         await db.query("update crm.page_folders set shared = $2 where id = $1", [folder.id, shared]);
       } catch (error) {
@@ -241,6 +260,10 @@ export async function shareFolder(actor: Actor, id: string, shared: boolean, pro
       }
       const after = await loadFolder(db, actor, id);
       await auditFolder(db, actor, "page_folder.shared", after, provenance, { shared, docs: before.docs, folders: before.folders }, folder.effective_shared);
+      if (folder.effective_shared && !after.effective_shared) {
+        await untagPrivatePages(db, actor, provenance);
+        untagFolderPagesAfterCommit(db, subtree);
+      }
       return { folder: mapFolder(actor, after), sharing: { ...before, shared: after.shared, effectiveShared: after.effective_shared } };
     }
     return { folder: mapFolder(actor, folder), sharing: await sharing(db, folder) };

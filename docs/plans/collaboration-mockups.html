@@ -1,0 +1,1537 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit collaboration mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme:dark;
+  --background:#161616;--foreground:#f9fbff;--card:#1c1c1c;--popover:#161616;
+  --primary:#4124fb;--primary-hover:#4b30ff;--secondary:#1e1e1e;--muted:#2a2a2a;--muted-foreground:#7f7f7f;
+  --border:#232323;--input:#393939;--ring:#c8c8c8;
+  --sidebar:#171717;--sidebar-foreground:#7f7f7f;--sidebar-primary:#2a2a2a;--sidebar-accent:#181818;--sidebar-border:#232323;
+  --line-strong:#393939;--subtle:#8c8c8c;--faint:#6a6a6a;--soft:#a4a4a4;--chip:#cfcfcf;--icon:#d0d4dd;
+  --success:#22c55e;--warning:#fbbf24;--danger:#f97373;--status:#16c89e;
+  --surface-panel:rgb(255 255 255/.02);--surface-hover:rgb(255 255 255/.035);--surface-field:rgb(255 255 255/.04);
+  --surface-raised:rgb(255 255 255/.06);--surface-active:rgb(255 255 255/.07);
+  --surface-selected:color-mix(in srgb,var(--primary) 12%,transparent);--line-subtle:rgb(255 255 255/.06);
+  --tag-blue-bg:#1d2b3e;--tag-blue-border:#23354c;--tag-blue-text:#bfdbfe;
+  --tag-purple-bg:#231f3a;--tag-purple-border:#4b437b;--tag-purple-text:#b7aee9;
+  --tag-green-bg:#1f3a2d;--tag-green-border:#275137;--tag-green-text:#b1ebc5;
+  --tag-red-bg:#3e1d1e;--tag-red-border:#4c2324;--tag-red-text:#febfc6;
+  --tag-amber-bg:#31221b;--tag-amber-border:#6c4830;--tag-amber-text:#fed7aa;
+  --tag-neutral-bg:#2a2a2a;--tag-neutral-border:#363636;--tag-neutral-text:#cfcfcf;
+  --violet:#8b7bff;
+  --shadow-overlay:0px 16px 40px 0px rgba(0,0,0,.5),0px 0px 0px 1px #0e0e0e;
+  --ease-power3-out:cubic-bezier(0.25,1,0.5,1);
+  --ease-power3-in:cubic-bezier(0.5,0,0.75,0);
+  --c-mark:oklch(0.72 0.10 221);--c-sam:oklch(0.74 0.12 50);--c-john:oklch(0.72 0.12 150);--c-priya:oklch(0.72 0.11 300);--c-lena:oklch(0.75 0.11 95);
+}
+*{box-sizing:border-box;border-color:var(--border);margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:72px}
+body{background:var(--background);color:var(--foreground);font-family:Geist,ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.4}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,textarea,select{font:inherit;color:inherit}
+ul{list-style:none}
+svg{display:block;flex-shrink:0}
+h1{font-size:18px;line-height:1;font-weight:600;letter-spacing:-.01em}
+h2{font-size:16px;line-height:1;font-weight:600}
+h3{font-size:14px;line-height:1;font-weight:500}
+p{font-size:14px;line-height:1.4}
+.cap{font-size:12px;line-height:1.35}
+.lead{font-size:14px;line-height:1}
+.ui{font-size:13px;line-height:1.4}
+.eyebrow{font-size:11px;line-height:1;letter-spacing:1px;text-transform:uppercase;font-weight:500;color:var(--subtle)}
+.c-fg{color:var(--foreground)}.c-soft{color:var(--soft)}.c-subtle{color:var(--subtle)}.c-faint{color:var(--faint)}.c-danger{color:var(--danger)}.c-amber{color:var(--tag-amber-text)}.c-blue{color:var(--tag-blue-text)}.c-violet{color:var(--violet)}.c-green{color:var(--tag-green-text)}
+.fw5{font-weight:500}.fw6{font-weight:600}.tab{font-variant-numeric:tabular-nums}
+.row{display:flex;align-items:center}.col{display:flex;flex-direction:column}.wrap{flex-wrap:wrap}
+.g1{gap:4px}.g15{gap:6px}.g2{gap:8px}.g25{gap:10px}.g3{gap:12px}.g4{gap:16px}.g6{gap:24px}
+.f1{flex:1;min-width:0}.ml-a{margin-left:auto}.trunc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rel{position:relative}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.s3 {width:12px;height:12px}.s35{width:14px;height:14px}.s4{width:16px;height:16px}.s25{width:10px;height:10px}
+
+.btn{display:inline-flex;flex-shrink:0;align-items:center;justify-content:center;gap:6px;white-space:nowrap;border-radius:999px;font-weight:500;line-height:1;user-select:none;transition:background-color .15s var(--ease-power3-out),color .15s var(--ease-power3-out),scale .15s var(--ease-power3-out)}
+.btn:active{scale:.97}
+.btn:focus-visible{outline:2px solid rgb(200 200 200/.6);outline-offset:0}
+.btn.sm{padding:9px;font-size:12px}
+.btn.md{padding:8px;font-size:14px}
+.btn.ic{width:30px;height:30px;padding:0}
+.btn.ics{width:24px;height:24px;padding:0}
+.btn.chipsz{height:32px;gap:4px;padding:0 10px;font-size:13px}
+.btn.primary{background:var(--primary);color:var(--foreground);box-shadow:0 4px 4px 0 rgba(42,42,42,.32),0 0 0 1px #0e0e0e,inset 0 4px 6px 0 rgba(255,255,255,.2),inset 0 0 0 1px rgba(255,255,255,.15),inset 0 -8px 14px 0 rgba(0,0,0,.15)}
+.btn.primary:hover{background:var(--primary-hover)}
+.btn.secondary{background:var(--secondary);box-shadow:0 0 0 1px rgba(0,0,0,.4),inset 0 1px 0 0 rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.06)}
+.btn.secondary:hover,.btn.secondary[data-on]{background:var(--muted)}
+.btn.ghost{color:var(--subtle)}
+.btn.ghost:hover{background:rgb(255 255 255/.06);color:var(--foreground)}
+.btn.chip{font-weight:400;color:var(--subtle)}
+.btn.chip:hover{background:var(--surface-hover);color:var(--foreground)}
+.btn.chip[data-on]{background:var(--surface-active);color:var(--foreground)}
+.btn.link{border-radius:0;text-decoration:underline;text-underline-offset:2px;padding:0;font-weight:500}
+.btn.danger{color:var(--danger)}
+.kbd{display:inline-flex;height:16px;min-width:16px;align-items:center;justify-content:center;border-radius:4px;background:rgb(255 255 255/.12);padding:0 4px;font-size:10.5px;font-weight:500;opacity:.7;margin-left:2px}
+.cb{display:inline-flex;height:16px;min-width:24px;align-items:center;justify-content:center;border-radius:999px;border:.5px solid #414141;background:var(--muted);padding:0 4px;font-size:12px;color:var(--chip);box-shadow:0 0 0 .5px #0e0e0e;font-variant-numeric:tabular-nums}
+.cb.accent{background:var(--primary);color:var(--foreground);border-color:transparent;box-shadow:none}
+.tag{display:inline-flex;height:22px;align-items:center;border-radius:999px;border:1px solid var(--tag-neutral-border);background:var(--tag-neutral-bg);color:var(--tag-neutral-text);padding:0 8px;font-size:14px;line-height:1;white-space:nowrap}
+.tag.sm{padding:0 6px;font-size:12px;height:20px}
+.tag.amber{border-color:var(--tag-amber-border);background:var(--tag-amber-bg);color:var(--tag-amber-text)}
+.tag.red{border-color:var(--tag-red-border);background:var(--tag-red-bg);color:var(--tag-red-text)}
+.tag.blue{border-color:var(--tag-blue-border);background:var(--tag-blue-bg);color:var(--tag-blue-text)}
+.tag.purple{border-color:var(--tag-purple-border);background:var(--tag-purple-bg);color:var(--tag-purple-text)}
+.tag.green{border-color:var(--tag-green-border);background:var(--tag-green-bg);color:var(--tag-green-text)}
+.pchip{display:inline-flex;height:28px;max-width:100%;align-items:center;gap:6px;border-radius:999px;background:rgb(255 255 255/.06);padding:0 10px;font-size:12.5px;color:var(--soft);white-space:nowrap}
+.pchip.rm{padding-right:4px}
+.pchip .x{display:flex;width:20px;height:20px;align-items:center;justify-content:center;border-radius:999px;color:var(--subtle)}
+.pchip .x:hover{background:rgb(255 255 255/.1);color:var(--foreground)}
+button.pchip:hover{background:rgb(255 255 255/.1);color:var(--foreground)}
+.av{display:inline-flex;flex-shrink:0;align-items:center;justify-content:center;border-radius:999px;font-weight:500;line-height:1;background:color-mix(in srgb,var(--c) 26%,#1c1c1c);color:color-mix(in srgb,var(--c) 70%,#f9fbff)}
+.av.xs{width:16px;height:16px;font-size:8px}.av.sm{width:20px;height:20px;font-size:9px}.av.md{width:24px;height:24px;font-size:10px}.av.lg{width:28px;height:28px;font-size:11px}.av.xl{width:32px;height:32px;font-size:12px}
+.av.hook{border-radius:30%;background:var(--muted);color:var(--soft);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.stack{display:flex;align-items:center}
+.stack .av{box-shadow:0 0 0 2px var(--ringbg,var(--background))}
+.stack .av+.av{margin-left:-4px}
+.mono{display:inline-flex;width:20px;height:20px;flex-shrink:0;align-items:center;justify-content:center;border-radius:6px;background:var(--secondary);color:var(--subtle);font-size:10px;font-weight:500}
+.mention{border-radius:4px;background:var(--tag-purple-bg);color:var(--tag-purple-text);box-shadow:0 0 0 2px var(--tag-purple-bg)}
+.mention.me{background:color-mix(in srgb,var(--primary) 34%,transparent);color:#fff;box-shadow:0 0 0 2px color-mix(in srgb,var(--primary) 34%,transparent)}
+.rec{color:var(--foreground);text-decoration:underline;text-decoration-color:rgb(139 123 255/.7);text-underline-offset:3px;cursor:pointer}
+.field{display:flex;width:100%;min-width:0;height:36px;align-items:center;border-radius:8px;border:1px solid var(--line-strong);background:var(--secondary);padding:0 12px;font-size:14px;color:var(--foreground);outline:none}
+.field::placeholder{color:var(--subtle)}
+.field:focus{border-color:var(--ring);box-shadow:0 0 0 2px rgb(200 200 200/.25)}
+textarea.field{height:auto;min-height:80px;padding:8px 12px;line-height:20px;resize:vertical}
+select.field{appearance:none;padding-right:32px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%238c8c8c' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:12px}
+label.lbl{font-size:14px;line-height:1;font-weight:500}
+.switch{position:relative;display:inline-flex;height:20px;width:36px;flex-shrink:0;align-items:center;border-radius:999px;background:var(--primary)}
+.switch::after{content:"";width:16px;height:16px;border-radius:999px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.4);transform:translateX(18px);transition:transform .2s var(--ease-power3-out)}
+.switch[aria-checked=false]{background:var(--muted);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.switch[aria-checked=false]::after{transform:translateX(2px)}
+.pop{background:var(--popover);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-overlay);overflow:hidden}
+.opt{display:flex;width:100%;align-items:center;gap:10px;border-radius:8px;padding:6px 10px;text-align:left}
+.opt:hover{background:rgb(255 255 255/.05)}
+.opt[aria-selected=true]{background:rgb(255 255 255/.07)}
+.opt .nm{font-size:13.5px;line-height:20px;color:var(--foreground)}
+.grp{padding:8px 10px 4px;font-size:12px;color:var(--subtle)}
+.overlay{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:20}
+.dialog{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:calc(100% - 2rem);max-width:480px;z-index:21;background:var(--popover);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-overlay)}
+.dialog .dh{display:flex;flex-direction:column;gap:8px;padding:20px 48px 20px 24px;border-bottom:1px solid var(--line-strong);position:relative}
+.dialog .dh .btn{position:absolute;top:16px;right:16px}
+.dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:16px 24px;border-top:1px solid var(--line-strong)}
+.notice{display:flex;align-items:flex-start;gap:10px;border-radius:8px;padding:10px 12px;background:rgb(255 255 255/.03)}
+.notice.amber{background:var(--tag-amber-bg)}
+
+/* page chrome */
+.topnav{position:sticky;top:0;z-index:100;background:rgb(22 22 22/.86);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.topnav .in{display:flex;align-items:center;gap:12px;max-width:1440px;margin:0 auto;padding:10px 16px}
+.topnav nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0;mask-image:linear-gradient(to right,black calc(100% - 24px),transparent)}
+.topnav nav a{display:inline-flex;height:30px;align-items:center;gap:6px;padding:0 10px;border-radius:999px;font-size:13px;color:var(--subtle);text-decoration:none;white-space:nowrap}
+.topnav nav a:hover{background:var(--surface-hover);color:var(--foreground)}
+.topnav nav a b{font-weight:500;color:var(--faint);font-variant-numeric:tabular-nums}
+.page{max-width:1440px;margin:0 auto;padding:0 16px 120px}
+.intro{padding:40px 0 8px;max-width:47.5em}
+.intro h1{font-size:24px;margin-bottom:12px}
+.intro p{color:var(--soft);margin-top:8px}
+.screen{padding-top:56px}
+.screen>header{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 24px;margin-bottom:12px}
+.screen>header .num{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;letter-spacing:1px}
+.screen>header h2{font-size:20px;letter-spacing:-.01em;margin-top:6px}
+.screen>.notes{max-width:60em;color:var(--soft);font-size:13px;line-height:1.55;margin-bottom:16px}
+.screen>.notes li{position:relative;padding-left:14px}
+.screen>.notes li::before{content:"";position:absolute;left:2px;top:.62em;width:4px;height:4px;border-radius:9px;background:var(--faint)}
+.seg{display:inline-flex;padding:3px;border-radius:999px;background:var(--secondary);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+.seg button{height:26px;padding:0 12px;border-radius:999px;font-size:12.5px;color:var(--subtle)}
+.seg button[aria-pressed=true]{background:var(--muted);color:var(--foreground);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.screen[data-view=desk] .v-phone,.screen[data-view=phone] .v-desk{display:none}
+.stage{overflow-x:auto;padding:4px 4px 24px;margin:0 -4px}
+.frames{display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start;padding:12px 12px 8px}
+.flabel{font-size:12px;color:var(--subtle);margin:0 0 10px 4px}
+.callout{display:inline-flex;align-items:center;gap:6px;border-radius:6px;border:1px dashed rgb(253 230 138/.5);color:var(--tag-yellow-text,#fde68a);font-size:11.5px;line-height:1.3;padding:3px 7px;background:rgb(51 48 26/.6)}
+.callout.abs{position:absolute;z-index:30;pointer-events:none}
+
+/* desktop frame */
+.desk{position:relative;width:1280px;height:800px;flex-shrink:0;display:flex;border:1px solid var(--line-strong);border-radius:14px;overflow:hidden;background:var(--background);box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.desk.short{height:640px}
+.canvas{position:relative;border:1px solid var(--line-strong);border-radius:14px;overflow:hidden;background:var(--background);flex-shrink:0}
+
+/* sidebar */
+.sbar{width:254px;flex-shrink:0;display:flex;flex-direction:column;background:var(--sidebar);border-right:1px solid var(--sidebar-border)}
+.sbar .top{display:flex;align-items:center;gap:8px;height:60px;padding:0 12px;border-bottom:1px solid var(--sidebar-border);background:var(--sidebar-accent)}
+.sbar .sec{display:flex;flex-direction:column;gap:4px;padding:12px}
+.sbar .sec+.sec{border-top:1px solid var(--sidebar-border)}
+.nav{display:flex;width:100%;height:30px;align-items:center;gap:6px;padding:0 8px;border-radius:8px;font-size:14px;font-weight:500;color:var(--sidebar-foreground)}
+.nav:hover{color:var(--foreground)}
+.nav .ico{color:var(--subtle)}
+.nav[data-on]{height:32px;margin-bottom:3px;background:var(--sidebar-primary);color:var(--foreground);box-shadow:0 0 0 1px rgba(0,0,0,.4),inset 0 1px 0 0 rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.06)}
+.nav[data-on] .ico{color:var(--icon)}
+.nav .lb{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav.sub{font-weight:400;font-size:13px;height:28px;padding-left:28px}
+.new-ring{position:absolute;inset:-3px;border-radius:10px;border:1px dashed rgb(253 230 138/.55);pointer-events:none}
+
+/* header */
+.hdr{height:60px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--border);background:var(--sidebar-accent)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+.panel{background:var(--surface-panel);border-radius:16px}
+
+/* chat */
+.clist{width:272px;flex-shrink:0;display:flex;flex-direction:column;gap:2px;padding:10px 8px;overflow:auto}
+.clist .h{display:flex;align-items:center;justify-content:space-between;padding:14px 8px 6px}
+.citem{display:flex;width:100%;height:30px;align-items:center;gap:8px;padding:0 8px;border-radius:8px;font-size:14px;color:var(--soft);text-align:left}
+.citem:hover{background:var(--surface-hover);color:var(--foreground)}
+.citem[data-on]{background:var(--surface-active);color:var(--foreground)}
+.citem.unread{color:var(--foreground);font-weight:600}
+.citem .hash{color:var(--faint)}
+.citem .ws{font-size:11.5px;color:var(--faint);font-weight:400}
+.room{flex:1;min-width:0;display:flex;flex-direction:column;margin:8px 8px 8px 0}
+.rhead{display:flex;align-items:center;gap:8px;height:52px;flex-shrink:0;padding:0 12px 0 20px;border-bottom:1px solid var(--line-subtle)}
+.rhead .title{font-size:15px;font-weight:600;display:flex;align-items:center;gap:4px}
+.msgs{flex:1;min-height:0;overflow:auto;padding:12px 0 8px;display:flex;flex-direction:column}
+.msg{position:relative;display:flex;gap:12px;padding:6px 20px}
+.msg:hover{background:var(--surface-hover)}
+.msg.cont{padding-top:2px}
+.msg .gut{width:28px;flex-shrink:0;text-align:right}
+.msg .gut time{visibility:hidden;font-size:10.5px;color:var(--faint);line-height:22px}
+.msg.cont:hover .gut time{visibility:visible}
+.msg .b{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.msg .hd{display:flex;align-items:baseline;gap:8px}
+.msg .hd .n{font-size:14px;font-weight:500}
+.msg .hd time{font-size:12px;color:var(--subtle);font-variant-numeric:tabular-nums}
+.msg .tx{font-size:14px;line-height:22px;color:var(--foreground);overflow-wrap:anywhere}
+.msg.mine-mention{background:color-mix(in srgb,var(--primary) 7%,transparent);box-shadow:inset 2px 0 0 color-mix(in srgb,var(--primary) 80%,white 0%)}
+.msg .tools{position:absolute;right:16px;top:-14px;display:none;align-items:center;gap:2px;padding:2px;border-radius:10px;background:var(--popover);border:1px solid var(--line-strong);box-shadow:var(--shadow-overlay)}
+.msg:hover .tools,.msg .tools[data-show]{display:flex}
+.replies{display:inline-flex;align-self:flex-start;align-items:center;gap:8px;margin-top:4px;margin-left:-6px;padding:3px 8px 3px 6px;border-radius:8px;font-size:12.5px}
+.replies:hover{background:var(--surface-raised)}
+.replies .ct{color:var(--violet);font-weight:500}
+.replies .stack{--ringbg:#1a1a1a}
+.newdiv{display:flex;align-items:center;gap:8px;margin:10px 20px;color:var(--violet);font-size:11.5px;font-weight:500}
+.newdiv::before,.newdiv::after{content:"";height:1px;flex:1;background:color-mix(in srgb,var(--violet) 55%,transparent)}
+.newdiv::before{flex:0 0 0}
+.daydiv{display:flex;align-items:center;gap:10px;margin:14px 20px 6px;font-size:12px;color:var(--subtle)}
+.daydiv::before,.daydiv::after{content:"";height:1px;flex:1;background:var(--line-subtle)}
+.composer{display:flex;align-items:flex-end;gap:8px;border-radius:16px;border:1px solid var(--line-strong);background:var(--secondary);padding:6px 6px 6px 14px}
+.composer:focus-within{border-color:var(--ring)}
+.composer .ta{flex:1;min-width:0;min-height:28px;padding:4px 0;font-size:14px;line-height:20px;color:var(--foreground);background:transparent;border:0;outline:none;resize:none}
+.composer .ta.ph{color:var(--subtle)}
+.composer .send{width:30px;height:30px}
+.cwrap{padding:0 16px 14px;flex-shrink:0}
+.typing{display:flex;align-items:center;gap:6px;height:22px;padding:0 4px;font-size:12px;color:var(--subtle)}
+.dots{display:inline-flex;gap:3px}
+.dots i{width:4px;height:4px;border-radius:9px;background:var(--subtle);animation:bounce 1.2s infinite var(--ease-power3-out)}
+.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
+@keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-3px)}}
+@media (prefers-reduced-motion:reduce){.dots i{animation:none}}
+.failed .tx{color:var(--soft)}
+.failrow{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--danger)}
+.thread{width:380px;flex-shrink:0;display:flex;flex-direction:column;margin:8px 8px 8px 0}
+.room-wrap{flex:1;min-width:0;display:flex}
+.room-wrap:not(.thread-open) .thread{display:none}
+.jump{position:absolute;left:50%;bottom:76px;transform:translateX(-50%);display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:999px;background:var(--popover);border:1px solid var(--line-strong);box-shadow:var(--shadow-overlay);font-size:13px}
+.hookmsg{border-radius:12px;border:1px solid var(--line-subtle);background:var(--surface-field);padding:10px 12px;display:flex;flex-direction:column;gap:4px;margin-top:4px;max-width:34em}
+
+/* phone */
+.phone{position:relative;width:390px;height:844px;flex-shrink:0;border-radius:52px;overflow:hidden;background:var(--background);box-shadow:0 0 0 10px #060606,0 0 0 11px #2c2c2c,0 30px 70px rgba(0,0,0,.55);display:flex;flex-direction:column;margin:11px}
+.phone .sbx{height:50px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:6px 30px 0 34px;font-size:15px;font-weight:600}
+.phone .island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:122px;height:35px;border-radius:999px;background:#000}
+.phone .home{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:9px;background:rgb(255 255 255/.75);z-index:40}
+.phone .body{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
+.phdr{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+.back{height:30px;gap:4px;padding:0 12px 0 8px;max-width:45%}
+.kb{flex-shrink:0;height:291px;background:#2b2b2d;padding:8px 3px 0;display:grid;grid-template-rows:repeat(4,42px);row-gap:12px}
+.kb .r{display:flex;gap:6px;justify-content:center}
+.kb .k{width:32px;border-radius:5px;background:#5b5b5e;box-shadow:0 1px 0 #1a1a1a}
+.kb .k.w{width:44px;background:#3f3f42}.kb .k.sp{width:180px}
+.ph-tabs{display:flex;gap:2px;overflow:hidden;padding:0 12px}
+
+/* mail */
+.mrow{display:flex;flex-direction:column;gap:2px;border-radius:12px;padding:10px 12px;text-align:left;width:100%}
+.mrow:hover{background:var(--surface-hover)}
+.mrow[data-on]{background:var(--surface-active)}
+.mrow .l1{display:flex;align-items:center;gap:8px;min-width:0}
+.mrow .l2{display:flex;align-items:baseline;gap:6px;padding-left:14px;font-size:13px;min-width:0}
+.dot{width:6px;height:6px;border-radius:9px;flex-shrink:0}
+.dot.un{background:var(--primary);box-shadow:0 0 0 3px rgba(65,36,251,.18)}
+.mcard{border-radius:16px;background:var(--surface-panel)}
+.mcard .mh{display:flex;align-items:flex-start;gap:12px;padding:12px 16px}
+.att{display:inline-flex;height:32px;max-width:18rem;align-items:center;gap:8px;border-radius:999px;background:rgb(255 255 255/.05);padding:0 12px 0 10px;font-size:13px}
+.att:hover{background:rgb(255 255 255/.08)}
+.notes-panel{width:340px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--line-subtle)}
+
+/* compose card */
+.ccard{position:relative;width:544px;height:560px;display:flex;flex-direction:column;background:var(--popover);border:1px solid var(--line-strong);border-radius:16px;box-shadow:var(--shadow-overlay);overflow:hidden;flex-shrink:0}
+.ccard .ch{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px}
+.ccard .cb2{flex:1;min-height:0;display:flex;flex-direction:column;gap:4px;overflow:auto;padding:4px 16px 0}
+.ccard .cf{display:flex;align-items:center;gap:4px;padding:8px 16px 12px;flex-shrink:0}
+.crow{display:flex;align-items:center;gap:8px;min-height:32px}
+.crow .k{width:32px;flex-shrink:0;font-size:13px;color:var(--subtle)}
+.rchip{display:inline-flex;height:26px;align-items:center;gap:6px;border-radius:999px;background:rgb(255 255 255/.06);padding:0 10px;font-size:13px}
+.body-ed{font-size:14px;line-height:24px;color:var(--foreground);padding-top:6px}
+.cur{position:relative;display:inline-block;width:0;height:1em;vertical-align:baseline}
+.cur::before{content:"";position:absolute;top:-4px;bottom:-5px;left:0;width:2px;border-radius:9px;background:var(--cc)}
+.cur>span{position:absolute;top:-17px;left:0;padding:2px 6px;border-radius:4px 4px 4px 0;font-size:10.5px;line-height:13px;font-weight:500;color:#161616;background:var(--cc);white-space:nowrap}
+.sel{background:color-mix(in srgb,var(--cc) 18%,transparent);border-radius:2px}
+.lockline{display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:999px;background:var(--surface-raised);font-size:13px;color:var(--soft)}
+.ro{color:var(--soft)}
+
+/* doc */
+.note-title{font-size:30px;line-height:1.15;font-weight:600;letter-spacing:-.022em}
+.note-body{font-size:16px;line-height:1.7;color:#e3e5ea}
+.note-body p{font-size:16px;line-height:1.7;margin-bottom:12px;color:#e3e5ea}
+.note-body h3{font-size:19px;line-height:1.35;font-weight:600;letter-spacing:-.012em;margin:14px 0 6px;color:var(--foreground)}
+.dmention{border-radius:4px;padding:0 3px;background:var(--tag-purple-bg);color:var(--tag-purple-text)}
+
+/* sheet */
+.sheet{position:absolute;top:0;right:0;bottom:0;z-index:21;display:flex;flex-direction:column;background:var(--background);border-left:1px solid var(--line-strong)}
+.sheet .sh{display:flex;align-items:center;justify-content:space-between;gap:8px;height:56px;flex-shrink:0;padding:0 24px;border-bottom:1px solid var(--line-strong)}
+.sheet .sf{display:flex;align-items:center;justify-content:space-between;gap:8px;height:62px;flex-shrink:0;padding:0 24px;border-top:1px solid var(--line-strong)}
+.sheet .sb{flex:1;min-height:0;overflow:auto}
+.kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:10px 12px;align-items:center}
+.kv>dt{font-size:13px;color:var(--subtle)}
+.trow{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--border);min-height:44px}
+.done{display:flex;width:24px;height:24px;flex-shrink:0;align-items:center;justify-content:center;border-radius:999px;background:var(--secondary);color:var(--subtle)}
+.done i{width:6px;height:6px;border-radius:9px;background:currentColor}
+.done.red{background:var(--danger);color:#fff}
+.card-s{border:1px solid var(--sidebar-border);background:var(--sidebar-accent);border-radius:12px}
+.secline{border-top:1px solid var(--border)}
+code.mono-t{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.annot{font-size:12px;color:var(--faint);max-width:46em;line-height:1.5;margin:6px 4px 0}
+.decisions{margin-top:72px;max-width:62em}
+.decisions h2{font-size:20px;margin-bottom:16px}
+.decisions ol{padding-left:20px;color:var(--soft);font-size:14px;line-height:1.6;display:flex;flex-direction:column;gap:8px}
+.decisions ol li::marker{color:var(--faint)}
+.decisions b{color:var(--foreground);font-weight:500}
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <div class="in">
+    <strong class="fw6" style="font-size:13px;white-space:nowrap">Orbit · Collaboration</strong>
+    <nav aria-label="Screens">
+      <a href="#s1"><b>1</b>@ picker</a>
+      <a href="#s2"><b>2</b>Chat</a>
+      <a href="#s3"><b>3</b>Chat on phone</a>
+      <a href="#s4"><b>4</b>Room settings</a>
+      <a href="#s5"><b>5</b>Threads</a>
+      <a href="#s6"><b>6</b>Tasks</a>
+      <a href="#s7"><b>7</b>Doc discussion</a>
+      <a href="#s8"><b>8</b>Shared email</a>
+      <a href="#s9"><b>9</b>Share control</a>
+      <a href="#s10"><b>10</b>Shared draft</a>
+      <a href="#s11"><b>11</b>Bell</a>
+      <a href="#choices"><b>·</b>Choices to approve</a>
+    </nav>
+  </div>
+</div>
+
+<main class="page">
+  <div class="intro">
+    <h1>Collaboration mockups</h1>
+    <p>Phase 0 of <code class="mono-t">docs/plans/collaboration.md</code>. Built with Orbit's real tokens, type scale, buttons, avatars and icons. Names and companies are invented.</p>
+    <p class="cap c-subtle">Dashed yellow labels are notes for review, not part of the interface. Use the Desktop and Phone switch on each screen. Hover messages, click reply counts, and type <b class="c-fg">@</b> in screen 1.</p>
+  </div>
+
+  <!-- 1 -->
+  <section id="s1" class="screen" data-view="desk">
+    <header>
+      <div><div class="num">01</div><h2>The @ picker</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div>
+    </header>
+    <ul class="notes">
+      <li>The existing mention list (<code class="mono-t">mention-input.tsx</code>) with two group labels: People first, then Records. Same row style, same width cap (352px), same keyboard: arrows, Enter or Tab, Esc.</li>
+      <li>People show avatar, name and workspace role. Records keep today's "Kind · detail" line. You are left out of People.</li>
+      <li>Try it: the composer below is live. Type <b>@</b>, then a few letters.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="canvas" style="width:760px;height:520px;display:flex;flex-direction:column">
+        <div class="rhead"><span class="title"><span class="c-faint">#</span>sales</span></div>
+        <div class="msgs" style="justify-content:flex-end">
+          <div class="msg"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>09:02</time></div><div class="tx">Halden want the revised pricing before their board meets.</div></div></div>
+        </div>
+        <div class="cwrap">
+          <div class="composer rel" id="pick-box">
+            <div class="f1 rel">
+              <div id="pick-mirror" aria-hidden="true" style="position:absolute;inset:0;padding:4px 0;font-size:14px;line-height:20px;white-space:pre-wrap;word-break:break-word;pointer-events:none"></div>
+              <textarea id="pick-ta" class="ta" rows="1" role="combobox" aria-expanded="false" aria-controls="pick-list" aria-autocomplete="list" aria-label="Message #sales" placeholder="Message #sales" style="position:relative;color:transparent;caret-color:var(--foreground);width:100%">Can you send it today </textarea>
+            </div>
+            <button class="btn primary ic send" aria-label="Send"><i data-i="arrowUp" class="s35"></i></button>
+            <ul id="pick-list" role="listbox" aria-label="Tag a person or record" class="pop" style="position:absolute;left:0;bottom:calc(100% + 8px);width:352px;max-height:288px;overflow:auto;padding:4px;display:none"></ul>
+          </div>
+        </div>
+      </div>
+      <p class="annot">The list opens above the composer in Chat and below the field in the task pad, as today. Picking a person in a private doc opens the share dialog (screen 7). Picking someone outside a shared email asks the owner first (screen 9).</p>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div class="phone">
+          <div class="island"></div><div class="sbx"><span>9:41</span><span class="row g1"><i data-i="signal"></i></span></div>
+          <div class="body">
+            <div class="phdr"><button class="btn secondary sm back"><i data-i="chevL" class="s35"></i><span class="trunc">Chat</span></button><span class="f1 fw6" style="font-size:15px;text-align:center;margin-right:62px"><span class="c-faint">#</span>sales</span></div>
+            <div class="msgs" style="justify-content:flex-end">
+              <div class="msg" style="padding:6px 14px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>09:02</time></div><div class="tx">Halden want the revised pricing before their board meets.</div></div></div>
+            </div>
+            <div class="rel" style="padding:0 8px 8px">
+              <ul class="pop" style="position:absolute;left:8px;right:8px;bottom:calc(100% + 0px);padding:4px">
+                <li class="grp">People</li>
+                <li><button class="opt" aria-selected="true"><b data-av="sam" data-s="md"></b><span class="f1 col"><span class="nm">Sam Okafor</span><span class="cap c-subtle">Admin</span></span></button></li>
+                <li class="grp">Records</li>
+                <li><button class="opt"><span class="col f1" style="padding-left:0"><span class="nm">Samsara Foods</span><span class="cap c-subtle">Company · samsara.co</span></span></button></li>
+                <li><button class="opt"><span class="col f1"><span class="nm">Sam Whitfield</span><span class="cap c-subtle">Contact · Halden Group</span></span></button></li>
+              </ul>
+              <div class="composer"><div class="ta" style="font-size:16px">Can you check with @sa</div><button class="btn primary ic send" aria-label="Send"><i data-i="arrowUp" class="s35"></i></button></div>
+            </div>
+            <div data-kb></div>
+          </div>
+          <div class="home"></div>
+        </div>
+      </div>
+      <p class="annot">On phones the list spans the composer's width (16px inputs, 44px rows) and sits above the keyboard.</p>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section id="s2" class="screen" data-view="desk">
+    <header>
+      <div><div class="num">02</div><h2>Chat on desktop</h2></div>
+    </header>
+    <ul class="notes">
+      <li>Chat sits under Mail in the sidebar. Its badge counts conversations with unread messages and turns purple when one of them mentions you, like Capture.</li>
+      <li>Chat list: Threads, Rooms, Direct messages. Unread is bold. Mentions show a count badge. Workspace labels on rooms only appear for people in more than one workspace (Mark is in two).</li>
+      <li>The room shows the unread divider, a thread root with reply count, avatars and last reply time, a message that mentions you, the typing line and a failed send. Click "4 replies" to close or open the thread panel.</li>
+    </ul>
+    <div class="stage">
+      <div class="desk">
+        <div data-inc="sidebar" data-active="chat"></div>
+        <div class="main">
+          <div data-inc="header" data-title="Chat"></div>
+          <div class="row f1" style="min-height:0;align-items:stretch">
+            <div data-inc="clist" data-active="sales"></div>
+            <div class="room-wrap thread-open" id="rw2">
+              <div class="room panel">
+                <div class="rhead">
+                  <span class="title"><span class="c-faint">#</span>sales</span>
+                  <span class="cap c-faint" style="margin-left:4px">Eclipse</span>
+                  <span class="ml-a row g2"><span class="stack" style="--ringbg:#1a1a1a"><b data-av="sam" data-s="sm"></b><b data-av="priya" data-s="sm"></b><b data-av="john" data-s="sm"></b><b data-av="mark" data-s="sm"></b></span><span class="cap c-subtle tab">4</span>
+                  <button class="btn ghost ic" aria-label="Room settings" title="Room settings"><i data-i="sliders" class="s35"></i></button></span>
+                </div>
+                <div class="msgs">
+                  <div class="daydiv">Yesterday</div>
+                  <div class="msg"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>16:02</time></div><div class="tx">Halden signed the pilot. Kick-off is Monday, notes in <span class="rec">Halden kick-off</span>.</div>
+                    <button class="replies" data-thread="rw2"><span class="stack"><b data-av="john" data-s="xs"></b><b data-av="sam" data-s="xs"></b><b data-av="mark" data-s="xs"></b></span><span class="ct">4 replies</span><span class="c-subtle">Last reply 17:40</span></button></div></div>
+                  <div class="msg"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n">John Hale</span><time>16:20</time></div><div class="tx">Nice. I'll open an Opportunity for the full rollout: <span class="rec">Halden Group rollout</span>.</div></div></div>
+                  <div class="newdiv">New</div>
+                  <div class="daydiv" style="margin-top:4px">Today</div>
+                  <div class="msg mine-mention"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Sam Okafor</span><time>09:14</time></div><div class="tx"><span class="mention me">@Mark Ridgeon</span> can you send Halden the revised pricing today? They asked twice.</div></div>
+                    <div class="tools"><button class="btn ghost ics" aria-label="Reply in thread" title="Reply in thread"><i data-i="reply" class="s35"></i></button><button class="btn ghost ics" aria-label="Copy link" title="Copy link"><i data-i="link" class="s35"></i></button></div></div>
+                  <div class="msg cont"><span class="gut"><time>09:15</time></span><div class="b"><div class="tx">I've shared the thread with you and <span class="mention">@Priya Nair</span>.</div></div></div>
+                  <div class="msg"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>09:31</time></div><div class="tx">On it. Sending before 12.</div></div>
+                    <div class="tools" data-show><button class="btn ghost ics" aria-label="Reply in thread" title="Reply in thread"><i data-i="reply" class="s35"></i></button><button class="btn ghost ics" aria-label="Edit" title="Edit (Up arrow)"><i data-i="edit" class="s35"></i></button><button class="btn ghost ics" aria-label="Delete" title="Delete"><i data-i="trash" class="s35"></i></button></div></div>
+                  <div class="msg cont failed"><span class="gut"><time>09:32</time></span><div class="b"><div class="tx">Looping in <span class="mention">@John Hale</span> for the contract side.</div>
+                    <div class="failrow" role="alert"><i data-i="alert" class="s3"></i>Couldn't send. <button class="btn link" style="color:var(--foreground);font-size:12px">Try again</button></div></div></div>
+                </div>
+                <div class="cwrap">
+                  <div class="typing" role="status"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Sam is typing…</div>
+                  <div class="composer"><div class="ta ph">Message #sales</div><button class="btn primary ic send" aria-label="Send" title="Send (Enter)"><i data-i="arrowUp" class="s35"></i></button></div>
+                </div>
+              </div>
+              <div class="thread panel">
+                <div class="rhead" style="padding-left:16px"><span class="col g1"><h3>Thread</h3><span class="cap c-subtle"># sales</span></span><button class="btn ghost ics ml-a" aria-label="Close thread" title="Close (Esc)" data-thread="rw2"><i data-i="x" class="s4"></i></button></div>
+                <div class="msgs">
+                  <div class="msg" style="padding:6px 16px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>Yesterday 16:02</time></div><div class="tx">Halden signed the pilot. Kick-off is Monday, notes in <span class="rec">Halden kick-off</span>.</div></div></div>
+                  <div class="daydiv" style="margin:8px 16px">4 replies</div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n">John Hale</span><time>16:31</time></div><div class="tx">Great. Who's running kick-off?</div></div></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>16:33</time></div><div class="tx"><span class="mention">@Sam Okafor</span> is. I'll join.</div></div></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Sam Okafor</span><time>17:02</time></div><div class="tx">Yes. Agenda is in the doc.</div></div></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>17:40</time></div><div class="tx">I'll come for the first half.</div></div></div>
+                </div>
+                <div class="cwrap" style="padding:0 12px 14px"><div class="composer"><div class="ta ph">Reply…</div><button class="btn primary ic send" aria-label="Send reply"><i data-i="arrowUp" class="s35"></i></button></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="annot">Shortcuts for the shortcuts sheet: Up arrow edits your last message, R replies in thread on the focused message, Esc closes the thread, G then C opens Chat, Alt Up and Alt Down move between conversations. Draft text is kept per room.</p>
+  </section>
+
+  <!-- 3 -->
+  <section id="s3" class="screen" data-view="phone">
+    <header><div><div class="num">03</div><h2>Chat on phone</h2></div></header>
+    <ul class="notes">
+      <li>List, room and thread are pushed screens. Back returns to the previous one. The composer sits above the keyboard (the visualViewport handling from the compose dock).</li>
+      <li>The room shows "Jump to latest" when scrolled up. Hover tools become a long press menu: Reply in thread, Edit, Delete.</li>
+    </ul>
+    <div class="stage">
+      <div class="frames">
+        <div>
+          <div class="flabel">List</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr"><button class="btn secondary ic" aria-label="Open navigation"><i data-i="menu" class="s35"></i></button><h1 class="f1">Chat</h1><button class="btn secondary ic" aria-label="New message"><i data-i="compose" class="s35"></i></button><button class="btn secondary ic rel" aria-label="Notifications, unread"><i data-i="bell" class="s35"></i><span style="position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:9px;background:var(--danger)"></span></button></div>
+              <div data-inc="clist" data-active="" data-phone="1" style="display:contents"></div>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Room, keyboard open</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr"><button class="btn secondary sm back"><i data-i="chevL" class="s35"></i><span>Chat</span></button><span class="f1 fw6" style="font-size:15px;text-align:center"><span class="c-faint">#</span>sales</span><button class="btn ghost ic" aria-label="Room settings" style="width:44px;height:44px"><i data-i="sliders" class="s35"></i></button></div>
+              <div class="msgs rel">
+                <div class="msg" style="padding:6px 14px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>16:02</time></div><div class="tx">Halden signed the pilot. Kick-off is Monday.</div>
+                  <button class="replies"><span class="stack"><b data-av="john" data-s="xs"></b><b data-av="sam" data-s="xs"></b></span><span class="ct">4 replies</span><span class="c-subtle">17:40</span></button></div></div>
+                <div class="newdiv" style="margin:10px 14px">New</div>
+                <div class="msg mine-mention" style="padding:6px 14px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Sam Okafor</span><time>09:14</time></div><div class="tx"><span class="mention me">@Mark Ridgeon</span> can you send Halden the revised pricing today?</div></div></div>
+                <div class="msg" style="padding:6px 14px"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>09:31</time></div><div class="tx">On it.</div></div></div>
+              </div>
+              <button class="jump" style="bottom:auto;top:66px"><i data-i="chevD" class="s3"></i>Jump to latest</button>
+              <div style="padding:0 8px 8px"><div class="typing" role="status"><span class="dots"><i></i><i></i><i></i></span>Sam is typing…</div><div class="composer"><div class="ta" style="font-size:16px">Sending now|</div><button class="btn primary ic send" aria-label="Send" style="width:36px;height:36px"><i data-i="arrowUp" class="s35"></i></button></div></div>
+              <div data-kb></div>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Thread</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr"><button class="btn secondary sm back"><i data-i="chevL" class="s35"></i><span># sales</span></button><span class="f1 fw6" style="font-size:15px;text-align:center;margin-right:70px">Thread</span></div>
+              <div class="msgs">
+                <div class="msg" style="padding:6px 14px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>Yesterday 16:02</time></div><div class="tx">Halden signed the pilot. Kick-off is Monday, notes in <span class="rec">Halden kick-off</span>.</div></div></div>
+                <div class="daydiv" style="margin:8px 14px">4 replies</div>
+                <div class="msg" style="padding:6px 14px"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n">John Hale</span><time>16:31</time></div><div class="tx">Great. Who's running kick-off?</div></div></div>
+                <div class="msg" style="padding:6px 14px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>16:33</time></div><div class="tx"><span class="mention">@Sam Okafor</span> is. I'll join.</div></div></div>
+                <div class="msg" style="padding:6px 14px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Sam Okafor</span><time>17:02</time></div><div class="tx">Yes. Agenda is in the doc.</div></div></div>
+                <div class="msg" style="padding:6px 14px"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>17:40</time></div><div class="tx">I'll come for the first half.</div></div></div>
+              </div>
+              <div style="padding:0 8px 34px"><div class="composer"><div class="ta ph" style="font-size:16px">Reply…</div><button class="btn primary ic send" aria-label="Send reply" style="width:36px;height:36px"><i data-i="arrowUp" class="s35"></i></button></div></div>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section id="s4" class="screen" data-view="desk">
+    <header>
+      <div><div class="num">04</div><h2>Room settings, new room and empty state</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div>
+    </header>
+    <ul class="notes">
+      <li>Room settings open as a Sheet from the right (full screen on phones). Name, workspace link, members, incoming webhooks, Leave room.</li>
+      <li>The Workspace field only exists for people in more than one workspace. Everyone else creates unlinked rooms without seeing the idea.</li>
+      <li>The hook secret is shown once, straight after Add incoming webhook or Rotate secret.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="desk">
+        <div data-inc="sidebar" data-active="chat"></div>
+        <div class="main">
+          <div data-inc="header" data-title="Chat"></div>
+          <div class="row f1" style="min-height:0;align-items:stretch">
+            <div data-inc="clist" data-active="alerts"></div>
+            <div class="room panel">
+              <div class="rhead"><span class="title"><span class="c-faint">#</span>alerts</span><span class="ml-a"><button class="btn secondary ic" data-on aria-label="Room settings"><i data-i="sliders" class="s35"></i></button></span></div>
+              <div class="msgs">
+                <div class="msg"><span class="av lg hook"><i data-i="braces" class="s35"></i></span><div class="b"><div class="hd"><span class="n">Google Analytics</span><span class="tag sm">Hook</span><time>08:00</time></div>
+                  <div class="hookmsg"><span class="fw5">Weekly traffic</span><span class="ui c-soft">Sessions 4,812, up 12% on last week. Top source: LinkedIn.</span><span class="rec ui" style="align-self:flex-start">Open report</span></div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="overlay"></div>
+        <aside class="sheet" style="width:480px" aria-label="Room settings">
+          <div class="sh"><h3>#alerts</h3><button class="btn ghost ics" aria-label="Close"><i data-i="x" class="s4"></i></button></div>
+          <div class="sb">
+            <div class="col g6" style="padding:20px 24px 24px">
+              <div class="col g2"><label class="lbl" for="rn">Name</label><input id="rn" class="field" value="alerts"></div>
+              <div class="col g2 rel">
+                <label class="lbl" for="rw">Workspace</label>
+                <select id="rw" class="field"><option>Eclipse</option><option>Not linked</option><option>Mark Ridgeon</option></select>
+                <span class="cap c-subtle">Only Eclipse members can join. Leaving Eclipse removes people from this room.</span>
+                <span class="callout" style="align-self:flex-start">Only shown to people in more than one workspace</span>
+              </div>
+              <div class="col g3">
+                <div class="row"><h3 class="f1">Members</h3><span class="cap c-subtle tab" style="margin-right:8px">3</span><button class="btn secondary sm"><i data-i="plus" class="s3"></i>Add people</button></div>
+                <ul class="col">
+                  <li class="row g25" style="padding:6px 0"><b data-av="mark" data-s="lg"></b><span class="f1 col g1"><span class="ui">Mark Ridgeon</span><span class="cap c-subtle">You · Created the room</span></span></li>
+                  <li class="row g25" style="padding:6px 0"><b data-av="sam" data-s="lg"></b><span class="f1 col g1"><span class="ui">Sam Okafor</span><span class="cap c-subtle">Admin</span></span><button class="btn ghost sm">Remove</button></li>
+                  <li class="row g25" style="padding:6px 0"><b data-av="priya" data-s="lg"></b><span class="f1 col g1"><span class="ui">Priya Nair</span><span class="cap c-subtle">Member</span></span><button class="btn ghost sm">Remove</button></li>
+                </ul>
+              </div>
+              <div class="col g3">
+                <div class="row"><h3 class="f1">Incoming webhooks</h3><button class="btn secondary sm"><i data-i="plus" class="s3"></i>Add incoming webhook</button></div>
+                <div class="card-s col">
+                  <div class="row g25" style="padding:12px 14px"><span class="av md hook"><i data-i="braces" class="s3"></i></span><span class="f1 col g1"><span class="ui">Google Analytics</span><span class="cap c-subtle">Last post today 08:00</span></span><span class="tag sm green">Active</span></div>
+                  <div class="col g2" style="padding:0 14px 14px">
+                    <div class="row g2"><code class="mono-t field trunc" style="height:32px;font-size:12px">https://orbit.eclipse.co/api/chat/hooks/hk_7Qm2x9</code><button class="btn secondary sm" style="height:32px"><i data-i="copy" class="s3"></i>Copy</button></div>
+                    <div class="notice amber col" style="align-items:stretch;gap:8px">
+                      <span class="ui c-amber fw5">Secret</span>
+                      <div class="row g2"><code class="mono-t field trunc" style="height:32px;font-size:12px;background:rgb(0 0 0/.25)">ohk_live_3fJ8sQ1wZr0bVx6NcL4tYp</code><button class="btn secondary sm" style="height:32px"><i data-i="copy" class="s3"></i>Copy</button></div>
+                      <span class="cap c-soft">Copy it now. It won't be shown again. Senders use <code class="mono-t">Authorization: Bearer</code> with this secret.</span>
+                    </div>
+                    <div class="row g1" style="margin-top:2px"><button class="btn ghost sm">Pause</button><button class="btn ghost sm">Rotate secret</button><button class="btn ghost sm danger ml-a"><i data-i="trash" class="s3"></i>Hold to delete</button></div>
+                  </div>
+                </div>
+                <span class="cap c-subtle">Body: <code class="mono-t">{"text", "title", "url"}</code>. Other JSON shows as a formatted block. Hook messages never tag anyone.</span>
+              </div>
+            </div>
+          </div>
+          <div class="sf"><button class="btn ghost md danger">Leave room</button><button class="btn primary md">Save</button></div>
+        </aside>
+      </div>
+      <div class="frames" style="padding-left:0;margin-top:24px">
+        <div>
+          <div class="flabel">New room</div>
+          <div class="canvas" style="width:560px;height:520px;background:rgb(0 0 0/.5)">
+            <div class="dialog" role="dialog" aria-label="New room">
+              <div class="dh"><h2>New room</h2><button class="btn ghost ics" aria-label="Close"><i data-i="x" class="s4"></i></button></div>
+              <div class="col g4" style="padding:20px 24px">
+                <div class="col g2"><label class="lbl" for="nr">Name</label><input id="nr" class="field" placeholder="pricing" value="design-review"></div>
+                <div class="col g2"><label class="lbl" for="nw">Workspace</label><select id="nw" class="field"><option>Not linked</option><option>Eclipse</option><option>Mark Ridgeon</option></select><span class="cap c-subtle">Anyone who shares a workspace with you can be added.</span></div>
+                <div class="col g2"><span class="lbl">People</span><div class="field" style="height:auto;min-height:36px;padding:4px 6px;flex-wrap:wrap;gap:4px"><span class="pchip rm"><b data-av="priya" data-s="xs"></b>Priya Nair<span class="x"><i data-i="x" class="s3"></i></span></span><span class="c-subtle" style="padding-left:4px;font-size:14px">Add people…</span></div></div>
+              </div>
+              <div class="df"><button class="btn ghost md">Cancel</button><button class="btn primary md">Create room</button></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Empty room</div>
+          <div class="canvas" style="width:560px;height:520px;display:flex;flex-direction:column">
+            <div class="rhead"><span class="title"><span class="c-faint">#</span>design-review</span><span class="ml-a"><button class="btn ghost ic" aria-label="Room settings"><i data-i="sliders" class="s35"></i></button></span></div>
+            <div class="f1 col" style="align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px">
+              <span class="row g1"><span class="stack"><b data-av="mark" data-s="lg"></b><b data-av="priya" data-s="lg"></b></span></span>
+              <p class="c-soft">Start of #design-review. Only members can see it.</p>
+              <button class="btn secondary sm"><i data-i="plus" class="s3"></i>Add people</button>
+            </div>
+            <div class="cwrap"><div class="composer"><div class="ta ph">Message #design-review</div><button class="btn primary ic" aria-label="Send"><i data-i="arrowUp" class="s35"></i></button></div></div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">No rooms yet</div>
+          <div class="canvas" style="width:300px;height:520px;display:flex;flex-direction:column;padding:10px 8px">
+            <div class="clist" style="width:auto;padding:0">
+              <button class="citem"><i data-i="threads" class="s35 c-subtle"></i><span class="f1">Threads</span></button>
+              <div class="h"><span class="eyebrow">Rooms</span><button class="btn ghost ics" aria-label="New room"><i data-i="plus" class="s3"></i></button></div>
+              <p class="cap c-subtle" style="padding:0 8px 4px">No rooms yet.</p>
+              <div class="h"><span class="eyebrow">Direct messages</span><button class="btn ghost ics" aria-label="New message"><i data-i="plus" class="s3"></i></button></div>
+              <p class="cap c-subtle" style="padding:0 8px">Message anyone who shares a workspace with you.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div class="phone">
+          <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+          <div class="body">
+            <div class="phdr"><button class="btn secondary sm back"><i data-i="chevL" class="s35"></i><span># alerts</span></button><span class="f1 fw6" style="font-size:15px;text-align:center;margin-right:84px">Settings</span></div>
+            <div class="col g6" style="padding:16px;overflow:auto;flex:1">
+              <div class="col g2"><label class="lbl">Name</label><input class="field" value="alerts" style="font-size:16px;height:44px"></div>
+              <div class="col g2"><label class="lbl">Workspace</label><select class="field" style="font-size:16px;height:44px"><option>Eclipse</option></select><span class="cap c-subtle">Only Eclipse members can join.</span></div>
+              <div class="col g2"><div class="row"><h3 class="f1">Members</h3><button class="btn secondary sm" style="height:36px">Add people</button></div>
+                <div class="row g25" style="padding:6px 0"><b data-av="mark" data-s="lg"></b><span class="f1 ui">Mark Ridgeon</span><span class="cap c-subtle">You</span></div>
+                <div class="row g25" style="padding:6px 0"><b data-av="sam" data-s="lg"></b><span class="f1 ui">Sam Okafor</span><button class="btn ghost sm" style="height:36px">Remove</button></div>
+              </div>
+              <div class="col g2"><div class="row"><h3 class="f1">Incoming webhooks</h3></div>
+                <div class="card-s row g25" style="padding:12px"><span class="av md hook"><i data-i="braces" class="s3"></i></span><span class="f1 ui">Google Analytics</span><span class="tag sm green">Active</span><i data-i="chevR" class="s3 c-subtle"></i></div>
+                <button class="btn secondary md" style="height:44px">Add incoming webhook</button></div>
+              <button class="btn ghost md danger" style="align-self:flex-start;height:44px">Leave room</button>
+            </div>
+          </div>
+          <div class="home"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section id="s5" class="screen" data-view="desk">
+    <header><div><div class="num">05</div><h2>Threads</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div></header>
+    <ul class="notes">
+      <li>Every thread you follow (you started it, replied or were mentioned), newest activity first. Unread threads first, with the new replies shown and a "2 new" count.</li>
+      <li>Each card shows where it lives, the root, the latest replies and a Reply field. Opening a card opens the thread panel. Reading clears it from the Threads badge.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="desk">
+        <div data-inc="sidebar" data-active="chat"></div>
+        <div class="main">
+          <div data-inc="header" data-title="Chat"></div>
+          <div class="row f1" style="min-height:0;align-items:stretch">
+            <div data-inc="clist" data-active="threads"></div>
+            <div class="room panel">
+              <div class="rhead"><span class="title">Threads</span></div>
+              <div class="msgs" style="padding:16px 20px;gap:12px">
+                <article class="mcard" style="background:var(--surface-raised);padding:12px 0 8px">
+                  <div class="row g2" style="padding:0 16px 6px"><span class="ui fw5"><span class="c-faint">#</span>sales</span><span class="tag sm purple">2 new</span><span class="cap c-subtle ml-a">10:42</span></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>Yesterday</time></div><div class="tx c-soft">Halden signed the pilot. Kick-off is Monday, notes in <span class="rec">Halden kick-off</span>.</div></div></div>
+                  <button class="btn link ui c-subtle" style="margin:2px 0 4px 56px;color:var(--subtle);font-weight:400">2 earlier replies</button>
+                  <div class="msg" style="padding:6px 16px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n fw6">Sam Okafor</span><time>10:31</time></div><div class="tx fw5">Moved kick-off to 10:00, Halden's CFO can only do mornings.</div></div></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n fw6">John Hale</span><time>10:42</time></div><div class="tx fw5"><span class="mention me">@Mark Ridgeon</span> still fine for you?</div></div></div>
+                  <div style="padding:6px 16px 6px 56px"><div class="composer" style="border-radius:12px"><div class="ta ph">Reply…</div></div></div>
+                </article>
+                <article class="mcard" style="background:var(--surface-raised);padding:12px 0 8px">
+                  <div class="row g2" style="padding:0 16px 6px"><b data-av="sam" data-s="xs"></b><span class="ui fw5">Sam Okafor</span><span class="cap c-subtle">Direct message</span><span class="tag sm purple">1 new</span><span class="cap c-subtle ml-a">09:50</span></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>Mon</time></div><div class="tx c-soft">Can you own the Samsara Foods renewal?</div></div></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n fw6">Sam Okafor</span><time>09:50</time></div><div class="tx fw5">Yes, I'll take it from here.</div></div></div>
+                </article>
+                <article class="mcard" style="padding:12px 0 8px">
+                  <div class="row g2" style="padding:0 16px 6px"><span class="ui c-soft"><span class="c-faint">#</span>general</span><span class="cap c-subtle ml-a">Tue</span></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n">John Hale</span><time>Tue</time></div><div class="tx c-soft">Office closed on the 24th.</div>
+                    <button class="replies"><span class="stack"><b data-av="priya" data-s="xs"></b><b data-av="mark" data-s="xs"></b></span><span class="ct">3 replies</span><span class="c-subtle">Last reply Tue</span></button></div></div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div class="phone">
+          <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+          <div class="body">
+            <div class="phdr"><button class="btn secondary sm back"><i data-i="chevL" class="s35"></i><span>Chat</span></button><span class="f1 fw6" style="font-size:15px;text-align:center;margin-right:62px">Threads</span></div>
+            <div class="msgs" style="padding:10px 8px;gap:8px">
+              <article class="mcard" style="background:var(--surface-raised);padding:10px 0 6px">
+                <div class="row g2" style="padding:0 12px 4px"><span class="ui fw5"><span class="c-faint">#</span>sales</span><span class="tag sm purple">2 new</span><span class="cap c-subtle ml-a">10:42</span></div>
+                <div class="msg" style="padding:6px 12px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n fw6">Sam Okafor</span><time>10:31</time></div><div class="tx fw5">Moved kick-off to 10:00.</div></div></div>
+                <div class="msg" style="padding:6px 12px"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n fw6">John Hale</span><time>10:42</time></div><div class="tx fw5"><span class="mention me">@Mark Ridgeon</span> still fine for you?</div></div></div>
+              </article>
+              <article class="mcard" style="background:var(--surface-raised);padding:10px 0 6px">
+                <div class="row g2" style="padding:0 12px 4px"><b data-av="sam" data-s="xs"></b><span class="ui fw5">Sam Okafor</span><span class="tag sm purple">1 new</span></div>
+                <div class="msg" style="padding:6px 12px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="tx fw5">Yes, I'll take it from here.</div></div></div>
+              </article>
+            </div>
+          </div>
+          <div class="home"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section id="s6" class="screen" data-view="desk">
+    <header><div><div class="num">06</div><h2>Task panel and Tasks list</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div>
+      <div class="seg" role="group" aria-label="View as" id="taskas"><button aria-pressed="true" data-as="owner">As John (assignee)</button><button aria-pressed="false" data-as="tagged">As Priya (tagged)</button></div></header>
+    <ul class="notes">
+      <li>Tasks gains a Tagged filter beside Mine (and Everyone for owners and admins). Mine stays tasks you own. Rows show the assignee's avatar and a discussion count.</li>
+      <li>The task panel is a Sheet: title, assignee, due, reminder, Tagged, description, linked records, then the discussion. Click the assignee to see the hand on menu.</li>
+      <li>Switch "View as" to see a tagged person's panel: read and discuss, no editing, completing or reassigning.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="desk">
+        <div data-inc="sidebar" data-active="tasks"></div>
+        <div class="main">
+          <div class="hdr"><h1 class="f1">Tasks</h1>
+            <span class="row g1"><button class="btn ghost sm">Mine</button><button class="btn secondary sm" aria-current="page">Tagged <span class="c-subtle tab">2</span></button><button class="btn ghost sm">Everyone</button></span>
+            <button class="btn secondary ic" aria-label="Search and commands"><i data-i="search" class="s35"></i></button><button class="btn secondary ic" aria-label="Notifications"><i data-i="bell" class="s35"></i></button>
+          </div>
+          <div class="row g2 wrap" style="padding:16px 16px 0">
+            <button class="btn secondary sm">All <span class="c-subtle tab">2</span></button><button class="btn ghost sm">Overdue <span class="c-subtle tab">0</span></button><button class="btn ghost sm">Today <span class="c-subtle tab">1</span></button><button class="btn ghost sm">Upcoming <span class="c-subtle tab">1</span></button><button class="btn ghost sm">Completed <span class="c-subtle tab">4</span></button>
+          </div>
+          <div style="padding:12px 16px;border-bottom:1px solid var(--border)"><div class="composer"><div class="ta ph">Add a task… @ for a company or contact</div><button class="btn primary ic" aria-label="Add task"><i data-i="arrowUp" class="s35"></i></button></div></div>
+          <ul>
+            <li class="trow" style="background:var(--surface-active)"><span class="done"><i></i></span><span class="f1 trunc">Send Halden the revised pricing</span><span class="row g1 c-subtle cap"><i data-i="chat" class="s3"></i>3</span><span class="tag sm amber">Today</span><span class="pchip" style="height:24px"><span class="mono" style="width:16px;height:16px;font-size:8px">H</span>Halden Group</span><b data-av="john" data-s="md" title="Assigned to John Hale"></b></li>
+            <li class="trow"><span class="done"><i></i></span><span class="f1 trunc">Draft Samsara Foods renewal terms</span><span class="row g1 c-subtle cap"><i data-i="chat" class="s3"></i>1</span><span class="c-subtle ui">Fri</span><span class="pchip" style="height:24px"><span class="mono" style="width:16px;height:16px;font-size:8px">S</span>Samsara Foods</span><b data-av="sam" data-s="md"></b></li>
+          </ul>
+        </div>
+        <div class="overlay"></div>
+        <aside class="sheet" style="width:520px" aria-label="Task" id="tasksheet">
+          <div class="sh"><span class="row g2"><span class="lead">Task</span><span class="cap c-subtle">Created by Mark · 3 Nov</span></span><button class="btn ghost ics" aria-label="Close"><i data-i="x" class="s4"></i></button></div>
+          <div class="sb">
+            <div class="col g4" style="padding:20px 24px">
+              <div class="row g25" style="align-items:flex-start"><span class="done" style="margin-top:2px"><i></i></span><h2 style="line-height:1.3;font-size:18px" class="f1">Send Halden the revised pricing</h2></div>
+              <div class="as-tagged notice" style="display:none"><i data-i="users" class="s35 c-blue" style="margin-top:1px"></i><span class="cap c-soft">You're tagged. You can read and discuss this task. John, Mark and admins can change it.</span></div>
+              <dl class="kv">
+                <dt>Assignee</dt>
+                <dd class="rel">
+                  <button class="pchip as-owner" id="assignbtn" aria-haspopup="listbox" aria-expanded="false"><b data-av="john" data-s="xs"></b>John Hale<i data-i="chevD" class="s3 c-subtle"></i></button>
+                  <span class="as-tagged ui c-fg row g2" style="display:none"><b data-av="john" data-s="xs"></b>John Hale</span>
+                  <div class="pop" id="assignpop" style="position:absolute;top:34px;left:0;width:272px;padding:4px;z-index:5;display:none">
+                    <div style="padding:4px"><input class="field" placeholder="Assign to…" style="height:32px;font-size:13px"></div>
+                    <button class="opt" aria-selected="true"><b data-av="john" data-s="md"></b><span class="nm f1">John Hale</span><i data-i="check" class="s35 c-subtle"></i></button>
+                    <button class="opt"><b data-av="priya" data-s="md"></b><span class="nm f1">Priya Nair</span><span class="cap c-subtle">Tagged</span></button>
+                    <button class="opt"><b data-av="sam" data-s="md"></b><span class="nm f1">Sam Okafor</span></button>
+                    <button class="opt"><b data-av="mark" data-s="md"></b><span class="nm f1">Mark Ridgeon</span></button>
+                    <p class="cap c-subtle" style="padding:6px 10px 8px;border-top:1px solid var(--line-strong);margin-top:4px">Handing it on keeps you tagged, so you can still follow it.</p>
+                  </div>
+                </dd>
+                <dt>Due</dt><dd class="row g2"><button class="pchip as-owner"><i data-i="calendar" class="s3"></i>Today</button><button class="pchip as-owner"><i data-i="clock" class="s3"></i>1 hour before</button><span class="as-tagged ui" style="display:none">Today · reminder 1 hour before</span></dd>
+                <dt>Tagged</dt><dd class="row g15 wrap"><span class="pchip rm"><b data-av="priya" data-s="xs"></b>Priya Nair<span class="x" title="Remove Priya"><i data-i="x" class="s3"></i></span></span><span class="cap c-subtle">Tag people with @ below.</span></dd>
+              </dl>
+              <div class="col g2"><span class="eyebrow">Description</span><textarea class="field as-owner-ta" style="min-height:72px">Use v4 from the shared thread. Keep the pilot discount, drop setup fee.</textarea></div>
+              <div class="col g2"><span class="eyebrow">Linked</span><div class="row g15 wrap"><button class="pchip"><span class="mono" style="width:16px;height:16px;font-size:8px">H</span>Halden Group</button><button class="pchip"><i data-i="book" class="s3"></i>Tom Becker</button><button class="pchip"><i data-i="clipboard" class="s3"></i>Halden Group rollout</button><button class="pchip"><i data-i="mail" class="s3"></i>Re: Revised pricing</button></div></div>
+              <div class="col g2" style="padding-top:8px;border-top:1px solid var(--border)">
+                <div class="row g2" style="padding-top:12px"><span class="eyebrow">Discussion</span><span class="cap c-subtle tab">3</span></div>
+                <div class="col" style="margin:0 -24px">
+                  <div class="msg" style="padding:6px 24px"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>Mon 14:10</time></div><div class="tx"><span class="mention">@Priya Nair</span> can you check the discount maths before John sends?</div></div></div>
+                  <div class="msg" style="padding:6px 24px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>Mon 15:02</time></div><div class="tx">Checked. 12% on year one holds.</div></div></div>
+                  <div class="msg" style="padding:6px 24px"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n">John Hale</span><time>09:20</time></div><div class="tx">Sending after lunch.</div></div></div>
+                </div>
+                <div class="composer"><div class="ta ph">Comment… @ to tag</div><button class="btn primary ic" aria-label="Send comment"><i data-i="arrowUp" class="s35"></i></button></div>
+                <span class="cap c-subtle">Tagging someone gives them access to this task and its discussion.</span>
+              </div>
+            </div>
+          </div>
+          <div class="sf"><span class="cap c-subtle">Halden Group</span><button class="btn secondary md as-owner">Mark done <span class="kbd">D</span></button></div>
+        </aside>
+      </div>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div>
+          <div class="flabel">Tasks, Tagged</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr" style="flex-wrap:wrap"><button class="btn secondary ic" aria-label="Open navigation"><i data-i="menu" class="s35"></i></button><h1 class="f1">Tasks</h1><span class="row g1"><button class="btn ghost sm">Mine</button><button class="btn secondary sm">Tagged</button></span></div>
+              <div class="row g1" style="padding:12px 12px 0;overflow:hidden"><button class="btn secondary sm">All <span class="c-subtle">2</span></button><button class="btn ghost sm">Overdue</button><button class="btn ghost sm">Today</button><button class="btn ghost sm">Upcoming</button></div>
+              <ul style="margin-top:8px">
+                <li class="trow" style="align-items:flex-start;padding:12px"><span class="done"><i></i></span><span class="f1 col g15"><span>Send Halden the revised pricing</span><span class="row g15"><span class="tag sm amber">Today</span><span class="row g1 c-subtle cap"><i data-i="chat" class="s3"></i>3</span><span class="cap c-subtle">Halden Group</span></span></span><b data-av="john" data-s="md"></b></li>
+                <li class="trow" style="align-items:flex-start;padding:12px"><span class="done"><i></i></span><span class="f1 col g15"><span>Draft Samsara Foods renewal terms</span><span class="row g15"><span class="cap c-subtle">Fri</span><span class="row g1 c-subtle cap"><i data-i="chat" class="s3"></i>1</span></span></span><b data-av="sam" data-s="md"></b></li>
+              </ul>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Task, full screen sheet</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr"><span class="f1 lead">Task</span><button class="btn ghost ic" aria-label="Close" style="width:44px;height:44px"><i data-i="x" class="s4"></i></button></div>
+              <div class="col g4" style="padding:16px;overflow:auto;flex:1">
+                <div class="row g25" style="align-items:flex-start"><span class="done"><i></i></span><h2 style="line-height:1.3;font-size:18px" class="f1">Send Halden the revised pricing</h2></div>
+                <div class="row g15 wrap"><button class="pchip" style="height:36px"><b data-av="john" data-s="xs"></b>John Hale<i data-i="chevD" class="s3"></i></button><button class="pchip" style="height:36px">Today</button><span class="pchip rm" style="height:36px"><b data-av="priya" data-s="xs"></b>Priya<span class="x"><i data-i="x" class="s3"></i></span></span></div>
+                <p class="c-soft">Use v4 from the shared thread. Keep the pilot discount, drop setup fee.</p>
+                <div class="row g15 wrap"><span class="pchip">Halden Group</span><span class="pchip">Tom Becker</span></div>
+                <div class="col" style="margin:0 -16px;border-top:1px solid var(--border);padding-top:8px">
+                  <div class="msg" style="padding:6px 16px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>Mon</time></div><div class="tx">Checked. 12% on year one holds.</div></div></div>
+                  <div class="msg" style="padding:6px 16px"><b data-av="john" data-s="lg"></b><div class="b"><div class="hd"><span class="n">John Hale</span><time>09:20</time></div><div class="tx">Sending after lunch.</div></div></div>
+                </div>
+              </div>
+              <div style="padding:8px 8px 34px;border-top:1px solid var(--border)"><div class="composer"><div class="ta ph" style="font-size:16px">Comment… @ to tag</div><button class="btn primary ic" aria-label="Send" style="width:36px;height:36px"><i data-i="arrowUp" class="s35"></i></button></div></div>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section id="s7" class="screen" data-view="desk">
+    <header><div><div class="num">07</div><h2>Doc discussion and share to tag</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div></header>
+    <ul class="notes">
+      <li>Shared docs get a Discussion button in the doc bar (with a count) that opens a panel to the right of the page, in place of the backlinks rail. Private docs and daily notes have no Discussion button.</li>
+      <li>People tags in the doc use the same purple chip as in Chat. Picking a person in a private doc opens the dialog below. Share and tag shares the doc, inserts the tag and puts focus back in the editor. Cancel inserts nothing.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="desk">
+        <div data-inc="sidebar" data-active="docs"></div>
+        <div class="main">
+          <div class="row g2" style="height:48px;padding:0 10px 0 20px;flex-shrink:0">
+            <nav class="f1 row g15 ui" aria-label="Breadcrumb"><span class="row g15 c-subtle"><i data-i="doc" class="s35"></i>Docs</span><i data-i="chevR" class="s3 c-faint"></i><span class="c-soft">Halden kick-off</span></nav>
+            <span class="stack" style="margin-right:6px"><b data-av="priya" data-s="md"></b><b data-av="sam" data-s="md"></b></span>
+            <button class="btn secondary sm" style="height:30px;padding:0 12px"><i data-i="users" class="s35 c-blue"></i>Shared</button>
+            <button class="btn secondary sm" data-on style="height:30px;padding:0 12px" aria-pressed="true"><i data-i="chat" class="s35"></i>Discussion <span class="c-subtle tab">3</span></button>
+            <button class="btn ghost ic" aria-label="History"><i data-i="history" class="s35"></i></button>
+          </div>
+          <div class="row f1" style="min-height:0;align-items:stretch">
+            <div class="f1" style="overflow:auto;padding:28px 48px 40px">
+              <div style="max-width:38em;margin:0 auto">
+                <h1 class="note-title">Halden kick-off</h1>
+                <div class="row g2 c-subtle" style="font-size:13px;margin:12px 0 28px"><span class="row g15"><span class="dot" style="background:rgb(177 235 197/.8)"></span>Saved</span><span class="c-faint">·</span><span>Shared with Eclipse</span></div>
+                <div class="note-body">
+                  <p>Monday 10:00 at <span class="rec">Halden Group</span>, with Tom Becker and their CFO.</p>
+                  <h3>Agenda</h3>
+                  <p>1. Pilot scope and success measures, led by <span class="dmention">@Sam Okafor</span>.<br>2. Pricing for the rollout: <span class="dmention">@Mark Ridgeon</span> to confirm v4.<br>3. Data access and security review.<span class="cur" style="--cc:var(--c-priya)"><span>Priya</span></span></p>
+                  <h3>Open questions</h3>
+                  <p>Who signs on their side if the CFO is away?</p>
+                </div>
+              </div>
+            </div>
+            <aside class="notes-panel" aria-label="Discussion">
+              <div class="rhead" style="padding-left:16px"><h3 class="f1">Discussion</h3><button class="btn ghost ics" aria-label="Close discussion"><i data-i="x" class="s4"></i></button></div>
+              <div class="msgs">
+                <div class="msg" style="padding:6px 16px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Sam Okafor</span><time>Mon</time></div><div class="tx">Added the security review. Their IT lead asked.</div>
+                  <button class="replies"><span class="stack"><b data-av="priya" data-s="xs"></b></span><span class="ct">1 reply</span><span class="c-subtle">Mon</span></button></div></div>
+                <div class="msg mine-mention" style="padding:6px 16px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>09:40</time></div><div class="tx"><span class="mention me">@Mark Ridgeon</span> is v4 final? I'd rather not show v3.</div></div></div>
+              </div>
+              <div class="cwrap" style="padding:0 12px 14px"><div class="composer"><div class="ta ph">Comment… @ to tag</div><button class="btn primary ic" aria-label="Send comment"><i data-i="arrowUp" class="s35"></i></button></div></div>
+            </aside>
+          </div>
+        </div>
+      </div>
+      <div class="frames" style="padding-left:0;margin-top:24px">
+        <div>
+          <div class="flabel">Tagging Sam in a private doc</div>
+          <div class="canvas" style="width:760px;height:460px" id="sharedlg">
+            <div style="padding:28px 48px">
+              <div class="row g2" style="margin-bottom:20px"><span class="f1"></span><button class="btn secondary sm" style="height:30px;padding:0 12px"><i data-i="lock" class="s35 c-subtle"></i>Private</button></div>
+              <h1 class="note-title">Pricing notes</h1>
+              <div class="note-body" style="margin-top:20px"><p>Ask <span class="mention">@Sam</span>| about the Halden discount.</p></div>
+            </div>
+            <div class="overlay" data-dlg></div>
+            <div class="dialog" role="dialog" aria-labelledby="dt7" aria-describedby="dd7" data-dlg>
+              <div class="dh"><h2 id="dt7" style="line-height:1.3">Share this doc with the workspace to tag Sam?</h2><p id="dd7" class="cap c-soft">Everyone in Eclipse can then read and edit it, and Sam is told they were tagged.</p><button class="btn ghost ics" aria-label="Close" data-close><i data-i="x" class="s4"></i></button></div>
+              <div class="df"><button class="btn ghost md" data-close>Cancel</button><button class="btn primary md" data-close>Share and tag</button></div>
+            </div>
+            <button class="btn secondary sm" style="position:absolute;right:16px;bottom:16px;z-index:5" id="reopen">Show dialog again</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div>
+          <div class="flabel">Discussion, full screen sheet</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr"><span class="f1 col g1"><span class="lead">Discussion</span><span class="cap c-subtle">Halden kick-off</span></span><button class="btn ghost ic" aria-label="Close" style="width:44px;height:44px"><i data-i="x" class="s4"></i></button></div>
+              <div class="msgs">
+                <div class="msg" style="padding:6px 14px"><b data-av="sam" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Sam Okafor</span><time>Mon</time></div><div class="tx">Added the security review. Their IT lead asked.</div></div></div>
+                <div class="msg mine-mention" style="padding:6px 14px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>09:40</time></div><div class="tx"><span class="mention me">@Mark Ridgeon</span> is v4 final?</div></div></div>
+              </div>
+              <div style="padding:8px 8px 34px"><div class="composer"><div class="ta ph" style="font-size:16px">Comment… @ to tag</div><button class="btn primary ic" style="width:36px;height:36px" aria-label="Send"><i data-i="arrowUp" class="s35"></i></button></div></div>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Share to tag</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr"><button class="btn secondary sm back"><i data-i="chevL" class="s35"></i><span>Docs</span></button><span class="f1"></span></div>
+              <div style="padding:20px"><h1 class="note-title" style="font-size:26px">Pricing notes</h1><div class="note-body" style="margin-top:16px"><p>Ask <span class="mention">@Sam</span> about the Halden discount.</p></div></div>
+              <div class="overlay"></div>
+              <div class="dialog" role="dialog" aria-label="Share to tag">
+                <div class="dh"><h2 style="line-height:1.3">Share this doc with the workspace to tag Sam?</h2><p class="cap c-soft">Everyone in Eclipse can then read and edit it, and Sam is told they were tagged.</p></div>
+                <div class="df"><button class="btn ghost md" style="height:44px;padding:0 16px">Cancel</button><button class="btn primary md" style="height:44px;padding:0 16px">Share and tag</button></div>
+              </div>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section id="s8" class="screen" data-view="desk">
+    <header><div><div class="num">08</div><h2>A shared email in Sam's Mail</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div></header>
+    <ul class="notes">
+      <li>Seen by Sam. Shared threads get their own "Shared" tab after the split tabs, shown only while something is shared with you. Rows carry the owner's avatar where the unread dot sits, and "Shared by Mark" on a third line.</li>
+      <li>The reader swaps the action bar for "Shared by Mark · Read only". No Archive, Remind me, Reply or Send. Attachments open as usual; one shows the reconnect error.</li>
+      <li>Notes sit in a panel beside the thread on desktop and below it on phones, outside the email frame and its ancestors, with no animation (Safari).</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="desk">
+        <div data-inc="sidebar" data-active="mail" data-who="sam"></div>
+        <div class="main">
+          <div data-inc="header" data-title="Mail" data-who="sam"></div>
+          <div class="row f1" style="min-height:0;align-items:stretch">
+            <div class="col" style="width:400px;flex-shrink:0">
+              <div style="padding:12px 12px 6px"><nav class="row g1" aria-label="Mail folders" style="overflow:hidden">
+                <button class="btn chip chipsz">Important <span class="tab" style="color:var(--foreground)">3</span></button><button class="btn chip chipsz">Other</button><button class="btn chip chipsz">News</button><button class="btn chip chipsz" data-on aria-current="page"><i data-i="users" class="s35"></i>Shared <span class="tab c-soft">1</span></button><button class="btn chip chipsz"><i data-i="folder" class="s35"></i>More<i data-i="chevD" class="s3"></i></button>
+              </nav></div>
+              <ul class="col" style="gap:1px;padding:0 8px">
+                <li><button class="mrow" data-on>
+                  <span class="l1"><b data-av="mark" data-s="xs" style="margin-left:-5px;margin-right:-1px"></b><span class="trunc fw5" style="font-size:14px">Tom Becker</span><span class="cap c-subtle tab">4</span><span class="ml-a row g15"><i data-i="paperclip" class="s3 c-subtle"></i><span class="tab" style="font-size:12px">09:12</span></span></span>
+                  <span class="l2"><span class="trunc c-fg" style="max-width:70%">Re: Revised pricing</span><span class="trunc c-subtle">Thanks Mark, could you confirm the setup fee…</span></span>
+                  <span class="l2 cap c-subtle" style="padding-top:1px">Shared by Mark</span>
+                </button></li>
+                <li><button class="mrow">
+                  <span class="l1"><b data-av="priya" data-s="xs" style="margin-left:-5px;margin-right:-1px"></b><span class="trunc c-soft" style="font-size:14px">Ana Ruiz</span><span class="ml-a tab c-subtle" style="font-size:12px">Mon</span></span>
+                  <span class="l2"><span class="trunc c-soft" style="max-width:70%">Samsara renewal</span><span class="trunc c-subtle">Attached the signed order form.</span></span>
+                  <span class="l2 cap c-subtle" style="padding-top:1px">Shared by Priya</span>
+                </button></li>
+              </ul>
+            </div>
+            <div class="f1 panel col" style="margin:8px 8px 8px 0;overflow:hidden">
+              <div class="row g2" style="padding:8px 20px;flex-shrink:0;min-height:46px">
+                <span class="row g2 f1"><b data-av="mark" data-s="sm"></b><span class="ui">Shared by Mark</span><span class="c-faint">·</span><span class="ui c-subtle">Read only</span></span>
+                <span class="cap c-subtle row g15"><span class="stack" style="--ringbg:#1a1a1a"><b data-av="priya" data-s="xs"></b><b data-av="sam" data-s="xs"></b></span>Mark, Priya and you</span>
+              </div>
+              <div class="row f1" style="min-height:0;align-items:stretch">
+                <div class="f1" style="overflow:auto;padding:12px 24px 40px">
+                  <div class="col g4" style="max-width:52em;margin:0 auto">
+                    <h2 style="padding:0 16px">Re: Revised pricing</h2>
+                    <div class="mcard"><div class="mh"><b data-av="mark" data-s="lg" style="margin-top:2px"></b><span class="f1 col g1"><span class="row g2"><span>Mark Ridgeon</span><span class="cap c-subtle ml-a tab">Mon 11:05</span></span><span class="trunc c-subtle" style="font-size:13px">Tom, attached is v3 of the pricing for the full rollout…</span></span></div></div>
+                    <div class="mcard" style="background:var(--surface-panel)">
+                      <div class="mh"><span class="mono" style="width:28px;height:28px;border-radius:999px;font-size:11px;margin-top:2px">T</span><span class="f1 col g1"><span class="row g2"><span class="fw5">Tom Becker</span><span class="cap c-subtle">tom@haldengroup.com</span><span class="cap c-subtle ml-a tab">09:12</span></span><span class="cap c-subtle">To Mark Ridgeon</span></span></div>
+                      <div class="col g3" style="padding:0 16px 16px 56px">
+                        <div class="col g3" style="font-size:14px;line-height:1.55;color:var(--foreground)">
+                          <p>Thanks Mark,</p><p>Could you confirm the setup fee is waived for the rollout? Our board meets Thursday and I'd like to bring the final numbers.</p><p>I've attached our order form with the quantities filled in.</p><p>Best,<br>Tom</p>
+                        </div>
+                        <ul class="row g15 wrap" aria-label="Attachments">
+                          <li><a class="att"><i data-i="paperclip" class="s3 c-subtle"></i><span class="trunc">Halden order form.pdf</span><span class="cap c-subtle">184 KB</span></a></li>
+                          <li><a class="att"><i data-i="paperclip" class="s3 c-subtle"></i><span class="trunc">Quantities.xlsx</span><span class="cap c-subtle">22 KB</span></a></li>
+                        </ul>
+                        <p role="alert" class="cap c-danger">Couldn't open the attachment. Mark needs to reconnect their mailbox.</p>
+                      </div>
+                    </div>
+                    <div class="mcard row g3" style="padding:12px 16px">
+                      <b data-av="mark" data-s="lg"></b><span class="f1 col g1"><span class="row g2"><span class="c-amber cap">Draft</span><span class="ui">Mark Ridgeon</span><span class="stack ml-a"><b data-av="priya" data-s="xs"></b></span><span class="cap c-subtle">Priya is editing</span></span><span class="trunc c-subtle" style="font-size:13px">Hi Tom, confirming the setup fee is waived for…</span></span>
+                      <button class="btn secondary sm">Edit with Mark</button>
+                    </div>
+                  </div>
+                </div>
+                <aside class="notes-panel" aria-label="Notes">
+                  <div class="rhead" style="padding-left:16px"><h3 class="f1">Notes</h3><span class="cap c-subtle">Only people in this thread</span></div>
+                  <div class="msgs">
+                    <div class="msg" style="padding:6px 16px"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>09:20</time></div><div class="tx"><span class="mention me">@Sam Okafor</span> can you check their quantities against the pilot?</div></div></div>
+                    <div class="msg" style="padding:6px 16px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>09:34</time></div><div class="tx">Setup fee waiver is fine on our side.</div></div></div>
+                  </div>
+                  <div class="cwrap" style="padding:0 12px 14px">
+                    <div class="notice" style="margin-bottom:8px"><span class="cap c-soft">John isn't in this thread. Only Mark can add people.</span></div>
+                    <div class="composer"><div class="ta">Quantities match, but <span class="mention">@John Hale</span> |</div><button class="btn primary ic" aria-label="Send note"><i data-i="arrowUp" class="s35"></i></button></div>
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div>
+          <div class="flabel">List, Shared</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="phdr"><button class="btn secondary ic" aria-label="Open navigation"><i data-i="menu" class="s35"></i></button><h1 class="f1">Mail</h1><button class="btn secondary ic" aria-label="Check for new mail"><i data-i="refresh" class="s35"></i></button></div>
+              <div style="padding:8px 12px 6px"><div class="field" style="height:40px;font-size:16px;color:var(--subtle);gap:8px"><i data-i="search" class="s35"></i>Search</div></div>
+              <div class="row g1" style="padding:0 12px 6px;overflow:hidden"><button class="btn chip chipsz">Important <span>3</span></button><button class="btn chip chipsz">Other</button><button class="btn chip chipsz" data-on><i data-i="users" class="s35"></i>Shared <span class="c-soft">1</span></button></div>
+              <ul class="col" style="padding:0 8px">
+                <li><button class="mrow">
+                  <span class="l1"><b data-av="mark" data-s="xs" style="margin-left:-5px;margin-right:-1px"></b><span class="trunc fw5">Tom Becker</span><span class="ml-a tab" style="font-size:12px">09:12</span></span>
+                  <span class="l2"><span class="trunc c-fg">Re: Revised pricing</span></span>
+                  <span class="l2 cap c-subtle">Shared by Mark</span>
+                </button></li>
+              </ul>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Reader with notes below</div>
+          <div class="phone">
+            <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+            <div class="body">
+              <div class="row g2" style="padding:6px 12px;min-height:52px;border-bottom:1px solid var(--border)"><button class="btn ghost ic" aria-label="Back" style="width:44px;height:44px"><i data-i="chevL" class="s35"></i></button><b data-av="mark" data-s="sm"></b><span class="ui f1">Shared by Mark <span class="c-subtle">· Read only</span></span></div>
+              <div style="overflow:auto;flex:1;padding:12px 12px 40px" class="col g3">
+                <h2 style="padding:0 4px;line-height:1.3">Re: Revised pricing</h2>
+                <div class="mcard"><div class="mh" style="padding:12px"><span class="mono" style="width:28px;height:28px;border-radius:999px">T</span><span class="f1 col g1"><span class="row"><span class="fw5">Tom Becker</span><span class="cap c-subtle ml-a">09:12</span></span><span class="cap c-subtle">To Mark Ridgeon</span></span></div>
+                  <div class="col g3" style="padding:0 12px 12px"><p>Could you confirm the setup fee is waived for the rollout? Our board meets Thursday.</p><a class="att" style="align-self:flex-start;height:40px"><i data-i="paperclip" class="s3 c-subtle"></i>Halden order form.pdf<span class="cap c-subtle">184 KB</span></a></div></div>
+                <div class="col g2" style="margin-top:8px;padding-top:12px;border-top:1px solid var(--border)">
+                  <div class="row"><h3 class="f1">Notes</h3><span class="cap c-subtle">2</span></div>
+                  <div class="msg" style="padding:6px 0"><b data-av="mark" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Mark Ridgeon</span><time>09:20</time></div><div class="tx"><span class="mention me">@Sam Okafor</span> can you check their quantities?</div></div></div>
+                  <div class="msg" style="padding:6px 0"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>09:34</time></div><div class="tx">Setup fee waiver is fine.</div></div></div>
+                  <div class="composer"><div class="ta ph" style="font-size:16px">Note… @ to tag</div><button class="btn primary ic" style="width:36px;height:36px" aria-label="Send"><i data-i="arrowUp" class="s35"></i></button></div>
+                </div>
+              </div>
+            </div>
+            <div class="home"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section id="s9" class="screen" data-view="desk">
+    <header><div><div class="num">09</div><h2>Mark's share control on a thread</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div></header>
+    <ul class="notes">
+      <li>A Share button joins the reader's action bar (shortcut Shift S). Once shared it shows the people's avatars instead of the word.</li>
+      <li>The popover lists who's in, with Remove, and an Add people field limited to people who share a workspace with Mark. Removing takes effect at once and tells that person's open tabs.</li>
+      <li>In the notes, when Mark tags someone outside the thread, the prompt asks "Add John to this thread?" right above the composer.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="canvas" style="width:1100px;height:600px;display:flex;flex-direction:column">
+        <div class="row g1" style="padding:8px 20px;border-bottom:1px solid var(--line-subtle)">
+          <button class="btn ghost ic" aria-label="Archive" title="Archive (E)"><i data-i="archive" class="s35"></i></button><button class="btn ghost ic" aria-label="Remind me" title="Remind me (H)"><i data-i="clock" class="s35"></i></button><button class="btn ghost ic" aria-label="Move to Trash"><i data-i="trash" class="s35"></i></button>
+          <span style="width:1px;height:16px;background:var(--line-subtle);margin:0 4px"></span>
+          <button class="btn ghost ic" aria-label="Mark unread"><i data-i="mailOpen" class="s35"></i></button><button class="btn ghost ic" aria-label="Flag"><i data-i="flag" class="s35"></i></button>
+          <span style="width:1px;height:16px;background:var(--line-subtle);margin:0 4px"></span>
+          <span class="rel">
+            <button class="btn secondary sm" data-on aria-expanded="true" title="Share (Shift S)" style="height:30px;padding:0 10px 0 6px"><span class="stack" style="--ringbg:var(--muted)"><b data-av="priya" data-s="sm"></b><b data-av="sam" data-s="sm"></b></span>Shared</button>
+            <div class="pop" style="position:absolute;top:38px;left:0;width:340px;z-index:5">
+              <div class="row g25" style="padding:16px 16px 12px"><i data-i="users" class="s35 c-blue"></i><h3 class="f1">Share this thread</h3></div>
+              <div style="padding:0 12px"><div class="field" style="height:auto;min-height:36px;padding:4px 10px;gap:6px"><span class="c-fg">Jo|</span></div></div>
+              <ul style="padding:4px 8px 0">
+                <li class="grp" style="padding-left:8px">Add</li>
+                <li><button class="opt" aria-selected="true"><b data-av="john" data-s="md"></b><span class="f1 col"><span class="nm">John Hale</span><span class="cap c-subtle">Member</span></span><span class="cap c-subtle">Enter</span></button></li>
+              </ul>
+              <div style="padding:8px 8px 0;margin-top:6px;border-top:1px solid var(--line-strong)">
+                <div class="grp" style="padding-left:8px">In this thread</div>
+                <div class="row g25" style="padding:6px 8px"><b data-av="mark" data-s="md"></b><span class="f1 ui">Mark Ridgeon</span><span class="cap c-subtle">You · Owner</span></div>
+                <div class="row g25" style="padding:4px 8px"><b data-av="priya" data-s="md"></b><span class="f1 ui">Priya Nair</span><button class="btn ghost sm">Remove</button></div>
+                <div class="row g25" style="padding:4px 8px"><b data-av="sam" data-s="md"></b><span class="f1 ui">Sam Okafor</span><button class="btn ghost sm">Remove</button></div>
+              </div>
+              <div class="notice" style="margin:10px 12px 12px"><span class="cap c-soft">They see this thread, its attachments and notes. Nothing else in your mailbox. Only you can send.</span></div>
+            </div>
+          </span>
+          <span class="ml-a row g15 cap c-subtle"><span class="dot" style="background:var(--c-mark)"></span>mark@eclipse.co</span>
+        </div>
+        <div class="row f1" style="min-height:0;align-items:stretch">
+          <div class="f1" style="padding:16px 24px"><div style="max-width:40em;margin-left:auto;margin-right:24px;margin-top:4px" class="col g4"><h2 style="padding:0 16px">Re: Revised pricing</h2><div class="mcard"><div class="mh"><span class="mono" style="width:28px;height:28px;border-radius:999px">T</span><span class="f1 col g1"><span class="row"><span class="fw5">Tom Becker</span><span class="cap c-subtle ml-a">09:12</span></span><span class="trunc c-subtle" style="font-size:13px">Thanks Mark, could you confirm the setup fee is waived…</span></span></div></div></div></div>
+          <aside class="notes-panel" aria-label="Notes">
+            <div class="rhead" style="padding-left:16px"><h3 class="f1">Notes</h3></div>
+            <div class="msgs"><div class="msg" style="padding:6px 16px"><b data-av="priya" data-s="lg"></b><div class="b"><div class="hd"><span class="n">Priya Nair</span><time>09:34</time></div><div class="tx">Setup fee waiver is fine on our side.</div></div></div></div>
+            <div class="cwrap" style="padding:0 12px 14px">
+              <div class="notice col" style="align-items:stretch;gap:8px;margin-bottom:8px;background:var(--surface-raised)"><span class="ui">Add John to this thread?</span><span class="cap c-subtle">They will see the thread, its attachments and notes.</span><span class="row g2" style="justify-content:flex-end"><button class="btn ghost sm">Cancel</button><button class="btn primary sm">Add to this thread</button></span></div>
+              <div class="composer"><div class="ta"><span class="mention">@John Hale</span> can you check clause 4?</div><button class="btn primary ic" aria-label="Send note"><i data-i="arrowUp" class="s35"></i></button></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <p class="annot">What Sam sees after removal: the thread leaves Sam's Shared tab, and an open reader shows "Mark removed you from this thread." in place of the messages.</p>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div class="phone">
+          <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+          <div class="body">
+            <div class="row g1" style="padding:6px 8px;border-bottom:1px solid var(--border)"><button class="btn ghost ic" style="width:44px;height:44px" aria-label="Back"><i data-i="chevL" class="s35"></i></button><button class="btn ghost ic" style="width:44px;height:44px" aria-label="Archive"><i data-i="archive" class="s35"></i></button><button class="btn ghost ic" style="width:44px;height:44px" aria-label="Remind me"><i data-i="clock" class="s35"></i></button><span class="f1"></span><button class="btn secondary sm" style="height:36px" data-on><span class="stack" style="--ringbg:var(--muted)"><b data-av="priya" data-s="sm"></b><b data-av="sam" data-s="sm"></b></span>Shared</button></div>
+            <div style="padding:16px"><h2>Re: Revised pricing</h2></div>
+            <div class="overlay"></div>
+            <div style="position:absolute;left:0;right:0;bottom:0;z-index:21;background:var(--background);border-top:1px solid var(--line-strong);border-radius:12px 12px 0 0;box-shadow:var(--shadow-overlay);padding-bottom:34px">
+              <div class="row" style="padding:16px"><h3 class="f1">Share this thread</h3><button class="btn ghost ic" style="width:44px;height:44px" aria-label="Close"><i data-i="x" class="s4"></i></button></div>
+              <div style="padding:0 16px"><input class="field" placeholder="Add people…" style="height:44px;font-size:16px"></div>
+              <div style="padding:8px 8px 0">
+                <div class="row g25" style="padding:8px"><b data-av="mark" data-s="lg"></b><span class="f1 ui">Mark Ridgeon</span><span class="cap c-subtle">You · Owner</span></div>
+                <div class="row g25" style="padding:4px 8px"><b data-av="priya" data-s="lg"></b><span class="f1 ui">Priya Nair</span><button class="btn ghost sm" style="height:44px">Remove</button></div>
+                <div class="row g25" style="padding:4px 8px"><b data-av="sam" data-s="lg"></b><span class="f1 ui">Sam Okafor</span><button class="btn ghost sm" style="height:44px">Remove</button></div>
+              </div>
+              <p class="cap c-subtle" style="padding:8px 16px">They see this thread, its attachments and notes. Only you can send.</p>
+            </div>
+          </div>
+          <div class="home"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section id="s10" class="screen" data-view="desk">
+    <header><div><div class="num">10</div><h2>Co-edited draft</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div></header>
+    <ul class="notes">
+      <li>Left: Mark's floating compose card. Avatars of everyone in the draft sit in the card bar; teammates' cursors use the Docs cursor style.</li>
+      <li>Middle: Sam's card. From, To and Cc are plain text. Attachments are listed with no remove or attach. "Only Mark can send" sits where Send was. Subject and body are editable.</li>
+      <li>Right: while Mark's send is in flight (or in its Undo window), Sam's editor is read only. The lock is shown by a status line and a hidden caret, never by fading or resizing.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="frames" style="flex-wrap:nowrap;padding-left:0">
+        <div>
+          <div class="flabel">Mark, owner</div>
+          <div class="ccard" role="dialog" aria-label="Re: Revised pricing">
+            <div class="ch"><span class="f1 trunc ui fw5">Re: Revised pricing</span><span class="stack" style="--ringbg:var(--popover);margin-right:4px"><b data-av="sam" data-s="sm"></b><b data-av="priya" data-s="sm"></b></span><button class="btn ghost ics" aria-label="Sharing"><i data-i="users" class="s35"></i></button><button class="btn ghost ics" aria-label="Minimise"><i data-i="minimise" class="s25"></i></button><button class="btn ghost ics" aria-label="Close"><i data-i="close" class="s25"></i></button></div>
+            <div class="cb2">
+              <div class="crow"><span class="k">From</span><span class="row g1" style="font-size:14px">mark@eclipse.co<i data-i="chevD" class="s3 c-subtle"></i></span></div>
+              <div class="crow"><span class="k">To</span><span class="rchip">Tom Becker</span><button class="btn ghost sm ml-a" style="font-weight:400">Cc Bcc</button></div>
+              <div class="crow" style="margin-top:4px"><span style="font-size:16px;font-weight:500">Re: Revised pricing</span></div>
+              <div class="body-ed">Hi Tom,<br><br>Confirming the setup fee is waived for the full rollout. <span class="sel" style="--cc:var(--c-priya)">Year one pricing stays at the pilot rate less 12%</span>, as in v4 attached.<br><br>Quantities on your order form<span class="cur" style="--cc:var(--c-sam)"><span>Sam</span></span> match what we scoped<br><br>Best,<br>Mark<span style="border-left:2px solid var(--foreground);margin-left:1px"></span></div>
+              <div class="col g2" style="padding:8px 0 4px"><ul class="row g15 wrap"><li><span class="att" style="padding-right:4px"><i data-i="paperclip" class="s3 c-subtle"></i>Halden pricing v4.pdf<span class="cap c-subtle">212 KB</span><button class="btn ghost ics" aria-label="Remove Halden pricing v4.pdf"><i data-i="x" class="s3"></i></button></span></li></ul></div>
+              <p class="cap c-subtle">Mark Ridgeon · Eclipse</p>
+            </div>
+            <div class="cf">
+              <button class="btn primary sm">Send</button>
+              <button class="btn ghost ic" aria-label="Send later"><i data-i="clock" class="s35"></i></button><button class="btn ghost ic" aria-label="Attach"><i data-i="paperclip" class="s35"></i></button><button class="btn ghost ic" aria-label="Write with AI"><i data-i="sparkle" class="s35"></i></button><button class="btn ghost ic" aria-label="Bold"><i data-i="bold" class="s35"></i></button>
+              <span class="cap c-subtle" style="margin-left:8px">Saved</span>
+              <button class="btn ghost sm ml-a"><i data-i="trash" class="s35"></i>Hold to discard</button>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Sam, teammate</div>
+          <div class="ccard" role="dialog" aria-label="Mark's draft">
+            <div class="ch"><span class="f1 trunc ui fw5">Mark's draft</span><span class="stack" style="--ringbg:var(--popover);margin-right:4px"><b data-av="mark" data-s="sm"></b><b data-av="priya" data-s="sm"></b></span><button class="btn ghost ics" aria-label="Minimise"><i data-i="minimise" class="s25"></i></button><button class="btn ghost ics" aria-label="Close"><i data-i="close" class="s25"></i></button></div>
+            <div class="cb2">
+              <div class="crow"><span class="k">From</span><span class="ro" style="font-size:14px">mark@eclipse.co</span></div>
+              <div class="crow"><span class="k">To</span><span class="ro" style="font-size:14px">Tom Becker</span></div>
+              <div class="crow" style="margin-top:4px"><span style="font-size:16px;font-weight:500">Re: Revised pricing</span></div>
+              <div class="body-ed">Hi Tom,<br><br>Confirming the setup fee is waived for the full rollout. <span class="sel" style="--cc:var(--c-priya)">Year one pricing stays at the pilot rate less 12%</span>, as in v4 attached.<br><br>Quantities on your order form<span style="border-left:2px solid var(--foreground);margin-left:1px"></span> match what we scoped<br><br>Best,<br>Mark<span class="cur" style="--cc:var(--c-mark)"><span>Mark</span></span></div>
+              <div class="col g2" style="padding:8px 0 4px"><ul class="row g15 wrap"><li><a class="att"><i data-i="paperclip" class="s3 c-subtle"></i>Halden pricing v4.pdf<span class="cap c-subtle">212 KB</span></a></li></ul><span class="cap c-subtle">Only Mark can add or remove attachments.</span></div>
+              <p class="cap c-subtle">Mark Ridgeon · Eclipse</p>
+            </div>
+            <div class="cf">
+              <span class="lockline"><i data-i="lock" class="s35"></i>Only Mark can send</span>
+              <button class="btn ghost ic" aria-label="Bold"><i data-i="bold" class="s35"></i></button>
+              <span class="cap c-subtle" style="margin-left:8px">Saved</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="flabel">Sam, while Mark sends</div>
+          <div class="ccard" role="dialog" aria-label="Mark's draft">
+            <div class="ch"><span class="f1 trunc ui fw5">Mark's draft</span><span class="stack" style="--ringbg:var(--popover);margin-right:4px"><b data-av="mark" data-s="sm"></b><b data-av="priya" data-s="sm"></b></span><button class="btn ghost ics" aria-label="Close"><i data-i="close" class="s25"></i></button></div>
+            <div class="cb2">
+              <p role="status" class="row g2 ui" style="padding:8px 12px;border-radius:12px;background:var(--surface-raised)"><i data-i="lock" class="s35 c-subtle"></i><span class="f1">Mark is sending. Read only.</span></p>
+              <div class="crow"><span class="k">To</span><span class="ro" style="font-size:14px">Tom Becker</span></div>
+              <div class="crow"><span style="font-size:16px;font-weight:500">Re: Revised pricing</span></div>
+              <div class="body-ed" style="caret-color:transparent">Hi Tom,<br><br>Confirming the setup fee is waived for the full rollout. Year one pricing stays at the pilot rate less 12%, as in v4 attached.<br><br>Quantities on your order form match what we scoped.<br><br>Best,<br>Mark</div>
+            </div>
+            <div class="cf"><span class="lockline"><i data-i="lock" class="s35"></i>Only Mark can send</span></div>
+          </div>
+          <div class="col g2" style="margin-top:16px;width:544px">
+            <span class="flabel" style="margin:0">Other teammate states, same status line</span>
+            <p class="row g2 ui" style="padding:8px 12px;border-radius:12px;background:var(--surface-raised)"><i data-i="clock" class="s35 c-subtle"></i>Scheduled for Fri 09:00. Read only until Mark cancels it.</p>
+            <p class="row g2 ui" style="padding:8px 12px;border-radius:12px;background:var(--surface-raised)"><i data-i="check" class="s35 c-subtle"></i>Sent by Mark.</p>
+            <p class="row g2 ui" style="padding:8px 12px;border-radius:12px;background:var(--surface-raised)"><i data-i="trash" class="s35 c-subtle"></i>Mark discarded the draft.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div class="phone">
+          <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+          <div class="body" style="background:var(--popover)">
+            <div class="ch row g2" style="padding:8px 8px 8px 16px"><span class="f1 trunc ui fw5">Mark's draft</span><span class="stack" style="--ringbg:var(--popover)"><b data-av="mark" data-s="sm"></b><b data-av="priya" data-s="sm"></b></span><button class="btn ghost ic" style="width:44px;height:44px" aria-label="Close"><i data-i="close" class="s25"></i></button></div>
+            <div class="col g1" style="padding:0 16px;flex:1;overflow:auto">
+              <div class="crow"><span class="k" style="width:40px">From</span><span class="ro">mark@eclipse.co</span></div>
+              <div class="crow"><span class="k" style="width:40px">To</span><span class="ro">Tom Becker</span></div>
+              <div class="crow" style="margin-top:4px"><span style="font-size:16px;font-weight:500">Re: Revised pricing</span></div>
+              <div class="body-ed" style="font-size:16px;line-height:26px">Hi Tom,<br><br>Confirming the setup fee is waived for the full rollout.<span class="cur" style="--cc:var(--c-mark)"><span>Mark</span></span> Year one pricing stays at the pilot rate less 12%.<br><br>Quantities match what we scoped<span style="border-left:2px solid var(--foreground);margin-left:1px"></span></div>
+              <a class="att" style="align-self:flex-start;margin-top:8px;height:40px"><i data-i="paperclip" class="s3 c-subtle"></i>Halden pricing v4.pdf</a>
+              <span class="cap c-subtle">Only Mark can add or remove attachments.</span>
+            </div>
+            <div class="row g2" style="padding:8px 16px;border-top:1px solid var(--line-subtle)"><span class="lockline"><i data-i="lock" class="s35"></i>Only Mark can send</span><span class="cap c-subtle ml-a">Saved</span></div>
+            <div data-kb></div>
+          </div>
+          <div class="home"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section id="s11" class="screen" data-view="desk">
+    <header><div><div class="num">11</div><h2>The bell</h2></div>
+      <div class="seg" role="group" aria-label="Size"><button aria-pressed="true" data-v="desk">Desktop</button><button aria-pressed="false" data-v="phone">Phone</button></div></header>
+    <ul class="notes">
+      <li>Same popover as today. New rows use generic text and no message or email content, because bell rows outlive access. The only extra line is a task's title, shown to its creator for "Done by John".</li>
+      <li>One push switch, "Teammates", under Settings › Notifications. The bell always records.</li>
+    </ul>
+    <div class="stage v-desk">
+      <div class="frames" style="padding-left:0">
+        <div class="canvas" style="width:720px;height:640px">
+          <div class="hdr" style="justify-content:flex-end"><h1 class="f1">Companies</h1><button class="btn secondary ic" aria-label="Search and commands"><i data-i="search" class="s35"></i></button><button class="btn secondary ic rel" data-on aria-label="Notifications, unread" aria-expanded="true"><i data-i="bell" class="s35"></i><span style="position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:9px;background:var(--danger)"></span></button><button class="btn secondary ic" aria-label="Account"><b data-av="mark" data-s="md" style="background:transparent"></b></button></div>
+          <div class="pop" style="position:absolute;right:16px;top:68px;width:360px"><div data-inc="bell"></div></div>
+        </div>
+        <div class="col g3" style="width:520px">
+          <div class="flabel" style="margin:0">Settings › Notifications</div>
+          <section class="card-s">
+            <div class="row g3" style="padding:16px 20px;align-items:flex-start">
+              <div class="f1 col g2"><h3 style="line-height:1.25">Teammates</h3><p class="cap c-subtle" style="line-height:1.4">Push when someone mentions you, messages you, tags you, assigns you a task or shares an email with you.</p></div>
+              <button class="switch" role="switch" aria-checked="true" aria-label="Teammates push" id="tmsw"></button>
+            </div>
+          </section>
+          <p class="annot" style="margin:0">Room messages without a mention don't push or reach the bell. They show as unread in Chat only.</p>
+        </div>
+      </div>
+    </div>
+    <div class="stage v-phone">
+      <div class="frames">
+        <div class="phone">
+          <div class="island"></div><div class="sbx"><span>9:41</span><span></span></div>
+          <div class="body">
+            <div class="phdr"><button class="btn secondary ic" aria-label="Open navigation"><i data-i="menu" class="s35"></i></button><h1 class="f1">Companies</h1><button class="btn secondary ic" data-on aria-label="Notifications"><i data-i="bell" class="s35"></i></button></div>
+            <div class="pop" style="position:absolute;left:16px;right:16px;top:58px"><div data-inc="bell"></div></div>
+          </div>
+          <div class="home"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="choices" class="decisions">
+    <h2>Choices to approve or veto</h2>
+    <ol>
+      <li><b>Chat in the sidebar sits right under Mail,</b> with a grey count of unread conversations that turns purple when one mentions you.</li>
+      <li><b>No presence dots</b> (online or away) on people. The plan has no presence; only typing.</li>
+      <li><b>Mentions of you</b> get a primary wash and left bar on the whole message, and a stronger chip. Other people tags use the existing purple mention colour. Record links in sent messages are underlined in violet, as in Docs.</li>
+      <li><b>Failed sends read "Couldn't send. Try again."</b> with "Try again" as the button, to match the error rule. The plan says "Retry".</li>
+      <li><b>The @ picker shows workspace role</b> (Owner, Admin, Member) under each person, not a job title. It leaves you out.</li>
+      <li><b>Threads view</b> shows only room and DM threads, as cards with an inline Reply field and "2 new" counts.</li>
+      <li><b>Room settings is a Sheet;</b> new room is a dialog. Members can be removed by anyone in the room. Webhooks get Pause, Rotate secret and Hold to delete.</li>
+      <li><b>Tasks:</b> Mine, Tagged and (owners and admins) Everyone in the header. The hand-on menu says "Handing it on keeps you tagged". Tagged people get a read-only panel with a one-line notice.</li>
+      <li><b>Doc discussion</b> is a button in the doc bar with a count, and a right-hand panel that takes the backlinks rail's place while open.</li>
+      <li><b>Shared email gets its own "Shared" tab</b> after the split tabs, shown only while something is shared with you. Rows put the owner's avatar where the unread dot goes.</li>
+      <li><b>Notes on phones sit below the thread,</b> not in a sheet.</li>
+      <li><b>The share button in Mark's reader</b> turns into the people's avatars once shared. Shortcut Shift S.</li>
+      <li><b>The teammate's compose card</b> is titled "Mark's draft", and its locked states use one status line with a lock icon.</li>
+      <li><b>Bell rows</b> carry no content except a task title on "Done by John". Plain room messages never reach the bell or push.</li>
+      <li><b>New icons needed:</b> chat (speech bubble), threads, sliders (room settings). Drawn here in the existing 14px, 1.4 stroke style.</li>
+    </ol>
+  </section>
+</main>
+
+<script>
+const P = {
+  mark:{n:"Mark Ridgeon",i:"MR",c:"var(--c-mark)",role:"Owner"},
+  sam:{n:"Sam Okafor",i:"SO",c:"var(--c-sam)",role:"Admin"},
+  john:{n:"John Hale",i:"JH",c:"var(--c-john)",role:"Member"},
+  priya:{n:"Priya Nair",i:"PN",c:"var(--c-priya)",role:"Member"},
+  lena:{n:"Lena Brandt",i:"LB",c:"var(--c-lena)",role:"Member"}
+};
+const ST = 'stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"';
+const IC = {
+  bell:`<path d="M8.16667 12.25H5.83333M10.5 4.66667C10.5 3.73841 10.1313 2.84817 9.47488 2.19179C8.8185 1.53542 7.92826 1.16667 7 1.16667C6.07174 1.16667 5.1815 1.53542 4.52513 2.19179C3.86875 2.84817 3.5 3.73841 3.5 4.66667C3.5 6.46927 3.04527 7.70348 2.5373 8.51982C2.10882 9.20843 1.89458 9.55273 1.90244 9.64878C1.91114 9.75513 1.93367 9.79568 2.01937 9.85925C2.09677 9.91667 2.44568 9.91667 3.1435 9.91667H10.8565C11.5543 9.91667 11.9032 9.91667 11.9806 9.85925C12.0663 9.79568 12.0889 9.75513 12.0976 9.64878C12.1054 9.55273 11.8912 9.20843 11.4627 8.51983C10.9547 7.70348 10.5 6.46928 10.5 4.66667Z" ${ST}/>`,
+  search:`<path d="M12.25 12.25L9.7125 9.7125M11.0833 6.41667C11.0833 8.994 8.994 11.0833 6.41667 11.0833C3.83934 11.0833 1.75 8.994 1.75 6.41667C1.75 3.83934 3.83934 1.75 6.41667 1.75C8.994 1.75 11.0833 3.83934 11.0833 6.41667Z" ${ST}/>`,
+  menu:`<path d="M2.33333 5.25H11.6667M2.33333 8.75H11.6667" ${ST}/>`,
+  plus:`<path d="M7 2.92V11.08M2.92 7H11.08" ${ST}/>`,
+  paperclip:`<path d="M12.1 6.6 7.05 11.65a3.2 3.2 0 0 1-4.53-4.53l5.2-5.2a2.13 2.13 0 0 1 3.02 3.02l-5.2 5.2a1.07 1.07 0 0 1-1.51-1.51L8.85 3.8" ${ST}/>`,
+  chevL:`<path d="M8.75 3.5L5.25 7L8.75 10.5" ${ST}/>`,
+  chevR:`<path d="M5.25 3.5L8.75 7L5.25 10.5" ${ST}/>`,
+  chevD:`<path d="M3.5 5.25L7 8.75L10.5 5.25" ${ST}/>`,
+  users:`<path d="M10.5 9.23818C11.3493 9.66481 12.0774 10.3495 12.6089 11.2056C12.7141 11.3752 12.7668 11.4599 12.785 11.5773C12.8219 11.8159 12.6588 12.1091 12.4366 12.2035C12.3273 12.25 12.2043 12.25 11.9583 12.25M9.33333 6.72714C10.1977 6.2976 10.7917 5.40567 10.7917 4.375C10.7917 3.34433 10.1977 2.4524 9.33333 2.02286M8.16667 4.375C8.16667 5.82475 6.99141 7 5.54167 7C4.09192 7 2.91667 5.82475 2.91667 4.375C2.91667 2.92525 4.09192 1.75 5.54167 1.75C6.99141 1.75 8.16667 2.92525 8.16667 4.375ZM1.49288 11.0474C2.4229 9.65099 3.89047 8.75 5.54167 8.75C7.19287 8.75 8.66044 9.65099 9.59045 11.0474C9.79419 11.3533 9.89606 11.5062 9.88433 11.7016C9.8752 11.8538 9.77547 12.04 9.65391 12.1319C9.49779 12.25 9.28307 12.25 8.85363 12.25H2.22971C1.80027 12.25 1.58555 12.25 1.42942 12.1319C1.30786 12.04 1.20813 11.8538 1.199 11.7016C1.18728 11.5062 1.28914 11.3533 1.49288 11.0474Z" ${ST}/>`,
+  mail:`<path d="M1.16667 4.08333L4.19641 6.10316C4.3712 6.21969 4.4586 6.27795 4.55315 6.31923C4.63707 6.35586 4.72502 6.38249 4.81517 6.39856C4.91674 6.41667 5.02177 6.41667 5.23185 6.41667H8.76815C8.97823 6.41667 9.08326 6.41667 9.18483 6.39856C9.27498 6.38249 9.36293 6.35586 9.44685 6.31923C9.5414 6.27795 9.62881 6.21969 9.80359 6.10316L12.8333 4.08333M3.96667 11.6667H10.0333C11.0134 11.6667 11.5035 11.6667 11.8778 11.4759C12.2071 11.3082 12.4748 11.0404 12.6426 10.7112C12.8333 10.3368 12.8333 9.84676 12.8333 8.86667V5.13333C12.8333 4.15324 12.8333 3.6632 12.6426 3.28885C12.4748 2.95957 12.2071 2.69185 11.8778 2.52407C11.5035 2.33333 11.0134 2.33333 10.0333 2.33333H3.96667C2.98658 2.33333 2.49653 2.33333 2.12218 2.52407C1.7929 2.69185 1.52518 2.95957 1.35741 3.28885C1.16667 3.6632 1.16667 4.15324 1.16667 5.13333V8.86667C1.16667 9.84676 1.16667 10.3368 1.35741 10.7112C1.52518 11.0404 1.7929 11.3082 2.12218 11.4759C2.49653 11.6667 2.98658 11.6667 3.96667 11.6667Z" ${ST}/>`,
+  inbox:`<path d="M1.46 7H3.9c.36 0 .7.2.86.53l.4.8c.16.32.5.53.86.53h1.96c.36 0 .7-.2.86-.53l.4-.8c.16-.32.5-.53.86-.53h2.44M3.97 2.33h6.06c.62 0 1.17.38 1.4.95l1.4 3.5v3.8c0 .87-.7 1.59-1.58 1.59H2.75c-.87 0-1.58-.72-1.58-1.6V6.79l1.4-3.5c.23-.58.79-.96 1.4-.96Z" ${ST}/>`,
+  building:`<path d="M6.41667 6.41667H3.61667C2.96327 6.41667 2.63658 6.41667 2.38701 6.54383C2.16749 6.65568 1.98901 6.83416 1.87716 7.05368C1.75 7.30324 1.75 7.62994 1.75 8.28333V12.25M12.25 12.25V3.61667C12.25 2.96327 12.25 2.63657 12.1228 2.38701C12.011 2.16749 11.8325 1.98901 11.613 1.87716C11.3634 1.75 11.0367 1.75 10.3833 1.75H8.28333C7.62994 1.75 7.30324 1.75 7.05368 1.87716C6.83416 1.98901 6.65568 2.16749 6.54383 2.38701C6.41667 2.63657 6.41667 2.96327 6.41667 3.61667V12.25M12.8333 12.25H1.16667M8.45833 4.08333H10.2083M8.45833 6.41667H10.2083M8.45833 8.75H10.2083" ${ST}/>`,
+  book:`<path d="M11.6667 11.0833V9.33333H4.08333C3.11684 9.33333 2.33333 10.1168 2.33333 11.0833M5.13333 12.8333H9.8C10.4534 12.8333 10.7801 12.8333 11.0297 12.7062C11.2492 12.5943 11.4277 12.4158 11.5395 12.1963C11.6667 11.9468 11.6667 11.6201 11.6667 10.9667V3.03333C11.6667 2.37994 11.6667 2.05324 11.5395 1.80368C11.4277 1.58416 11.2492 1.40568 11.0297 1.29383C10.7801 1.16667 10.4534 1.16667 9.8 1.16667H5.13333C4.15324 1.16667 3.6632 1.16667 3.28885 1.35741C2.95957 1.52518 2.69185 1.7929 2.52407 2.12218C2.33333 2.49653 2.33333 2.98658 2.33333 3.96667V10.0333C2.33333 11.0134 2.33333 11.5035 2.52407 11.8778C2.69185 12.2071 2.95957 12.4748 3.28885 12.6426C3.6632 12.8333 4.15324 12.8333 5.13333 12.8333Z" ${ST}/>`,
+  calendar:`<path d="M12.25 5.83333H1.75M9.33333 1.16667V3.5M4.66667 1.16667V3.5M4.55 12.8333H9.45C10.4301 12.8333 10.9201 12.8333 11.2945 12.6426C11.6238 12.4748 11.8915 12.2071 12.0593 11.8778C12.25 11.5035 12.25 11.0134 12.25 10.0333V5.13333C12.25 4.15324 12.25 3.6632 12.0593 3.28885C11.8915 2.95957 11.6238 2.69185 11.2945 2.52407C10.9201 2.33333 10.4301 2.33333 9.45 2.33333H4.55C3.56991 2.33333 3.07986 2.33333 2.70552 2.52407C2.37623 2.69185 2.10852 2.95957 1.94074 3.28885C1.75 3.6632 1.75 4.15324 1.75 5.13333V10.0333C1.75 11.0134 1.75 11.5035 1.94074 11.8778C2.10852 12.2071 2.37623 12.4748 2.70552 12.6426C3.07986 12.8333 3.56991 12.8333 4.55 12.8333Z" ${ST}/>`,
+  clipboard:`<path d="M9.33333 2.33333C9.87582 2.33333 10.1471 2.33333 10.3696 2.39296C10.9735 2.55478 11.4452 3.02649 11.607 3.6304C11.6667 3.85294 11.6667 4.12418 11.6667 4.66667V10.0333C11.6667 11.0134 11.6667 11.5035 11.4759 11.8778C11.3082 12.2071 11.0404 12.4748 10.7112 12.6426C10.3368 12.8333 9.84676 12.8333 8.86667 12.8333H5.13333C4.15324 12.8333 3.6632 12.8333 3.28885 12.6426C2.95957 12.4748 2.69185 12.2071 2.52407 11.8778C2.33333 11.5035 2.33333 11.0134 2.33333 10.0333V4.66667C2.33333 4.12418 2.33333 3.85294 2.39296 3.6304C2.55478 3.02649 3.02649 2.55478 3.6304 2.39296C3.85294 2.33333 4.12418 2.33333 4.66667 2.33333M5.6 3.5H8.4C8.7267 3.5 8.89005 3.5 9.01483 3.43642C9.12459 3.38049 9.21383 3.29126 9.26975 3.18149C9.33333 3.05671 9.33333 2.89336 9.33333 2.56667V2.1C9.33333 1.7733 9.33333 1.60995 9.26975 1.48517C9.21383 1.37541 9.12459 1.28617 9.01483 1.23025C8.89005 1.16667 8.7267 1.16667 8.4 1.16667H5.6C5.2733 1.16667 5.10995 1.16667 4.98517 1.23025C4.87541 1.28617 4.78617 1.37541 4.73025 1.48517C4.66667 1.60995 4.66667 1.7733 4.66667 2.1V2.56667C4.66667 2.89336 4.66667 3.05671 4.73025 3.18149C4.78617 3.29126 4.87541 3.38049 4.98517 3.43642C5.10995 3.5 5.2733 3.5 5.6 3.5Z" ${ST}/>`,
+  target:`<path d="M7 12.8333C10.2217 12.8333 12.8333 10.2217 12.8333 7C12.8333 3.77834 10.2217 1.16667 7 1.16667C3.77834 1.16667 1.16667 3.77834 1.16667 7C1.16667 10.2217 3.77834 12.8333 7 12.8333Z" ${ST}/><path d="M7 10.5C8.933 10.5 10.5 8.933 10.5 7C10.5 5.067 8.933 3.5 7 3.5C5.067 3.5 3.5 5.067 3.5 7C3.5 8.933 5.067 10.5 7 10.5Z" ${ST}/><path d="M7 8.16667C7.64433 8.16667 8.16667 7.64433 8.16667 7C8.16667 6.35567 7.64433 5.83333 7 5.83333C6.35567 5.83333 5.83333 6.35567 5.83333 7C5.83333 7.64433 6.35567 8.16667 7 8.16667Z" ${ST}/>`,
+  zap:`<path d="M7.58333 1.16667L2.38792 7.40116C2.18444 7.64533 2.0827 7.76742 2.08114 7.87053C2.07979 7.96016 2.11973 8.04544 2.18946 8.10176C2.26968 8.16667 2.42861 8.16667 2.74646 8.16667H7L6.41667 12.8333L11.6121 6.59884C11.8156 6.35467 11.9173 6.23258 11.9189 6.12947C11.9202 6.03984 11.8803 5.95456 11.8105 5.89824C11.7303 5.83333 11.5714 5.83333 11.2535 5.83333H7L7.58333 1.16667Z" ${ST}/>`,
+  fileSig:`<path d="M8.16667 1.32386V3.73333C8.16667 4.06003 8.16667 4.22338 8.23025 4.34816C8.28617 4.45792 8.37541 4.54716 8.48517 4.60308C8.60995 4.66667 8.7733 4.66667 9.1 4.66667H11.5095M11.6667 5.82648V10.0333C11.6667 11.0134 11.6667 11.5035 11.4759 11.8778C11.3082 12.2071 11.0404 12.4748 10.7112 12.6426C10.3368 12.8333 9.84676 12.8333 8.86667 12.8333H5.13333C4.15324 12.8333 3.6632 12.8333 3.28885 12.6426C2.95957 12.4748 2.69185 12.2071 2.52407 11.8778C2.33333 11.5035 2.33333 11.0134 2.33333 10.0333V3.96667C2.33333 2.98658 2.33333 2.49653 2.52407 2.12218C2.69185 1.7929 2.95957 1.52518 3.28885 1.35741C3.6632 1.16667 4.15324 1.16667 5.13333 1.16667H7.00686C7.43491 1.16667 7.64893 1.16667 7.85034 1.21502C8.02891 1.25789 8.19962 1.32861 8.35621 1.42456C8.53283 1.53279 8.68416 1.68412 8.98683 1.98679L10.8466 3.84654C11.1492 4.14921 11.3006 4.30054 11.4088 4.47716C11.5048 4.63375 11.5755 4.80446 11.6183 4.98304C11.6667 5.18444 11.6667 5.39847 11.6667 5.82648Z" ${ST}/>`,
+  settings:`<path d="M6.12478 5.2513C6.22756 4.95913 6.43043 4.71275 6.69746 4.55582C6.96449 4.39889 7.27844 4.34152 7.58371 4.39388C7.88898 4.44624 8.16587 4.60495 8.36533 4.8419C8.5648 5.07885 8.67397 5.37875 8.67351 5.68848C8.67351 6.56283 7.36198 7 7.36198 7M7.37889 8.75H7.38472M7.29145 11.6667C10.0299 11.6667 12.2498 9.44675 12.2498 6.70833C12.2498 3.96992 10.0299 1.75 7.29145 1.75C4.55304 1.75 2.33311 3.96992 2.33311 6.70833C2.33311 7.2625 2.42403 7.79543 2.59175 8.29302C2.65486 8.48028 2.68642 8.57391 2.69211 8.64583C2.69774 8.71687 2.69349 8.76667 2.67591 8.83572C2.65812 8.90565 2.61883 8.97837 2.54025 9.12381L1.58612 10.8899C1.45002 11.1418 1.38197 11.2677 1.3972 11.365C1.41047 11.4496 1.4603 11.5242 1.53347 11.5688C1.61747 11.62 1.75987 11.6053 2.04468 11.5759L5.03194 11.2671C5.12241 11.2577 5.16764 11.2531 5.20887 11.2546C5.24942 11.2562 5.27804 11.26 5.31758 11.2691C5.35779 11.2784 5.40834 11.2979 5.50946 11.3368C6.06249 11.5499 6.66333 11.6667 7.29145 11.6667Z" ${ST}/>`,
+  chat:`<path d="M4.08 5.25h5.84M4.08 7.58h3.5M3.97 11.08l-1.36 1.09c-.3.24-.45.36-.58.36a.35.35 0 0 1-.27-.13c-.08-.1-.08-.29-.08-.68V4.2c0-.98 0-1.47.19-1.84.17-.33.44-.6.77-.77.37-.19.86-.19 1.84-.19h4.9c.98 0 1.47 0 1.84.19.33.17.6.44.77.77.19.37.19.86.19 1.84v4.2c0 .98 0 1.47-.19 1.84-.17.33-.44.6-.77.77-.37.19-.86.19-1.84.19H4.7c-.27 0-.4 0-.53.03-.11.03-.22.07-.32.14-.11.07-.2.17-.4.33Z" ${ST}/>`,
+  threads:`<path d="M5.25 8.17 2.92 10.5V3.5c0-.65.52-1.17 1.16-1.17h5.84c.64 0 1.16.52 1.16 1.17v3.5c0 .64-.52 1.17-1.16 1.17H5.25ZM8.17 10.5h2.91l2.34 1.75V7" ${ST}/>`,
+  sliders:`<path d="M2.33 4.08h5.25M10.5 4.08h1.17M2.33 9.92h1.17M6.42 9.92h5.25M7.58 4.08a1.46 1.46 0 1 0 2.92 0 1.46 1.46 0 0 0-2.92 0ZM3.5 9.92a1.46 1.46 0 1 0 2.92 0 1.46 1.46 0 0 0-2.92 0Z" ${ST}/>`,
+  x:`<path d="M11.8047 5.13807C12.0651 4.87772 12.0651 4.45561 11.8047 4.19526C11.5444 3.93491 11.1223 3.93491 10.8619 4.19526L8 7.05719L5.13807 4.19526C4.87772 3.93491 4.45561 3.93491 4.19526 4.19526C3.93491 4.45561 3.93491 4.87772 4.19526 5.13807L7.05719 8L4.19526 10.8619C3.93491 11.1223 3.93491 11.5444 4.19526 11.8047C4.45561 12.0651 4.87772 12.0651 5.13807 11.8047L8 8.94281L10.8619 11.8047C11.1223 12.0651 11.5444 12.0651 11.8047 11.8047C12.0651 11.5444 12.0651 11.1223 11.8047 10.8619L8.94281 8L11.8047 5.13807Z" fill="currentColor"/>`,
+  archive:`<path d="M2.33 4.67v5.36c0 .99 0 1.48.2 1.85.16.33.43.6.76.77.37.19.86.19 1.84.19h3.74c.98 0 1.47 0 1.84-.2.33-.16.6-.43.77-.76.19-.37.19-.86.19-1.85V4.67M2.4 1.75h9.2c.33 0 .49 0 .61.06.11.06.2.15.26.26.06.12.06.28.06.6v1.4c0 .33 0 .5-.06.62a.58.58 0 0 1-.26.25c-.12.06-.28.06-.6.06H2.4c-.32 0-.48 0-.6-.06a.58.58 0 0 1-.26-.25c-.06-.13-.06-.29-.06-.61v-1.4c0-.33 0-.49.06-.61a.58.58 0 0 1 .26-.26c.12-.06.28-.06.6-.06ZM5.83 6.71h2.34" ${ST}/>`,
+  clock:`<path d="M7 3.5V7l2.33 1.17M12.83 7A5.83 5.83 0 1 1 1.17 7a5.83 5.83 0 0 1 11.66 0Z" ${ST}/>`,
+  trash:`<path d="M9.33 3.5v-.47c0-.65 0-.98-.12-1.23a1.17 1.17 0 0 0-.51-.51c-.25-.12-.58-.12-1.23-.12h-.94c-.65 0-.98 0-1.23.12-.22.11-.4.29-.51.51-.12.25-.12.58-.12 1.23v.47M1.75 3.5h10.5m-1.17 0v6.53c0 .98 0 1.47-.19 1.84-.17.33-.44.6-.76.77-.38.19-.87.19-1.85.19H5.72c-.98 0-1.47 0-1.85-.2a1.75 1.75 0 0 1-.76-.76c-.2-.37-.2-.86-.2-1.84V3.5" ${ST}/>`,
+  reply:`<path d="M5.83 4.08 2.33 7.58l3.5 3.5M2.33 7.58h5.6c1.96 0 2.94 0 3.69.38.66.34 1.19.87 1.53 1.53.08.16.15.33.2.51" ${ST}/>`,
+  compose:`<path d="M6.42 2.33H4.08c-.98 0-1.47 0-1.84.2-.33.16-.6.43-.77.76-.19.37-.19.86-.19 1.84v4.79c0 .98 0 1.47.2 1.84.16.33.43.6.76.77.37.19.86.19 1.84.19h4.79c.98 0 1.47 0 1.84-.2.33-.16.6-.43.77-.76.19-.37.19-.86.19-1.84V7.58M4.67 9.33h.97c.29 0 .43 0 .56-.03.12-.03.23-.07.34-.14.11-.07.21-.17.41-.37l5.59-5.59a1.24 1.24 0 0 0-1.75-1.75L5.2 7.04c-.2.2-.3.3-.37.41-.07.1-.11.22-.14.34-.03.13-.03.27-.03.56v.98Z" ${ST}/>`,
+  minimise:`<path d="M2.92 7h8.16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>`,
+  close:`<path d="M3.5 3.5 10.5 10.5M10.5 3.5 3.5 10.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>`,
+  lock:`<path d="M4.08 6.42V4.67a2.92 2.92 0 1 1 5.84 0v1.75M4.55 12.83h4.9c.98 0 1.47 0 1.84-.19.33-.17.6-.44.77-.77.19-.37.19-.86.19-1.84v-.23c0-.98 0-1.47-.19-1.84a1.75 1.75 0 0 0-.77-.77c-.37-.19-.86-.19-1.84-.19h-4.9c-.98 0-1.47 0-1.84.19-.33.17-.6.44-.77.77-.19.37-.19.86-.19 1.84v.23c0 .98 0 1.47.19 1.84.17.33.44.6.77.77.37.19.86.19 1.84.19Z" ${ST}/>`,
+  doc:`<path d="M8.17 1.32v2.41c0 .33 0 .49.06.61.06.11.15.2.26.26.12.06.28.06.61.06h2.41M4.67 7.58h4.66M4.67 9.92h3.5M8.17 1.17H4.9c-.98 0-1.47 0-1.84.19-.33.17-.6.44-.77.77-.19.37-.19.86-.19 1.84v6.06c0 .98 0 1.47.19 1.84.17.33.44.6.77.77.37.19.86.19 1.84.19h4.2c.98 0 1.47 0 1.84-.19.33-.17.6-.44.77-.77.19-.37.19-.86.19-1.84V4.67L8.17 1.17Z" ${ST}/>`,
+  arrowUp:`<path d="M7 11.6667V2.33333M7 2.33333L2.91667 6.41667M7 2.33333L11.0833 6.41667" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+  check:`<path d="M11.6667 3.5L5.25 9.91667L2.33333 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+  link:`<path d="M7.41249 10.7123L6.58753 11.5373C5.44851 12.6763 3.60178 12.6763 2.46276 11.5373C1.32373 10.3983 1.32373 8.55153 2.46276 7.41251L3.28771 6.58755M10.7123 7.41251L11.5373 6.58755C12.6763 5.44853 12.6763 3.6018 11.5373 2.46277C10.3982 1.32375 8.55151 1.32375 7.41249 2.46277L6.58753 3.28773M4.95834 9.04167L9.04167 4.95834" ${ST}/>`,
+  history:`<path d="M1.75 7a5.25 5.25 0 1 0 1.54-3.71L1.75 4.83M1.75 2.33v2.5h2.5M7 4.08V7l1.75 1.17" ${ST}/>`,
+  copy:`<path d="M2.91667 8.75C2.37307 8.75 2.10127 8.75 1.88687 8.66119C1.60099 8.54278 1.37388 8.31567 1.25547 8.0298C1.16667 7.81539 1.16667 7.54359 1.16667 7V3.03333C1.16667 2.37994 1.16667 2.05324 1.29383 1.80368C1.40568 1.58416 1.58416 1.40568 1.80368 1.29383C2.05324 1.16667 2.37994 1.16667 3.03333 1.16667H7C7.54359 1.16667 7.81539 1.16667 8.0298 1.25547C8.31567 1.37388 8.54278 1.60099 8.66119 1.88687C8.75 2.10127 8.75 2.37307 8.75 2.91667M7.11667 12.8333H10.9667C11.6201 12.8333 11.9468 12.8333 12.1963 12.7062C12.4158 12.5943 12.5943 12.4158 12.7062 12.1963C12.8333 11.9468 12.8333 11.6201 12.8333 10.9667V7.11667C12.8333 6.46327 12.8333 6.13657 12.7062 5.88701C12.5943 5.66749 12.4158 5.48901 12.1963 5.37716C11.9468 5.25 11.6201 5.25 10.9667 5.25H7.11667C6.46327 5.25 6.13657 5.25 5.88701 5.37716C5.66749 5.48901 5.48901 5.66749 5.37716 5.88701C5.25 6.13657 5.25 6.46327 5.25 7.11667V10.9667C5.25 11.6201 5.25 11.9468 5.37716 12.1963C5.48901 12.4158 5.66749 12.5943 5.88701 12.7062C6.13657 12.8333 6.46327 12.8333 7.11667 12.8333Z" ${ST}/>`,
+  refresh:`<path d="M1.17 5.83s1.17-1.6 2.12-2.54a5.25 5.25 0 1 1-1.34 5.13M1.17 5.83v-3.5m0 3.5h3.5" ${ST}/>`,
+  sparkle:`<path d="M7 1.75L8.10208 4.78542C8.20521 5.06979 8.25677 5.21198 8.34062 5.33073C8.41493 5.43594 8.50656 5.52757 8.61177 5.60188C8.73052 5.68573 8.87271 5.73729 9.15708 5.84042L12.25 7L9.15708 8.15958C8.87271 8.26271 8.73052 8.31427 8.61177 8.39812C8.50656 8.47243 8.41493 8.56406 8.34062 8.66927C8.25677 8.78802 8.20521 8.93021 8.10208 9.21458L7 12.25L5.89792 9.21458C5.79479 8.93021 5.74323 8.78802 5.65938 8.66927C5.58507 8.56406 5.49344 8.47243 5.38823 8.39812C5.26948 8.31427 5.12729 8.26271 4.84292 8.15958L1.75 7L4.84292 5.84042C5.12729 5.73729 5.26948 5.68573 5.38823 5.60188C5.49344 5.52757 5.58507 5.43594 5.65938 5.33073C5.74323 5.21198 5.79479 5.06979 5.89792 4.78542L7 1.75Z" ${ST}/>`,
+  braces:`<path d="M4.75 2.25c-1.1 0-1.5.5-1.5 1.5v1.6c0 .7-.4 1.15-1 1.15.6 0 1 .45 1 1.15v1.6c0 1 .4 1.5 1.5 1.5M9.25 2.25c1.1 0 1.5.5 1.5 1.5v1.6c0 .7.4 1.15 1 1.15-.6 0-1 .45-1 1.15v1.6c0 1-.4 1.5-1.5 1.5" ${ST}/>`,
+  edit:`<path d="M6.41667 2.33333H4.08333C3.1 2.33333 2.33333 3.1 2.33333 4.08333V9.91667C2.33333 10.9 3.1 11.6667 4.08333 11.6667H9.91667C10.9 11.6667 11.6667 10.9 11.6667 9.91667V7.58333M5.25 8.75L5.6 6.65L10.5 1.75L12.25 3.5L7.35 8.4L5.25 8.75Z" ${ST}/>`,
+  alert:`<path d="M7 5.25v2.33m0 2.34h.01M6.19 2.27 1.39 10.56c-.27.46-.4.69-.38.88.02.17.1.32.24.42.15.11.42.11.95.11h9.6c.53 0 .8 0 .95-.11a.58.58 0 0 0 .24-.42c.02-.19-.11-.42-.38-.88L7.81 2.27c-.27-.46-.4-.69-.57-.77a.58.58 0 0 0-.48 0c-.17.08-.3.31-.57.77Z" ${ST}/>`,
+  folder:`<path d="M7.58 4.08 6.93 2.78c-.19-.37-.28-.56-.42-.7a1.17 1.17 0 0 0-.44-.27c-.18-.06-.39-.06-.8-.06H3.03c-.65 0-.98 0-1.23.13-.22.11-.4.29-.51.51-.13.25-.13.58-.13 1.23v.46m0 0h8.87c.98 0 1.47 0 1.84.19.33.17.6.44.77.77.19.37.19.86.19 1.84v2.57c0 .98 0 1.47-.19 1.84-.17.33-.44.6-.77.77-.37.19-.86.19-1.84.19H4.55c-.98 0-1.47 0-1.84-.19a1.75 1.75 0 0 1-.77-.77c-.19-.37-.19-.86-.19-1.84V4.08Z" ${ST}/>`,
+  mailOpen:`<path d="M7.6 1.38 11.99 4.23c.15.1.23.15.29.22.05.06.09.12.11.2.03.08.03.17.03.36v4.82c0 .98 0 1.47-.19 1.84-.17.33-.44.6-.77.77-.37.19-.86.19-1.84.19H4.38c-.98 0-1.47 0-1.84-.19a1.75 1.75 0 0 1-.77-.77c-.19-.37-.19-.86-.19-1.84V5.01c0-.19 0-.28.03-.36.02-.08.06-.14.11-.2.06-.07.14-.12.29-.22L6.4 1.38c.21-.14.32-.21.44-.23a.58.58 0 0 1 .32 0c.12.02.23.09.44.23ZM8.07 8.39l3.5-2.47M2.4 5.92l3.53 2.47" ${ST}/>`,
+  flag:`<path d="M2.33 8.75s.59-.58 2.34-.58 2.91 1.16 4.66 1.16 2.34-.58 2.34-.58V1.75s-.59.58-2.34.58S6.42 1.17 4.67 1.17s-2.34.58-2.34.58v11.08" ${ST}/>`,
+  bold:`<path d="M3.5 7h4.67a2.33 2.33 0 1 0 0-4.67H3.5V7Zm0 0h5.25a2.33 2.33 0 1 1 0 4.67H3.5V7Z" ${ST}/>`,
+  signal:`<path d="M2 11h1M5 9h1v2H5zM8 7h1v4H8zM11 5h1v6h-1z" ${ST}/>`
+};
+function icon(name, cls){ return `<svg viewBox="0 0 14 14" fill="none" aria-hidden="true" class="${cls||'s35'}">${IC[name]||''}</svg>`; }
+function av(k, s){ const p=P[k]; return `<span class="av ${s||'md'}" style="--c:${p.c}" title="${p.n}" aria-hidden="true">${p.i}</span>`; }
+
+function sidebar(active, who){
+  const me = P[who||'mark'];
+  const nav=(ic,label,key,extra='')=>`<li><button class="nav" ${active===key?'data-on aria-current="page"':''}><span class="ico">${icon(ic)}</span><span class="lb">${label}</span>${extra}</button></li>`;
+  return `<aside class="sbar">
+    <div class="top"><svg width="32" height="32" viewBox="4 1 32 32" aria-hidden="true"><rect x="4" y="1" width="32" height="32" rx="8" fill="#2A2A2A"/><path fill="#fff" fill-rule="evenodd" d="M17.17 8c-1.01 0-1.99.4-2.7 1.12L11 12.59v1.58c0 1.12.48 2.13 1.25 2.83A3.82 3.82 0 0 0 11 19.83v1.58l3.46 3.47a3.82 3.82 0 0 0 5.54-.13 3.82 3.82 0 0 0 5.54.13L29 21.41v-1.58c0-1.12-.48-2.13-1.25-2.83.77-.7 1.25-1.71 1.25-2.83v-1.58l-3.46-3.47A3.82 3.82 0 0 0 20 9.25 3.82 3.82 0 0 0 17.17 8Zm5.42 9-.13-.12L20 14.41l-2.46 2.47-.13.12.13.12L20 19.59l2.46-2.47.13-.12ZM21 21.41v.76a1.83 1.83 0 0 0 3.12 1.29L27 20.59v-.76a1.83 1.83 0 0 0-3.12-1.3L21 21.42Zm-2 0-2.88-2.88A1.83 1.83 0 0 0 13 19.83v.76l2.88 2.87A1.83 1.83 0 0 0 19 22.17v-.76Zm0-9.58v.76l-2.88 2.87A1.83 1.83 0 0 1 13 14.17v-.76l2.88-2.87A1.83 1.83 0 0 1 19 11.83Zm4.88 3.63L21 12.59v-.76a1.83 1.83 0 0 1 3.12-1.3L27 13.42v.76a1.83 1.83 0 0 1-3.12 1.29Z"/></svg>
+      <span class="f1 col g1"><span class="fw5" style="font-size:14px;line-height:1">Orbit</span><span class="cap c-subtle row g1">Eclipse ${icon('chevD','s3')}</span></span>
+      <button class="btn ghost ics" aria-label="Collapse sidebar">${icon('sidebar','s35')}</button></div>
+    <div class="f1" style="overflow:auto">
+      <div class="sec"><ul class="col">
+        ${nav('inbox','Mail','mail','<span class="cb">4</span>')}
+        <li class="rel">${''}<button class="nav" ${active==='chat'?'data-on aria-current="page"':''}><span class="ico">${icon('chat')}</span><span class="lb">Chat</span><span class="cb accent">3<span class="sr"> unread, mentions you</span></span></button></li>
+        ${nav('building','Companies','co','<span class="cb">248</span>')}
+        ${nav('book','Contacts','ct')}
+        ${nav('mail','Capture','cap','<span class="cb accent">5</span>')}
+        ${nav('calendar','Calendar','cal')}
+        ${nav('clipboard','Opportunities','opp')}
+        ${nav('fileSig','Proposals','prop')}
+        ${nav('target','Tasks','tasks','<span class="cb">12</span>')}
+        ${nav('zap','Workflows','wf')}
+      </ul></div>
+      <div class="sec"><span class="eyebrow" style="padding:0 8px 4px">Docs</span><ul class="col">
+        <li><button class="nav sub" style="padding-left:8px" ${active==='docs'?'data-on':''}><span class="ico">${icon('doc')}</span><span class="lb">Halden kick-off</span></button></li>
+        <li><button class="nav sub" style="padding-left:8px"><span class="ico">${icon('doc')}</span><span class="lb">Pricing notes</span></button></li>
+        <li><button class="nav sub" style="padding-left:8px"><span class="ico">${icon('doc')}</span><span class="lb">Q4 plan</span></button></li>
+      </ul></div>
+    </div>
+    <div class="sec" style="border-top:1px solid var(--sidebar-border)"><ul class="col">${nav('settings','Settings','set')}<li><button class="nav" style="font-weight:400;color:var(--subtle)">Account</button></li></ul></div>
+  </aside>`;
+}
+IC.sidebar = `<path d="M2.1 2.45h9.8v9.1h-9.8z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.25 2.45v9.1" stroke="currentColor" stroke-width="1.4"/>`;
+
+function header(title, who){
+  return `<div class="hdr"><h1 class="f1">${title}</h1><button class="btn secondary ic" aria-label="Search and commands">${icon('search')}</button><button class="btn secondary ic rel" aria-label="Notifications, unread">${icon('bell')}<span style="position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:9px;background:var(--danger)"></span></button></div>`;
+}
+
+function clist(active, phone){
+  const it=(key,inner,cls='')=>`<button class="citem ${cls}" ${active===key?'data-on aria-current="page"':''} ${phone?'style="height:44px;font-size:15px"':''}>${inner}</button>`;
+  const ws = t=>`<span class="ws">${t}</span>`;
+  return `<div class="clist" ${phone?'style="width:auto;padding:8px 8px"':''}>
+    ${it('threads',`${icon('threads','s35')}<span class="f1">Threads</span><span class="cb">2</span>`,'unread')}
+    <div class="h"><span class="eyebrow">Rooms</span><button class="btn ghost ics" aria-label="New room" title="New room">${icon('plus','s3')}</button></div>
+    ${it('sales',`<span class="hash">#</span><span class="f1 trunc">sales</span>${ws('Eclipse')}<span class="cb accent">2<span class="sr"> mentions</span></span>`,'unread')}
+    ${it('alerts',`<span class="hash">#</span><span class="f1 trunc">alerts</span>${ws('Eclipse')}`,'unread')}
+    ${it('general',`<span class="hash">#</span><span class="f1 trunc">general</span>${ws('Eclipse')}`)}
+    ${it('rollout',`<span class="hash">#</span><span class="f1 trunc">ridgeon-clients</span>${ws('Mark Ridgeon')}`)}
+    ${it('design',`<span class="hash">#</span><span class="f1 trunc">design-review</span>`)}
+    <div class="h"><span class="eyebrow">Direct messages</span><button class="btn ghost ics" aria-label="New message" title="New message (C)">${icon('plus','s3')}</button></div>
+    ${it('dm-sam',`${av('sam','sm')}<span class="f1 trunc">Sam Okafor</span><span class="cb accent">1</span>`,'unread')}
+    ${it('dm-priya',`${av('priya','sm')}<span class="f1 trunc">Priya Nair</span>`)}
+    ${it('dm-john',`${av('john','sm')}<span class="f1 trunc">John Hale</span>`)}
+  </div>`;
+}
+
+function bell(){
+  const row=(fresh,title,body,when,ico)=>`<li><button class="btn ghost sm" style="height:auto;width:100%;align-items:flex-start;justify-content:flex-start;border-radius:8px;padding:8px;text-align:left;white-space:normal;font-weight:400"><span class="dot" style="margin-top:6px;background:${fresh?'var(--primary)':'transparent'}"></span><span class="col g1 f1"><span class="c-fg" style="font-size:14px;line-height:20px">${title}</span>${body?`<span class="cap c-subtle">${body}</span>`:''}<span class="cap c-subtle">${when}</span></span></button></li>`;
+  return `<div class="col g3" style="padding:20px 16px;max-height:560px;overflow:auto">
+    <h2>Notifications</h2>
+    <button class="btn ghost sm" style="height:auto;width:100%;justify-content:flex-start;gap:10px;border-radius:8px;background:rgb(255 255 255/.04);padding:10px;text-align:left;font-weight:400"><span style="display:flex;width:24px;height:24px;border-radius:99px;background:var(--primary);color:#fff;align-items:center;justify-content:center">${icon('mail','s3')}</span><span class="col g1 f1"><span class="c-fg" style="font-size:14px;line-height:20px">5 waiting in Capture</span><span class="cap c-subtle">3 new people, 2 calls</span></span>${icon('chevR','s3 c-subtle')}</button>
+    <ul class="col g1">
+      ${row(1,'Sam mentioned you in #sales','','2 min ago')}
+      ${row(1,'Mark shared an email with you','','20 min ago')}
+      ${row(1,'Done by John','Send Halden the revised pricing','1 hour ago')}
+      ${row(1,'John replied to your thread in #sales','','1 hour ago')}
+      ${row(0,'Priya tagged you in a doc','','Yesterday')}
+      ${row(0,'Priya tagged you in a task','','Yesterday')}
+      ${row(0,'Sam handed you a task','','Mon')}
+      ${row(0,'Mark added you to a draft','','Mon')}
+      ${row(0,'Priya sent you a message','','Mon')}
+    </ul></div>`;
+}
+
+function keyboard(){
+  return `<div class="kb" aria-hidden="true"><div class="r">${'<span class="k"></span>'.repeat(10)}</div><div class="r">${'<span class="k"></span>'.repeat(9)}</div><div class="r"><span class="k w"></span>${'<span class="k"></span>'.repeat(7)}<span class="k w"></span></div><div class="r"><span class="k w"></span><span class="k w"></span><span class="k sp"></span><span class="k w" style="width:88px"></span></div></div>`;
+}
+
+document.querySelectorAll('[data-inc]').forEach(el=>{
+  const k=el.dataset.inc;
+  let html='';
+  if(k==='sidebar') html=sidebar(el.dataset.active, el.dataset.who);
+  if(k==='header') html=header(el.dataset.title, el.dataset.who);
+  if(k==='clist') html=clist(el.dataset.active, el.dataset.phone);
+  if(k==='bell') html=bell();
+  el.outerHTML=html;
+});
+document.querySelectorAll('[data-kb]').forEach(el=>el.outerHTML=keyboard());
+document.querySelectorAll('i[data-i]').forEach(el=>{ el.outerHTML=icon(el.dataset.i, el.className); });
+document.querySelectorAll('b[data-av]').forEach(el=>{
+  const tmp=document.createElement('span'); tmp.innerHTML=av(el.dataset.av, el.dataset.s); const n=tmp.firstChild;
+  if(el.getAttribute('style')) n.setAttribute('style', n.getAttribute('style')+';'+el.getAttribute('style'));
+  if(el.title) n.title=el.title;
+  el.replaceWith(n);
+});
+
+document.querySelectorAll('.screen .seg').forEach(seg=>{
+  seg.addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b) return;
+    if(b.dataset.v){
+      seg.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed', x===b));
+      seg.closest('.screen').dataset.view=b.dataset.v;
+    }
+  });
+});
+
+document.querySelectorAll('[data-thread]').forEach(b=>b.addEventListener('click',()=>{
+  document.getElementById(b.dataset.thread).classList.toggle('thread-open');
+}));
+
+const ab=document.getElementById('assignbtn'), ap=document.getElementById('assignpop');
+ab.addEventListener('click',()=>{ const o=ap.style.display==='none'; ap.style.display=o?'block':'none'; ab.setAttribute('aria-expanded',o); });
+document.getElementById('taskas').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  document.querySelectorAll('#taskas button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  const tagged=b.dataset.as==='tagged';
+  const sh=document.getElementById('tasksheet');
+  sh.querySelectorAll('.as-owner').forEach(x=>x.style.display=tagged?'none':'');
+  sh.querySelectorAll('.as-tagged').forEach(x=>x.style.display=tagged?'':'none');
+  const ta=sh.querySelector('.as-owner-ta'); ta.readOnly=tagged; ta.style.border=tagged?'0':''; ta.style.background=tagged?'transparent':''; ta.style.padding=tagged?'0':''; ta.style.resize=tagged?'none':'';
+  ap.style.display='none';
+});
+
+const dl=document.getElementById('sharedlg');
+dl.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>dl.querySelectorAll('[data-dlg]').forEach(x=>x.style.display='none')));
+document.getElementById('reopen').addEventListener('click',()=>dl.querySelectorAll('[data-dlg]').forEach(x=>x.style.display=''));
+
+document.getElementById('tmsw').addEventListener('click',e=>{ const s=e.currentTarget; s.setAttribute('aria-checked', s.getAttribute('aria-checked')!=='true'); });
+
+(function picker(){
+  const ta=document.getElementById('pick-ta'), mirror=document.getElementById('pick-mirror'), list=document.getElementById('pick-list');
+  const people=['sam','priya','john','lena'].map(k=>({kind:'person',key:k,name:P[k].n,detail:P[k].role}));
+  const records=[
+    {kind:'record',name:'Samsara Foods',detail:'Company · samsara.co'},
+    {kind:'record',name:'Sam Whitfield',detail:'Contact · Halden Group'},
+    {kind:'record',name:'Halden Group',detail:'Company · haldengroup.com'},
+    {kind:'record',name:'Halden Group rollout',detail:'Opportunity · Proposal sent'},
+    {kind:'record',name:'Tom Becker',detail:'Contact · Halden Group'},
+    {kind:'record',name:'Send Halden the revised pricing',detail:'Task · Today'},
+    {kind:'record',name:'Priority Freight',detail:'Company · priorityfreight.co.uk'}
+  ];
+  let picked=[], open=null, opts=[], hi=0;
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  function paint(){
+    let html=esc(ta.value);
+    picked.forEach(p=>{ const label=esc('@'+p.name); html=html.split(label).join(`<mark class="mention" style="color:var(--tag-purple-text)">${label}</mark>`); });
+    mirror.innerHTML=html+'​';
+  }
+  function find(){
+    const caret=ta.selectionStart, before=ta.value.slice(0,caret);
+    const m=/(^|\s)@([^\s@]{0,30})$/.exec(before);
+    if(!m){ open=null; return; }
+    open={start:caret-m[2].length-1,end:caret,q:m[2].toLowerCase()};
+  }
+  function render(){
+    if(!open){ list.style.display='none'; ta.setAttribute('aria-expanded','false'); return; }
+    const q=open.q;
+    const ppl=people.filter(p=>p.name.toLowerCase().split(' ').some(w=>w.startsWith(q))||p.name.toLowerCase().startsWith(q));
+    const rec=records.filter(r=>q&&r.name.toLowerCase().split(' ').some(w=>w.startsWith(q))).slice(0,5);
+    const recs=q?rec:records.slice(2,5);
+    opts=[...ppl,...recs];
+    if(!opts.length){ list.style.display='none'; ta.setAttribute('aria-expanded','false'); return; }
+    hi=Math.min(hi,opts.length-1);
+    let html='', i=0;
+    if(ppl.length){ html+=`<li class="grp" role="presentation">People</li>`; ppl.forEach(p=>{ html+=`<li role="option" aria-selected="${i===hi}"><button class="opt" data-ix="${i}" aria-selected="${i===hi}">${av(p.key,'md')}<span class="f1 col"><span class="nm trunc">${p.name}</span><span class="cap c-subtle">${p.detail}</span></span></button></li>`; i++; }); }
+    if(recs.length){ html+=`<li class="grp" role="presentation">Records</li>`; recs.forEach(r=>{ html+=`<li role="option" aria-selected="${i===hi}"><button class="opt" data-ix="${i}" aria-selected="${i===hi}"><span class="f1 col"><span class="nm trunc">${r.name}</span><span class="cap c-subtle trunc">${r.detail}</span></span></button></li>`; i++; }); }
+    list.innerHTML=html; list.style.display='block'; ta.setAttribute('aria-expanded','true');
+  }
+  function pick(o){
+    const v=ta.value, ins='@'+o.name+' ';
+    ta.value=v.slice(0,open.start)+ins+v.slice(open.end).replace(/^\s+/,'');
+    const c=open.start+ins.length; picked.push(o); open=null;
+    ta.focus(); ta.setSelectionRange(c,c); paint(); render();
+  }
+  ta.addEventListener('input',()=>{ hi=0; find(); paint(); render(); });
+  ta.addEventListener('click',()=>{ find(); render(); });
+  ta.addEventListener('keydown',e=>{
+    if(open&&opts.length){
+      if(e.key==='ArrowDown'||e.key==='ArrowUp'){ e.preventDefault(); hi=(hi+(e.key==='ArrowDown'?1:-1)+opts.length)%opts.length; render(); return; }
+      if(e.key==='Enter'||e.key==='Tab'){ e.preventDefault(); pick(opts[hi]); return; }
+      if(e.key==='Escape'){ e.preventDefault(); open=null; render(); return; }
+    }
+    if(e.key==='Enter'&&!e.shiftKey) e.preventDefault();
+  });
+  list.addEventListener('mousedown',e=>e.preventDefault());
+  list.addEventListener('click',e=>{ const b=e.target.closest('[data-ix]'); if(b) pick(opts[+b.dataset.ix]); });
+  ta.value='Can you send it today @sa'; paint();
+  ta.setSelectionRange(ta.value.length,ta.value.length); find(); render();
+})();
+</script>
+</body>
+</html>

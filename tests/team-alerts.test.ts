@@ -10,7 +10,7 @@ import { watchLiveActivity } from "@/lib/docs/live/client";
 import { personTopic, workspaceTopic } from "@/lib/docs/live/protocol";
 import { memoryHub } from "@/lib/docs/live/transport";
 import { recordHref } from "@/lib/docs/routes";
-import { createDoc, docsMentioning, shareDoc } from "@/lib/docs/store";
+import { createDoc, docsMentioning } from "@/lib/docs/store";
 import { appBadge, notificationSettings, setMailNotifications, teamUnreadCount } from "@/lib/mail/notify";
 import { expandMentions, mentionsIn } from "@/lib/mentions";
 import { savePushSubscription, type PushSender } from "@/lib/push";
@@ -404,8 +404,7 @@ describe("people mentions", () => {
   });
 
   it("indexes people tagged in a doc", async () => {
-    const doc = await createDoc(mark, { title: "Plan", content: `Owner: @[Sam Member](member:${sam.userId})` }, PROVENANCE);
-    await shareDoc(mark, doc.id, true);
+    const doc = await createDoc(mark, { title: "Plan", content: `Owner: @[Sam Member](member:${sam.userId})`, shared: true }, PROVENANCE);
     assert.deepEqual(doc.mentions, [{ kind: "member", id: sam.userId, name: "Sam Member" }]);
     const references = await docsMentioning(mark, { kind: "member", id: sam.userId });
     assert.deepEqual(
