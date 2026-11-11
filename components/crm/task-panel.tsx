@@ -174,7 +174,12 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
 
   async function save(write: TaskDetails) {
     setError(null);
-    const result = await saveTaskDetailsAction(task.id, write);
+    let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
+    try {
+      result = await saveTaskDetailsAction(task.id, write);
+    } catch {
+      result = { error: "Couldn't save. Try again." };
+    }
     if (result.error) {
       setError(result.error);
       return false;

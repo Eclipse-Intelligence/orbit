@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { discussionCount, discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
-import { replaceDescriptionText } from "@/lib/crm/task-description";
+import { replaceDescriptionText, splitDescription } from "@/lib/crm/task-description";
 import type { ChatLiveEvent, ChatMessage } from "@/lib/chat/types";
 import {
   chatWorkSettled,
@@ -488,5 +488,13 @@ describe("discussion helpers", () => {
     assert.equal(replaceDescriptionText(`A\n${link}\nB`, "Only"), `Only\n${link}`);
     assert.equal(replaceDescriptionText(`One\n${link}`, ""), link);
     assert.equal(replaceDescriptionText(null, ""), null);
+    let mid = `A\n\n${link}\nB`;
+    for (let round = 0; round < 3; round += 1) {
+      const { text } = splitDescription(mid);
+      mid = replaceDescriptionText(mid, text) ?? "";
+    }
+    assert.equal(mid, `A\n\n${link}\nB`);
+    const edited = replaceDescriptionText(`A\n\n${link}\nB`, "A changed\n\nB");
+    assert.equal(replaceDescriptionText(edited, splitDescription(edited).text), edited);
   });
 });

@@ -46,6 +46,7 @@ export default function ActionsScreen({
   discussions = {},
   openTask = null,
   admins = [],
+  switchTo = null,
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -62,6 +63,7 @@ export default function ActionsScreen({
   discussions?: Record<string, number>;
   openTask?: Task | null;
   admins?: string[];
+  switchTo?: string | null;
 }) {
   const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
@@ -81,7 +83,11 @@ export default function ActionsScreen({
   const [kept, setKept] = useState<Task | null>(null);
   if (listed && listed !== kept) setKept(listed);
   const panelTask = listed ?? (kept && kept.id === panelId ? kept : null);
-  const missing = Boolean(panelId) && !panelTask;
+  const missing = Boolean(panelId) && !panelTask && !switchTo;
+
+  useEffect(() => {
+    if (switchTo) window.location.replace(switchTo);
+  }, [switchTo]);
   const openedHere = useRef(false);
 
   const openPanel = useCallback((id: string) => {

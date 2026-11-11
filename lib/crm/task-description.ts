@@ -30,16 +30,25 @@ export function replaceDescriptionText(original: string | null, text: string) {
   const fresh = typed.trim() ? typed.split("\n") : [];
   const total = fresh.filter((line) => line.trim()).length;
   const out: string[] = [];
+  let swallow = false;
   const place = (seen: number) => {
     for (const anchor of anchors) {
       if (Math.min(anchor.after, total) !== seen) continue;
-      if (anchor.gap && out.length > 0 && out[out.length - 1].trim()) out.push("");
+      if (anchor.gap && out.length > 0 && out[out.length - 1].trim()) {
+        out.push("");
+        swallow = true;
+      }
       out.push(anchor.line);
     }
   };
   place(0);
   let seen = 0;
   for (const line of fresh) {
+    if (!line.trim() && swallow) {
+      swallow = false;
+      continue;
+    }
+    swallow = false;
     out.push(line);
     if (!line.trim()) continue;
     seen += 1;

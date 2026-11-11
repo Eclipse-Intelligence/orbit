@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
 import ActionsScreen from "@/components/crm/actions-screen";
 import { getUserActor } from "@/lib/auth/user";
-import { TASK_PARAM, taskPanelHref } from "@/lib/chat/discussions";
+import { TASK_PARAM } from "@/lib/chat/discussions";
 import { discussionCounts } from "@/lib/crm/chat";
 import { getClickUpPicker } from "@/lib/crm/clickup";
 import { listMembers } from "@/lib/crm/companies";
 import { countTaskViews, getDueActions } from "@/lib/crm/relationships";
-import { DEFAULT_TASK_VIEW, taskViewFromParam } from "@/lib/crm/task-views";
+import { DEFAULT_TASK_VIEW, TASKS_PATH, taskViewFromParam } from "@/lib/crm/task-views";
 import { isUuid } from "@/lib/crm/mutate";
 import { getTask, listTaskParticipants } from "@/lib/crm/tasks";
 
@@ -40,9 +40,12 @@ export default async function TasksPage({
   const askedTask = resolved[TASK_PARAM];
   const wanted = typeof askedTask === "string" && isUuid(askedTask) ? askedTask.toLowerCase() : null;
   const openTask = wanted && !due.tasks.some((task) => task.id === wanted) ? await getTask(user, wanted).catch(() => null) : null;
-  if (openTask && openTask.workspaceId !== user.workspaceId) {
-    redirect(`/open?workspace=${openTask.workspaceId}&to=${encodeURIComponent(taskPanelHref(openTask.id))}`);
+  const elsewhere = openTask && openTask.workspaceId !== user.workspaceId ? openTask : null;
+  const original = new URLSearchParams();
+  for (const [key, value] of Object.entries(resolved)) {
+    for (const item of Array.isArray(value) ? value : value === undefined ? [] : [value]) original.append(key, item);
   }
+  const switchTo = elsewhere ? `/open?workspace=${elsewhere.workspaceId}&to=${encodeURIComponent(`${TASKS_PATH}?${original.toString()}`)}` : null;
   const ids = [...due.tasks.map((task) => task.id), ...(openTask ? [openTask.id] : [])];
   const [tagged, taggedCount, discussions] = await Promise.all([
     team ? listTaskParticipants(user, ids) : Promise.resolve({}),
@@ -71,7 +74,8 @@ export default async function TasksPage({
       tagged={tagged}
       taggedCount={taggedCount}
       discussions={discussions}
-      openTask={openTask}
+      openTask={elsewhere ? null : openTask}
+      switchTo={switchTo}
       admins={members.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.id)}
     />
   );
