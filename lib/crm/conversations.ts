@@ -963,7 +963,7 @@ export async function createContactAndFile(
 }
 
 function ownImport(actor: UserActor, row: LockedImport | null): LockedImport {
-  if (!row || (row.user_id && row.user_id !== actor.userId)) throw notFound("conversation");
+  if (!row || row.user_id !== actor.userId) throw notFound("conversation");
   return row;
 }
 
@@ -993,8 +993,8 @@ export async function restoreImport(actor: UserActor, importId: string) {
 
 export async function listDismissedImports(actor: UserActor, options: { offset?: number; limit?: number } = {}): Promise<DismissedPage> {
   assertScope(actor.scopes, "crm:read");
-  const offset = Math.max(0, Math.floor(options.offset ?? 0));
-  const limit = Math.min(Math.max(Math.floor(options.limit ?? DISMISSED_PAGE), 1), 100);
+  const offset = Number.isSafeInteger(options.offset) ? Math.max(0, options.offset!) : 0;
+  const limit = Number.isSafeInteger(options.limit) ? Math.min(Math.max(options.limit!, 1), 200) : DISMISSED_PAGE;
   return withActor(actor, async (db) => {
     const result = await db.query<{
       id: string;

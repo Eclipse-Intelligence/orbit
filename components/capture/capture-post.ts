@@ -1,6 +1,7 @@
 import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
 
 export const OFFLINE = "That didn't save. Check your connection and try again.";
+export const SAVE_FAILED = "That didn't save. Try again.";
 
 export async function postCapture(action: CaptureAction, workspaceId: string, keepalive = false) {
   let response: Response;
@@ -15,6 +16,6 @@ export async function postCapture(action: CaptureAction, workspaceId: string, ke
     throw new Error(OFFLINE);
   }
   const body = (await response.json().catch(() => ({}))) as Partial<CaptureOutcome> & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "That didn't save. Try again.");
+  if (!response.ok) throw new Error(body.error ?? SAVE_FAILED);
   return body;
 }

@@ -106,11 +106,11 @@ export async function syncTranscriptsAction() {
 
 type ConversationActionState = { error?: string; ok?: boolean };
 
-export async function listDismissedAction(workspaceId: string, offset: number): Promise<{ page?: DismissedPage; error?: string }> {
+export async function listDismissedAction(workspaceId: string, offset: number, limit: number): Promise<{ page?: DismissedPage; error?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
-    return { page: await listDismissedImports(await captureActor(user, workspaceId), { offset }) };
+    return { page: await listDismissedImports(await captureActor(user, workspaceId), { offset, limit }) };
   } catch (error) {
     return actionError(error);
   }

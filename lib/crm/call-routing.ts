@@ -1,6 +1,7 @@
 import {
   confidentFor,
   contactsByName,
+  exactFor,
   excludedNameKeys,
   inQueryOrder,
   nameQueries,
@@ -74,7 +75,13 @@ export async function routeCallInDb(
   owner: UserActor,
   actors: UserActor[],
   people: Participant[],
-  options: { own?: Set<string>; occurredAt?: string | null; names?: boolean; ownNames?: (string | null | undefined)[] } = {},
+  options: {
+    own?: Set<string>;
+    occurredAt?: string | null;
+    names?: boolean;
+    ownNames?: (string | null | undefined)[];
+    nameWorkspaceIds?: string[];
+  } = {},
 ): Promise<CallRoute> {
   const workspaceIds = actors.map((item) => item.workspaceId);
   const own = options.own ?? (await ownCallAddresses(db, owner));
@@ -119,13 +126,14 @@ export async function routeCallInDb(
   }
   let suggested: NameCandidate[] = [];
   if (names.length > 0 && unmatched.length > 0) {
-    const lookup = await contactsByName(db, workspaceIds, names);
+    const lookup = await contactsByName(db, [...new Set([...workspaceIds, ...(options.nameWorkspaceIds ?? [])])], names);
     const confident = names.filter((query) => confidentFor(query, lookup));
+    const hits = confident.flatMap((query) => exactFor(query, lookup.candidates));
     for (const actor of unmatched) {
-      const hit = inQueryOrder(lookup.candidates, confident).find((candidate) => candidate.workspaceId === actor.workspaceId);
+      const hit = hits.find((candidate) => candidate.workspaceId === actor.workspaceId);
       if (hit) matched.set(actor.workspaceId, { actor, match: hit });
     }
-    if (matched.size === 0) suggested = inQueryOrder(lookup.candidates, names);
+    if (matched.size === 0) suggested = inQueryOrder(lookup.candidates, names).filter((candidate) => workspaceIds.includes(candidate.workspaceId));
   }
   const targets = actors.map((actor) => matched.get(actor.workspaceId)).filter((target): target is CallTarget => Boolean(target));
   return { targets, ruled, suggested };
@@ -195,6 +203,9 @@ export async function moveImportToWorkspace(owner: UserActor, importId: string, 
       if (error.code === "P0002") throw notFound("conversation");
       if (error.code === "55000") throw new CrmError("conflict", "This conversation is already filed or ignored.", 409);
       if (error.code === "23505") throw new CrmError("conflict", "A colleague already has this conversation in that workspace.", 409, { field: "workspaceId" });
+      if (error.code === "OR409") {
+        throw new CrmError("conflict", "Couldn't move it. A colleague dismissed this call in that workspace, so only they can bring it back there.", 409, { field: "workspaceId" });
+      }
       if (error.code === "42501") throw new CrmError("forbidden", "Choose a workspace you're in.", 403, { field: "workspaceId" });
     }
     throw error;

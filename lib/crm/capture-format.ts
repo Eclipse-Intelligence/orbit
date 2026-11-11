@@ -66,8 +66,8 @@ export function dueLabel(iso: string, now: number, timeZone = appTimeZone()) {
   return time === "00:00" ? "Today" : `Today ${time}`;
 }
 
-export function pruneHidden(hidden: Set<string>, present: Iterable<string>) {
-  const keep = new Set(present);
+export function pruneHidden(hidden: Set<string>, present: Iterable<string>, acting: Iterable<string> = []) {
+  const keep = new Set([...present, ...acting]);
   const next = new Set([...hidden].filter((id) => keep.has(id)));
   return next.size === hidden.size ? hidden : next;
 }

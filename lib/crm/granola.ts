@@ -273,7 +273,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
     const open = actors.filter((item) => !known?.workspaces.has(item.workspaceId));
     const placeholder = await importPlaceholder(db, workspaceIds, "granola", note.id, owner.userId);
     const own = await ownCallAddresses(db, owner, [note.owner?.email]);
-    const routing = { own, occurredAt, names: true, ownNames };
+    const routing = { own, occurredAt, names: true, ownNames, nameWorkspaceIds: workspaceIds };
     let route = await routeCallInDb(db, owner, open, participants, routing);
     let added = 0;
     for (const person of route.ruled) {

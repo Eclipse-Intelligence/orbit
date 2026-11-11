@@ -54,18 +54,20 @@ export const COLLAPSE_MS = 220;
 const OUT_MS = 180;
 
 const pointer = { down: false, watching: false };
+const RELEASE_EVENTS = ["pointerup", "pointercancel", "contextmenu", "dragstart", "blur"] as const;
+const RELEASE_FALLBACK_MS = 3_000;
 
 function watchPointer() {
   if (pointer.watching) return;
   pointer.watching = true;
-  const release = () => {
-    pointer.down = false;
-  };
   window.addEventListener("pointerdown", () => {
     pointer.down = true;
   }, true);
-  window.addEventListener("pointerup", release, true);
-  window.addEventListener("pointercancel", release, true);
+  for (const name of RELEASE_EVENTS) {
+    window.addEventListener(name, () => {
+      pointer.down = false;
+    }, true);
+  }
 }
 
 function afterPointerRelease(run: () => void) {
@@ -73,13 +75,16 @@ function afterPointerRelease(run: () => void) {
     run();
     return;
   }
+  let finished = false;
   const done = () => {
-    window.removeEventListener("pointerup", done, true);
-    window.removeEventListener("pointercancel", done, true);
+    if (finished) return;
+    finished = true;
+    window.clearTimeout(fallback);
+    for (const name of RELEASE_EVENTS) window.removeEventListener(name, done, true);
     window.setTimeout(run, 0);
   };
-  window.addEventListener("pointerup", done, true);
-  window.addEventListener("pointercancel", done, true);
+  const fallback = window.setTimeout(done, RELEASE_FALLBACK_MS);
+  for (const name of RELEASE_EVENTS) window.addEventListener(name, done, true);
 }
 
 function SnoozeItems({ choices, pick, extra }: { choices: SnoozeChoice[]; pick: (choice: SnoozeChoice) => void; extra?: MenuItem[] }) {

@@ -493,12 +493,12 @@ function SuggestedMenu({ contacts, hint, onPick }: { contacts: ContactSuggestion
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button variant="secondary" size="sm" className="max-w-full sm:max-w-[16rem]" data-row-key="a" shortcut={hint}>
+        <Button variant="secondary" size="sm" className="max-w-full sm:max-w-[16rem]" data-row-key="a" title={sameName ? `File to ${contacts[0].name} (A)` : "File to suggested (A)"} shortcut={hint}>
           <span className="truncate">{sameName ? `File to ${contacts[0].name}` : "File to suggested"}</span>
           <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-w-[calc(100vw-2rem)] min-w-[14rem]">
+      <DropdownMenuContent align="end" className="max-w-[min(28rem,calc(100vw-2rem))] min-w-[14rem]">
         {contacts.map((contact) => {
           const detail = suggestionDetail(contact, contacts);
           return (

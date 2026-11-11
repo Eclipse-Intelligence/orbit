@@ -7,7 +7,7 @@ const LOWER = "abcdefghijklmnopqrstuvwxyz";
 const SKELETON_DROP_SQL = `[^${UPPER}${LOWER}0123456789]`;
 const TITLE_JOINER = /\s+(?:and|x|\+|&)\s+/i;
 const NAME_WORD = /^\p{L}[\p{L}'’.-]*$/u;
-const MAX_CANDIDATES = 200;
+const MAX_CANDIDATES = 500;
 
 export type ContactSuggestion = { contactId: string; name: string; companyName: string | null; email: string | null };
 
@@ -20,7 +20,7 @@ export type NameCandidate = PartyMatch & {
   words: string;
 };
 
-export type NameQuery = { key: string; words: string; skeleton: string; raw: string };
+export type NameQuery = { key: string; words: string; skeleton: string; latin: boolean };
 
 export type NameLookup = { candidates: NameCandidate[]; complete: boolean };
 
@@ -31,10 +31,11 @@ function squash(value: string | null | undefined) {
 export function foldName(value: string | null | undefined) {
   return squash(value)
     .normalize("NFKD")
-    .replace(/\p{M}+/gu, "")
+    .replace(/(\p{Script=Latin})\p{M}+/gu, "$1")
+    .normalize("NFC")
     .toLowerCase()
     .replace(/['’‘`´.]+/g, "")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim();
 }
 
@@ -55,8 +56,8 @@ function skeleton(value: string) {
   return value.normalize("NFKD").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
 }
 
-function rawKey(value: string) {
-  return value.normalize("NFC").replace(/\s+/g, "");
+export function latinName(value: string | null | undefined) {
+  return [...squash(value).normalize("NFC")].every((char) => !/\p{L}/u.test(char) || /\p{Script=Latin}/u.test(char));
 }
 
 export function nameQueries(names: (string | null | undefined)[], excluded: Set<string>) {
@@ -64,7 +65,7 @@ export function nameQueries(names: (string | null | undefined)[], excluded: Set<
   for (const name of names) {
     const key = nameKey(name);
     if (!key || excluded.has(key) || queries.some((query) => query.key === key)) continue;
-    queries.push({ key, words: foldName(name), skeleton: skeleton(squash(name)), raw: rawKey(squash(name)) });
+    queries.push({ key, words: foldName(name), skeleton: skeleton(squash(name)), latin: latinName(name) });
   }
   return queries;
 }
@@ -96,8 +97,8 @@ export async function excludedNameKeys(db: Db, userId: string, extra: (string | 
 
 export async function contactsByName(db: Db, workspaceIds: string[], queries: NameQuery[]): Promise<NameLookup> {
   const skeletons = [...new Set(queries.map((query) => query.skeleton).filter(Boolean))];
-  const raws = [...new Set(queries.map((query) => query.raw).filter(Boolean))];
-  if (workspaceIds.length === 0 || (skeletons.length === 0 && raws.length === 0)) return { candidates: [], complete: true };
+  const bare = queries.some((query) => !query.skeleton);
+  if (workspaceIds.length === 0 || (skeletons.length === 0 && !bare)) return { candidates: [], complete: true };
   const result = await db.query<{
     id: string;
     workspace_id: string;
@@ -112,14 +113,15 @@ export async function contactsByName(db: Db, workspaceIds: string[], queries: Na
             coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email) as name
      from crm.contacts c
      left join crm.companies co on co.id = c.company_id
+     cross join lateral (
+       select translate(regexp_replace(normalize(concat_ws(' ', c.first_name, c.last_name), NFKD), $4, '', 'g'), $5, $6) as skeleton
+     ) k
      where c.workspace_id = any($1::uuid[]) and c.archived_at is null
-       and (
-         translate(regexp_replace(normalize(concat_ws(' ', c.first_name, c.last_name), NFKD), $4, '', 'g'), $5, $6) = any($2::text[])
-         or regexp_replace(normalize(concat_ws(' ', c.first_name, c.last_name), NFC), '[[:space:]]+', '', 'g') = any($3::text[])
-       )
-     order by c.updated_at desc
+       and nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), '') is not null
+       and (k.skeleton = any($2::text[]) or ($3::boolean and k.skeleton = ''))
+     order by (k.skeleton = any($2::text[])) desc, c.updated_at desc
      limit ${MAX_CANDIDATES}`,
-    [workspaceIds, skeletons, raws, SKELETON_DROP_SQL, UPPER, LOWER],
+    [workspaceIds, skeletons, bare, SKELETON_DROP_SQL, UPPER, LOWER],
   );
   const keys = new Set(queries.map((query) => query.key));
   const candidates: NameCandidate[] = [];
@@ -153,9 +155,13 @@ function onePerson(candidates: NameCandidate[]) {
 }
 
 export function confidentFor(query: NameQuery, lookup: NameLookup) {
-  if (!lookup.complete || query.words.split(" ").length < 2) return false;
-  const named = lookup.candidates.filter((candidate) => candidate.key === query.key);
-  return named.every((candidate) => candidate.words === query.words) && onePerson(named);
+  if (!lookup.complete || !query.latin || query.words.split(" ").length < 2) return false;
+  const exact = lookup.candidates.filter((candidate) => candidate.key === query.key && candidate.words === query.words);
+  return onePerson(exact);
+}
+
+export function exactFor(query: NameQuery, candidates: NameCandidate[]) {
+  return candidates.filter((candidate) => candidate.key === query.key && candidate.words === query.words);
 }
 
 export function inQueryOrder(candidates: NameCandidate[], queries: NameQuery[]) {

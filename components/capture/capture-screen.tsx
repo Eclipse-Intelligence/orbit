@@ -172,6 +172,7 @@ export default function CaptureScreen({
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const [leaving, setLeaving] = useState<Set<string>>(() => new Set());
   const [filing, setFiling] = useState<string | null>(null);
+  const [acting, setActing] = useState<Set<string>>(() => new Set());
   const pending = useRef<Pending | null>(null);
   const mounted = useRef(true);
   const settleUntil = useRef(0);
@@ -264,11 +265,12 @@ export default function CaptureScreen({
     })),
   ];
 
-  const entryIds = entries.map((entry) => entry.id).join("\n");
-  const [seenIds, setSeenIds] = useState(entryIds);
-  if (seenIds !== entryIds) {
-    setSeenIds(entryIds);
-    setHidden((current) => pruneHidden(current, entryIds.split("\n")));
+  const entryIds = entries.map((entry) => entry.id);
+  const entryKey = entryIds.join("\n");
+  const [seenKey, setSeenKey] = useState(entryKey);
+  if (seenKey !== entryKey) {
+    setSeenKey(entryKey);
+    setHidden((current) => pruneHidden(current, entryIds, acting));
   }
 
   const gone = (id: string) => hidden.has(id) || leaving.has(id);
@@ -348,6 +350,16 @@ export default function CaptureScreen({
     });
   }
 
+  function acted(id: string, on: boolean) {
+    setActing((current) => {
+      if (current.has(id) === on) return current;
+      const next = new Set(current);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
   function commit(item: Pending, keepalive: boolean) {
     dismissToast(item.toast);
     const filing = FILED.has(item.action.kind) && mounted.current ? showToast({ message: "Filing…", duration: FILING_MS }) : null;
@@ -355,10 +367,12 @@ export default function CaptureScreen({
       .then((outcome) => {
         if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
+        acted(item.id, false);
         router.refresh();
       })
       .catch((error: Error) => {
         if (filing !== null) dismissToast(filing);
+        acted(item.id, false);
         if (!mounted.current) {
           setCaptureCleared(NO_CAPTURE_COUNTS);
           return;
@@ -383,6 +397,7 @@ export default function CaptureScreen({
     pending.current = null;
     window.clearTimeout(item.timer);
     dismissToast(item.toast);
+    acted(item.id, false);
     show(item.id);
     return true;
   }
@@ -436,6 +451,7 @@ export default function CaptureScreen({
   }
 
   function queue(id: string, verb: string, action: CaptureAction, instead?: ClearInstead) {
+    acted(id, true);
     const item: Pending = {
       id,
       action,

@@ -72,7 +72,10 @@ begin
       delete from crm.conversation_imports i where i.id = v_import.id;
       return v_existing.id;
     end if;
-    if v_existing.user_id is distinct from p_user and v_existing.status in ('filed', 'unfiled', 'ignored') then
+    if v_existing.user_id is distinct from p_user and v_existing.status = 'ignored' then
+      raise exception 'A colleague dismissed this conversation in that workspace.' using errcode = 'OR409';
+    end if;
+    if v_existing.user_id is distinct from p_user and v_existing.status in ('filed', 'unfiled') then
       raise exception 'A colleague already has this conversation in that workspace.' using errcode = '23505';
     end if;
     delete from crm.conversation_imports i where i.id = v_existing.id;
