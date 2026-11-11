@@ -5,6 +5,7 @@ import { after } from "next/server";
 import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
 import DocsProvider from "@/components/docs/docs-provider";
+import ChatLive from "@/components/chat/chat-live";
 import MailUnread from "@/components/mail/mail-unread";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
 import { getHomeActor, getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
@@ -122,6 +123,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
         <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
           <KeepPageInPlace />
           <MailUnread />
+          <ChatLive />
           <Sidebar
             boards={boards}
             companyCount={companyCount}

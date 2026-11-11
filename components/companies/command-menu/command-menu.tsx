@@ -30,7 +30,7 @@ type Results = {
   failed?: boolean;
 };
 
-const PAGE_GROUPS = new Set<ShortcutGroup>(["Lists", "Selection", "Tasks", "Opportunities", "Records", "Calendar", "Capture", "Mail", "Docs"]);
+const PAGE_GROUPS = new Set<ShortcutGroup>(["Lists", "Selection", "Tasks", "Opportunities", "Records", "Calendar", "Capture", "Mail", "Chat", "Docs"]);
 const GENERAL_IDS = new Set(["assistant", "help", "settings", "notifications", "account"]);
 const DOCS_PALETTE_IDS = new Set(["create-note", "docs-daily", "docs-search"]);
 

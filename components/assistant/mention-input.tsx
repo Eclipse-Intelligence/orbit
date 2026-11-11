@@ -67,6 +67,8 @@ export default function MentionInput({
   composeFocus,
   shortcut,
   autoFocus,
+  onKeyDown: onKey,
+  onBlur,
 }: {
   id: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -83,6 +85,8 @@ export default function MentionInput({
   composeFocus?: boolean;
   shortcut?: string;
   autoFocus?: boolean;
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onBlur?: () => void;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [found, setFound] = useState<{ query: string; options: MentionOption[] }>({ query: "", options: [] });
@@ -155,6 +159,8 @@ export default function MentionInput({
         return;
       }
     }
+    onKey?.(event);
+    if (event.defaultPrevented) return;
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       onSubmit();
@@ -260,7 +266,10 @@ export default function MentionInput({
           refresh(next, event.target.selectionStart ?? next.length, kept);
         }}
         onSelect={(event) => refresh(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
-        onBlur={() => window.setTimeout(() => setOpen(null), 150)}
+        onBlur={() => {
+          window.setTimeout(() => setOpen(null), 150);
+          onBlur?.();
+        }}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
         onKeyDown={onKeyDown}
         placeholder={placeholder}

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ChatSidebar } from "@/lib/chat/types";
 
 export const CAPTURE_SECTIONS = ["approvals", "followUps", "replies", "tasks", "toFile"] as const;
 
@@ -14,6 +15,7 @@ type CompaniesState = {
   profileOpen: boolean;
   sidebarOpen: boolean;
   mailUnread: number | null;
+  chat: ChatSidebar | null;
   capture: CaptureBadge | null;
   captureCleared: CaptureCounts;
   captureLive: boolean;
@@ -22,6 +24,7 @@ type CompaniesState = {
   closeProfile: () => void;
   setSidebarOpen: (open: boolean) => void;
   setMailUnread: (count: number) => void;
+  setChat: (chat: ChatSidebar | ((current: ChatSidebar | null) => ChatSidebar | null)) => void;
   setCapture: (capture: CaptureBadge | null) => void;
   setCaptureCleared: (cleared: CaptureCounts) => void;
   setCaptureLive: (live: boolean) => void;
@@ -44,6 +47,7 @@ export const useCompaniesStore = create<CompaniesState>((set) => ({
   profileOpen: false,
   sidebarOpen: false,
   mailUnread: null,
+  chat: null,
   capture: null,
   captureCleared: NO_CAPTURE_COUNTS,
   captureLive: false,
@@ -52,6 +56,7 @@ export const useCompaniesStore = create<CompaniesState>((set) => ({
   closeProfile: () => set({ profileOpen: false }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   setMailUnread: (mailUnread) => set({ mailUnread }),
+  setChat: (chat) => set((state) => ({ chat: typeof chat === "function" ? chat(state.chat) : chat })),
   setCapture: (capture) => set((state) => (state.captureLive ? { capture } : { capture, captureCleared: NO_CAPTURE_COUNTS })),
   setCaptureCleared: (captureCleared) => set({ captureCleared }),
   setCaptureLive: (captureLive) => set({ captureLive }),
