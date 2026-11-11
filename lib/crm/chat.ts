@@ -942,27 +942,54 @@ function afterPost(db: Db, userIds: string[], event: ChatLiveEvent, jobs: AlertJ
   });
 }
 
-async function existingPost(db: Db, actor: UserActor, clientKey: string, conversationId: string, parentId: string | null): Promise<ChatPost | null> {
-  const existing = await db.query<{ id: string }>("select id from crm.chat_messages where author_user_id = $1 and client_key = $2", [actor.userId, clientKey]);
+export async function ownPostWithKey(actor: UserActor, clientKey: string): Promise<{ conversationId: string; parentId: string | null } | null> {
+  const key = cleanClientKey(clientKey);
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ conversation_id: string; parent_id: string | null }>(
+      "select conversation_id, parent_id from crm.chat_messages where author_user_id = $1 and client_key = $2",
+      [actor.userId, key],
+    );
+    const row = result.rows[0];
+    return row ? { conversationId: row.conversation_id, parentId: row.parent_id } : null;
+  });
+}
+
+export function checkChatPost(body: unknown) {
+  const text = cleanBody(body);
+  memberMentions(text);
+  return text;
+}
+
+async function existingPost(db: Db, actor: UserActor, clientKey: string, conversationId: string, parentId: string | null, body?: string): Promise<ChatPost | null> {
+  const existing = await db.query<{ id: string; body: string }>("select id, body from crm.chat_messages where author_user_id = $1 and client_key = $2", [actor.userId, clientKey]);
   if (!existing.rows[0]) return null;
   const message = await readMessage(db, existing.rows[0].id, actor.userId);
-  if (!message || message.conversationId !== conversationId || message.parentId !== parentId) {
+  if (!message || message.conversationId !== conversationId || message.parentId !== parentId || (body !== undefined && existing.rows[0].body !== body)) {
     throw new CrmError("conflict", "That message key was already used for another message.", 409, { field: "clientKey" });
   }
   const root = message.parentId ? await readMessage(db, message.parentId, actor.userId) : null;
   return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
-export async function postMessage(actor: UserActor, input: PostInput, options: { viaWorkflowId?: string } = {}): Promise<ChatPost> {
+export async function postMessage(actor: UserActor, input: PostInput, options: { viaWorkflowId?: string; charge?: () => Promise<void> } = {}): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
   const body = cleanBody(input.body);
   const clientKey = cleanClientKey(input.clientKey);
   const mentions = memberMentions(body);
+  const repeatCheck = options.charge ? body : undefined;
   try {
+    if (options.charge) {
+      const before = await withActor(actor, async (db) => {
+        await readConversation(db, actor, conversationId);
+        return existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
+      });
+      if (before) return before;
+      await options.charge();
+    }
     return await withActor(actor, async (db) => {
       const conversation = await readConversation(db, actor, conversationId);
-      const earlier = await existingPost(db, actor, clientKey, conversationId, parentId);
+      const earlier = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
       if (earlier) return earlier;
       const tagged = await tagFromDiscussion(db, actor, conversation, mentions);
       if (conversation.kind === "dm") {
@@ -978,7 +1005,7 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
         [conversationId, parentId, actor.userId, clientKey, body, mentions, ...(via ? [via] : [])],
       );
       if (!inserted.rows[0]) {
-        const raced = await existingPost(db, actor, clientKey, conversationId, parentId);
+        const raced = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
         if (raced) return raced;
         throw new CrmError("conflict", "That message key was already used for another message. Send this one with a new key.", 409, { field: "clientKey" });
       }

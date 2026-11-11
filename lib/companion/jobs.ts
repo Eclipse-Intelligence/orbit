@@ -1,5 +1,5 @@
-import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
-import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
+import { PROPOSED, type CompanionCall, type CompanionJob, type CompanionRequest, type CompanionResult } from "@/companion/src/protocol";
+import { EXTERNAL_NOTICE, findTool, isWriteCall, runTool, toolJson } from "@/lib/assistant/tools";
 import { untrustedToken } from "@/lib/assistant/untrusted";
 import { needsWebApproval, outsideRead, readTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
@@ -366,8 +366,10 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
   if (call.name === CONTINUE_RESULT_TOOL.name) return continueResult(auth, jobId, call.arguments);
   const tool = findTool(call.name);
   if (!tool) return { content: toolJson({ error: `There is no tool called ${call.name}.` }), isError: true };
-  if (tool.write) return { content: toolJson({ error: "Changes need the user's approval in Orbit." }), isError: true };
   const args = parseArgs(call.arguments);
+  if (isWriteCall(call.name, args)) {
+    return tool.reads ? { content: PROPOSED, isError: false } : { content: toolJson({ error: "Changes need the user's approval in Orbit." }), isError: true };
+  }
   if (WEB_TOOLS.has(tool.name) && needsWebApproval(tool.name, args, await companionWebState(auth, jobId, job.conversation_id))) {
     return { content: toolJson({ approvalNeeded: WEB_APPROVAL_MARK, message: WEB_APPROVAL_RESULT }), isError: false };
   }

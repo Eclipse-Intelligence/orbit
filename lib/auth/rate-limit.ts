@@ -47,3 +47,11 @@ export async function consumeMailSendLimit(userId: string, now = Date.now()) {
     { retryAt: retryAt.toISOString() },
   );
 }
+
+export const MCP_CHAT_POSTS_PER_MINUTE = 60;
+
+export async function consumeChatPostLimit(userId: string) {
+  const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`chat-post:${userId}`, MCP_CHAT_POSTS_PER_MINUTE, WINDOW_SECONDS]);
+  if (result.rows[0]?.allowed) return;
+  throw new CrmError("rate_limited", `Couldn't post. ${MCP_CHAT_POSTS_PER_MINUTE} Chat messages a minute is the most MCP allows. Try again in a minute.`, 429);
+}

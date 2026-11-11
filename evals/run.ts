@@ -1,6 +1,6 @@
 import { sendMessage } from "@/lib/assistant/chat";
 import { assistantModel } from "@/lib/assistant/models";
-import { findTool } from "@/lib/assistant/tools";
+import { isWriteCall } from "@/lib/assistant/tools";
 import { getAdminPool } from "@/lib/db/pool";
 import { runJudge } from "./judge";
 import { breaches, inContext, newContext, outsideFetch, realFetch, type GatewayHandler, type RunContext } from "./outside";
@@ -148,7 +148,7 @@ async function readTranscript(conversationId: string, context: RunContext, error
         result = raw;
       }
       const refused = Boolean(result && typeof result === "object" && (result as { field?: unknown }).field === "workspace");
-      calls.push({ id: call.id, name: call.function.name, args: parseArgs(call.function.arguments), write: Boolean(findTool(call.function.name)?.write), result, refused });
+      calls.push({ id: call.id, name: call.function.name, args: parseArgs(call.function.arguments), write: isWriteCall(call.function.name, parseArgs(call.function.arguments)), result, refused });
     }
     for (const action of row.actions ?? []) {
       const call = (row.tool_calls ?? []).find((entry) => entry.id === action.id);

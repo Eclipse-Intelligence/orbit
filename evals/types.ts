@@ -187,6 +187,8 @@ type MemorySeed = { scope: "personal" | "business" | "market"; kind: string; tit
 
 type ChangeSeed = { company: string; description: string };
 
+type ChatSeed = { room: string; messages: { by: "me" | "colleague"; text: string; key?: string }[] };
+
 export type WorkspaceSeed = {
   brand?: { website: string; whatYouSell: string; whoItsFor?: string; tone?: string };
   companies?: CompanySeed[];
@@ -202,6 +204,7 @@ export type WorkspaceSeed = {
   proof?: ProofSeed[];
   memories?: MemorySeed[];
   changes?: ChangeSeed[];
+  chat?: ChatSeed[];
   booking?: boolean;
 };
 
