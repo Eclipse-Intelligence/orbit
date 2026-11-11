@@ -126,13 +126,15 @@ function checkAlert(alert: TeamAlert) {
   if (landsInSubjectWorkspace(alert.source) && !alert.workspaceId) throw new CrmError("invalid_input", "Say which workspace the alert is about.", 400);
 }
 
-async function bellLink(target: UserActor, href: string) {
+async function bellLink(target: UserActor, alert: TeamAlert) {
+  const href = alert.href;
+  if (!landsInSubjectWorkspace(alert.source)) return href;
   const linked = await alertLink(target, href);
   return linked.length <= NOTIFICATION_HREF_MAX ? linked : href;
 }
 
 async function record(target: UserActor, alert: TeamAlert) {
-  const href = await bellLink(target, alert.href);
+  const href = await bellLink(target, alert);
   return withActor(target, async (db) => {
     const logged = await db.query("insert into crm.push_log (workspace_id, user_id, key) values ($1, $2, $3) on conflict (user_id, key) do nothing returning id", [
       target.workspaceId,
@@ -155,7 +157,7 @@ async function record(target: UserActor, alert: TeamAlert) {
 async function push(target: UserActor, alert: TeamAlert, options: TeamAlertOptions) {
   if (!(await teamNotifyOn(target))) return 0;
   const badge = await appBadge(target);
-  const result = await pushToUser(target, { title: cut(alert.title, 120), body: cut(alert.body ?? "", 400), url: alert.href, tag: cut(alert.tag, 200), badge }, { send: options.send });
+  const result = await pushToUser(target, { title: cut(alert.title, 120), body: cut(alert.body ?? "", 400), url: alert.href, tag: cut(alert.tag, 200), badge }, { send: options.send, keepLink: !landsInSubjectWorkspace(alert.source) });
   return result.failures.length;
 }
 

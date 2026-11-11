@@ -1,6 +1,6 @@
-export type ChatKind = "room" | "dm" | "task" | "doc";
+export type ChatKind = "room" | "dm" | "task" | "doc" | "mail_thread";
 
-export type ChatSubjectKind = "task" | "doc";
+export type ChatSubjectKind = "task" | "doc" | "mail_thread";
 
 export type ChatSubject = { kind: ChatSubjectKind; id: string };
 
@@ -125,4 +125,6 @@ export type ChatDiscussion = {
   page: ChatPage | null;
 };
 
-export type ChatResult<T> = ({ ok: true } & T) | { ok?: false; error: string };
+export type ChatNeedsShare = { people: ChatPerson[]; canAdd: boolean };
+
+export type ChatResult<T> = ({ ok: true } & T) | { ok?: false; error: string; needsShare?: ChatNeedsShare };

@@ -40,6 +40,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import { publishLiveBatch, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
+import { sharedThreadHref } from "@/lib/mail/share-types";
 import { mentionsIn } from "@/lib/mentions";
 
 type Stamp = Date | string;
@@ -80,6 +81,7 @@ type ConversationRow = {
   mentions: number;
   task_id?: string | null;
   page_id?: string | null;
+  mail_share_id?: string | null;
   subject_workspace_id?: string | null;
 };
 
@@ -340,11 +342,11 @@ function broadcastAfterCommit(db: Db, userIds: string[], event: ChatLiveEvent) {
 const SUBJECT_SQL = `
   select c.id, c.kind, coalesce(t.title, p.title, '') as name, null::uuid as workspace_id, null::text as workspace_name, c.created_at, c.created_by,
     now() as last_read_at, null::timestamptz as last_message_at, null::uuid as dm_user_id, null::text as dm_name, 0 as unread, 0 as mentions,
-    c.task_id, c.page_id, coalesce(t.workspace_id, p.workspace_id) as subject_workspace_id
+    c.task_id, c.page_id, c.mail_share_id, coalesce(t.workspace_id, p.workspace_id) as subject_workspace_id
   from crm.chat_conversations c
   left join crm.tasks t on c.kind = 'task' and t.id = c.task_id
   left join crm.pages p on c.kind = 'doc' and p.id = c.page_id
-  where c.kind in ('task', 'doc') and c.archived_at is null`;
+  where c.kind in ('task', 'doc', 'mail_thread') and c.archived_at is null`;
 
 const SUBJECT_AUDIENCE_SQL = `
   select wm.user_id, now() as last_read_at
@@ -363,7 +365,17 @@ const SUBJECT_AUDIENCE_SQL = `
   from crm.chat_conversations c
   join crm.pages p on p.id = c.page_id
   join crm.workspace_members wm on wm.workspace_id = p.workspace_id
-  where c.id = $1 and c.kind = 'doc' and p.effective_shared and p.kind = 'note'`;
+  where c.id = $1 and c.kind = 'doc' and p.effective_shared and p.kind = 'note'
+  union
+  select s.owner_user_id, now() as last_read_at
+  from crm.chat_conversations c
+  join crm.mail_shares s on s.id = c.mail_share_id
+  where c.id = $1 and c.kind = 'mail_thread'
+  union
+  select sm.user_id, now() as last_read_at
+  from crm.chat_conversations c
+  join crm.mail_share_members sm on sm.share_id = c.mail_share_id
+  where c.id = $1 and c.kind = 'mail_thread'`;
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
   const result = await db.query<ConversationRow>(`${CONVERSATIONS_SQL} and c.id = $2`, [actor.userId, id]);
@@ -1162,10 +1174,42 @@ export async function markThreadRead(actor: UserActor, rootId: string, upTo?: st
 function subjectOf(conversation: ConversationRow): ChatSubject | null {
   if (conversation.kind === "task" && conversation.task_id) return { kind: "task", id: conversation.task_id };
   if (conversation.kind === "doc" && conversation.page_id) return { kind: "doc", id: conversation.page_id };
+  if (conversation.kind === "mail_thread" && conversation.mail_share_id) return { kind: "mail_thread", id: conversation.mail_share_id };
   return null;
 }
 
+async function refuseOutsiders(db: Db, actor: UserActor, shareId: string, people: string[]) {
+  const wanted = [...new Set(people.filter((person) => person !== actor.userId))];
+  if (wanted.length === 0) return;
+  const audience = await db.query<{ user_id: string; owner: boolean }>(
+    `select s.owner_user_id as user_id, true as owner from crm.mail_shares s where s.id = $1
+     union all
+     select sm.user_id, false from crm.mail_share_members sm where sm.share_id = $1`,
+    [shareId],
+  );
+  const inside = new Set(audience.rows.map((row) => row.user_id));
+  const outside = wanted.filter((person) => !inside.has(person));
+  if (outside.length === 0) return;
+  const ownerId = audience.rows.find((row) => row.owner)?.user_id ?? null;
+  const named = await db.query<{ id: string; name: string }>(
+    "select p.id, coalesce(nullif(btrim(p.full_name), ''), p.email, 'Someone') as name from crm.profiles p where p.id = any($1::uuid[])",
+    [ownerId ? [...outside, ownerId] : outside],
+  );
+  const names = new Map(named.rows.map((row) => [row.id, row.name]));
+  const outsiders = outside.map((id) => ({ id, name: names.get(id) ?? "Someone" }));
+  const canAdd = ownerId === actor.userId;
+  const who = outsiders.length === 1 ? outsiders[0].name : `${outsiders.length} people you tagged`;
+  const verb = outsiders.length === 1 ? "isn't" : "aren't";
+  const ownerName = ownerId ? (names.get(ownerId) ?? "The owner").split(/\s+/)[0] : "The owner";
+  const message = canAdd ? `${who} ${verb} in this thread. Add them first.` : `${who} ${verb} in this thread. Only ${ownerName} can add people.`;
+  throw new CrmError("conflict", message, 409, { field: "body", needsShare: { people: outsiders, canAdd } });
+}
+
 async function tagFromDiscussion(db: Db, actor: UserActor, conversation: ConversationRow, people: string[]) {
+  if (conversation.kind === "mail_thread" && conversation.mail_share_id) {
+    await refuseOutsiders(db, actor, conversation.mail_share_id, people);
+    return [];
+  }
   if (conversation.kind !== "task" || !conversation.task_id) return [];
   const wanted = [...new Set(people.filter((person) => person !== actor.userId))];
   if (wanted.length === 0) return [];
@@ -1195,10 +1239,43 @@ async function tagFromDiscussion(db: Db, actor: UserActor, conversation: Convers
   }
 }
 
+function mailThreadAlerts(actor: UserActor, shareId: string, message: ChatMessage): AlertJob[] {
+  const name = firstName(actor);
+  const base = { source: "mail_share" as const, href: sharedThreadHref(shareId, { notes: true }), tag: `mail_share:${shareId}`, body: null };
+  const mentioned = message.mentions.filter((person) => person !== actor.userId);
+  const jobs: AlertJob[] = [];
+  if (mentioned.length > 0) {
+    jobs.push(async () => {
+      const audience = await query<{ user_id: string }>("select user_id from private.mail_share_people($1, $2)", [actor.userId, shareId]);
+      const inside = new Set(audience.rows.map((row) => row.user_id));
+      const recipients = mentioned.filter((person) => inside.has(person));
+      if (recipients.length === 0) return;
+      await alertMembers(actor, recipients, { ...base, key: `mail_share:discussion:${message.id}`, title: `${name} mentioned you in a shared email` }, VERIFIED);
+    });
+  }
+  const rootId = message.parentId;
+  if (!rootId) return jobs;
+  const skip = new Set([actor.userId, ...message.mentions]);
+  jobs.push(async () => {
+    const followers = await query<{ user_id: string; last_read_at: Stamp }>("select user_id, last_read_at from private.chat_subject_followers($1, $2)", [actor.userId, rootId]);
+    const byKey = new Map<string, string[]>();
+    for (const follower of followers.rows) {
+      if (skip.has(follower.user_id)) continue;
+      const key = `chat:thread:${rootId}:${millis(follower.last_read_at)}`;
+      byKey.set(key, [...(byKey.get(key) ?? []), follower.user_id]);
+    }
+    for (const [key, recipients] of byKey) {
+      await alertMembers(actor, recipients, { ...base, key, title: `${name} replied in a thread on a shared email` }, VERIFIED);
+    }
+  });
+  return jobs;
+}
+
 function subjectAlerts(actor: UserActor, conversation: ConversationRow, message: ChatMessage, tagged: string[]): AlertJob[] {
+  if (conversation.kind === "mail_thread") return conversation.mail_share_id ? mailThreadAlerts(actor, conversation.mail_share_id, message) : [];
   const subject = subjectOf(conversation);
   const workspaceId = conversation.subject_workspace_id ?? null;
-  if (!subject || !workspaceId) return [];
+  if (!subject || subject.kind === "mail_thread" || !workspaceId) return [];
   const task = subject.kind === "task";
   const name = task ? actor.fullName?.trim() || actor.email || "A teammate" : firstName(actor);
   const base = { source: subject.kind, href: discussionHref(subject), tag: `${subject.kind}:${subject.id}`, body: task ? conversation.name : null, workspaceId };
@@ -1249,6 +1326,11 @@ function checkSubject(input: unknown): ChatSubject {
 }
 
 async function assertDiscussable(db: Db, subject: ChatSubject) {
+  if (subject.kind === "mail_thread") {
+    const share = await db.query("select 1 from crm.mail_shares where id = $1", [subject.id]);
+    if ((share.rowCount ?? 0) === 0) throw notFound("conversation");
+    return;
+  }
   if (subject.kind === "task") {
     const task = await db.query("select 1 from crm.tasks where id = $1", [subject.id]);
     if ((task.rowCount ?? 0) === 0) throw notFound("task");
@@ -1261,7 +1343,7 @@ async function assertDiscussable(db: Db, subject: ChatSubject) {
   if (!row.effective_shared) throw new CrmError("forbidden", "Share this doc with the workspace to discuss it.", 403);
 }
 
-const SUBJECT_COLUMN: Record<ChatSubjectKind, "task_id" | "page_id"> = { task: "task_id", doc: "page_id" };
+const SUBJECT_COLUMN: Record<ChatSubjectKind, "task_id" | "page_id" | "mail_share_id"> = { task: "task_id", doc: "page_id", mail_thread: "mail_share_id" };
 
 async function findDiscussion(db: Db, subject: ChatSubject) {
   const column = SUBJECT_COLUMN[subject.kind];

@@ -30,6 +30,7 @@ import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
 import { SYNC_RETRYING } from "@/lib/mail/view";
 import { grantsMailWrite, type MicrosoftToken } from "@/lib/microsoft/oauth";
+import { announceSharedMessages, syncTouchesShares } from "@/lib/mail/share-live";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const LOCK_GRACE_SECONDS = 60;
@@ -473,8 +474,10 @@ async function syncFolder(
     }
     const removals = await placeRemoved(actor, source, folder, page.removed, token, options.places, options.fetchImpl, options.deadline);
     if (!removals) break;
+    let inserted: string[] = [];
     const full = await withActor(actor, async (db) => {
       const stored = await storePage(db, actor, source, folder, page.messages, removals, live && folder.role === "inbox");
+      inserted = stored.inserted;
       report.stored += stored.stored;
       report.removed += removals.deleted.length;
       report.moved += removals.moved.length;
@@ -492,6 +495,9 @@ async function syncFolder(
       );
       return options.guard && state === "backfill" ? storageFull(db) : false;
     });
+    if (syncTouchesShares(folder.role, inserted)) {
+      await announceSharedMessages(actor.userId, inserted).catch((error) => console.error("Couldn't check shared threads after sync", error));
+    }
     if (page.deltaLink) return;
     if (!page.nextLink) return;
     link = page.nextLink;

@@ -1,7 +1,7 @@
 "use server";
 
 import { getUserActor } from "@/lib/auth/user";
-import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatPost, ChatResult } from "@/lib/chat/types";
+import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatPost, ChatResult } from "@/lib/chat/types";
 import {
   addRoomMembers,
   createRoom,
@@ -17,13 +17,18 @@ import { createHook, deleteHook, listHooks, rotateHookSecret, setHookPaused } fr
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
+function needsShare(error: CrmError): { needsShare?: ChatNeedsShare } {
+  const value = error.details?.needsShare as ChatNeedsShare | undefined;
+  return value ? { needsShare: value } : {};
+}
+
 async function run<T extends object>(fallback: string, work: (actor: UserActor) => Promise<T>): Promise<ChatResult<T>> {
   try {
     const actor = await getUserActor();
     if (!actor) return { error: "Your session ended. Sign in again." };
     return { ok: true, ...(await work(actor)) };
   } catch (error) {
-    if (error instanceof CrmError) return { error: error.message };
+    if (error instanceof CrmError) return { error: error.message, ...needsShare(error) };
     console.error("Chat action failed", error);
     return { error: fallback };
   }
