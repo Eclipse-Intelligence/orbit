@@ -203,7 +203,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         {!continuation && (
           <div className="flex items-baseline gap-2">
-            <span className="truncate text-[14px] font-medium">{message.author.name}</span>
+            <span className="truncate text-[14px] font-medium">
+              {message.author.name}
+              {message.via && <span className="text-subtle font-normal"> via {message.via.name}</span>}
+            </span>
             <time dateTime={message.createdAt} title={fullTime(message.createdAt)} className="caption-style text-subtle shrink-0 tabular-nums">
               {stamp}
             </time>

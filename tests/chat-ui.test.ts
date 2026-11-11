@@ -35,6 +35,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     conversationId: ROOM,
     parentId: null,
     author: { id: SAM, name: "Sam Okafor" },
+    via: null,
     clientKey: null,
     body: "Hello",
     mentions: [],
@@ -170,6 +171,9 @@ describe("chat timeline", () => {
     assert.equal(startsGroup(b, c, true), true);
     assert.equal(startsGroup(a, { ...b, author: { id: ME, name: "Mark" } }, true), true);
     assert.equal(startsGroup(a, b, false), true);
+    const viaFlow = { ...b, via: { workflowId: null, name: "Won deals" } };
+    assert.equal(startsGroup(a, viaFlow, true), true);
+    assert.equal(startsGroup(viaFlow, { ...c, createdAt: b.createdAt, via: { workflowId: null, name: "Won deals" } }, true), false);
   });
 
   it("finds your last message for Up arrow editing", () => {
@@ -177,6 +181,8 @@ describe("chat timeline", () => {
     const theirs = message({ at: "2026-11-11T09:01:00.000Z" });
     assert.equal(lastOwnMessage([mine, theirs], ME)?.id, mine.id);
     assert.equal(lastOwnMessage([theirs], ME), null);
+    const posted = message({ at: "2026-11-11T09:02:00.000Z", author: { id: ME, name: "Mark" }, via: { workflowId: null, name: "Won deals" } });
+    assert.equal(lastOwnMessage([mine, theirs, posted], ME)?.id, mine.id);
   });
 
   it("upserts by id in time order", () => {

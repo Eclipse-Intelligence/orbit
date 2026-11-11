@@ -42,6 +42,8 @@ type MessageRow = {
   parent_id: string | null;
   author_user_id: string | null;
   author_name: string;
+  via_workflow_id: string | null;
+  via_workflow_name: string | null;
   client_key: string | null;
   body: string;
   mentions: string[] | null;
@@ -95,7 +97,7 @@ function millis(value: Stamp) {
 }
 
 function messageColumns(alias = "m") {
-  return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.author_user_id, ${alias}.author_name, ${alias}.client_key, ${alias}.body,
+  return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.author_user_id, ${alias}.author_name, ${alias}.via_workflow_id, ${alias}.via_workflow_name, ${alias}.client_key, ${alias}.body,
     ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at,
     case when ${alias}.reply_count > 0 then coalesce((
       select json_agg(json_build_object('id', a.author_user_id, 'name', a.author_name) order by a.latest desc)
@@ -116,6 +118,7 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     conversationId: row.conversation_id,
     parentId: row.parent_id,
     author: { id: row.author_user_id, name: row.author_name || FORMER },
+    via: row.via_workflow_name ? { workflowId: row.via_workflow_id, name: row.via_workflow_name } : null,
     clientKey: row.author_user_id === viewerId ? row.client_key : null,
     body: row.body,
     mentions: row.mentions ?? [],
@@ -869,7 +872,7 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
   return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
-export async function postMessage(actor: UserActor, input: PostInput): Promise<ChatPost> {
+export async function postMessage(actor: UserActor, input: PostInput, options: { viaWorkflowId?: string } = {}): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
   const body = cleanBody(input.body);
@@ -885,11 +888,11 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
         if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
       }
       const inserted = await db.query<{ id: string }>(
-        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, mentions)
-         values ($1, $2, $3, $4, $5, $6::uuid[])
+        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, mentions, via_workflow_id)
+         values ($1, $2, $3, $4, $5, $6::uuid[], $7)
          on conflict on constraint chat_messages_author_client_key do nothing
          returning id`,
-        [conversationId, parentId, actor.userId, clientKey, body, mentions],
+        [conversationId, parentId, actor.userId, clientKey, body, mentions, options.viaWorkflowId ?? null],
       );
       if (!inserted.rows[0]) {
         const raced = await existingPost(db, actor, clientKey, conversationId, parentId);
@@ -919,6 +922,24 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
   } catch (error) {
     chatFailure(error);
   }
+}
+
+export async function findMyRoom(actor: UserActor, ref: { id?: string | null; name?: string | null }): Promise<{ id: string; name: string } | null> {
+  const id = ref.id && isUuid(ref.id) ? ref.id.toLowerCase() : null;
+  const name = ref.name?.trim().replace(/^#+/, "").trim().toLowerCase() || null;
+  if (!id && !name) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string }>(
+      `select c.id, c.name from crm.chat_conversations c
+       join crm.chat_members me on me.conversation_id = c.id and me.user_id = $1
+       where c.kind = 'room' and c.archived_at is null
+         and (case when $2::uuid is not null then c.id = $2::uuid else lower(c.name) = $3 end)
+       order by c.created_at
+       limit 1`,
+      [actor.userId, id, name],
+    );
+    return result.rows[0] ?? null;
+  });
 }
 
 async function ownMessage(db: Db, actor: UserActor, id: string) {

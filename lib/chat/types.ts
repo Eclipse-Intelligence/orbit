@@ -30,11 +30,14 @@ export type ChatSidebar = {
   mentioned: boolean;
 };
 
+export type ChatVia = { workflowId: string | null; name: string };
+
 export type ChatMessage = {
   id: string;
   conversationId: string;
   parentId: string | null;
   author: { id: string | null; name: string };
+  via: ChatVia | null;
   clientKey: string | null;
   body: string;
   mentions: string[];

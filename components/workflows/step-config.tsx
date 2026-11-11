@@ -26,6 +26,7 @@ export type BuilderOptions = {
   proposalTemplates: { id: string; name: string }[];
   products: { id: string; name: string; priceGbp: number | null; priceUsd: number | null }[];
   aiFields?: { id: string; label: string }[];
+  chatRooms?: { id: string; name: string }[];
 };
 
 export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {
@@ -533,6 +534,34 @@ export default function StepConfig({
           {field("body", "Message", { rows: 3 })}
         </div>
       );
+    case "post_to_chat": {
+      const rooms = options.chatRooms ?? [];
+      const roomId = str(c.roomId);
+      const roomName = str(c.roomName).replace(/^#+/, "");
+      const gone = Boolean(roomId) && !rooms.some((room) => room.id === roomId);
+      return (
+        <div className="flex flex-col gap-3">
+          <Select
+            id={`${step.id}-room`}
+            label="Room"
+            value={roomId}
+            onChange={(value) => update({ ...c, roomId: value, roomName: rooms.find((room) => room.id === value)?.name ?? "" })}
+            className="sm:w-72"
+          >
+            <option value="">Choose a room</option>
+            {gone && <option value={roomId}>#{roomName || "Room"} (you&apos;re no longer in it)</option>}
+            {rooms.map((room) => (
+              <option key={room.id} value={room.id}>
+                #{room.name}
+              </option>
+            ))}
+          </Select>
+          {rooms.length === 0 && !roomId && <p className="caption-style text-subtle leading-[1.4]">You&apos;re not in any rooms. Create one in Chat.</p>}
+          {field("body", "Message", { rows: 4, placeholder: "{{company.name}} just signed." })}
+          <p className="caption-style text-subtle leading-[1.4]">Posts as you, marked as sent by this workflow.</p>
+        </div>
+      );
+    }
     case "send_email":
       return (
         <div className="flex flex-col gap-3">
