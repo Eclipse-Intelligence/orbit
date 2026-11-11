@@ -13,6 +13,17 @@ const AttentionContext = createContext<Attention>({ notifications: NONE, teamUnr
 
 const POLL_MS = 60_000;
 const FOCUS_GAP_MS = 5_000;
+const FETCH_TIMEOUT_MS = 15_000;
+
+function sameNotifications(left: Notification[], right: Notification[]) {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => {
+      const other = right[index];
+      return item.id === other.id && item.readAt === other.readAt && item.title === other.title && item.body === other.body && item.href === other.href;
+    })
+  );
+}
 
 type Fetched = { notifications?: Notification[]; teamUnread?: number | null; badge?: number | null };
 
@@ -46,12 +57,16 @@ export function AttentionProvider({ notifications = NONE, teamUnread = 0, childr
       }
       running = true;
       last = Date.now();
-      void fetch("/api/notifications", { cache: "no-store", credentials: "same-origin" })
+      void fetch("/api/notifications", { cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
         .then((response) => (response.ok ? (response.json() as Promise<Fetched>) : null))
         .then((body) => {
           if (stopped || !body?.notifications) return;
           const fresh = body.notifications;
-          setState((current) => ({ notifications: fresh, teamUnread: typeof body.teamUnread === "number" ? body.teamUnread : current.teamUnread }));
+          setState((current) => {
+            const teamUnread = typeof body.teamUnread === "number" ? body.teamUnread : current.teamUnread;
+            if (teamUnread === current.teamUnread && sameNotifications(current.notifications, fresh)) return current;
+            return { notifications: fresh, teamUnread };
+          });
           if (typeof body.badge === "number") setBadge(body.badge);
         })
         .catch(() => undefined)

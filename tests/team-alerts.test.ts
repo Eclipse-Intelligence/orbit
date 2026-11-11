@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
-import { alertMembers, alertTargets, sendAlert } from "@/lib/alerts";
+import { alertMembers, alertMembersAfterCommit, alertTargets, sendAlert } from "@/lib/alerts";
 import { searchMentions } from "@/lib/crm/mention-search";
 import type { UserActor } from "@/lib/crm/types";
-import { getAdminPool, getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool, type Db } from "@/lib/db/pool";
 import { parseMentions } from "@/lib/docs/markdown";
 import { publishLiveBatch, setLiveTesting, supabaseBatchSink, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { watchLiveActivity } from "@/lib/docs/live/client";
@@ -196,9 +196,35 @@ describe("teammate alerts", () => {
     const push = pusher();
     const result = await alertMembers(mark, [sam.userId], { source: "chat", key: "chat:m5", title: "Late", href: "/chat", tag: "chat:c5" }, { send: push.send, budgetMs: -1 });
     assert.deepEqual(result.alerted, [sam.userId]);
-    assert.equal(result.delivered, false);
+    assert.equal(result.finished, false);
+    assert.equal(result.pushFailures, 0);
     assert.equal((await listNotifications(samHome)).map((item) => item.title).join(), "Late");
-    await until(() => push.sent.length === 1, "the push still goes out after the budget");
+    assert.equal(push.sent.length, 1);
+  });
+
+  it("sends pushes while a broadcast hangs, and waits for them, not the broadcast", async () => {
+    setLiveTesting({ batch: () => new Promise<void>(() => {}) });
+    const push = pusher();
+    const started = Date.now();
+    const result = await alertMembers(mark, [sam.userId], { source: "chat", key: "chat:hang", title: "Hang", href: "/chat", tag: "chat:hang" }, { send: push.send, budgetMs: 100 });
+    assert.ok(Date.now() - started < 2_000);
+    assert.equal(result.finished, false);
+    assert.equal(push.sent.length, 1);
+    assert.equal(push.sent[0].body.title, "Hang");
+  });
+
+  it("counts failed pushes", async () => {
+    const failing: PushSender = async () => {
+      throw Object.assign(new Error("refused"), { statusCode: 500, body: "refused" });
+    };
+    const errors = console.error;
+    console.error = () => {};
+    try {
+      const result = await alertMembers(mark, [sam.userId], { source: "chat", key: "chat:fail", title: "Fail", href: "/chat", tag: "chat:fail" }, { send: failing });
+      assert.deepEqual([result.alerted, result.finished, result.pushFailures], [[sam.userId], true, 1]);
+    } finally {
+      console.error = errors;
+    }
   });
 
   it("refuses an alert without a title, key or Orbit link", async () => {
@@ -206,8 +232,30 @@ describe("teammate alerts", () => {
     await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, title: "  " }), /title/);
     await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, key: "" }), /key/);
     await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, href: "https://evil.test" }), /Orbit link/);
+    await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, href: "/\\evil.test" }), /Orbit link/);
+    await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, href: "/chat\nx" }), /Orbit link/);
     await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, source: "task" }), /workspace/);
+    assert.throws(() => alertMembersAfterCommit({} as Db, mark, [sam.userId], { ...base, title: "" }), /title/);
     assert.equal((await sql("select count(*)::int as n from crm.notifications")).rows[0].n, 0);
+  });
+
+  it("clears every unread alert in the bell's scope when it opens, even beyond the rows it shows", async () => {
+    for (let index = 0; index < 13; index += 1) {
+      await alertMembers(mark, [sam.userId], { source: "chat", key: `chat:many${index}`, title: `Many ${index}`, href: "/chat", tag: "chat:many" }, { send: pusher().send });
+    }
+    await sql("insert into crm.notifications (workspace_id, user_id, title, source, category) values ($1, $2, 'Waiting in Capture', 'mail', 'capture')", [samHome.workspaceId, sam.userId]);
+    const listed = await listNotifications(samHome, 10);
+    assert.equal(listed.length, 10);
+    assert.equal(await teamUnreadCount(samHome), 13);
+    await alertMembers(mark, [sam.userId], { source: "chat", key: "chat:after", title: "After opening", href: "/chat", tag: "chat:many" }, { send: pusher().send });
+    await sql("update crm.notifications set created_at = now() + interval '1 minute' where title = 'After opening'");
+    await markNotificationsRead(samHome, listed.map((item) => item.id), listed[0].createdAt);
+    assert.equal(await teamUnreadCount(samHome), 1);
+    const unread = await sql("select title from crm.notifications where read_at is null order by title");
+    assert.deepEqual(
+      unread.rows.map((row) => row.title),
+      ["After opening", "Waiting in Capture"],
+    );
   });
 
   it("keeps a whole link when the workspace switch would make it too long", async () => {

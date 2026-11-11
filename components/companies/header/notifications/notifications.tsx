@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { useNotifications, useRefreshNotifications } from "@/components/crm/attention";
+import { useNotifications, useRefreshNotifications, useTeamUnread } from "@/components/crm/attention";
 import { markNotificationsReadAction } from "@/app/(crm)/workflows/actions";
 import { relativeWhen } from "@/lib/companies";
 import { captureSummary } from "@/lib/crm/capture-format";
@@ -21,6 +21,7 @@ export default function Notifications({ workspaceId }: { workspaceId?: string })
   const router = useRouter();
   const updates = useNotifications();
   const refresh = useRefreshNotifications();
+  const teamUnread = useTeamUnread();
   const capture = useCompaniesStore((state) => state.capture);
   const cleared = useCompaniesStore((state) => state.captureCleared);
   const waiting = captureLeft(capture, cleared);
@@ -28,12 +29,16 @@ export default function Notifications({ workspaceId }: { workspaceId?: string })
 
   function toggle(next: boolean) {
     setOpen(next);
-    if (next && unread.length > 0) {
+    const newest = updates[0]?.createdAt ?? null;
+    if (next && newest && (unread.length > 0 || teamUnread > 0)) {
       const ids = unread.map((item) => item.id);
-      void markNotificationsReadAction(ids).then(() => {
-        setRead((current) => [...current, ...ids]);
-        refresh();
-      });
+      void markNotificationsReadAction(ids, newest)
+        .then((result) => {
+          if (result.error) return;
+          setRead((current) => [...current, ...ids]);
+          refresh();
+        })
+        .catch(() => undefined);
     }
   }
 

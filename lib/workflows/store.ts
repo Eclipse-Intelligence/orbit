@@ -603,12 +603,18 @@ export async function listNotifications(actor: UserActor, limit = 20): Promise<N
   });
 }
 
-export async function markNotificationsRead(actor: UserActor, ids?: string[]) {
+export async function markNotificationsRead(actor: UserActor, ids?: string[], through?: string | null) {
+  const until = through && !Number.isNaN(Date.parse(through)) ? new Date(through) : null;
   await withActor(actor, (db) =>
     db.query(
       `update crm.notifications set read_at = now()
-       where (workspace_id = $1 or source = any($4::text[])) and user_id = $2 and read_at is null and ($3::uuid[] is null or id = any($3::uuid[]))`,
-      [actor.workspaceId, actor.userId, ids && ids.length ? ids.filter((id) => isUuid(id)) : null, EVERY_WORKSPACE_SOURCES],
+       where (workspace_id = $1 or source = any($4::text[])) and user_id = $2 and read_at is null
+         and (
+           ($3::uuid[] is null and $5::timestamptz is null)
+           or id = any($3::uuid[])
+           or (category is null and created_at <= $5::timestamptz)
+         )`,
+      [actor.workspaceId, actor.userId, ids && ids.length ? ids.filter((id) => isUuid(id)) : null, EVERY_WORKSPACE_SOURCES, until],
     ),
   );
 }

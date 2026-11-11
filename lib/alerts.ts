@@ -73,6 +73,7 @@ const ALERT_BUDGET_MS = 8_000;
 const ALERT_CONCURRENCY = 6;
 const HREF_MAX = 300;
 const NOTIFICATION_HREF_MAX = 500;
+const UNSAFE_LINK = /[\\\u0000-\u001f\u007f]/;
 
 function cut(value: string, max: number) {
   return value.length > max ? value.slice(0, max) : value;
@@ -113,7 +114,7 @@ function checkAlert(alert: TeamAlert) {
   if (!TEAM_ALERT_SOURCES.includes(alert.source)) throw new CrmError("invalid_input", "Pick a known alert source.", 400);
   if (!alert.title?.trim()) throw new CrmError("invalid_input", "Give the alert a title.", 400);
   if (!alert.key?.trim() || !alert.tag?.trim()) throw new CrmError("invalid_input", "Give the alert a key and a tag.", 400);
-  if (!alert.href?.startsWith("/") || alert.href.startsWith("//") || alert.href.length > HREF_MAX) {
+  if (!alert.href?.startsWith("/") || alert.href.startsWith("//") || UNSAFE_LINK.test(alert.href) || alert.href.length > HREF_MAX) {
     throw new CrmError("invalid_input", `Give the alert an Orbit link of up to ${HREF_MAX} characters.`, 400);
   }
   if (landsInSubjectWorkspace(alert.source) && !alert.workspaceId) throw new CrmError("invalid_input", "Say which workspace the alert is about.", 400);
@@ -146,9 +147,10 @@ async function record(target: UserActor, alert: TeamAlert) {
 }
 
 async function push(target: UserActor, alert: TeamAlert, options: TeamAlertOptions) {
-  if (!(await teamNotifyOn(target))) return;
+  if (!(await teamNotifyOn(target))) return 0;
   const badge = await appBadge(target);
-  await pushToUser(target, { title: cut(alert.title, 120), body: cut(alert.body ?? "", 400), url: alert.href, tag: cut(alert.tag, 200), badge }, { send: options.send });
+  const result = await pushToUser(target, { title: cut(alert.title, 120), body: cut(alert.body ?? "", 400), url: alert.href, tag: cut(alert.tag, 200), badge }, { send: options.send });
+  return result.failures.length;
 }
 
 async function within(work: Promise<unknown>, stopAt: number) {
@@ -160,10 +162,12 @@ async function within(work: Promise<unknown>, stopAt: number) {
   return finished;
 }
 
-export async function alertMembers(actor: UserActor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}): Promise<{ alerted: string[]; delivered: boolean }> {
+export type TeamAlertResult = { alerted: string[]; finished: boolean; pushFailures: number };
+
+export async function alertMembers(actor: UserActor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}): Promise<TeamAlertResult> {
   checkAlert(alert);
   const targets = await alertTargets(actor, recipients, alert);
-  if (targets.length === 0) return { alerted: [], delivered: true };
+  if (targets.length === 0) return { alerted: [], finished: true, pushFailures: 0 };
   const queue = [...targets];
   const fresh: UserActor[] = [];
   const worker = async () => {
@@ -176,30 +180,30 @@ export async function alertMembers(actor: UserActor, recipients: string[], alert
     }
   };
   await Promise.all(Array.from({ length: Math.min(ALERT_CONCURRENCY, queue.length) }, worker));
-  if (fresh.length === 0) return { alerted: [], delivered: true };
+  if (fresh.length === 0) return { alerted: [], finished: true, pushFailures: 0 };
   const stopAt = Date.now() + (options.budgetMs ?? ALERT_BUDGET_MS);
   const payload: AlertMessage = { source: alert.source };
-  const sent = new Set<string>();
   const broadcast = publishLiveBatch(fresh.map((target) => ({ topic: personTopic(target.userId), event: "alert" as const, payload }))).catch((error) =>
     console.error("Teammate alert broadcast failed", error),
   );
-  const pushes = fresh.map((target) =>
-    push(target, alert, options)
-      .then(() => void sent.add(target.userId))
-      .catch((error) => {
-        sent.add(target.userId);
-        console.error("Teammate push failed", target.userId, error);
-      }),
+  const pushes = Promise.all(
+    fresh.map((target) =>
+      push(target, alert, options).then(
+        (failed) => failed,
+        (error) => {
+          console.error("Teammate push failed", target.userId, error);
+          return 1;
+        },
+      ),
+    ),
   );
-  const delivered = await within(Promise.all([broadcast, ...pushes]), stopAt);
-  if (!delivered) {
-    const waiting = fresh.filter((target) => !sent.has(target.userId)).map((target) => target.userId);
-    console.error("Teammate alerts ran out of time", { source: alert.source, key: alert.key, pushesWaiting: waiting });
-  }
-  return { alerted: fresh.map((target) => target.userId), delivered };
+  const [finished, failures] = await Promise.all([within(broadcast, stopAt), pushes]);
+  if (!finished) console.error("Teammate alert broadcast ran out of time", { source: alert.source, key: alert.key, recipients: fresh.length });
+  return { alerted: fresh.map((target) => target.userId), finished, pushFailures: failures.reduce((sum, value) => sum + value, 0) };
 }
 
 export function alertMembersAfterCommit(db: Db, actor: UserActor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}) {
+  checkAlert(alert);
   afterCommit(db, async () => {
     await alertMembers(actor, recipients, alert, options);
   });
