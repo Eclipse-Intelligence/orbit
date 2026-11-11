@@ -208,7 +208,7 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
     } finally {
       mutations.current += 1;
       setBusy(false);
-      if (currentRoom.current === room) setReload((value) => value + 1);
+      setReload((value) => value + 1);
     }
   }
 

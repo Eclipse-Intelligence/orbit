@@ -8,6 +8,7 @@ import {
   CHAT_PAGE_MAX,
   CHAT_PAGE_SIZE,
   CHAT_ROOM_NAME_MAX,
+  EMPTY_HOOK_CARD,
   type ChatConversation,
   type ChatHookCard,
   type ChatKind,
@@ -127,7 +128,7 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     editedAt: iso(row.edited_at),
     deletedAt: iso(row.deleted_at),
     createdAt: iso(row.created_at),
-    hook: row.deleted_at ? null : hookCard(row.hook),
+    hook: row.deleted_at && row.hook ? { ...EMPTY_HOOK_CARD } : hookCard(row.hook),
   };
 }
 

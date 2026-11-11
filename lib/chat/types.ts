@@ -12,6 +12,8 @@ export const CHAT_HOOK_NAME_MAX = 80;
 
 export type ChatHookCard = { title: string | null; url: string | null; block: boolean };
 
+export const EMPTY_HOOK_CARD: ChatHookCard = { title: null, url: null, block: false };
+
 export type ChatHook = { id: string; name: string; createdBy: string | null; pausedAt: string | null; lastUsedAt: string | null; createdAt: string };
 
 export type ChatHookSecret = { hook: ChatHook; secret: string };

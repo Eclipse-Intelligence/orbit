@@ -306,7 +306,7 @@ describe("chat hooks", () => {
       assert.deepEqual(row.hook, {});
       const shown = (await listMessages(sam, roomId)).messages.find((message) => message.id === id);
       assert.ok(shown?.deletedAt);
-      assert.equal(shown.hook, null);
+      assert.deepEqual(shown.hook, { title: null, url: null, block: false });
       await refused(deleteMessage(mark, id), /not found|deleted/i);
       await chatWorkSettled();
       const events = broadcasts.filter((message) => message.topic === personTopic(mark.userId)).map((message) => message.payload as ChatLiveEvent);

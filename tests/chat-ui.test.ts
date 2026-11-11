@@ -146,6 +146,22 @@ describe("chat timeline", () => {
     assert.equal(state.timelines[ROOM].messages.length, 1);
   });
 
+  it("clears a deleted hook message's card in the room and its open thread", () => {
+    const hook = { title: "Weekly traffic", url: "https://analytics.example/", block: false };
+    const root = message({ at: "2026-11-11T08:00:00.000Z", author: { id: null, name: "Google Analytics" }, hook, replyCount: 1 });
+    let state = chatReducer(loaded([root]), {
+      type: "thread",
+      thread: { conversation: null as never, root, replies: [], hasOlder: false, hasNewer: false, following: true, lastReadAt: null },
+      mode: "replace",
+    });
+    state = chatReducer(state, { type: "deleted", conversationId: ROOM, messageId: root.id, parentId: null, root: null });
+    const empty = { title: null, url: null, block: false };
+    assert.deepEqual(state.timelines[ROOM].messages[0].hook, empty);
+    assert.ok(state.timelines[ROOM].messages[0].deletedAt);
+    assert.deepEqual(state.threads[root.id].root?.hook, empty);
+    assert.equal(state.threads[root.id].root?.body, "");
+  });
+
   it("adds replies to an open thread and leaves other threads alone", () => {
     const root = message({ at: "2026-11-11T08:00:00.000Z", replyCount: 0 });
     let state = chatReducer(loaded([root]), {
