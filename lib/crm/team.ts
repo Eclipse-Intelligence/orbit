@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { announceRemoval, roomsLinkedTo } from "@/lib/crm/chat";
+import { announceRemoval, roomsLostOnLeaving } from "@/lib/crm/chat";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -137,8 +137,8 @@ export async function setMemberRole(actor: UserActor, userId: string, role: stri
 
 export async function removeMember(actor: UserActor, userId: string) {
   const rooms = isUuid(userId)
-    ? await roomsLinkedTo(actor.workspaceId, userId).catch((error) => {
-        console.error("Couldn't read the rooms linked to this workspace", error);
+    ? await roomsLostOnLeaving(actor.workspaceId, userId).catch((error) => {
+        console.error("Couldn't read the Chat rooms they leave", error);
         return [];
       })
     : [];

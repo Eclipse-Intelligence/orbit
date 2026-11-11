@@ -19,6 +19,7 @@ import {
   openDm,
   postMessage,
   removeRoomMember,
+  chatWorkSettled,
   searchMessages,
   updateRoom,
 } from "@/lib/crm/chat";
@@ -32,6 +33,7 @@ import { memoryHub } from "@/lib/docs/live/transport";
 import { canonicalTopic, chatTopic, parseTopic, personTopic } from "@/lib/docs/live/protocol";
 import { relayAllows, relayEventAllowed, relayPayload } from "@/lib/docs/live/relay-access";
 import { upToBody } from "@/lib/chat/http";
+import { savePushSubscription } from "@/lib/push";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 after(async () => {
@@ -254,7 +256,7 @@ describe("chat", () => {
 
     it("never alerts for a room message without a mention", async () => {
       await postMessage(mark, { conversationId: room, body: "Plain update", clientKey: "plain-1" });
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await chatWorkSettled();
       assert.equal((await sql("select count(*)::int as n from crm.notifications")).rows[0].n, 0);
     });
 
@@ -273,7 +275,7 @@ describe("chat", () => {
       await postMessage(mark, { conversationId: dm.id, body: "One", clientKey: "dm-1" });
       await until(async () => (await notifications(priya.userId)).length === 1, "first DM alert");
       await postMessage(mark, { conversationId: dm.id, body: "Two", clientKey: "dm-2" });
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await chatWorkSettled();
       assert.equal((await notifications(priya.userId)).length, 1);
       assert.equal((await notifications(priya.userId))[0].title, "Mark sent you a message");
       await markConversationRead(priya, dm.id);
@@ -423,34 +425,42 @@ describe("chat", () => {
       assert.equal((await sql("select count(*)::int as n from crm.chat_conversations where id = $1", [room.id])).rows[0].n, 0);
     });
 
-    it("removes people from rooms linked to a workspace they leave, and keeps everything else", async () => {
+    it("removes people who leave a workspace from its linked rooms and from conversations they no longer share a workspace in", async () => {
+      const samHomeId = (await sql("select private.home_workspace_id($1) as id", [sam.userId])).rows[0].id as string;
+      await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [samHomeId, olly.userId]);
       const linked = await createRoom(mark, { name: "eclipse-team", workspaceId: mark.workspaceId, memberIds: [sam.userId, priya.userId] });
       const open = await createRoom(mark, { name: "friends", memberIds: [sam.userId] });
+      const bridged = await createRoom(sam, { name: "bridge", memberIds: [mark.userId, olly.userId] });
       const dm = await openDm(mark, sam.userId);
       await postMessage(sam, { conversationId: linked.id, body: "Bye", clientKey: "leave-1" });
       await postMessage(sam, { conversationId: dm.id, body: "Keep this", clientKey: "leave-2" });
       const movedRows = await sql("select count(*)::int as n from crm.chat_messages where author_user_id = $1", [sam.userId]);
       await removeMember(mark, sam.userId);
-      assert.ok(chatEvents(sam.userId).some((event) => event.type === "removed" && event.conversationId === linked.id));
-      assert.ok(!chatEvents(sam.userId).some((event) => event.type === "removed" && event.conversationId === open.id));
+      for (const gone of [linked.id, open.id, dm.id]) {
+        assert.ok(chatEvents(sam.userId).some((event) => event.type === "removed" && event.conversationId === gone), `removed from ${gone}`);
+        assert.ok(chatEvents(mark.userId).some((event) => event.type === "conversation" && event.conversationId === gone));
+      }
+      assert.ok(!chatEvents(sam.userId).some((event) => event.type === "removed" && event.conversationId === bridged.id));
       assert.ok(chatEvents(priya.userId).some((event) => event.type === "conversation" && event.conversationId === linked.id));
-      assert.ok(chatEvents(mark.userId).some((event) => event.type === "conversation" && event.conversationId === linked.id));
-      const samHome: UserActor = { ...sam, workspaceId: (await sql("select private.home_workspace_id($1) as id", [sam.userId])).rows[0].id };
-      const sidebar = await listConversations(samHome);
-      const ids = sidebar.conversations.map((conversation) => conversation.id);
-      assert.ok(!ids.includes(linked.id));
-      assert.ok(ids.includes(open.id));
-      assert.ok(ids.includes(dm.id));
+      const samHome: UserActor = { ...sam, workspaceId: samHomeId };
+      const ids = (await listConversations(samHome)).conversations.map((conversation) => conversation.id);
+      assert.deepEqual(
+        [linked.id, open.id, dm.id, bridged.id].map((id) => ids.includes(id)),
+        [false, false, false, true],
+      );
+      assert.equal((await sql("select count(*)::int as n from crm.chat_members where conversation_id = $1", [open.id])).rows[0].n, 1);
       assert.equal((await sql("select count(*)::int as n from crm.chat_messages where author_user_id = $1", [sam.userId])).rows[0].n, movedRows.rows[0].n);
       const history = await listMessages(mark, linked.id);
       assert.equal(history.messages.find((message) => message.body === "Bye")?.author.name, "Sam Okafor");
       const markDm = (await listConversations(mark)).conversations.find((conversation) => conversation.id === dm.id)!;
       assert.equal(markDm.name, "Sam Okafor");
       await refused(postMessage(mark, { conversationId: dm.id, body: "Are you there?" }), /no longer share a workspace/);
-      const friends = await getRoom(mark, open.id);
-      assert.equal(friends.members.find((member) => member.id === sam.userId)?.name, "Sam Okafor");
-      await postMessage(mark, { conversationId: open.id, body: `${tag(sam)} still with us?`, clientKey: "leave-3" });
-      await until(async () => (await notifications(sam.userId)).some((alert) => alert.title === "Mark mentioned you in #friends"), "mention across workspaces");
+      const room = await getRoom(mark, bridged.id);
+      assert.equal(room.members.find((member) => member.id === olly.userId)?.name, "Olly Outside");
+      await postMessage(mark, { conversationId: bridged.id, body: `${tag(olly)} welcome`, clientKey: "leave-3" });
+      await chatWorkSettled();
+      assert.ok((await notifications(olly.userId)).some((alert) => alert.title === "Mark mentioned you in #bridge"));
+      await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [samHomeId, olly.userId]);
       await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
     });
   });
@@ -583,8 +593,12 @@ describe("chat", () => {
       const counts = async () =>
         (await sql("select (select count(*)::int from crm.chat_members where user_id = $1) as members, (select count(*)::int from crm.chat_messages where author_user_id = $1) as messages", [priya.userId])).rows[0];
       const was = await counts();
-      const home = (await sql("select workspace_id from crm.workspace_members where user_id = $1 and workspace_id <> $2", [priya.userId, mark.workspaceId])).rows[0].workspace_id;
-      await sql("select private.move_personal_rows($1, $2, $3)", [priya.userId, mark.workspaceId, home]);
+      const home = (await sql("select private.home_workspace_id($1) as id", [priya.userId])).rows[0].id as string;
+      await savePushSubscription({ ...priya, workspaceId: home }, { endpoint: "https://web.push.apple.com/priya-move", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+      const device = async () => (await sql("select workspace_id from crm.push_subscriptions where user_id = $1", [priya.userId])).rows[0]?.workspace_id;
+      assert.equal(await device(), home);
+      await sql("select private.move_personal_rows($1, $2, $3)", [priya.userId, home, mark.workspaceId]);
+      assert.equal(await device(), mark.workspaceId);
       assert.deepEqual(await counts(), was);
       assert.deepEqual(
         (await listConversations(priya)).conversations.map((conversation) => conversation.id),
@@ -761,6 +775,146 @@ describe("chat", () => {
       const again = await postMessage(sam, { conversationId: room, parentId: root.message.id, body: "Reply", clientKey: "retry-reply" });
       assert.equal(again.duplicate, true);
       assert.equal(again.message.id, reply.message.id);
+    });
+  });
+
+  describe("review round 3", () => {
+    async function teammate(email: string, name: string) {
+      const user = await createUser(email, name);
+      await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, user.userId]);
+      return { ...user, workspaceId: mark.workspaceId, role: "member" as const };
+    }
+
+    it("alerts and follows people newly tagged in an edit, once per message", async () => {
+      const room = (await createRoom(mark, { name: "edits", memberIds: [sam.userId, priya.userId] })).id;
+      const root = await postMessage(mark, { conversationId: room, body: "Plain", clientKey: "edit-root" });
+      await editMessage(mark, root.message.id, `Plain ${tag(sam)}`);
+      await chatWorkSettled();
+      assert.deepEqual(
+        (await notifications(sam.userId)).map((alert) => alert.title),
+        ["Mark mentioned you in #edits"],
+      );
+      assert.equal((await sql("select count(*)::int as n from crm.chat_thread_reads where message_id = $1 and user_id = $2", [root.message.id, sam.userId])).rows[0].n, 1);
+      await editMessage(mark, root.message.id, `Plain again ${tag(sam)}`);
+      await chatWorkSettled();
+      assert.equal((await notifications(sam.userId)).length, 1);
+
+      const thread = await postMessage(priya, { conversationId: room, body: "Question", clientKey: "edit-thread" });
+      const reply = await postMessage(sam, { conversationId: room, parentId: thread.message.id, body: "Answer", clientKey: "edit-reply" });
+      await chatWorkSettled();
+      assert.deepEqual(
+        (await notifications(priya.userId)).map((alert) => alert.title),
+        ["Sam replied in a thread in #edits"],
+      );
+      await editMessage(sam, reply.message.id, `Answer ${tag(priya)} ${tag(mark)}`);
+      await chatWorkSettled();
+      assert.equal((await notifications(priya.userId)).length, 1);
+      assert.deepEqual(
+        (await notifications(mark.userId)).map((alert) => alert.title),
+        ["Sam mentioned you in #edits"],
+      );
+      assert.equal((await sql("select count(*)::int as n from crm.chat_thread_reads where message_id = $1 and user_id = $2", [thread.message.id, mark.userId])).rows[0].n, 1);
+
+      const dm = await openDm(mark, priya.userId);
+      const direct = await postMessage(mark, { conversationId: dm.id, body: "Hi", clientKey: "edit-dm" });
+      await chatWorkSettled();
+      const before = (await notifications(priya.userId)).length;
+      await editMessage(mark, direct.message.id, `Hi ${tag(priya)}`);
+      await chatWorkSettled();
+      assert.equal((await notifications(priya.userId)).length, before);
+    });
+
+    it("links DM alerts to the conversation", async () => {
+      const juno = await teammate("juno@eclipse.test", "Juno Park");
+      const dm = await openDm(mark, juno.userId);
+      await postMessage(mark, { conversationId: dm.id, body: "First", clientKey: "dm-link" });
+      await chatWorkSettled();
+      assert.deepEqual(await notifications(juno.userId), [{ title: "Mark sent you a message", href: `/chat/${dm.id}`, source: "chat" }]);
+    });
+
+    it("lists a DM while it has something to show, and for whoever opened it", async () => {
+      const lena = await teammate("lena@eclipse.test", "Lena Brandt");
+      const kai = await teammate("kai@eclipse.test", "Kai Moss");
+      const listed = async (person: UserActor, id: string) => (await listConversations(person)).conversations.some((conversation) => conversation.id === id);
+      const empty = await openDm(lena, kai.userId);
+      assert.equal(await listed(lena, empty.id), true);
+      assert.equal(await listed(kai, empty.id), false);
+      await openDm(kai, lena.userId);
+      assert.equal(await listed(kai, empty.id), true);
+      const dm = await openDm(mark, lena.userId);
+      const root = await postMessage(mark, { conversationId: dm.id, body: "Root", clientKey: "listed-root" });
+      const reply = await postMessage(lena, { conversationId: dm.id, parentId: root.message.id, body: "Reply", clientKey: "listed-reply" });
+      await deleteMessage(mark, root.message.id);
+      assert.equal(await listed(lena, dm.id), true);
+      await deleteMessage(lena, reply.message.id);
+      assert.equal(await listed(lena, dm.id), false);
+      assert.equal(await listed(mark, dm.id), true);
+    });
+
+    it("counts every unread mention, not only those among the newest messages", async () => {
+      const room = (await createRoom(sam, { name: "counting", memberIds: [mark.userId] })).id;
+      for (let index = 0; index < 3; index += 1) await postMessage(sam, { conversationId: room, body: `${tag(mark)} ${index}`, clientKey: `count-mention-${index}` });
+      await sql(
+        `insert into crm.chat_messages (conversation_id, author_user_id, body) select $1, $2, 'Filler ' || n from generate_series(1, 105) as n`,
+        [room, sam.userId],
+      );
+      const entry = (await listConversations(mark)).conversations.find((conversation) => conversation.id === room)!;
+      assert.equal(entry.unread, 100);
+      assert.equal(entry.mentions, 3);
+    });
+
+    it("refuses bad cursors and read marks from elsewhere with 400 and 404", async () => {
+      const forged = Buffer.from(JSON.stringify({ u: 0, t: "1", id: "00000000-0000-4000-8000-000000000001" })).toString("base64url");
+      await assert.rejects(listThreads(mark, { cursor: forged }), (error: unknown) => error instanceof CrmError && error.status === 400);
+      const one = (await createRoom(mark, { name: "one", memberIds: [sam.userId] })).id;
+      const two = (await createRoom(mark, { name: "two", memberIds: [sam.userId] })).id;
+      const elsewhere = (await postMessage(sam, { conversationId: two, body: "Elsewhere", clientKey: "upto-elsewhere" })).message.id;
+      await assert.rejects(markConversationRead(mark, one, elsewhere), (error: unknown) => error instanceof CrmError && error.status === 404);
+      const root = (await postMessage(sam, { conversationId: one, body: "Root", clientKey: "upto-root" })).message.id;
+      await postMessage(mark, { conversationId: one, parentId: root, body: "Reply", clientKey: "upto-reply" });
+      await assert.rejects(markThreadRead(sam, root, elsewhere), (error: unknown) => error instanceof CrmError && error.status === 404);
+    });
+
+    it("says clearly when a client key belongs to a message you can no longer see", async () => {
+      const room = (await createRoom(mark, { name: "gone", memberIds: [priya.userId] })).id;
+      await postMessage(priya, { conversationId: room, body: "Before", clientKey: "hidden-key" });
+      await removeRoomMember(mark, room, priya.userId);
+      const dm = await openDm(priya, mark.userId);
+      await assert.rejects(
+        postMessage(priya, { conversationId: dm.id, body: "After", clientKey: "hidden-key" }),
+        (error: unknown) => error instanceof CrmError && error.status === 409 && /new key/.test(error.message),
+      );
+    });
+
+    it("refuses invisible room names and doesn't search author names", async () => {
+      await refused(createRoom(mark, { name: "​ ⁠﻿" }), /Give the room a name\./);
+      await assert.rejects(sql("select private.chat_room_name($1)", ["​‌ "]), /Give the room a name\./);
+      const room = (await createRoom(mark, { name: "search", memberIds: [sam.userId] })).id;
+      await postMessage(sam, { conversationId: room, body: "Hello there", clientKey: "search-author" });
+      assert.deepEqual((await searchMessages(mark, room, "Okafor")).messages, []);
+      assert.equal((await searchMessages(mark, room, "hello")).messages.length, 1);
+    });
+
+    it("stamps messages in commit order within a conversation", async () => {
+      const room = (await createRoom(mark, { name: "order", memberIds: [sam.userId] })).id;
+      const client = await getAdminPool().connect();
+      try {
+        await client.query("begin");
+        const first = (await client.query("insert into crm.chat_messages (conversation_id, author_user_id, body) values ($1, $2, 'Slow') returning id", [room, mark.userId])).rows[0].id;
+        let settled = false;
+        const second = postMessage(sam, { conversationId: room, body: "Fast", clientKey: "order-fast" }).then((posted) => {
+          settled = true;
+          return posted;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        assert.equal(settled, false);
+        await client.query("commit");
+        const posted = await second;
+        const order = await sql("select (select created_at from crm.chat_messages where id = $1) < (select created_at from crm.chat_messages where id = $2) as ordered", [first, posted.message.id]);
+        assert.equal(order.rows[0].ordered, true);
+      } finally {
+        client.release();
+      }
     });
   });
 });

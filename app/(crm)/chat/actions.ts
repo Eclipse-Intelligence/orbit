@@ -17,9 +17,9 @@ import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
 async function run<T extends object>(fallback: string, work: (actor: UserActor) => Promise<T>): Promise<ChatResult<T>> {
-  const actor = await getUserActor();
-  if (!actor) return { error: "Your session ended. Sign in again." };
   try {
+    const actor = await getUserActor();
+    if (!actor) return { error: "Your session ended. Sign in again." };
     return { ok: true, ...(await work(actor)) };
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message };

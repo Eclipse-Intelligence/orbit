@@ -29,6 +29,7 @@ create table if not exists crm.chat_members (
   conversation_id uuid not null references crm.chat_conversations (id) on delete cascade,
   user_id uuid not null references crm.profiles (id) on delete cascade,
   name text not null default '',
+  opened boolean not null default false,
   last_read_at timestamptz not null default now(),
   added_by uuid references crm.profiles (id) on delete set null,
   created_at timestamptz not null default now(),
@@ -61,6 +62,7 @@ create table if not exists crm.chat_messages (
 create index if not exists chat_messages_conversation_idx on crm.chat_messages (conversation_id, created_at desc, id desc) where deleted_at is null;
 create index if not exists chat_messages_roots_idx on crm.chat_messages (conversation_id, created_at desc, id desc) where parent_id is null;
 create index if not exists chat_messages_parent_idx on crm.chat_messages (parent_id, created_at, id) where parent_id is not null;
+create index if not exists chat_messages_body_trgm_idx on crm.chat_messages using gin (body gin_trgm_ops) where deleted_at is null;
 
 create table if not exists crm.chat_thread_reads (
   message_id uuid not null references crm.chat_messages (id) on delete cascade,
@@ -182,6 +184,7 @@ begin
   new.last_reply_at := null;
   new.edited_at := null;
   new.deleted_at := null;
+  perform pg_advisory_xact_lock(hashtextextended('chat:' || new.conversation_id::text, 0));
   new.created_at := clock_timestamp();
   return new;
 end;
@@ -320,6 +323,17 @@ begin
     if new.parent_id is not null and new.deleted_at is not null and old.deleted_at is null then
       perform private.chat_recount(new.parent_id);
     end if;
+    if new.deleted_at is null and new.mentions is distinct from old.mentions then
+      v_followers := array(select unnest(new.mentions) except select unnest(old.mentions));
+      v_followers := array_remove(v_followers, new.author_user_id);
+      if cardinality(v_followers) > 0 then
+        if new.parent_id is null then
+          perform private.chat_follow(new.id, v_followers, new.created_at);
+        else
+          perform private.chat_follow(new.parent_id, v_followers, (select r.created_at from crm.chat_messages r where r.id = new.parent_id));
+        end if;
+      end if;
+    end if;
     return null;
   end if;
   if old.parent_id is not null and old.deleted_at is null then
@@ -333,7 +347,7 @@ revoke all on function private.chat_message_counts() from public;
 
 drop trigger if exists chat_messages_counts on crm.chat_messages;
 create trigger chat_messages_counts
-  after insert or delete or update of deleted_at on crm.chat_messages
+  after insert or delete or update of deleted_at, mentions on crm.chat_messages
   for each row execute function private.chat_message_counts();
 
 create or replace function private.chat_shares_workspace(p_user uuid, p_other uuid)
@@ -431,7 +445,26 @@ create trigger profiles_chat_name
   when (old.full_name is distinct from new.full_name or old.email is distinct from new.email)
   execute function private.chat_profile_renamed();
 
-create or replace function private.chat_rooms_linked(p_workspace uuid, p_user uuid)
+create or replace function private.chat_stranded(p_user uuid, p_conversation uuid, p_leaving uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from crm.chat_members o where o.conversation_id = p_conversation and o.user_id <> p_user)
+    and not exists (
+      select 1 from crm.chat_members o
+      join crm.workspace_members theirs on theirs.user_id = o.user_id
+      join crm.workspace_members mine on mine.workspace_id = theirs.workspace_id and mine.user_id = p_user
+      where o.conversation_id = p_conversation and o.user_id <> p_user
+        and (p_leaving is null or mine.workspace_id <> p_leaving)
+    )
+$$;
+
+revoke all on function private.chat_stranded(uuid, uuid, uuid) from public;
+
+create or replace function private.chat_rooms_leaving(p_workspace uuid, p_user uuid)
 returns table (conversation_id uuid, member_ids uuid[])
 language sql
 stable
@@ -441,11 +474,12 @@ as $$
   select c.id, array(select o.user_id from crm.chat_members o where o.conversation_id = c.id and o.user_id <> p_user)
   from crm.chat_conversations c
   join crm.chat_members m on m.conversation_id = c.id and m.user_id = p_user
-  where c.kind = 'room' and c.workspace_id = p_workspace
+  where (c.kind = 'room' and c.workspace_id = p_workspace)
+    or (((c.kind = 'room' and c.workspace_id is null) or c.kind = 'dm') and private.chat_stranded(p_user, c.id, p_workspace))
 $$;
 
-revoke all on function private.chat_rooms_linked(uuid, uuid) from public;
-grant execute on function private.chat_rooms_linked(uuid, uuid) to crm_app;
+revoke all on function private.chat_rooms_leaving(uuid, uuid) from public;
+grant execute on function private.chat_rooms_leaving(uuid, uuid) to crm_app;
 
 create or replace function private.chat_room_name(p_name text)
 returns text
@@ -454,7 +488,7 @@ immutable
 set search_path = ''
 as $$
 declare
-  v_name text := btrim(coalesce(p_name, ''));
+  v_name text := regexp_replace(regexp_replace(coalesce(p_name, ''), E'[\\u200B-\\u200D\\u2060\\uFEFF]', '', 'g'), E'^[[:space:]]+|[[:space:]]+$', '', 'g');
 begin
   if length(v_name) = 0 then
     raise exception 'Give the room a name.' using errcode = '22023';
@@ -531,8 +565,9 @@ begin
     end if;
   end if;
   insert into crm.chat_members (conversation_id, user_id, added_by)
-    values (v_id, p_user, p_user), (v_id, p_other, p_user)
+    select v_id, x.id, p_user from unnest(array[p_user, p_other]) as x(id) order by x.id
     on conflict do nothing;
+  update crm.chat_members m set opened = true where m.conversation_id = v_id and m.user_id = p_user and not m.opened;
   return v_id;
 end;
 $$;
@@ -678,6 +713,11 @@ begin
   delete from crm.chat_members m
     using crm.chat_conversations c
     where c.id = m.conversation_id and c.kind = 'room' and c.workspace_id = old.workspace_id and m.user_id = old.user_id;
+  delete from crm.chat_members m
+    using crm.chat_conversations c
+    where c.id = m.conversation_id and m.user_id = old.user_id
+      and ((c.kind = 'room' and c.workspace_id is null) or c.kind = 'dm')
+      and private.chat_stranded(old.user_id, c.id, null);
   delete from crm.chat_conversations c
     where c.kind = 'room' and c.workspace_id = old.workspace_id
       and not exists (select 1 from crm.chat_members m where m.conversation_id = c.id);

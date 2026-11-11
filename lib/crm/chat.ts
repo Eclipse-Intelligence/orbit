@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { alertMembers, alertMembersAfterCommit, type TeamAlert } from "@/lib/alerts";
+import { alertMembers, type TeamAlert } from "@/lib/alerts";
 import {
   CHAT_BODY_MAX,
   CHAT_CLIENT_KEY_MAX,
@@ -80,6 +80,7 @@ const SEARCH_LIMIT = 30;
 const MENTION_MAX = 50;
 const FORMER = "Former teammate";
 const NUL = /\u0000/g;
+const INVISIBLE = /[\u0000\u200B-\u200D\u2060\uFEFF]/g;
 
 function iso(value: Stamp): string;
 function iso(value: Stamp | null): string | null;
@@ -158,9 +159,12 @@ const CONVERSATIONS_SQL = `
     other.user_id as dm_user_id,
     case when c.kind = 'dm' then coalesce(
       ${MEMBER_NAME("other", "p")},
-      (select a.author_name from crm.chat_messages a where a.conversation_id = c.id and a.author_user_id = other.user_id order by a.created_at desc limit 1)
+      (select a.author_name from crm.chat_messages a
+       where a.conversation_id = c.id and a.author_user_id is not null and a.author_user_id is distinct from me.user_id
+         and (other.user_id is null or a.author_user_id = other.user_id)
+       order by a.created_at desc limit 1)
     ) end as dm_name,
-    counts.unread, counts.mentions
+    counts.unread, mentioned.mentions
   from crm.chat_members me
   join crm.chat_conversations c on c.id = me.conversation_id and c.kind in ('room', 'dm') and c.archived_at is null
   left join crm.workspaces w on w.id = c.workspace_id
@@ -174,15 +178,23 @@ const CONVERSATIONS_SQL = `
   ) other on c.kind = 'dm'
   left join crm.profiles p on p.id = other.user_id
   cross join lateral (
-    select count(*)::integer as unread, count(*) filter (where me.user_id = any(u.mentions))::integer as mentions
+    select count(*)::integer as unread
     from (
-      select m.mentions from crm.chat_messages m
+      select 1 from crm.chat_messages m
       where m.conversation_id = c.id and m.parent_id is null and m.deleted_at is null
         and m.created_at > me.last_read_at and m.author_user_id is distinct from me.user_id
-      order by m.created_at desc, m.id desc
       limit ${CHAT_COUNT_CAP}
     ) u
   ) counts
+  cross join lateral (
+    select count(*)::integer as mentions
+    from (
+      select 1 from crm.chat_messages m
+      where m.conversation_id = c.id and m.parent_id is null and m.deleted_at is null
+        and m.created_at > me.last_read_at and m.author_user_id is distinct from me.user_id and me.user_id = any(m.mentions)
+      limit ${CHAT_COUNT_CAP}
+    ) u
+  ) mentioned
   where me.user_id = $1`;
 
 function chatFailure(error: unknown): never {
@@ -216,7 +228,7 @@ function memberMentions(body: string) {
 }
 
 function cleanRoomName(name: unknown) {
-  const text = typeof name === "string" ? name.replace(NUL, "").trim().replace(/^#+/, "").replace(/\s+/g, " ").trim() : "";
+  const text = typeof name === "string" ? name.replace(INVISIBLE, "").trim().replace(/^#+/, "").replace(/\s+/g, " ").trim() : "";
   if (!text) throw new CrmError("invalid_input", "Give the room a name.", 400, { field: "name" });
   if (text.length > CHAT_ROOM_NAME_MAX) throw new CrmError("invalid_input", "Keep the room name to 80 characters.", 400, { field: "name" });
   return text;
@@ -242,13 +254,33 @@ function firstName(actor: UserActor) {
   return actor.fullName?.trim().split(/\s+/)[0] || actor.email || "A teammate";
 }
 
+const running = new Set<Promise<void>>();
+
+function tracked(task: () => Promise<void>) {
+  return () => {
+    const work: Promise<void> = task()
+      .catch((error) => console.error("Chat background work failed", error))
+      .finally(() => running.delete(work));
+    running.add(work);
+    return work;
+  };
+}
+
+export async function chatWorkSettled() {
+  while (running.size > 0) await Promise.all([...running]);
+}
+
 function background(task: () => Promise<void>) {
-  const run = () => task().catch((error) => console.error("Chat background work failed", error));
+  const run = tracked(task);
   try {
     after(run);
   } catch {
     void run();
   }
+}
+
+function afterChatCommit(db: Db, task: () => Promise<void>) {
+  afterCommit(db, tracked(task));
 }
 
 async function publish(messages: LiveMessage[]) {
@@ -265,7 +297,7 @@ async function broadcast(userIds: string[], event: ChatLiveEvent) {
 }
 
 function broadcastAfterCommit(db: Db, userIds: string[], event: ChatLiveEvent) {
-  afterCommit(db, () => broadcast(userIds, event));
+  afterChatCommit(db, () => broadcast(userIds, event));
 }
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
@@ -289,7 +321,10 @@ export async function listConversations(actor: UserActor): Promise<ChatSidebar> 
   return withActor(actor, async (db) => {
     const rows = await db.query<ConversationRow>(
       `${CONVERSATIONS_SQL}
-         and not (c.kind = 'dm' and last.created_at is null and c.created_by is distinct from me.user_id)
+         and not (
+           c.kind = 'dm' and not me.opened
+           and not exists (select 1 from crm.chat_messages v where v.conversation_id = c.id and v.parent_id is null and (v.deleted_at is null or v.reply_count > 0))
+         )
        order by c.kind, coalesce(last.created_at, c.created_at) desc`,
       [actor.userId],
     );
@@ -299,12 +334,17 @@ export async function listConversations(actor: UserActor): Promise<ChatSidebar> 
        join crm.chat_messages r on r.id = t.message_id
        join crm.chat_conversations c on c.id = r.conversation_id and c.kind in ('room', 'dm') and c.archived_at is null
        cross join lateral (
-         select count(*)::integer as unread, count(*) filter (where t.user_id = any(x.mentions))::integer as mentions
-         from (
-           select x.mentions from crm.chat_messages x
-           where x.parent_id = r.id and x.deleted_at is null and x.created_at > t.last_read_at and x.author_user_id is distinct from t.user_id
-           limit ${CHAT_COUNT_CAP}
-         ) x
+         select
+           (select count(*)::integer from (
+             select 1 from crm.chat_messages x
+             where x.parent_id = r.id and x.deleted_at is null and x.created_at > t.last_read_at and x.author_user_id is distinct from t.user_id
+             limit ${CHAT_COUNT_CAP}
+           ) a) as unread,
+           (select count(*)::integer from (
+             select 1 from crm.chat_messages x
+             where x.parent_id = r.id and x.deleted_at is null and x.created_at > t.last_read_at and x.author_user_id is distinct from t.user_id and t.user_id = any(x.mentions)
+             limit ${CHAT_COUNT_CAP}
+           ) b) as mentions
        ) u
        where t.user_id = $1 and r.last_reply_at > t.last_read_at`,
       [actor.userId],
@@ -442,8 +482,8 @@ export async function leaveRoom(actor: UserActor, id: string) {
   return removeRoomMember(actor, id, actor.userId);
 }
 
-export async function roomsLinkedTo(workspaceId: string, userId: string): Promise<LinkedRoom[]> {
-  const result = await query<{ conversation_id: string; member_ids: string[] }>("select conversation_id, member_ids::text[] as member_ids from private.chat_rooms_linked($1, $2)", [
+export async function roomsLostOnLeaving(workspaceId: string, userId: string): Promise<LinkedRoom[]> {
+  const result = await query<{ conversation_id: string; member_ids: string[] }>("select conversation_id, member_ids::text[] as member_ids from private.chat_rooms_leaving($1, $2)", [
     workspaceId,
     userId,
   ]);
@@ -624,11 +664,13 @@ export async function listThread(actor: UserActor, rootId: string, options: { be
 
 type ThreadsCursor = { u: 0 | 1; t: string; id: string };
 
+const CURSOR_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2}){0,2}$/;
+
 function readThreadsCursor(value: string | null | undefined): ThreadsCursor | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<ThreadsCursor>;
-    if ((parsed.u === 0 || parsed.u === 1) && typeof parsed.t === "string" && parsed.t.length <= 64 && !Number.isNaN(Date.parse(parsed.t)) && typeof parsed.id === "string" && isUuid(parsed.id)) {
+    if ((parsed.u === 0 || parsed.u === 1) && typeof parsed.t === "string" && CURSOR_TIME.test(parsed.t) && typeof parsed.id === "string" && isUuid(parsed.id)) {
       return { u: parsed.u, t: parsed.t, id: parsed.id.toLowerCase() };
     }
   } catch {}
@@ -655,12 +697,17 @@ export async function listThreads(actor: UserActor, options: { cursor?: string |
        join crm.chat_messages r on r.id = t.message_id
        join crm.chat_conversations c on c.id = r.conversation_id and c.kind in ('room', 'dm') and c.archived_at is null
        cross join lateral (
-         select count(*)::integer as unread, count(*) filter (where t.user_id = any(x.mentions))::integer as mentions
-         from (
-           select x.mentions from crm.chat_messages x
-           where x.parent_id = r.id and x.deleted_at is null and x.created_at > t.last_read_at and x.author_user_id is distinct from t.user_id
-           limit ${CHAT_COUNT_CAP}
-         ) x
+         select
+           (select count(*)::integer from (
+             select 1 from crm.chat_messages x
+             where x.parent_id = r.id and x.deleted_at is null and x.created_at > t.last_read_at and x.author_user_id is distinct from t.user_id
+             limit ${CHAT_COUNT_CAP}
+           ) a) as unread,
+           (select count(*)::integer from (
+             select 1 from crm.chat_messages x
+             where x.parent_id = r.id and x.deleted_at is null and x.created_at > t.last_read_at and x.author_user_id is distinct from t.user_id and t.user_id = any(x.mentions)
+             limit ${CHAT_COUNT_CAP}
+           ) b) as mentions
        ) u
        where t.user_id = $1 and r.reply_count > 0
          and ($2::integer is null or ((case when u.unread > 0 then 1 else 0 end), r.last_reply_at, r.id) < ($2::integer, $3::timestamptz, $4::uuid))
@@ -710,7 +757,7 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
     await readConversation(db, actor, conversationId);
     const result = await db.query<MessageRow>(
       `select ${messageColumns()} from crm.chat_messages m
-       where m.conversation_id = $1 and m.deleted_at is null and (m.body ilike $2 or m.author_name ilike $2)
+       where m.conversation_id = $1 and m.deleted_at is null and m.body ilike $2
        order by m.created_at desc, m.id desc limit ${limit}`,
       [conversationId, likePattern(search)],
     );
@@ -726,28 +773,57 @@ function chatHref(conversationId: string, message: ChatMessage) {
 
 const VERIFIED = { recipientsVerified: true };
 
-function scheduleAlerts(db: Db, actor: UserActor, conversation: ConversationRow, members: MemberRow[], message: ChatMessage) {
+type AlertJob = () => Promise<void>;
+
+function alertJob(actor: UserActor, recipients: string[], alert: TeamAlert): AlertJob[] {
+  if (recipients.length === 0) return [];
+  return [
+    async () => {
+      await alertMembers(actor, recipients, alert, VERIFIED);
+    },
+  ];
+}
+
+function mentionAlert(actor: UserActor, conversation: ConversationRow, message: ChatMessage, recipients: string[]) {
+  return alertJob(actor, recipients, {
+    source: "chat",
+    href: chatHref(conversation.id, message),
+    tag: `chat:${conversation.id}`,
+    body: null,
+    key: `chat:mention:${message.id}`,
+    title: `${firstName(actor)} mentioned you in #${conversation.name ?? ""}`,
+  });
+}
+
+function postAlerts(actor: UserActor, conversation: ConversationRow, members: MemberRow[], message: ChatMessage): AlertJob[] {
   const name = firstName(actor);
-  const base = { source: "chat" as const, href: chatHref(conversation.id, message), tag: `chat:${conversation.id}`, body: null };
-  const send = (recipients: string[], alert: Pick<TeamAlert, "key" | "title">) => {
-    if (recipients.length > 0) alertMembersAfterCommit(db, actor, recipients, { ...base, ...alert }, VERIFIED);
-  };
+  const tag = `chat:${conversation.id}`;
   const dm = conversation.kind === "dm";
   const others = members.filter((member) => member.user_id !== actor.userId);
-  const room = `#${conversation.name ?? ""}`;
   const memberSet = new Set(others.map((member) => member.user_id));
   const mentioned = dm ? [] : message.mentions.filter((id) => memberSet.has(id));
-  send(mentioned, { key: `chat:mention:${message.id}`, title: `${name} mentioned you in ${room}` });
+  const jobs = mentionAlert(actor, conversation, message, mentioned);
   if (!message.parentId) {
     if (dm) {
-      for (const other of others) send([other.user_id], { key: `chat:dm:${conversation.id}:${millis(other.last_read_at)}`, title: `${name} sent you a message` });
+      for (const other of others) {
+        jobs.push(
+          ...alertJob(actor, [other.user_id], {
+            source: "chat",
+            href: `/chat/${conversation.id}`,
+            tag,
+            body: null,
+            key: `chat:dm:${conversation.id}:${millis(other.last_read_at)}`,
+            title: `${name} sent you a message`,
+          }),
+        );
+      }
     }
-    return;
+    return jobs;
   }
   const rootId = message.parentId;
   const skip = new Set([actor.userId, ...mentioned]);
-  const title = dm ? `${name} replied in a thread` : `${name} replied in a thread in ${room}`;
-  afterCommit(db, async () => {
+  const title = dm ? `${name} replied in a thread` : `${name} replied in a thread in #${conversation.name ?? ""}`;
+  jobs.push(async () => {
     const followers = await query<{ user_id: string; last_read_at: Stamp }>("select user_id, last_read_at from private.chat_thread_followers($1, $2)", [actor.userId, rootId]);
     const byKey = new Map<string, string[]>();
     for (const follower of followers.rows) {
@@ -756,7 +832,21 @@ function scheduleAlerts(db: Db, actor: UserActor, conversation: ConversationRow,
       byKey.set(key, [...(byKey.get(key) ?? []), follower.user_id]);
     }
     for (const [key, recipients] of byKey) {
-      await alertMembers(actor, recipients, { ...base, key, title }, VERIFIED);
+      await alertMembers(actor, recipients, { source: "chat", href: chatHref(conversation.id, message), tag, body: null, key, title }, VERIFIED);
+    }
+  });
+  return jobs;
+}
+
+function afterPost(db: Db, userIds: string[], event: ChatLiveEvent, jobs: AlertJob[]) {
+  afterChatCommit(db, async () => {
+    await broadcast(userIds, event);
+    for (const job of jobs) {
+      try {
+        await job();
+      } catch (error) {
+        console.error("Chat alert failed", error);
+      }
     }
   });
 }
@@ -783,9 +873,9 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
       const conversation = await readConversation(db, actor, conversationId);
       const earlier = await existingPost(db, actor, clientKey, conversationId, parentId);
       if (earlier) return earlier;
-      if (conversation.kind === "dm" && conversation.dm_user_id) {
-        const reachable = await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]);
-        if ((reachable.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
+      if (conversation.kind === "dm") {
+        const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
+        if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
       }
       const inserted = await db.query<{ id: string }>(
         `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, mentions)
@@ -797,7 +887,7 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
       if (!inserted.rows[0]) {
         const raced = await existingPost(db, actor, clientKey, conversationId, parentId);
         if (raced) return raced;
-        throw new CrmError("conflict", "Couldn't send. Try again.", 409);
+        throw new CrmError("conflict", "That message key was already used for another message. Send this one with a new key.", 409, { field: "clientKey" });
       }
       const message = (await readMessage(db, inserted.rows[0].id, actor.userId))!;
       const rootMessage = parentId ? await readMessage(db, parentId, actor.userId) : null;
@@ -810,12 +900,13 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
         );
       }
       const members = await memberIds(db, conversationId);
-      broadcastAfterCommit(
+      const jobs = conversation.kind === "room" || conversation.kind === "dm" ? postAlerts(actor, conversation, members, message) : [];
+      afterPost(
         db,
         members.map((member) => member.user_id),
         { type: "message", conversationId, message, root },
+        jobs,
       );
-      if (conversation.kind === "room" || conversation.kind === "dm") scheduleAlerts(db, actor, conversation, members, message);
       return { message, root, duplicate: false };
     });
   } catch (error) {
@@ -838,14 +929,25 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
   try {
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
+      const conversation = await readConversation(db, actor, current.conversationId);
+      const followersBefore = current.parentId
+        ? new Set((await query<{ user_id: string }>("select user_id from private.chat_thread_followers($1, $2)", [actor.userId, current.parentId])).rows.map((row) => row.user_id))
+        : new Set<string>();
       const updated = await db.query("update crm.chat_messages set body = $2, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId]);
       if ((updated.rowCount ?? 0) === 0) throw notFound("message");
       const message = (await readMessage(db, messageId, actor.userId))!;
       const members = await memberIds(db, current.conversationId);
-      broadcastAfterCommit(
+      const memberSet = new Set(members.map((member) => member.user_id));
+      const before = new Set(current.mentions);
+      const added =
+        conversation.kind === "room"
+          ? message.mentions.filter((person) => !before.has(person) && person !== actor.userId && memberSet.has(person) && !followersBefore.has(person))
+          : [];
+      afterPost(
         db,
         members.map((member) => member.user_id),
         { type: "edit", conversationId: current.conversationId, message },
+        mentionAlert(actor, conversation, message, added),
       );
       return message;
     });
@@ -879,6 +981,10 @@ export async function markConversationRead(actor: UserActor, id: string, upTo?: 
   const conversationId = checkId(id, "conversation");
   const messageId = upTo ? checkId(upTo, "message") : null;
   return withActor(actor, async (db) => {
+    if (messageId) {
+      const known = await db.query("select 1 from crm.chat_messages where id = $1 and conversation_id = $2", [messageId, conversationId]);
+      if ((known.rowCount ?? 0) === 0) throw notFound("message");
+    }
     const result = await db.query<{ last_read_at: Stamp }>(
       `update crm.chat_members set last_read_at = greatest(last_read_at, coalesce(
          (select m.created_at from crm.chat_messages m where m.id = $3 and m.conversation_id = $1),
@@ -902,6 +1008,10 @@ export async function markThreadRead(actor: UserActor, rootId: string, upTo?: st
   const messageId = upTo ? checkId(upTo, "message") : null;
   return withActor(actor, async (db) => {
     const root = await readRoot(db, id, actor.userId);
+    if (messageId) {
+      const known = await db.query("select 1 from crm.chat_messages where id = $1 and parent_id = $2", [messageId, id]);
+      if ((known.rowCount ?? 0) === 0) throw notFound("message");
+    }
     const result = await db.query<{ last_read_at: Stamp }>(
       `update crm.chat_thread_reads set last_read_at = greatest(last_read_at, coalesce(
          (select m.created_at from crm.chat_messages m where m.id = $3 and m.parent_id = $1),
