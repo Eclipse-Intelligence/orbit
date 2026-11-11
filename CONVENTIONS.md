@@ -1,6 +1,6 @@
 # Conventions
 
-How Orbit is built. Follow these when changing or adding code. `README.md` covers setup and features, and `docs/architecture.md` covers how the pieces fit together.
+How Orbit is built. Follow these when changing or adding code. `README.md` covers setup and features, and `docs/architecture.md` covers how the pieces fit together. `docs/working-notes.md` holds the decisions and working habits settled with Mark.
 
 ## Layout
 
@@ -70,10 +70,10 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 ## Testing and checks
 
-- Before every commit: `npx tsc --noEmit`, `npx eslint .`, `npm test` (needs the local `crm_test` database, see Test database in `README.md`).
+- Before every commit: `npx tsc --noEmit`, `npx eslint .` and the test files related to the change (see `docs/working-notes.md` for the command). Run the full `npm test` (10 to 15 minutes, needs the local `crm_test` database, see Test database in `README.md`) when a change is broad.
 - Add tests in `tests/*.test.ts` for new behaviour in `lib/`. Fake outside APIs by passing `fetchImpl`, never by calling real services.
-- After a change to the assistant's prompt, tools or models, run `npm run eval -- --model <id>` with `LLM_API_KEY` (it calls real models and costs money, so it isn't part of `npm test`). Add a task to `evals/tasks` when a chat shows a new kind of request or failure.
-- For UI changes, run the production build locally and check the page in a browser at desktop and mobile sizes.
+- After a change to the assistant's prompt, tools or models, check it with the offline harness in `tests/assistant-evals.test.ts`. Real-model runs (`npm run eval`) aren't part of the workflow. Add a task to `evals/tasks` when a chat shows a new kind of request or failure.
+- For UI changes, run the production build locally, check the page in a browser at desktop and mobile sizes, and run `npm run sweep` for the phone and tablet sweep.
 
 ## Git
 

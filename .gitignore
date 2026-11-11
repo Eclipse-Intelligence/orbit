@@ -46,3 +46,12 @@ next-env.d.ts
 /public/downloads
 
 /evals/results/
+
+# agent and workspace tools
+/.context/
+/.conductor/settings.local.*
+.claude/worktrees/
+.claude/settings.local.json
+.claude/scheduled_tasks.*
+.claude/checkpoints/
+/sweep-results/
