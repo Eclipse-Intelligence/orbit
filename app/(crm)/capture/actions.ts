@@ -7,6 +7,8 @@ import { redirect } from "next/navigation";
 import { getHomeActor, getUserActor } from "@/lib/auth/user";
 import { discardAttachments, prepareAttachment, type PreparedAttachment } from "@/lib/crm/email-attachments";
 import { syncCalls } from "@/lib/crm/calls";
+import { captureActor } from "@/lib/crm/capture-actions";
+import { listDismissedImports, type DismissedPage } from "@/lib/crm/conversations";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
 import {
@@ -103,6 +105,16 @@ export async function syncTranscriptsAction() {
 }
 
 type ConversationActionState = { error?: string; ok?: boolean };
+
+export async function listDismissedAction(workspaceId: string, offset: number): Promise<{ page?: DismissedPage; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in again." };
+  try {
+    return { page: await listDismissedImports(await captureActor(user, workspaceId), { offset }) };
+  } catch (error) {
+    return actionError(error);
+  }
+}
 
 export async function closeFollowUpAction(id: string, state: "used" | "dismissed"): Promise<ConversationActionState> {
   const user = await getUserActor();

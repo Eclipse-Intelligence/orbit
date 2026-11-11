@@ -117,9 +117,10 @@ function granolaParticipants(note: GranolaNote, ownNames: (string | null | undef
   const own = new Set(ownNames.map(looseNameKey).filter((key): key is string => Boolean(key)));
   const people = new Map<string, Participant>();
   const named = new Map<string, Participant>();
-  const add = (name: string | null | undefined, email: string | null | undefined) => {
-    const canonical = email ? canonicalEmail(email) : null;
-    const cleanName = name?.trim() || null;
+  const add = (rawName: string | null | undefined, email: string | null | undefined) => {
+    const nameAsEmail = !email && rawName ? canonicalEmail(rawName) : null;
+    const canonical = nameAsEmail ?? (email ? canonicalEmail(email) : null);
+    const cleanName = nameAsEmail ? null : rawName?.trim() || null;
     if (!canonical) {
       const key = looseNameKey(cleanName);
       if (cleanName && key && !own.has(key) && !named.has(key)) named.set(key, { name: cleanName, email: null });
@@ -287,7 +288,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       if (placeholder) await dropPlaceholder(db, placeholder.id);
       return "skipped";
     }
-    const byTitle = route.targets.length === 0 && participants.length === 0;
+    const byTitle = route.targets.length === 0 && route.suggested.length === 0;
     const suggested = byTitle
       ? await suggestByTitleInDb(db, owner, open.map((item) => item.workspaceId), [title, note.calendar_event?.event_title], ownNames)
       : route.suggested;

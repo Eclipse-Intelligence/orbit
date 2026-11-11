@@ -1,10 +1,10 @@
 import {
+  confidentFor,
   contactsByName,
   excludedNameKeys,
-  inKeyOrder,
-  onePerson,
+  inQueryOrder,
+  nameQueries,
   titleNames,
-  usableNameKeys,
   type NameCandidate,
 } from "@/lib/crm/call-names";
 import { isFreeMailDomain } from "@/lib/crm/communications";
@@ -88,11 +88,9 @@ export async function routeCallInDb(
     seen.add(email);
     emails.push({ email, name: person.name?.trim() || null });
   }
-  const names = options.names
-    ? usableNameKeys(
-        people.filter((person) => !person.email).map((person) => person.name),
-        await excludedNameKeys(db, workspaceIds, [owner.fullName, ...(options.ownNames ?? [])]),
-      )
+  const nameless = people.filter((person) => !person.email).map((person) => person.name);
+  const names = options.names && nameless.length > 0
+    ? nameQueries(nameless, await excludedNameKeys(db, owner.userId, [owner.fullName, ...(options.ownNames ?? [])]))
     : [];
   const matched = new Map<string, CallTarget>();
   const unmatched: UserActor[] = [];
@@ -121,13 +119,13 @@ export async function routeCallInDb(
   }
   let suggested: NameCandidate[] = [];
   if (names.length > 0 && unmatched.length > 0) {
-    const found = await contactsByName(db, unmatched.map((item) => item.workspaceId), names);
-    const confident = names.filter((key) => onePerson(found.filter((candidate) => candidate.key === key)));
+    const lookup = await contactsByName(db, workspaceIds, names);
+    const confident = names.filter((query) => confidentFor(query, lookup));
     for (const actor of unmatched) {
-      const hit = inKeyOrder(found, confident).find((candidate) => candidate.workspaceId === actor.workspaceId);
+      const hit = inQueryOrder(lookup.candidates, confident).find((candidate) => candidate.workspaceId === actor.workspaceId);
       if (hit) matched.set(actor.workspaceId, { actor, match: hit });
     }
-    if (matched.size === 0) suggested = inKeyOrder(found, names);
+    if (matched.size === 0) suggested = inQueryOrder(lookup.candidates, names);
   }
   const targets = actors.map((actor) => matched.get(actor.workspaceId)).filter((target): target is CallTarget => Boolean(target));
   return { targets, ruled, suggested };
@@ -142,8 +140,8 @@ export async function suggestByTitleInDb(
 ) {
   const names = [...new Set(titles.flatMap((title) => titleNames(title)))];
   if (names.length === 0) return [];
-  const keys = usableNameKeys(names, await excludedNameKeys(db, workspaceIds, [owner.fullName, ...ownNames]));
-  return inKeyOrder(await contactsByName(db, workspaceIds, keys), keys);
+  const queries = nameQueries(names, await excludedNameKeys(db, owner.userId, [owner.fullName, ...ownNames]));
+  return inQueryOrder((await contactsByName(db, workspaceIds, queries)).candidates, queries);
 }
 
 export function suggestedWorkspace(suggested: NameCandidate[], fallback: string) {

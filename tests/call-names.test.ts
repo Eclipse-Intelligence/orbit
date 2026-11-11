@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { nameKey, titleNames } from "@/lib/crm/call-names";
+import { foldName, nameKey, titleNames } from "@/lib/crm/call-names";
+import { moveImport } from "@/lib/crm/call-routing";
+import { pruneHidden } from "@/lib/crm/capture-format";
 import { listToFile } from "@/lib/crm/capture";
 import { readCaptureAction, runCaptureAction } from "@/lib/crm/capture-actions";
 import { createContact } from "@/lib/crm/contacts";
-import { listDismissedImports } from "@/lib/crm/conversations";
+import { ignoreImport, listDismissedImports, restoreImport } from "@/lib/crm/conversations";
 import { processGranolaWebhook, syncGranola } from "@/lib/crm/granola";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { settleTeamsTranscripts } from "@/lib/crm/teams-transcripts";
@@ -67,6 +69,7 @@ describe("calls matched by name", () => {
   let home: UserActor;
   let eclipse: UserActor;
   let jamesId: string;
+  let tara: UserActor;
   const notes = new Map<string, GranolaNote>();
 
   async function rows(externalId: string) {
@@ -102,6 +105,9 @@ describe("calls matched by name", () => {
     eclipse = { ...home, workspaceId: created.id, workspaceName: "Eclipse", role: "owner", scopes: scopesForRole("owner") };
     jamesId = (await createContact(eclipse, { firstName: "James", lastName: "O'Toole", email: "james@otoole.test" })).body.contact.id;
     await createContact(eclipse, { firstName: "Mark", lastName: "Ridgeon", email: "mark@elsewhere.test" });
+    const teammate = await createUser("tara@eclipse.test", "Tara Mate");
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [eclipse.workspaceId, teammate.userId]);
+    tara = { ...teammate, workspaceId: eclipse.workspaceId, workspaceName: "Eclipse", role: "member", scopes: scopesForRole("member") };
   });
 
   beforeEach(() => {
@@ -117,6 +123,9 @@ describe("calls matched by name", () => {
   it("compares names without case or punctuation and reads people from a call title", () => {
     assert.equal(nameKey("James O'Toole"), nameKey("james  otoole"));
     assert.equal(nameKey("James O’Toole"), nameKey("JAMES O-TOOLE"));
+    assert.equal(foldName("JOSÉ  Álvarez"), "jose alvarez");
+    assert.equal(foldName("Anne-Marie O’Neil"), "anne marie oneil");
+    assert.notEqual(foldName("Joan Nesmith"), foldName("Jo Anne Smith"));
     assert.equal(nameKey("James"), null);
     assert.equal(nameKey("james@otoole.test"), null);
     assert.deepEqual(titleNames("Mark Ridgeon and James O'Toole"), ["Mark Ridgeon", "James O'Toole"]);
@@ -222,7 +231,8 @@ describe("calls matched by name", () => {
     assert.equal(found[0].workspace_id, eclipse.workspaceId);
     assert.equal(found[0].status, "unfiled");
     const item = (await listToFile(eclipse)).unfiled.find((row) => row.id === found[0].id)!;
-    assert.deepEqual(item.suggestions, [{ contactId: jamesId, name: "James O'Toole", companyName: null }]);
+    assert.deepEqual(item.suggestions, [{ contactId: jamesId, name: "James O'Toole", companyName: null, email: "james@otoole.test" }]);
+    assert.equal(item.suggestedBy, "title");
   });
 
   it("keeps an unknown name unfiled in the home workspace with nothing suggested", async () => {
@@ -292,23 +302,185 @@ describe("calls matched by name", () => {
     assert.equal((await listDismissedImports(home)).items.some((item) => item.id === row.id && item.title === "Old supplier"), true);
   });
 
-  it("drops calls dismissed more than 30 days ago from the list without deleting them", async () => {
-    const id = noteId("dismissold");
-    notes.set(id, makeNote(id, home, { title: "Long ago", attendees: [{ name: "Someone", email: "someone@unknown.test" }] }));
+  it("lists every dismissed call newest dismissal first, pages them, and stamps and clears the dismissal time", async () => {
+    const ids: string[] = [];
+    for (const label of ["pageone", "pagetwo", "pagethree"]) {
+      const id = noteId(label);
+      notes.set(id, makeNote(id, home, { title: label, attendees: [{ name: "Someone", email: `${label}@unknown.test` }] }));
+    }
+    await sync();
+    for (const label of ["pageone", "pagetwo", "pagethree"]) {
+      const [row] = await rows(noteId(label));
+      ids.push(row.id);
+      await ignoreImport(home, row.id);
+    }
+    const admin = getAdminPool();
+    await admin.query("update crm.conversation_imports set dismissed_at = now() - interval '400 days' where id = $1", [ids[0]]);
+    await admin.query("update crm.conversation_imports set dismissed_at = now() - interval '40 days' where id = $1", [ids[1]]);
+    await admin.query("update crm.conversation_imports set title = 'pageone', error = null where id = $1", [ids[0]]);
+
+    const all = await listDismissedImports(home, { limit: 100 });
+    const order = all.items.map((item) => item.id).filter((id) => ids.includes(id));
+    assert.deepEqual(order, [ids[2], ids[1], ids[0]]);
+    assert.ok(all.total >= 3);
+    const first = await listDismissedImports(home, { limit: 1 });
+    const second = await listDismissedImports(home, { offset: 1, limit: 1 });
+    assert.equal(first.items.length, 1);
+    assert.equal(second.items.length, 1);
+    assert.notEqual(first.items[0].id, second.items[0].id);
+    assert.equal(first.total, all.total);
+    assert.equal(second.total, all.total);
+    assert.equal((await listDismissedImports(home, { offset: all.total })).total, all.total);
+    assert.equal("sourceSummary" in all.items[0], false);
+
+    const stamp = await admin.query<{ dismissed_at: Date | null }>("select dismissed_at from crm.conversation_imports where id = $1", [ids[2]]);
+    assert.ok(stamp.rows[0].dismissed_at);
+    await restoreImport(home, ids[2]);
+    const cleared = await admin.query<{ dismissed_at: Date | null; status: string }>("select dismissed_at, status from crm.conversation_imports where id = $1", [ids[2]]);
+    assert.deepEqual(cleared.rows[0], { dismissed_at: null, status: "unfiled" });
+  });
+
+  it("never lets a colleague see, dismiss or restore someone else's call, or delete their dismissed copy with a move", async () => {
+    const id = noteId("colleague");
+    notes.set(id, makeNote(id, home, { title: "Mark Ridgeon and James O'Toole", attendees: [] }));
     await sync();
     const [row] = await rows(id);
-    await runCaptureAction(home, readCaptureAction({ kind: "import-ignore", id: row.id }));
-    const client = await getAdminPool().connect();
-    try {
-      await client.query("begin");
-      await client.query("set local session_replication_role = replica");
-      await client.query("update crm.conversation_imports set updated_at = now() - interval '31 days' where id = $1", [row.id]);
-      await client.query("commit");
-    } finally {
-      client.release();
-    }
-    assert.equal((await listDismissedImports(home)).items.some((item) => item.id === row.id), false);
+    assert.equal(row.workspace_id, eclipse.workspaceId);
+    await assert.rejects(ignoreImport(tara, row.id), /not found/i);
+    await ignoreImport(eclipse, row.id);
+    assert.equal((await listDismissedImports(tara)).items.some((item) => item.id === row.id), false);
+    assert.equal((await listDismissedImports(eclipse)).items.some((item) => item.id === row.id), true);
+    await assert.rejects(restoreImport(tara, row.id), /not found/i);
     assert.equal((await rows(id))[0].status, "ignored");
+
+    const admin = getAdminPool();
+    const shared = noteId("sharednote");
+    await admin.query(
+      `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, title, transcript, status)
+       values ($1, $2, 'granola', $3, 'meeting', 'Their copy', 'Tara: hello', 'ignored')`,
+      [eclipse.workspaceId, tara.userId, shared],
+    );
+    const mine = await admin.query<{ id: string }>(
+      `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, title, transcript, status)
+       values ($1, $2, 'granola', $3, 'meeting', 'My copy', 'Mark: hello', 'unfiled') returning id`,
+      [home.workspaceId, home.userId, shared],
+    );
+    await assert.rejects(moveImport(home, mine.rows[0].id, eclipse.workspaceId), /colleague already has/);
+    const copies = await rows(shared);
+    assert.deepEqual(
+      copies.map((copy) => [copy.workspace_id, copy.status]).sort(),
+      [
+        [eclipse.workspaceId, "ignored"],
+        [home.workspaceId, "unfiled"],
+      ].sort(),
+    );
+  });
+
+  it("refuses to restore a filed call", async () => {
+    const id = noteId("restorefiled");
+    notes.set(id, makeNote(id, home, { attendees: [{ name: "James O'Toole", email: null }] }));
+    await sync();
+    const [row] = await rows(id);
+    assert.equal(row.status, "filed");
+    await assert.rejects(restoreImport(eclipse, row.id), /already filed/);
+  });
+
+  it("drops a restored row from the hidden set only once the server no longer lists it", () => {
+    const hidden = new Set(["import:a", "email:b"]);
+    assert.equal(pruneHidden(hidden, ["import:a", "email:b", "task:c"]), hidden);
+    const pruned = pruneHidden(hidden, ["email:b", "task:c"]);
+    assert.deepEqual([...pruned], ["email:b"]);
+    assert.equal(pruneHidden(pruned, ["import:a", "email:b"]).has("import:a"), false);
+  });
+
+  it("never files on a namesake when another workspace's email match has a different person by that name", async () => {
+    const zed = (await createContact(home, { firstName: "Zed", lastName: "Known", email: "zed@known.test" })).body.contact.id;
+    await createContact(home, { firstName: "Rory", lastName: "Bell", email: "rory@home.test" });
+    await createContact(eclipse, { firstName: "Rory", lastName: "Bell", email: "rory@eclipse.test" });
+    const id = noteId("nameemail");
+    notes.set(id, makeNote(id, home, { attendees: [{ name: "Zed Known", email: "zed@known.test" }, { name: "Rory Bell", email: null }] }));
+    await sync();
+    const found = await rows(id);
+    assert.deepEqual(
+      found.map((row) => [row.workspace_id, row.status, row.contact_id]),
+      [[home.workspaceId, "filed", zed]],
+    );
+  });
+
+  it("files only on a word for word full name, and only suggests run-together or single-word names", async () => {
+    const jo = (await createContact(eclipse, { firstName: "Jo Anne", lastName: "Smith", email: "jo@anne.test" })).body.contact.id;
+    const benedict = (await createContact(eclipse, { firstName: "Benedict", email: "benedict@one.test" })).body.contact.id;
+    const cases = [
+      ["joan", "Joan Nesmith", jo],
+      ["benedict", "Ben Edict", benedict],
+    ] as const;
+    for (const [label, name, contact] of cases) {
+      const id = noteId(`loose${label}`);
+      notes.set(id, makeNote(id, home, { attendees: [{ name, email: null }] }));
+      await sync();
+      const [row] = await rows(id);
+      assert.equal(row.status, "unfiled", name);
+      assert.equal(row.workspace_id, eclipse.workspaceId, name);
+      const item = (await listToFile(eclipse)).unfiled.find((entry) => entry.id === row.id)!;
+      assert.deepEqual(item.suggestions.map((entry) => entry.contactId), [contact], name);
+      assert.equal(item.suggestedBy, "name");
+    }
+  });
+
+  it("matches accented capitals and non-Latin names the same way whatever the database collation", async () => {
+    const jose = (await createContact(eclipse, { firstName: "José", lastName: "Álvarez", email: "jose@alvarez.test" })).body.contact.id;
+    const nikos = (await createContact(eclipse, { firstName: "Νίκος", lastName: "Παπαδόπουλος", email: "nikos@example.test" })).body.contact.id;
+    const cases = [
+      ["upper", "JOSÉ ÁLVAREZ", jose],
+      ["plain", "Jose Alvarez", jose],
+      ["greek", "Νίκος Παπαδόπουλος", nikos],
+    ] as const;
+    for (const [label, name, contact] of cases) {
+      const id = noteId(`accent${label}`);
+      notes.set(id, makeNote(id, home, { attendees: [{ name, email: null }] }));
+      await sync();
+      const [row] = await rows(id);
+      assert.deepEqual([row.workspace_id, row.status, row.contact_id], [eclipse.workspaceId, "filed", contact], name);
+    }
+  });
+
+  it("never matches a contact in a workspace the person isn't in, or a teammate's name", async () => {
+    const olive = await createUser("olive@elsewhere.test", "Olive Other");
+    await createContact(olive, { firstName: "Quinn", lastName: "Hart", email: "quinn@hart.test" });
+    await createContact(home, { firstName: "Tara", lastName: "Mate", email: "tara@personal.test" });
+    const cases = [
+      ["outsider", "Quinn Hart"],
+      ["teammate", "Tara Mate"],
+    ] as const;
+    for (const [label, name] of cases) {
+      const id = noteId(`excl${label}`);
+      notes.set(id, makeNote(id, home, { title: "Catch up", attendees: [{ name, email: null }] }));
+      await sync();
+      const [row] = await rows(id);
+      assert.deepEqual([row.workspace_id, row.status], [home.workspaceId, "unfiled"], name);
+      const item = (await listToFile(home)).unfiled.find((entry) => entry.id === row.id)!;
+      assert.deepEqual(item.suggestions, [], name);
+    }
+  });
+
+  it("uses an attendee name that is an email address as their email", async () => {
+    const id = noteId("nameisemail");
+    notes.set(id, makeNote(id, home, { attendees: [{ name: "james@otoole.test", email: null }] }));
+    await sync();
+    const [row] = await rows(id);
+    assert.deepEqual([row.workspace_id, row.status, row.contact_id], [eclipse.workspaceId, "filed", jamesId]);
+    assert.deepEqual(row.participants, [{ name: null, email: "james@otoole.test" }]);
+  });
+
+  it("falls back to the title when the attendees match nobody", async () => {
+    const id = noteId("titlefallback");
+    notes.set(id, makeNote(id, home, { title: "Mark x James O'Toole", attendees: [{ name: "Vendor", email: "vendor@nobody.test" }] }));
+    await sync();
+    const [row] = await rows(id);
+    assert.deepEqual([row.workspace_id, row.status], [eclipse.workspaceId, "unfiled"]);
+    const item = (await listToFile(eclipse)).unfiled.find((entry) => entry.id === row.id)!;
+    assert.deepEqual(item.suggestions.map((entry) => entry.contactId), [jamesId]);
+    assert.equal(item.suggestedBy, "title");
   });
 
   it("moves a Teams transcript to the workspace of the person named in it and suggests them", async () => {

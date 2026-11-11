@@ -53,6 +53,35 @@ export const CaptureListContext = createContext<CaptureList>({ leaving: new Set(
 export const COLLAPSE_MS = 220;
 const OUT_MS = 180;
 
+const pointer = { down: false, watching: false };
+
+function watchPointer() {
+  if (pointer.watching) return;
+  pointer.watching = true;
+  const release = () => {
+    pointer.down = false;
+  };
+  window.addEventListener("pointerdown", () => {
+    pointer.down = true;
+  }, true);
+  window.addEventListener("pointerup", release, true);
+  window.addEventListener("pointercancel", release, true);
+}
+
+function afterPointerRelease(run: () => void) {
+  if (!pointer.down) {
+    run();
+    return;
+  }
+  const done = () => {
+    window.removeEventListener("pointerup", done, true);
+    window.removeEventListener("pointercancel", done, true);
+    window.setTimeout(run, 0);
+  };
+  window.addEventListener("pointerup", done, true);
+  window.addEventListener("pointercancel", done, true);
+}
+
 function SnoozeItems({ choices, pick, extra }: { choices: SnoozeChoice[]; pick: (choice: SnoozeChoice) => void; extra?: MenuItem[] }) {
   return (
     <>
@@ -180,6 +209,7 @@ export default function CaptureRow({
   const [height, setHeight] = useState<number | null>(null);
   const [width, setWidth] = useState(360);
   const row = useRef<HTMLLIElement>(null);
+  useEffect(watchPointer, []);
   const body = useRef<HTMLDivElement>(null);
   const handlers = useRef<SwipeHandlers>({});
   const armedBefore = useRef(false);
@@ -284,7 +314,10 @@ export default function CaptureRow({
       }}
       onPointerDown={() => focusOnPage("capture", rowId)}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActive(false);
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        afterPointerRelease(() => {
+          if (!row.current?.contains(document.activeElement)) setActive(false);
+        });
       }}
       className={cn(
         KEYBOARD_ROW_CLASS,

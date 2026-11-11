@@ -33,6 +33,7 @@ import type { MetPerson } from "@/lib/crm/calendar";
 import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
 import type { DismissedImport, UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
+import { pruneHidden } from "@/lib/crm/capture-format";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { SkippedEmail } from "@/lib/mail/capture-filter";
 import type { SenderRule } from "@/lib/mail/relevance";
@@ -262,6 +263,13 @@ export default function CaptureScreen({
       node: <PersonItem key={item.email} item={item} clearId={`person:${item.email}`} />,
     })),
   ];
+
+  const entryIds = entries.map((entry) => entry.id).join("\n");
+  const [seenIds, setSeenIds] = useState(entryIds);
+  if (seenIds !== entryIds) {
+    setSeenIds(entryIds);
+    setHidden((current) => pruneHidden(current, entryIds.split("\n")));
+  }
 
   const gone = (id: string) => hidden.has(id) || leaving.has(id);
   const shown = entries.filter((entry) => !hidden.has(entry.id));
@@ -555,7 +563,7 @@ export default function CaptureScreen({
               {(notShownHere || dismissedHere) && (
                 <div className="flex flex-col gap-1">
                   {notShownHere && <NotShown items={data.notShown} total={notShownTotal} sorting={sorting} rules={rules} workspaceId={workspaceId} />}
-                  {dismissedHere && <Dismissed items={data.dismissed} total={dismissedTotal} now={now} workspaceId={workspaceId} />}
+                  {dismissedHere && <Dismissed items={data.dismissed} total={dismissedTotal} now={now} workspaceId={workspaceId} onRestored={(id) => show(`import:${id}`)} />}
                 </div>
               )}
             </ClearContext.Provider>
