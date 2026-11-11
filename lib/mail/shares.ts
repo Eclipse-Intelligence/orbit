@@ -76,7 +76,7 @@ function address(name: string | null, email: string | null): MailAddress | null 
 async function readPeople(userId: string, shareId: string) {
   const result = await query<PersonRow>("select user_id, name, email, owner, added_at from private.mail_share_people($1, $2)", [userId, shareId]);
   const owner = result.rows.filter((row) => row.owner);
-  const members = result.rows.filter((row) => !row.owner).sort((a, b) => new Date(a.added_at).getTime() - new Date(b.added_at).getTime());
+  const members = result.rows.filter((row) => !row.owner).sort((a, b) => new Date(a.added_at).getTime() - new Date(b.added_at).getTime() || (a.user_id < b.user_id ? -1 : a.user_id > b.user_id ? 1 : 0));
   return [...owner, ...members].map(toPerson);
 }
 

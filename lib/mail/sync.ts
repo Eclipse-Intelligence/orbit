@@ -519,7 +519,7 @@ async function syncFolder(
       );
       return options.guard && state === "backfill" ? storageFull(db) : false;
     });
-    if (options.shares && touched.length > 0 && Date.now() < options.deadline) {
+    if (options.shares && touched.length > 0) {
       await announceSharedThreads(actor.userId, source.id, touched).catch((error) => console.error("Couldn't check shared threads after sync", error instanceof Error ? error.name : "unknown"));
     }
     if (page.deltaLink) return;

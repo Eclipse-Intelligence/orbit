@@ -22,7 +22,6 @@ create table if not exists crm.mail_share_members (
 
 create index if not exists mail_share_members_user_idx on crm.mail_share_members (user_id);
 create index if not exists mail_share_members_added_by_idx on crm.mail_share_members (added_by);
-create index if not exists mail_shares_owner_idx on crm.mail_shares (owner_user_id);
 
 alter table crm.mail_shares enable row level security;
 alter table crm.mail_shares force row level security;
@@ -339,6 +338,8 @@ $$;
 
 revoke all on function private.shared_message_owner(uuid, uuid, uuid) from public;
 grant execute on function private.shared_message_owner(uuid, uuid, uuid) to crm_app;
+
+drop function if exists private.mail_shares_touched(uuid, uuid[]);
 
 create or replace function private.mail_shares_touched(p_user uuid, p_source uuid, p_thread_keys text[])
 returns table (share_id uuid, member_ids uuid[])

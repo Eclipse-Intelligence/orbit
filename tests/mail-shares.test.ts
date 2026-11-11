@@ -24,6 +24,7 @@ import {
   sharesLostOnLeaving,
   shareThread,
 } from "@/lib/mail/shares";
+import { moveMessages } from "@/lib/mail/actions";
 import { syncMail } from "@/lib/mail/sync";
 import { threadKey } from "@/lib/mail/threads";
 import { createUser, resetDatabase } from "./helpers";
@@ -51,9 +52,10 @@ function graphMessage(id: string, conversationId: string, at: string, extra: Gra
 
 let pending: GraphMessage[] = [];
 let parents: Record<string, string> = {};
+let archivePending: GraphMessage[] = [];
 let graphCalls: string[] = [];
 
-const fetchImpl: typeof fetch = async (input) => {
+const fetchImpl: typeof fetch = async (input, init) => {
   const url = String(input);
   graphCalls.push(url);
   if (url.includes("/me/messages/m-1/attachments/att-1/$value")) return new Response("PDFDATA", { headers: { "content-type": "application/pdf" } });
@@ -75,6 +77,17 @@ const fetchImpl: typeof fetch = async (input) => {
   if (folderOf) {
     const parent = parents[decodeURIComponent(folderOf[1])];
     return parent ? Response.json({ id: folderOf[1], parentFolderId: parent }) : Response.json({ error: { code: "ErrorItemNotFound" } }, { status: 404 });
+  }
+  const moving = url.match(/\/me\/messages\/([^/?]+)\/move$/);
+  if (moving) {
+    const destination = (JSON.parse(String(init?.body ?? "{}")) as { destinationId?: string }).destinationId ?? "";
+    const folders: Record<string, string> = { deleteditems: "f-trash", archive: "f-archive", inbox: "f-inbox" };
+    return Response.json({ id: decodeURIComponent(moving[1]), parentFolderId: folders[destination] ?? destination });
+  }
+  if (url.includes("token=") && url.includes("f-archive")) {
+    const value = archivePending;
+    archivePending = [];
+    return Response.json({ value, "@odata.deltaLink": url });
   }
   if (url.includes("token=") && !url.includes("f-inbox")) return Response.json({ value: [], "@odata.deltaLink": url });
   if (url.includes("token=")) {
@@ -523,6 +536,34 @@ describe("live updates from sync", () => {
     assert.deepEqual(await synced([{ id: "m-4", "@removed": { reason: "deleted" } }]), [{ type: "message", shareId }]);
     assert.equal(await count(), 5);
     assert.deepEqual(await synced([{ id: "m-other", "@removed": { reason: "deleted" } }]), []);
+  });
+
+  it("sends an event when a message turns up in another folder's delta", async () => {
+    const shareId = (await getThreadShare(mark, key)).shareId!;
+    broadcasts = [];
+    archivePending = [graphMessage("m-2", "conv-1", "2026-10-02T09:00:00Z")];
+    await syncMail(mark, { budgetMs: 30_000, fetchImpl });
+    assert.deepEqual(shareEventsFor(sam), [{ type: "message", shareId }]);
+    const role = await sql<{ role: string }>("select f.role from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id where m.id = $1", [ids["m-2"]]);
+    assert.equal(role[0].role, "archive");
+    assert.equal((await getSharedThread(sam, shareId)).messages.length, 5);
+  });
+
+  it("sends an event when the owner bins or restores a message in Orbit, and not for moves that keep it shown", async () => {
+    const shareId = (await getThreadShare(mark, key)).shareId!;
+    const message = { id: ids["m-2"], providerMessageId: "m-2", threadKey: "conv-1" };
+    const moved = async (target: Parameters<typeof moveMessages>[3]) => {
+      broadcasts = [];
+      const result = await moveMessages(mark, sourceId, [message], target, fetchImpl);
+      assert.equal(result.error, null);
+      return shareEventsFor(sam);
+    };
+    assert.deepEqual(await moved("trash"), [{ type: "message", shareId }]);
+    assert.equal((await getSharedThread(sam, shareId)).messages.length, 4);
+    assert.deepEqual(await moved({ providerFolderId: "f-inbox", role: "inbox" }), [{ type: "message", shareId }]);
+    assert.equal((await getSharedThread(sam, shareId)).messages.length, 5);
+    assert.deepEqual(await moved("archive"), []);
+    assert.equal((await getSharedThread(sam, shareId)).messages.length, 5);
   });
 });
 
