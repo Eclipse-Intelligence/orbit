@@ -109,7 +109,7 @@ function cleanList(list: unknown, label: string): MailAddress[] {
     if (!address) throw new CrmError("invalid_input", `${String(raw ?? "").slice(0, 80) || "That"} isn't an email address.`, 400, { field: label });
     if (seen.has(address)) continue;
     seen.add(address);
-    const name = typeof item === "object" && item && typeof (item as { name?: unknown }).name === "string" ? (item as { name: string }).name.trim().slice(0, 200) : null;
+    const name = typeof item === "object" && item && typeof (item as { name?: unknown }).name === "string" ? (item as { name: string }).name.replace(/\p{Cc}+/gu, " ").replace(/\s+/g, " ").trim().slice(0, 200) : null;
     out.push({ address, name: name || null });
   }
   if (out.length > RECIPIENT_MAX) throw new CrmError("invalid_input", `Send to at most ${RECIPIENT_MAX} people in ${label}.`, 400, { field: label });
@@ -559,6 +559,7 @@ type SendOptions = {
   logOnTimeline?: boolean;
   claimed?: boolean;
   force?: boolean;
+  keyDetails?: KeyDetails;
 };
 
 export const ALREADY_SENDING = "Already sending. Check Sent.";
@@ -573,8 +574,9 @@ export const ALREADY_SENT_WARNING = "Already sent.";
 const RESEND_AFTER_MS = 2 * 60_000;
 
 type SendKeyClaim = { state: "new" | "retry"; draftId: string | null } | { state: "sent" } | { state: "busy" };
+type KeyDetails = { contentHash: string | null; tokenId: string | null };
 
-async function claimSendKey(actor: UserActor, key: string, draftId: string | null): Promise<SendKeyClaim> {
+async function claimSendKey(actor: UserActor, key: string, draftId: string | null, details: KeyDetails = { contentHash: null, tokenId: null }): Promise<SendKeyClaim> {
   return withActor(actor, async (db) => {
     await db.query(
       `delete from crm.mail_send_keys k where k.user_id = $1 and coalesce(k.sent_at, k.created_at) < now() - interval '7 days'
@@ -583,9 +585,9 @@ async function claimSendKey(actor: UserActor, key: string, draftId: string | nul
       [actor.userId],
     );
     const inserted = await db.query(
-      `insert into crm.mail_send_keys (user_id, workspace_id, key, draft_id) values ($1, $2, $3, $4)
+      `insert into crm.mail_send_keys (user_id, workspace_id, key, draft_id, content_hash, token_id) values ($1, $2, $3, $4, $5, $6)
        on conflict (user_id, key) do nothing returning key`,
-      [actor.userId, actor.workspaceId, key, draftId],
+      [actor.userId, actor.workspaceId, key, draftId, details.contentHash, details.tokenId],
     );
     if (inserted.rowCount) return { state: "new", draftId };
     const found = await db.query<{ draft_id: string | null; sent: boolean; fresh: boolean }>(
@@ -598,7 +600,11 @@ async function claimSendKey(actor: UserActor, key: string, draftId: string | nul
     if (row.sent) return { state: "sent" };
     if (row.draft_id) return { state: "retry", draftId: row.draft_id };
     if (row.fresh) return { state: "busy" };
-    await db.query("update crm.mail_send_keys set draft_id = $3, created_at = now() where user_id = $1 and key = $2", [actor.userId, key, draftId]);
+    await db.query(
+      `update crm.mail_send_keys set draft_id = $3, created_at = now(), content_hash = coalesce($4, content_hash), token_id = coalesce($5, token_id)
+       where user_id = $1 and key = $2`,
+      [actor.userId, key, draftId, details.contentHash, details.tokenId],
+    );
     return { state: "new", draftId };
   });
 }
@@ -737,9 +743,17 @@ export async function sendMailDraft(
   input: DraftInput & { attachments?: string[] },
   options: SendOptions,
 ): Promise<{ warning: string | null }> {
+  const { warning } = await sendDraftOnce(actor, input, options);
+  return { warning };
+}
+
+type SentEmail = { draftId: string; sourceId: string; threadKey: string | null; subject: string; internetMessageId: string | null };
+type SendOutcome = { warning: string | null; sent?: SentEmail };
+
+async function sendDraftOnce(actor: UserActor, input: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<SendOutcome> {
   checkSendable(input);
   const sendKey = !options.claimed && input.sendKey ? input.sendKey : null;
-  const key = sendKey ? await claimSendKey(actor, sendKey, input.id ?? null) : null;
+  const key = sendKey ? await claimSendKey(actor, sendKey, input.id ?? null, options.keyDetails) : null;
   if (key?.state === "sent") return { warning: null };
   if (key?.state === "busy") {
     if (input.replaces && (await replacedBusy(actor, input.replaces))) throw stillSaving();
@@ -885,7 +899,7 @@ type Finish = {
   logOnTimeline?: boolean;
 };
 
-async function finishSend(actor: UserActor, input: DraftInput, finish: Finish): Promise<{ warning: string | null }> {
+async function finishSend(actor: UserActor, input: DraftInput, finish: Finish): Promise<SendOutcome> {
   const { row, from, originalId, ids, summary, fetchImpl } = finish;
   await withActor(actor, async (db) => {
     if (row.tracking_id) {
@@ -932,7 +946,16 @@ async function finishSend(actor: UserActor, input: DraftInput, finish: Finish): 
           () => false,
         ),
   ]);
-  return { warning: logged ? null : "Sent, but not added to the contact's timeline." };
+  return {
+    warning: logged ? null : "Sent, but not added to the contact's timeline.",
+    sent: {
+      draftId: row.id,
+      sourceId: row.source_id,
+      threadKey: row.thread_key ?? (row.reply_to ? `m:${row.reply_to}` : null),
+      subject: row.subject ?? "",
+      internetMessageId: originalId,
+    },
+  };
 }
 
 async function finishEarlierSend(actor: UserActor, input: DraftInput, row: DraftRow, ids: string[], options: SendOptions) {
@@ -951,10 +974,10 @@ async function finishEarlierSend(actor: UserActor, input: DraftInput, row: Draft
     fetchImpl: options.fetchImpl ?? fetch,
     logOnTimeline: options.logOnTimeline,
   });
-  return { warning: result.warning ?? ALREADY_SENT_WARNING };
+  return { ...result, warning: result.warning ?? ALREADY_SENT_WARNING };
 }
 
-async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<{ warning: string | null }> {
+async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<SendOutcome> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const ids = await draftFileList(actor, input, options.storedFiles);
   const earlier = input.id ? await attemptedDraft(actor, input.id) : null;
@@ -1056,13 +1079,15 @@ function scheduleTime(sendAt: string) {
 export async function scheduleMailDraft(
   actor: UserActor,
   input: DraftInput & { attachments?: string[]; sendAt: string },
-  options: { origin: string | null; fetchImpl?: typeof fetch; storedFiles: StoredFiles },
+  options: { origin: string | null; fetchImpl?: typeof fetch; storedFiles: StoredFiles; onDraftRow?: (id: string) => void | Promise<void> },
 ): Promise<MailDraft> {
   checkSendable(input);
   const at = scheduleTime(input.sendAt);
   const ids = await draftFileList(actor, input, options.storedFiles);
   await attachmentSummary(actor, ids);
-  const { row } = await withReplaced(actor, await keyedDraft(actor, input), (claimed) => writeDraft(actor, claimed, { origin: options.origin, fetchImpl: options.fetchImpl ?? fetch, attachments: ids }));
+  const { row } = await withReplaced(actor, await keyedDraft(actor, input), (claimed) =>
+    writeDraft(actor, claimed, { origin: options.origin, fetchImpl: options.fetchImpl ?? fetch, attachments: ids, onDraftRow: options.onDraftRow }),
+  );
   return withActor(actor, async (db) => {
     const result = await db.query<DraftRow>(
       `update crm.mail_drafts set send_at = $2, remind_hours = $3, signature = $4, follow_up_days = $5, follow_up_body = $6, send_error = null
@@ -1633,5 +1658,313 @@ export async function plannedRecipients(
     to: recipients.to.map((item) => item.address),
     cc: recipients.cc.map((item) => item.address),
     bcc: recipients.bcc.map((item) => item.address),
+  };
+}
+
+
+type RecipientInput = string | { address: string; name?: string | null };
+
+export type MailSendRequest = {
+  draftId?: string | null;
+  mode?: DraftMode;
+  messageId?: string | null;
+  from?: string | null;
+  to?: RecipientInput[];
+  cc?: RecipientInput[];
+  bcc?: RecipientInput[];
+  subject?: string;
+  body?: string;
+  sendAt?: string | null;
+  key?: string | null;
+};
+
+export type MailSendResult = {
+  status: "sent" | "scheduled" | "already_sent";
+  key: string;
+  draftId: string | null;
+  mode: DraftMode | null;
+  replyTo: string | null;
+  from: string | null;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string | null;
+  sourceId: string | null;
+  threadKey: string | null;
+  internetMessageId: string | null;
+  sentAt: string | null;
+  sendAt: string | null;
+  warning: string | null;
+};
+
+type MailSendOptions = {
+  origin: string | null;
+  fetchImpl?: typeof fetch;
+  smtp?: SmtpSender;
+  saveSent?: SentSaver;
+  tokenId?: string | null;
+  charge?: () => Promise<void>;
+};
+
+export const MAIL_SEND_REPEATED = "Orbit already sent this email, so it didn't send it again. Check Sent in Mail.";
+export const MAIL_SEND_KEY_REUSED = "This idempotency_key was already used for a different email. Use a new key for this one.";
+export const MAIL_SEND_MAYBE_SENT = "May already be sent. Check Sent with mail_search before trying again.";
+const CONTENT_REPEAT = "interval '10 minutes'";
+
+function keyFrom(parts: unknown[]) {
+  const hex = createHash("sha256").update(JSON.stringify(["mail-send", ...parts])).digest("hex");
+  const variant = ((parseInt(hex[16], 16) & 3) | 8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+function addresses(list: MailAddress[]) {
+  return list.map((item) => item.address);
+}
+
+function iso(value: Date | string | null | undefined) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function senderAddress(accounts: ComposeAccount[], sourceId: string, identityId: string | null) {
+  return (identityId ? accounts.find((item) => item.identityId === identityId) : accounts.find((item) => item.id === sourceId))?.email ?? null;
+}
+
+function rowThreadKey(row: DraftRow) {
+  return row.thread_key ?? (row.reply_to ? `m:${row.reply_to}` : null);
+}
+
+async function draftBusy(actor: UserActor, id: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ busy: boolean }>(
+      `select coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy from crm.mail_drafts where id = $1 and user_id = $2`,
+      [id, actor.userId],
+    );
+    return result.rows[0]?.busy ?? false;
+  });
+}
+
+type KeyState = { draftId: string | null; sentAt: string | null; contentHash: string | null; live: boolean };
+
+async function settleSendKey(actor: UserActor, key: string, byContent: boolean): Promise<KeyState | null> {
+  return withActor(actor, async (db) => {
+    await db.query(
+      `delete from crm.mail_send_keys k where k.user_id = $1 and k.key = $2 and (
+         (k.sent_at is null and k.draft_id is not null and not exists (select 1 from crm.mail_drafts d where d.id = k.draft_id and d.user_id = k.user_id))
+         or ($3::boolean and k.sent_at < now() - ${CONTENT_REPEAT})
+       )`,
+      [actor.userId, key, byContent],
+    );
+    const result = await db.query<{ draft_id: string | null; sent_at: Date | string | null; content_hash: string | null; live: boolean }>(
+      `select k.draft_id, k.sent_at, k.content_hash, exists (select 1 from crm.mail_drafts d where d.id = k.draft_id and d.user_id = k.user_id) as live
+       from crm.mail_send_keys k where k.user_id = $1 and k.key = $2`,
+      [actor.userId, key],
+    );
+    const row = result.rows[0];
+    return row ? { draftId: row.draft_id, sentAt: iso(row.sent_at), contentHash: row.content_hash, live: row.live } : null;
+  });
+}
+
+async function keySentAt(actor: UserActor, key: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ sent_at: Date | string | null }>("select sent_at from crm.mail_send_keys where user_id = $1 and key = $2", [actor.userId, key]);
+    return iso(result.rows[0]?.sent_at);
+  });
+}
+
+async function originalMessage(actor: UserActor, id: string) {
+  if (!isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ source_id: string; tk: string | null; to_recipients: MailAddress[] | null; cc_recipients: MailAddress[] | null }>(
+      "select source_id, thread_key as tk, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
+      [id, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+}
+
+async function composedInput(actor: UserActor, request: MailSendRequest, accounts: ComposeAccount[]) {
+  const mode = request.mode ?? "new";
+  const messageId = mode === "new" ? null : (request.messageId ?? null);
+  if (mode !== "new" && !messageId) throw new CrmError("invalid_input", "Replies and forwards need message_id, the id of the email from mail_get_thread.", 400, { field: "message_id" });
+  const original = messageId ? await originalMessage(actor, messageId) : null;
+  if (messageId && !original) throw new CrmError("not_found", "That email isn't in Mail. Find it again with mail_search and mail_get_thread.", 404, { field: "message_id" });
+  const sender = request.from?.trim()
+    ? await resolveSendAccount(actor, request.from)
+    : original
+      ? (receivingIdentity(accounts, original.source_id, [...(original.to_recipients ?? []), ...(original.cc_recipients ?? [])]) ?? { sourceId: original.source_id, identityId: null })
+      : await resolveSendAccount(actor, null);
+  if (original && sender.sourceId !== original.source_id) {
+    const mailbox = accounts.find((item) => item.id === original.source_id)?.email ?? "the mailbox it came to";
+    const choices = accounts.filter((item) => (item.sourceId ?? item.id) === original.source_id).map((item) => item.email);
+    throw new CrmError(
+      "invalid_input",
+      `Replies and forwards go out from the mailbox the conversation is in, ${mailbox}. Leave out from, or use ${choices.join(" or ") || mailbox}.`,
+      400,
+      { field: "from" },
+    );
+  }
+  const input = readDraftInput({
+    mode,
+    messageId,
+    sourceId: sender.sourceId,
+    identityId: sender.identityId,
+    to: request.to ?? [],
+    cc: request.cc ?? [],
+    bcc: request.bcc ?? [],
+    subject: request.subject ?? "",
+    body: request.body ?? "",
+  });
+  return { input, threadKey: original?.tk ?? null };
+}
+
+function storedOnly(request: MailSendRequest) {
+  return [request.mode, request.messageId, request.from, request.to, request.cc, request.bcc, request.subject, request.body].every((value) => value === undefined || value === null);
+}
+
+function contentKey(input: DraftInput) {
+  return keyFrom([input.mode, input.messageId, input.sourceId, input.identityId ?? null, ...[input.to, input.cc, input.bcc].map(addresses), input.subject, input.body]);
+}
+
+type Described = Omit<MailSendResult, "status" | "draftId" | "sentAt" | "sendAt">;
+
+function described(key: string, accounts: ComposeAccount[], input: DraftInput, threadKey: string | null): Described {
+  return {
+    key,
+    mode: input.mode,
+    replyTo: input.messageId,
+    from: input.sourceId ? senderAddress(accounts, input.sourceId, input.identityId ?? null) : null,
+    to: addresses(input.to),
+    cc: addresses(input.cc),
+    bcc: addresses(input.bcc),
+    subject: input.subject || null,
+    sourceId: input.sourceId,
+    threadKey,
+    internetMessageId: null,
+    warning: null,
+  };
+}
+
+function repeated(key: string, sentAt: string | null, known: Partial<MailSendResult>): MailSendResult {
+  return {
+    mode: null,
+    replyTo: null,
+    from: null,
+    to: [],
+    cc: [],
+    bcc: [],
+    subject: null,
+    sourceId: null,
+    threadKey: null,
+    internetMessageId: null,
+    sendAt: null,
+    draftId: null,
+    ...known,
+    status: "already_sent",
+    sentAt,
+    key,
+    warning: MAIL_SEND_REPEATED,
+  };
+}
+
+function keyReused() {
+  return new CrmError("conflict", MAIL_SEND_KEY_REUSED, 409, { field: "idempotency_key" });
+}
+
+function toolProblem(error: unknown) {
+  if (error instanceof CrmError && (error.details?.maybeSent || error.message === SEND_UNCONFIRMED)) {
+    return new CrmError(error.code, MAIL_SEND_MAYBE_SENT, error.status, error.details);
+  }
+  return error;
+}
+
+export async function sendMailOnce(actor: UserActor, request: MailSendRequest, options: MailSendOptions): Promise<MailSendResult> {
+  try {
+    return await sendOrSchedule(actor, request, options);
+  } catch (error) {
+    throw toolProblem(error);
+  }
+}
+
+async function sendOrSchedule(actor: UserActor, request: MailSendRequest, options: MailSendOptions): Promise<MailSendResult> {
+  if (request.key && !isUuid(request.key)) throw new CrmError("invalid_input", "idempotency_key must be a UUID.", 400, { field: "idempotency_key" });
+  if (request.draftId && !storedOnly(request)) {
+    throw new CrmError("invalid_input", "Pass draft_id on its own to send the draft as saved, or change it with mail_save_draft first.", 400, { field: "draft_id" });
+  }
+  const sendAt = request.sendAt ? scheduleTime(request.sendAt).toISOString() : null;
+  const accounts = await composeAccounts(actor);
+  const stored = request.draftId ? await scheduledRow(actor, request.draftId) : null;
+  if (request.draftId && !stored) {
+    const fingerprint = keyFrom(["draft", request.draftId]);
+    const key = request.key ?? fingerprint;
+    const found = await settleSendKey(actor, key, false);
+    if (found?.contentHash && found.contentHash !== fingerprint) throw keyReused();
+    if (found?.sentAt) return repeated(key, found.sentAt, { draftId: request.draftId });
+    throw new CrmError("not_found", "That draft isn't in Mail any more: it was sent or deleted. Check Sent, or save it again with mail_save_draft.", 404, { field: "draft_id" });
+  }
+  const composed = stored ? null : await composedInput(actor, request, accounts);
+  const asked = stored ? dueDraftInput(stored) : composed!.input;
+  const fingerprint = stored ? keyFrom(["draft", stored.id]) : contentKey(asked);
+  const key = request.key ?? fingerprint;
+  const found = await settleSendKey(actor, key, !request.key && !stored);
+  if (found?.contentHash && found.contentHash !== fingerprint) throw keyReused();
+  const askedThread = stored ? rowThreadKey(stored) : composed!.threadKey;
+  if (found?.sentAt) return repeated(key, found.sentAt, described(key, accounts, asked, askedThread));
+  const kept = found?.draftId && found.live ? await scheduledRow(actor, found.draftId) : null;
+  if (kept?.send_at && sendAt) {
+    return {
+      ...described(key, accounts, dueDraftInput(kept), rowThreadKey(kept)),
+      status: "scheduled",
+      draftId: kept.id,
+      subject: kept.subject || null,
+      sentAt: null,
+      sendAt: iso(kept.send_at),
+    };
+  }
+  const input = kept?.content_hash ? dueDraftInput(kept) : { ...asked, id: kept?.id ?? asked.id ?? null };
+  const about = described(key, accounts, input, kept ? rowThreadKey(kept) : askedThread);
+  checkSendable(input);
+  await options.charge?.();
+  const details = { contentHash: fingerprint, tokenId: options.tokenId ?? null };
+  const sendOptions = { origin: options.origin, fetchImpl: options.fetchImpl, smtp: options.smtp, saveSent: options.saveSent };
+  if (sendAt) {
+    const claim = await claimSendKey(actor, key, input.id ?? null, details);
+    if (claim.state === "sent") return repeated(key, await keySentAt(actor, key), about);
+    if (claim.state === "busy") throw stillSaving();
+    const id = claim.draftId ?? input.id ?? null;
+    let linked = Boolean(id);
+    try {
+      if (id && (await draftBusy(actor, id))) throw new CrmError("conflict", ALREADY_SENDING, 409);
+      const draft = await scheduleMailDraft(
+        actor,
+        { ...input, id, sendKey: null, sendAt },
+        {
+          ...sendOptions,
+          storedFiles: "keep",
+          onDraftRow: async (row) => {
+            if (row === id) return;
+            await linkSendKey(actor, key, row);
+            linked = true;
+          },
+        },
+      );
+      return { ...about, status: "scheduled", draftId: draft.id, subject: draft.subject || about.subject, sourceId: draft.sourceId, sentAt: null, sendAt: draft.sendAt };
+    } catch (error) {
+      if (!linked) await dropSendKey(actor, key).catch(() => undefined);
+      throw error;
+    }
+  }
+  const outcome = await sendDraftOnce(actor, { ...input, sendKey: key }, { ...sendOptions, storedFiles: "keep", keyDetails: details });
+  if (!outcome.sent) return repeated(key, await keySentAt(actor, key), about);
+  return {
+    ...about,
+    status: "sent",
+    draftId: outcome.sent.draftId,
+    subject: outcome.sent.subject || about.subject,
+    sourceId: outcome.sent.sourceId,
+    threadKey: outcome.sent.threadKey ?? about.threadKey,
+    internetMessageId: outcome.sent.internetMessageId,
+    sentAt: new Date().toISOString(),
+    sendAt: null,
+    warning: outcome.warning,
   };
 }

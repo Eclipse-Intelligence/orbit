@@ -2,8 +2,10 @@
 
 import { useState, useTransition, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
+import { Checkbox } from "@/components/_ui/checkbox";
+import Switch from "@/components/_ui/switch";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { createPersonalTokenAction, revokePersonalTokenAction } from "@/app/(crm)/settings/api-tokens/actions";
+import { createPersonalTokenAction, revokePersonalTokenAction, setPersonalTokenSendingAction } from "@/app/(crm)/settings/api-tokens/actions";
 import type { PersonalToken } from "@/lib/auth/personal";
 import { formatDate } from "@/lib/companies";
 
@@ -15,6 +17,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
   const [fresh, setFresh] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [canSend, setCanSend] = useState(false);
   const [pending, startTransition] = useTransition();
   const url = `${origin}/api/mcp`;
 
@@ -24,7 +27,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
     const name = String(new FormData(form).get("name") ?? "");
     setError(null);
     startTransition(async () => {
-      const result = await createPersonalTokenAction(name);
+      const result = await createPersonalTokenAction(name, canSend);
       if (result.error || !result.token || !result.details) {
         setError(result.error ?? "The token wasn't created. Try again.");
         return;
@@ -32,7 +35,20 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
       setFresh(result.token);
       setCopied(false);
       setTokens((current) => [result.details!, ...current]);
+      setCanSend(false);
       form.reset();
+    });
+  }
+
+  function allowSending(id: string, value: boolean) {
+    setError(null);
+    setTokens((current) => current.map((token) => (token.id === id ? { ...token, canSend: value } : token)));
+    startTransition(async () => {
+      const result = await setPersonalTokenSendingAction(id, value);
+      if (result.error || !result.details) {
+        setError(result.error ?? "Couldn't save. Try again.");
+        setTokens((current) => current.map((token) => (token.id === id ? { ...token, canSend: !value } : token)));
+      }
     });
   }
 
@@ -56,7 +72,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
     <SettingsCard
       id="personal-tokens"
       title="Personal tokens"
-      description="Lets Claude or any MCP app use Orbit as you, including reading your mail. It can't send email. Keep it private."
+      description="Lets Claude or any MCP app use Orbit as you, including your mail. Only a token with Can send email can send. Keep it private."
     >
       <div className="flex flex-col gap-4">
         <form onSubmit={create} className="flex flex-wrap items-end gap-2">
@@ -64,6 +80,12 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
             <span className="caption-style text-subtle">Name</span>
             <input name="name" required maxLength={80} placeholder="Claude on my Mac" className={field} />
           </label>
+          <span className="flex h-9 items-center gap-2">
+            <Checkbox id="token-can-send" checked={canSend} onCheckedChange={(value) => setCanSend(value === true)} />
+            <label htmlFor="token-can-send" className="ui-style cursor-pointer">
+              Can send email
+            </label>
+          </span>
           <Button type="submit" variant="primary" disabled={pending}>
             Create token
           </Button>
@@ -103,9 +125,15 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
                     {token.lastUsedAt ? `last used ${formatDate(token.lastUsedAt)}` : "not used yet"}
                   </span>
                 </span>
-                <Button variant="ghost" size="sm" disabled={pending} onClick={() => revoke(token.id)} aria-label={`Revoke ${token.name}`}>
-                  Revoke
-                </Button>
+                <span className="flex items-center gap-3">
+                  <label className="ui-style text-subtle flex cursor-pointer items-center gap-2">
+                    <Switch checked={token.canSend} onChange={(value) => allowSending(token.id, value)} label={`Can send email: ${token.name}`} />
+                    Can send email
+                  </label>
+                  <Button variant="ghost" size="sm" disabled={pending} onClick={() => revoke(token.id)} aria-label={`Revoke ${token.name}`}>
+                    Revoke
+                  </Button>
+                </span>
               </li>
             ))}
           </ul>

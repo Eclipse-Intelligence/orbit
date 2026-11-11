@@ -216,7 +216,7 @@ The calendar button above an email reads the conversation and opens New event wi
 
 Orbit also reads the attachments in a conversation: PDFs, Word, Excel and PowerPoint files, and text, CSV and HTML files, up to 25 MB and ten per email. Prepared replies, Write with AI and the summary above a conversation use what they say (a reply to "see the attached terms" can refer to the terms), and Ask AI can answer from any attachment Orbit has read, naming the file. Images, scanned PDFs without a text layer and other formats are skipped. What Orbit reads is kept privately for you so each file is only downloaded once.
 
-Claude (or any app that speaks MCP) can work with your mail too. In Settings › API tokens › Personal tokens, create a token and add it to Claude with the command shown. Claude can then search and read your email and attachments, ask questions about it, and save drafts that appear in Orbit for you to check and send. It can never send email itself, and you can revoke the token at any time. See `docs/mcp.md`.
+Claude (or any app that speaks MCP) can work with your mail too. In Settings › API tokens › Personal tokens, create a token and add it to Claude with the command shown. Claude can then search and read your email and attachments, ask questions about it, and save drafts that appear in Orbit for you to check. A token with Can send email ticked can also send or schedule email from your own mailbox; Orbit doesn't ask you first, so whether you're asked before each send is up to Claude's own tool approval. You can switch sending off, or revoke the token, at any time. See `docs/mcp.md`.
 
 ### Replies and read statuses
 
