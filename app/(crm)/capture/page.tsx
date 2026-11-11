@@ -6,6 +6,7 @@ import { listWaitingOnOthers } from "@/lib/crm/action-needed";
 import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
 import { captureContext, captureStatus, connectionAlert, listToFile, markCaptureSeen, waitingHere } from "@/lib/crm/capture";
+import { listDismissedImports } from "@/lib/crm/conversations";
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
@@ -40,7 +41,7 @@ export default async function CapturePage() {
   const live = mailbox?.status === "connected";
   const context = await captureContext(user, openedAt.getTime(), { inline: true });
   const failed = new Set<CaptureSection>(context.failed);
-  const [items, status, calls, granola, transcripts, calendar, followUps, unknown, others] = await Promise.all([
+  const [items, status, calls, granola, transcripts, calendar, followUps, unknown, others, dismissed] = await Promise.all([
     listToFile(user, openedAt.getTime()).catch((error) => {
       failed.add("toFile");
       return logged("Reading what's waiting to file failed", { unfiled: [], people: [] })(error);
@@ -66,6 +67,7 @@ export default async function CapturePage() {
       })(error);
     }),
     listWaitingOnOthers(user, openedAt).catch(logged("Reading approvals waiting on others failed", [])),
+    listDismissedImports(user).catch(logged("Reading dismissed calls failed", { items: [], total: 0 })),
   ]);
   const rules = await listSenderRules(user).catch(logged("Reading Capture rules failed", []));
   after(async () => {
@@ -107,9 +109,11 @@ export default async function CapturePage() {
         notShown: unknown.notShown,
         unfiled: items.unfiled,
         people: items.people,
+        dismissed: dismissed.items,
       }}
       toFileTotal={status?.sections.toFile ?? 0}
       notShownTotal={unknown.notShownTotal}
+      dismissedTotal={dismissed.total}
       sorting={unknown.sorting}
       rules={rules}
       failed={[...failed]}

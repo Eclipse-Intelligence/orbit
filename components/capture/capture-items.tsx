@@ -17,6 +17,7 @@ import type { OthersApproval, WaitingApproval, WaitingTask } from "@/lib/crm/act
 import type { MetPerson } from "@/lib/crm/calendar";
 import { agoLabel, dayLabel, dueLabel, REPLY_AMBER_WORKING_DAYS, sinceLabel } from "@/lib/crm/capture-format";
 import type { CaptureAction } from "@/lib/crm/capture-actions";
+import type { ContactSuggestion } from "@/lib/crm/call-names";
 import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
@@ -465,6 +466,53 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
   );
 }
 
+function suggestionDetail(contact: ContactSuggestion, contacts: ContactSuggestion[]) {
+  const twin = contacts.some((other) => other !== contact && other.name === contact.name);
+  if (!twin) return contact.companyName ?? contact.email;
+  return [contact.companyName, contact.email].filter(Boolean).join(" · ") || null;
+}
+
+function SuggestedButton({ contact, hint, onPick }: { contact: ContactSuggestion; hint: string[] | undefined; onPick: (contact: ContactSuggestion) => void }) {
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      className="max-w-full sm:max-w-[16rem]"
+      data-row-key="a"
+      title={`File to ${contact.name} (A)`}
+      shortcut={hint}
+      onClick={() => onPick(contact)}
+    >
+      <span className="truncate">File to {contact.name}</span>
+    </Button>
+  );
+}
+
+function SuggestedMenu({ contacts, hint, onPick }: { contacts: ContactSuggestion[]; hint: string[] | undefined; onPick: (contact: ContactSuggestion) => void }) {
+  const sameName = contacts.every((contact) => contact.name === contacts[0].name);
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="secondary" size="sm" className="max-w-full sm:max-w-[16rem]" data-row-key="a" title={sameName ? `File to ${contacts[0].name} (A)` : "File to suggested (A)"} shortcut={hint}>
+          <span className="truncate">{sameName ? `File to ${contacts[0].name}` : "File to suggested"}</span>
+          <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-[min(28rem,calc(100vw-2rem))] min-w-[14rem]">
+        {contacts.map((contact) => {
+          const detail = suggestionDetail(contact, contacts);
+          return (
+            <DropdownMenuItem key={contact.contactId} className="min-w-0 max-sm:py-2.5" onSelect={() => onPick(contact)}>
+              <span className="min-w-0 truncate">{contact.name}</span>
+              {detail && <span className="text-subtle ml-auto min-w-0 truncate pl-3">{detail}</span>}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function MoveMenu({ others, onMove }: { others: WorkspaceChoiceRef[]; onMove: (target: WorkspaceChoiceRef) => void }) {
   return (
     <DropdownMenu modal={false}>
@@ -636,6 +684,11 @@ function Summary({ id, text }: { id: string; text: string }) {
   );
 }
 
+function importMatch(people: string, by: UnfiledImport["suggestedBy"]) {
+  const match = by === "name" ? "matched by name" : by === "title" ? "matched by title" : "no contact matched";
+  return people ? `${people}, ${match}` : match[0].toUpperCase() + match.slice(1);
+}
+
 export function ImportItem({
   item,
   others,
@@ -663,15 +716,34 @@ export function ImportItem({
       id: item.id,
       email: person.email,
     });
-  const actions: RowAction[] = item.newPeople.map((person, index) => ({
+  const suggested = item.suggestions;
+  const fileTo = (contact: ContactSuggestion) => onClear("Filed", { kind: "import-file", id: item.id, contactId: contact.contactId });
+  const actions: RowAction[] = [];
+  if (suggested.length > 0) {
+    actions.push({
+      id: "suggest",
+      label: suggested.length === 1 ? `File to ${suggested[0].name}` : "File to suggested",
+      variant: "secondary",
+      key: "a",
+      hint: "A",
+      render: (hint) =>
+        suggested.length === 1 ? (
+          <SuggestedButton contact={suggested[0]} hint={hint} onPick={fileTo} />
+        ) : (
+          <SuggestedMenu contacts={suggested} hint={hint} onPick={fileTo} />
+        ),
+    });
+  }
+  const offset = actions.length;
+  actions.push(...item.newPeople.map((person, index): RowAction => ({
     id: `create-${person.email}`,
     label: `Create ${person.name ?? person.email} & file`,
     variant: "secondary",
-    key: index === 0 ? "a" : undefined,
-    hint: index === 0 ? "A" : undefined,
-    phoneMore: index > 0,
+    key: offset + index === 0 ? "a" : undefined,
+    hint: offset + index === 0 ? "A" : undefined,
+    phoneMore: offset + index > 0,
     run: () => create(person),
-  }));
+  })));
   actions.push(
     {
       id: "file",
@@ -679,7 +751,7 @@ export function ImportItem({
       variant: "secondary",
       key: "f",
       hint: "F",
-      phoneMore: item.newPeople.length > 0,
+      phoneMore: actions.length > 0,
       run: () => onFiling(true),
     },
   );
@@ -699,7 +771,7 @@ export function ImportItem({
       mark={<IconMark icon={item.source === "teams" ? PhoneIcon : MicIcon} />}
       title={item.title || (item.kind === "call" ? "Teams call" : "Meeting")}
       when={item.occurredAt ? dayLabel(item.occurredAt, now) : null}
-      meta={`${SOURCE[item.source]} · ${people ? `${people}, no contact matched` : "No contact matched"}`}
+      meta={`${SOURCE[item.source]} · ${importMatch(people, item.suggestedBy)}`}
       detail={summary ? <Summary id={item.id} text={summary} /> : null}
       actions={actions}
       more={others.map((target) => ({

@@ -31,7 +31,8 @@ import {
   type IntegrationStatus,
   type Participant,
 } from "@/lib/crm/conversations";
-import { captureWorkspaceInDb, ownCallAddresses, routeCallInDb } from "@/lib/crm/call-routing";
+import { looseNameKey } from "@/lib/crm/call-names";
+import { captureWorkspaceInDb, ownCallAddresses, routeCallInDb, suggestByTitleInDb, suggestedWorkspace } from "@/lib/crm/call-routing";
 import { CrmError, notSetUp } from "@/lib/crm/errors";
 import { unreachable } from "@/lib/upstream";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -111,22 +112,32 @@ function granolaKey(actor: UserActor): IntegrationKey {
   return { workspaceId: actor.workspaceId, source: "granola", userId: actor.userId };
 }
 
-function granolaParticipants(note: GranolaNote): Participant[] {
+function granolaParticipants(note: GranolaNote, ownNames: (string | null | undefined)[]): Participant[] {
   const owner = canonicalEmail(note.owner?.email ?? "");
+  const own = new Set(ownNames.map(looseNameKey).filter((key): key is string => Boolean(key)));
   const people = new Map<string, Participant>();
-  const add = (name: string | null | undefined, email: string | null | undefined) => {
-    const canonical = email ? canonicalEmail(email) : null;
-    if (!canonical || canonical === owner) return;
-    const existing = people.get(canonical);
-    if (existing) {
-      if (!existing.name && name?.trim()) existing.name = name.trim();
+  const named = new Map<string, Participant>();
+  const add = (rawName: string | null | undefined, email: string | null | undefined) => {
+    const nameAsEmail = !email && rawName ? canonicalEmail(rawName) : null;
+    const canonical = nameAsEmail ?? (email ? canonicalEmail(email) : null);
+    const cleanName = nameAsEmail ? null : rawName?.trim() || null;
+    if (!canonical) {
+      const key = looseNameKey(cleanName);
+      if (cleanName && key && !own.has(key) && !named.has(key)) named.set(key, { name: cleanName, email: null });
       return;
     }
-    people.set(canonical, { name: name?.trim() || null, email: canonical });
+    if (canonical === owner) return;
+    const existing = people.get(canonical);
+    if (existing) {
+      if (!existing.name && cleanName) existing.name = cleanName;
+      return;
+    }
+    people.set(canonical, { name: cleanName, email: canonical });
   };
   for (const attendee of note.attendees ?? []) add(attendee.name, attendee.email);
   for (const invitee of note.calendar_event?.invitees ?? []) add(null, invitee.email);
-  return [...people.values()];
+  const emailed = new Set([...people.values()].map((person) => looseNameKey(person.name)).filter(Boolean));
+  return [...people.values(), ...[...named.entries()].filter(([key]) => !emailed.has(key)).map(([, person]) => person)];
 }
 
 export async function resolveGranolaActor(
@@ -245,7 +256,8 @@ export async function syncGranolaOnVisit(actor: UserActor) {
 export async function fileGranolaNote(owner: UserActor, note: GranolaNote, everyone?: UserActor[]): Promise<ImportOutcome> {
   const actors = everyone ?? (await workspaceActors(owner));
   const workspaceIds = actors.map((item) => item.workspaceId);
-  const participants = granolaParticipants(note);
+  const ownNames = [note.owner?.name, owner.fullName];
+  const participants = granolaParticipants(note, ownNames);
   const transcript = granolaTranscriptText(note.transcript, note.owner?.name ?? owner.fullName);
   const title = clip(note.title, 500) ?? clip(note.calendar_event?.event_title, 500);
   const occurredAt =
@@ -261,7 +273,8 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
     const open = actors.filter((item) => !known?.workspaces.has(item.workspaceId));
     const placeholder = await importPlaceholder(db, workspaceIds, "granola", note.id, owner.userId);
     const own = await ownCallAddresses(db, owner, [note.owner?.email]);
-    let route = await routeCallInDb(db, owner, open, participants, { own, occurredAt });
+    const routing = { own, occurredAt, names: true, ownNames, nameWorkspaceIds: workspaceIds };
+    let route = await routeCallInDb(db, owner, open, participants, routing);
     let added = 0;
     for (const person of route.ruled) {
       const target = open.find((item) => item.workspaceId === person.workspaceId);
@@ -270,12 +283,12 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       await ensureContactInDb(db, target, person, copy, { operation: "call_domain_rule", source: "granola" });
       added += 1;
     }
-    if (added > 0) route = await routeCallInDb(db, owner, open, participants, { own, occurredAt });
-    if (route.targets.length === 0 && known) {
-      if (placeholder) await dropPlaceholder(db, placeholder.id);
-      return "skipped";
-    }
-    const captureId = await captureWorkspaceInDb(db, owner, open, participants, [note.owner?.email, owner.email]);
+    if (added > 0) route = await routeCallInDb(db, owner, open, participants, routing);
+    const byTitle = route.targets.length === 0 && route.suggested.length === 0;
+    const suggested = byTitle
+      ? await suggestByTitleInDb(db, owner, open.map((item) => item.workspaceId), [title, note.calendar_event?.event_title], ownNames)
+      : route.suggested;
+    const captureId = suggestedWorkspace(suggested, await captureWorkspaceInDb(db, owner, open, participants, [note.owner?.email, owner.email]));
     const writes = route.targets.length > 0
       ? route.targets
       : [{ actor: open.find((item) => item.workspaceId === captureId) ?? owner, match: null }];

@@ -1,3 +1,13 @@
+import {
+  confidentFor,
+  contactsByName,
+  exactFor,
+  excludedNameKeys,
+  inQueryOrder,
+  nameQueries,
+  titleNames,
+  type NameCandidate,
+} from "@/lib/crm/call-names";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { internalAddresses, type Participant } from "@/lib/crm/conversations";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
@@ -17,7 +27,7 @@ const RULE_GRACE_MS = 5 * 60 * 1000;
 
 export type CallTarget = { actor: UserActor; match: PartyMatch };
 export type RuledPerson = { workspaceId: string; email: string; name: string | null };
-export type CallRoute = { targets: CallTarget[]; ruled: RuledPerson[] };
+export type CallRoute = { targets: CallTarget[]; ruled: RuledPerson[]; suggested: NameCandidate[] };
 
 type Rule = { domain: string; workspaceIds: string[]; updatedAt: number };
 
@@ -60,48 +70,18 @@ function domainOf(email: string) {
   return email.split("@")[1]?.toLowerCase() ?? "";
 }
 
-function personName(person: Participant) {
-  const name = person.name?.replace(/\s+/g, " ").trim() ?? "";
-  if (!name || canonicalEmail(name) || name.split(" ").length < 2 || name.length > 160) return null;
-  return name.toLowerCase();
-}
-
-async function memberNames(db: Db, workspaceId: string) {
-  const result = await db.query<{ name: string | null }>(
-    `select lower(regexp_replace(btrim(p.full_name), '\\s+', ' ', 'g')) as name
-     from crm.workspace_members m join crm.profiles p on p.id = m.user_id
-     where m.workspace_id = $1 and p.full_name is not null`,
-    [workspaceId],
-  );
-  return new Set(result.rows.map((row) => row.name).filter((name): name is string => Boolean(name)));
-}
-
-async function matchByName(db: Db, workspaceId: string, names: string[]): Promise<PartyMatch | null> {
-  for (const name of names) {
-    const result = await db.query<{ id: string; company_id: string | null; name: string }>(
-      `select c.id, c.company_id, coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email) as name
-       from crm.contacts c
-       where c.workspace_id = $1 and c.archived_at is null
-         and lower(regexp_replace(btrim(concat_ws(' ', c.first_name, c.last_name)), '\\s+', ' ', 'g')) = $2
-       limit 2`,
-      [workspaceId, name],
-    );
-    if (result.rows.length !== 1) continue;
-    const contact = result.rows[0];
-    const company = contact.company_id
-      ? (await db.query<{ name: string }>("select name from crm.companies where id = $1", [contact.company_id])).rows[0]?.name ?? null
-      : null;
-    return { contactId: contact.id, contactName: contact.name, companyId: contact.company_id, companyName: company };
-  }
-  return null;
-}
-
 export async function routeCallInDb(
   db: Db,
   owner: UserActor,
   actors: UserActor[],
   people: Participant[],
-  options: { own?: Set<string>; occurredAt?: string | null; names?: boolean } = {},
+  options: {
+    own?: Set<string>;
+    occurredAt?: string | null;
+    names?: boolean;
+    ownNames?: (string | null | undefined)[];
+    nameWorkspaceIds?: string[];
+  } = {},
 ): Promise<CallRoute> {
   const workspaceIds = actors.map((item) => item.workspaceId);
   const own = options.own ?? (await ownCallAddresses(db, owner));
@@ -115,10 +95,12 @@ export async function routeCallInDb(
     seen.add(email);
     emails.push({ email, name: person.name?.trim() || null });
   }
-  const names = options.names
-    ? [...new Set(people.filter((person) => !person.email).map(personName).filter((name): name is string => Boolean(name)))]
+  const nameless = people.filter((person) => !person.email).map((person) => person.name);
+  const names = options.names && nameless.length > 0
+    ? nameQueries(nameless, await excludedNameKeys(db, owner.userId, [owner.fullName, ...(options.ownNames ?? [])]))
     : [];
-  const targets: CallTarget[] = [];
+  const matched = new Map<string, CallTarget>();
+  const unmatched: UserActor[] = [];
   const ruled: RuledPerson[] = [];
   for (const actor of actors) {
     const internal = await internalAddresses(db, actor.workspaceId, [...own]);
@@ -127,11 +109,7 @@ export async function routeCallInDb(
       const rule = rules.get(domainOf(item.email));
       return !rule || rule.workspaceIds.includes(actor.workspaceId);
     });
-    let match = await matchParties(db, actor.workspaceId, allowed.map((item) => item.email));
-    if (!match.contactId && !match.companyId && names.length > 0) {
-      const members = await memberNames(db, actor.workspaceId);
-      match = (await matchByName(db, actor.workspaceId, names.filter((name) => !members.has(name)))) ?? match;
-    }
+    const match = await matchParties(db, actor.workspaceId, allowed.map((item) => item.email));
     for (const item of allowed) {
       const domain = domainOf(item.email);
       const rule = rules.get(domain);
@@ -143,9 +121,40 @@ export async function routeCallInDb(
       );
       if (!known.rowCount) ruled.push({ workspaceId: actor.workspaceId, email: item.email, name: item.name });
     }
-    if (match.contactId || match.companyId) targets.push({ actor, match });
+    if (match.contactId || match.companyId) matched.set(actor.workspaceId, { actor, match });
+    else unmatched.push(actor);
   }
-  return { targets, ruled };
+  let suggested: NameCandidate[] = [];
+  if (names.length > 0 && unmatched.length > 0) {
+    const lookup = await contactsByName(db, [...new Set([...workspaceIds, ...(options.nameWorkspaceIds ?? [])])], names);
+    const confident = names.filter((query) => confidentFor(query, lookup));
+    const hits = confident.flatMap((query) => exactFor(query, lookup.candidates));
+    for (const actor of unmatched) {
+      const hit = hits.find((candidate) => candidate.workspaceId === actor.workspaceId);
+      if (hit) matched.set(actor.workspaceId, { actor, match: hit });
+    }
+    if (matched.size === 0) suggested = inQueryOrder(lookup.candidates, names).filter((candidate) => workspaceIds.includes(candidate.workspaceId));
+  }
+  const targets = actors.map((actor) => matched.get(actor.workspaceId)).filter((target): target is CallTarget => Boolean(target));
+  return { targets, ruled, suggested };
+}
+
+export async function suggestByTitleInDb(
+  db: Db,
+  owner: UserActor,
+  workspaceIds: string[],
+  titles: (string | null | undefined)[],
+  ownNames: (string | null | undefined)[] = [],
+) {
+  const names = [...new Set(titles.flatMap((title) => titleNames(title)))];
+  if (names.length === 0) return [];
+  const queries = nameQueries(names, await excludedNameKeys(db, owner.userId, [owner.fullName, ...ownNames]));
+  return inQueryOrder((await contactsByName(db, workspaceIds, queries)).candidates, queries);
+}
+
+export function suggestedWorkspace(suggested: NameCandidate[], fallback: string) {
+  if (suggested.length === 0 || suggested.some((candidate) => candidate.workspaceId === fallback)) return fallback;
+  return suggested[0].workspaceId;
 }
 
 export async function captureWorkspaceInDb(
@@ -194,6 +203,9 @@ export async function moveImportToWorkspace(owner: UserActor, importId: string, 
       if (error.code === "P0002") throw notFound("conversation");
       if (error.code === "55000") throw new CrmError("conflict", "This conversation is already filed or ignored.", 409);
       if (error.code === "23505") throw new CrmError("conflict", "A colleague already has this conversation in that workspace.", 409, { field: "workspaceId" });
+      if (error.code === "OR409") {
+        throw new CrmError("conflict", "Couldn't move it. A colleague dismissed this call in that workspace, so only they can bring it back there.", 409, { field: "workspaceId" });
+      }
       if (error.code === "42501") throw new CrmError("forbidden", "Choose a workspace you're in.", 403, { field: "workspaceId" });
     }
     throw error;

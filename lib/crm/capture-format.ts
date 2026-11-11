@@ -65,3 +65,15 @@ export function dueLabel(iso: string, now: number, timeZone = appTimeZone()) {
   const time = clock(at, timeZone);
   return time === "00:00" ? "Today" : `Today ${time}`;
 }
+
+export function pruneHidden(hidden: Set<string>, present: Iterable<string>, acting: Iterable<string> = []) {
+  const keep = new Set([...present, ...acting]);
+  const next = new Set([...hidden].filter((id) => keep.has(id)));
+  return next.size === hidden.size ? hidden : next;
+}
+
+export function pageRequests(offset: number, count: number, size = 200) {
+  const requests: { offset: number; limit: number }[] = [];
+  for (let done = 0; done < count; done += size) requests.push({ offset: offset + done, limit: Math.min(size, count - done) });
+  return requests;
+}

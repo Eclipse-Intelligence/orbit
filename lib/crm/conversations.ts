@@ -13,6 +13,16 @@ import {
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
+import {
+  asSuggestion,
+  contactsByName,
+  excludedNameKeys,
+  inQueryOrder,
+  nameQueries,
+  titleNames,
+  type ContactSuggestion,
+  type NameQuery,
+} from "@/lib/crm/call-names";
 import { CrmError, errorText, notFound } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { hasCalendarAccounts, hasCalendarFeeds } from "@/lib/crm/calendar-accounts";
@@ -116,7 +126,7 @@ type ImportRow = {
   created_at: Date | string;
 };
 
-type LockedImport = ImportRow & { transcript: string | null; attempts: number };
+type LockedImport = ImportRow & { transcript: string | null; attempts: number; user_id: string | null };
 
 const IMPORT_COLUMNS = `
   i.id,
@@ -549,7 +559,25 @@ export async function lockImportKey(db: Db, scope: string, source: ConversationS
 }
 
 type NewPerson = { name: string | null; email: string };
-export type UnfiledImport = ConversationImport & { newPeople: NewPerson[] };
+export type SuggestedBy = "name" | "title";
+export type UnfiledImport = ConversationImport & {
+  newPeople: NewPerson[];
+  suggestions: ContactSuggestion[];
+  suggestedBy: SuggestedBy | null;
+};
+export type DismissedImport = {
+  id: string;
+  source: ConversationSource;
+  kind: ConversationKind;
+  title: string | null;
+  occurredAt: string | null;
+  participants: Participant[];
+  dismissedAt: string;
+};
+export type DismissedPage = { items: DismissedImport[]; total: number };
+
+const MAX_SUGGESTIONS = 3;
+export const DISMISSED_PAGE = 20;
 
 function personName(person: Participant) {
   const name = person.name?.trim();
@@ -586,10 +614,27 @@ async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImpo
             )
           ).rows.map((row) => row.normalized_email),
         );
-  return imports.map((item, index) => ({
-    ...item,
-    newPeople: candidates[index].filter((person) => !existing.has(person.email)),
-  }));
+  const excluded = await excludedNameKeys(db, actor.userId, [actor.fullName]);
+  const byName = imports.map((item) => nameQueries(item.participants.filter((person) => !person.email).map((person) => person.name), excluded));
+  const byTitle = imports.map((item) => nameQueries(titleNames(item.title), excluded));
+  const lookup = await contactsByName(db, [actor.workspaceId], [...byName.flat(), ...byTitle.flat()]);
+  return imports.map((item, index) => {
+    const suggested = pickSuggestions(lookup.candidates, byName[index], byTitle[index]);
+    return {
+      ...item,
+      newPeople: candidates[index].filter((person) => !existing.has(person.email)),
+      suggestions: suggested.contacts,
+      suggestedBy: suggested.by,
+    };
+  });
+}
+
+function pickSuggestions(candidates: Parameters<typeof inQueryOrder>[0], byName: NameQuery[], byTitle: NameQuery[]) {
+  const named = inQueryOrder(candidates, byName);
+  const found = named.length > 0 ? named : inQueryOrder(candidates, byTitle);
+  const unique = found.filter((candidate, index) => found.findIndex((other) => other.contactId === candidate.contactId) === index);
+  const by: SuggestedBy | null = unique.length === 0 ? null : named.length > 0 ? "name" : "title";
+  return { contacts: unique.slice(0, MAX_SUGGESTIONS).map(asSuggestion), by };
 }
 
 export async function listUnfiledImports(actor: UserActor, limit = 50, options: { mine?: boolean } = {}): Promise<UnfiledImport[]> {
@@ -673,7 +718,7 @@ export function importActivityInput(
 
 async function lockImport(db: Db, actor: UserActor, importId: string) {
   const result = await db.query<LockedImport>(
-    `select ${IMPORT_COLUMNS}, i.transcript, i.attempts
+    `select ${IMPORT_COLUMNS}, i.transcript, i.attempts, i.user_id
      from crm.conversation_imports i
      where i.id = $1 and i.workspace_id = $2
      for update`,
@@ -917,16 +962,81 @@ export async function createContactAndFile(
   return filed;
 }
 
+function ownImport(actor: UserActor, row: LockedImport | null): LockedImport {
+  if (!row || row.user_id !== actor.userId) throw notFound("conversation");
+  return row;
+}
+
 export async function ignoreImport(actor: UserActor, importId: string) {
   assertScope(actor.scopes, "activities:write");
   if (!isUuid(importId)) throw notFound("conversation");
   await withActor(actor, async (db) => {
-    const row = await lockUnfiled(db, actor, importId);
+    const row = ownImport(actor, await lockUnfiled(db, actor, importId));
     await db.query(
       "update crm.conversation_imports set status = 'ignored' where id = $1",
       [row.id],
     );
   });
+}
+
+export async function restoreImport(actor: UserActor, importId: string) {
+  assertScope(actor.scopes, "activities:write");
+  if (!isUuid(importId)) throw notFound("conversation");
+  await withActor(actor, async (db) => {
+    const row = ownImport(actor, await lockImport(db, actor, importId));
+    if (row.status === "filed") throw new CrmError("conflict", "This conversation is already filed.", 409);
+    if (row.status === "pending") throw new CrmError("conflict", "This call is still importing.", 409);
+    if (row.status !== "ignored") throw new CrmError("conflict", "This call is already back in Capture.", 409);
+    await db.query("update crm.conversation_imports set status = 'unfiled' where id = $1", [row.id]);
+  });
+}
+
+export async function listDismissedImports(actor: UserActor, options: { offset?: number; limit?: number } = {}): Promise<DismissedPage> {
+  assertScope(actor.scopes, "crm:read");
+  const offset = Number.isSafeInteger(options.offset) ? Math.max(0, options.offset!) : 0;
+  const limit = Number.isSafeInteger(options.limit) ? Math.min(Math.max(options.limit!, 1), 200) : DISMISSED_PAGE;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{
+      id: string;
+      source: ConversationSource;
+      kind: ConversationKind;
+      title: string | null;
+      occurred_at: Date | string | null;
+      participants: unknown;
+      dismissed_at: Date | string;
+      total: number;
+    }>(
+      `select i.id, i.source, i.kind, i.title, i.occurred_at, i.participants,
+              coalesce(i.dismissed_at, i.updated_at) as dismissed_at, count(*) over ()::int as total
+       from crm.conversation_imports i
+       where i.workspace_id = $1 and i.user_id = $2 and i.status = 'ignored'
+       order by coalesce(i.dismissed_at, i.updated_at) desc, i.id
+       offset $3
+       limit $4`,
+      [actor.workspaceId, actor.userId, offset, limit],
+    );
+    const total = result.rows[0]?.total ?? (offset > 0 ? await countDismissed(db, actor) : 0);
+    return {
+      items: result.rows.map((row) => ({
+        id: row.id,
+        source: row.source,
+        kind: row.kind,
+        title: row.title,
+        occurredAt: iso(row.occurred_at),
+        participants: mapParticipants(row.participants),
+        dismissedAt: iso(row.dismissed_at) ?? new Date(0).toISOString(),
+      })),
+      total,
+    };
+  });
+}
+
+async function countDismissed(db: Db, actor: UserActor) {
+  const result = await db.query<{ total: number }>(
+    "select count(*)::int as total from crm.conversation_imports where workspace_id = $1 and user_id = $2 and status = 'ignored'",
+    [actor.workspaceId, actor.userId],
+  );
+  return result.rows[0]?.total ?? 0;
 }
 
 function summaryTranscript(raw: string) {

@@ -17,6 +17,7 @@ import {
   ClearContext,
   type ClearInstead,
 } from "@/components/capture/capture-items";
+import Dismissed from "@/components/capture/dismissed";
 import NotShown from "@/components/capture/not-shown";
 import { OFFLINE, postCapture } from "@/components/capture/capture-post";
 import { CaptureListContext, COLLAPSE_MS } from "@/components/capture/capture-row";
@@ -30,8 +31,9 @@ import { closeFollowUpAction } from "@/app/(crm)/capture/actions";
 import type { OthersApproval, WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
 import type { MetPerson } from "@/lib/crm/calendar";
 import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
-import type { UnfiledImport } from "@/lib/crm/conversations";
+import type { DismissedImport, UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
+import { pruneHidden } from "@/lib/crm/capture-format";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { SkippedEmail } from "@/lib/mail/capture-filter";
 import type { SenderRule } from "@/lib/mail/relevance";
@@ -69,6 +71,7 @@ export type CaptureData = {
   notShown: SkippedEmail[];
   unfiled: UnfiledImport[];
   people: MetPerson[];
+  dismissed: DismissedImport[];
 };
 
 type Entry = { id: string; section: CaptureSectionId; node: ReactNode };
@@ -137,6 +140,7 @@ export default function CaptureScreen({
   data,
   toFileTotal,
   notShownTotal,
+  dismissedTotal,
   sorting,
   rules,
   failed,
@@ -150,6 +154,7 @@ export default function CaptureScreen({
   data: CaptureData;
   toFileTotal: number;
   notShownTotal: number;
+  dismissedTotal: number;
   sorting: number;
   rules: SenderRule[];
   failed: CaptureSectionId[];
@@ -167,6 +172,7 @@ export default function CaptureScreen({
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const [leaving, setLeaving] = useState<Set<string>>(() => new Set());
   const [filing, setFiling] = useState<string | null>(null);
+  const [acting, setActing] = useState<Set<string>>(() => new Set());
   const pending = useRef<Pending | null>(null);
   const mounted = useRef(true);
   const settleUntil = useRef(0);
@@ -259,6 +265,14 @@ export default function CaptureScreen({
     })),
   ];
 
+  const entryIds = entries.map((entry) => entry.id);
+  const entryKey = entryIds.join("\n");
+  const [seenKey, setSeenKey] = useState(entryKey);
+  if (seenKey !== entryKey) {
+    setSeenKey(entryKey);
+    setHidden((current) => pruneHidden(current, entryIds, acting));
+  }
+
   const gone = (id: string) => hidden.has(id) || leaving.has(id);
   const shown = entries.filter((entry) => !hidden.has(entry.id));
   const clearedHere = Object.fromEntries(
@@ -336,6 +350,16 @@ export default function CaptureScreen({
     });
   }
 
+  function acted(id: string, on: boolean) {
+    setActing((current) => {
+      if (current.has(id) === on) return current;
+      const next = new Set(current);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
   function commit(item: Pending, keepalive: boolean) {
     dismissToast(item.toast);
     const filing = FILED.has(item.action.kind) && mounted.current ? showToast({ message: "Filing…", duration: FILING_MS }) : null;
@@ -343,10 +367,12 @@ export default function CaptureScreen({
       .then((outcome) => {
         if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
+        acted(item.id, false);
         router.refresh();
       })
       .catch((error: Error) => {
         if (filing !== null) dismissToast(filing);
+        acted(item.id, false);
         if (!mounted.current) {
           setCaptureCleared(NO_CAPTURE_COUNTS);
           return;
@@ -371,6 +397,7 @@ export default function CaptureScreen({
     pending.current = null;
     window.clearTimeout(item.timer);
     dismissToast(item.toast);
+    acted(item.id, false);
     show(item.id);
     return true;
   }
@@ -424,6 +451,7 @@ export default function CaptureScreen({
   }
 
   function queue(id: string, verb: string, action: CaptureAction, instead?: ClearInstead) {
+    acted(id, true);
     const item: Pending = {
       id,
       action,
@@ -464,6 +492,7 @@ export default function CaptureScreen({
   const othersShown = data.others.length > 0 && (view === "all" || view === "approvals");
   const nothing = total === 0 && unread.size === 0;
   const notShownHere = (notShownTotal > 0 || rules.length > 0 || sorting > 0) && (view === "all" || view === "toFile");
+  const dismissedHere = dismissedTotal > 0 && (view === "all" || view === "toFile");
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -547,7 +576,12 @@ export default function CaptureScreen({
                 })}
                 {othersShown && !showing.includes("approvals") && <OthersApprovals items={data.others} />}
               </KeyboardList>
-              {notShownHere && <NotShown items={data.notShown} total={notShownTotal} sorting={sorting} rules={rules} workspaceId={workspaceId} />}
+              {(notShownHere || dismissedHere) && (
+                <div className="flex flex-col gap-1">
+                  {notShownHere && <NotShown items={data.notShown} total={notShownTotal} sorting={sorting} rules={rules} workspaceId={workspaceId} />}
+                  {dismissedHere && <Dismissed items={data.dismissed} total={dismissedTotal} now={now} workspaceId={workspaceId} onRestored={(id) => show(`import:${id}`)} />}
+                </div>
+              )}
             </ClearContext.Provider>
           </CaptureListContext.Provider>
         </div>

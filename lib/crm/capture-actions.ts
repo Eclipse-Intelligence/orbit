@@ -1,7 +1,7 @@
 import { snoozeTask } from "@/lib/crm/action-needed";
 import { createContactFromMeeting, hideAttendee } from "@/lib/crm/calendar";
 import { moveImport } from "@/lib/crm/call-routing";
-import { createContactAndFile, fileImport, ignoreImport } from "@/lib/crm/conversations";
+import { createContactAndFile, fileImport, ignoreImport, restoreImport } from "@/lib/crm/conversations";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
@@ -37,6 +37,7 @@ export type CaptureAction =
   | { kind: "import-create"; id: string; email: string }
   | { kind: "import-file"; id: string; contactId: string }
   | { kind: "import-ignore"; id: string }
+  | { kind: "import-restore"; id: string }
   | { kind: "import-move"; id: string; workspaceId: string }
   | { kind: "person-create"; email: string }
   | { kind: "person-hide"; email: string };
@@ -75,6 +76,7 @@ export function readCaptureAction(body: unknown): CaptureAction {
     case "reminder-done":
     case "task-done":
     case "import-ignore":
+    case "import-restore":
       return { kind: input.kind, id: id(input.id) };
     case "reply-done":
       return { kind: "reply-done", thread: required(input.thread) };
@@ -189,6 +191,9 @@ export async function runCaptureAction(actor: UserActor, action: CaptureAction, 
       return { ok: true, importId: action.id };
     case "import-ignore":
       await ignoreImport(actor, action.id);
+      return { ok: true };
+    case "import-restore":
+      await restoreImport(actor, action.id);
       return { ok: true };
     case "import-move":
       await moveImport(actor, action.id, action.workspaceId);

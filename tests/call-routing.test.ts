@@ -349,8 +349,11 @@ describe("calls across workspaces", () => {
     const nobody = note("not_route_colleague02", eclipse, [{ name: "Gita Guest", email: "gita@shared-note.com" }]);
     await getAdminPool().query("update crm.companies set archived_at = now() where workspace_id = $1 and domain = 'shared-note.com'", [ridgeon.workspaceId]);
     assert.equal(await fileGranolaNote(cara, nobody), "filed");
+    assert.equal(await fileGranolaNote(eclipse, nobody), "unfiled");
+    const waiting = await imports(nobody.id);
+    assert.deepEqual(waiting.map((row) => [row.workspace_id, row.status]), [[eclipse.workspaceId, "filed"], [ridgeon.workspaceId, "unfiled"]]);
+    assert.equal((await importRow(waiting[1].id))?.user_id, eclipse.userId);
     assert.equal(await fileGranolaNote(eclipse, nobody), "skipped");
-    assert.equal((await imports(nobody.id)).length, 1);
   });
 
   it("copies a transcript filed by hand into a workspace that logs its call later", async () => {

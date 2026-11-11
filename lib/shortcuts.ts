@@ -193,7 +193,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "docs-panel", label: "Show or hide backlinks", group: "Docs", combos: [{ key: "\\", mod: true }], whileTyping: true, keywords: "panel links details" },
 
   { id: "inbox-sync", label: "Sync Microsoft mail", group: "Settings", combos: [{ key: "s" }], target: "sync", palette: true },
-  { id: "capture-approve", label: "Approve, or add as a contact", group: "Capture", combos: [{ key: "a" }], rowKey: "a" },
+  { id: "capture-approve", label: "Approve, add as a contact, or file", group: "Capture", combos: [{ key: "a" }], rowKey: "a" },
   { id: "capture-reply", label: "Reply, or reject an approval", group: "Capture", combos: [{ key: "r" }], rowKey: "r" },
   { id: "capture-done", label: "Done, or dismiss a follow-up", group: "Capture", combos: [{ key: "e" }], rowKey: "e" },
   { id: "capture-snooze", label: "Snooze", group: "Capture", combos: [{ key: "h" }], rowKey: "h" },

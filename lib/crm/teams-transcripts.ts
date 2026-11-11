@@ -30,7 +30,7 @@ import {
   type IntegrationStatus,
   type Participant,
 } from "@/lib/crm/conversations";
-import { captureWorkspaceInDb, moveImportToWorkspace, ownCallAddresses, routeCallInDb } from "@/lib/crm/call-routing";
+import { captureWorkspaceInDb, moveImportToWorkspace, ownCallAddresses, routeCallInDb, suggestedWorkspace } from "@/lib/crm/call-routing";
 import { readStored } from "@/lib/crm/inbox";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
@@ -238,6 +238,7 @@ async function expiredByName(db: Db, owner: UserActor, actors: UserActor[], cuto
     const people = Array.isArray(row.participants) ? row.participants : [];
     const route = await routeCallInDb(db, owner, actors, people, { own, names: true, occurredAt: row.occurred_at ? new Date(row.occurred_at).toISOString() : null });
     const targets = route.targets.filter((target) => target.match.contactId).map((target) => target.actor.workspaceId);
+    if (targets.length === 0 && route.suggested.length > 0) targets.push(suggestedWorkspace(route.suggested, row.workspace_id));
     if (targets.length > 0) filings.push({ importId: row.id, workspaceId: row.workspace_id, targets });
   }
   return filings;

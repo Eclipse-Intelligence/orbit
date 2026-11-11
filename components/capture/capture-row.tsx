@@ -53,6 +53,44 @@ export const CaptureListContext = createContext<CaptureList>({ leaving: new Set(
 export const COLLAPSE_MS = 220;
 const OUT_MS = 180;
 
+const pointer = { down: false, watching: false };
+const RELEASE_EVENTS = ["pointerup", "pointercancel", "contextmenu", "dragstart", "blur"] as const;
+const RELEASE_FALLBACK_MS = 3_000;
+
+function released(event: Event) {
+  return event.type !== "blur" || event.target === window;
+}
+
+function watchPointer() {
+  if (pointer.watching) return;
+  pointer.watching = true;
+  window.addEventListener("pointerdown", () => {
+    pointer.down = true;
+  }, true);
+  for (const name of RELEASE_EVENTS) {
+    window.addEventListener(name, (event) => {
+      if (released(event)) pointer.down = false;
+    }, true);
+  }
+}
+
+function afterPointerRelease(run: () => void) {
+  if (!pointer.down) {
+    run();
+    return;
+  }
+  let finished = false;
+  const done = (event?: Event) => {
+    if (finished || (event && !released(event))) return;
+    finished = true;
+    window.clearTimeout(fallback);
+    for (const name of RELEASE_EVENTS) window.removeEventListener(name, done, true);
+    window.setTimeout(run, 0);
+  };
+  const fallback = window.setTimeout(done, RELEASE_FALLBACK_MS);
+  for (const name of RELEASE_EVENTS) window.addEventListener(name, done, true);
+}
+
 function SnoozeItems({ choices, pick, extra }: { choices: SnoozeChoice[]; pick: (choice: SnoozeChoice) => void; extra?: MenuItem[] }) {
   return (
     <>
@@ -180,6 +218,7 @@ export default function CaptureRow({
   const [height, setHeight] = useState<number | null>(null);
   const [width, setWidth] = useState(360);
   const row = useRef<HTMLLIElement>(null);
+  useEffect(watchPointer, []);
   const body = useRef<HTMLDivElement>(null);
   const handlers = useRef<SwipeHandlers>({});
   const armedBefore = useRef(false);
@@ -284,7 +323,10 @@ export default function CaptureRow({
       }}
       onPointerDown={() => focusOnPage("capture", rowId)}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActive(false);
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        afterPointerRelease(() => {
+          if (!row.current?.contains(document.activeElement)) setActive(false);
+        });
       }}
       className={cn(
         KEYBOARD_ROW_CLASS,
