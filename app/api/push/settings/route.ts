@@ -10,13 +10,14 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as { mail?: unknown; calendarMinutes?: unknown; reads?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { mail?: unknown; calendarMinutes?: unknown; reads?: unknown; team?: unknown };
   return mailResponse(async (actor) => {
     const minutes = body.calendarMinutes === null ? null : typeof body.calendarMinutes === "number" ? Math.max(0, Math.min(1440, Math.trunc(body.calendarMinutes))) : undefined;
     await setMailNotifications(actor, {
       mail: LEVELS.find((level) => level === body.mail),
       calendarMinutes: minutes,
       reads: typeof body.reads === "boolean" ? body.reads : undefined,
+      team: typeof body.team === "boolean" ? body.team : undefined,
     });
     return notificationSettings(actor);
   });

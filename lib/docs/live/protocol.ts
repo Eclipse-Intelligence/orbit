@@ -2,7 +2,7 @@ import type { ParticipantKind } from "@/lib/docs/client-types";
 
 export type LiveTransportKind = "supabase" | "relay";
 
-export type LiveEvent = "hello" | "state" | "update" | "awareness" | "saved" | "pull" | "title" | "writing";
+export type LiveEvent = "hello" | "state" | "update" | "awareness" | "saved" | "pull" | "title" | "writing" | "alert";
 
 export type LiveUser = { id: string; name: string; kind: ParticipantKind };
 
@@ -23,6 +23,7 @@ export type AwarenessMessage = { a: string };
 export type SavedMessage = { sv: string; r: number; g?: number };
 export type TitleMessage = { t: string };
 export type WritingMessage = { pageId: string; user: LiveUser; writing: boolean; revision?: number };
+export type AlertMessage = { source: string };
 
 export const LIVE_MESSAGE_MAX = 180_000;
 

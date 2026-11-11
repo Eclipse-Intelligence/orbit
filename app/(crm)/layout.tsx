@@ -15,7 +15,7 @@ import { listBoards } from "@/lib/crm/boards";
 import { countCompanies } from "@/lib/crm/companies";
 import { syncGranolaOnVisit } from "@/lib/crm/granola";
 import { runWorkflowTick } from "@/lib/workflows/engine";
-import { listNotifications } from "@/lib/workflows/store";
+import { BELL_LIMIT, listNotifications } from "@/lib/workflows/store";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { captureStatuses } from "@/lib/crm/capture";
 import { unreadBrief } from "@/lib/learning/nightly";
@@ -106,7 +106,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listBoards(user),
-    listNotifications(user, 10),
+    listNotifications(user, BELL_LIMIT),
     captureStatuses(user).catch(() => null),
     unreadBrief(user).catch(() => null),
   ]);

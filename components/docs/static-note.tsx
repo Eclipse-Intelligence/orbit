@@ -28,7 +28,7 @@ function Widget({ spec }: { spec: WidgetSpec }) {
       .toUpperCase();
     return (
       <span className={`note-mention note-mention-${spec.mentionKind}`}>
-        {spec.mentionKind === "contact" ? (
+        {spec.mentionKind === "contact" || spec.mentionKind === "member" ? (
           <span aria-hidden className="note-mention-initials">
             {letters}
           </span>

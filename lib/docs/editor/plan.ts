@@ -28,7 +28,7 @@ export type PlanInput = {
   resolve: (target: string) => boolean;
 };
 
-const MENTION = /^@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)$/;
+const MENTION = /^@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):([0-9a-f-]{36})\)$/;
 const LIST_MARK = /^([-*+]|\d+[.)])(\s+|$)(\[[ xX]\](?:\s+|$))?/;
 
 type ListLine = { depth: number; first: boolean; task: boolean; done: boolean };

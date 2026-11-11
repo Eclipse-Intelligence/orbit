@@ -23,7 +23,11 @@ export type LiveChange = {
 
 export type LiveSink = (topic: string, event: LiveEvent, payload: unknown) => Promise<void>;
 
-type Options = { sink?: LiveSink | null; wait?: (ms: number) => Promise<void>; watched?: (pageId: string) => Promise<boolean> };
+export type LiveMessage = { topic: string; event: LiveEvent; payload: unknown };
+
+export type LiveBatchSink = (messages: LiveMessage[]) => Promise<void>;
+
+type Options = { sink?: LiveSink | null; batch?: LiveBatchSink | null; wait?: (ms: number) => Promise<void>; watched?: (pageId: string) => Promise<boolean> };
 
 const WATCH_WINDOW_SECONDS = 90;
 const TYPING_MIN_MS = 1_000;
@@ -33,6 +37,7 @@ const LINGER_MS = 1_500;
 const SEND_TIMEOUT_MS = 5_000;
 const BATCH_CONCURRENCY = 4;
 const BATCH_BUDGET_MS = 8_000;
+const BROADCAST_BATCH_MAX = 100;
 
 let testing: Options | null = null;
 
@@ -52,20 +57,38 @@ export function liveTransport(): LiveTransportKind | null {
 
 let batchOnly = false;
 
+function serviceHeaders(key: string) {
+  return { apikey: key, "content-type": "application/json", ...(key.startsWith("eyJ") ? { authorization: `Bearer ${key}` } : {}) };
+}
+
+async function postBatch(fetchImpl: typeof fetch, base: string, headers: Record<string, string>, messages: LiveMessage[]) {
+  const response = await fetchImpl(`${base}/realtime/v1/api/broadcast`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ messages: messages.map((message) => ({ ...message, private: true })) }),
+    signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Realtime broadcast failed with ${response.status}`);
+}
+
+export function supabaseBatchSink(fetchImpl: typeof fetch = fetch): LiveBatchSink | null {
+  const base = baseUrl();
+  const key = secretKey();
+  if (!base || !key) return null;
+  const headers = serviceHeaders(key);
+  return async (messages) => {
+    for (let start = 0; start < messages.length; start += BROADCAST_BATCH_MAX) {
+      await postBatch(fetchImpl, base, headers, messages.slice(start, start + BROADCAST_BATCH_MAX));
+    }
+  };
+}
+
 export function supabaseSink(fetchImpl: typeof fetch = fetch): LiveSink | null {
   const base = baseUrl();
   const key = secretKey();
   if (!base || !key) return null;
-  const headers = { apikey: key, "content-type": "application/json", ...(key.startsWith("eyJ") ? { authorization: `Bearer ${key}` } : {}) };
-  const sendBatch = async (topic: string, event: LiveEvent, payload: unknown) => {
-    const response = await fetchImpl(`${base}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ messages: [{ topic, event, payload, private: true }] }),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`Realtime broadcast failed with ${response.status}`);
-  };
+  const headers = serviceHeaders(key);
+  const sendBatch = (topic: string, event: LiveEvent, payload: unknown) => postBatch(fetchImpl, base, headers, [{ topic, event, payload }]);
   return async (topic, event, payload) => {
     if (batchOnly) return sendBatch(topic, event, payload);
     const response = await fetchImpl(`${base}/realtime/v1/api/broadcast/${encodeURIComponent(topic)}/events/${encodeURIComponent(event)}?private=true`, {
@@ -104,6 +127,24 @@ export function setLiveTesting(options: Options | null) {
 function currentSink() {
   if (testing && "sink" in testing) return testing.sink ?? null;
   return supabaseSink() ?? relaySink();
+}
+
+function currentBatchSink(): LiveBatchSink | null {
+  if (testing && "batch" in testing) return testing.batch ?? null;
+  if (testing && "sink" in testing) {
+    const sink = testing.sink;
+    return sink ? async (messages) => void (await Promise.all(messages.map((message) => sink(message.topic, message.event, message.payload)))) : null;
+  }
+  const supabase = supabaseBatchSink();
+  if (supabase) return supabase;
+  const relay = relaySink();
+  return relay ? async (messages) => void (await Promise.all(messages.map((message) => relay(message.topic, message.event, message.payload)))) : null;
+}
+
+export async function publishLiveBatch(messages: LiveMessage[]) {
+  if (messages.length === 0) return;
+  const sink = currentBatchSink();
+  if (sink) await sink(messages);
 }
 
 function pause(ms: number) {

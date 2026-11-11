@@ -39,6 +39,7 @@ export default async function GeneralSettings() {
         initialMail={notifications.mail}
         initialCalendarMinutes={notifications.calendarMinutes}
         initialReads={notifications.reads}
+        initialTeam={notifications.team}
       />
       <MeetingLinkSettings meetingLink={meetingLink} />
       <ShortcutSettings />

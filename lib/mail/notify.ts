@@ -1,3 +1,4 @@
+import { TEAM_ALERT_SOURCES } from "@/lib/alert-sources";
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
@@ -30,6 +31,35 @@ export async function mailNotifyLevel(actor: UserActor): Promise<NotifyMail> {
   });
 }
 
+export async function teamNotifyOn(actor: UserActor): Promise<boolean> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ notify_team: boolean }>(
+      "select notify_team from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
+      [actor.userId],
+    );
+    return result.rows[0]?.notify_team ?? true;
+  });
+}
+
+export async function teamUnreadCount(actor: UserActor): Promise<number> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ count: number }>(
+      `select count(*)::int as count from crm.notifications
+       where user_id = $1 and read_at is null and category is null and source = any($2::text[])
+         and created_at > now() - interval '30 days'`,
+      [actor.userId, [...TEAM_ALERT_SOURCES]],
+    );
+    return result.rows[0]?.count ?? 0;
+  });
+}
+
+export async function appBadge(actor: UserActor): Promise<number | null> {
+  const { mailUnreadCount } = await import("@/lib/mail/threads");
+  const [mail, team] = await Promise.all([mailUnreadCount(actor).catch(() => null), teamUnreadCount(actor).catch(() => null)]);
+  if (mail === null && team === null) return null;
+  return (mail ?? 0) + (team ?? 0);
+}
+
 export async function notifyNewMail(actor: UserActor, messageIds: string[], options: { send?: PushSender } = {}) {
   if (messageIds.length === 0) return { sent: 0 };
   const level = await mailNotifyLevel(actor);
@@ -56,8 +86,7 @@ export async function notifyNewMail(actor: UserActor, messageIds: string[], opti
   });
   const wanted = arrivals.filter((item) => level === "all" || item.split === "important" || item.split === "calendar");
   if (wanted.length === 0) return { sent: 0 };
-  const { mailUnreadCount } = await import("@/lib/mail/threads");
-  const badge = await mailUnreadCount(actor).catch(() => null);
+  const badge = await appBadge(actor);
   if (wanted.length > GROUP_AFTER) {
     const senders = [...new Set(wanted.map((item) => item.from_name || item.from_email || "Someone"))];
     const result = await pushToUser(
@@ -92,23 +121,33 @@ export async function notifyNewMail(actor: UserActor, messageIds: string[], opti
   return { sent };
 }
 
-export async function setMailNotifications(actor: UserActor, input: { mail?: NotifyMail; calendarMinutes?: number | null; reads?: boolean }) {
+export async function setMailNotifications(actor: UserActor, input: { mail?: NotifyMail; calendarMinutes?: number | null; reads?: boolean; team?: boolean }) {
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.mail_preferences (workspace_id, user_id, notify_mail, notify_calendar_minutes, notify_reads)
-       values ($1, $2, coalesce($3, 'important'), $4, coalesce($5, false))
+      `with latest as (
+         select notify_mail, notify_calendar_minutes, notify_reads, notify_team from crm.mail_preferences
+         where user_id = $2 order by updated_at desc limit 1
+       )
+       insert into crm.mail_preferences (workspace_id, user_id, notify_mail, notify_calendar_minutes, notify_reads, notify_team)
+       select $1, $2,
+         coalesce($3::text, (select notify_mail from latest), 'important'),
+         case when $6::boolean then $4::integer when exists (select 1 from latest) then (select notify_calendar_minutes from latest) else 10 end,
+         coalesce($5::boolean, (select notify_reads from latest), false),
+         coalesce($7::boolean, (select notify_team from latest), true)
        on conflict (workspace_id, user_id) do update set
-         notify_mail = coalesce($3, crm.mail_preferences.notify_mail),
-         notify_calendar_minutes = case when $6 then $4 else crm.mail_preferences.notify_calendar_minutes end,
-         notify_reads = coalesce($5, crm.mail_preferences.notify_reads),
+         notify_mail = excluded.notify_mail,
+         notify_calendar_minutes = excluded.notify_calendar_minutes,
+         notify_reads = excluded.notify_reads,
+         notify_team = excluded.notify_team,
          updated_at = now()`,
       [
         actor.workspaceId,
         actor.userId,
         input.mail ?? null,
-        input.calendarMinutes === undefined ? 10 : input.calendarMinutes,
+        input.calendarMinutes === undefined ? null : input.calendarMinutes,
         input.reads ?? null,
         input.calendarMinutes !== undefined,
+        input.team ?? null,
       ],
     ),
   );
@@ -116,8 +155,8 @@ export async function setMailNotifications(actor: UserActor, input: { mail?: Not
 
 export async function notificationSettings(actor: UserActor) {
   return withActor(actor, async (db) => {
-    const result = await db.query<{ notify_mail: NotifyMail; notify_calendar_minutes: number | null; notify_reads: boolean }>(
-      "select notify_mail, notify_calendar_minutes, notify_reads from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
+    const result = await db.query<{ notify_mail: NotifyMail; notify_calendar_minutes: number | null; notify_reads: boolean; notify_team: boolean }>(
+      "select notify_mail, notify_calendar_minutes, notify_reads, notify_team from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
       [actor.userId],
     );
     const devices = await db.query<{ count: number }>("select count(*)::int as count from crm.push_subscriptions where user_id = $1", [actor.userId]);
@@ -126,6 +165,7 @@ export async function notificationSettings(actor: UserActor) {
       mail: row?.notify_mail ?? "important",
       calendarMinutes: row ? row.notify_calendar_minutes : 10,
       reads: row?.notify_reads ?? false,
+      team: row?.notify_team ?? true,
       devices: devices.rows[0]?.count ?? 0,
     };
   });
