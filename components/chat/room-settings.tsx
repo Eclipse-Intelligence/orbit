@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { Input } from "@/components/_ui/input";
@@ -10,7 +10,7 @@ import { addRoomMembersAction, leaveRoomAction, removeRoomMemberAction, updateRo
 import { ChatAvatar, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar } from "@/components/chat/chat-live";
 import { usePeople } from "@/components/chat/chat-dialogs";
-import PeopleField, { type ChatCandidate } from "@/components/chat/people-field";
+import PeopleField, { pickerOpen, type ChatCandidate } from "@/components/chat/people-field";
 import { CHAT_ROOM_NAME_MAX, type ChatRoom } from "@/lib/chat/types";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
@@ -53,7 +53,7 @@ export default function RoomSettings({
   const [seen, setSeen] = useState({ open, id: conversation.id, name: conversation.name, workspaceId: conversation.workspaceId });
   const [addOpen, setAddOpen] = useState(adding);
   const [picked, setPicked] = useState<ChatCandidate[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ area: "members" | "room"; text: string } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -69,6 +69,11 @@ export default function RoomSettings({
     }
   }
   const people = usePeople(open && addOpen, conversation.workspaceId);
+  useEffect(() => {
+    if (!status) return;
+    const timer = window.setTimeout(() => setStatus(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
   const memberIds = new Set(room.members.map((member) => member.id));
   const candidates = people.people.filter((person) => !memberIds.has(person.id));
   const linked = workspaces.find((workspace) => workspace.id === workspaceId);
@@ -99,7 +104,7 @@ export default function RoomSettings({
           setStatus("Saved");
           loadRoom(conversation.id);
           refreshChatSidebar();
-        } else setError("error" in result ? result.error : "Couldn't save the room. Try again.");
+        } else setError({ area: "room", text: "error" in result ? result.error : "Couldn't save the room. Try again." });
       },
     );
   }
@@ -113,7 +118,7 @@ export default function RoomSettings({
           setPicked([]);
           setAddOpen(false);
           loadRoom(conversation.id);
-        } else setError("error" in result ? result.error : "Couldn't add them. Try again.");
+        } else setError({ area: "members", text: "error" in result ? result.error : "Couldn't add them. Try again." });
       },
     );
   }
@@ -123,7 +128,7 @@ export default function RoomSettings({
       () => removeRoomMemberAction(conversation.id, userId).catch(() => ({ error: "Couldn't remove them. Try again." })),
       (result) => {
         if ("ok" in result && result.ok) loadRoom(conversation.id);
-        else setError("error" in result ? result.error : "Couldn't remove them. Try again.");
+        else setError({ area: "members", text: "error" in result ? result.error : "Couldn't remove them. Try again." });
       },
     );
   }
@@ -136,14 +141,20 @@ export default function RoomSettings({
           onOpenChange(false);
           refreshChatSidebar();
           onLeft();
-        } else setError("error" in result ? result.error : "Couldn't leave the room. Try again.");
+        } else setError({ area: "room", text: "error" in result ? result.error : "Couldn't leave the room. Try again." });
       },
     );
   }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full md:w-[480px] md:max-w-[480px]">
+      <SheetContent
+        side="right"
+        className="w-full md:w-[480px] md:max-w-[480px]"
+        onEscapeKeyDown={(event) => {
+          if (pickerOpen()) event.preventDefault();
+        }}
+      >
         <form onSubmit={save} className="flex min-h-0 flex-1 flex-col" data-shortcut-scope>
           <SheetHeader className="max-md:pt-[env(safe-area-inset-top)] max-md:h-auto max-md:min-h-14">
             <SheetTitle className="h3-style truncate">#{conversation.name}</SheetTitle>
@@ -207,6 +218,11 @@ export default function RoomSettings({
                   </div>
                 </div>
               )}
+              {error?.area === "members" && (
+                <p role="alert" className="caption-style text-danger">
+                  {error.text}
+                </p>
+              )}
               <ul className="flex flex-col">
                 {room.members.map((member) => {
                   const you = member.id === viewer.id;
@@ -229,19 +245,29 @@ export default function RoomSettings({
               </ul>
             </section>
             <RoomHooksPlaceholder />
-            {(error || status) && (
-              <p role={error ? "alert" : "status"} className={error ? "caption-style text-danger" : "caption-style text-subtle"}>
-                {error ?? status}
-              </p>
-            )}
           </div>
+          {error?.area === "room" && (
+            <p role="alert" className="caption-style text-danger border-line-strong border-t px-6 pt-3 max-md:px-4">
+              {error.text}
+            </p>
+          )}
+          <p role="status" className="sr-only">
+            {status ?? ""}
+          </p>
           <SheetFooter className="max-md:px-4">
             <Button variant="ghost" size="md" className="text-danger hover:text-danger max-md:h-11" onClick={() => setLeaving(true)}>
               Leave room
             </Button>
-            <Button type="submit" variant="primary" size="md" disabled={!changed || !name.trim() || busy} data-shortcut-submit className="max-md:h-11">
-              Save
-            </Button>
+            <span className="flex items-center gap-3">
+              {status && (
+                <span aria-hidden className="caption-style text-subtle">
+                  {status}
+                </span>
+              )}
+              <Button type="submit" variant="primary" size="md" disabled={!changed || !name.trim() || busy} data-shortcut-submit className="max-md:h-11">
+                Save
+              </Button>
+            </span>
           </SheetFooter>
         </form>
         <ConfirmDialog

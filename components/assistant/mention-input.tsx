@@ -51,6 +51,10 @@ function tightenPunctuation(text: string, mentions: Mention[]) {
   return output;
 }
 
+function composing(event: KeyboardEvent<HTMLTextAreaElement>) {
+  return event.nativeEvent.isComposing || event.keyCode === 229;
+}
+
 export default function MentionInput({
   id,
   inputRef,
@@ -67,6 +71,7 @@ export default function MentionInput({
   composeFocus,
   shortcut,
   autoFocus,
+  autoSize,
   onKeyDown: onKey,
   onBlur,
 }: {
@@ -85,6 +90,7 @@ export default function MentionInput({
   composeFocus?: boolean;
   shortcut?: string;
   autoFocus?: boolean;
+  autoSize?: number;
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onBlur?: () => void;
 }) {
@@ -147,7 +153,7 @@ export default function MentionInput({
         setHighlight((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length);
         return;
       }
-      if (event.key === "Enter" || event.key === "Tab") {
+      if ((event.key === "Enter" && !composing(event)) || event.key === "Tab") {
         event.preventDefault();
         pick(options[highlight]);
         return;
@@ -161,7 +167,7 @@ export default function MentionInput({
     }
     onKey?.(event);
     if (event.defaultPrevented) return;
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && !event.shiftKey && !composing(event)) {
       event.preventDefault();
       onSubmit();
     }
@@ -196,6 +202,13 @@ export default function MentionInput({
       </li>
     );
   }
+
+  useLayoutEffect(() => {
+    const node = inputRef.current;
+    if (!autoSize || !node) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, autoSize)}px`;
+  }, [autoSize, value, inputRef]);
 
   useLayoutEffect(() => {
     if (!showList) return;

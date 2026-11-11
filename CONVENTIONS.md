@@ -10,10 +10,10 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 | `app/api/` | Route handlers: the agent REST API (`v1`), the MCP endpoint (`mcp`), Mail, push, booking, webhooks, OAuth callbacks, cron and the Orbit Agent endpoints. |
 | `app/login`, `app/join`, `app/book`, `app/auth` | Public pages: sign in, invite acceptance, booking pages, the Supabase email callback. |
 | `lib/crm/` | Domain logic. Every function takes an `Actor` and talks to Postgres through `withActor`. |
-| `lib/mail/`, `lib/workflows/`, `lib/assistant/`, `lib/enrichment/`, `lib/booking/`, `lib/ical/`, `lib/companion/`, `lib/ai-accounts/` | Feature engines. |
+| `lib/mail/`, `lib/workflows/`, `lib/assistant/`, `lib/enrichment/`, `lib/booking/`, `lib/ical/`, `lib/companion/`, `lib/ai-accounts/` | Feature engines. `lib/chat/` holds Chat's client-safe types, routes and message state. |
 | `lib/*.ts` | Clients for outside services (`llm.ts`, `linear.ts`, `clickup.ts`, `granola.ts`, `storage.ts`, `microsoft/`) and small shared helpers. |
 | `components/_ui/` | Primitives (`Button`, `Input`, `Sheet`, `Popover`, `DropdownMenu`, `Switch`, `Tag`, `Asset`). |
-| `components/<area>/` | Feature components, grouped by area (`crm`, `companies`, `mail`, `workflows`, `assistant`, `booking`, `push`, `shortcuts`, `auth`). |
+| `components/<area>/` | Feature components, grouped by area (`crm`, `companies`, `mail`, `chat`, `workflows`, `assistant`, `booking`, `push`, `shortcuts`, `auth`). |
 | `hooks/`, `stores/` | Shared React hooks, and the Zustand store for ephemeral UI state. |
 | `server/mcp/` | The MCP server and its tools (`server.ts`, mail tools in `mail.ts`), served at `/api/mcp` and over stdio. |
 | `public/assets/images/<area>/` | SVG icons and images. |

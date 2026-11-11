@@ -3,28 +3,32 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import ChatMessageRow from "@/components/chat/chat-message";
-import { useChat } from "@/components/chat/chat-context";
+import { useChat, type ChatPane } from "@/components/chat/chat-context";
 import { dayLabel, dayOf } from "@/lib/chat/format";
 import { isLocal, startsGroup } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
-import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
 const EDGE_PX = 240;
 const BOTTOM_PX = 48;
 const JUMP_PX = 600;
 
-type Snapshot = { first: string | null; last: string | null; height: number; top: number; atBottom: boolean; ready: boolean };
+type Snapshot = { first: string | null; last: string | null; height: number; top: number; atBottom: boolean; hidden: boolean };
+
+function hidden(node: HTMLElement) {
+  return node.clientHeight === 0 || node.getClientRects().length === 0;
+}
 
 export default function MessageList({
   messages,
   ready,
   dividerId,
   days,
-  inThread,
+  pane,
   hasOlder,
   hasNewer,
   focusId,
+  bottomSignal = 0,
   header,
   empty,
   label,
@@ -37,10 +41,11 @@ export default function MessageList({
   ready: boolean;
   dividerId: string | null;
   days: boolean;
-  inThread: boolean;
+  pane: ChatPane;
   hasOlder: boolean;
   hasNewer: boolean;
   focusId: string | null;
+  bottomSignal?: number;
   header?: ReactNode;
   empty?: ReactNode;
   label: string;
@@ -52,8 +57,13 @@ export default function MessageList({
   const { viewer, now } = useChat();
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
-  const snapshot = useRef<Snapshot>({ first: null, last: null, height: 0, top: 0, atBottom: true, ready: false });
+  const snapshot = useRef<Snapshot>({ first: null, last: null, height: 0, top: 0, atBottom: true, hidden: false });
+  const placed = useRef(false);
+  const toBottom = useRef(false);
+  const signal = useRef(bottomSignal);
   const [far, setFar] = useState(false);
+  const [unseen, setUnseen] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
   const [highlight, setHighlight] = useState<string | null>(focusId);
   const bottomRef = useRef(onBottom);
   const edges = useRef({ hasOlder, hasNewer, onOlder, onNewer });
@@ -62,17 +72,27 @@ export default function MessageList({
     edges.current = { hasOlder, hasNewer, onOlder, onNewer };
   });
 
-  const measure = useCallback(() => {
-    const node = scroller.current;
-    if (!node) return;
+  const report = useCallback((node: HTMLElement) => {
+    if (hidden(node)) {
+      bottomRef.current(false);
+      return false;
+    }
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
     const atBottom = distance < BOTTOM_PX;
-    snapshot.current = { ...snapshot.current, height: node.scrollHeight, top: node.scrollTop, atBottom };
+    snapshot.current = { ...snapshot.current, height: node.scrollHeight, top: node.scrollTop, atBottom, hidden: false };
     setFar(distance > JUMP_PX);
+    if (atBottom) setUnseen(false);
     bottomRef.current(atBottom && !edges.current.hasNewer);
+    return true;
+  }, []);
+
+  const measure = useCallback(() => {
+    const node = scroller.current;
+    if (!node || !report(node)) return;
+    const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
     if (node.scrollTop < EDGE_PX && edges.current.hasOlder) edges.current.onOlder();
     if (distance < EDGE_PX && edges.current.hasNewer) edges.current.onNewer();
-  }, []);
+  }, [report]);
 
   const first = messages[0]?.id ?? null;
   const last = messages[messages.length - 1] ?? null;
@@ -80,43 +100,65 @@ export default function MessageList({
   useLayoutEffect(() => {
     const node = scroller.current;
     if (!node) return;
+    if (bottomSignal !== signal.current) {
+      signal.current = bottomSignal;
+      toBottom.current = true;
+    }
+    if (hidden(node)) {
+      bottomRef.current(false);
+      return;
+    }
     const previous = snapshot.current;
-    if (ready && !previous.ready) {
+    let arrived: ChatMessage | null = null;
+    if (ready && !placed.current) {
+      placed.current = true;
       const target = focusId ?? dividerId;
-      const element = target ? node.querySelector<HTMLElement>(target === dividerId && !focusId ? "[data-chat-divider]" : `[data-chat-message="${target}"]`) : null;
-      if (element) {
-        const offset = focusId ? node.clientHeight / 3 : 24;
-        node.scrollTop = Math.max(0, element.offsetTop - offset);
-      } else {
-        node.scrollTop = node.scrollHeight;
-      }
-    } else if (previous.ready) {
+      const element = target ? node.querySelector<HTMLElement>(focusId ? `[data-chat-message="${focusId}"]` : "[data-chat-divider]") : null;
+      if (element) node.scrollTop = Math.max(0, element.offsetTop - (focusId ? node.clientHeight / 3 : 24));
+      else node.scrollTop = node.scrollHeight;
+    } else if (ready) {
       const prepended = first !== previous.first && previous.first !== null && messages.some((message) => message.id === previous.first);
       const appended = (last?.id ?? null) !== previous.last;
-      const ownNew = appended && last !== null && isLocal(last) && last.author.id === viewer.id;
-      if (prepended) node.scrollTop = previous.top + (node.scrollHeight - previous.height);
+      const ownNew = appended && last !== null && last.author.id === viewer.id && isLocal(last);
+      if (toBottom.current && !hasNewer) {
+        toBottom.current = false;
+        node.scrollTop = node.scrollHeight;
+      } else if (prepended) node.scrollTop = previous.top + (node.scrollHeight - previous.height);
       else if (appended && (previous.atBottom || ownNew)) node.scrollTop = node.scrollHeight;
+      if (appended && last && previous.last !== null && last.author.id !== viewer.id && !isLocal(last)) arrived = last;
     }
-    const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
-    snapshot.current = { first, last: last?.id ?? null, height: node.scrollHeight, top: node.scrollTop, atBottom: distance < BOTTOM_PX, ready };
-    bottomRef.current(distance < BOTTOM_PX && !hasNewer);
+    snapshot.current = { ...snapshot.current, first, last: last?.id ?? null };
+    report(node);
+    if (arrived) {
+      const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+      setAnnouncement(`New message from ${arrived.author.name}`);
+      if (distance >= BOTTOM_PX) setUnseen(true);
+    }
     if (!ready) return;
+    const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
     if (hasOlder && node.scrollTop < EDGE_PX) edges.current.onOlder();
     if (hasNewer && distance < EDGE_PX) edges.current.onNewer();
-  }, [messages, first, last, ready, focusId, dividerId, viewer.id, hasNewer, hasOlder]);
+  }, [messages, first, last, ready, focusId, dividerId, viewer.id, hasNewer, hasOlder, bottomSignal, report]);
 
   useEffect(() => {
     const node = scroller.current;
     const inner = content.current;
     if (!node || !inner || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      if (hidden(node)) {
+        snapshot.current = { ...snapshot.current, hidden: true };
+        bottomRef.current(false);
+        return;
+      }
+      const wasHidden = snapshot.current.hidden;
       if (snapshot.current.atBottom) node.scrollTop = node.scrollHeight;
-      snapshot.current = { ...snapshot.current, height: node.scrollHeight, top: node.scrollTop };
+      else if (wasHidden) node.scrollTop = snapshot.current.top;
+      report(node);
     });
     observer.observe(node);
     observer.observe(inner);
     return () => observer.disconnect();
-  }, []);
+  }, [report]);
 
   useEffect(() => {
     if (!highlight) return;
@@ -139,8 +181,9 @@ export default function MessageList({
   }
 
   function jump() {
+    setUnseen(false);
     if (hasNewer) {
-      snapshot.current = { ...snapshot.current, ready: false };
+      toBottom.current = true;
       onLatest();
       return;
     }
@@ -169,43 +212,38 @@ export default function MessageList({
           )}
           {!hasOlder && header}
           {ready && messages.length === 0 && empty}
-          {rows.map(({ message, newDay, divider, continuation }, index) => {
-            return (
-              <Fragment key={message.id}>
-                {divider && (
-                  <div data-chat-divider className="mx-5 my-2.5 flex items-center gap-2 text-[11.5px] font-medium text-[#8b7bff] max-md:mx-3.5" role="separator" aria-label="New messages">
-                    New
-                    <span aria-hidden className="h-px flex-1 bg-[#8b7bff]/55" />
-                  </div>
-                )}
-                {newDay && (
-                  <div className="caption-style text-subtle mx-5 mt-3.5 mb-1.5 flex items-center gap-2.5 max-md:mx-3.5" role="separator" aria-label={dayLabel(message.createdAt, now)}>
-                    <span aria-hidden className="bg-line-subtle h-px flex-1" />
-                    {dayLabel(message.createdAt, now)}
-                    <span aria-hidden className="bg-line-subtle h-px flex-1" />
-                  </div>
-                )}
-                <ChatMessageRow
-                  message={message}
-                  continuation={continuation}
-                  inThread={inThread}
-                  highlighted={highlight === message.id}
-                  tabStop={index === lastIndex}
-                />
-              </Fragment>
-            );
-          })}
+          {rows.map(({ message, newDay, divider, continuation }, index) => (
+            <Fragment key={message.id}>
+              {divider && (
+                <div data-chat-divider className="text-violet mx-5 my-2.5 flex items-center gap-2 text-[11.5px] font-medium max-md:mx-3.5" role="separator" aria-label="New messages">
+                  New
+                  <span aria-hidden className="bg-violet/55 h-px flex-1" />
+                </div>
+              )}
+              {newDay && (
+                <div className="caption-style text-subtle mx-5 mt-3.5 mb-1.5 flex items-center gap-2.5 max-md:mx-3.5" role="separator" aria-label={dayLabel(message.createdAt, now)}>
+                  <span aria-hidden className="bg-line-subtle h-px flex-1" />
+                  {dayLabel(message.createdAt, now)}
+                  <span aria-hidden className="bg-line-subtle h-px flex-1" />
+                </div>
+              )}
+              <ChatMessageRow message={message} continuation={continuation} inThread={pane !== "room"} pane={pane} highlighted={highlight === message.id} tabStop={index === lastIndex} />
+            </Fragment>
+          ))}
         </div>
       </div>
-      {(far || hasNewer) && ready && (
+      <span role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </span>
+      {(far || hasNewer || unseen) && ready && (
         <Button
           variant="secondary"
           size="none"
           onClick={jump}
-          className={cn("bg-popover border-line-strong shadow-overlay absolute bottom-3 left-1/2 h-8 -translate-x-1/2 gap-1.5 border px-3.5 text-[13px] max-md:h-11")}
+          className="bg-popover border-line-strong shadow-overlay absolute bottom-3 left-1/2 h-8 -translate-x-1/2 gap-1.5 border px-3.5 text-[13px] max-md:h-11"
         >
           <ChevronDownIcon aria-hidden className="size-3" />
-          Jump to latest
+          {unseen ? "New messages" : "Jump to latest"}
         </Button>
       )}
     </div>

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { dayLabel, shortWhen } from "@/lib/chat/format";
-import { chatLocationHref, chatSegments, messageHref, parseChatLocation } from "@/lib/chat/routes";
+import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseChatLocation } from "@/lib/chat/routes";
 import {
+  appendCards,
   chatReducer,
+  refreshCards,
   EMPTY_CHAT,
   lastOwnMessage,
   localMessage,
@@ -235,6 +238,113 @@ describe("chat dates and shortcuts", () => {
     assert.equal(sequenceShortcut("g", "h")?.href, "/chat");
     assert.equal(sequenceShortcut("g", "c")?.href, "/contacts");
     const ids = SHORTCUTS.filter((shortcut) => shortcut.group === "Chat").map((shortcut) => shortcut.id);
-    for (const id of ["chat-edit-last", "chat-reply", "chat-close-thread", "chat-prev", "chat-next"]) assert.ok(ids.includes(id), id);
+    for (const id of ["chat-edit-last", "chat-reply", "chat-close-thread", "chat-prev", "chat-next", "chat-new-room", "chat-room-settings"]) assert.ok(ids.includes(id), id);
+    assert.equal(sequenceShortcut("c", "h")?.id, "chat-new-message");
+  });
+});
+
+describe("chat review fixes", () => {
+  const mine = (key: string, at: string) => localMessage({ clientKey: key, conversationId: ROOM, parentId: null, author: { id: ME, name: "Mark" }, body: "Hi", mentions: [], at });
+
+  it("swaps a message sent while the room loads and asks for newer messages after", () => {
+    let state = chatReducer(EMPTY_CHAT, { type: "loading", conversationId: ROOM });
+    state = chatReducer(state, { type: "pending", message: mine("load-1", "2026-11-11T09:05:00.000Z") });
+    const echo = message({ at: "2026-11-11T09:05:00.100Z", author: { id: ME, name: "Mark" }, clientKey: "load-1" });
+    state = chatReducer(state, { type: "incoming", message: echo, root: null });
+    assert.deepEqual(
+      state.timelines[ROOM].messages.map((item) => item.id),
+      [echo.id],
+    );
+
+    const other = message({ at: "2026-11-11T09:06:00.000Z" });
+    let loading = chatReducer(chatReducer(EMPTY_CHAT, { type: "loading", conversationId: ROOM }), { type: "pending", message: mine("load-2", "2026-11-11T09:07:00.000Z") });
+    loading = chatReducer(loading, { type: "incoming", message: other, root: null });
+    const landed = message({ at: "2026-11-11T09:07:00.100Z", author: { id: ME, name: "Mark" }, clientKey: "load-2" });
+    loading = chatReducer(loading, { type: "page", conversationId: ROOM, page: page([landed]), mode: "replace" });
+    assert.deepEqual(
+      loading.timelines[ROOM].messages.map((item) => item.id),
+      [landed.id],
+    );
+    assert.equal(loading.timelines[ROOM].stale, true);
+    loading = chatReducer(loading, { type: "page", conversationId: ROOM, page: page([other]), mode: "newer" });
+    assert.equal(loading.timelines[ROOM].stale, false);
+    assert.equal(loading.timelines[ROOM].messages.length, 2);
+  });
+
+  it("keeps your copy until the latest page loads when later messages are still unloaded", () => {
+    let state = loaded([message({ at: "2026-11-11T08:00:00.000Z" })], { hasNewer: true });
+    const local = mine("gap-1", "2026-11-11T09:00:00.000Z");
+    state = chatReducer(state, { type: "pending", message: local });
+    const echo = message({ at: "2026-11-11T09:00:00.100Z", author: { id: ME, name: "Mark" }, clientKey: "gap-1" });
+    state = chatReducer(state, { type: "incoming", message: echo, root: null });
+    assert.ok(state.timelines[ROOM].messages.some((item) => item.id === local.id));
+    assert.ok(!state.timelines[ROOM].messages.some((item) => item.id === echo.id));
+    assert.equal(state.timelines[ROOM].stale, true);
+  });
+
+  it("keeps a reply sent from a Threads card so its failure can show", () => {
+    const root = "55555555-5555-4555-8555-555555555555";
+    const reply = localMessage({ clientKey: "card-1", conversationId: ROOM, parentId: root, author: { id: ME, name: "Mark" }, body: "Hi", mentions: [], at: "2026-11-11T09:00:00.000Z" });
+    let state = chatReducer(EMPTY_CHAT, { type: "pending", message: reply });
+    assert.deepEqual(
+      state.threads[root].timeline.messages.map((item) => item.id),
+      [reply.id],
+    );
+    state = chatReducer(state, { type: "failed", clientKey: "card-1", error: "Couldn't send. Try again." });
+    assert.equal(state.failed["card-1"], "Couldn't send. Try again.");
+  });
+
+  it("never marks a delivered message as failed", () => {
+    let state = chatReducer(loaded([]), { type: "pending", message: mine("done-1", "2026-11-11T09:00:00.000Z") });
+    state = chatReducer(state, { type: "incoming", message: message({ at: "2026-11-11T09:00:01.000Z", author: { id: ME, name: "Mark" }, clientKey: "done-1" }), root: null });
+    state = chatReducer(state, { type: "failed", clientKey: "done-1", error: "Couldn't send. Try again." });
+    assert.equal(state.failed["done-1"], undefined);
+  });
+
+  it("clears the New divider once the room is read or newer pages load", () => {
+    const unread = message({ at: "2026-11-11T09:30:00.000Z" });
+    let state = loaded([unread], { firstUnreadId: unread.id });
+    assert.equal(state.timelines[ROOM].firstUnreadId, unread.id);
+    state = chatReducer(state, { type: "read", conversationId: ROOM, lastReadAt: "2026-11-11T09:31:00.000Z" });
+    assert.equal(state.timelines[ROOM].firstUnreadId, null);
+    let paged = loaded([unread], { firstUnreadId: unread.id });
+    paged = chatReducer(paged, { type: "page", conversationId: ROOM, page: page([message({ at: "2026-11-11T09:40:00.000Z" })], { firstUnreadId: unread.id }), mode: "newer" });
+    assert.equal(paged.timelines[ROOM].firstUnreadId, null);
+  });
+
+  it("ignores a stale reply count that arrives after a newer one", () => {
+    const root = message({ at: "2026-11-11T08:00:00.000Z" });
+    let state = loaded([root]);
+    const late = { id: root.id, replyCount: 2, lastReplyAt: "2026-11-11T08:20:00.000Z", replyAuthors: [] };
+    state = chatReducer(state, { type: "incoming", message: message({ at: "2026-11-11T08:20:00.000Z", parentId: root.id }), root: late });
+    state = chatReducer(state, { type: "incoming", message: message({ at: "2026-11-11T08:10:00.000Z", parentId: root.id }), root: { ...late, replyCount: 1, lastReplyAt: "2026-11-11T08:10:00.000Z" } });
+    assert.equal(state.timelines[ROOM].messages[0].replyCount, 2);
+  });
+
+  it("keeps Next's history markers out of Chat's history state and survives bad paths", () => {
+    assert.deepEqual(chatHistoryState(true), { chatPushed: true });
+    assert.equal(parseChatLocation("/chat/%E0%A4%A"), null);
+    for (const file of readdirSync("components/chat")) {
+      assert.doesNotMatch(readFileSync(`components/chat/${file}`, "utf8"), /\.\.\.\s*(window\.)?history\.state|\.\.\.current,\s*chatPushed/, file);
+    }
+  });
+
+  it("merges refreshed thread cards without dropping later pages", () => {
+    const card = (id: string, unread: number) => ({ conversation: { id: ROOM, kind: "room" as const, name: "sales" }, root: message({ id, at: "2026-11-11T08:00:00.000Z" }), latest: [], earlier: 0, unread, mentions: 0, lastReadAt: "" });
+    const a = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000a", 0);
+    const b = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000b", 0);
+    const c = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000c", 0);
+    assert.deepEqual(
+      refreshCards([a, b, c], [{ ...c, unread: 1 }, a]).map((item) => [item.root.id, item.unread]),
+      [
+        [c.root.id, 1],
+        [a.root.id, 0],
+        [b.root.id, 0],
+      ],
+    );
+    assert.deepEqual(
+      appendCards([a], [a, b]).map((item) => item.root.id),
+      [a.root.id, b.root.id],
+    );
   });
 });

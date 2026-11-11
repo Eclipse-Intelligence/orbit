@@ -11,6 +11,18 @@ export function isChatId(value: string | null | undefined): value is string {
   return typeof value === "string" && UUID.test(value);
 }
 
+function decoded(segment: string) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+export function chatHistoryState(pushed: boolean) {
+  return { chatPushed: pushed };
+}
+
 function idParam(params: URLSearchParams, name: string) {
   const value = params.get(name);
   return isChatId(value) ? value.toLowerCase() : null;
@@ -30,7 +42,7 @@ export function parseChatLocation(pathname: string, search: URLSearchParams | st
     .slice(CHAT_PATH.length)
     .split("/")
     .filter(Boolean)
-    .map((segment) => decodeURIComponent(segment));
+    .map(decoded);
   const view = chatSegments(segments);
   if (!view) return null;
   const params = typeof search === "string" ? new URLSearchParams(search) : search;

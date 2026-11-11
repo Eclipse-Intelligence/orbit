@@ -1,4 +1,4 @@
-import type { ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatRoom, ChatRoot, ChatSidebar, ChatThread } from "@/lib/chat/types";
+import type { ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
 const GROUP_GAP_MS = 5 * 60_000;
@@ -11,6 +11,7 @@ export type Timeline = {
   lastReadAt: string | null;
   status: "loading" | "ready" | "error";
   error: string | null;
+  stale: boolean;
 };
 
 export type ThreadState = {
@@ -47,12 +48,13 @@ export type ChatAction =
   | { type: "retrying"; clientKey: string }
   | { type: "discard"; message: ChatMessage }
   | { type: "read"; conversationId: string; lastReadAt: string }
+  | { type: "thread-read"; rootId: string; lastReadAt: string }
   | { type: "forget"; conversationId: string };
 
 export const EMPTY_CHAT: ChatState = { rooms: {}, roomErrors: {}, timelines: {}, threads: {}, failed: {} };
 
 export function emptyTimeline(status: Timeline["status"] = "loading"): Timeline {
-  return { messages: [], hasOlder: false, hasNewer: false, firstUnreadId: null, lastReadAt: null, status, error: null };
+  return { messages: [], hasOlder: false, hasNewer: false, firstUnreadId: null, lastReadAt: null, status, error: null, stale: false };
 }
 
 export function localId(clientKey: string) {
@@ -103,10 +105,14 @@ export function mergeMessages(list: ChatMessage[], incoming: ChatMessage[]) {
   return incoming.reduce(upsertMessage, list);
 }
 
-export function applyRoot(list: ChatMessage[], root: ChatRoot) {
+function newerRoot(current: { lastReplyAt: string | null }, update: ChatRoot, force: boolean) {
+  return force || !current.lastReplyAt || !update.lastReplyAt || update.lastReplyAt >= current.lastReplyAt;
+}
+
+export function applyRoot(list: ChatMessage[], root: ChatRoot, force = false) {
   let changed = false;
   const next = list.map((message) => {
-    if (message.id !== root.id) return message;
+    if (message.id !== root.id || !newerRoot(message, root, force)) return message;
     changed = true;
     return { ...message, replyCount: root.replyCount, lastReplyAt: root.lastReplyAt, replyAuthors: root.replyAuthors };
   });
@@ -134,15 +140,18 @@ export function removeRoot(list: ChatMessage[], id: string) {
 
 function withPage(current: Timeline | undefined, page: { messages: ChatMessage[]; hasOlder: boolean; hasNewer: boolean }, mode: PageMode): Timeline {
   const base = current ?? emptyTimeline();
-  const locals = base.messages.filter(isLocal);
+  const landed = new Set(page.messages.map((message) => message.clientKey).filter((key): key is string => Boolean(key)));
+  const unsent = (message: ChatMessage) => isLocal(message) && !(message.clientKey && landed.has(message.clientKey));
   if (mode === "replace") {
-    return { ...base, messages: mergeMessages(page.messages, locals), hasOlder: page.hasOlder, hasNewer: page.hasNewer, status: "ready", error: null };
+    return { ...base, messages: mergeMessages(page.messages, base.messages.filter(unsent)), hasOlder: page.hasOlder, hasNewer: page.hasNewer, status: "ready", error: null };
   }
+  const kept = base.messages.filter((message) => !isLocal(message) || unsent(message));
   return {
     ...base,
-    messages: mergeMessages(base.messages, page.messages),
+    messages: mergeMessages(kept, page.messages),
     hasOlder: mode === "older" ? page.hasOlder : base.hasOlder,
     hasNewer: mode === "newer" ? page.hasNewer : base.hasNewer,
+    stale: mode === "newer" ? false : base.stale,
     status: "ready",
     error: null,
   };
@@ -169,35 +178,41 @@ function withoutFailure(state: ChatState, clientKey: string | null) {
   return { ...state, failed };
 }
 
-function rootFields(root: ChatMessage | null, update: ChatRoot | null) {
-  if (!root || !update || root.id !== update.id) return root;
+function rootFields(root: ChatMessage | null, update: ChatRoot | null, force = false) {
+  if (!root || !update || root.id !== update.id || !newerRoot(root, update, force)) return root;
   return { ...root, replyCount: update.replyCount, lastReplyAt: update.lastReplyAt, replyAuthors: update.replyAuthors };
 }
 
-function hasMessage(timeline: Timeline, message: ChatMessage) {
-  return timeline.messages.some((item) => item.id === message.id || (message.clientKey !== null && item.clientKey === message.clientKey));
+function hasLocalKey(timeline: Timeline, key: string | null) {
+  return Boolean(key) && timeline.messages.some((item) => isLocal(item) && item.clientKey === key);
+}
+
+export function acceptIncoming(timeline: Timeline, message: ChatMessage): Timeline {
+  if (timeline.messages.some((item) => item.id === message.id)) return { ...timeline, messages: replaceMessage(timeline.messages, message) };
+  if (hasLocalKey(timeline, message.clientKey)) {
+    if (timeline.hasNewer) return timeline.stale ? timeline : { ...timeline, stale: true };
+    return { ...timeline, messages: upsertMessage(timeline.messages, message) };
+  }
+  if (timeline.status === "ready" && !timeline.hasNewer) return { ...timeline, messages: upsertMessage(timeline.messages, message) };
+  if (timeline.status !== "ready") return timeline.stale ? timeline : { ...timeline, stale: true };
+  return timeline;
+}
+
+export function hasLocal(state: ChatState, clientKey: string) {
+  return (
+    Object.values(state.timelines).some((timeline) => hasLocalKey(timeline, clientKey)) ||
+    Object.values(state.threads).some((thread) => hasLocalKey(thread.timeline, clientKey))
+  );
 }
 
 function incoming(state: ChatState, message: ChatMessage, root: ChatRoot | null) {
   let next = withoutFailure(state, message.clientKey);
   if (message.parentId) {
-    next = updateThread(next, message.parentId, (thread) => {
-      const timeline = thread.timeline;
-      const accept = timeline.status === "ready" && (!timeline.hasNewer || hasMessage(timeline, message));
-      return {
-        ...thread,
-        root: rootFields(thread.root, root),
-        timeline: accept ? { ...timeline, messages: upsertMessage(timeline.messages, message) } : timeline,
-      };
-    });
+    next = updateThread(next, message.parentId, (thread) => ({ ...thread, root: rootFields(thread.root, root), timeline: acceptIncoming(thread.timeline, message) }));
     if (root) next = updateTimeline(next, message.conversationId, (timeline) => ({ ...timeline, messages: applyRoot(timeline.messages, root) }));
     return next;
   }
-  return updateTimeline(next, message.conversationId, (timeline) => {
-    if (timeline.status !== "ready") return timeline;
-    if (timeline.hasNewer && !hasMessage(timeline, message)) return timeline;
-    return { ...timeline, messages: upsertMessage(timeline.messages, message) };
-  });
+  return updateTimeline(next, message.conversationId, (timeline) => acceptIncoming(timeline, message));
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -211,33 +226,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, roomErrors: { ...state.roomErrors, [action.conversationId]: action.error } };
     case "loading": {
       const current = state.timelines[action.conversationId];
-      return { ...state, timelines: { ...state.timelines, [action.conversationId]: current ? { ...current, status: current.status === "error" ? "loading" : current.status, error: null } : emptyTimeline() } };
+      return {
+        ...state,
+        timelines: { ...state.timelines, [action.conversationId]: current ? { ...current, status: current.status === "error" ? "loading" : current.status, error: null } : emptyTimeline() },
+      };
     }
     case "page": {
       const current = state.timelines[action.conversationId];
       const timeline = withPage(current, action.page, action.mode);
-      const fresh = action.mode === "replace" || !current;
-      return {
-        ...state,
-        timelines: {
-          ...state.timelines,
-          [action.conversationId]: {
-            ...timeline,
-            firstUnreadId: fresh ? action.page.firstUnreadId : timeline.firstUnreadId,
-            lastReadAt: action.page.lastReadAt,
-          },
-        },
-      };
+      const firstUnreadId = action.mode === "replace" || !current ? action.page.firstUnreadId : action.mode === "newer" ? null : timeline.firstUnreadId;
+      return { ...state, timelines: { ...state.timelines, [action.conversationId]: { ...timeline, firstUnreadId, lastReadAt: action.page.lastReadAt } } };
     }
     case "page-error": {
       const current = state.timelines[action.conversationId] ?? emptyTimeline();
-      const status = current.messages.length > 0 ? "ready" : "error";
+      const status = current.messages.some((message) => !isLocal(message)) ? "ready" : "error";
       return { ...state, timelines: { ...state.timelines, [action.conversationId]: { ...current, status, error: action.error } } };
     }
     case "thread-loading": {
       const current = state.threads[action.rootId];
       const thread: ThreadState = current
-        ? { ...current, timeline: { ...current.timeline, status: current.timeline.status === "error" ? "loading" : current.timeline.status, error: null } }
+        ? { ...current, timeline: { ...current.timeline, status: current.timeline.status === "error" || !current.root ? "loading" : current.timeline.status, error: null } }
         : { conversation: null, root: null, following: false, timeline: emptyTimeline() };
       return { ...state, threads: { ...state.threads, [action.rootId]: thread } };
     }
@@ -272,7 +280,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           return messages === thread.timeline.messages ? thread : { ...thread, timeline: { ...thread.timeline, messages } };
         });
       } else {
-        next = updateThread(next, message.id, (thread) => (thread.root ? { ...thread, root: { ...message, replyCount: thread.root.replyCount, replyAuthors: thread.root.replyAuthors, lastReplyAt: thread.root.lastReplyAt } } : thread));
+        next = updateThread(next, message.id, (thread) =>
+          thread.root ? { ...thread, root: { ...message, replyCount: thread.root.replyCount, replyAuthors: thread.root.replyAuthors, lastReplyAt: thread.root.lastReplyAt } } : thread,
+        );
       }
       return next;
     }
@@ -281,10 +291,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (parentId) {
         let next = updateThread(state, parentId, (thread) => ({
           ...thread,
-          root: rootFields(thread.root, root),
+          root: rootFields(thread.root, root, true),
           timeline: { ...thread.timeline, messages: thread.timeline.messages.filter((message) => message.id !== messageId) },
         }));
-        if (root) next = updateTimeline(next, conversationId, (timeline) => ({ ...timeline, messages: applyRoot(timeline.messages, root) }));
+        if (root) next = updateTimeline(next, conversationId, (timeline) => ({ ...timeline, messages: applyRoot(timeline.messages, root, true) }));
         return next;
       }
       const next = updateTimeline(state, conversationId, (timeline) => {
@@ -297,12 +307,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const { message } = action;
       const next = withoutFailure(state, message.clientKey);
       if (message.parentId) {
-        return updateThread(next, message.parentId, (thread) => ({ ...thread, timeline: { ...thread.timeline, messages: upsertMessage(thread.timeline.messages, message) } }));
+        const thread = next.threads[message.parentId] ?? { conversation: null, root: null, following: true, timeline: emptyTimeline("ready") };
+        return { ...next, threads: { ...next.threads, [message.parentId]: { ...thread, timeline: { ...thread.timeline, messages: upsertMessage(thread.timeline.messages, message) } } } };
       }
       const timeline = next.timelines[message.conversationId] ?? emptyTimeline("ready");
       return { ...next, timelines: { ...next.timelines, [message.conversationId]: { ...timeline, messages: upsertMessage(timeline.messages, message) } } };
     }
     case "failed":
+      if (!hasLocal(state, action.clientKey)) return state;
       return { ...state, failed: { ...state.failed, [action.clientKey]: action.error } };
     case "retrying":
       return withoutFailure(state, action.clientKey);
@@ -314,8 +326,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return updateTimeline(next, message.conversationId, (timeline) => ({ ...timeline, messages: drop(timeline.messages) }));
     }
     case "read":
-      return updateTimeline(state, action.conversationId, (timeline) =>
-        timeline.lastReadAt && timeline.lastReadAt >= action.lastReadAt ? timeline : { ...timeline, lastReadAt: action.lastReadAt },
+      return updateTimeline(state, action.conversationId, (timeline) => {
+        const lastReadAt = timeline.lastReadAt && timeline.lastReadAt > action.lastReadAt ? timeline.lastReadAt : action.lastReadAt;
+        return lastReadAt === timeline.lastReadAt && !timeline.firstUnreadId ? timeline : { ...timeline, lastReadAt, firstUnreadId: null };
+      });
+    case "thread-read":
+      return updateThread(state, action.rootId, (thread) =>
+        thread.timeline.lastReadAt && thread.timeline.lastReadAt >= action.lastReadAt ? thread : { ...thread, following: true, timeline: { ...thread.timeline, lastReadAt: action.lastReadAt } },
       );
     case "forget": {
       const rooms = { ...state.rooms };
@@ -371,6 +388,16 @@ export function sidebarRead(sidebar: ChatSidebar, conversationId: string): ChatS
     unreadConversations: conversations.filter((conversation) => conversation.unread > 0).length,
     mentioned: sidebar.threads.mentions > 0 || conversations.some((conversation) => conversation.mentions > 0 || (conversation.kind === "dm" && conversation.unread > 0)),
   };
+}
+
+export function appendCards(current: ChatThreadCard[], incoming: ChatThreadCard[]) {
+  const seen = new Set(current.map((card) => card.root.id));
+  return [...current, ...incoming.filter((card) => !seen.has(card.root.id))];
+}
+
+export function refreshCards(current: ChatThreadCard[], fresh: ChatThreadCard[]) {
+  const updated = new Set(fresh.map((card) => card.root.id));
+  return [...fresh, ...current.filter((card) => !updated.has(card.root.id))];
 }
 
 export function sidebarBadge(sidebar: ChatSidebar | null) {

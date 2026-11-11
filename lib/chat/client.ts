@@ -49,8 +49,19 @@ export function newClientKey() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function draftKey(conversationId: string, parentId: string | null) {
-  return parentId ? `${DRAFT_PREFIX}thread:${parentId}` : `${DRAFT_PREFIX}${conversationId}`;
+export function draftKey(userId: string, conversationId: string, parentId: string | null) {
+  const room = `${DRAFT_PREFIX}${userId}:${conversationId}`;
+  return parentId ? `${room}:${parentId}` : room;
+}
+
+export function clearDrafts(userId: string, conversationId: string) {
+  const room = draftKey(userId, conversationId, null);
+  try {
+    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(
+      (key): key is string => key !== null && (key === room || key.startsWith(`${room}:`)),
+    );
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {}
 }
 
 export function readDraft(key: string): ChatDraft {

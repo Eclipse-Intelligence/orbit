@@ -16,10 +16,11 @@ import ThreadPanel from "@/components/chat/thread-panel";
 import ThreadsView from "@/components/chat/threads-view";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
 import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit";
-import { newClientKey } from "@/lib/chat/client";
-import { chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
+import { clearDrafts, newClientKey } from "@/lib/chat/client";
+import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, localMessage, newestServerId, type ChatState } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
+import type { Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ComposeIcon from "@/public/assets/images/mail/compose.svg";
@@ -39,6 +40,7 @@ export type ChatInitial = {
 const TICK_MS = 60_000;
 const FOCUS_GAP_MS = 5_000;
 const NOTICE_MS = 6_000;
+const NEW_PARAM = "new";
 
 function ok<T extends object>(value: Loaded<T>): value is T {
   return value !== null && !("error" in value);
@@ -60,9 +62,21 @@ function seeded(state: ChatState, initial: ChatInitial): ChatState {
   return next;
 }
 
+function servedIds(initial: ChatInitial) {
+  const ids = new Set<string>();
+  if (initial.location.view.kind === "room" && ok(initial.room) && ok(initial.page)) ids.add(`room:${initial.location.view.id}`);
+  if (initial.location.thread && ok(initial.thread)) ids.add(`thread:${initial.location.thread}`);
+  return ids;
+}
+
 function parentOf(location: ChatLocation): ChatLocation {
   if (location.thread) return { view: location.view, thread: null, message: null };
   return { view: { kind: "home" }, thread: null, message: null };
+}
+
+function composerHasText() {
+  const active = document.activeElement;
+  return active instanceof HTMLTextAreaElement && active.value.length > 0;
 }
 
 export default function ChatScreen({ viewer, workspaces, initial, now: initialNow }: { viewer: Viewer; workspaces: ChatWorkspace[]; initial: ChatInitial; now: number }) {
@@ -71,22 +85,28 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const location = useMemo(() => parseChatLocation(pathname, search) ?? initial.location, [pathname, search, initial.location]);
   const [state, dispatch] = useReducer(chatReducer, initial, (seed) => seeded(EMPTY_CHAT, seed));
   const [served, setServed] = useState(initial);
+  const fresh = useRef(servedIds(initial));
+  const [threadsSeed, setThreadsSeed] = useState(initial.threads);
   if (served !== initial) {
     setServed(initial);
+    setThreadsSeed(initial.threads);
     if (ok(initial.room)) dispatch({ type: "room", room: initial.room });
     if (ok(initial.page) && initial.location.view.kind === "room") dispatch({ type: "page", conversationId: initial.location.view.id, page: initial.page, mode: "replace" });
     if (ok(initial.thread)) dispatch({ type: "thread", thread: initial.thread, mode: "replace" });
   }
+  if (location.view.kind !== "threads" && threadsSeed !== null) setThreadsSeed(null);
   const storeChat = useCompaniesStore((store) => store.chat);
   const sidebar = storeChat ?? initial.sidebar;
   const joined = useChatJoined();
   const [notice, setNotice] = useState<string | null>(null);
-  const actions = useChatActions(dispatch, state, setNotice);
+  const actions = useChatActions(dispatch, state, viewer.id, setNotice);
   const [editing, setEditing] = useState<ChatEditing>(null);
   const [now, setNow] = useState(initialNow);
   const [newRoom, setNewRoom] = useState(false);
   const [newMessage, setNewMessage] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; adding: boolean }>({ open: false, adding: false });
+  const [slide, setSlide] = useState<"room" | "thread" | null>(null);
+  const [bottomSignal, setBottomSignal] = useState(0);
   const opener = useRef<HTMLElement | null>(null);
   const pane = useRef<HTMLDivElement>(null);
   const threadPane = useRef<HTMLDivElement>(null);
@@ -122,14 +142,20 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const go = useCallback((next: ChatLocation, options: { replace?: boolean } = {}) => {
     const href = chatLocationHref(next);
     if (`${window.location.pathname}${window.location.search}` === href) return;
-    const current = window.history.state as Record<string, unknown> | null;
-    if (options.replace) window.history.replaceState({ ...current, chatPushed: current?.chatPushed === true }, "", href);
-    else window.history.pushState({ ...current, chatPushed: true }, "", href);
+    if (options.replace) {
+      const current = window.history.state as Record<string, unknown> | null;
+      setSlide(null);
+      window.history.replaceState(chatHistoryState(current?.chatPushed === true), "", href);
+      return;
+    }
+    setSlide(next.thread ? "thread" : next.view.kind === "home" ? null : "room");
+    window.history.pushState(chatHistoryState(true), "", href);
   }, []);
 
   const back = useCallback(() => {
     const current = latest.current.location;
     const state = window.history.state as Record<string, unknown> | null;
+    setSlide(null);
     if (state?.chatPushed === true) window.history.back();
     else go(parentOf(current), { replace: true });
   }, [go]);
@@ -166,10 +192,12 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
     }
   }, []);
 
+  const { loadRoom, loadMessages, loadThread, deliver } = actions;
+
   const send = useCallback(
-    (input: { conversationId: string; parentId: string | null; text: string; mentions: Parameters<typeof messageBody>[1] }) => {
+    (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[] }) => {
       const body = messageBody(input.text, input.mentions);
-      if (!body || !input.conversationId) return;
+      if (!body || !input.conversationId) return Promise.resolve(null);
       const message = localMessage({
         clientKey: newClientKey(),
         conversationId: input.conversationId,
@@ -180,15 +208,23 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
         at: new Date().toISOString(),
       });
       dispatch({ type: "pending", message });
-      void actions.deliver(message);
+      const timeline = latest.current.state.timelines[input.conversationId];
+      if (!input.parentId && timeline?.hasNewer) {
+        loadMessages(input.conversationId, "latest");
+        setBottomSignal((value) => value + 1);
+      }
+      return deliver(message);
     },
-    [actions, me],
+    [deliver, loadMessages, me],
   );
-
-  const { loadRoom, loadMessages, loadThread } = actions;
 
   useEffect(() => {
     if (!roomId) return;
+    const key = `room:${roomId}`;
+    if (fresh.current.has(key)) {
+      fresh.current.delete(key);
+      return;
+    }
     const timeline = latest.current.state.timelines[roomId];
     const message = location.message;
     if (!timeline || timeline.status === "error") loadMessages(roomId, "latest", message ?? "unread");
@@ -199,10 +235,41 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
 
   useEffect(() => {
     if (!threadId) return;
+    const key = `thread:${threadId}`;
+    if (fresh.current.has(key)) {
+      fresh.current.delete(key);
+      return;
+    }
     const thread = latest.current.state.threads[threadId];
-    if (!thread || thread.timeline.status !== "ready") loadThread(threadId, "latest");
+    if (!thread?.root || thread.timeline.status !== "ready") loadThread(threadId, "latest");
     else loadThread(threadId, "newer");
   }, [threadId, loadThread]);
+
+  const roomTimeline = roomId ? state.timelines[roomId] : undefined;
+  const roomStale = Boolean(roomTimeline?.stale && roomTimeline.status === "ready");
+  const roomBehind = Boolean(roomTimeline?.hasNewer);
+  useEffect(() => {
+    if (roomId && roomStale) loadMessages(roomId, roomBehind ? "latest" : "newer");
+  }, [roomId, roomStale, roomBehind, loadMessages]);
+
+  const threadTimeline = threadId ? state.threads[threadId]?.timeline : undefined;
+  const threadStale = Boolean(threadTimeline?.stale && threadTimeline.status === "ready");
+  useEffect(() => {
+    if (threadId && threadStale) loadThread(threadId, "newer");
+  }, [threadId, threadStale, loadThread]);
+
+  const wasJoined = useRef(joined);
+  useEffect(() => {
+    const rejoined = joined && !wasJoined.current;
+    wasJoined.current = joined;
+    if (!rejoined) return;
+    const current = latest.current.location;
+    if (current.view.kind === "room") {
+      loadMessages(current.view.id, "newer");
+      loadRoom(current.view.id);
+    }
+    if (current.thread) loadThread(current.thread, "newer");
+  }, [joined, loadMessages, loadRoom, loadThread]);
 
   useEffect(() => {
     if (joined || !roomId || !sidebar) return;
@@ -239,6 +306,26 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
     };
   }, [loadMessages, loadRoom, loadThread]);
 
+  const wantsNew = search.get(NEW_PARAM) === "message";
+  const [askedNew, setAskedNew] = useState(false);
+  if (wantsNew !== askedNew) {
+    setAskedNew(wantsNew);
+    if (wantsNew) setNewMessage(true);
+  }
+  useEffect(() => {
+    if (!wantsNew) return;
+    const current = window.history.state as Record<string, unknown> | null;
+    window.history.replaceState(chatHistoryState(current?.chatPushed === true), "", chatLocationHref(latest.current.location));
+  }, [wantsNew]);
+
+  const leftRoom = useCallback(
+    (conversationId: string) => {
+      dispatch({ type: "forget", conversationId });
+      clearDrafts(viewer.id, conversationId);
+    },
+    [viewer.id],
+  );
+
   useChatEvents((event) => {
     switch (event.type) {
       case "message":
@@ -253,16 +340,23 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       case "read":
         dispatch({ type: "read", conversationId: event.conversationId, lastReadAt: event.lastReadAt });
         return;
+      case "thread-read":
+        dispatch({ type: "thread-read", rootId: event.messageId, lastReadAt: event.lastReadAt });
+        return;
       case "conversation":
         if (latest.current.state.rooms[event.conversationId]) loadRoom(event.conversationId);
         return;
       case "removed": {
         const current = latest.current.location;
-        dispatch({ type: "forget", conversationId: event.conversationId });
+        const threadRoom = current.thread ? latest.current.state.threads[current.thread]?.root?.conversationId : null;
+        leftRoom(event.conversationId);
         if (current.view.kind === "room" && current.view.id === event.conversationId) {
           setSettings({ open: false, adding: false });
           go({ view: { kind: "home" }, thread: null, message: null }, { replace: true });
-          setNotice("You're no longer in that room.");
+          setNotice("You're no longer in that conversation.");
+        } else if (threadRoom === event.conversationId) {
+          go({ view: current.view, thread: null, message: null }, { replace: true });
+          setNotice("You're no longer in that conversation.");
         }
         return;
       }
@@ -271,6 +365,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
 
   const step = useCallback(
     (direction: 1 | -1) => {
+      if (composerHasText()) return false;
       const views = listViews(latest.current.sidebar);
       if (views.length === 0) return false;
       const current = latest.current.location.view;
@@ -282,8 +377,12 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
     [go],
   );
 
+  const roomForSettings = roomId ? (state.rooms[roomId] ?? null) : null;
   useShortcut("chat-prev", () => step(-1));
   useShortcut("chat-next", () => step(1));
+  useShortcut("chat-new-message", () => setNewMessage(true));
+  useShortcut("chat-new-room", () => setNewRoom(true));
+  useShortcut("chat-room-settings", () => setSettings({ open: true, adding: false }), roomForSettings?.conversation.kind === "room");
   useShortcut("chat-close-thread", () => {
     if (!latest.current.location.thread) return false;
     closeThread();
@@ -299,12 +398,14 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   });
 
   const failed = state.failed;
+  const room = roomForSettings;
+  const members = room?.members;
+  const memberNames = useMemo(() => new Map((members ?? []).map((member) => [member.id.toLowerCase(), member.name])), [members]);
   const context = useMemo<ChatContextValue>(
-    () => ({ ...actions, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send }),
-    [actions, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send],
+    () => ({ ...actions, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames }),
+    [actions, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames],
   );
 
-  const room = roomId ? (state.rooms[roomId] ?? null) : null;
   const entry: ChatConversation | null = roomId ? (sidebar?.conversations.find((item) => item.id === roomId) ?? room?.conversation ?? null) : null;
   const thread = threadId ? (state.threads[threadId] ?? null) : null;
 
@@ -353,12 +454,13 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
               data-chat-room-pane
               className={cn(
                 PHONE_LAYER,
-                "md:bg-surface-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden max-md:z-30 max-md:motion-safe:animate-enter-from-right md:my-2 md:mr-2 md:rounded-2xl",
+                "md:bg-surface-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden max-md:z-30 md:my-2 md:mr-2 md:rounded-2xl",
+                slide === "room" && "max-md:motion-safe:animate-enter-from-right",
                 threadId && "max-xl:hidden",
               )}
             >
               {view.kind === "threads" ? (
-                <ThreadsView initial={initial.location.view.kind === "threads" ? initial.threads : null} />
+                <ThreadsView initial={threadsSeed} />
               ) : view.kind === "room" ? (
                 <RoomView
                   key={view.id}
@@ -368,6 +470,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                   roomError={state.roomErrors[view.id] ?? null}
                   timeline={state.timelines[view.id] ?? null}
                   focusId={location.message}
+                  bottomSignal={bottomSignal}
                   onSettings={() => setSettings({ open: true, adding: false })}
                   onAddPeople={() => setSettings({ open: true, adding: true })}
                 />
@@ -380,7 +483,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
               data-chat-thread-pane
               className={cn(
                 PHONE_LAYER,
-                "md:bg-surface-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden max-md:z-[31] max-md:motion-safe:animate-enter-from-right md:my-2 md:mr-2 md:rounded-2xl xl:w-[380px] xl:flex-none",
+                "md:bg-surface-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden max-md:z-[31] md:my-2 md:mr-2 md:rounded-2xl xl:w-[380px] xl:flex-none",
+                slide === "thread" && "max-md:motion-safe:animate-enter-from-right",
               )}
             >
               <ThreadPanel key={threadId} rootId={threadId} thread={thread} conversation={roomId ? entry : null} onClose={closeThread} />
@@ -393,7 +497,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
             className="bg-popover border-line-strong shadow-overlay ui-style fixed bottom-[calc(env(safe-area-inset-bottom)+5.5rem)] left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-xl border py-2 pr-2 pl-3.5"
           >
             <span className="min-w-0">{notice}</span>
-            <Button variant="ghost" size="sm" onClick={() => setNotice(null)}>
+            <Button variant="ghost" size="sm" onClick={() => setNotice(null)} className="max-md:h-11">
               Dismiss
             </Button>
           </div>
@@ -408,7 +512,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
           room={room}
           adding={settings.adding}
           onLeft={() => {
-            dispatch({ type: "forget", conversationId: room.conversation.id });
+            leftRoom(room.conversation.id);
             go({ view: { kind: "home" }, thread: null, message: null }, { replace: true });
           }}
         />

@@ -4,6 +4,7 @@ import { useContext, useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname } from "next/navigation";
 import { DocsContext } from "@/components/docs/use-docs";
 import { chatApi } from "@/lib/chat/client";
+import { sidebarRead } from "@/lib/chat/timeline";
 import type { ChatLiveEvent } from "@/lib/chat/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 
@@ -18,6 +19,12 @@ const listeners = new Set<Listener>();
 const joinListeners = new Set<() => void>();
 let joined = false;
 let reload: () => void = () => {};
+let viewing: string | null = null;
+
+export function setChatViewing(conversationId: string | null) {
+  viewing = conversationId;
+  if (conversationId) useCompaniesStore.getState().setChat((current) => (current ? sidebarRead(current, conversationId) : current));
+}
 
 function setJoined(next: boolean) {
   if (joined === next) return;
@@ -89,7 +96,7 @@ export default function ChatLive() {
       chatApi
         .sidebar()
         .then((sidebar) => {
-          if (!stopped) useCompaniesStore.getState().setChat(sidebar);
+          if (!stopped) useCompaniesStore.getState().setChat(viewing ? sidebarRead(sidebar, viewing) : sidebar);
         })
         .catch(() => undefined)
         .finally(() => {
@@ -122,6 +129,12 @@ export default function ChatLive() {
             userId,
             (event) => {
               for (const listener of listeners) listener(event);
+              if (event.type === "read") {
+                const conversationId = event.conversationId;
+                useCompaniesStore.getState().setChat((current) => (current ? sidebarRead(current, conversationId) : current));
+                return;
+              }
+              if (event.type === "message" && event.conversationId === viewing && !event.message.parentId) return;
               soon();
             },
             (now) => {

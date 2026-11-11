@@ -5,7 +5,8 @@ import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import MentionInput from "@/components/assistant/mention-input";
-import { AvatarStack, ChatAvatar, useChat } from "@/components/chat/chat-context";
+import { AvatarStack, ChatAvatar, useChat, type ChatPane } from "@/components/chat/chat-context";
+import { focusComposer } from "@/components/chat/composer";
 import MessageBody from "@/components/chat/message-body";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
@@ -29,6 +30,7 @@ type Props = {
   message: ChatMessage;
   continuation: boolean;
   inThread: boolean;
+  pane: ChatPane;
   fullStamp?: boolean;
   highlighted?: boolean;
   tabStop?: boolean;
@@ -38,6 +40,12 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
   const { edit } = useChat();
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const done = () => {
+    const from = box.current;
+    onDone();
+    window.setTimeout(() => focusComposer(from), 0);
+  };
   const [value, setValue] = useState(() => plainMentions(message.body));
   const [mentions, setMentions] = useState<Mention[]>(() => mentionsIn(message.body));
   const [saving, setSaving] = useState(false);
@@ -45,12 +53,12 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
   async function save() {
     if (!value.trim() || saving) return;
     setSaving(true);
-    onDone();
+    done();
     await edit(message, value, mentions);
   }
 
   return (
-    <div className="flex flex-col gap-2 py-1">
+    <div ref={box} className="flex flex-col gap-2 py-1">
       <div className="border-line-strong bg-secondary focus-within:border-ring rounded-xl border px-3 py-1.5">
         <MentionInput
           id={`chat-edit-${id}`}
@@ -60,6 +68,7 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
           placeholder="Message"
           ariaLabel="Edit message"
           autoFocus
+          autoSize={200}
           onChange={(next, kept) => {
             setValue(next);
             setMentions(kept);
@@ -69,7 +78,7 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
             if (event.key === "Escape") {
               event.preventDefault();
               event.stopPropagation();
-              onDone();
+              done();
             }
           }}
         />
@@ -77,10 +86,10 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
       <div className="flex items-center gap-2">
         <span className="caption-style text-subtle max-sm:hidden">Enter to save, Esc to cancel</span>
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={onDone} className="max-md:h-9">
+        <Button variant="ghost" size="sm" onClick={done} className="max-md:h-11">
           Cancel
         </Button>
-        <Button variant="primary" size="sm" disabled={!value.trim() || saving} onClick={() => void save()} className="max-md:h-9">
+        <Button variant="primary" size="sm" disabled={!value.trim() || saving} onClick={() => void save()} className="max-md:h-11">
           Save
         </Button>
       </div>
@@ -96,9 +105,10 @@ function ToolButton({ label, title, onClick, children }: { label: string; title?
   );
 }
 
-function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighted, tabStop }: Props) {
+function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, copyLink, openThread } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, copyLink, openThread, memberNames } = chat;
+  const pressed = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const [menu, setMenu] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -106,8 +116,8 @@ function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighte
   const local = isLocal(message);
   const own = message.author.id === viewer.id;
   const deleted = Boolean(message.deletedAt);
-  const error = message.clientKey && own ? failed[message.clientKey] : undefined;
-  const isEditing = editing?.id === message.id && !deleted;
+  const error = local && message.clientKey ? failed[message.clientKey] : undefined;
+  const isEditing = editing?.id === message.id && editing.pane === pane && !deleted;
   const mentionsMe = !own && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
   const canReply = !inThread && !local && !deleted;
   const canEdit = own && !local && !deleted;
@@ -116,8 +126,10 @@ function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighte
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
     if (event.pointerType !== "touch" || isEditing) return;
+    pressed.current = false;
     const timer = window.setTimeout(() => {
       press.current = null;
+      pressed.current = true;
       setMenu(true);
     }, LONG_PRESS_MS);
     press.current = { timer, x: event.clientX, y: event.clientY };
@@ -158,6 +170,12 @@ function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighte
       onPointerMove={movePress}
       onPointerUp={endPress}
       onPointerCancel={endPress}
+      onClickCapture={(event) => {
+        if (!pressed.current) return;
+        pressed.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onContextMenu={(event) => {
         if (menu || press.current) event.preventDefault();
       }}
@@ -191,7 +209,7 @@ function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighte
         ) : isEditing ? (
           <EditBox message={message} onDone={() => setEditing(null)} />
         ) : (
-          <MessageBody body={message.body} viewerId={viewer.id} className={cn(error && "text-soft")} />
+          <MessageBody body={message.body} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
         )}
         {message.editedAt && !deleted && !isEditing && <span className="caption-style text-faint">Edited</span>}
         {error && (
@@ -210,7 +228,7 @@ function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighte
             className="hover:bg-surface-raised -ml-1.5 mt-1 inline-flex min-h-7 items-center gap-2 self-start rounded-lg py-0.5 pr-2 pl-1.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
           >
             <AvatarStack people={message.replyAuthors} size="xs" />
-            <span className="font-medium text-[#8b7bff]">
+            <span className="font-medium text-violet">
               {message.replyCount === 1 ? "1 reply" : `${message.replyCount} replies`}
             </span>
             {message.lastReplyAt && <span className="text-subtle">Last reply {shortWhen(message.lastReplyAt, now)}</span>}
@@ -228,7 +246,7 @@ function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighte
             {copied ? <CheckIcon aria-hidden className="text-success size-3.5" /> : <LinkIcon aria-hidden className="size-3.5" />}
           </ToolButton>
           {canEdit && (
-            <ToolButton label="Edit" title="Edit (Up arrow)" onClick={() => setEditing({ id: message.id })}>
+            <ToolButton label="Edit" title="Edit (Up arrow)" onClick={() => setEditing({ id: message.id, pane })}>
               <EditIcon aria-hidden className="size-3.5" />
             </ToolButton>
           )}
@@ -280,7 +298,7 @@ function ChatMessageRow({ message, continuation, inThread, fullStamp, highlighte
             </SheetAction>
           )}
           {canEdit && (
-            <SheetAction onClick={() => act(() => setEditing({ id: message.id }))} icon={<EditIcon aria-hidden className="size-4" />}>
+            <SheetAction onClick={() => act(() => setEditing({ id: message.id, pane }))} icon={<EditIcon aria-hidden className="size-4" />}>
               Edit
             </SheetAction>
           )}

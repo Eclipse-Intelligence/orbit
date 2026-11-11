@@ -10,26 +10,29 @@ import Composer from "@/components/chat/composer";
 import { PhoneBack } from "@/components/chat/room-view";
 import { chatApi } from "@/lib/chat/client";
 import { shortWhen } from "@/lib/chat/format";
+import { appendCards, refreshCards } from "@/lib/chat/timeline";
 import type { ChatThreadCard, ChatThreads } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
 const SETTLE_MS = 500;
 
-function mergeCards(current: ChatThreadCard[], incoming: ChatThreadCard[]) {
-  const seen = new Set(current.map((card) => card.root.id));
-  return [...current, ...incoming.filter((card) => !seen.has(card.root.id))];
-}
-
-function Card({ card }: { card: ChatThreadCard }) {
+function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean }) {
   const { now, openThread, send, viewer } = useChat();
   const unread = card.unread > 0;
   const latestAt = card.latest[card.latest.length - 1]?.createdAt ?? card.root.lastReplyAt;
   const open = () => openThread(card.conversation.id, card.root.id);
   const other = [card.root, ...card.latest].find((message) => message.author.id && message.author.id !== viewer.id)?.author ?? null;
   return (
-    <article className={cn("rounded-2xl pt-3 pb-2", unread ? "bg-surface-raised" : "bg-surface-panel")} aria-label={`Thread in ${card.conversation.kind === "dm" ? card.conversation.name : `#${card.conversation.name}`}`}>
+    <article
+      className={cn("rounded-2xl pt-3 pb-2", unread ? "bg-surface-raised" : "bg-surface-panel")}
+      aria-label={`Thread in ${card.conversation.kind === "dm" ? card.conversation.name : `#${card.conversation.name}`}`}
+    >
       <div className="flex items-center gap-2 px-4 pb-1.5 max-md:px-3">
-        <button type="button" onClick={open} className="ui-style flex min-w-0 items-center gap-2 rounded-md font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11">
+        <button
+          type="button"
+          onClick={open}
+          className="ui-style flex min-w-0 items-center gap-2 rounded-md font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
+        >
           {card.conversation.kind === "dm" ? (
             <>
               <ChatAvatar person={other ? { id: other.id ?? card.conversation.id, name: other.name } : { id: card.conversation.id, name: card.conversation.name }} size="xs" />
@@ -52,8 +55,8 @@ function Card({ card }: { card: ChatThreadCard }) {
         )}
         {latestAt && <span className="caption-style text-subtle ml-auto shrink-0">{shortWhen(latestAt, now)}</span>}
       </div>
-      <ChatMessageRow message={card.root} continuation={false} inThread={unread} />
-      {unread && (
+      <ChatMessageRow message={card.root} continuation={false} inThread={expanded} pane="card" />
+      {expanded && (
         <>
           {card.earlier > 0 && (
             <Button variant="link" size="none" onClick={open} className="ui-style text-subtle mt-0.5 mb-1 ml-14 font-normal max-md:ml-[50px] max-md:min-h-11">
@@ -61,7 +64,7 @@ function Card({ card }: { card: ChatThreadCard }) {
             </Button>
           )}
           {card.latest.map((message) => (
-            <ChatMessageRow key={message.id} message={message} continuation={false} inThread />
+            <ChatMessageRow key={message.id} message={message} continuation={false} inThread pane="card" />
           ))}
           <div className="py-1.5 pr-4 pl-14 max-md:pr-3 max-md:pl-3">
             <Composer
@@ -72,6 +75,7 @@ function Card({ card }: { card: ChatThreadCard }) {
               label="Reply in thread"
               sendLabel="Send reply"
               compact
+              restoreOnFailure
               onSend={(text, mentions) => send({ conversationId: card.conversation.id, parentId: card.root.id, text, mentions })}
             />
           </div>
@@ -83,26 +87,36 @@ function Card({ card }: { card: ChatThreadCard }) {
 
 export default function ThreadsView({ initial }: { initial: ChatThreads | { error: string } | null }) {
   const { back } = useChat();
-  const [cards, setCards] = useState<ChatThreadCard[] | null>(initial && "threads" in initial ? initial.threads : null);
-  const [next, setNext] = useState<string | null>(initial && "threads" in initial ? initial.next : null);
+  const seeded = initial && "threads" in initial ? initial : null;
+  const [cards, setCards] = useState<ChatThreadCard[] | null>(seeded?.threads ?? null);
+  const [next, setNext] = useState<string | null>(seeded?.next ?? null);
   const [error, setError] = useState<string | null>(initial && "error" in initial ? initial.error : null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set((seeded?.threads ?? []).filter((card) => card.unread > 0).map((card) => card.root.id)));
   const [loadingMore, setLoadingMore] = useState(false);
   const settle = useRef(0);
+
+  const receive = useCallback((incoming: ChatThreadCard[], merge: (current: ChatThreadCard[], incoming: ChatThreadCard[]) => ChatThreadCard[]) => {
+    setCards((current) => merge(current ?? [], incoming));
+    setExpanded((current) => {
+      const opened = incoming.filter((card) => card.unread > 0 && !current.has(card.root.id));
+      return opened.length ? new Set([...current, ...opened.map((card) => card.root.id)]) : current;
+    });
+  }, []);
 
   const reload = useCallback(() => {
     chatApi
       .threads()
       .then((page) => {
-        setCards(mergeCards([], page.threads));
-        setNext(page.next);
+        receive(page.threads, refreshCards);
+        setNext((current) => current ?? page.next);
         setError(null);
       })
       .catch((failure: Error) => setError(failure.message));
-  }, []);
+  }, [receive]);
 
   useEffect(() => {
-    reload();
-  }, [reload]);
+    if (!seeded) reload();
+  }, [seeded, reload]);
 
   useEffect(() => () => window.clearTimeout(settle.current), []);
 
@@ -119,7 +133,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
     chatApi
       .threads(next)
       .then((page) => {
-        setCards((current) => mergeCards(current ?? [], page.threads));
+        receive(page.threads, appendCards);
         setNext(page.next);
       })
       .catch((failure: Error) => setError(failure.message))
@@ -132,7 +146,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
         <span className="md:hidden">
           <PhoneBack label="Chat" onClick={back} />
         </span>
-        <h2 className="text-[15px] font-semibold max-md:flex-1 max-md:text-center">Threads</h2>
+        <h2 className="max-md:flex-1 max-md:text-center">Threads</h2>
         <span aria-hidden className="size-11 shrink-0 md:hidden" />
       </header>
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-5 py-4 max-md:gap-2 max-md:px-2 max-md:py-2.5">
@@ -141,7 +155,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
             <p role="alert" className="text-danger">
               {error}
             </p>
-            <Button variant="secondary" size="sm" onClick={reload}>
+            <Button variant="secondary" size="sm" onClick={reload} className="max-md:h-11">
               Try again
             </Button>
           </div>
@@ -157,7 +171,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
             <p className="text-soft max-w-[24em]">Threads you start, reply to or are mentioned in show here.</p>
           </div>
         )}
-        {cards?.map((card) => <Card key={card.root.id} card={card} />)}
+        {cards?.map((card) => <Card key={card.root.id} card={card} open={expanded.has(card.root.id)} />)}
         {next && (
           <Button variant="secondary" size="sm" onClick={more} disabled={loadingMore} className="self-center max-md:h-11">
             {loadingMore ? "Loading…" : "Show more"}

@@ -41,6 +41,7 @@
   --color-soft: var(--soft);
   --color-chip: var(--chip);
   --color-icon: var(--icon);
+  --color-violet: var(--violet);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
@@ -213,6 +214,7 @@
   --soft: #a4a4a4;
   --chip: #cfcfcf;
   --icon: #d0d4dd;
+  --violet: #8b7bff;
   --success: #22c55e;
   --warning: #fbbf24;
   --danger: #f97373;

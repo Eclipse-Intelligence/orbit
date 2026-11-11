@@ -6,7 +6,7 @@ import { roomLabel, useChat } from "@/components/chat/chat-context";
 import ChatMessageRow from "@/components/chat/chat-message";
 import Composer from "@/components/chat/composer";
 import MessageList from "@/components/chat/message-list";
-import { PhoneBack } from "@/components/chat/room-view";
+import { PhoneBack, useVisible } from "@/components/chat/room-view";
 import { isLocal, lastOwnMessage, newestServerId, type ThreadState } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage } from "@/lib/chat/types";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
@@ -21,6 +21,7 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
   const { viewer, send, setEditing, loadThread, markThreadRead } = chat;
   const heading = useRef<HTMLHeadingElement>(null);
   const [atBottom, setAtBottom] = useState(false);
+  const visible = useVisible();
   const timeline = thread?.timeline ?? null;
   const ready = timeline?.status === "ready" && Boolean(thread?.root);
   const messages = useMemo(() => timeline?.messages ?? [], [timeline]);
@@ -39,14 +40,14 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
   const behind = Boolean(thread?.following && newestMessage && (!timeline?.lastReadAt || newestMessage.createdAt > timeline.lastReadAt));
 
   useEffect(() => {
-    if (!ready || !atBottom || !behind || !newest || document.visibilityState !== "visible") return;
+    if (!ready || !atBottom || !behind || !newest || !visible) return;
     const timer = window.setTimeout(() => markThreadRead(rootId, newest), 400);
     return () => window.clearTimeout(timer);
-  }, [ready, atBottom, behind, newest, rootId, markThreadRead]);
+  }, [ready, atBottom, behind, newest, visible, rootId, markThreadRead]);
 
   const header = root ? (
     <>
-      <ChatMessageRow message={root} continuation={false} inThread fullStamp />
+      <ChatMessageRow message={root} continuation={false} inThread pane="thread" fullStamp />
       <div className="caption-style text-subtle mx-4 my-2 flex items-center gap-2.5 max-md:mx-3.5" role="separator">
         <span aria-hidden className="bg-line-subtle h-px flex-1" />
         {root.replyCount === 1 ? "1 reply" : `${root.replyCount} replies`}
@@ -62,7 +63,7 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
           <PhoneBack label={place || "Chat"} onClick={onClose} />
         </span>
         <div className="flex min-w-0 flex-col gap-1 max-md:flex-1 max-md:items-center">
-          <h3 id={`thread-${rootId}`} ref={heading} tabIndex={-1} className="outline-none max-md:text-[15px] max-md:font-semibold">
+          <h3 id={`thread-${rootId}`} ref={heading} tabIndex={-1} className="outline-none">
             Thread
           </h3>
           {place && <span className="caption-style text-subtle truncate max-md:hidden">{place}</span>}
@@ -88,7 +89,7 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
           ready={ready}
           dividerId={divider.id}
           days={false}
-          inThread
+          pane="thread"
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={null}
@@ -115,11 +116,11 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
           sendLabel="Send reply"
           autoFocus
           disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
-          onSend={(text, mentions) => root && send({ conversationId: root.conversationId, parentId: rootId, text, mentions })}
+          onSend={(text, mentions) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions }) : Promise.resolve(null))}
           onEditLast={() => {
             const own = lastOwnMessage(messages, viewer.id);
             if (!own) return false;
-            setEditing({ id: own.id });
+            setEditing({ id: own.id, pane: "thread" });
             return true;
           }}
         />

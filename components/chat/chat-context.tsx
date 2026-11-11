@@ -11,7 +11,9 @@ import { cn } from "@/lib/utils";
 
 export type ChatWorkspace = { id: string; name: string };
 
-export type ChatEditing = { id: string } | null;
+export type ChatPane = "room" | "thread" | "card";
+
+export type ChatEditing = { id: string; pane: ChatPane } | null;
 
 export type ChatContextValue = ChatTimelineActions & {
   viewer: ChatPerson;
@@ -28,7 +30,8 @@ export type ChatContextValue = ChatTimelineActions & {
   closeThread: () => void;
   conversation: (id: string) => ChatConversation | null;
   copyLink: (message: ChatMessage) => Promise<boolean>;
-  send: (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[] }) => void;
+  send: (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[] }) => Promise<string | null>;
+  memberNames: Map<string, string>;
 };
 
 export const ChatContext = createContext<ChatContextValue | null>(null);

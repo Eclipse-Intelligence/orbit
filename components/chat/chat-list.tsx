@@ -62,9 +62,9 @@ function Item({ view, active, unread, children }: { view: ChatView; active: bool
 function Heading({ id, label, action }: { id: string; label: string; action: ReactNode }) {
   return (
     <div className="flex items-center justify-between px-2 pt-3.5 pb-1.5">
-      <h2 id={id} className="eyebrow-style text-subtle text-[11px] font-medium">
+      <span id={id} className="eyebrow-style text-subtle">
         {label}
-      </h2>
+      </span>
       {action}
     </div>
   );

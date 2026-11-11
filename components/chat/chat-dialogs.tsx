@@ -8,7 +8,7 @@ import { NativeSelect } from "@/components/_ui/native-select";
 import { createRoomAction, openDmAction } from "@/app/(crm)/chat/actions";
 import { ChatAvatar, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar } from "@/components/chat/chat-live";
-import PeopleField, { matchPeople, type ChatCandidate } from "@/components/chat/people-field";
+import PeopleField, { matchPeople, pickerOpen, type ChatCandidate } from "@/components/chat/people-field";
 import { chatApi } from "@/lib/chat/client";
 import { CHAT_ROOM_NAME_MAX, type ChatConversation } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
@@ -76,7 +76,11 @@ export function NewRoomDialog({ open, onOpenChange, onCreated }: { open: boolean
 
   return (
     <Dialog open={open} onOpenChange={reset}>
-      <DialogContent>
+      <DialogContent
+        onEscapeKeyDown={(event) => {
+          if (pickerOpen()) event.preventDefault();
+        }}
+      >
         <form onSubmit={submit} data-shortcut-scope>
           <DialogHeader className="pr-12">
             <DialogTitle>New room</DialogTitle>
@@ -134,11 +138,11 @@ export function NewRoomDialog({ open, onOpenChange, onCreated }: { open: boolean
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="ghost" size="md">
+              <Button variant="ghost" size="md" className="max-md:h-11">
                 Cancel
               </Button>
             </DialogClose>
-            <Button type="submit" variant="primary" size="md" disabled={!name.trim() || saving} data-shortcut-submit>
+            <Button type="submit" variant="primary" size="md" disabled={!name.trim() || saving} data-shortcut-submit className="max-md:h-11">
               {saving ? "Creating…" : "Create room"}
             </Button>
           </DialogFooter>

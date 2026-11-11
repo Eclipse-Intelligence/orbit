@@ -2,12 +2,12 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "react";
 import { deleteMessageAction, editMessageAction, postMessageAction } from "@/app/(crm)/chat/actions";
-import { chatApi } from "@/lib/chat/client";
-import { isLocal, newestServerId, oldestServerId, type ChatAction, type ChatState } from "@/lib/chat/timeline";
+import { refreshChatSidebar } from "@/components/chat/chat-live";
+import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
+import { isLocal, newestServerId, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
 import { encodeMentions, mentionsIn, type Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
-import { sidebarRead } from "@/lib/chat/timeline";
 
 export const SEND_FAILED = "Couldn't send. Try again.";
 
@@ -15,7 +15,7 @@ export type ChatTimelineActions = {
   loadRoom: (conversationId: string) => void;
   loadMessages: (conversationId: string, mode: "latest" | "older" | "newer", around?: string | null) => void;
   loadThread: (rootId: string, mode: "latest" | "older" | "newer") => void;
-  deliver: (message: ChatMessage) => Promise<void>;
+  deliver: (message: ChatMessage) => Promise<string | null>;
   retry: (message: ChatMessage) => void;
   edit: (message: ChatMessage, text: string, mentions: Mention[]) => Promise<boolean>;
   remove: (message: ChatMessage) => Promise<boolean>;
@@ -31,7 +31,7 @@ export function messageBody(text: string, mentions: Mention[]) {
   return encodeMentions(text, mentions).trim();
 }
 
-export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState, onError: (message: string) => void): ChatTimelineActions {
+export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState, userId: string, onError: (message: string) => void): ChatTimelineActions {
   const latest = useRef(state);
   const errorRef = useRef(onError);
   useLayoutEffect(() => {
@@ -61,15 +61,17 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
 
   const loadMessages = useCallback(
     (conversationId: string, mode: "latest" | "older" | "newer", around?: string | null) =>
-      once(`messages:${conversationId}:${mode}`, async () => {
+      once(`messages:${conversationId}:${mode}:${mode === "latest" ? (around ?? "") : ""}`, async () => {
         const timeline = latest.current.timelines[conversationId];
         const before = mode === "older" ? oldestServerId(timeline?.messages ?? []) : null;
         const after = mode === "newer" ? newestServerId(timeline?.messages ?? []) : null;
-        if ((mode === "older" && !before) || (mode === "newer" && !after)) return;
-        if (mode === "latest") dispatch({ type: "loading", conversationId });
+        if (mode === "older" && !before) return;
+        if (mode === "newer" && !after && timeline?.status !== "ready") return;
+        const effective = mode === "newer" && !after ? "latest" : mode;
+        if (effective === "latest") dispatch({ type: "loading", conversationId });
         try {
-          const page = await chatApi.messages(conversationId, { before, after, around: mode === "latest" ? around : null });
-          dispatch({ type: "page", conversationId, page, mode: mode === "latest" ? "replace" : mode });
+          const page = await chatApi.messages(conversationId, { before, after, around: effective === "latest" ? around : null });
+          dispatch({ type: "page", conversationId, page, mode: effective === "latest" ? "replace" : effective });
         } catch (error) {
           dispatch({ type: "page-error", conversationId, error: (error as Error).message });
         }
@@ -80,14 +82,16 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
   const loadThread = useCallback(
     (rootId: string, mode: "latest" | "older" | "newer") =>
       once(`thread:${rootId}:${mode}`, async () => {
-        const messages = latest.current.threads[rootId]?.timeline.messages ?? [];
+        const thread = latest.current.threads[rootId];
+        const messages = thread?.timeline.messages ?? [];
         const before = mode === "older" ? oldestServerId(messages) : null;
         const after = mode === "newer" ? newestServerId(messages) : null;
-        if ((mode === "older" && !before) || (mode === "newer" && !after && messages.length > 0)) return;
-        if (mode === "latest") dispatch({ type: "thread-loading", rootId });
+        if (mode === "older" && !before) return;
+        const effective = mode === "newer" && (!after || !thread?.root) ? "latest" : mode;
+        if (effective === "latest") dispatch({ type: "thread-loading", rootId });
         try {
-          const thread = await chatApi.thread(rootId, { before, after });
-          dispatch({ type: "thread", thread, mode: mode === "latest" ? "replace" : mode });
+          const loaded = await chatApi.thread(rootId, effective === "latest" ? {} : { before, after });
+          dispatch({ type: "thread", thread: loaded, mode: effective === "latest" ? "replace" : effective });
         } catch (error) {
           dispatch({ type: "thread-error", rootId, error: (error as Error).message });
         }
@@ -101,10 +105,18 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
       const result = await postMessageAction({ conversationId: message.conversationId, parentId: message.parentId, body: message.body, clientKey }).catch(() => ({
         error: SEND_FAILED,
       }));
-      if ("ok" in result && result.ok) dispatch({ type: "incoming", message: result.message, root: result.root });
-      else dispatch({ type: "failed", clientKey, error: "error" in result ? result.error : SEND_FAILED });
+      if ("ok" in result && result.ok) {
+        dispatch({ type: "incoming", message: result.message, root: result.root });
+        const key = draftKey(userId, message.conversationId, message.parentId);
+        const draft = readDraft(key);
+        if (draft.text && messageBody(draft.text, draft.mentions) === message.body) writeDraft(key, { text: "", mentions: [] });
+        return null;
+      }
+      const error = "error" in result ? result.error : SEND_FAILED;
+      dispatch({ type: "failed", clientKey, error });
+      return error;
     },
-    [dispatch],
+    [dispatch, userId],
   );
 
   const retry = useCallback(
@@ -154,24 +166,36 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
 
   const markRead = useCallback(
     (conversationId: string, upTo: string | null) => {
-      const key = `${conversationId}`;
+      const key = conversationId;
       if (reads.current.has(key) && reads.current.get(key) === upTo) return;
       reads.current.set(key, upTo);
       useCompaniesStore.getState().setChat((current) => (current ? sidebarRead(current, conversationId) : current));
       void chatApi
         .markRead(conversationId, upTo)
         .then((result) => dispatch({ type: "read", conversationId, lastReadAt: result.lastReadAt }))
-        .catch(() => reads.current.delete(key));
+        .catch(() => {
+          reads.current.delete(key);
+          refreshChatSidebar();
+        });
     },
     [dispatch],
   );
 
-  const markThreadRead = useCallback((rootId: string, upTo: string | null) => {
-    const key = `thread:${rootId}`;
-    if (reads.current.has(key) && reads.current.get(key) === upTo) return;
-    reads.current.set(key, upTo);
-    void chatApi.markThreadRead(rootId, upTo).catch(() => reads.current.delete(key));
-  }, []);
+  const markThreadRead = useCallback(
+    (rootId: string, upTo: string | null) => {
+      const key = `thread:${rootId}`;
+      if (reads.current.has(key) && reads.current.get(key) === upTo) return;
+      reads.current.set(key, upTo);
+      void chatApi
+        .markThreadRead(rootId, upTo)
+        .then((result) => {
+          if (result.lastReadAt) dispatch({ type: "thread-read", rootId, lastReadAt: result.lastReadAt });
+          refreshChatSidebar();
+        })
+        .catch(() => reads.current.delete(key));
+    },
+    [dispatch],
+  );
 
   return useMemo(
     () => ({ loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, markRead, markThreadRead }),

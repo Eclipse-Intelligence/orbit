@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Button from "@/components/_ui/button";
 import { AvatarStack, ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
-import { useChatEvents } from "@/components/chat/chat-live";
+import { setChatViewing, useChatEvents } from "@/components/chat/chat-live";
 import Composer from "@/components/chat/composer";
 import MessageList from "@/components/chat/message-list";
 import { useTyping } from "@/components/chat/use-typing";
@@ -20,7 +20,7 @@ function firstUnread(messages: ChatMessage[], lastReadAt: string | null, viewerI
   return messages.find((message) => !isLocal(message) && !message.deletedAt && message.author.id !== viewerId && message.createdAt > lastReadAt)?.id ?? null;
 }
 
-function useVisible() {
+export function useVisible() {
   const [visible, setVisible] = useState(true);
   useEffect(() => {
     const update = () => setVisible(document.visibilityState === "visible");
@@ -46,9 +46,9 @@ export function TypingLine({ names }: { names: string[] }) {
       {names.length > 0 && (
         <>
           <span aria-hidden className="flex gap-[3px]">
-            {[0, 150, 300].map((delay) => (
-              <span key={delay} className="bg-subtle size-1 rounded-full motion-safe:animate-bounce" style={{ animationDelay: `${delay}ms` }} />
-            ))}
+            <span className="bg-subtle size-1 rounded-full motion-safe:animate-bounce" />
+            <span className="bg-subtle size-1 rounded-full [animation-delay:150ms] motion-safe:animate-bounce" />
+            <span className="bg-subtle size-1 rounded-full [animation-delay:300ms] motion-safe:animate-bounce" />
           </span>
           {typingLine(names)}
         </>
@@ -64,6 +64,7 @@ export default function RoomView({
   roomError,
   timeline,
   focusId,
+  bottomSignal,
   onSettings,
   onAddPeople,
 }: {
@@ -73,6 +74,7 @@ export default function RoomView({
   roomError: string | null;
   timeline: Timeline | null;
   focusId: string | null;
+  bottomSignal: number;
   onSettings: () => void;
   onAddPeople: () => void;
 }) {
@@ -98,11 +100,18 @@ export default function RoomView({
   const newestMessage = newest ? messages.find((message) => message.id === newest) : null;
   const behind = Boolean(newestMessage && timeline?.lastReadAt && newestMessage.createdAt > timeline.lastReadAt);
 
+  const reading = ready && atBottom && visible;
   useEffect(() => {
-    if (!ready || !atBottom || !visible || !newest || !(unread || behind)) return;
+    if (!reading) return;
+    setChatViewing(conversationId);
+    return () => setChatViewing(null);
+  }, [reading, conversationId]);
+
+  useEffect(() => {
+    if (!reading || !newest || !(unread || behind)) return;
     const timer = window.setTimeout(() => markRead(conversationId, newest), 400);
     return () => window.clearTimeout(timer);
-  }, [ready, atBottom, visible, newest, unread, behind, conversationId, markRead]);
+  }, [reading, newest, unread, behind, conversationId, markRead]);
 
   const title = info ? roomLabel(info) : "";
   const dm = info?.kind === "dm";
@@ -135,7 +144,7 @@ export default function RoomView({
         <span className="md:hidden">
           <PhoneBack label="Chat" onClick={back} />
         </span>
-        <h2 className="flex min-w-0 items-center gap-1 text-[15px] font-semibold max-md:flex-1 max-md:justify-center">
+        <h2 className="flex min-w-0 items-center gap-1 max-md:flex-1 max-md:justify-center">
           {dm ? (
             <ChatAvatar person={info?.dmUser ?? null} size="sm" className="mr-1 max-md:hidden" />
           ) : (
@@ -143,7 +152,7 @@ export default function RoomView({
               #
             </span>
           )}
-          <span className="truncate">{info ? (dm ? info.name : info.name) : roomError ? "Conversation" : ""}</span>
+          <span className="truncate">{info ? info.name : roomError ? "Conversation" : ""}</span>
         </h2>
         {multi && !dm && info?.workspaceName && <span className="caption-style text-faint ml-1 shrink-0 max-md:hidden">{info.workspaceName}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-2 max-md:ml-0">
@@ -188,7 +197,8 @@ export default function RoomView({
           ready={ready}
           dividerId={divider.id}
           days
-          inThread={false}
+          pane="room"
+          bottomSignal={bottomSignal}
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={focusId}
@@ -220,7 +230,7 @@ export default function RoomView({
           onEditLast={() => {
             const own = lastOwnMessage(messages, viewer.id);
             if (!own) return false;
-            setEditing({ id: own.id });
+            setEditing({ id: own.id, pane: "room" });
             return true;
           }}
         />
