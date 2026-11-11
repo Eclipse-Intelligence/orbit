@@ -405,5 +405,22 @@ describe("chat review fixes", () => {
     state = chatReducer(state, { type: "page", conversationId: ROOM, page: page([message({ at: "2026-11-11T09:00:00.000Z" })], { hasNewer: false }), mode: "newer" });
     assert.equal(needsCatchUp(state.timelines[ROOM]), true);
   });
+
+  it("folds your thread reply into the latest thread page when the thread was behind", () => {
+    const root = message({ at: "2026-11-11T08:00:00.000Z" });
+    const old = message({ at: "2026-11-11T08:05:00.000Z", parentId: root.id });
+    let state = chatReducer(EMPTY_CHAT, { type: "thread", thread: { conversation: null as never, root, replies: [old], hasOlder: false, hasNewer: true, following: true, lastReadAt: null }, mode: "replace" });
+    const local = localMessage({ clientKey: "thread-gap", conversationId: ROOM, parentId: root.id, author: { id: ME, name: "Mark" }, body: "Hi", mentions: [], at: "2026-11-11T09:00:00.000Z" });
+    state = chatReducer(state, { type: "pending", message: local });
+    const echo = message({ at: "2026-11-11T09:00:00.000Z", parentId: root.id, author: { id: ME, name: "Mark" }, clientKey: "thread-gap" });
+    const newest = message({ at: "2026-11-11T08:50:00.000Z", parentId: root.id });
+    state = chatReducer(state, { type: "thread-loading", rootId: root.id });
+    state = chatReducer(state, { type: "thread", thread: { conversation: null as never, root, replies: [newest, echo], hasOlder: true, hasNewer: false, following: true, lastReadAt: null }, mode: "replace" });
+    assert.deepEqual(
+      state.threads[root.id].timeline.messages.map((item) => item.id),
+      [newest.id, echo.id],
+    );
+    assert.equal(state.threads[root.id].timeline.hasNewer, false);
+  });
 });
 

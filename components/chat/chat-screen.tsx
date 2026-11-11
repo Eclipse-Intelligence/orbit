@@ -107,6 +107,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const [settings, setSettings] = useState<{ open: boolean; adding: boolean }>({ open: false, adding: false });
   const [slide, setSlide] = useState<"room" | "thread" | null>(null);
   const [bottomSignal, setBottomSignal] = useState(0);
+  const [threadBottomSignal, setThreadBottomSignal] = useState(0);
   const opener = useRef<HTMLElement | null>(null);
   const pane = useRef<HTMLDivElement>(null);
   const threadPane = useRef<HTMLDivElement>(null);
@@ -213,12 +214,16 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
         loadMessages(input.conversationId, "latest");
         setBottomSignal((value) => value + 1);
       }
+      if (input.parentId && latest.current.state.threads[input.parentId]?.timeline.hasNewer) {
+        loadThread(input.parentId, "latest");
+        setThreadBottomSignal((value) => value + 1);
+      }
       return deliver(message).then((error) => {
         if (error && input.discardOnFailure) dispatch({ type: "discard", message });
         return error;
       });
     },
-    [deliver, loadMessages, me],
+    [deliver, loadMessages, loadThread, me],
   );
 
   useEffect(() => {
@@ -491,7 +496,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                 slide === "thread" && "max-md:motion-safe:animate-enter-from-right",
               )}
             >
-              <ThreadPanel key={threadId} rootId={threadId} thread={thread} conversation={roomId ? entry : null} onClose={closeThread} />
+              <ThreadPanel key={threadId} rootId={threadId} thread={thread} conversation={roomId ? entry : null} bottomSignal={threadBottomSignal} onClose={closeThread} />
             </div>
           )}
         </div>

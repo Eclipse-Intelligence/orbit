@@ -16,7 +16,19 @@ function firstUnreadReply(messages: ChatMessage[], lastReadAt: string | null, vi
   return messages.find((message) => !isLocal(message) && message.author.id !== viewerId && message.createdAt > lastReadAt)?.id ?? null;
 }
 
-export default function ThreadPanel({ rootId, thread, conversation, onClose }: { rootId: string; thread: ThreadState | null; conversation: ChatConversation | null; onClose: () => void }) {
+export default function ThreadPanel({
+  rootId,
+  thread,
+  conversation,
+  bottomSignal,
+  onClose,
+}: {
+  rootId: string;
+  thread: ThreadState | null;
+  conversation: ChatConversation | null;
+  bottomSignal: number;
+  onClose: () => void;
+}) {
   const chat = useChat();
   const { viewer, send, setEditing, loadThread, markThreadRead } = chat;
   const heading = useRef<HTMLHeadingElement>(null);
@@ -90,6 +102,7 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
           days={false}
           pane="thread"
           align="start"
+          bottomSignal={bottomSignal}
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={null}
