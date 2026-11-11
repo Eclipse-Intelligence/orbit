@@ -486,11 +486,23 @@ function openShared(transport: LiveTransport, topic: string, handlers: ChannelHa
     const state: { status: ChannelStatus } = { status: "joining" };
     const channel = transport.open(topic, {
       message: (event, payload) => {
-        for (const listener of [...listeners]) listener.message(event, payload);
+        for (const listener of [...listeners]) {
+          try {
+            listener.message(event, payload);
+          } catch (error) {
+            console.error("Live listener failed", error);
+          }
+        }
       },
       status: (status) => {
         state.status = status;
-        for (const listener of [...listeners]) listener.status(status);
+        for (const listener of [...listeners]) {
+          try {
+            listener.status(status);
+          } catch (error) {
+            console.error("Live listener failed", error);
+          }
+        }
       },
     });
     shared = { channel, handlers: listeners, state };

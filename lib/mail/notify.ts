@@ -1,4 +1,4 @@
-import { TEAM_ALERT_SOURCES } from "@/lib/alert-sources";
+import { EVERY_WORKSPACE_SOURCES, TEAM_ALERT_SOURCES } from "@/lib/alert-sources";
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
@@ -46,18 +46,27 @@ export async function teamUnreadCount(actor: UserActor): Promise<number> {
     const result = await db.query<{ count: number }>(
       `select count(*)::int as count from crm.notifications
        where user_id = $1 and read_at is null and category is null and source = any($2::text[])
+         and (workspace_id = $3 or source = any($4::text[]))
          and created_at > now() - interval '30 days'`,
-      [actor.userId, [...TEAM_ALERT_SOURCES]],
+      [actor.userId, [...TEAM_ALERT_SOURCES], actor.workspaceId, [...EVERY_WORKSPACE_SOURCES]],
     );
     return result.rows[0]?.count ?? 0;
   });
 }
 
-export async function appBadge(actor: UserActor): Promise<number | null> {
+export async function badgeParts(actor: UserActor): Promise<{ mail: number | null; team: number | null }> {
   const { mailUnreadCount } = await import("@/lib/mail/threads");
   const [mail, team] = await Promise.all([mailUnreadCount(actor).catch(() => null), teamUnreadCount(actor).catch(() => null)]);
-  if (mail === null && team === null) return null;
-  return (mail ?? 0) + (team ?? 0);
+  return { mail, team };
+}
+
+export function badgeTotal(parts: { mail: number | null; team: number | null }) {
+  if (parts.mail === null && parts.team === null) return null;
+  return (parts.mail ?? 0) + (parts.team ?? 0);
+}
+
+export async function appBadge(actor: UserActor): Promise<number | null> {
+  return badgeTotal(await badgeParts(actor));
 }
 
 export async function notifyNewMail(actor: UserActor, messageIds: string[], options: { send?: PushSender } = {}) {
@@ -124,27 +133,19 @@ export async function notifyNewMail(actor: UserActor, messageIds: string[], opti
 export async function setMailNotifications(actor: UserActor, input: { mail?: NotifyMail; calendarMinutes?: number | null; reads?: boolean; team?: boolean }) {
   await withActor(actor, (db) =>
     db.query(
-      `with latest as (
-         select notify_mail, notify_calendar_minutes, notify_reads, notify_team from crm.mail_preferences
-         where user_id = $2 order by updated_at desc limit 1
-       )
-       insert into crm.mail_preferences (workspace_id, user_id, notify_mail, notify_calendar_minutes, notify_reads, notify_team)
-       select $1, $2,
-         coalesce($3::text, (select notify_mail from latest), 'important'),
-         case when $6::boolean then $4::integer when exists (select 1 from latest) then (select notify_calendar_minutes from latest) else 10 end,
-         coalesce($5::boolean, (select notify_reads from latest), false),
-         coalesce($7::boolean, (select notify_team from latest), true)
+      `insert into crm.mail_preferences (workspace_id, user_id, notify_mail, notify_calendar_minutes, notify_reads, notify_team)
+       values ($1, $2, coalesce($3, 'important'), $4, coalesce($5, false), coalesce($7, true))
        on conflict (workspace_id, user_id) do update set
-         notify_mail = excluded.notify_mail,
-         notify_calendar_minutes = excluded.notify_calendar_minutes,
-         notify_reads = excluded.notify_reads,
-         notify_team = excluded.notify_team,
+         notify_mail = coalesce($3, crm.mail_preferences.notify_mail),
+         notify_calendar_minutes = case when $6 then $4 else crm.mail_preferences.notify_calendar_minutes end,
+         notify_reads = coalesce($5, crm.mail_preferences.notify_reads),
+         notify_team = coalesce($7, crm.mail_preferences.notify_team),
          updated_at = now()`,
       [
         actor.workspaceId,
         actor.userId,
         input.mail ?? null,
-        input.calendarMinutes === undefined ? null : input.calendarMinutes,
+        input.calendarMinutes === undefined ? 10 : input.calendarMinutes,
         input.reads ?? null,
         input.calendarMinutes !== undefined,
         input.team ?? null,

@@ -48,6 +48,7 @@ import {
 import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
 import { setBadge } from "@/components/push/push-client";
+import { useTeamUnread } from "@/components/crm/attention";
 import PushPrompt from "@/components/push/push-prompt";
 import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/mail/reconnect-notice";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
@@ -299,12 +300,13 @@ export default function MailScreen({
     if (page) storeList(query, page);
   }, [page, query]);
 
+  const teamUnread = useTeamUnread();
   const importantUnread = nav.splits.filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0);
   useEffect(() => {
     if (nav.partial) return;
     setMailUnread(importantUnread);
-    setBadge(importantUnread);
-  }, [importantUnread, setMailUnread, nav.partial]);
+    setBadge(importantUnread + teamUnread);
+  }, [importantUnread, teamUnread, setMailUnread, nav.partial]);
 
   useEffect(() => {
     if (initialThread) storeThread(initialThread);

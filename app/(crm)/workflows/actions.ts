@@ -9,16 +9,13 @@ import {
   discardUntouchedWorkflow,
   createWorkflow,
   decideApproval,
-  BELL_LIMIT,
   getRunSteps,
-  listNotifications,
   markNotificationsRead,
   saveWorkflow,
   setWorkflowStatus,
   setWorkflowTemplate,
   startRun,
   type RunStepLog,
-  type Notification,
   type RunSummary,
   type Workflow,
   type WorkflowStatus,
@@ -134,16 +131,6 @@ export async function decideApprovalAction(runId: string, approved: boolean, not
     return { status };
   } catch (error) {
     return failure(error, "Couldn't record your decision.");
-  }
-}
-
-export async function listNotificationsAction(): Promise<{ notifications?: Notification[]; error?: string }> {
-  const user = await getUserActor();
-  if (!user) return { error: "Your session ended. Sign in again." };
-  try {
-    return { notifications: await listNotifications(user, BELL_LIMIT) };
-  } catch (error) {
-    return failure(error, "Couldn't load notifications. Try again.");
   }
 }
 

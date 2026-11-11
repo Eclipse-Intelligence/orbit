@@ -17,6 +17,7 @@ import type { Notification } from "@/lib/workflows/store";
 export default function CrmChrome({
   viewer,
   notifications,
+  teamUnread = 0,
   brief = null,
   multi,
   children,
@@ -24,11 +25,12 @@ export default function CrmChrome({
   viewer: Viewer;
   multi: boolean;
   notifications?: Notification[];
+  teamUnread?: number;
   brief?: UnreadBrief | null;
   children: ReactNode;
 }) {
   return (
-    <AttentionProvider notifications={notifications}>
+    <AttentionProvider notifications={notifications} teamUnread={teamUnread}>
       <QuickAddProvider>
         <ComposerProvider>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

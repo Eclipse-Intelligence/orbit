@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { searchMentionsAction } from "@/app/(crm)/search";
 import type { MentionOption } from "@/lib/crm/mention-search";
@@ -165,7 +165,31 @@ export default function MentionInput({
   const pieces = highlightPieces(value, mentions, marks);
   const listId = `${id}-mentions`;
   const showList = open !== null && options.length > 0;
-  const grouped = options.some((option) => option.kind === "member") && options.some((option) => option.kind !== "member");
+  const indexed = options.map((option, index) => ({ option, index }));
+  const groups = [
+    { id: "people", label: "People", items: indexed.filter(({ option }) => option.kind === "member") },
+    { id: "records", label: "Records", items: indexed.filter(({ option }) => option.kind !== "member") },
+  ];
+  const grouped = groups.every((group) => group.items.length > 0);
+
+  function optionRow(option: MentionOption, index: number) {
+    return (
+      <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === highlight}>
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => pick(option)}
+          className={cn("flex w-full cursor-pointer flex-col items-start rounded-lg px-2.5 py-1.5 text-left", index === highlight ? "bg-white/[0.07]" : "hover:bg-white/5")}
+        >
+          <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option.name}</span>
+          <span className="caption-style text-subtle w-full truncate">
+            {KIND_LABELS[option.kind]}
+            {option.detail ? ` · ${option.detail}` : ""}
+          </span>
+        </button>
+      </li>
+    );
+  }
 
   useLayoutEffect(() => {
     if (!showList) return;
@@ -251,32 +275,16 @@ export default function MentionInput({
           style={place}
           className="bg-popover border-line-strong shadow-overlay fixed z-[100] overflow-y-auto overscroll-contain rounded-xl border p-1"
         >
-          {options.map((option, index) => (
-            <Fragment key={`${option.kind}-${option.id}`}>
-              {grouped && (index === 0 || (option.kind !== "member" && options[index - 1].kind === "member")) && (
-                <li role="presentation" className="caption-style text-subtle px-2.5 pt-1.5 pb-0.5">
-                  {option.kind === "member" ? "People" : "Records"}
+          {grouped
+            ? groups.map((group) => (
+                <li key={group.id} role="group" aria-labelledby={`${listId}-${group.id}`}>
+                  <div id={`${listId}-${group.id}`} className="caption-style text-subtle px-2.5 pt-1.5 pb-0.5">
+                    {group.label}
+                  </div>
+                  <ul role="presentation">{group.items.map(({ option, index }) => optionRow(option, index))}</ul>
                 </li>
-              )}
-              <li role="option" aria-selected={index === highlight}>
-                <button
-                  type="button"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => pick(option)}
-                  className={cn(
-                    "flex w-full cursor-pointer flex-col items-start rounded-lg px-2.5 py-1.5 text-left",
-                    index === highlight ? "bg-white/[0.07]" : "hover:bg-white/5",
-                  )}
-                >
-                  <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option.name}</span>
-                  <span className="caption-style text-subtle w-full truncate">
-                    {KIND_LABELS[option.kind]}
-                    {option.detail ? ` · ${option.detail}` : ""}
-                  </span>
-                </button>
-              </li>
-            </Fragment>
-          ))}
+              ))
+            : options.map((option, index) => optionRow(option, index))}
         </ul>,
         document.body,
       )}

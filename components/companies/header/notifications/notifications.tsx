@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { useNotifications } from "@/components/crm/attention";
+import { useNotifications, useRefreshNotifications } from "@/components/crm/attention";
 import { markNotificationsReadAction } from "@/app/(crm)/workflows/actions";
 import { relativeWhen } from "@/lib/companies";
 import { captureSummary } from "@/lib/crm/capture-format";
@@ -20,6 +20,7 @@ export default function Notifications({ workspaceId }: { workspaceId?: string })
   const [read, setRead] = useState<string[]>([]);
   const router = useRouter();
   const updates = useNotifications();
+  const refresh = useRefreshNotifications();
   const capture = useCompaniesStore((state) => state.capture);
   const cleared = useCompaniesStore((state) => state.captureCleared);
   const waiting = captureLeft(capture, cleared);
@@ -29,7 +30,10 @@ export default function Notifications({ workspaceId }: { workspaceId?: string })
     setOpen(next);
     if (next && unread.length > 0) {
       const ids = unread.map((item) => item.id);
-      void markNotificationsReadAction(ids).then(() => setRead((current) => [...current, ...ids]));
+      void markNotificationsReadAction(ids).then(() => {
+        setRead((current) => [...current, ...ids]);
+        refresh();
+      });
     }
   }
 

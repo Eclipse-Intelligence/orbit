@@ -11,7 +11,7 @@ import { personTopic, workspaceTopic } from "@/lib/docs/live/protocol";
 import { memoryHub } from "@/lib/docs/live/transport";
 import { recordHref } from "@/lib/docs/routes";
 import { createDoc, docsMentioning, shareDoc } from "@/lib/docs/store";
-import { notificationSettings, setMailNotifications } from "@/lib/mail/notify";
+import { appBadge, notificationSettings, setMailNotifications, teamUnreadCount } from "@/lib/mail/notify";
 import { expandMentions, mentionsIn } from "@/lib/mentions";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { listNotifications, markNotificationsRead } from "@/lib/workflows/store";
@@ -182,9 +182,58 @@ describe("teammate alerts", () => {
     assert.equal((await sql("select source from crm.notifications where title = 'Mail bell'")).rows[0].source, "mail");
   });
 
-  it("stops starting recipients when the time budget runs out", async () => {
-    const result = await alertMembers(mark, [sam.userId], { source: "chat", key: "chat:m5", title: "Late", href: "/chat", tag: "chat:c5" }, { send: pusher().send, budgetMs: -1 });
-    assert.deepEqual(result.alerted, []);
+  it("keeps both of two settings changed at the same moment", async () => {
+    for (let round = 0; round < 10; round += 1) {
+      const reads = round % 2 === 0;
+      const team = round % 3 === 0;
+      await Promise.all([setMailNotifications(mark, { reads }), setMailNotifications(markInRidgeon, { team }), setMailNotifications(mark, { calendarMinutes: round })]);
+      const settings = await notificationSettings(mark);
+      assert.deepEqual([settings.reads, settings.team, settings.calendarMinutes], [reads, team, round], `round ${round}`);
+    }
+  });
+
+  it("always writes the bell row, even when the time budget has run out", async () => {
+    const push = pusher();
+    const result = await alertMembers(mark, [sam.userId], { source: "chat", key: "chat:m5", title: "Late", href: "/chat", tag: "chat:c5" }, { send: push.send, budgetMs: -1 });
+    assert.deepEqual(result.alerted, [sam.userId]);
+    assert.equal(result.delivered, false);
+    assert.equal((await listNotifications(samHome)).map((item) => item.title).join(), "Late");
+    await until(() => push.sent.length === 1, "the push still goes out after the budget");
+  });
+
+  it("refuses an alert without a title, key or Orbit link", async () => {
+    const base = { source: "chat" as const, key: "chat:bad", title: "Fine", href: "/chat", tag: "chat:bad" };
+    await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, title: "  " }), /title/);
+    await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, key: "" }), /key/);
+    await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, href: "https://evil.test" }), /Orbit link/);
+    await assert.rejects(() => alertMembers(mark, [sam.userId], { ...base, source: "task" }), /workspace/);
+    assert.equal((await sql("select count(*)::int as n from crm.notifications")).rows[0].n, 0);
+  });
+
+  it("keeps a whole link when the workspace switch would make it too long", async () => {
+    const href = `/tasks?q=${"%25".repeat(90)}`;
+    await alertMembers(mark, [sam.userId], { source: "task", key: "task:long", title: "Long", href, tag: "task:long", workspaceId: mark.workspaceId }, { send: pusher().send });
+    assert.equal((await sql("select href from crm.notifications where title = 'Long'")).rows[0].href, href);
+  });
+
+  it("counts the badge from mail and the teammate alerts the bell can clear", async () => {
+    const push = pusher();
+    for (const index of [1, 2]) {
+      await alertMembers(mark, [sam.userId], { source: "chat", key: `chat:b${index}`, title: `Chat ${index}`, href: "/chat", tag: "chat:b" }, { send: push.send });
+    }
+    await alertMembers(mark, [sam.userId], { source: "task", key: "task:b3", title: "Task 3", href: "/tasks", tag: "task:b3", workspaceId: mark.workspaceId }, { send: push.send });
+    assert.deepEqual(
+      push.sent.map((item) => item.body.badge),
+      [1, 2, 3],
+    );
+    assert.equal(await teamUnreadCount(sam), 3);
+    assert.equal(await teamUnreadCount(samHome), 2);
+    assert.equal(await appBadge(samHome), 2);
+    await markNotificationsRead(samHome);
+    assert.equal(await teamUnreadCount(samHome), 0);
+    assert.equal(await teamUnreadCount(sam), 1);
+    await markNotificationsRead(sam);
+    assert.equal(await appBadge(sam), 0);
   });
 });
 
@@ -253,6 +302,37 @@ describe("live alerts", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(alerts, ["chat"]);
   });
+
+  it("tells the bell when the channel drops and joins again, and one failing listener doesn't stop the others", async () => {
+    const hub = memoryHub();
+    const transport = hub.transport();
+    const scope = { workspaceId: "00000000-0000-4000-8000-0000000000cc", userId: "00000000-0000-4000-8000-0000000000dd" };
+    const joins: boolean[] = [];
+    const alerts: string[] = [];
+    const errors = console.error;
+    console.error = () => {};
+    try {
+      const stopBroken = await watchLiveActivity(transport, scope, null, () => {}, () => {
+        throw new Error("broken listener");
+      });
+      const stopBell = await watchLiveActivity(transport, scope, null, (joined) => joins.push(joined), (message) => alerts.push(message.source));
+      await until(() => joins.at(-1) === true, "first join");
+      hub.disconnect(transport.id);
+      await until(() => joins.at(-1) === false, "drop");
+      hub.reconnect(transport.id);
+      await until(() => joins.at(-1) === true, "rejoin");
+      assert.deepEqual(
+        joins.filter((joined, index) => index === 0 || joined !== joins[index - 1]),
+        [true, false, true],
+      );
+      hub.publish(personTopic(scope.userId), "alert", { source: "doc" });
+      await until(() => alerts.length === 1, "alert after a failing listener");
+      stopBroken();
+      stopBell();
+    } finally {
+      console.error = errors;
+    }
+  });
 });
 
 describe("people mentions", () => {
@@ -297,5 +377,17 @@ describe("people mentions", () => {
     assert.deepEqual(named[0], { kind: "member", id: sam.userId, name: "Sam Member", detail: "sam@eclipse.test" });
     assert.equal((await searchMentions(mark, "mark")).some((option) => option.kind === "member"), false);
     assert.equal((await searchMentions(mark, "nobody here")).length, 0);
+  });
+
+  it("never offers someone from another workspace", async () => {
+    const samWorkspace = (await sql("select workspace_id from crm.workspace_members where user_id = $1 and workspace_id <> $2", [sam.userId, mark.workspaceId])).rows[0].workspace_id;
+    const sara = await createUser("sara@elsewhere.test", "Sara Elsewhere");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [samWorkspace, sara.userId]);
+    assert.equal((await searchMentions(mark, "sara")).some((option) => option.kind === "member"), false);
+    const inSamWorkspace = { ...sam, workspaceId: samWorkspace, role: "owner" as const };
+    assert.deepEqual(
+      (await searchMentions(inSamWorkspace, "sara")).filter((option) => option.kind === "member").map((option) => option.name),
+      ["Sara Elsewhere"],
+    );
   });
 });
