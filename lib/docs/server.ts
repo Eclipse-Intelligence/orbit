@@ -13,7 +13,7 @@ export type DocsInitial = {
 };
 
 export function docsSeed(user: UserActor): DocsSeed {
-  return { now: new Date().toISOString(), workspaceId: user.workspaceId, viewer: { id: user.userId, name: user.fullName || user.email }, live: liveTransport(), livePublish: livePublishing() };
+  return { now: new Date().toISOString(), workspaceId: user.workspaceId, workspaceName: user.workspaceName, viewer: { id: user.userId, name: user.fullName || user.email }, live: liveTransport(), livePublish: livePublishing() };
 }
 
 export function emptyDocsNav(user: UserActor): DocsNav {

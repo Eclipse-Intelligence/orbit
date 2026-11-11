@@ -93,13 +93,13 @@ async function memberships(userIds: string[]) {
 }
 
 export async function alertTargets(actor: Actor, recipients: string[], alert: Pick<TeamAlert, "source" | "workspaceId">): Promise<UserActor[]> {
-  const sender = actor.type === "user" ? actor.userId : null;
-  const wanted = [...new Set(recipients.filter((id) => typeof id === "string" && isUuid(id)).map((id) => id.toLowerCase()))].filter((id) => id !== sender);
+  const self = actor.type === "user" ? actor.userId : null;
+  const wanted = [...new Set(recipients.filter((id) => typeof id === "string" && isUuid(id)).map((id) => id.toLowerCase()))].filter((id) => id !== self);
   if (wanted.length === 0) return [];
   const subject = landsInSubjectWorkspace(alert.source) ? alert.workspaceId ?? null : null;
   if (landsInSubjectWorkspace(alert.source) && !subject) return [];
-  const byUser = await memberships(sender ? [sender, ...wanted] : wanted);
-  const shared = new Set(sender ? (byUser.get(sender) ?? []).map((row) => row.workspace_id) : [actor.workspaceId]);
+  const byUser = await memberships(self ? [self, ...wanted] : wanted);
+  const shared = self ? new Set((byUser.get(self) ?? []).map((row) => row.workspace_id)) : new Set([actor.workspaceId]);
   if (subject && !shared.has(subject)) return [];
   const targets: UserActor[] = [];
   for (const userId of wanted) {
