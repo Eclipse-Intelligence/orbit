@@ -2,7 +2,7 @@ import type { ParticipantKind } from "@/lib/docs/client-types";
 
 export type LiveTransportKind = "supabase" | "relay";
 
-export type LiveEvent = "hello" | "state" | "update" | "awareness" | "saved" | "pull" | "title" | "writing" | "alert";
+export type LiveEvent = "hello" | "state" | "update" | "awareness" | "saved" | "pull" | "title" | "writing" | "alert" | "chat" | "typing";
 
 export type LiveUser = { id: string; name: string; kind: ParticipantKind };
 
@@ -41,7 +41,11 @@ export function personTopic(userId: string) {
   return `docs-person:${userId.toLowerCase()}`;
 }
 
-export type TopicTarget = { kind: "doc" | "workspace" | "person"; id: string };
+export function chatTopic(conversationId: string) {
+  return `chat:${conversationId.toLowerCase()}`;
+}
+
+export type TopicTarget = { kind: "doc" | "workspace" | "person" | "chat"; id: string };
 
 export function parseTopic(topic: string): TopicTarget | null {
   const [prefix, id, ...rest] = topic.split(":");
@@ -49,6 +53,7 @@ export function parseTopic(topic: string): TopicTarget | null {
   if (prefix === "doc") return { kind: "doc", id: id.toLowerCase() };
   if (prefix === "docs-workspace") return { kind: "workspace", id: id.toLowerCase() };
   if (prefix === "docs-person") return { kind: "person", id: id.toLowerCase() };
+  if (prefix === "chat") return { kind: "chat", id: id.toLowerCase() };
   return null;
 }
 
@@ -56,5 +61,6 @@ export function canonicalTopic(topic: string) {
   const target = parseTopic(topic);
   if (!target) return null;
   if (target.kind === "doc") return docTopic(target.id);
+  if (target.kind === "chat") return chatTopic(target.id);
   return target.kind === "workspace" ? workspaceTopic(target.id) : personTopic(target.id);
 }

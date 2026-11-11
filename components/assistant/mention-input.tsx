@@ -51,6 +51,10 @@ function tightenPunctuation(text: string, mentions: Mention[]) {
   return output;
 }
 
+function composing(event: KeyboardEvent<HTMLTextAreaElement>) {
+  return event.nativeEvent.isComposing || event.keyCode === 229;
+}
+
 export default function MentionInput({
   id,
   inputRef,
@@ -67,6 +71,9 @@ export default function MentionInput({
   composeFocus,
   shortcut,
   autoFocus,
+  autoSize,
+  onKeyDown: onKey,
+  onBlur,
 }: {
   id: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -83,6 +90,9 @@ export default function MentionInput({
   composeFocus?: boolean;
   shortcut?: string;
   autoFocus?: boolean;
+  autoSize?: number;
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onBlur?: () => void;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [found, setFound] = useState<{ query: string; options: MentionOption[] }>({ query: "", options: [] });
@@ -143,7 +153,7 @@ export default function MentionInput({
         setHighlight((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length);
         return;
       }
-      if (event.key === "Enter" || event.key === "Tab") {
+      if ((event.key === "Enter" && !composing(event)) || event.key === "Tab") {
         event.preventDefault();
         pick(options[highlight]);
         return;
@@ -155,7 +165,9 @@ export default function MentionInput({
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    onKey?.(event);
+    if (event.defaultPrevented) return;
+    if (event.key === "Enter" && !event.shiftKey && !composing(event)) {
       event.preventDefault();
       onSubmit();
     }
@@ -183,13 +195,31 @@ export default function MentionInput({
         >
           <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option.name}</span>
           <span className="caption-style text-subtle w-full truncate">
-            {KIND_LABELS[option.kind]}
-            {option.detail ? ` · ${option.detail}` : ""}
+            {option.kind === "member" && option.detail ? option.detail : `${KIND_LABELS[option.kind]}${option.detail ? ` · ${option.detail}` : ""}`}
           </span>
         </button>
       </li>
     );
   }
+
+  useLayoutEffect(() => {
+    const node = inputRef.current;
+    if (!autoSize || !node) return;
+    const fit = () => {
+      node.style.height = "auto";
+      node.style.height = `${Math.min(node.scrollHeight, autoSize)}px`;
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    let width = node.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (node.clientWidth === width) return;
+      width = node.clientWidth;
+      fit();
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [autoSize, value, inputRef]);
 
   useLayoutEffect(() => {
     if (!showList) return;
@@ -260,7 +290,10 @@ export default function MentionInput({
           refresh(next, event.target.selectionStart ?? next.length, kept);
         }}
         onSelect={(event) => refresh(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
-        onBlur={() => window.setTimeout(() => setOpen(null), 150)}
+        onBlur={() => {
+          window.setTimeout(() => setOpen(null), 150);
+          onBlur?.();
+        }}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
         onKeyDown={onKeyDown}
         placeholder={placeholder}

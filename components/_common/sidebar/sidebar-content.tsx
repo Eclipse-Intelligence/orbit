@@ -11,6 +11,7 @@ import SidebarSection from "./sidebar-section";
 import SidebarShortcuts from "./sidebar-shortcuts";
 import { CollapseSidebarButton } from "./sidebar-toggle";
 import { captureHasNew, captureLeft, useCompaniesStore } from "@/stores/companies-store";
+import { sidebarBadge } from "@/lib/chat/timeline";
 import type { CaptureStatus } from "@/lib/crm/capture";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { SETTINGS_ROOT } from "@/lib/settings-nav";
@@ -25,6 +26,7 @@ import FileSignatureIcon from "@/public/assets/images/companies/sidebar/file-sig
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
+import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
@@ -51,6 +53,7 @@ export default function SidebarContent({
   const openProfile = useCompaniesStore((state) => state.openProfile);
   const liveMailUnread = useCompaniesStore((state) => state.mailUnread);
   const unreadMail = liveMailUnread ?? 0;
+  const chat = sidebarBadge(useCompaniesStore((state) => state.chat));
   const liveCapture = useCompaniesStore((state) => state.capture);
   const captureCleared = useCompaniesStore((state) => state.captureCleared);
   const captureSeen = useCompaniesStore((state) => state.captureSeen);
@@ -83,6 +86,15 @@ export default function SidebarContent({
               label="Mail"
               count={unreadMail > 0 ? unreadMail : undefined}
               active={current("/mail")}
+            />
+            <SidebarNavItem
+              href="/chat"
+              icon={ChatIcon}
+              label="Chat"
+              count={chat.count > 0 ? chat.count : undefined}
+              countLabel={chat.mentioned ? "unread, mentions you" : "unread"}
+              accent={chat.mentioned}
+              active={current("/chat")}
             />
             <SidebarNavItem
               href="/"

@@ -90,8 +90,8 @@ What the mockups covered:
 - Chat is personal data like Mail: no `recordAudit`, no outbound webhooks. `private.move_personal_rows` needs no change; a test checks chat survives a person moving workspace.
 
 ### Live
-- **`chat:<id>` topics,** added to `parseTopic` and `canonicalTopic` (`lib/docs/live/protocol.ts:44-59`), `relay-access.ts`, the relay route's event list, and new `realtime.messages` select and insert policies through `private.my_chat_ids()`. Typing is a broadcast event (presence isn't allowed).
-- **The server is the authority.** Messages are written by a server action, then broadcast once per commit to the conversation topic and to each member's person channel for unread counts. A removed member's writes are refused and a `removed` event is sent; Realtime only checks policy at join, so clients can't be trusted to drop themselves.
+- **`chat:<id>` topics,** added to `parseTopic` and `canonicalTopic` (`lib/docs/live/protocol.ts:44-59`), `relay-access.ts`, the relay route's event list, and new `realtime.messages` select and insert policies through `private.my_chat_ids()`. `chat:<id>` carries typing only (presence isn't allowed).
+- **The server is the authority.** Messages are written by a server action, then broadcast once per commit as a `chat` event on each member's person channel only, never on `chat:<id>`: members can write to that topic, so payloads there can't be trusted, and a removed member may still be joined to it. A removed member's writes are refused and a `removed` event is sent; Realtime only checks policy at join, so clients can't be trusted to drop themselves.
 
 ### UI
 - **Navigation:** Chat in the sidebar with an unread badge, not filtered by workspace. Workspace labels on rooms only for people in more than one workspace.

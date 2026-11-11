@@ -4,7 +4,8 @@ import type { Page, PageSummary, Participant, Presence } from "@/lib/docs/client
 import { clearLiveDraft, readDraft, readLiveDraft, writeLiveDraft } from "@/lib/docs/drafts";
 import { setPresence } from "@/lib/docs/editor/presence";
 import { bind, lock, unbind } from "@/lib/docs/live/binding";
-import { personTopic, workspaceTopic, type AlertMessage, type LiveTransportKind, type LiveUser, type WritingMessage } from "@/lib/docs/live/protocol";
+import type { ChatLiveEvent, ChatTyping } from "@/lib/chat/types";
+import { chatTopic, personTopic, workspaceTopic, type AlertMessage, type LiveTransportKind, type LiveUser, type WritingMessage } from "@/lib/docs/live/protocol";
 import { onTrustChange, publishPresence, trustedUser, trustWriter } from "@/lib/docs/live/registry";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
 import {
@@ -563,5 +564,53 @@ export async function watchLiveActivity(
   return () => {
     closed = true;
     for (const channel of channels) channel.close();
+  };
+}
+
+const CHAT_EVENT_TYPES: readonly string[] = ["message", "edit", "delete", "read", "thread-read", "conversation", "removed"];
+
+export async function watchChat(source: LiveTransportKind | LiveTransport, userId: string, onEvent: (event: ChatLiveEvent) => void, onJoined: (joined: boolean) => void) {
+  const transport = typeof source === "string" ? await transportFor(source).catch(() => null) : source;
+  if (!transport) {
+    onJoined(false);
+    return () => {};
+  }
+  let closed = false;
+  const channel = openShared(transport, personTopic(userId), {
+    message: (event, payload) => {
+      if (closed || event !== "chat" || !payload || typeof payload !== "object") return;
+      const chat = payload as ChatLiveEvent;
+      if (CHAT_EVENT_TYPES.includes(chat.type) && typeof chat.conversationId === "string") onEvent(chat);
+    },
+    status: (status) => {
+      if (!closed) onJoined(status === "joined");
+    },
+  });
+  return () => {
+    closed = true;
+    channel.close();
+  };
+}
+
+export async function openChatTyping(source: LiveTransportKind | LiveTransport, conversationId: string, onTyping: (typing: ChatTyping) => void) {
+  const transport = typeof source === "string" ? await transportFor(source).catch(() => null) : source;
+  if (!transport) return { send: () => false, close: () => {} };
+  const topic = chatTopic(conversationId);
+  let closed = false;
+  const channel = transport.open(topic, {
+    message: (event, payload) => {
+      if (closed || event !== "typing" || !payload || typeof payload !== "object") return;
+      const typing = payload as ChatTyping;
+      if (typing.conversationId !== conversationId || typeof typing.user?.id !== "string" || typeof typing.user?.name !== "string") return;
+      onTyping({ conversationId, user: { id: typing.user.id, name: typing.user.name.slice(0, 120) }, typing: typing.typing === true });
+    },
+    status: () => {},
+  });
+  return {
+    send: (typing: ChatTyping) => !closed && channel.send("typing", typing),
+    close: () => {
+      closed = true;
+      channel.close();
+    },
   };
 }

@@ -10,6 +10,7 @@ export type ShortcutGroup =
   | "Calendar"
   | "Capture"
   | "Mail"
+  | "Chat"
   | "Docs"
   | "Settings";
 
@@ -42,6 +43,7 @@ export const SEQUENCE_TIMEOUT_MS = 1200;
 
 const NAV: [string, string, string, string?][] = [
   ["m", "Mail", "/mail", "email inbox sent drafts archive"],
+  ["h", "Chat", "/chat", "messages rooms direct threads team"],
   ["o", "Companies", "/", "home organisations"],
   ["c", "Contacts", "/contacts", "people"],
   ["p", "Opportunities", "/opportunities", "deals pipeline"],
@@ -186,6 +188,16 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-flag", label: "Flag or unflag", group: "Mail", combos: [{ key: "s" }] },
   { id: "mail-undo", label: "Undo the last move", group: "Mail", combos: [{ key: "z" }] },
   { id: "mail-refresh", label: "Check for new mail", group: "Mail", combos: [{ key: "r", shift: true }], palette: true, keywords: "sync refresh email" },
+
+  { id: "chat-new-message", label: "New message", group: "Create", sequence: ["c", "h"], href: "/chat?new=message", palette: true, keywords: "chat direct message dm teammate" },
+  { id: "chat-new-room", label: "New room", group: "Chat", palette: true, keywords: "chat create channel" },
+  { id: "chat-room-settings", label: "Room settings", group: "Chat", palette: true, keywords: "chat members name workspace leave" },
+  { id: "chat-edit-last", label: "Edit your last message", group: "Chat", combos: [{ key: "ArrowUp" }], whileTyping: true },
+  { id: "chat-reply", label: "Reply in thread", group: "Chat", combos: [{ key: "r" }] },
+  { id: "chat-close-thread", label: "Close the thread", group: "Chat", combos: [{ key: "Escape" }] },
+  { id: "chat-prev", label: "Previous conversation", group: "Chat", combos: [{ key: "ArrowUp", alt: true }], whileTyping: true },
+  { id: "chat-next", label: "Next conversation", group: "Chat", combos: [{ key: "ArrowDown", alt: true }], whileTyping: true },
+  { id: "chat-send", label: "Send (Shift Enter adds a line)", group: "Chat", combos: [{ key: "Enter" }], whileTyping: true },
 
   { id: "docs-search", label: "Search docs", group: "Docs", combos: [{ key: "f", mod: true, shift: true }], whileTyping: true, palette: true, keywords: "find notes text" },
   { id: "docs-daily", label: "Today's daily note", group: "Docs", sequence: ["g", "d"], palette: true, keywords: "journal today docs" },

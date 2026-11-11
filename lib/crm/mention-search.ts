@@ -11,6 +11,8 @@ export type MentionOption = Mention & { detail: string | null };
 
 const PEOPLE_LIMIT = 5;
 
+const ROLE_LABELS = { owner: "Owner", admin: "Admin", member: "Member" } as const;
+
 function rankBy(text: string) {
   const lower = text.toLowerCase();
   return (option: MentionOption) => {
@@ -41,7 +43,7 @@ export async function searchMentions(user: UserActor, query: string): Promise<Me
   const lower = text.toLowerCase();
   const people: MentionOption[] = members
     .filter((member) => member.id !== user.userId && (!lower || member.name.toLowerCase().includes(lower) || (member.email ?? "").toLowerCase().includes(lower)))
-    .map((member) => ({ kind: "member" as const, id: member.id, name: member.name, detail: member.email }));
+    .map((member) => ({ kind: "member" as const, id: member.id, name: member.name, detail: ROLE_LABELS[member.role] }));
   const records: MentionOption[] = [
     ...contacts.data.map((contact) => ({
       kind: "contact" as const,

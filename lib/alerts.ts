@@ -58,7 +58,7 @@ export type TeamAlert = {
   workspaceId?: string | null;
 };
 
-export type TeamAlertOptions = { send?: PushSender; budgetMs?: number };
+export type TeamAlertOptions = { send?: PushSender; budgetMs?: number; recipientsVerified?: boolean };
 
 type Membership = {
   user_id: string;
@@ -92,7 +92,12 @@ async function memberships(userIds: string[]) {
   return byUser;
 }
 
-export async function alertTargets(actor: Actor, recipients: string[], alert: Pick<TeamAlert, "source" | "workspaceId">): Promise<UserActor[]> {
+export async function alertTargets(
+  actor: Actor,
+  recipients: string[],
+  alert: Pick<TeamAlert, "source" | "workspaceId">,
+  options: Pick<TeamAlertOptions, "recipientsVerified"> = {},
+): Promise<UserActor[]> {
   const self = actor.type === "user" ? actor.userId : null;
   const wanted = [...new Set(recipients.filter((id) => typeof id === "string" && isUuid(id)).map((id) => id.toLowerCase()))].filter((id) => id !== self);
   if (wanted.length === 0) return [];
@@ -104,7 +109,7 @@ export async function alertTargets(actor: Actor, recipients: string[], alert: Pi
   const targets: UserActor[] = [];
   for (const userId of wanted) {
     const rows = byUser.get(userId) ?? [];
-    if (!rows.some((row) => shared.has(row.workspace_id))) continue;
+    if (!options.recipientsVerified && !rows.some((row) => shared.has(row.workspace_id))) continue;
     const landing = subject ? rows.find((row) => row.workspace_id === subject) : rows[0];
     if (landing) targets.push(memberActor(landing));
   }
@@ -167,7 +172,7 @@ export type TeamAlertResult = { alerted: string[]; finished: boolean; pushFailur
 
 export async function alertMembers(actor: Actor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}): Promise<TeamAlertResult> {
   checkAlert(alert);
-  const targets = await alertTargets(actor, recipients, alert);
+  const targets = await alertTargets(actor, recipients, alert, options);
   if (targets.length === 0) return { alerted: [], finished: true, pushFailures: 0 };
   const queue = [...targets];
   const fresh: UserActor[] = [];
