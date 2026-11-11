@@ -74,6 +74,7 @@ export function localMessage(input: { clientKey: string; conversationId: string;
     conversationId: input.conversationId,
     parentId: input.parentId,
     author: { id: input.author.id, name: input.author.name },
+    via: null,
     clientKey: input.clientKey,
     body: input.body,
     mentions: input.mentions,
@@ -404,6 +405,7 @@ export function oldestServerId(messages: ChatMessage[]) {
 export function startsGroup(previous: ChatMessage | null, message: ChatMessage, sameDay: boolean) {
   if (!previous || !sameDay) return true;
   if (previous.author.id !== message.author.id || !message.author.id) return true;
+  if ((previous.via?.name ?? null) !== (message.via?.name ?? null)) return true;
   if (previous.deletedAt || previous.replyCount > 0) return true;
   return Date.parse(message.createdAt) - Date.parse(previous.createdAt) > GROUP_GAP_MS;
 }
@@ -411,7 +413,7 @@ export function startsGroup(previous: ChatMessage | null, message: ChatMessage, 
 export function lastOwnMessage(messages: ChatMessage[], viewerId: string) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.author.id === viewerId && !message.deletedAt && !isLocal(message)) return message;
+    if (message.author.id === viewerId && !message.via && !message.deletedAt && !isLocal(message)) return message;
   }
   return null;
 }

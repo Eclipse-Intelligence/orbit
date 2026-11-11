@@ -252,6 +252,7 @@ export async function postViaHook(
       conversationId,
       parentId: null,
       author: { id: null, name: row.author_name ?? "" },
+      via: null,
       clientKey: null,
       body: row.body ?? "",
       mentions: [],

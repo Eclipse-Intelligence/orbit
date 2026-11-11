@@ -121,7 +121,30 @@ function iso(value: Date | string | null) {
   return value ? new Date(value).toISOString() : null;
 }
 
+function withoutChatRooms(definition: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...definition,
+    nodes: definition.nodes.map((node) => (node.type === "post_to_chat" ? { ...node, config: { ...node.config, roomId: "", roomName: "" } } : node)),
+  };
+}
+
+export function settleChatRooms(previous: WorkflowDefinition, next: WorkflowDefinition): WorkflowDefinition {
+  const before = new Map(previous.nodes.map((node) => [node.id, node]));
+  return {
+    ...next,
+    nodes: next.nodes.map((node) => {
+      const earlier = before.get(node.id);
+      if (node.type !== "post_to_chat" || earlier?.type !== "post_to_chat") return node;
+      const room = (config: Record<string, unknown>) => String(config.roomName ?? "").trim().replace(/^#+/, "").trim().toLowerCase();
+      const renamed = room(node.config) !== room(earlier.config);
+      const sameId = String(node.config.roomId ?? "") === String(earlier.config.roomId ?? "");
+      return renamed && sameId ? { ...node, config: { ...node.config, roomId: "" } } : node;
+    }),
+  };
+}
+
 function mapWorkflow(row: WorkflowRow, actor: UserActor): Workflow {
+  const definition = safeDefinition(row.definition) ?? EMPTY;
   return {
     id: row.id,
     name: row.name,
@@ -136,7 +159,7 @@ function mapWorkflow(row: WorkflowRow, actor: UserActor): Workflow {
     lastRunStatus: row.last_run_status,
     runCount: row.run_count,
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
-    definition: safeDefinition(row.definition) ?? EMPTY,
+    definition: row.owner_id === actor.userId ? definition : withoutChatRooms(definition),
   };
 }
 
@@ -242,7 +265,7 @@ export async function saveWorkflow(
   input: { name?: string; description?: string | null; definition?: unknown },
 ): Promise<Workflow> {
   const current = await requireOwn(actor, id);
-  const definition = input.definition === undefined ? current.definition : validate(input.definition);
+  const definition = input.definition === undefined ? current.definition : settleChatRooms(current.definition, validate(input.definition));
   const name = input.name === undefined ? current.name : cleanName(input.name);
   const description = input.description === undefined ? current.description : cleanText(input.description ?? "", 2000, "description");
   await withActor(actor, (db) =>

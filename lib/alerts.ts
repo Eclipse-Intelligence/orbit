@@ -58,7 +58,7 @@ export type TeamAlert = {
   workspaceId?: string | null;
 };
 
-export type TeamAlertOptions = { send?: PushSender; budgetMs?: number; recipientsVerified?: boolean };
+export type TeamAlertOptions = { send?: PushSender; budgetMs?: number; recipientsVerified?: boolean; includeSelf?: boolean };
 
 type Membership = {
   user_id: string;
@@ -96,10 +96,10 @@ export async function alertTargets(
   actor: Actor,
   recipients: string[],
   alert: Pick<TeamAlert, "source" | "workspaceId">,
-  options: Pick<TeamAlertOptions, "recipientsVerified"> = {},
+  options: Pick<TeamAlertOptions, "recipientsVerified" | "includeSelf"> = {},
 ): Promise<UserActor[]> {
   const self = actor.type === "user" ? actor.userId : null;
-  const wanted = [...new Set(recipients.filter((id) => typeof id === "string" && isUuid(id)).map((id) => id.toLowerCase()))].filter((id) => id !== self);
+  const wanted = [...new Set(recipients.filter((id) => typeof id === "string" && isUuid(id)).map((id) => id.toLowerCase()))].filter((id) => options.includeSelf || id !== self);
   if (wanted.length === 0) return [];
   const subject = landsInSubjectWorkspace(alert.source) ? alert.workspaceId ?? null : null;
   if (landsInSubjectWorkspace(alert.source) && !subject) return [];

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import type { ChatLiveEvent } from "@/lib/chat/types";
 import {
@@ -42,6 +42,11 @@ after(async () => {
 
 async function sql(text: string, values: unknown[] = []) {
   return getAdminPool().query(text, values);
+}
+
+async function rerunChatMigrations() {
+  const files = readdirSync("supabase/migrations").filter((file) => file.endsWith(".sql") && file >= "20270116120000_chat.sql").sort();
+  for (const file of files) await getAdminPool().query(readFileSync(`supabase/migrations/${file}`, "utf8"));
 }
 
 async function until(check: () => Promise<boolean> | boolean, label: string) {
@@ -477,7 +482,7 @@ describe("chat", () => {
       const exists = await admin.query<{ found: boolean }>("select to_regclass('realtime.messages') is not null as found");
       if (!exists.rows[0].found) await admin.query(readFileSync("supabase/bootstrap/local-realtime.sql", "utf8"));
       await admin.query(readFileSync("supabase/migrations/20261216100000_docs_realtime.sql", "utf8"));
-      await admin.query(readFileSync("supabase/migrations/20270116120000_chat.sql", "utf8"));
+      await rerunChatMigrations();
       room = (await createRoom(mark, { name: "live", memberIds: [sam.userId] })).id;
     });
 
@@ -949,7 +954,7 @@ describe("chat", () => {
       const admin = getAdminPool();
       await admin.query("alter table crm.chat_members drop column opened");
       await admin.query("alter table crm.chat_messages drop constraint chat_messages_body_present");
-      await admin.query(readFileSync("supabase/migrations/20270116120000_chat.sql", "utf8"));
+      await rerunChatMigrations();
       const shape = await admin.query(
         `select
            exists (select 1 from information_schema.columns where table_schema = 'crm' and table_name = 'chat_members' and column_name = 'opened') as opened,

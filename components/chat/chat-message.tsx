@@ -121,9 +121,9 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const deleted = Boolean(message.deletedAt);
   const error = local && message.clientKey ? failed[message.clientKey] : undefined;
   const isEditing = editing?.id === message.id && editing.pane === pane && !deleted;
-  const mentionsMe = !own && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
+  const mentionsMe = (!own || Boolean(message.via)) && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
   const canReply = !inThread && !local && !deleted;
-  const canEdit = own && !local && !deleted;
+  const canEdit = own && !local && !deleted && !message.via;
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted;
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
@@ -207,7 +207,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         {!continuation && (
           <div className="flex items-baseline gap-2">
-            <span className="truncate text-[14px] font-medium">{message.author.name}</span>
+            <span className="truncate text-[14px] font-medium">
+              {message.author.name}
+              {message.via && <span className="text-subtle font-normal"> via {message.via.name}</span>}
+            </span>
             {message.hook && (
               <Tag size="sm" className="h-[18px] self-center text-[11px]">
                 Hook
