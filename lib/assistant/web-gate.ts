@@ -47,7 +47,17 @@ function outsideDescription(content: string) {
   }
 }
 
+function ownChatPost(content: string) {
+  try {
+    const parsed = JSON.parse(content) as { posted?: unknown } | null;
+    return Boolean(parsed && typeof parsed === "object" && typeof parsed.posted === "boolean");
+  } catch {
+    return false;
+  }
+}
+
 export function outsideRead(name: string, content: string) {
+  if (name === "team_chat" && ownChatPost(content)) return hasOutsideRecord(content);
   return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && outsideDescription(content)) || hasOutsideRecord(content);
 }
 

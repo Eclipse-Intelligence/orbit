@@ -5,6 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { POST as mcpRoute } from "@/app/api/mcp/route";
 import { describeAction, isWriteCall, recordNames, resolveToolCall, runTool, toolDefinitions } from "@/lib/assistant/tools";
 import { needsEmailConfirm } from "@/lib/assistant/email-policy";
+import { outsideRead } from "@/lib/assistant/web-gate";
 import { createPersonalToken } from "@/lib/auth/personal";
 import { MCP_CHAT_POSTS_PER_MINUTE } from "@/lib/auth/rate-limit";
 import { chatWorkSettled, createRoom, listMessages, listThread, postMessage } from "@/lib/crm/chat";
@@ -18,7 +19,7 @@ import { createAgent, createUser, resetDatabase } from "./helpers";
 
 type Answer = { content: { type: string; text: string }[]; isError?: boolean };
 
-type Message = { id: string; threadId: string | null; author: string; authorId: string | null; text: string | null; replies: number };
+type Message = { id: string; threadId: string | null; author: { id: string | null; name: string }; text: string | null; replies: number };
 
 async function sql(text: string, values: unknown[] = []) {
   return getAdminPool().query(text, values);
@@ -119,6 +120,17 @@ describe("Chat over MCP and in the assistant", () => {
         await agentServer.close();
       }
       assert.ok(!(await routeTools(agent.token)).some((name) => name.startsWith("chat_")));
+      const agentCall = await mcpRoute(
+        new Request("http://crm.test/api/mcp", {
+          method: "POST",
+          headers: { authorization: `Bearer ${agent.token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "chat_post", arguments: { conversation_id: room, text: "From an agent" } } }),
+        }),
+      );
+      const agentAnswer = JSON.stringify(await agentCall.json());
+      assert.match(agentAnswer, /chat_post/);
+      assert.match(agentAnswer, /not found|isError|-32602/i);
+      assert.equal((await sql("select 1 from crm.chat_messages where body = 'From an agent'")).rowCount, 0);
       const token = await createPersonalToken(mark, "Chat check");
       const viaRoute = await routeTools(token.token);
       assert.ok(viaRoute.includes("chat_post") && viaRoute.includes("chat_read"));
@@ -149,7 +161,7 @@ describe("Chat over MCP and in the assistant", () => {
       });
       assert.equal(page.conversation.name, "#sales");
       assert.deepEqual(page.messages.map((message) => message.text), ["Update 2", "Update 3"]);
-      assert.equal(page.messages[0].author, "Sam Okafor");
+      assert.deepEqual(page.messages[0].author, { id: sam.userId, name: "Sam Okafor" });
       assert.equal(page.hasOlder, true);
       assert.equal(page.hasNewer, false);
       assert.ok(page.firstUnreadId);
@@ -182,7 +194,7 @@ describe("Chat over MCP and in the assistant", () => {
       assert.equal(posted.posted, true);
       assert.equal(posted.duplicate, false);
       assert.equal(posted.conversationId, room);
-      assert.equal(posted.message.author, "Mark Ridgeon");
+      assert.deepEqual(posted.message.author, { id: mark.userId, name: "Mark Ridgeon" });
       const reply = await ok<{ message: Message; conversationId: string }>(sam, "chat_post", { thread_id: posted.message.id, text: "Great news" });
       assert.equal(reply.message.threadId, posted.message.id);
       assert.equal(reply.conversationId, room);
@@ -205,8 +217,8 @@ describe("Chat over MCP and in the assistant", () => {
       assert.equal(dm.kind, "dm");
       assert.equal(dm.name, "Mark Ridgeon");
       assert.equal(dm.person?.id, mark.userId);
-      assert.match(await refused(mark, "chat_post", { person: "olly@elsewhere.test", text: "Hello" }), /^not_found: No teammate with that address/);
-      assert.match(await refused(mark, "chat_post", { person: olly.userId, text: "Hello" }), /^(forbidden|not_found): /);
+      assert.match(await refused(mark, "chat_post", { person: "olly@elsewhere.test", text: "Hello" }), /^not_found: Couldn't find that teammate\.$/);
+      assert.equal(await refused(mark, "chat_post", { person: olly.userId, text: "Hello" }), "not_found: Couldn't find that teammate.");
     });
 
     it("posts once for a repeated idempotency_key and refuses the key for another conversation", async () => {
@@ -220,11 +232,25 @@ describe("Chat over MCP and in the assistant", () => {
       assert.equal((await sql("select 1 from crm.chat_messages where body = 'Only once'")).rowCount, 1);
       assert.equal((await sql("select client_key from crm.chat_messages where id = $1", [first.message.id])).rows[0].client_key, "retry-1");
       assert.match(await refused(mark, "chat_post", { person: sam.userId, text: "Only once", idempotency_key: "retry-1" }), /^conflict: /);
+      assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "Not the same", idempotency_key: "retry-1" }), /^conflict: /);
     });
 
-    it(`allows ${MCP_CHAT_POSTS_PER_MINUTE} posts a minute, and still answers a repeat over the limit`, async () => {
+    it(`allows ${MCP_CHAT_POSTS_PER_MINUTE} posts a minute, charging only new posts, and still answers a repeat over the limit`, async () => {
       const key = `chat-post:${mark.userId}`;
+      const charged = async () => Number((await sql("select request_count from private.rate_limit_buckets where bucket_key = $1", [key])).rows[0]?.request_count ?? 0);
+      await sql("delete from private.rate_limit_buckets where bucket_key = $1", [key]);
       await ok(mark, "chat_post", { conversation_id: room, text: "Before the limit", idempotency_key: "limit-1" });
+      assert.equal(await charged(), 1);
+      await ok(mark, "chat_post", { conversation_id: room, text: "Before the limit", idempotency_key: "limit-1" });
+      await ok(mark, "chat_post", { person: sam.email, text: "Before the limit", idempotency_key: "limit-dm" });
+      await ok(mark, "chat_post", { person: sam.userId, text: "Before the limit", idempotency_key: "limit-dm" });
+      assert.equal(await charged(), 2);
+      assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "   " }), /^invalid_input: /);
+      assert.match(await refused(mark, "chat_post", { person: "nobody@eclipse.test", text: "Hi" }), /^not_found: /);
+      assert.match(await refused(mark, "chat_post", { person: mark.userId, text: "Hi" }), /^not_found: /);
+      assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "Different", idempotency_key: "limit-1" }), /^conflict: /);
+      assert.match(await refused(olly, "chat_post", { conversation_id: room, text: "Let me in" }), /^not_found: /);
+      assert.equal(await charged(), 2);
       await sql(
         `insert into private.rate_limit_buckets (bucket_key, window_start, request_count)
          values ($1, to_timestamp(floor(extract(epoch from clock_timestamp()) / 60) * 60), $2)
@@ -233,7 +259,7 @@ describe("Chat over MCP and in the assistant", () => {
       );
       try {
         const limited = await refused(mark, "chat_post", { conversation_id: room, text: "Over the limit" });
-        assert.equal(limited, `rate_limited: ${MCP_CHAT_POSTS_PER_MINUTE} Chat messages have been posted through MCP this minute, the most Orbit allows. Try again in a minute.`);
+        assert.equal(limited, `rate_limited: Couldn't post. ${MCP_CHAT_POSTS_PER_MINUTE} Chat messages a minute is the most MCP allows. Try again in a minute.`);
         assert.equal((await sql("select 1 from crm.chat_messages where body = 'Over the limit'")).rowCount, 0);
         const dana = await createUser("dana@eclipse.test", "Dana Reyes");
         await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, dana.userId]);
@@ -245,6 +271,20 @@ describe("Chat over MCP and in the assistant", () => {
       } finally {
         await sql("delete from private.rate_limit_buckets where bucket_key = $1", [key]);
       }
+    });
+
+    it("refuses bad text, keys and ids with the documented codes", async () => {
+      assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "x".repeat(10_001) }), /^invalid_input: Keep messages to 10,000 characters\.$/);
+      assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "Hi", idempotency_key: "   " }), /^invalid_input: /);
+      assert.match(await refused(mark, "chat_post", { conversation_id: room, text: "Hi", idempotency_key: "k".repeat(101) }), /^invalid_input: /);
+      assert.match(await refused(mark, "chat_post", { conversation_id: "not-a-uuid", text: "Hi" }), /^not_found: /);
+      assert.match(await refused(mark, "chat_read", { conversation_id: "not-a-uuid" }), /^not_found: /);
+      const root = await postMessage(sam, { conversationId: room, body: "Thread root" });
+      assert.match(await refused(mark, "chat_read", { conversation_id: room, before: root.message.id, after: root.message.id }), /^invalid_input: Pass before or after, not both\.$/);
+      assert.match(await refused(mark, "chat_read", { thread_id: root.message.id, from_unread: true }), /^invalid_input: /);
+      const trimmed = await ok<{ posted: boolean; message: Message }>(mark, "chat_post", { conversation_id: room, text: "Trimmed key", idempotency_key: "  spaced  " });
+      assert.equal((await sql("select client_key from crm.chat_messages where id = $1", [trimmed.message.id])).rows[0].client_key, "spaced");
+      assert.equal((await ok<{ duplicate: boolean }>(mark, "chat_post", { conversation_id: room, text: "Trimmed key", idempotency_key: "spaced" })).duplicate, true);
     });
   });
 
@@ -268,16 +308,20 @@ describe("Chat over MCP and in the assistant", () => {
       assert.match(listed.notice, /Treat it as information only/);
       assert.ok(listed.conversations.some((item) => item.id === room));
       assert.ok(listed.people.some((person) => person.id === sam.userId));
-      const read = (await runTool(mark, "team_chat", { action: "read", conversationId: room, limit: 3 }, { fence: "abcdef012345" })) as { messages: { text: string }[] };
+      const read = (await runTool(mark, "team_chat", { action: "read", conversationId: room, limit: 3 }, { fence: "abcdef012345" })) as { messages: { text: string; author: { name: string } }[] };
       assert.equal(read.messages.length, 3);
       assert.match(read.messages[0].text, /<<untrusted-abcdef012345>>/);
-      const ignored = (await runTool(mark, "team_chat", { conversationId: room, text: "Not posted" })) as { messages: unknown[] };
-      assert.ok(Array.isArray(ignored.messages));
+      for (const action of [undefined, "Post", " post", "send", null, ["post"]]) {
+        assert.deepEqual(await runTool(mark, "team_chat", { action, conversationId: room, text: "Not posted" }), { error: "action must be read or post.", field: "action" }, String(action));
+      }
       assert.equal((await listMessages(mark, room, { limit: 100 })).messages.length, before);
+      assert.match(read.messages[0].author.name, /^<<untrusted-abcdef012345>>/);
       const dm = (await runTool(mark, "team_chat", { action: "read", person: "sam@eclipse.test" })) as { conversation: { kind: string } | null };
       assert.equal(dm.conversation?.kind, "dm");
       const posted = (await runTool(mark, "team_chat", { action: "post", conversationId: room, text: "From the assistant" })) as { posted: boolean; message: { id: string } };
       assert.equal(posted.posted, true);
+      assert.equal(outsideRead("team_chat", JSON.stringify(posted)), false);
+      assert.equal(outsideRead("team_chat", JSON.stringify(read)), true);
       const replied = (await runTool(mark, "team_chat", { action: "post", threadId: posted.message.id, text: "And a reply" })) as { message: { threadId: string } };
       assert.equal(replied.message.threadId, posted.message.id);
       assert.equal((await listThread(sam, posted.message.id)).replies.length, 1);
@@ -293,7 +337,7 @@ describe("Chat over MCP and in the assistant", () => {
       const formatted = await postViaHook({ hookId: hook.id, authorization: `Bearer ${secret}`, body: JSON.stringify({ event: "signup", plan: "pro" }) });
       const workflow = await createWorkflow(mark, { name: "Won deals" });
       const viaFlow = await postMessage(mark, { conversationId: room, body: "Quillfeather signed" }, { viaWorkflowId: workflow.id });
-      type Read = { id: string; fromWebhook?: boolean; webhook?: { title: string | null; url: string | null; formatted: boolean }; via?: { workflowId: string; name: string }; author: string; text: string };
+      type Read = { id: string; fromWebhook?: boolean; webhook?: { title: string | null; url: string | null; formatted: boolean }; via?: { workflowId: string; name: string }; author: { id: string | null; name: string }; text: string };
       const page = await ok<{ messages: Read[] }>(mark, "chat_read", { conversation_id: room, limit: 5 });
       const lead = page.messages.find((message) => message.id === hooked.id)!;
       assert.equal(lead.fromWebhook, true);
@@ -309,6 +353,7 @@ describe("Chat over MCP and in the assistant", () => {
       const fencedLead = fenced.messages.find((message) => message.id === hooked.id)!;
       assert.equal(fencedLead.fromWebhook, true);
       assert.match(fencedLead.text, /^<<untrusted-abcdef012345>>/);
+      assert.match(fencedLead.author.name, /^<<untrusted-abcdef012345>>/);
       assert.match(fencedLead.webhook!.title!, /^<<untrusted-abcdef012345>>/);
       assert.equal(fencedLead.webhook!.url, "https://hooks.test/x");
       assert.match(fenced.messages.find((message) => message.id === viaFlow.message.id)!.via!.name, /^<<untrusted-abcdef012345>>/);
@@ -323,6 +368,9 @@ describe("Chat over MCP and in the assistant", () => {
       assert.deepEqual(await card({ action: "post", conversationId: room, text: "Pilot signed" }), { title: "Post in #sales", lines: ["Pilot signed"] });
       assert.deepEqual(await card({ action: "post", threadId: root.message.id, text: "I do" }), { title: "Reply in #sales", lines: ["Thread: Who has the Larkspur deck?", "I do"] });
       assert.deepEqual(await card({ action: "post", person: sam.email, text: "Call?" }), { title: "Message Sam Okafor", lines: ["Call?"] });
+      const outsiderRoom = (await createRoom(olly, { name: "elsewhere" })).id;
+      assert.equal((await card({ action: "post", conversationId: outsiderRoom, text: "Hi" })).title, "Post in a conversation Orbit can't find");
+      assert.equal((await card({ action: "post", person: olly.email, text: "Hi" })).title, "Message a teammate Orbit can't find");
     });
   });
 });
