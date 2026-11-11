@@ -183,16 +183,22 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
       setTitle(saved.current.title);
       return;
     }
-    if (next === saved.current.title) return;
+    const previous = saved.current.title;
+    if (next === previous) return;
     saved.current.title = next;
-    void save({ title: next });
+    void save({ title: next }).then((ok) => {
+      if (!ok && saved.current.title === next) saved.current.title = previous;
+    });
   }
 
   function saveText() {
     const next = text.trim();
-    if (next === saved.current.text) return;
+    const previous = saved.current.text;
+    if (next === previous) return;
     saved.current.text = next;
-    void save({ description: replaceDescriptionText(task.description, next) });
+    void save({ description: replaceDescriptionText(task.description, next) }).then((ok) => {
+      if (!ok && saved.current.text === next) saved.current.text = previous;
+    });
   }
 
   function flush() {
@@ -241,6 +247,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "d" || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented) return;
     const target = event.target as HTMLElement;
+    if (!event.currentTarget.contains(target)) return;
     if (target.closest("input, textarea, select, [contenteditable='true'], [role='combobox'], [role='listbox'], [role='menu']")) return;
     if (!canChange || done) return;
     event.preventDefault();
@@ -263,7 +270,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
       ref={setSheet}
       side="right"
       aria-label="Task"
-      className="w-full md:w-[520px] md:max-w-[520px]"
+      className="w-full data-[keyboard]:pb-0 md:w-[520px] md:max-w-[520px]"
       onKeyDown={onKeyDown}
       onEscapeKeyDown={(event) => {
         if (holdEscape(discussion)) {
@@ -283,7 +290,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
               <span className="caption-style text-subtle truncate">{created}</span>
             </div>
             <SheetDescription className="sr-only">{task.title}</SheetDescription>
-            <SheetCloseButton label="Close" className="max-md:size-11" />
+            <SheetCloseButton label="Close" className="[@media(pointer:coarse)]:size-11" />
           </SheetHeader>
           <div data-chat-room-pane className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-5 pb-4 max-md:px-3.5">
@@ -336,7 +343,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                           disabled={busy}
                           handOnNote
                           trigger={
-                            <span className={cn("inline-flex items-center max-md:h-11", CHIP)}>
+                            <span className={cn("inline-flex items-center [@media(pointer:coarse)]:h-11", CHIP)}>
                               <MemberAvatar member={owner} viewerId={viewer.id} size="xs" />
                               <span className="truncate">{owner?.name ?? "No one"}</span>
                               <ChevronDownIcon aria-hidden className="text-subtle size-3 shrink-0" />
@@ -363,7 +370,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                               if (!value) setReminder(null);
                               void save(value ? { dueAt: value } : { dueAt: null, remindMinutes: null });
                             }}
-                            className={cn(CHIP, "max-md:h-11 [&_svg]:size-3.5", !due && "text-subtle")}
+                            className={cn(CHIP, "[@media(pointer:coarse)]:h-11 [&_svg]:size-3.5", !due && "text-subtle")}
                           />
                           {due && (
                             <ReminderSelect
@@ -374,7 +381,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                                 setReminder(minutes);
                                 void save({ remindMinutes: minutes });
                               }}
-                              className={cn(CHIP, "max-md:h-11", reminder === null && "text-subtle")}
+                              className={cn(CHIP, "[@media(pointer:coarse)]:h-11", reminder === null && "text-subtle")}
                             />
                           )}
                         </>
@@ -388,7 +395,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                           const member = named(person) ?? { id: person, name: "Former member" };
                           const removable = canRemoveTag(viewer, task, person);
                           return (
-                            <span key={person} className={cn("inline-flex items-center", CHIP, removable && "pr-0.5")}>
+                            <span key={person} className={cn("inline-flex items-center [@media(pointer:coarse)]:h-11", CHIP, removable && "pr-0.5")}>
                               <MemberAvatar member={member} viewerId={viewer.id} size="xs" />
                               <span className="truncate">{member.name}</span>
                               {removable && (
@@ -398,7 +405,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                                   aria-label={person === viewer.id ? "Remove yourself" : `Remove ${member.name}`}
                                   title="Remove"
                                   onClick={() => void untag(person)}
-                                  className="size-6 rounded-full max-md:-my-2 max-md:size-11"
+                                  className="size-6 rounded-full [@media(pointer:coarse)]:size-11"
                                 >
                                   <XIcon aria-hidden className="size-3" />
                                 </Button>
@@ -472,7 +479,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
           {canChange && (
             <SheetFooter className="max-md:px-3.5">
               <span className="caption-style text-subtle min-w-0 truncate">{task.companyName ?? ""}</span>
-              <Button variant="secondary" size="md" disabled={done || busy} onClick={() => void complete()} shortcut={done ? undefined : ["D"]} className="max-md:h-11">
+              <Button variant="secondary" size="md" disabled={done || busy} onClick={() => void complete()} shortcut={done ? undefined : ["D"]} className="[@media(pointer:coarse)]:h-11">
                 {done ? "Done" : "Mark done"}
               </Button>
             </SheetFooter>

@@ -1169,7 +1169,6 @@ async function tagFromDiscussion(db: Db, actor: UserActor, conversation: Convers
   if (conversation.kind !== "task" || !conversation.task_id) return [];
   const wanted = [...new Set(people.filter((person) => person !== actor.userId))];
   if (wanted.length === 0) return [];
-  assertScope(actor.scopes, "tasks:write");
   const seeing = await db.query<{ user_id: string }>(
     `select wm.user_id from crm.tasks t
      join crm.workspace_members wm on wm.workspace_id = t.workspace_id
@@ -1185,6 +1184,7 @@ async function tagFromDiscussion(db: Db, actor: UserActor, conversation: Convers
   const already = new Set(seeing.rows.map((row) => row.user_id));
   const fresh = wanted.filter((person) => !already.has(person));
   if (fresh.length === 0) return [];
+  assertScope(actor.scopes, "tasks:write");
   try {
     return await addTaskParticipantsInDb(db, actor, conversation.task_id, fresh, { operation: "tag_task", source: "chat" }, { alert: false });
   } catch (error) {

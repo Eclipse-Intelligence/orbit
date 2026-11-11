@@ -481,7 +481,11 @@ describe("discussion helpers", () => {
     const link = "[Re: pricing](/mail?thread=a)";
     assert.equal(replaceDescriptionText(`Intro\n${link}\nSecond`, "Intro changed\nSecond"), `Intro changed\n${link}\nSecond`);
     assert.equal(replaceDescriptionText(`Use v4\n\n${link}`, "Use v5"), `Use v5\n\n${link}`);
-    assert.equal(replaceDescriptionText(link, "New text"), `New text\n\n${link}`);
+    assert.equal(replaceDescriptionText(link, "New text"), `${link}\nNew text`);
+    assert.equal(replaceDescriptionText("A\n\nB", "A\nB"), "A\nB");
+    assert.equal(replaceDescriptionText("A", "A\n\n\n\nB"), "A\n\n\n\nB");
+    assert.equal(replaceDescriptionText(`A\n${link}\nB`, "A\nNew\nB"), `A\n${link}\nNew\nB`);
+    assert.equal(replaceDescriptionText(`A\n${link}\nB`, "Only"), `Only\n${link}`);
     assert.equal(replaceDescriptionText(`One\n${link}`, ""), link);
     assert.equal(replaceDescriptionText(null, ""), null);
   });

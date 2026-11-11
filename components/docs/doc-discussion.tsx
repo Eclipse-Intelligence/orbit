@@ -79,7 +79,7 @@ export function DocDiscussionPanel({ discussion, title, phone, onClose }: { disc
         >
           {thread ? <DiscussionThread discussion={discussion} backLabel="Discussion" /> : <DiscussionMessages discussion={discussion} className="pt-1" />}
         </div>
-        <div className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-4 max-md:px-2 max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-4 max-md:px-2 max-md:pb-2">
           <DiscussionNotice discussion={discussion} />
           {thread ? (
             <DiscussionComposer key={thread} discussion={discussion} parentId={thread} autoFocus onEscape={discussion.context.closeThread} />
@@ -100,7 +100,7 @@ function PhoneSheetBody({ discussion, title, onClose }: { discussion: Discussion
     <SheetContent
       ref={setSheet}
       side="right"
-      className="w-full"
+      className="w-full data-[keyboard]:pb-0"
       aria-describedby={undefined}
       onEscapeKeyDown={(event) => {
         if (holdEscape(discussion)) event.preventDefault();

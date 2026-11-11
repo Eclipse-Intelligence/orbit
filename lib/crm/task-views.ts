@@ -36,10 +36,17 @@ type TaskDueState = {
   label: string;
 };
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 function dateParts(date: Date, options: Intl.DateTimeFormatOptions) {
-  const parts = new Intl.DateTimeFormat("en-GB", options).formatToParts(date);
-  const pick = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
-  return [pick("weekday"), pick("day"), pick("month"), pick("year")].filter(Boolean).join(" ");
+  const parts = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "numeric", day: "numeric", timeZone: options.timeZone }).formatToParts(date);
+  const pick = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value ?? "0");
+  const year = pick("year");
+  const month = pick("month");
+  const day = pick("day");
+  const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  return [options.weekday ? weekday : "", String(day), MONTHS[month - 1], options.year ? String(year) : ""].filter(Boolean).join(" ");
 }
 
 export function taskDueState(

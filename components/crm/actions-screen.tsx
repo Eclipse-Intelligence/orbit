@@ -88,29 +88,31 @@ export default function ActionsScreen({
     const params = new URLSearchParams(window.location.search);
     params.set(TASK_PARAM, id);
     openedHere.current = true;
-    window.history.pushState(null, "", `${window.location.pathname}?${params.toString()}`);
+    window.history.pushState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
   }, []);
 
   const dropParam = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     params.delete(TASK_PARAM);
     const query = params.toString();
-    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
   }, []);
 
   const closePanel = useCallback(() => {
-    router.refresh();
     if (openedHere.current) {
       openedHere.current = false;
       window.history.back();
       return;
     }
     dropParam();
-  }, [router, dropParam]);
+  }, [dropParam]);
 
+  const shownPanel = useRef(panelId);
   useEffect(() => {
     if (!panelId) openedHere.current = false;
-  }, [panelId]);
+    if (shownPanel.current && !panelId) router.refresh();
+    shownPanel.current = panelId;
+  }, [panelId, router]);
 
   useEffect(() => {
     if (!missing) return;

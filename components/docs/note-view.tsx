@@ -339,13 +339,23 @@ export default function NoteView({
     if (!discussionAsked) discussionPushed.current = false;
   }, [discussionAsked]);
 
+  const undiscussable = discussionAsked && Boolean(page && summary) && !discussable;
+  useEffect(() => {
+    if (!undiscussable) return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete(DISCUSSION_PARAM);
+    const query = params.toString();
+    discussionPushed.current = false;
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+  }, [undiscussable]);
+
   function setDiscussing(open: boolean) {
     const params = new URLSearchParams(window.location.search);
     if (open) {
       if (params.get(DISCUSSION_PARAM) === "1") return;
       params.set(DISCUSSION_PARAM, "1");
       discussionPushed.current = true;
-      window.history.pushState(null, "", `${window.location.pathname}?${params.toString()}`);
+      window.history.pushState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
       return;
     }
     if (params.get(DISCUSSION_PARAM) !== "1") return;
@@ -356,7 +366,7 @@ export default function NoteView({
     }
     params.delete(DISCUSSION_PARAM);
     const query = params.toString();
-    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
   }
 
   function toggleDiscussion() {
@@ -393,7 +403,7 @@ export default function NoteView({
 
   function toggleHistory() {
     setDiscussing(false);
-    if (historyOpen) {
+    if (historyOpen && !discussionOpen) {
       setSelected(null);
       setRail(wide ? "details" : null);
     } else setRail("history");

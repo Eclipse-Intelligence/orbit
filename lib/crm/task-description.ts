@@ -17,29 +17,34 @@ export function splitDescription(description: string | null) {
 }
 
 export function replaceDescriptionText(original: string | null, text: string) {
-  const lines = (original ?? "").split("\n");
   const isLink = (line: string) => MAIL_LINK.test(line.trim());
-  const slots = lines.flatMap((line, index) => (isLink(line) || !line.trim() ? [] : [index]));
-  const fresh = text.trim() ? text.trim().split("\n") : [];
-  const out: string[] = [];
-  if (slots.length === 0) out.push(...fresh, ...(fresh.length && lines.some(isLink) ? [""] : []));
-  const last = slots[slots.length - 1];
-  let next = 0;
+  const lines = (original ?? "").split("\n");
+  const anchors: { after: number; gap: boolean; line: string }[] = [];
+  let count = 0;
   lines.forEach((line, index) => {
-    if (isLink(line)) {
-      out.push(line.trim());
-      return;
-    }
-    if (!slots.includes(index)) {
-      if (slots.length > 0 && index > slots[0] && index < last) out.push("");
-      else if (out.length > 0 && index > (last ?? -1)) out.push("");
-      return;
-    }
-    if (index === last) {
-      out.push(...fresh.slice(next));
-      next = fresh.length;
-    } else if (next < fresh.length) out.push(fresh[next++]);
+    if (isLink(line)) anchors.push({ after: count, gap: count > 0 && index > 0 && !lines[index - 1].trim(), line: line.trim() });
+    else if (line.trim()) count += 1;
   });
-  const joined = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  const typed = text.replace(/^\s*\n|\s+$/g, "");
+  if (anchors.length === 0) return typed.trim() ? typed : null;
+  const fresh = typed.trim() ? typed.split("\n") : [];
+  const total = fresh.filter((line) => line.trim()).length;
+  const out: string[] = [];
+  const place = (seen: number) => {
+    for (const anchor of anchors) {
+      if (Math.min(anchor.after, total) !== seen) continue;
+      if (anchor.gap && out.length > 0 && out[out.length - 1].trim()) out.push("");
+      out.push(anchor.line);
+    }
+  };
+  place(0);
+  let seen = 0;
+  for (const line of fresh) {
+    out.push(line);
+    if (!line.trim()) continue;
+    seen += 1;
+    place(seen);
+  }
+  const joined = out.join("\n").trim();
   return joined || null;
 }
