@@ -1,8 +1,10 @@
 "use client";
 
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import Button from "@/components/_ui/button";
-import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread } from "@/components/chat/discussion";
+import { Sheet, SheetContent, SheetTitle } from "@/components/_ui/sheet";
+import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread, holdEscape } from "@/components/chat/discussion";
+import { useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import type { Discussion } from "@/components/chat/use-discussion";
 import { cn } from "@/lib/utils";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
@@ -87,5 +89,33 @@ export function DocDiscussionPanel({ discussion, title, phone, onClose }: { disc
         </div>
       </div>
     </DiscussionProvider>
+  );
+}
+
+function PhoneSheetBody({ discussion, title, onClose }: { discussion: Discussion; title: string; onClose: () => void }) {
+  const [sheet, setSheet] = useState<HTMLDivElement | null>(null);
+  const sheetRef = useMemo(() => ({ current: sheet }), [sheet]);
+  useKeyboardFit(sheetRef, Boolean(sheet));
+  return (
+    <SheetContent
+      ref={setSheet}
+      side="right"
+      className="w-full"
+      aria-describedby={undefined}
+      onEscapeKeyDown={(event) => {
+        if (holdEscape(discussion)) event.preventDefault();
+      }}
+    >
+      <SheetTitle className="sr-only">Discussion</SheetTitle>
+      <DocDiscussionPanel discussion={discussion} title={title} phone onClose={onClose} />
+    </SheetContent>
+  );
+}
+
+export function PhoneDiscussionSheet({ open, discussion, title, onClose }: { open: boolean; discussion: Discussion; title: string; onClose: () => void }) {
+  return (
+    <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
+      <PhoneSheetBody discussion={discussion} title={title} onClose={onClose} />
+    </Sheet>
   );
 }

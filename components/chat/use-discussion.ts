@@ -4,12 +4,12 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import { openDiscussionAction } from "@/app/(crm)/discussions";
 import type { ChatContextValue, ChatEditing } from "@/components/chat/chat-context";
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
-import { memberIds, messageBody, SEND_FAILED, useChatActions } from "@/components/chat/use-chat-actions";
+import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
 import { draftKey, newClientKey, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
 import type { ChatLocation } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, type ChatAction, type ChatState, type ThreadState, type Timeline } from "@/lib/chat/timeline";
-import type { ChatDiscussion, ChatPerson, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
+import type { ChatDiscussion, ChatMessage, ChatPerson, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 
 const TIMEOUT_MS = 15_000;
@@ -18,6 +18,7 @@ const FOCUS_GAP_MS = 5_000;
 const RELOAD_SETTLE_MS = 400;
 const NOTICE_MS = 6_000;
 const LOAD_FAILED = "Couldn't load the discussion. Try again.";
+const OPEN_FAILED = "Couldn't open the discussion. Try again.";
 const NOWHERE: ChatLocation = {
   view: { kind: "home" },
   thread: null,
@@ -62,7 +63,7 @@ function discussionReducer(state: ChatState, action: ChatAction | { type: "reset
   return action.type === "reset" ? EMPTY_CHAT : chatReducer(state, action);
 }
 
-export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPerson, options: { enabled?: boolean; initialCount?: number } = {}): Discussion {
+export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPerson, options: { enabled?: boolean; initialCount?: number; onSent?: (message: ChatMessage) => void } = {}): Discussion {
   const enabled = options.enabled ?? true;
   const initialCount = options.initialCount ?? 0;
   const subject = useMemo<ChatSubject>(() => ({ kind, id }), [kind, id]);
@@ -95,7 +96,11 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
   useLayoutEffect(() => {
     latest.current = { conversationId, threadId, subjectKey };
   });
-  const draftId = conversationId ?? draftSubjectKey(subject);
+  const draftId = draftSubjectKey(subject);
+  const sent = useRef(options.onSent);
+  useLayoutEffect(() => {
+    sent.current = options.onSent;
+  });
 
   const load = useCallback(() => {
     if (!enabled) return Promise.resolve();
@@ -160,7 +165,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
   useChatEvents((event) => {
     switch (event.type) {
       case "message":
-        if (!latest.current.conversationId) reloadSoon();
+        if (!latest.current.conversationId && event.subject?.kind === subject.kind && event.subject.id === subject.id) reloadSoon();
         dispatch({
           type: "incoming",
           message: event.message,
@@ -220,13 +225,15 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
   const ensureConversation = useCallback(async () => {
     const known = latest.current.conversationId;
     if (known) return { id: known, error: null };
+    const asked = latest.current.subjectKey;
     const result = await openDiscussionAction(subject).catch(() => ({
-      error: SEND_FAILED,
+      error: OPEN_FAILED,
     }));
+    if (latest.current.subjectKey !== asked) return { id: null, error: OPEN_FAILED };
     if (!("ok" in result) || !result.ok)
       return {
         id: null,
-        error: "error" in result ? result.error : SEND_FAILED,
+        error: "error" in result ? result.error : OPEN_FAILED,
       };
     const id = result.conversationId;
     latest.current.conversationId = id;
@@ -251,13 +258,14 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
     async (input: { parentId: string | null; text: string; mentions: Mention[] }) => {
       const body = messageBody(input.text, input.mentions);
       if (!body) return null;
+      const asked = latest.current.subjectKey;
       const opened = await ensureConversation();
       if (!opened.id) return opened.error;
-      if (!input.parentId)
-        writeDraft(draftKey(viewer.id, draftSubjectKey(subject), null), {
-          text: "",
-          mentions: [],
-        });
+      if (latest.current.subjectKey !== asked) return OPEN_FAILED;
+      writeDraft(draftKey(viewer.id, draftSubjectKey(subject), input.parentId), {
+        text: "",
+        mentions: [],
+      });
       const message = localMessage({
         clientKey: newClientKey(),
         conversationId: opened.id,
@@ -268,7 +276,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
         at: new Date().toISOString(),
       });
       dispatch({ type: "pending", message });
-      await deliver(message);
+      if ((await deliver(message)) === null) sent.current?.(message);
       return null;
     },
     [deliver, ensureConversation, subject, viewer],

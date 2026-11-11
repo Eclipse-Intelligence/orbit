@@ -36,6 +36,12 @@ type TaskDueState = {
   label: string;
 };
 
+function dateParts(date: Date, options: Intl.DateTimeFormatOptions) {
+  const parts = new Intl.DateTimeFormat("en-GB", options).formatToParts(date);
+  const pick = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return [pick("weekday"), pick("day"), pick("month"), pick("year")].filter(Boolean).join(" ");
+}
+
 export function taskDueState(
   dueAt: string | null | undefined,
   now: number,
@@ -52,11 +58,6 @@ export function taskDueState(
     new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(new Date(now));
   return {
     kind: "later",
-    label: new Intl.DateTimeFormat(
-      "en-GB",
-      sameYear
-        ? { weekday: "short", day: "numeric", month: "short", timeZone }
-        : { day: "numeric", month: "short", year: "numeric", timeZone },
-    ).format(due),
+    label: dateParts(due, sameYear ? { weekday: "short", day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }),
   };
 }

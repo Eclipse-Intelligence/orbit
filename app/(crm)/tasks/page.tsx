@@ -41,13 +41,11 @@ export default async function TasksPage({
   const wanted = typeof askedTask === "string" && isUuid(askedTask) ? askedTask.toLowerCase() : null;
   const openTask = wanted && !due.tasks.some((task) => task.id === wanted) ? await getTask(user, wanted).catch(() => null) : null;
   const ids = [...due.tasks.map((task) => task.id), ...(openTask ? [openTask.id] : [])];
-  const [tagged, taggedCount] = team
-    ? await Promise.all([
-        listTaskParticipants(user, ids),
-        scope.tagged ? Promise.resolve(counts.all) : countTaskViews(user, { tagged: true }).then((views) => views.all),
-      ])
-    : [{}, 0];
-  const discussions = await discussionCounts(user, "task", ids);
+  const [tagged, taggedCount, discussions] = await Promise.all([
+    team ? listTaskParticipants(user, ids) : Promise.resolve({}),
+    !team ? Promise.resolve(0) : scope.tagged ? Promise.resolve(counts.all) : countTaskViews(user, { tagged: true }).then((views) => views.all),
+    discussionCounts(user, "task", ids),
+  ]);
 
   return (
     <ActionsScreen
@@ -71,6 +69,7 @@ export default async function TasksPage({
       taggedCount={taggedCount}
       discussions={discussions}
       openTask={openTask}
+      admins={members.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.id)}
     />
   );
 }

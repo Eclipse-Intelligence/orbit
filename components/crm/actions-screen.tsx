@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import RecordTransfer from "@/components/crm/record-transfer";
@@ -45,6 +45,7 @@ export default function ActionsScreen({
   taggedCount = 0,
   discussions = {},
   openTask = null,
+  admins = [],
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -60,6 +61,7 @@ export default function ActionsScreen({
   taggedCount?: number;
   discussions?: Record<string, number>;
   openTask?: Task | null;
+  admins?: string[];
 }) {
   const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
@@ -79,24 +81,43 @@ export default function ActionsScreen({
   const [kept, setKept] = useState<Task | null>(null);
   if (listed && listed !== kept) setKept(listed);
   const panelTask = listed ?? (kept && kept.id === panelId ? kept : null);
+  const missing = Boolean(panelId) && !panelTask;
+  const openedHere = useRef(false);
 
   const openPanel = useCallback((id: string) => {
     const params = new URLSearchParams(window.location.search);
     params.set(TASK_PARAM, id);
-    window.history.pushState({ taskPanel: true }, "", `${window.location.pathname}?${params.toString()}`);
+    openedHere.current = true;
+    window.history.pushState(null, "", `${window.location.pathname}?${params.toString()}`);
   }, []);
 
-  const closePanel = useCallback(() => {
-    const state = window.history.state as Record<string, unknown> | null;
-    if (state?.taskPanel === true) {
-      window.history.back();
-      return;
-    }
+  const dropParam = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     params.delete(TASK_PARAM);
     const query = params.toString();
     window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
   }, []);
+
+  const closePanel = useCallback(() => {
+    router.refresh();
+    if (openedHere.current) {
+      openedHere.current = false;
+      window.history.back();
+      return;
+    }
+    dropParam();
+  }, [router, dropParam]);
+
+  useEffect(() => {
+    if (!panelId) openedHere.current = false;
+  }, [panelId]);
+
+  useEffect(() => {
+    if (!missing) return;
+    dropParam();
+  }, [missing, dropParam]);
+  const [notFound, setNotFound] = useState(false);
+  if (missing && !notFound) setNotFound(true);
 
   async function complete(id: string) {
     setDone((current) => new Set(current).add(id));
@@ -202,6 +223,14 @@ export default function ActionsScreen({
           {message}
         </p>
       )}
+      {notFound && !message && (
+        <p role="status" className="caption-style text-soft flex items-center gap-2 px-4 pt-3">
+          Task not found.
+          <Button variant="ghost" size="sm" onClick={() => setNotFound(false)} className="max-md:h-11">
+            Dismiss
+          </Button>
+        </p>
+      )}
       <KeyboardList className="flex min-h-0 flex-1 flex-col">
       {view === "none" ? (
         <RecordList
@@ -252,6 +281,7 @@ export default function ActionsScreen({
         viewer={viewer}
         members={members}
         tagged={tagged[(panelTask ?? kept)?.id ?? ""] ?? []}
+        admins={admins}
       />
     </section>
   );

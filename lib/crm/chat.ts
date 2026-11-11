@@ -29,11 +29,12 @@ import {
   type ChatThreadCard,
   type ChatThreads,
 } from "@/lib/chat/types";
-import { discussionHref, readSubject } from "@/lib/chat/discussions";
+import { discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
+import { assertScope } from "@/lib/crm/scopes";
 import { addTaskParticipantsInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
@@ -984,7 +985,7 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
       afterPost(
         db,
         members.map((member) => member.user_id),
-        { type: "message", conversationId, message, root },
+        { type: "message", conversationId, message, root, ...(subjectOf(conversation) ? { subject: subjectOf(conversation)! } : {}) },
         jobs,
       );
       return { message, root, duplicate: false };
@@ -1166,10 +1167,26 @@ function subjectOf(conversation: ConversationRow): ChatSubject | null {
 
 async function tagFromDiscussion(db: Db, actor: UserActor, conversation: ConversationRow, people: string[]) {
   if (conversation.kind !== "task" || !conversation.task_id) return [];
-  const wanted = people.filter((person) => person !== actor.userId);
+  const wanted = [...new Set(people.filter((person) => person !== actor.userId))];
   if (wanted.length === 0) return [];
+  assertScope(actor.scopes, "tasks:write");
+  const seeing = await db.query<{ user_id: string }>(
+    `select wm.user_id from crm.tasks t
+     join crm.workspace_members wm on wm.workspace_id = t.workspace_id
+     where t.id = $1 and wm.user_id = any($2::uuid[])
+       and (
+         wm.user_id = t.owner_id
+         or wm.user_id = t.created_by_user_id
+         or wm.role in ('owner', 'admin')
+         or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = wm.user_id)
+       )`,
+    [conversation.task_id, wanted],
+  );
+  const already = new Set(seeing.rows.map((row) => row.user_id));
+  const fresh = wanted.filter((person) => !already.has(person));
+  if (fresh.length === 0) return [];
   try {
-    return await addTaskParticipantsInDb(db, actor, conversation.task_id, wanted, { operation: "tag_task", source: "chat" });
+    return await addTaskParticipantsInDb(db, actor, conversation.task_id, fresh, { operation: "tag_task", source: "chat" }, { alert: false });
   } catch (error) {
     if (error instanceof CrmError && error.code === "invalid_input") {
       throw new CrmError("invalid_input", "Tag people in this task's workspace.", 400, { field: "body" });
@@ -1188,12 +1205,22 @@ function subjectAlerts(actor: UserActor, conversation: ConversationRow, message:
   const fresh = new Set(tagged);
   const mentioned = message.mentions.filter((person) => person !== actor.userId && !fresh.has(person));
   const jobs: AlertJob[] = [];
+  if (tagged.length > 0) {
+    jobs.push(async () => {
+      await alertMembers(actor, tagged, {
+        ...base,
+        href: taskPanelHref(subject.id, { tagged: true }),
+        key: `task:discussion:${message.id}:tagged`,
+        title: `${name} tagged you in a task`,
+      });
+    });
+  }
   if (mentioned.length > 0) {
     jobs.push(async () => {
       await alertMembers(actor, mentioned, {
         ...base,
         key: `${subject.kind}:discussion:${message.id}`,
-        title: task ? `${name} tagged you in a task` : `${name} mentioned you in a doc`,
+        title: task ? `${name} mentioned you in a task` : `${name} mentioned you in a doc`,
       });
     });
   }

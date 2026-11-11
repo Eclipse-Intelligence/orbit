@@ -751,7 +751,7 @@ export async function listTaskParticipants(actor: UserActor, taskIds: string[]):
   });
 }
 
-export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: string, userIds: string[], provenance?: Provenance) {
+export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: string, userIds: string[], provenance?: Provenance, options: { alert?: boolean } = {}) {
   const task = await readTask(db, taskId);
   if (!task) throw notFound("task");
   const wanted = [...new Set(userIds.filter(isUuid).map((id) => id.toLowerCase()))].filter((id) => id !== task.owner_id);
@@ -764,7 +764,7 @@ export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: 
     throw new CrmError("invalid_input", "Choose people in this workspace.", 400, { field: "userIds" });
   }
   const fresh = await tagInDb(db, actor, { id: task.id, title: task.title }, wanted, provenance);
-  if (fresh.length > 0) {
+  if (fresh.length > 0 && options.alert !== false) {
     alertMembersAfterCommit(db, actor, fresh, {
       source: "task",
       key: `task:${taskId}:tagged:${Date.now()}`,

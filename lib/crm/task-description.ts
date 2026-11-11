@@ -16,9 +16,30 @@ export function splitDescription(description: string | null) {
   return { text, links };
 }
 
-export function joinDescription(text: string, links: TaskLink[]) {
-  const lines = links.map((link) => `[${link.label}](${link.href})`).join("\n");
-  const body = text.trim();
-  const joined = [body, lines].filter(Boolean).join("\n\n");
+export function replaceDescriptionText(original: string | null, text: string) {
+  const lines = (original ?? "").split("\n");
+  const isLink = (line: string) => MAIL_LINK.test(line.trim());
+  const slots = lines.flatMap((line, index) => (isLink(line) || !line.trim() ? [] : [index]));
+  const fresh = text.trim() ? text.trim().split("\n") : [];
+  const out: string[] = [];
+  if (slots.length === 0) out.push(...fresh, ...(fresh.length && lines.some(isLink) ? [""] : []));
+  const last = slots[slots.length - 1];
+  let next = 0;
+  lines.forEach((line, index) => {
+    if (isLink(line)) {
+      out.push(line.trim());
+      return;
+    }
+    if (!slots.includes(index)) {
+      if (slots.length > 0 && index > slots[0] && index < last) out.push("");
+      else if (out.length > 0 && index > (last ?? -1)) out.push("");
+      return;
+    }
+    if (index === last) {
+      out.push(...fresh.slice(next));
+      next = fresh.length;
+    } else if (next < fresh.length) out.push(fresh[next++]);
+  });
+  const joined = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   return joined || null;
 }

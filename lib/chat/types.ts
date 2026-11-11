@@ -108,7 +108,7 @@ export type ChatSearchResult = { messages: ChatMessage[] };
 export type ChatPost = { message: ChatMessage; root: ChatRoot | null; duplicate: boolean };
 
 export type ChatLiveEvent =
-  | { type: "message"; conversationId: string; message: ChatMessage; root: ChatRoot | null }
+  | { type: "message"; conversationId: string; message: ChatMessage; root: ChatRoot | null; subject?: ChatSubject }
   | { type: "edit"; conversationId: string; message: ChatMessage }
   | { type: "delete"; conversationId: string; messageId: string; parentId: string | null; root: ChatRoot | null }
   | { type: "read"; conversationId: string; lastReadAt: string }

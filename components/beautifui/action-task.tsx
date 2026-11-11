@@ -139,7 +139,7 @@ export default function ActionTask({
               <span className="caption-style text-subtle flex shrink-0 items-center gap-1 tabular-nums" title={comments === 1 ? "1 comment" : `${comments} comments`}>
                 <ChatIcon aria-hidden className="size-3" />
                 {comments}
-                <span className="sr-only">{comments === 1 ? "comment" : "comments"}</span>
+                <span className="sr-only">{comments === 1 ? " comment" : " comments"}</span>
               </span>
             )}
             {due ? (

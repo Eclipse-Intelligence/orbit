@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { discussionCount, discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
+import { replaceDescriptionText } from "@/lib/crm/task-description";
 import type { ChatLiveEvent, ChatMessage } from "@/lib/chat/types";
 import {
   chatWorkSettled,
@@ -184,17 +185,14 @@ describe("task discussions", () => {
     });
     const first = await send(sam, conversationId, `${tag(priya)} can you check the discount maths? ${tag(ada)} too.`);
 
-    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id]?.sort(), [ada.userId, mark.userId, priya.userId].sort());
+    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id]?.sort(), [mark.userId, priya.userId].sort());
     const audit = await sql<{ user_id: string; source: string }>(
       "select changes->'participant'->>'userId' as user_id, source from crm.audit_events where entity_id = $1 and event_type = 'task.participant_added' and actor_user_id = $2",
       [task.id, sam.userId],
     );
     assert.deepEqual(
       audit.map((row) => [row.user_id, row.source]).sort(),
-      [
-        [ada.userId, "chat"],
-        [priya.userId, "chat"],
-      ].sort(),
+      [[priya.userId, "chat"]],
     );
 
     assert.deepEqual(await alertsFor(priya), [
@@ -205,7 +203,10 @@ describe("task discussions", () => {
         source: "task",
       },
     ]);
-    assert.equal((await alertsFor(ada)).length, 1);
+    assert.deepEqual(
+      (await alertsFor(ada)).map((alert) => [alert.title, alert.href]),
+      [["Sam Okafor mentioned you in a task", opened(taskPanelHref(task.id))]],
+    );
     assert.deepEqual(await alertsFor(mark), []);
 
     const seen = await getDiscussion(priya, { kind: "task", id: task.id });
@@ -244,7 +245,7 @@ describe("task discussions", () => {
     await send(sam, conversationId, `${tag(mark)} is v4 final?`);
     assert.deepEqual(await alertsFor(mark), [
       {
-        title: "Sam Okafor tagged you in a task",
+        title: "Sam Okafor mentioned you in a task",
         body: "Ask Mark about v4",
         href: taskPanelHref(task.id),
         source: "task",
@@ -321,6 +322,50 @@ describe("task discussions", () => {
     const discussion = await getDiscussion(sam, { kind: "task", id: task.id });
     assert.equal(discussion.count, 2);
     assert.equal(discussionCount(discussion.page?.messages ?? []), 2);
+  });
+  it("rolls back the whole post when one of two tags is outside the workspace", async () => {
+    const task = await newTask("Two tags");
+    const { conversationId } = await openDiscussion(sam, { kind: "task", id: task.id });
+    await refused(postMessage(sam, { conversationId, body: `${tag(priya)} and ${tag(olly)} please look` }), /Tag people in this task's workspace/);
+    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id] ?? [], [mark.userId]);
+    assert.equal((await getDiscussion(sam, { kind: "task", id: task.id })).count, 0);
+    await refused(getDiscussion(priya, { kind: "task", id: task.id }), /Task not found/);
+    assert.deepEqual(await alertsFor(priya), []);
+  });
+
+  it("shuts out an assignee who left the workspace but still owns the task", async () => {
+    const dana = await join(await createUser("dana@discuss.test", "Dana Left"), "member");
+    const task = await newTask("Owned by a leaver", dana);
+    const { conversationId } = await openDiscussion(dana, { kind: "task", id: task.id });
+    await send(dana, conversationId, "Picking this up.");
+    await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [mark.workspaceId, dana.userId]);
+    const [row] = await sql<{ owner_id: string }>("select owner_id from crm.tasks where id = $1", [task.id]);
+    assert.equal(row.owner_id, dana.userId);
+    broadcasts = [];
+    await refused(getDiscussion(dana, { kind: "task", id: task.id }), /Task not found/);
+    await refused(postMessage(dana, { conversationId, body: "Still here?" }), /Conversation not found/);
+    await send(mark, conversationId, "Taking this back.");
+    await until(() => chatEvents(mark.userId).length > 0, "the creator's live event");
+    assert.deepEqual(chatEvents(dana.userId), []);
+    await send(mark, conversationId, `${tag(dana)} are you there?`);
+    assert.deepEqual((await alertsFor(dana)).filter((alert) => !alert.title.includes("assigned")), []);
+    assert.deepEqual(chatEvents(dana.userId), []);
+  });
+
+  it("carries the discussion when the task moves workspace", async () => {
+    const other = await createUser("owner@elsewhere-two.test", "Other Owner");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", [other.workspaceId, mark.userId]);
+    const task = (await createTask(mark, { title: "Moving task", ownerId: mark.userId })).body.task;
+    const { conversationId } = await openDiscussion(mark, { kind: "task", id: task.id });
+    await send(mark, conversationId, `${tag(priya)} have a look`);
+    assert.equal((await getDiscussion(priya, { kind: "task", id: task.id })).count, 1);
+    await sql("update crm.tasks set workspace_id = $2 where id = $1", [task.id, other.workspaceId]);
+    await refused(getDiscussion(priya, { kind: "task", id: task.id }), /Task not found/);
+    assert.equal((await getDiscussion(mark, { kind: "task", id: task.id })).count, 1);
+    const moved = await getDiscussion(other, { kind: "task", id: task.id });
+    assert.equal(moved.conversationId, conversationId);
+    assert.equal(moved.count, 1);
+    await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [other.workspaceId, mark.userId]);
   });
 });
 
@@ -430,5 +475,14 @@ describe("discussion helpers", () => {
       ]),
       5,
     );
+  });
+
+  it("keeps mail links where they were when the description text changes", () => {
+    const link = "[Re: pricing](/mail?thread=a)";
+    assert.equal(replaceDescriptionText(`Intro\n${link}\nSecond`, "Intro changed\nSecond"), `Intro changed\n${link}\nSecond`);
+    assert.equal(replaceDescriptionText(`Use v4\n\n${link}`, "Use v5"), `Use v5\n\n${link}`);
+    assert.equal(replaceDescriptionText(link, "New text"), `New text\n\n${link}`);
+    assert.equal(replaceDescriptionText(`One\n${link}`, ""), link);
+    assert.equal(replaceDescriptionText(null, ""), null);
   });
 });
