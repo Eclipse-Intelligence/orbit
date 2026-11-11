@@ -505,6 +505,7 @@ export type CommitOptions = {
   baseRevision?: number;
   overwrite?: boolean;
   keepVersions?: boolean;
+  keepEdited?: boolean;
   coalesceTitle?: boolean;
   now?: Date;
 };
@@ -552,8 +553,10 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
   const written = live ? writeLiveText(live.doc, content, agent) : null;
   const fitted = live ? fitLiveDoc(live, content) : null;
   await db.query(
-    `update crm.pages set title = $2, content = $3, word_count = $4, revision = revision + 1, edited_by = $5, edited_by_user_id = $6,
-       edited_by_agent_id = $7, edited_at = $8, versioned_at = case when $9 then $8 else versioned_at end,
+    `update crm.pages set title = $2, content = $3, word_count = $4, revision = revision + 1,
+       edited_by = case when $13 then edited_by else $5 end, edited_by_user_id = case when $13 then edited_by_user_id else $6 end,
+       edited_by_agent_id = case when $13 then edited_by_agent_id else $7 end, edited_at = case when $13 then edited_at else $8 end,
+       versioned_at = case when $9 then $8 else versioned_at end,
        ydoc = case when $10 then $11::bytea else ydoc end, ydoc_generation = case when $10 then $12::int else ydoc_generation end
      where id = $1`,
     [
@@ -569,6 +572,7 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
       fitted !== null,
       fitted ? encodeState(fitted.doc) : null,
       fitted?.generation ?? 0,
+      options.keepEdited === true,
     ],
   );
   if (fitted && written && (fitted.rebuilt || written.steps.length > 0)) {
@@ -936,12 +940,17 @@ function checkRevision(page: FullPageRow, baseRevision: number | undefined) {
 
 const UNTAG_SUMMARY = "Turned people tags into text because it's private";
 
-async function untagPages(db: Db, actor: Actor, ids: string[], stamp: Stamp, provenance?: Provenance) {
-  for (const id of ids) {
-    const page = await loadPage(db, actor, id, { lock: true });
-    if (tagsPeople(page)) continue;
-    await commitPage(db, actor, page, { title: page.title, content: page.content }, { stamp, provenance, summary: UNTAG_SUMMARY, keepVersions: true });
-  }
+async function untagPage(db: Db, actor: Actor, id: string, stamp: Stamp, provenance?: Provenance) {
+  const page = await loadPage(db, actor, id, { lock: true });
+  if (tagsPeople(page)) return false;
+  const result = await commitPage(db, actor, page, { title: page.title, content: page.content }, {
+    stamp,
+    provenance,
+    summary: UNTAG_SUMMARY,
+    keepVersions: true,
+    keepEdited: true,
+  });
+  return result.changed;
 }
 
 export async function untagPrivatePages(db: Db, actor: Actor, provenance?: Provenance) {
@@ -952,8 +961,9 @@ export async function untagPrivatePages(db: Db, actor: Actor, provenance?: Prove
        and exists (select 1 from crm.page_links l where l.page_id = p.id and l.target_kind = 'member')`,
     [actor.workspaceId, actor.userId],
   );
-  await untagPages(db, actor, hidden.rows.map((row) => row.id), stampFor(actor, provenance), provenance);
-  return hidden.rows.length;
+  let cleaned = 0;
+  for (const row of hidden.rows) if (await untagPage(db, actor, row.id, stampFor(actor, provenance), provenance)) cleaned += 1;
+  return cleaned;
 }
 
 type OwnerRow = { user_id: string; workspace_id: string; workspace_name: string; role: "owner" | "admin" | "member"; email: string | null; full_name: string | null };
@@ -979,10 +989,19 @@ export async function untagFolderPages(folderIds: string[]) {
          from private.memberships_for($1) m where m.workspace_id = $2`,
         [owner.userId, owner.workspaceId],
       );
-      if (!membership.rows[0]) continue;
+      if (!membership.rows[0]) {
+        console.error("People tags left in a former member's private notes until someone takes them over", owner.userId, owner.ids);
+        continue;
+      }
       const actor = memberActor(membership.rows[0]);
-      await withActor(actor, (db) => untagPages(db, actor, owner.ids, { editor: "person", userId: actor.userId, agentId: null }));
-      cleaned += owner.ids.length;
+      const stamp: Stamp = { editor: "person", userId: actor.userId, agentId: null };
+      for (const id of owner.ids) {
+        try {
+          if (await withActor(actor, (db) => untagPage(db, actor, id, stamp))) cleaned += 1;
+        } catch (error) {
+          console.error("Couldn't turn people tags into text", id, error);
+        }
+      }
     } catch (error) {
       console.error("Couldn't turn people tags into text", owner.userId, error);
     }

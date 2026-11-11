@@ -13,6 +13,7 @@ import type { Page, PageFilter, Presence, RecordRef } from "@/lib/docs/client-ty
 import { clearDraft, draftToRestore, readDraft } from "@/lib/docs/drafts";
 import type { CachedLive } from "@/lib/docs/live/client";
 import { refreshPreview } from "@/lib/docs/editor/preview";
+import { textEdits } from "@/lib/docs/live/text-diff";
 import { setPresence } from "@/lib/docs/editor/presence";
 import { applyMention, bridge, external, insertAtCursor, noteExtensions, type ActiveTrigger } from "@/lib/docs/editor/setup";
 import { createStateCache } from "@/lib/docs/editor/state-cache";
@@ -213,17 +214,22 @@ export default function NoteEditor({
 
   function insertTag(asked: NonNullable<typeof tagging>) {
     const view = liveView;
-    if (!view || liveId !== asked.pageId) return;
+    if (!view || liveId !== asked.pageId) return false;
     const { at, head } = asked.trigger;
     if (head <= view.state.doc.length && view.state.sliceDoc(at, head) === asked.typed) applyMention(view, asked.trigger, asked.person);
     else insertAtCursor(view, `@[${asked.person.name.replace(/[[\]\n]/g, " ").trim()}](member:${asked.person.id}) `);
+    return true;
   }
 
   async function shareAndTag() {
     const asked = tagging;
     if (!asked) return;
-    const failed = await share({ kind: "page", id: asked.pageId }, "shared", () => insertTag(asked));
+    let tagged = false;
+    const failed = await share({ kind: "page", id: asked.pageId }, "shared", () => {
+      tagged = insertTag(asked);
+    });
     if (failed) notify(failed, { tone: "alert" });
+    else if (!tagged) notify(`Shared. Tag ${asked.person.name.trim().split(/\s+/)[0] || asked.person.name} again to tell them.`);
   }
 
   useLayoutEffect(() => {
@@ -344,7 +350,8 @@ export default function NoteEditor({
       return;
     }
     if (view.state.doc.toString() === page.body) return;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: page.body }, annotations: external.of(true) });
+    const changes = textEdits(view.state.doc.toString(), page.body).map((edit) => ({ from: edit.at, to: edit.at + edit.remove, insert: edit.insert }));
+    view.dispatch({ changes, annotations: external.of(true) });
     titles.set(page.id, page.title);
     clearDraft(page.id);
   }, [epoch, page]);
@@ -380,6 +387,7 @@ export default function NoteEditor({
         confirmLabel="Share and tag"
         tone="neutral"
         onConfirm={() => void shareAndTag()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
       />
     </div>
   );

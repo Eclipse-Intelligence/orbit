@@ -18,6 +18,7 @@ import {
 import { docsData, refreshDocsActivity, resetDocsConnection } from "@/lib/docs/connection";
 import { clearDraft, readDraft, setDraftScope, writeDraft } from "@/lib/docs/drafts";
 import { entryCount, excerptFrom, parseTags, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
+import { memberTagCount } from "@/lib/docs/people-tags";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import type { LiveStatus } from "@/lib/docs/live/session";
 import { listKey } from "@/lib/docs/routes";
@@ -978,7 +979,9 @@ function acknowledge(id: string, sent: Queued, previous: Acknowledged, saved: Pa
   if (renamedFrom) refreshLinked(id, renamedFrom, saved.title);
   if (navChanged || saved.kind === "daily") void store.refreshNav();
   if (queued.has(id)) return flush(id);
-  if (saved.body !== sent.body && !liveNotes.has(id) && !readers.has(id) && !inflight.has(id)) store.replaceBody(saved);
+  if (saved.body !== sent.body && memberTagCount(saved.body) < memberTagCount(sent.body) && !liveNotes.has(id) && !readers.has(id) && !inflight.has(id) && !holds.has(id)) {
+    store.replaceBody(saved);
+  }
   if (!readers.has(id)) store.setSave(id, "saved");
   return Promise.resolve();
 }

@@ -5,3 +5,7 @@ export function peopleTagMode(page: { kind: string; shared: boolean; owner: { id
   if (page.shared) return "tag";
   return viewerId && page.owner.id === viewerId ? "share" : "none";
 }
+
+export function memberTagCount(text: string) {
+  return text.split("](member:").length - 1;
+}

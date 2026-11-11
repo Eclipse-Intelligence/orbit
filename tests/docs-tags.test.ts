@@ -10,9 +10,10 @@ import { appendToDailyNote } from "@/lib/docs/daily-notes";
 import { createFolder, moveFolder, shareFolder } from "@/lib/docs/folders";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { createLiveDoc, liveText } from "@/lib/docs/live/ydoc";
-import { peopleTagMode } from "@/lib/docs/people-tags";
+import { memberTagCount, peopleTagMode } from "@/lib/docs/people-tags";
 import { createDocFromBody, patchDocFromBody } from "@/lib/docs/rest";
-import { appendToDoc, createDoc, editDoc, getDoc, moveDoc, openLiveDoc, restoreVersion, listVersions, saveDoc, shareDoc, syncLiveDoc, updateDoc } from "@/lib/docs/store";
+import { takeOverFormerMemberDocs } from "@/lib/docs/admin";
+import { appendToDoc, createDoc, editDoc, getDoc, moveDoc, openLiveDoc, restoreVersion, listVersions, saveDoc, shareDoc, syncLiveDoc, untagFolderPages, updateDoc } from "@/lib/docs/store";
 import { createCrmMcpServer } from "@/server/mcp/server";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
@@ -322,12 +323,15 @@ describe("teammates' notes in a folder that goes private", () => {
     const marks = await createDoc(mark, { title: "Mark's", content: tag(priya, "Priya"), folderId: folder.id }, PROVENANCE);
     const sams = await createDoc(sam, { title: "Sam's", content: `For ${tag(priya, "Priya")}`, folderId: folder.id }, PROVENANCE);
     const samShared = await createDoc(sam, { title: "Sam's shared", content: tag(priya, "Priya"), folderId: folder.id, shared: true }, PROVENANCE);
+    const editedBefore = (await sql<{ edited_at: Date }>("select edited_at from crm.pages where id = $1", [sams.id])).rows[0].edited_at.getTime();
     await shareFolder(mark, folder.id, false, PROVENANCE);
     assert.equal((await getDoc(mark, marks.id)).content, "@Priya");
     await eventually(async () => (await getDoc(sam, sams.id)).content === "For @Priya", "Sam's note to lose its tag");
     assert.deepEqual(await memberLinks(sams.id), []);
     const versions = await listVersions(sam, sams.id);
     assert.equal(versions[0].summary, "Turned people tags into text because it's private");
+    const editedAfter = (await sql<{ edited_at: Date }>("select edited_at from crm.pages where id = $1", [sams.id])).rows[0].edited_at.getTime();
+    assert.equal(editedAfter, editedBefore);
     assert.equal((await getDoc(sam, samShared.id)).content, tag(priya, "Priya"));
     assert.deepEqual(await memberLinks(samShared.id), [priya.userId]);
   });
@@ -344,7 +348,51 @@ describe("teammates' notes in a folder that goes private", () => {
   });
 });
 
+describe("folder cleanup edge cases", () => {
+  it("cleans a note inside a third person's subfolder that moves out when the folder goes private", async () => {
+    const folder = await createFolder(mark, { name: "Accounts", shared: true }, PROVENANCE);
+    const priyas = await createFolder(priya, { name: "Priya's sub", parentId: folder.id }, PROVENANCE);
+    const sams = await createDoc(sam, { title: "Sam in Priya's", content: `Ping ${tag(mark, "Mark")}`, folderId: priyas.id }, PROVENANCE);
+    assert.deepEqual(await memberLinks(sams.id), [mark.userId]);
+    await shareFolder(mark, folder.id, false, PROVENANCE);
+    const moved = await sql<{ parent_id: string | null; effective_shared: boolean }>("select parent_id, effective_shared from crm.page_folders where id = $1", [priyas.id]);
+    assert.deepEqual(moved.rows[0], { parent_id: null, effective_shared: false });
+    await eventually(async () => (await getDoc(sam, sams.id)).content === "Ping @Mark", "Sam's note in Priya's subfolder to lose its tag");
+  });
+
+  it("leaves a folder that was shared again before the cleanup ran alone, and counts only cleaned pages", async () => {
+    const folder = await createFolder(mark, { name: "Reshared", shared: true }, PROVENANCE);
+    const sams = await createDoc(sam, { title: "Still shared", content: tag(priya, "Priya"), folderId: folder.id }, PROVENANCE);
+    assert.equal(await untagFolderPages([folder.id]), 0);
+    assert.equal((await getDoc(sam, sams.id)).content, tag(priya, "Priya"));
+    await sql("update crm.page_folders set shared = false where id = $1", [folder.id]);
+    assert.equal(await untagFolderPages([folder.id]), 1);
+    assert.equal(await untagFolderPages([folder.id]), 0);
+    assert.equal((await getDoc(sam, sams.id)).content, "@Priya");
+  });
+
+  it("leaves a former member's notes until someone takes them over, then turns their tags into text", async () => {
+    const tomUser = await createUser("tom@doc-tags.test", "Tom Former");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, tomUser.userId]);
+    const tom: UserActor = { ...tomUser, workspaceId: mark.workspaceId, workspaceName: "Eclipse", role: "member" };
+    const folder = await createFolder(mark, { name: "Handover", shared: true }, PROVENANCE);
+    const toms = await createDoc(tom, { title: "Tom's", content: `For ${tag(sam, "Sam")}`, folderId: folder.id }, PROVENANCE);
+    await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [mark.workspaceId, tom.userId]);
+    await shareFolder(mark, folder.id, false, PROVENANCE);
+    assert.equal(await untagFolderPages([folder.id]), 0);
+    assert.deepEqual(await memberLinks(toms.id), [sam.userId]);
+    await takeOverFormerMemberDocs(mark, tom.userId);
+    assert.equal((await getDoc(mark, toms.id)).content, "For @Sam");
+    assert.deepEqual(await memberLinks(toms.id), []);
+  });
+});
+
 describe("who the picker offers people to", () => {
+  it("counts member tags so the editor only adopts bodies where tags were removed", () => {
+    assert.equal(memberTagCount(`a ${"@[Sam](member:00000000-0000-0000-0000-000000000000)"} b`), 1);
+    assert.equal(memberTagCount("a @Sam b"), 0);
+  });
+
   const owner = { id: "owner-id" };
   it("tags in shared notes, including ones shared by their folder, for everyone", () => {
     assert.equal(peopleTagMode({ kind: "note", shared: true, owner }, "owner-id"), "tag");
