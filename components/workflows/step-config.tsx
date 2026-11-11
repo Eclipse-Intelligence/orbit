@@ -556,7 +556,7 @@ export default function StepConfig({
             className="sm:w-72"
           >
             <option value="">Choose a room</option>
-            {missing && <option value={selected}>{roomName ? `#${roomName} (not one of your rooms)` : "A room you're not in"}</option>}
+            {missing && <option value={selected}>{!roomName ? "A room you're not in" : !roomId && named.length > 1 ? `#${roomName} (more than one room, pick one)` : `#${roomName} (not one of your rooms)`}</option>}
             {rooms.map((room) => (
               <option key={room.id} value={room.id}>
                 #{room.name}

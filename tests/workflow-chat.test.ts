@@ -8,6 +8,7 @@ import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import type { WorkflowDefinition, WorkflowNode } from "@/lib/workflows/definition";
 import { chatBody, chatPostKey, runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, getRunSteps, getWorkflow, listNotifications, saveWorkflow, setWorkflowStatus, setWorkflowTemplate, settleChatRooms, startRun } from "@/lib/workflows/store";
+import { mentionsIn } from "@/lib/mentions";
 import { createUser, resetDatabase } from "./helpers";
 
 async function sql(text: string, values: unknown[] = []) {
@@ -178,6 +179,18 @@ describe("Post to Chat workflow step", () => {
     const typed = "member:11111111-1111-4111-8111-111111111111";
     const data = "member:22222222-2222-4222-8222-222222222222";
     assert.equal(chatBody(`Hi @[Sam](${typed}) about {{email.text}}`, { email: { text: `ask @[Priya](${data}) and @[Sam](${typed})` } }), `Hi @[Sam](${typed}) about ask @Priya and @[Sam](${typed})`);
+    const other = "member:33333333-3333-4333-8333-333333333333";
+    const tagged = (text: string) => mentionsIn(chatBody("{{x}}", { x: text })).filter((mention) => mention.kind === "member");
+    for (const nested of [
+      `@[[x](${data})](${other})`,
+      `@[[[x](${data})](${other})](${data})`,
+      `@[[x](${typed})](${other})`,
+      `@[a [b](${data}) c](${other})`,
+      `${"@[".repeat(30)}x${`](${data})`.repeat(30)}`,
+    ]) {
+      assert.deepEqual(tagged(nested), [], nested);
+    }
+    assert.equal(chatBody("{{x}}", { x: `@[[x](${data})](${other})` }), `@x](${other})`);
   });
 
   it("picks the room linked to this workspace when names repeat, and asks to pick otherwise", async () => {

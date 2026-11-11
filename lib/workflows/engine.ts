@@ -823,20 +823,28 @@ export function chatPostKey(runId: string, stepId: string, frames: Pick<LoopFram
   return key.length <= CHAT_CLIENT_KEY_MAX ? key : `wf:${createHash("sha256").update(key).digest("base64url")}`;
 }
 
+function untrustedTags(text: string, typed: Set<string>) {
+  return splitMentions(text).some((piece) => "mention" in piece && piece.mention.kind === "member" && !typed.has(piece.mention.id.toLowerCase()));
+}
+
 export function chatBody(template: unknown, vars: Vars) {
   const typed = new Set(
     mentionsIn(str(template))
       .filter((mention) => mention.kind === "member")
       .map((mention) => mention.id.toLowerCase()),
   );
-  return splitMentions(render(template, vars))
-    .map((piece) => {
-      if ("text" in piece) return piece.text;
-      const { kind, id, name } = piece.mention;
-      return kind === "member" && !typed.has(id.toLowerCase()) ? `@${name}` : `@[${name}](${kind}:${id})`;
-    })
-    .join("")
-    .trim();
+  let body = render(template, vars);
+  for (let pass = 0; pass < 20 && untrustedTags(body, typed); pass += 1) {
+    body = splitMentions(body)
+      .map((piece) => {
+        if ("text" in piece) return piece.text;
+        const { kind, id, name } = piece.mention;
+        return kind === "member" && !typed.has(id.toLowerCase()) ? `@${name.replace(/[[\]]/g, "")}` : `@[${name}](${kind}:${id})`;
+      })
+      .join("");
+  }
+  if (untrustedTags(body, typed)) body = body.replace(/\]\(member:/g, "] (member:");
+  return body.trim();
 }
 
 async function chatRoom(ctx: Ctx, roomId: string, roomName: string) {
