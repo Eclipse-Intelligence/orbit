@@ -226,6 +226,21 @@ describe("Post to Chat workflow step", () => {
     assert.equal(step((await getWorkflow(mark, workflowId)).definition).roomName, "sales");
   });
 
+  it("never lets a webhook message carry a workflow", async () => {
+    const workflowId = await flow("Not a hook", { roomId, roomName: "sales", body: "Hi" });
+    await assert.rejects(
+      sql(
+        `insert into crm.chat_messages (conversation_id, author_user_id, body, hook, via_workflow_id) values ($1, null, 'From a hook', '{}'::jsonb, $2)`,
+        [roomId, workflowId],
+      ),
+      /chat_messages_hook_check|Only the workflow's owner/,
+    );
+    const hookRow = (await sql(`insert into crm.chat_messages (conversation_id, author_user_id, body, hook) values ($1, null, 'From a hook', '{}'::jsonb) returning id`, [roomId])).rows[0].id;
+    await assert.rejects(sql("update crm.chat_messages set via_workflow_id = $2 where id = $1", [hookRow, workflowId]), /chat_messages_hook_check/);
+    await assert.rejects(sql("update crm.chat_messages set via_workflow_name = 'Sneaky' where id = $1", [hookRow]), /chat_messages_hook_check/);
+    await sql("delete from crm.chat_messages where id = $1", [hookRow]);
+  });
+
   it("keeps ordinary posting working if the workflow column grant goes missing", async () => {
     await sql("revoke insert (via_workflow_id) on crm.chat_messages from authenticated");
     try {

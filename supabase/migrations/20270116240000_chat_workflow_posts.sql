@@ -11,6 +11,13 @@ begin
 end;
 $$;
 
+alter table crm.chat_messages drop constraint if exists chat_messages_hook_check;
+alter table crm.chat_messages add constraint chat_messages_hook_check check (
+  (hook is null and via_hook_id is null)
+  or (hook is not null and jsonb_typeof(hook) = 'object' and author_user_id is null and parent_id is null and cardinality(mentions) = 0
+      and via_workflow_id is null and via_workflow_name is null)
+);
+
 create index if not exists chat_messages_via_workflow_idx on crm.chat_messages (via_workflow_id) where via_workflow_id is not null;
 
 grant insert (via_workflow_id) on crm.chat_messages to authenticated;
