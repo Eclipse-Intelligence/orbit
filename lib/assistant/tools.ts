@@ -93,6 +93,9 @@ import { MOVE_LIMIT, moveRecordsToWorkspace, moveTargetNamed, previewMoveToWorks
 import { createContactAndFile, fileImport, getConversationImport, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
+import { chatConversation, chatPersonId, listChat, postChat, readChat } from "@/lib/chat/tools";
+import { CHAT_PAGE_MAX, CHAT_PAGE_SIZE } from "@/lib/chat/types";
+import { getConversation as getChatConversation, listChatPeople, listThread as listChatThread } from "@/lib/crm/chat";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
@@ -188,6 +191,7 @@ type AssistantTool = {
   description: string;
   parameters: JsonSchema;
   write?: boolean;
+  reads?: (args: Args) => boolean;
   label: string;
   run: (actor: UserActor, args: Args, context: ToolContext) => Promise<unknown>;
   describe?: (args: Args, name: Names) => { title: string; lines: string[]; diff?: DocDiffLine[]; approval?: DocApproval };
@@ -393,6 +397,32 @@ const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meet
 
 function clipText(text: string, max: number) {
   return text.length > max ? `${text.slice(0, max - 3)}…` : text;
+}
+
+function postsToChat(args: Args) {
+  return str(args.action) === "post";
+}
+
+async function chatCardDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const threadId = str(args.threadId);
+  const conversationId = str(args.conversationId);
+  const person = str(args.person);
+  if (threadId) {
+    const thread = await listChatThread(actor, threadId, { limit: 1 }).catch(() => null);
+    if (thread) {
+      out[`${threadId}:where`] = chatConversation(thread.conversation).name;
+      out[`${threadId}:root`] = thread.root.deletedAt ? "Deleted message" : clipText(thread.root.body.replace(/\s+/g, " "), 140);
+    }
+  } else if (conversationId) {
+    const conversation = await getChatConversation(actor, conversationId).catch(() => null);
+    if (conversation) out[`${conversationId}:where`] = chatConversation(conversation).name;
+  } else if (person) {
+    const id = await chatPersonId(actor, person).catch(() => null);
+    const found = id ? (await listChatPeople(actor).catch(() => [])).find((item) => item.id === id) : null;
+    if (found) out[`${person}:person`] = found.name;
+  }
+  return out;
 }
 
 function activityEditShown(field: ActivityEditField, value: unknown, name: Names) {
@@ -1308,6 +1338,10 @@ export const TOOL_DOMAINS = {
     summary: "the user's Readwise Reader and Recall",
     tools: ["reader_list", "reader_read", "recall_search", "recall_read"],
   },
+  chat: {
+    summary: "team Chat: reading and posting in rooms, direct messages and threads",
+    tools: ["team_chat"],
+  },
   web: {
     summary: "check_web and social_lookup",
     tools: ["check_web", "social_lookup"],
@@ -1560,7 +1594,7 @@ function switchMessage(name: string, current: UserActor, what: string) {
 
 export async function crossWorkspaceRefusal(actor: UserActor, name: string, args: Args): Promise<string | null> {
   const resolved = resolveTool(name, args);
-  if (!resolved?.tool.write) return null;
+  if (!resolved || !writes(resolved.tool, resolved.args)) return null;
   const wanted = typeof args.workspace === "string" ? args.workspace.trim() : "";
   if (wanted) {
     const actors = await workspaceActors(actor);
@@ -2583,6 +2617,52 @@ const TOOL_LIST: AssistantTool[] = [
     description: "Workspace members with their ids, for setting ownerId on companies, contacts and tasks.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => ({ members: await listMembers(actor), you: { id: actor.userId, email: actor.email, name: actor.fullName } }),
+  },
+  {
+    name: "team_chat",
+    label: "Checking Chat",
+    write: true,
+    reads: (args) => !postsToChat(args),
+    description:
+      "The user's Chat with teammates: rooms, direct messages and threads. action read with no ids lists their rooms and direct messages with unread and mention counts, and the teammates they can message. action read with conversationId reads a room or direct message (newest first; before pages back), with threadId one thread, and with person their direct messages with that teammate. Reading needs no approval and marks nothing read. action post posts text as the user where conversationId, threadId (a reply) or person (a direct message) says, and only that needs the user's approval: proposing it shows them a card, and it only runs if they confirm. Teammates see a post at once. Tag a teammate with @[Name](member:id). Only post what the user asked for.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["read", "post"], description: "read to list or read conversations, post to send a message." },
+        conversationId: idParam("A room or direct message id from a read with no ids."),
+        threadId: idParam("The id of a thread's first message, to read the thread or reply in it."),
+        person: { type: "string", description: "A teammate's id (from a read with no ids, or list_team_members) or email address, for a direct message." },
+        before: idParam("For read: a message id; returns the messages before it."),
+        fromUnread: { type: "boolean", description: "For read with conversationId: start at the first unread message instead of the newest." },
+        limit: { type: "integer", description: "For read: messages to return, up to 100. Defaults to 50.", minimum: 1, maximum: 100 },
+        text: { type: "string", description: "For post: the message, in light Markdown, up to 10,000 characters." },
+      },
+      required: ["action"],
+    },
+    details: async (actor, args) => chatCardDetails(actor, args),
+    describe: (args, name) => {
+      const text = str(args.text);
+      if (str(args.threadId)) {
+        const thread = str(args.threadId);
+        return { title: `Reply in ${name(`${thread}:where`)}`, lines: [`Thread: ${name(`${thread}:root`)}`, text] };
+      }
+      if (str(args.person)) return { title: `Message ${name(`${str(args.person)}:person`)}`, lines: [text] };
+      return { title: `Post in ${name(`${str(args.conversationId)}:where`)}`, lines: [text] };
+    },
+    run: async (actor, args) => {
+      const conversationId = optionalStr(args.conversationId) ?? null;
+      const threadId = optionalStr(args.threadId) ?? null;
+      const person = optionalStr(args.person) ?? null;
+      if (postsToChat(args)) return postChat(actor, { conversationId, threadId, person, text: args.text });
+      if (!conversationId && !threadId && !person) return listChat(actor, { people: true });
+      const limit = int(args.limit, CHAT_PAGE_SIZE, 1, CHAT_PAGE_MAX);
+      const before = optionalStr(args.before) ?? null;
+      if (conversationId || threadId) return readChat(actor, { conversationId, threadId, before, fromUnread: args.fromUnread === true, limit });
+      const personId = await chatPersonId(actor, person!);
+      const dm = (await listChat(actor)).conversations.find((item) => item.kind === "dm" && item.person?.id === personId);
+      if (!dm) return { conversation: null, messages: [], note: "No direct messages with them yet." };
+      return readChat(actor, { conversationId: dm.id, before, fromUnread: args.fromUnread === true, limit });
+    },
   },
   {
     name: "list_email_templates",
@@ -5772,15 +5852,24 @@ export function findTool(name: string) {
   return resolveTool(name)?.tool;
 }
 
+function writes(tool: Pick<AssistantTool, "write" | "reads">, args: Args) {
+  return Boolean(tool.write) && !tool.reads?.(args);
+}
+
+export function isWriteCall(name: string, args: Args) {
+  const resolved = resolveTool(name, args);
+  return resolved ? writes(resolved.tool, resolved.args) : false;
+}
+
 export function resolveToolCall(name: string, args: Args) {
   const resolved = resolveTool(name, args);
-  return resolved ? { name: resolved.tool.name, args: resolved.args, write: Boolean(resolved.tool.write) } : null;
+  return resolved ? { name: resolved.tool.name, args: resolved.args, write: writes(resolved.tool, resolved.args) } : null;
 }
 
 export const APPROVAL_NOTE = "Needs the user's approval: proposing it shows them a card, and it only runs if they confirm.";
 
-export function toolDescription(tool: Pick<AssistantTool, "description" | "write">) {
-  return tool.write ? `${tool.description} ${APPROVAL_NOTE}` : tool.description;
+export function toolDescription(tool: Pick<AssistantTool, "description" | "write" | "reads">) {
+  return tool.write && !tool.reads ? `${tool.description} ${APPROVAL_NOTE}` : tool.description;
 }
 
 export const RETIRED_TOOLS: Record<string, { label: string; error: string }> = {
@@ -5881,6 +5970,7 @@ const EXTERNAL_TOOLS = new Set([
   "list_email_attachments",
   "read_chat_file",
   "list_workflow_approvals",
+  "team_chat",
 ]);
 
 const OWN_FIELDS: Record<string, ReadonlySet<string>> = {
@@ -6127,10 +6217,11 @@ export async function runTool(
   const resolved = resolveTool(name, args);
   if (!resolved) return { error: Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].error : `There is no tool called ${name}.` };
   const { tool } = resolved;
-  const { workspace: requestedWorkspace, ...cleaned } = dropStrayNulls(tool.write ? withoutMarkers(resolved.args) : resolved.args, tool.parameters) as Args;
+  const write = writes(tool, resolved.args);
+  const { workspace: requestedWorkspace, ...cleaned } = dropStrayNulls(write ? withoutMarkers(resolved.args) : resolved.args, tool.parameters) as Args;
   let scope: { targets: UserActor[]; all: boolean } | null = null;
   try {
-    if (tool.write) {
+    if (write) {
       const refusal = await crossWorkspaceRefusal(actor, tool.name, resolved.args);
       if (refusal) return { error: refusal, field: "workspace" };
     } else if (WORKSPACE_READ_TOOLS.has(tool.name)) {
@@ -6148,7 +6239,7 @@ export async function runTool(
   const limit = Math.max(5_000, Math.min(TOOL_TIMEOUT_MS, (options.deadline ?? Date.now() + TOOL_TIMEOUT_MS) - Date.now()));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<{ error: string }>((resolve) => {
-    if (tool.write) return;
+    if (write) return;
     timer = setTimeout(
       () => resolve({ error: `${tool.label} took too long and was stopped after ${Math.round(limit / 1000)} seconds. Try a narrower request, or try again.` }),
       limit,
@@ -6159,7 +6250,7 @@ export async function runTool(
       withToolSource(options.source, () => {
         const context: ToolContext = {
           callId: options.callId,
-          deadline: tool.write ? options.deadline : Date.now() + limit,
+          deadline: write ? options.deadline : Date.now() + limit,
           defer: options.defer,
           unattended: options.unattended === true,
           approval: options.approval,

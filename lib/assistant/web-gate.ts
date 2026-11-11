@@ -28,6 +28,7 @@ export const OUTSIDE_TOOLS: ReadonlySet<string> = new Set([
   "list_activities",
   "list_email_attachments",
   "read_chat_file",
+  "team_chat",
 ]);
 
 function flaggedOutside(value: unknown, depth: number): boolean {

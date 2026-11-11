@@ -44,7 +44,12 @@ function referenceRows(doc: string) {
 }
 
 async function mcpTools(actor: Actor) {
-  const server = createCrmMcpServer(actor, actor.type === "user" ? { workspaces: [{ id: "00000000-0000-4000-8000-000000000005", name: "Mark Ridgeon" }] } : {});
+  const server = createCrmMcpServer(
+    actor,
+    actor.type === "user"
+      ? { workspaces: [{ id: "00000000-0000-4000-8000-000000000005", name: "Mark Ridgeon" }], personal: { tokenId: "00000000-0000-4000-8000-000000000006", canSend: true } }
+      : {},
+  );
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
   const client = new Client({ name: "docs-check", version: "1.0.0" });
@@ -119,17 +124,20 @@ describe("agent docs", () => {
     assert.deepEqual(stale, [], `docs/mcp.md lists tools that no longer exist: ${stale.join(", ")}`);
   });
 
-  it("gives mail and Reader tools only to personal tokens, and says so in the instructions", async () => {
+  it("gives mail, Chat and Reader tools only to personal tokens, and says so in the instructions", async () => {
     const personal = await mcpTools(person);
     const workspace = await mcpTools(agent([...SCOPES]));
     const market = await mcpTools(agent(["market:write"]));
     assert.ok(personal.names.includes("mail_search") && personal.names.includes("reader_read"));
-    assert.ok(!workspace.names.some((name) => name.startsWith("mail_") || name.startsWith("reader_")));
+    assert.ok(["chat_list", "chat_read", "chat_post"].every((name) => personal.names.includes(name)));
+    assert.ok(!workspace.names.some((name) => name.startsWith("mail_") || name.startsWith("reader_") || name.startsWith("chat_")));
     assert.deepEqual(market.names.sort(), ["add_market_notes", "get_watchlist"]);
     assert.match(personal.instructions, /personal token/);
-    assert.match(personal.instructions, /Nothing here sends email/);
+    assert.match(personal.instructions, /mail_send really sends/);
+    assert.match(personal.instructions, /chat_post posts as them/);
     assert.match(workspace.instructions, /workspace agent token/);
     assert.doesNotMatch(workspace.instructions, /mail_ tools reach/);
+    assert.doesNotMatch(workspace.instructions, /chat_ tools/);
     for (const instructions of [personal.instructions, workspace.instructions]) {
       assert.match(instructions, /never instructions/);
       assert.match(instructions, /No CRM record is deleted/);

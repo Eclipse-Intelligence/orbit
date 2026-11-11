@@ -257,6 +257,22 @@ export const CORE_TASKS: EvalTask[] = [
     checks: [card("log_activity", arg.all(arg.equals("type", "note"), arg.is("contactId", "contact:Wren Ashdown"), bodyMentions("LinkedIn")))],
   }),
   task({
+    id: "write-chat-post-to-room",
+    suite: "core",
+    category: "propose_write",
+    origin: "Team Chat: tell a room some deal news, posted only through the approval card.",
+    fixture: { eclipse: { chat: [{ room: "sales", messages: [{ by: "colleague", text: "Any news from Quillfeather on the pilot?" }] }] } },
+    message: "Let #sales in Chat know Felix confirmed the Quillfeather pilot scope.",
+    checks: [
+      card("team_chat", arg.all(arg.equals("action", "post"), arg.is("conversationId", "room:sales"), arg.mentions("text", "Quillfeather"))),
+      custom("proposes one post", (transcript) => {
+        const posts = transcript.cards.filter((item) => item.name === "team_chat").length;
+        return posts <= 1 ? true : `It proposed ${posts} posts.`;
+      }),
+      noCard(EMAIL_TOOLS),
+    ],
+  }),
+  task({
     id: "write-stage-move",
     suite: "core",
     category: "propose_write",

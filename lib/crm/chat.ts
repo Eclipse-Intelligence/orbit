@@ -869,7 +869,7 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
   return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
-export async function postMessage(actor: UserActor, input: PostInput): Promise<ChatPost> {
+export async function postMessage(actor: UserActor, input: PostInput, options: { charge?: () => Promise<void> } = {}): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
   const body = cleanBody(input.body);
@@ -880,6 +880,7 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
       const conversation = await readConversation(db, actor, conversationId);
       const earlier = await existingPost(db, actor, clientKey, conversationId, parentId);
       if (earlier) return earlier;
+      await options.charge?.();
       if (conversation.kind === "dm") {
         const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
         if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);

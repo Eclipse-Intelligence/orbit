@@ -131,6 +131,15 @@ describe("Orbit Agent turns", () => {
       assert.match(tool.content, /Acme Agent/);
       const blocked = await runCompanionTool(auth, job.id, { id: "evt_2", name: "create_task", arguments: '{"title":"x"}' });
       assert.equal(blocked.isError, true);
+      const chatRead = await runCompanionTool(auth, job.id, { id: "evt_3", name: "team_chat", arguments: '{"action":"read"}' });
+      assert.equal(chatRead.isError, false);
+      assert.match(chatRead.content, /"conversations"/);
+      const chatPost = await runCompanionTool(auth, job.id, {
+        id: "evt_4",
+        name: "team_chat",
+        arguments: '{"action":"post","conversationId":"00000000-0000-4000-8000-000000000009","text":"x"}',
+      });
+      assert.deepEqual(chatPost, { content: PROPOSED, isError: false });
       return {
         steps: [
           { text: "Looking up Acme.", calls: [{ id: "toolu_read", name: "search_records", arguments: '{"query":"Acme"}' }] },
@@ -161,6 +170,7 @@ describe("Orbit Agent turns", () => {
     assert.match(request.system, /every tool is already loaded/);
     assert.ok(request.tools.find((tool) => tool.name === "create_task")!.write);
     assert.ok(!request.tools.find((tool) => tool.name === "search_records")!.write);
+    assert.ok(!request.tools.find((tool) => tool.name === "team_chat")!.write);
     assert.match(request.system, /You are the assistant inside Orbit/);
 
     assert.deepEqual(
@@ -168,6 +178,8 @@ describe("Orbit Agent turns", () => {
       [
         ["search_records", "running"],
         ["search_records", "done"],
+        ["team_chat", "running"],
+        ["team_chat", "done"],
       ],
     );
     const pending = events.find((event) => event.type === "actions") as Extract<AssistantEvent, { type: "actions" }>;
