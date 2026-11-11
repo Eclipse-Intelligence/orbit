@@ -31,6 +31,31 @@ npm run dev
 
 `npm run db:reset` drops the `crm` and `private` schemas and the local auth users, then sets up again. It refuses to run when it detects hosted Supabase Auth.
 
+### On a Mac
+
+Install Postgres 16 with Homebrew and give the `postgres` role the password the scripts expect:
+
+```bash
+brew install postgresql@16
+brew services start postgresql@16
+export PATH="$(brew --prefix postgresql@16)/bin:$PATH"
+createuser -s postgres
+psql -d postgres -c "alter role postgres password 'postgres'"
+psql -U postgres -d postgres -c "create role crm_app login password 'crm_app_dev' nosuperuser nocreatedb nocreaterole noinherit" -c "create database crm owner crm_app" -c "create database crm_test"
+```
+
+Then run the steps above from `npm install`. `npm install` also generates the Next.js types (`next typegen`), so `npx tsc --noEmit` works on a fresh clone.
+
+Keep `DATABASE_URL` pointing at the local database. To try an outside service locally, copy just that service's key from Vercel (Project, Settings, Environment Variables) into `.env.local`. Never copy the production database URLs.
+
+### Agents and Conductor
+
+- Agents read `CLAUDE.md`, `CONVENTIONS.md` and `docs/working-notes.md`. The working notes hold the decisions and working habits settled with Mark, plus the open follow-ups.
+- `.conductor/settings.toml` sets up Conductor workspaces: `npm install` on creation, a Dev action on the workspace's port, and a Sweep action. `.env.local` is copied into each workspace by Conductor's default `.env*` rule.
+- `.mcp.json` connects agents to the hosted Supabase project through the Supabase MCP.
+- Workspaces share the local Postgres, so give parallel test runs their own database (see `docs/working-notes.md`).
+- `npm run sweep` signs in with `DEV_USER_EMAIL` and `DEV_USER_PASSWORD` and checks the core flows at iPhone and iPad sizes against `SWEEP_URL` (default `http://localhost:3000`). It uses installed Chrome by default (`CHROME_PATH` to choose another), or Safari's engine with `BROWSER=webkit` after `npx playwright install webkit`. Screenshots go to `sweep-results/`.
+
 ### Test database
 
 `npm test` uses its own database, `crm_test` on `127.0.0.1:5432`, with the connection strings set in the `test` script in `package.json` (not `.env.local`): it connects as `postgres` with password `postgres` to rebuild the schema, and as `crm_app` with password `crm_app_dev` for the tests. Create it once as `postgres`:
