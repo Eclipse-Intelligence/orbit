@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { writingStyle } from "@/lib/writing-style";
 import { brandOrEmpty, brandToneNote } from "@/lib/crm/brand";
 import { userLinks } from "@/lib/assistant/links";
@@ -30,6 +31,9 @@ import { completeJson, LlmError } from "@/lib/llm";
 import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
 import { siteOrigin } from "@/lib/site-url";
 import { alertLink } from "@/lib/crm/workspaces";
+import { findMyRooms, postMessage } from "@/lib/crm/chat";
+import { mentionsIn, splitMentions } from "@/lib/mentions";
+import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX } from "@/lib/chat/types";
 import { appTimeZone } from "@/lib/time";
 import { dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import {
@@ -100,6 +104,7 @@ type StepResult =
 type Ctx = {
   actor: UserActor;
   run: RunRow;
+  state: RunState;
   vars: Vars;
   fetchImpl?: typeof fetch;
   deadline: number;
@@ -811,7 +816,67 @@ async function assigneeFor(ctx: Ctx, value: unknown) {
   return isUuid(choice) ? choice : ctx.actor.userId;
 }
 
-const SIDE_EFFECTS = new Set(["create_task", "add_note", "update_record", "board", "notify", "send_email", "linear_issue", "upsert_record", "webhook"]);
+const SIDE_EFFECTS = new Set(["create_task", "add_note", "update_record", "board", "notify", "post_to_chat", "send_email", "linear_issue", "upsert_record", "webhook"]);
+
+export function chatPostKey(runId: string, stepId: string, frames: Pick<LoopFrame, "id" | "index">[] = []) {
+  const key = ["wf", runId, stepId, ...frames.map((frame) => `${frame.id}.${frame.index}`)].join(":");
+  return key.length <= CHAT_CLIENT_KEY_MAX ? key : `wf:${createHash("sha256").update(key).digest("base64url")}`;
+}
+
+function untrustedTags(text: string, typed: Set<string>) {
+  return splitMentions(text).some((piece) => "mention" in piece && piece.mention.kind === "member" && !typed.has(piece.mention.id.toLowerCase()));
+}
+
+export function chatBody(template: unknown, vars: Vars) {
+  const typed = new Set(
+    mentionsIn(str(template))
+      .filter((mention) => mention.kind === "member")
+      .map((mention) => mention.id.toLowerCase()),
+  );
+  let body = render(template, vars).replace(/\u0000/g, "").replace(/\r\n?/g, "\n");
+  for (let pass = 0; pass < 20 && untrustedTags(body, typed); pass += 1) {
+    body = splitMentions(body)
+      .map((piece) => {
+        if ("text" in piece) return piece.text;
+        const { kind, id, name } = piece.mention;
+        return kind === "member" && !typed.has(id.toLowerCase()) ? `@${name.replace(/[[\]]/g, "")}` : `@[${name}](${kind}:${id})`;
+      })
+      .join("");
+  }
+  if (untrustedTags(body, typed)) body = body.replace(/\]\(member:/g, "] (member:");
+  return body.trim();
+}
+
+async function chatRoom(ctx: Ctx, roomId: string, roomName: string) {
+  const shown = roomName ? `#${roomName}` : "that room";
+  const rooms = await findMyRooms(ctx.actor, { id: roomId || null, name: roomId ? null : roomName });
+  if (rooms.length === 0) {
+    throw new CrmError("forbidden", roomId ? `Couldn't post to Chat: you're no longer in ${shown}.` : `Couldn't post to Chat: you're not in a room called ${shown}.`, 403);
+  }
+  if (rooms.length === 1) return rooms[0];
+  const linked = rooms.filter((room) => room.workspaceId === ctx.actor.workspaceId);
+  if (linked.length === 1) return linked[0];
+  throw new CrmError("invalid_input", `Couldn't post to Chat: more than one of your rooms is called ${shown}. Pick it in the step.`, 400);
+}
+
+async function chatStep(ctx: Ctx, step: Step): Promise<StepResult> {
+  const roomName = str(step.config.roomName).trim().replace(/^#+/, "").trim();
+  const roomId = str(step.config.roomId).trim();
+  if (!roomId && !roomName) throw new CrmError("invalid_input", "Couldn't post to Chat: choose a room.", 400);
+  const body = chatBody(step.config.body, ctx.vars);
+  if (!body) throw new CrmError("invalid_input", "Couldn't post to Chat: the message is empty.", 400);
+  if (body.length > CHAT_BODY_MAX) throw new CrmError("invalid_input", "Couldn't post to Chat: keep the message to 10,000 characters.", 400);
+  const room = await chatRoom(ctx, roomId, roomName);
+  const posted = await postMessage(
+    ctx.actor,
+    { conversationId: room.id, body, clientKey: chatPostKey(ctx.run.id, step.id, ctx.state.frames ?? []) },
+    { viaWorkflowId: ctx.run.workflow_id },
+  );
+  return {
+    kind: "next",
+    output: { room: `#${room.name}`, messageId: posted.message.id, url: link(`/chat/${room.id}?message=${posted.message.id}`), duplicate: posted.duplicate },
+  };
+}
 
 async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
   const config = step.config;
@@ -942,6 +1007,8 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       await notify(ctx.actor, to, { title, body: render(config.body, ctx.vars).trim().slice(0, 4000) || null, href, source: "workflow" });
       return { kind: "next", output: { to, title } };
     }
+    case "post_to_chat":
+      return chatStep(ctx, step);
     case "send_email": {
       const contactId = requireRecord(ctx, "contact");
       const subject = render(config.subject, ctx.vars).replace(/\s+/g, " ").trim();
@@ -1148,7 +1215,7 @@ export async function executeRun(
     }
   }
   const vars = state.vars ?? {};
-  const ctx: Ctx = { actor, run, vars, fetchImpl: options.fetchImpl, deadline: options.deadline };
+  const ctx: Ctx = { actor, run, state, vars, fetchImpl: options.fetchImpl, deadline: options.deadline };
   const nodes = new Map(definition.nodes.map((node) => [node.id, node]));
   let at: string | null = state.at !== undefined ? state.at : follow(definition, TRIGGER_NODE, "out", state, vars);
   const finish = async (status: "succeeded" | "cancelled", error: string | null = null) => {

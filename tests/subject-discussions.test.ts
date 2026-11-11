@@ -408,6 +408,8 @@ describe("discussion helpers", () => {
       clientKey: null,
       body: "x",
       mentions: [],
+      via: null,
+      hook: null,
       replyCount: 0,
       lastReplyAt: null,
       replyAuthors: [],

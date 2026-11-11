@@ -139,7 +139,7 @@ export default function MessageList({
         node.scrollTop = node.scrollHeight;
       } else if (prepended) node.scrollTop = previous.top + (node.scrollHeight - previous.height);
       else if (appended && (previous.atBottom || ownNew)) node.scrollTop = node.scrollHeight;
-      if (appended && last && previous.last !== null && last.author.id !== viewer.id && !isLocal(last)) arrived = last;
+      if (appended && last && previous.last !== null && (last.author.id !== viewer.id || last.via) && !isLocal(last)) arrived = last;
     }
     snapshot.current = { ...snapshot.current, first, last: last?.id ?? null };
     report(node);

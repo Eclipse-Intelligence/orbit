@@ -35,6 +35,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     conversationId: ROOM,
     parentId: null,
     author: { id: SAM, name: "Sam Okafor" },
+    via: null,
     clientKey: null,
     body: "Hello",
     mentions: [],
@@ -44,6 +45,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     editedAt: null,
     deletedAt: null,
     createdAt: input.at,
+    hook: null,
     ...input,
   };
 }
@@ -145,6 +147,22 @@ describe("chat timeline", () => {
     assert.equal(state.timelines[ROOM].messages.length, 1);
   });
 
+  it("clears a deleted hook message's card in the room and its open thread", () => {
+    const hook = { title: "Weekly traffic", url: "https://analytics.example/", block: false };
+    const root = message({ at: "2026-11-11T08:00:00.000Z", author: { id: null, name: "Google Analytics" }, hook, replyCount: 1 });
+    let state = chatReducer(loaded([root]), {
+      type: "thread",
+      thread: { conversation: null as never, root, replies: [], hasOlder: false, hasNewer: false, following: true, lastReadAt: null },
+      mode: "replace",
+    });
+    state = chatReducer(state, { type: "deleted", conversationId: ROOM, messageId: root.id, parentId: null, root: null });
+    const empty = { title: null, url: null, block: false };
+    assert.deepEqual(state.timelines[ROOM].messages[0].hook, empty);
+    assert.ok(state.timelines[ROOM].messages[0].deletedAt);
+    assert.deepEqual(state.threads[root.id].root?.hook, empty);
+    assert.equal(state.threads[root.id].root?.body, "");
+  });
+
   it("adds replies to an open thread and leaves other threads alone", () => {
     const root = message({ at: "2026-11-11T08:00:00.000Z", replyCount: 0 });
     let state = chatReducer(loaded([root]), {
@@ -170,6 +188,9 @@ describe("chat timeline", () => {
     assert.equal(startsGroup(b, c, true), true);
     assert.equal(startsGroup(a, { ...b, author: { id: ME, name: "Mark" } }, true), true);
     assert.equal(startsGroup(a, b, false), true);
+    const viaFlow = { ...b, via: { workflowId: null, name: "Won deals" } };
+    assert.equal(startsGroup(a, viaFlow, true), true);
+    assert.equal(startsGroup(viaFlow, { ...c, createdAt: b.createdAt, via: { workflowId: null, name: "Won deals" } }, true), false);
   });
 
   it("finds your last message for Up arrow editing", () => {
@@ -177,6 +198,8 @@ describe("chat timeline", () => {
     const theirs = message({ at: "2026-11-11T09:01:00.000Z" });
     assert.equal(lastOwnMessage([mine, theirs], ME)?.id, mine.id);
     assert.equal(lastOwnMessage([theirs], ME), null);
+    const posted = message({ at: "2026-11-11T09:02:00.000Z", author: { id: ME, name: "Mark" }, via: { workflowId: null, name: "Won deals" } });
+    assert.equal(lastOwnMessage([mine, theirs, posted], ME)?.id, mine.id);
   });
 
   it("upserts by id in time order", () => {

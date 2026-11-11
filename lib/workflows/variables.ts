@@ -262,6 +262,7 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
     if (step.type === "linear_issue") {
       options.push({ path: `steps.${step.id}.identifier`, label: "Issue", group }, { path: `steps.${step.id}.url`, label: "Issue link", group });
     }
+    if (step.type === "post_to_chat") options.push({ path: `steps.${step.id}.url`, label: "Message link", group });
     if (step.type === "approval") options.push({ path: `steps.${step.id}.note`, label: "Approval note", group });
     if (step.type === "create_proposal") {
       options.push(

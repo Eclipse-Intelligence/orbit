@@ -60,6 +60,7 @@ const DEFAULTS: Record<StepType, Record<string, unknown>> = {
   update_record: { object: "company", field: "lifecycle", value: "customer" },
   board: { boardId: "", stageId: "" },
   notify: { to: "owner", title: "", body: "" },
+  post_to_chat: { roomId: "", roomName: "", body: "" },
   send_email: { subject: "", body: "" },
   linear_issue: { title: "", description: "", priority: "medium" },
   find_records: { object: "contact", lifecycles: [], tag: "", owner: "", openOpportunity: "any", quietDays: "", search: "", order: "least_contacted", limit: 25, skipDays: "" },

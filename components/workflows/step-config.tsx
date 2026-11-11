@@ -26,6 +26,7 @@ export type BuilderOptions = {
   proposalTemplates: { id: string; name: string }[];
   products: { id: string; name: string; priceGbp: number | null; priceUsd: number | null }[];
   aiFields?: { id: string; label: string }[];
+  chatRooms?: { id: string; name: string }[];
 };
 
 export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {
@@ -47,6 +48,8 @@ const OP_LABELS: Record<string, string> = {
   greater_than: "is more than",
   less_than: "is less than",
 };
+
+const NAMED_ROOM = "named";
 
 const TYPE_LABELS: Record<string, string> = { text: "Text", number: "Number", boolean: "Yes or no", list: "List", choice: "One of" };
 
@@ -533,6 +536,39 @@ export default function StepConfig({
           {field("body", "Message", { rows: 3 })}
         </div>
       );
+    case "post_to_chat": {
+      const rooms = options.chatRooms ?? [];
+      const roomId = str(c.roomId);
+      const roomName = str(c.roomName).trim().replace(/^#+/, "").trim();
+      const named = roomName ? rooms.filter((room) => room.name.toLowerCase() === roomName.toLowerCase()) : [];
+      const selected = roomId || (named.length === 1 ? named[0].id : roomName ? NAMED_ROOM : "");
+      const missing = selected === NAMED_ROOM || (Boolean(roomId) && !rooms.some((room) => room.id === roomId));
+      return (
+        <div className="flex flex-col gap-3">
+          <Select
+            id={`${step.id}-room`}
+            label="Room"
+            value={selected}
+            onChange={(value) => {
+              if (missing && value === selected) return;
+              update({ ...c, roomId: value, roomName: rooms.find((room) => room.id === value)?.name ?? "" });
+            }}
+            className="sm:w-72"
+          >
+            <option value="">Choose a room</option>
+            {missing && <option value={selected}>{!roomName ? "A room you're not in" : !roomId && named.length > 1 ? `#${roomName} (more than one room, pick one)` : `#${roomName} (not one of your rooms)`}</option>}
+            {rooms.map((room) => (
+              <option key={room.id} value={room.id}>
+                #{room.name}
+              </option>
+            ))}
+          </Select>
+          {rooms.length === 0 && !missing && <p className="caption-style text-subtle leading-[1.4]">You&apos;re not in any rooms. Create one in Chat.</p>}
+          {field("body", "Message", { rows: 4, placeholder: "{{company.name}} just signed." })}
+          <p className="caption-style text-subtle leading-[1.4]">Posts as you, marked as sent by this workflow.</p>
+        </div>
+      );
+    }
     case "send_email":
       return (
         <div className="flex flex-col gap-3">

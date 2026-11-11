@@ -12,6 +12,15 @@ export const CHAT_PAGE_MAX = 100;
 export const CHAT_COUNT_CAP = 100;
 export const CHAT_ROOM_NAME_MAX = 80;
 export const CHAT_CLIENT_KEY_MAX = 100;
+export const CHAT_HOOK_NAME_MAX = 80;
+
+export type ChatHookCard = { title: string | null; url: string | null; block: boolean };
+
+export const EMPTY_HOOK_CARD: ChatHookCard = { title: null, url: null, block: false };
+
+export type ChatHook = { id: string; name: string; createdBy: string | null; pausedAt: string | null; lastUsedAt: string | null; createdAt: string };
+
+export type ChatHookSecret = { hook: ChatHook; secret: string };
 
 export type ChatConversation = {
   id: string;
@@ -34,11 +43,14 @@ export type ChatSidebar = {
   mentioned: boolean;
 };
 
+export type ChatVia = { workflowId: string | null; name: string };
+
 export type ChatMessage = {
   id: string;
   conversationId: string;
   parentId: string | null;
   author: { id: string | null; name: string };
+  via: ChatVia | null;
   clientKey: string | null;
   body: string;
   mentions: string[];
@@ -48,6 +60,7 @@ export type ChatMessage = {
   editedAt: string | null;
   deletedAt: string | null;
   createdAt: string;
+  hook: ChatHookCard | null;
 };
 
 export type ChatRoot = { id: string; replyCount: number; lastReplyAt: string | null; replyAuthors: ChatPerson[] };
