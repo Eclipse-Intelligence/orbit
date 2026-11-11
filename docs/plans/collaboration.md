@@ -27,7 +27,18 @@ Rooms, DMs and the discussions under a task, a doc and a shared email are one th
 | `doc` | Whoever can see the doc; shared docs only | `exists` on `crm.pages` under the caller's own policies | Doc page |
 | `mail_thread` | The owner and the share's members | Share membership helper | Shared email |
 
-## Phase 0: mockups (approval before code)
+## Phase 0: mockups (approved by Mark, 2026-11-11)
+
+The approved mockups are `docs/plans/collaboration-mockups.html`; open it in a browser. Build to them. Every "Choice to approve" listed at the end of that file is approved, and these follow-up decisions are settled:
+
+- **Threads view** shows threads from rooms and DMs only. Task, doc and shared email discussions are not listed there.
+- **Rooms:** any member can rename a room, add or remove members, and manage its incoming webhooks. No archive in v1.
+- **Shared emails:** the owner removes people one at a time; there is no "stop sharing with everyone".
+- **Threads:** no unfollow and no "also send to #room" in v1.
+- **Alerts** go out for: mentions, DMs, replies in a thread you follow, tags in tasks and docs, task assigned or handed to you, "Done by John", an email shared with you, and being added to a draft. Room messages without a mention never reach the bell or push.
+- **Failed sends** read "Couldn't send. Try again." with Try again as the button.
+
+What the mockups covered:
 
 - The `@` picker: people first, then records.
 - Chat on desktop and phone: sidebar, room, thread panel (side panel on desktop, pushed screen on phone), DMs, Threads view, room settings, empty states.
