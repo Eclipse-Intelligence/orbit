@@ -37,6 +37,7 @@ export type TaskAssigning = {
   viewerId: string;
   tagged: string[];
   canAssign: boolean;
+  pending: boolean;
   onAssign: (ownerId: string) => void;
 };
 
@@ -60,7 +61,9 @@ function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning })
       onPick={assigning.onAssign}
       label={`Assigned to ${name}. Reassign`}
       align="end"
+      disabled={assigning.pending}
       handOnNote
+      triggerClassName="min-h-11 min-w-11 justify-center sm:min-h-0 sm:min-w-0"
       trigger={<MemberAvatar member={member} viewerId={assigning.viewerId} className="hover:ring-line-strong hover:ring-2" />}
     />
   );

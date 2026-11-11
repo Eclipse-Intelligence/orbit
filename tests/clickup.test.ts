@@ -817,6 +817,27 @@ describe("clickup sync", () => {
     await db.query("delete from crm.workspace_members where user_id = any($1::uuid[])", [[sam, ola]]);
   });
 
+  it("skips ClickUp tasks already linked to a task the person can't change, after handing it on", async () => {
+    const db = getAdminPool();
+    const priyaId = (await db.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["priya@orbit.test", "Priya Nair"])).rows[0].id;
+    await db.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, priyaId]);
+    const priya: UserActor = { ...owner, userId: priyaId, email: "priya@orbit.test", fullName: "Priya Nair", role: "member", scopes: scopesForRole("member") };
+    const task = (await createTaskWithClickUp(owner, { title: "Priya hands this on", contactId: janeId, ownerId: priyaId }, RELATIONSHIPS, { fetchImpl })).task;
+    await updateTask(priya, task.id, { ownerId: owner.userId });
+    const linked = await db.query<{ clickup_task_id: string }>("select clickup_task_id from crm.tasks where id = $1", [task.id]);
+    const clickupId = linked.rows[0].clickup_task_id;
+    assert.ok(clickupId);
+    const remote = fake.tasks.get(clickupId)!;
+    remote.date_updated = String(Date.now() + 1_000);
+    remote.custom_fields = remote.custom_fields?.map((field) => ({ ...field, value: "jane@acme.com" }));
+    const result = await syncClickUp({ actor: priya, force: true, fetchImpl });
+    assert.equal(result.failed, 0);
+    assert.equal(result.imported, 0);
+    const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [clickupId]);
+    assert.equal(copies.rows[0].n, 1);
+    await db.query("delete from crm.workspace_members where user_id = $1", [priyaId]);
+  });
+
   it("adds a clickup step for the workspace in scheduled sync", async () => {
     const { targets } = await syncTargets({ fetchImpl });
     const mine = targets.find((target) => target.actor.workspaceId === owner.workspaceId);

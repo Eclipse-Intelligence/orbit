@@ -9,6 +9,7 @@ create table if not exists crm.task_participants (
 );
 
 create index if not exists task_participants_user_idx on crm.task_participants (user_id);
+create index if not exists task_participants_added_by_idx on crm.task_participants (added_by);
 
 alter table crm.task_participants enable row level security;
 alter table crm.task_participants force row level security;
@@ -78,5 +79,66 @@ create policy tasks_select_member on crm.tasks
       or id in (select private.my_task_ids())
     )
   );
+
+create or replace function private.task_participants_leave()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  delete from crm.task_participants p
+  using crm.tasks t
+  where p.task_id = t.id and t.workspace_id = old.workspace_id and p.user_id = old.user_id;
+  return old;
+end;
+$$;
+
+revoke all on function private.task_participants_leave() from public;
+
+drop trigger if exists workspace_members_task_participants on crm.workspace_members;
+create trigger workspace_members_task_participants
+  after delete on crm.workspace_members
+  for each row execute function private.task_participants_leave();
+
+create or replace function private.task_participants_move()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  delete from crm.task_participants p
+  where p.task_id = new.id
+    and not exists (
+      select 1 from crm.workspace_members m where m.workspace_id = new.workspace_id and m.user_id = p.user_id
+    );
+  return new;
+end;
+$$;
+
+revoke all on function private.task_participants_move() from public;
+
+drop trigger if exists tasks_participants_move on crm.tasks;
+create trigger tasks_participants_move
+  after update of workspace_id on crm.tasks
+  for each row
+  when (old.workspace_id is distinct from new.workspace_id)
+  execute function private.task_participants_move();
+
+create or replace function private.clickup_task_linked(p_workspace uuid, p_clickup_task text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from crm.tasks t where t.workspace_id = p_workspace and t.clickup_task_id = p_clickup_task
+  );
+$$;
+
+revoke all on function private.clickup_task_linked(uuid, text) from public;
+grant execute on function private.clickup_task_linked(uuid, text) to crm_app;
 
 reset lock_timeout;

@@ -40,6 +40,7 @@ export default function ActionsScreen({
   shared = false,
   members = [],
   tagged = {},
+  taggedCount = 0,
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -52,6 +53,7 @@ export default function ActionsScreen({
   shared?: boolean;
   members?: AssignableMember[];
   tagged?: Record<string, string[]>;
+  taggedCount?: number;
 }) {
   const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
@@ -64,6 +66,7 @@ export default function ActionsScreen({
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState<Set<string>>(() => new Set());
+  const [assigningIds, setAssigningIds] = useState<Set<string>>(() => new Set());
 
   async function complete(id: string) {
     setDone((current) => new Set(current).add(id));
@@ -82,8 +85,15 @@ export default function ActionsScreen({
   }
 
   async function assign(id: string, ownerId: string) {
+    if (assigningIds.has(id)) return;
     setMessage(null);
+    setAssigningIds((current) => new Set(current).add(id));
     const result = await assignTaskAction(id, ownerId);
+    setAssigningIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
     if (result.error) {
       setMessage(result.error);
       return;
@@ -98,6 +108,7 @@ export default function ActionsScreen({
       viewerId: viewer.id,
       tagged: tagged[task.id] ?? [],
       canAssign: admin || task.ownerId === viewer.id || task.createdByUserId === viewer.id,
+      pending: assigningIds.has(task.id),
       onAssign: (ownerId: string) => void assign(task.id, ownerId),
     };
   }
@@ -121,6 +132,7 @@ export default function ActionsScreen({
                   aria-current={who === "tagged" ? "page" : undefined}
                 >
                   Tagged
+                  <span className="text-subtle tabular-nums">{taggedCount}</span>
                 </Button>
                 {shared && (
                   <Button

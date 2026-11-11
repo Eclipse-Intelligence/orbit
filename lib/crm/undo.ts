@@ -20,7 +20,7 @@ import { readRelationshipOverride, setRelationshipOverrideInDb } from "@/lib/crm
 import { isRelationshipLabel, RELATIONSHIP_META } from "@/lib/crm/relationship-score";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
-import { archiveTaskInDb, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
+import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { dateTimeInputValue } from "@/lib/time";
 import type { AccountHealth, Actor, CompanyWrite, ContactWrite, OpportunityWrite, Provenance, TaskWrite } from "@/lib/crm/types";
@@ -537,6 +537,9 @@ async function describeEvent(
   if (undone) return refuse(summary, "This change has already been undone.");
   if (!current) return refuse(summary, notFoundMessage(noun));
   if (!hasScope(actor.scopes, SCOPES[entity])) return refuse(summary, `You don't have permission to change this ${noun}.`);
+  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null })) {
+    return refuse(summary, "Can't undo: you're only tagged on this task now.");
+  }
   if (check) return refuse(summary, check);
   return { entityName, summary, plan: { ok: true, restores, run } };
 }

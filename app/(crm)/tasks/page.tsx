@@ -34,7 +34,12 @@ export default async function TasksPage({
     countTaskViews(user, scope),
     getClickUpPicker(user),
   ]);
-  const tagged = team ? await listTaskParticipants(user, due.tasks.map((task) => task.id)) : {};
+  const [tagged, taggedCount] = team
+    ? await Promise.all([
+        listTaskParticipants(user, due.tasks.map((task) => task.id)),
+        scope.tagged ? Promise.resolve(counts.all) : countTaskViews(user, { tagged: true }).then((views) => views.all),
+      ])
+    : [{}, 0];
 
   return (
     <ActionsScreen
@@ -55,6 +60,7 @@ export default async function TasksPage({
       shared={shared}
       members={team ? members.map((member) => ({ id: member.id, name: member.name })) : []}
       tagged={tagged}
+      taggedCount={taggedCount}
     />
   );
 }

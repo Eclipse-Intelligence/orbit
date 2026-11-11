@@ -403,6 +403,11 @@ async function readSyncRow(db: Db, workspaceId: string, id: string, lock = false
   return result.rows[0] ?? null;
 }
 
+async function linkedElsewhere(workspaceId: string, clickupTaskId: string) {
+  const result = await query<{ linked: boolean }>("select private.clickup_task_linked($1, $2) as linked", [workspaceId, clickupTaskId]);
+  return Boolean(result.rows[0]?.linked);
+}
+
 async function linkedRow(db: Db, workspaceId: string, clickupTaskId: string) {
   const result = await db.query<SyncRow>(
     `select ${SYNC_COLUMNS} ${SYNC_FROM} where t.workspace_id = $1 and t.clickup_task_id = $2 and ${directTaskSql("t")}`,
@@ -758,6 +763,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
       return changed ? "updated" : "unchanged";
     }
     if (!listId || !watched.has(listId)) return "ignored";
+    if (await linkedElsewhere(s.actor.workspaceId, taskId)) return "ignored";
     const creating = await db.query<{ id: string }>(
       `select id from crm.tasks
        where workspace_id = $1 and clickup_task_id is null and clickup_list_id = $2 and title = $3
