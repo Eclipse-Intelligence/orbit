@@ -134,10 +134,10 @@ export async function decideApprovalAction(runId: string, approved: boolean, not
   }
 }
 
-export async function markNotificationsReadAction(ids?: string[]): Promise<{ error?: string }> {
+export async function markNotificationsReadAction(ids?: string[], through?: string | null): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
-    await markNotificationsRead(user, ids);
+    await markNotificationsRead(user, ids, typeof through === "string" ? through : null);
     return {};
   } catch (error) {
     return failure(error, "Couldn't update notifications.");

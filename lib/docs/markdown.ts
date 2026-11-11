@@ -14,7 +14,7 @@ export type ParsedDoc = { links: ParsedLink[]; tags: string[]; mentions: Mention
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const WIKILINK = /\[\[([^[\]\n]{1,400}?)\]\]/g;
-const MENTION = /@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)/g;
+const MENTION = /@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):([0-9a-f-]{36})\)/g;
 const TAG = /#([\p{L}\p{N}_\-/]+)/gu;
 const PARAGRAPH_BREAK = /\n[ \t]*\n/g;
 const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;

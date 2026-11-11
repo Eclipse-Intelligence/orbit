@@ -1,8 +1,8 @@
 import type { LiveEvent } from "@/lib/docs/live/protocol";
 
-type ChannelStatus = "joining" | "joined" | "closed";
+export type ChannelStatus = "joining" | "joined" | "closed";
 
-type ChannelHandlers = {
+export type ChannelHandlers = {
   message: (event: LiveEvent, payload: unknown) => void;
   status: (status: ChannelStatus) => void;
 };

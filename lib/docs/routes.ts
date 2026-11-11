@@ -81,10 +81,13 @@ export function sameList(left: PageFilter, right: PageFilter) {
   return listKey(left) === listKey(right);
 }
 
+export const TEAM_HREF = "/settings/team";
+
 export function recordHref(kind: MentionKind, id: string) {
   if (kind === "company") return companyHref(id);
   if (kind === "contact") return contactHref(id);
   if (kind === "opportunity") return dealHref(id);
   if (kind === "proposal") return `/proposals/${encodeURIComponent(id)}`;
+  if (kind === "member") return TEAM_HREF;
   return "/tasks";
 }

@@ -221,6 +221,14 @@ export const CORE_TASKS: EvalTask[] = [
     checks: [card("create_task", arg.all(arg.is("contactId", "contact:Ansel Pike"), dueOn("dueAt", { weekday: 2 }), (args) => typeof args.remindMinutes === "number"))],
   }),
   task({
+    id: "write-task-for-tagged-teammate",
+    suite: "core",
+    category: "propose_write",
+    origin: "Teammate tags: a task for a tagged teammate about a contact, without treating the teammate as a record.",
+    message: "Give {{member:Tamsin Holt}} a task to call Wren Ashdown on Friday.",
+    checks: [card("create_task", arg.all(arg.is("ownerId", "member:Tamsin Holt"), arg.is("contactId", "contact:Wren Ashdown"), dueOn("dueAt", { weekday: 5 })))],
+  }),
+  task({
     id: "write-move-task-to-monday",
     suite: "core",
     category: "propose_write",

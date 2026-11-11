@@ -37,7 +37,7 @@ import {
   type ReasoningLevel,
 } from "@/lib/assistant/models";
 import { relativeWhen } from "@/lib/companies";
-import { pageHref } from "@/lib/docs/routes";
+import { pageHref, TEAM_HREF } from "@/lib/docs/routes";
 import type { DocDiffLine } from "@/lib/docs/types";
 import type { UnreadBrief } from "@/lib/learning/nightly";
 import { briefKey, opensBriefOnExpand, pendingBrief as unhandledBrief } from "@/lib/assistant/brief-dock";
@@ -585,7 +585,9 @@ function MentionChip({ mention }: { mention: Mention }) {
           ? "/tasks"
           : mention.kind === "proposal"
             ? `/proposals/${mention.id}`
-            : "/opportunities";
+            : mention.kind === "member"
+              ? TEAM_HREF
+              : "/opportunities";
   return (
     <a
       href={href}

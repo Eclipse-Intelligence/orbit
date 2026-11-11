@@ -84,7 +84,7 @@ function BacklinkCard({ context, linked, now }: { context: LinkContext; linked: 
 
 function RecordIcon({ record }: { record: RecordRef }) {
   if (record.kind === "company") return <Monogram name={record.name} className="size-6 rounded-lg text-[11px]" />;
-  if (record.kind === "contact") {
+  if (record.kind === "contact" || record.kind === "member") {
     return (
       <ParticipantAvatar
         participant={{ id: record.id, name: record.name, short: record.name, initials: participantInitials(record.name), color: "oklch(0.70 0.13 162)", kind: "person" }}

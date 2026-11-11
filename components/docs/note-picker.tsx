@@ -34,7 +34,7 @@ type Option =
   | { type: "tag"; path: string; count: number }
   | { type: "record"; record: RecordRef };
 
-const RECORD_LABELS: Record<RecordRef["kind"], string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
+const RECORD_LABELS: Record<RecordRef["kind"], string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal", member: "Teammate" };
 
 function flatten(tags: TagNode[]): TagNode[] {
   return tags.flatMap((tag) => [tag, ...flatten(tag.children)]);
@@ -77,6 +77,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
   const query = trigger.query.trim();
   const key = `${trigger.kind}:${trigger.query}`;
   const highlight = highlightState.key === key ? highlightState.index : 0;
+  const tagsPeople = page.kind === "note" && page.shared;
   const setHighlight = (index: number) => setHighlightState({ key, index });
 
   const tagOptions = useMemo<Option[]>(() => {
@@ -106,7 +107,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
                 .then((targets) => targets.map((target): Option => ({ type: "target", target })))
             : docsData()
                 .searchRecords(trigger.query)
-                .then((records) => records.map((record): Option => ({ type: "record", record })));
+                .then((records) => records.filter((record) => record.kind !== "member" || tagsPeople).map((record): Option => ({ type: "record", record })));
         void request
           .then((options) => {
             if (live) setFound({ key, options });
@@ -121,7 +122,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
       live = false;
       window.clearTimeout(timer);
     };
-  }, [trigger.kind, trigger.query, page.id, key]);
+  }, [trigger.kind, trigger.query, page.id, key, tagsPeople]);
 
   const settled = trigger.kind === "tag" || found.key === key;
   const failed = trigger.kind !== "tag" && found.key === key && Boolean(found.failed);
@@ -243,7 +244,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
     },
   }));
 
-  const heading = trigger.kind === "link" ? "Link to a note" : trigger.kind === "tag" ? "Tags" : "Mention a record";
+  const heading = trigger.kind === "link" ? "Link to a note" : trigger.kind === "tag" ? "Tags" : tagsPeople ? "Mention" : "Mention a record";
   const empty = settled ? "Nothing matches" : "Searching…";
 
   function noteDetail(target: { shared: boolean; folderName: string | null }, edited: string | null): { warn: boolean; detail: ReactNode } {

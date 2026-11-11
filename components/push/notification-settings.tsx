@@ -35,13 +35,16 @@ export default function NotificationSettings({
   initialMail,
   initialCalendarMinutes,
   initialReads,
+  initialTeam,
 }: {
   initialMail: NotifyMail;
   initialCalendarMinutes: number | null;
   initialReads: boolean;
+  initialTeam: boolean;
 }) {
   const [calendar, setCalendar] = useState(initialCalendarMinutes === null ? "off" : String(initialCalendarMinutes));
   const [reads, setReads] = useState(initialReads);
+  const [team, setTeam] = useState(initialTeam);
   const [state, setState] = useState<PushState | null>(null);
   const [mail, setMail] = useState(initialMail);
   const [busy, setBusy] = useState(false);
@@ -96,6 +99,11 @@ export default function NotificationSettings({
   function chooseReads(next: boolean) {
     setReads(next);
     void save({ reads: next }, () => setReads(!next));
+  }
+
+  function chooseTeam(next: boolean) {
+    setTeam(next);
+    void save({ team: next }, () => setTeam(!next));
   }
 
   return (
@@ -180,6 +188,10 @@ export default function NotificationSettings({
         <div className="flex items-center justify-between gap-3">
           <span className="text-[14px]">When someone reads my email</span>
           <Switch checked={reads} onChange={chooseReads} label="Notify me when someone reads my email" />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[14px]">Teammates</span>
+          <Switch checked={team} onChange={chooseTeam} label="Notify me when a teammate mentions me or shares something with me" />
         </div>
         {message && (
           <p role={message.tone} className={message.tone === "alert" ? "caption-style text-danger" : "caption-style text-subtle"}>

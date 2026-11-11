@@ -24,7 +24,7 @@ export type DocSort = (typeof DOC_SORTS)[number];
 export const VERSION_REASONS = ["created", "edited", "renamed", "before_agent", "restored", "link_renamed"] as const;
 export type VersionReason = (typeof VERSION_REASONS)[number];
 
-export const DOC_LINK_KINDS = ["page", "contact", "company", "task", "opportunity", "proposal"] as const;
+export const DOC_LINK_KINDS = ["page", "contact", "company", "task", "opportunity", "proposal", "member"] as const;
 export type DocLinkKind = (typeof DOC_LINK_KINDS)[number];
 
 export type DocPerson = { id: string; name: string };

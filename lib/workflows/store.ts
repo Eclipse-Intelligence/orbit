@@ -1,3 +1,4 @@
+import { EVERY_WORKSPACE_SOURCES } from "@/lib/alert-sources";
 import { withActor } from "@/lib/crm/context";
 import { query } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
@@ -571,6 +572,8 @@ export async function decideApproval(
   return executeRun(runId, actor.userId, actor.workspaceId, { deadline: Date.now() + 50_000, fetchImpl: options.fetchImpl });
 }
 
+export const BELL_LIMIT = 10;
+
 export async function listNotifications(actor: UserActor, limit = 20): Promise<Notification[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<{
@@ -583,10 +586,10 @@ export async function listNotifications(actor: UserActor, limit = 20): Promise<N
       created_at: Date;
     }>(
       `select id, title, body, href, source, read_at, created_at from crm.notifications
-       where (workspace_id = $1 or source = 'mail') and user_id = $2 and created_at > now() - interval '30 days'
+       where (workspace_id = $1 or source = any($4::text[])) and user_id = $2 and created_at > now() - interval '30 days'
          and category is null
        order by created_at desc limit $3`,
-      [actor.workspaceId, actor.userId, limit],
+      [actor.workspaceId, actor.userId, limit, EVERY_WORKSPACE_SOURCES],
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -600,12 +603,18 @@ export async function listNotifications(actor: UserActor, limit = 20): Promise<N
   });
 }
 
-export async function markNotificationsRead(actor: UserActor, ids?: string[]) {
+export async function markNotificationsRead(actor: UserActor, ids?: string[], through?: string | null) {
+  const until = through && !Number.isNaN(Date.parse(through)) ? new Date(through) : null;
   await withActor(actor, (db) =>
     db.query(
       `update crm.notifications set read_at = now()
-       where (workspace_id = $1 or source = 'mail') and user_id = $2 and read_at is null and ($3::uuid[] is null or id = any($3::uuid[]))`,
-      [actor.workspaceId, actor.userId, ids && ids.length ? ids.filter((id) => isUuid(id)) : null],
+       where (workspace_id = $1 or source = any($4::text[])) and user_id = $2 and read_at is null
+         and (
+           ($3::uuid[] is null and $5::timestamptz is null)
+           or id = any($3::uuid[])
+           or (category is null and created_at <= $5::timestamptz)
+         )`,
+      [actor.workspaceId, actor.userId, ids && ids.length ? ids.filter((id) => isUuid(id)) : null, EVERY_WORKSPACE_SOURCES, until],
     ),
   );
 }

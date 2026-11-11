@@ -4,7 +4,7 @@ import type { Page, PageSummary, Participant, Presence } from "@/lib/docs/client
 import { clearLiveDraft, readDraft, readLiveDraft, writeLiveDraft } from "@/lib/docs/drafts";
 import { setPresence } from "@/lib/docs/editor/presence";
 import { bind, lock, unbind } from "@/lib/docs/live/binding";
-import { personTopic, workspaceTopic, type LiveTransportKind, type LiveUser, type WritingMessage } from "@/lib/docs/live/protocol";
+import { personTopic, workspaceTopic, type AlertMessage, type LiveTransportKind, type LiveUser, type WritingMessage } from "@/lib/docs/live/protocol";
 import { onTrustChange, publishPresence, trustedUser, trustWriter } from "@/lib/docs/live/registry";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
 import {
@@ -21,7 +21,7 @@ import {
   type SyncReply,
 } from "@/lib/docs/live/session";
 import { supabaseTransport } from "@/lib/docs/live/supabase-transport";
-import type { LiveTransport } from "@/lib/docs/live/transport";
+import type { ChannelHandlers, ChannelStatus, LiveChannel, LiveTransport } from "@/lib/docs/live/transport";
 import { absoluteFrom, createLiveDoc, decodeBytes, encodeBytes, liveText } from "@/lib/docs/live/ydoc";
 import { liveParticipant } from "@/lib/docs/participants";
 import { adoptLiveBase, registerLiveNote, settleForLive, useDocsStore } from "@/stores/docs-store";
@@ -470,11 +470,62 @@ export function detachLive(pageId: string, options: { save?: boolean } = {}): Ca
   return cached;
 }
 
+type SharedChannel = { channel: LiveChannel; handlers: Set<ChannelHandlers>; state: { status: ChannelStatus } };
+
+const sharedChannels = new WeakMap<LiveTransport, Map<string, SharedChannel>>();
+
+function openShared(transport: LiveTransport, topic: string, handlers: ChannelHandlers) {
+  let byTopic = sharedChannels.get(transport);
+  if (!byTopic) {
+    byTopic = new Map();
+    sharedChannels.set(transport, byTopic);
+  }
+  let shared = byTopic.get(topic);
+  if (!shared) {
+    const listeners = new Set<ChannelHandlers>();
+    const state: { status: ChannelStatus } = { status: "joining" };
+    const channel = transport.open(topic, {
+      message: (event, payload) => {
+        for (const listener of [...listeners]) {
+          try {
+            listener.message(event, payload);
+          } catch (error) {
+            console.error("Live listener failed", error);
+          }
+        }
+      },
+      status: (status) => {
+        state.status = status;
+        for (const listener of [...listeners]) {
+          try {
+            listener.status(status);
+          } catch (error) {
+            console.error("Live listener failed", error);
+          }
+        }
+      },
+    });
+    shared = { channel, handlers: listeners, state };
+    byTopic.set(topic, shared);
+  }
+  const entry = shared;
+  entry.handlers.add(handlers);
+  handlers.status(entry.state.status);
+  return {
+    close() {
+      if (!entry.handlers.delete(handlers) || entry.handlers.size > 0) return;
+      entry.channel.close();
+      if (byTopic.get(topic) === entry) byTopic.delete(topic);
+    },
+  };
+}
+
 export async function watchLiveActivity(
   source: LiveTransportKind | LiveTransport,
   scope: { workspaceId: string; userId: string },
-  listener: (pageId: string, writer: Participant, writing: boolean, revision?: number) => void,
+  listener: ((pageId: string, writer: Participant, writing: boolean, revision?: number) => void) | null,
   onJoined: (joined: boolean) => void,
+  onAlert?: (message: AlertMessage) => void,
 ) {
   const transport = typeof source === "string" ? await transportFor(source).catch(() => null) : source;
   if (!transport) {
@@ -483,11 +534,17 @@ export async function watchLiveActivity(
   }
   let closed = false;
   const joined = new Set<string>();
-  const topics = [workspaceTopic(scope.workspaceId), personTopic(scope.userId)];
+  const topics = listener ? [workspaceTopic(scope.workspaceId), personTopic(scope.userId)] : [personTopic(scope.userId)];
   const channels = topics.map((topic) =>
-    transport.open(topic, {
+    openShared(transport, topic, {
       message: (event, payload) => {
-        if (closed || event !== "writing" || !payload || typeof payload !== "object") return;
+        if (closed || !payload || typeof payload !== "object") return;
+        if (event === "alert") {
+          const alert = payload as AlertMessage;
+          if (onAlert && topic === personTopic(scope.userId) && typeof alert.source === "string") onAlert(alert);
+          return;
+        }
+        if (event !== "writing" || !listener) return;
         const message = payload as WritingMessage;
         if (typeof message.pageId !== "string" || !message.user || typeof message.user.id !== "string") return;
         const writing = message.writing === true;

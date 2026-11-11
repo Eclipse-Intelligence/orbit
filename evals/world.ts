@@ -388,6 +388,7 @@ export async function buildWorld(fixture: Fixture, options: { workspace?: "eclip
     ["workspace:eclipse", eclipse.workspaceId],
     ["workspace:ridgeon", ridgeon.workspaceId],
     ["user:me", eclipse.userId],
+    ["member:Tamsin Holt", colleagueId],
   ]);
   const world: World = {
     tag,

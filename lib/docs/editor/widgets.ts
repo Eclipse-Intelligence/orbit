@@ -82,7 +82,7 @@ export class CheckboxWidget extends WidgetType {
   }
 }
 
-const KIND_LABELS: Record<MentionKind, string> = { contact: "Person", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
+const KIND_LABELS: Record<MentionKind, string> = { contact: "Person", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal", member: "Teammate" };
 
 export class MentionWidget extends WidgetType {
   constructor(
@@ -100,7 +100,7 @@ export class MentionWidget extends WidgetType {
     chip.setAttribute("data-mention-kind", this.kind);
     chip.setAttribute("data-mention-id", this.id);
     chip.setAttribute("title", `${this.name}, ${KIND_LABELS[this.kind].toLowerCase()}`);
-    if (this.kind === "contact") {
+    if (this.kind === "contact" || this.kind === "member") {
       const letters = this.name
         .split(/\s+/)
         .map((part) => part[0] ?? "")

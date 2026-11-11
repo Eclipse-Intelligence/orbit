@@ -282,6 +282,36 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(result.calls.map((call) => call.name), ["list_calendar_events", "read_web_page", "create_company"]);
   });
 
+  it("shows a tagged teammate as a teammate id and passes a task assigned to them", async () => {
+    let seen = "";
+    const result = await runOnce(
+      byId("write-task-for-tagged-teammate"),
+      settings(
+        scripted([
+          ({ body, world }) => {
+            seen = JSON.stringify(body.messages);
+            return {
+              calls: [
+                {
+                  name: "create_task",
+                  args: { title: "Call Wren Ashdown", ownerId: world.colleague.userId, contactId: world.id("contact:Wren Ashdown"), dueAt: `${londonDay({ weekday: 5 })}T10:00` },
+                },
+              ],
+            };
+          },
+        ]),
+      ),
+    );
+    assert.match(seen, /Tamsin Holt \[teammate id [0-9a-f-]{36}\]/);
+    assert.match(seen, /A tagged teammate appears as/);
+    assert.deepEqual(failed(result), []);
+    const wrong = await runOnce(
+      byId("write-task-for-tagged-teammate"),
+      settings(scripted([({ world }) => ({ calls: [{ name: "create_task", args: { title: "Call Wren Ashdown", contactId: world.id("contact:Wren Ashdown"), dueAt: `${londonDay({ weekday: 5 })}T10:00` } }] })])),
+    );
+    assert.deepEqual(failed(wrong), ["proposes create_task"]);
+  });
+
   it("fails a model that logs the note on the wrong person", async () => {
     const result = await runOnce(byId("write-note-on-contact"), settings(scripted([({ world }) => ({ calls: [{ name: "log_activity", args: { type: "note", contactId: world.id("contact:Felix Arden"), body: "Connected on LinkedIn." } }] })])));
     assert.deepEqual(failed(result), ["proposes log_activity"]);

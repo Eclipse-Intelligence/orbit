@@ -2,12 +2,13 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { searchMentionsAction, type MentionOption } from "@/app/(crm)/search";
+import { searchMentionsAction } from "@/app/(crm)/search";
+import type { MentionOption } from "@/lib/crm/mention-search";
 import { liveMentions, type Mention, type MentionKind } from "@/lib/mentions";
 import { stripMention } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 
-const KIND_LABELS: Record<MentionKind, string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
+const KIND_LABELS: Record<MentionKind, string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal", member: "Teammate" };
 
 type Open = { start: number; end: number; query: string };
 
@@ -164,6 +165,31 @@ export default function MentionInput({
   const pieces = highlightPieces(value, mentions, marks);
   const listId = `${id}-mentions`;
   const showList = open !== null && options.length > 0;
+  const indexed = options.map((option, index) => ({ option, index }));
+  const groups = [
+    { id: "people", label: "People", items: indexed.filter(({ option }) => option.kind === "member") },
+    { id: "records", label: "Records", items: indexed.filter(({ option }) => option.kind !== "member") },
+  ];
+  const grouped = groups.every((group) => group.items.length > 0);
+
+  function optionRow(option: MentionOption, index: number) {
+    return (
+      <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === highlight}>
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => pick(option)}
+          className={cn("flex w-full cursor-pointer flex-col items-start rounded-lg px-2.5 py-1.5 text-left", index === highlight ? "bg-white/[0.07]" : "hover:bg-white/5")}
+        >
+          <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option.name}</span>
+          <span className="caption-style text-subtle w-full truncate">
+            {KIND_LABELS[option.kind]}
+            {option.detail ? ` · ${option.detail}` : ""}
+          </span>
+        </button>
+      </li>
+    );
+  }
 
   useLayoutEffect(() => {
     if (!showList) return;
@@ -245,29 +271,20 @@ export default function MentionInput({
           ref={list}
           id={listId}
           role="listbox"
-          aria-label={kinds ? "Tag a contact or company" : "Tag a record"}
+          aria-label={kinds ? "Tag a contact or company" : "Tag a person or record"}
           style={place}
           className="bg-popover border-line-strong shadow-overlay fixed z-[100] overflow-y-auto overscroll-contain rounded-xl border p-1"
         >
-          {options.map((option, index) => (
-            <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === highlight}>
-              <button
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => pick(option)}
-                className={cn(
-                  "flex w-full cursor-pointer flex-col items-start rounded-lg px-2.5 py-1.5 text-left",
-                  index === highlight ? "bg-white/[0.07]" : "hover:bg-white/5",
-                )}
-              >
-                <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option.name}</span>
-                <span className="caption-style text-subtle w-full truncate">
-                  {KIND_LABELS[option.kind]}
-                  {option.detail ? ` · ${option.detail}` : ""}
-                </span>
-              </button>
-            </li>
-          ))}
+          {grouped
+            ? groups.map((group) => (
+                <li key={group.id} role="group" aria-labelledby={`${listId}-${group.id}`}>
+                  <div id={`${listId}-${group.id}`} className="caption-style text-subtle px-2.5 pt-1.5 pb-0.5">
+                    {group.label}
+                  </div>
+                  <ul role="presentation">{group.items.map(({ option, index }) => optionRow(option, index))}</ul>
+                </li>
+              ))
+            : options.map((option, index) => optionRow(option, index))}
         </ul>,
         document.body,
       )}
