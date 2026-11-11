@@ -156,6 +156,12 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [removed, setRemoved] = useState<string[]>([]);
+  const taggedKey = tagged.join(",");
+  const [seenTagged, setSeenTagged] = useState(taggedKey);
+  if (seenTagged !== taggedKey) {
+    setSeenTagged(taggedKey);
+    setRemoved((current) => current.filter((person) => !tagged.includes(person)));
+  }
   const people = tagged.filter((person) => person !== task.ownerId && !removed.includes(person));
   const isTagged = tagged.includes(viewer.id);
   const readOnly = !canChange;
@@ -281,6 +287,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
       }}
       onPointerDownOutside={flush}
       onCloseAutoFocus={flush}
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        (event.target as HTMLElement | null)?.focus?.({ preventScroll: true });
+      }}
     >
       <DiscussionProvider discussion={discussion}>
         <div className="flex min-h-0 flex-1 flex-col">

@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import ActionsScreen from "@/components/crm/actions-screen";
 import { getUserActor } from "@/lib/auth/user";
-import { TASK_PARAM } from "@/lib/chat/discussions";
+import { TASK_PARAM, taskPanelHref } from "@/lib/chat/discussions";
 import { discussionCounts } from "@/lib/crm/chat";
 import { getClickUpPicker } from "@/lib/crm/clickup";
 import { listMembers } from "@/lib/crm/companies";
@@ -40,6 +40,9 @@ export default async function TasksPage({
   const askedTask = resolved[TASK_PARAM];
   const wanted = typeof askedTask === "string" && isUuid(askedTask) ? askedTask.toLowerCase() : null;
   const openTask = wanted && !due.tasks.some((task) => task.id === wanted) ? await getTask(user, wanted).catch(() => null) : null;
+  if (openTask && openTask.workspaceId !== user.workspaceId) {
+    redirect(`/open?workspace=${openTask.workspaceId}&to=${encodeURIComponent(taskPanelHref(openTask.id))}`);
+  }
   const ids = [...due.tasks.map((task) => task.id), ...(openTask ? [openTask.id] : [])];
   const [tagged, taggedCount, discussions] = await Promise.all([
     team ? listTaskParticipants(user, ids) : Promise.resolve({}),

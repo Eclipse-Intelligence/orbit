@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
@@ -35,6 +35,8 @@ import HashIcon from "@/public/assets/images/docs/hash.svg";
 import HistoryIcon from "@/public/assets/images/docs/history.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
+
+const ROOMY_DISCUSSION_PX = 1060;
 
 function ToolButton({ label, pressed, onClick, children, shortcut }: { label: string; pressed?: boolean; onClick: () => void; children: ReactNode; shortcut?: string }) {
   return (
@@ -332,6 +334,17 @@ export default function NoteView({
   const discussable = Boolean(page && viewer && !daily && summary?.shared);
   const discussion = useDiscussion("doc", pageId, { id: viewer?.id ?? "", name: viewer?.name ?? "" }, { enabled: discussable });
   const discussionAsked = useSearchParams().get(DISCUSSION_PARAM) === "1";
+  const [bodyWidth, setBodyWidth] = useState(0);
+  const observer = useRef<ResizeObserver | null>(null);
+  const bodyRef = useCallback((node: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    setBodyWidth(node.clientWidth);
+    observer.current = new ResizeObserver(() => setBodyWidth(node.clientWidth));
+    observer.current.observe(node);
+  }, []);
+  const roomy = bodyWidth >= ROOMY_DISCUSSION_PX;
   const discussionOpen = discussable && discussionAsked;
   const discussionPushed = useRef(false);
 
@@ -586,7 +599,7 @@ export default function NoteView({
         />
       )}
 
-      <div className="relative flex min-h-0 flex-1">
+      <div ref={bodyRef} className="relative flex min-h-0 flex-1">
         <div ref={scroller} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto px-5 pt-5 pb-40 md:px-12 md:pt-7">
           <div className={cn("note-surface mx-auto w-full", daily ? "max-w-[calc(38em+4.75rem)]" : "note-measure")}>
             {page ? (
@@ -657,7 +670,10 @@ export default function NoteView({
           <aside
             aria-label="Discussion"
             data-quick-add-hide=""
-            className="flex min-h-0 w-[20rem] shrink-0 flex-col border-l border-white/[0.05] xl:w-[22rem]"
+            className={cn(
+              "flex min-h-0 w-[22rem] shrink-0 flex-col border-l border-white/[0.05]",
+              !roomy && "bg-background absolute inset-y-0 right-0 z-10 max-w-[calc(100%-2rem)] shadow-[-24px_0_48px_rgba(0,0,0,0.45)]",
+            )}
           >
             <DocDiscussionPanel discussion={discussion} title={title} onClose={() => setDiscussing(false)} />
           </aside>
