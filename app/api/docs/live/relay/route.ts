@@ -1,12 +1,16 @@
 import { supabaseConfigured } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
-import { canonicalTopic, type LiveEvent } from "@/lib/docs/live/protocol";
+import { canonicalTopic, parseTopic, type LiveEvent } from "@/lib/docs/live/protocol";
 import { relayAllows } from "@/lib/docs/live/relay-access";
 import { relayEnabled, relayPublish, relaySubscribe } from "@/lib/docs/live/relay-hub";
 
 export const dynamic = "force-dynamic";
 
-const EVENTS: LiveEvent[] = ["hello", "state", "update", "awareness", "saved", "pull", "title"];
+const EVENTS: LiveEvent[] = ["hello", "state", "update", "awareness", "saved", "pull", "title", "typing"];
+
+function eventFits(topic: string, event: LiveEvent) {
+  return parseTopic(topic)?.kind === "chat" ? event === "typing" : event !== "typing";
+}
 
 function unavailable() {
   return Response.json({ error: "Live editing isn't switched on here." }, { status: 404 });
@@ -59,7 +63,7 @@ export async function POST(request: Request) {
   const input = (await request.json().catch(() => null)) as { topic?: unknown; event?: unknown; payload?: unknown; client?: unknown } | null;
   const topic = typeof input?.topic === "string" ? canonicalTopic(input.topic) : null;
   const event = EVENTS.find((item) => item === input?.event);
-  if (!topic || !event || !(await relayAllows(actor, topic, true))) return Response.json({ error: "You can't edit that note." }, { status: 403 });
+  if (!topic || !event || !eventFits(topic, event) || !(await relayAllows(actor, topic, true))) return Response.json({ error: "You can't edit that note." }, { status: 403 });
   relayPublish(topic, event, input?.payload ?? null, typeof input?.client === "string" ? input.client : null);
   return new Response(null, { status: 204 });
 }
