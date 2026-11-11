@@ -273,3 +273,13 @@ Every call except `pair`, `pair/redeem`, `me`, `lookup` and `revoke` names its w
 - `X-MachineMail-Event-Id` must match the body's `event_id` (`400` if not). An event id already handled answers `200` with `{ "duplicate": true }`.
 - Bodies over 5 MB get `413`. `webhook.test`, events that aren't `message.received*` and messages for another inbox answer `200` and are ignored. `message.received.quarantined`, `.spam`, `.unauthenticated` and `.blocked` are stored and refused (`acted: false`) even from a listed sender, and so is mail without a trust report, without `direction: "inbound"`, from more than one address or from the mailbox itself.
 - Every message is stored. Only mail from an address on the list that passes DMARC, or DKIM for the sender's domain or a subdomain (and not marked unaligned by MachineMail), starts work, after the response (`after()`). The answer is `200` with `{ "ok": true, "stored": true, "acted": true | false }`, well within MachineMail's 10 seconds.
+
+## Chat incoming webhooks
+
+`POST /api/chat/hooks/<hook id>` posts into a Chat room from tools like Zapier or Make. It isn't part of the agent API and takes no Orbit token: a member of the room adds the hook in Room settings › Incoming webhooks and gets its URL and a secret, shown once (see Incoming webhooks in `docs/architecture.md`).
+
+- `Authorization: Bearer <secret>`. A secret in the query string is refused with `400`.
+- Body (JSON, up to 32 KB): `{ "text", "title"?, "url"? }` posts a card. `text` up to 10,000 characters, `title` up to 200, `url` http or https. Any other JSON is posted as a formatted block, cut at 8,000 characters.
+- `Idempotency-Key` (optional): a repeat key for the same hook answers `200` with the first message's id and `"duplicate": true` and posts nothing.
+- `201` returns `{ "ok": true, "id", "conversationId", "duplicate": false }`. Errors are `{ "error" }`: `400` invalid body, `401` wrong or missing secret, `404` unknown or deleted hook, `409` paused, `413` too large, `429` more than 30 posts a minute from that hook. Every response is `no-store`.
+- Hook messages never carry mentions and never alert anyone; they count as unread like any other room message.

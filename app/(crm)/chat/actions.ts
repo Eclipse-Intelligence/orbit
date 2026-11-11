@@ -1,7 +1,7 @@
 "use server";
 
 import { getUserActor } from "@/lib/auth/user";
-import type { ChatConversation, ChatMessage, ChatPost, ChatResult } from "@/lib/chat/types";
+import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatPost, ChatResult } from "@/lib/chat/types";
 import {
   addRoomMembers,
   createRoom,
@@ -13,6 +13,7 @@ import {
   removeRoomMember,
   updateRoom,
 } from "@/lib/crm/chat";
+import { createHook, deleteHook, listHooks, rotateHookSecret, setHookPaused } from "@/lib/crm/chat-hooks";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -62,4 +63,24 @@ export async function editMessageAction(id: string, body: string): Promise<ChatR
 
 export async function deleteMessageAction(id: string): Promise<ChatResult<{ deleted: true }>> {
   return run("Couldn't delete the message. Try again.", (actor) => deleteMessage(actor, id));
+}
+
+export async function listHooksAction(roomId: string): Promise<ChatResult<{ hooks: ChatHook[] }>> {
+  return run("Couldn't load webhooks. Try again.", async (actor) => ({ hooks: await listHooks(actor, roomId) }));
+}
+
+export async function createHookAction(roomId: string, name: string): Promise<ChatResult<ChatHookSecret>> {
+  return run("Couldn't add the webhook. Try again.", (actor) => createHook(actor, roomId, name));
+}
+
+export async function setHookPausedAction(hookId: string, paused: boolean): Promise<ChatResult<{ hook: ChatHook }>> {
+  return run(paused ? "Couldn't pause the webhook. Try again." : "Couldn't resume the webhook. Try again.", async (actor) => ({ hook: await setHookPaused(actor, hookId, paused === true) }));
+}
+
+export async function rotateHookSecretAction(hookId: string): Promise<ChatResult<ChatHookSecret>> {
+  return run("Couldn't rotate the secret. Try again.", (actor) => rotateHookSecret(actor, hookId));
+}
+
+export async function deleteHookAction(hookId: string): Promise<ChatResult<{ deleted: true }>> {
+  return run("Couldn't delete the webhook. Try again.", (actor) => deleteHook(actor, hookId));
 }

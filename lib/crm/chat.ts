@@ -9,6 +9,7 @@ import {
   CHAT_PAGE_SIZE,
   CHAT_ROOM_NAME_MAX,
   type ChatConversation,
+  type ChatHookCard,
   type ChatKind,
   type ChatLiveEvent,
   type ChatMember,
@@ -51,6 +52,7 @@ type MessageRow = {
   deleted_at: Stamp | null;
   created_at: Stamp;
   reply_authors: ChatPerson[] | null;
+  hook: { title?: unknown; url?: unknown; block?: unknown } | null;
 };
 
 type ConversationRow = {
@@ -96,7 +98,7 @@ function millis(value: Stamp) {
 
 function messageColumns(alias = "m") {
   return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.author_user_id, ${alias}.author_name, ${alias}.client_key, ${alias}.body,
-    ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at,
+    ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at, ${alias}.hook,
     case when ${alias}.reply_count > 0 then coalesce((
       select json_agg(json_build_object('id', a.author_user_id, 'name', a.author_name) order by a.latest desc)
       from (
@@ -125,6 +127,16 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     editedAt: iso(row.edited_at),
     deletedAt: iso(row.deleted_at),
     createdAt: iso(row.created_at),
+    hook: hookCard(row.hook),
+  };
+}
+
+export function hookCard(value: { title?: unknown; url?: unknown; block?: unknown } | null): ChatHookCard | null {
+  if (!value || typeof value !== "object") return null;
+  return {
+    title: typeof value.title === "string" && value.title ? value.title : null,
+    url: typeof value.url === "string" && /^https?:\/\//i.test(value.url) ? value.url : null,
+    block: value.block === true,
   };
 }
 
@@ -283,6 +295,10 @@ function background(task: () => Promise<void>) {
   }
 }
 
+export function chatBackground(task: () => Promise<void>) {
+  background(task);
+}
+
 function afterChatCommit(db: Db, task: () => Promise<void>) {
   afterCommit(db, tracked(task));
 }
@@ -294,6 +310,10 @@ async function publish(messages: LiveMessage[]) {
 function eventFor(userId: string, event: ChatLiveEvent): LiveMessage {
   const payload = event.type === "message" || event.type === "edit" ? { ...event, message: forViewer(event.message, userId) } : event;
   return { topic: personTopic(userId), event: "chat", payload };
+}
+
+export async function broadcastChat(userIds: string[], event: ChatLiveEvent) {
+  await broadcast(userIds, event);
 }
 
 async function broadcast(userIds: string[], event: ChatLiveEvent) {

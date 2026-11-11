@@ -13,6 +13,7 @@ import { usePeople } from "@/components/chat/chat-dialogs";
 import { workspaceRolesAction } from "@/app/(crm)/chat/roles";
 import type { WorkspaceRole } from "@/lib/crm/types";
 import PeopleField, { pickerOpen, type ChatCandidate } from "@/components/chat/people-field";
+import RoomHooks from "@/components/chat/room-hooks";
 import { CHAT_ROOM_NAME_MAX, type ChatRoom } from "@/lib/chat/types";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
@@ -33,25 +34,6 @@ function useRoles(open: boolean, workspaceId: string | null) {
     };
   }, [open, workspaceId]);
   return loaded && loaded.workspaceId === workspaceId ? loaded.roles : {};
-}
-
-function RoomHooksPlaceholder() {
-  return (
-    <section aria-labelledby="room-hooks" className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <h3 id="room-hooks" className="flex-1">
-          Incoming webhooks
-        </h3>
-        <Button variant="secondary" size="sm" disabled aria-describedby="room-hooks-note" className="max-md:h-11">
-          <PlusIcon aria-hidden className="size-3" />
-          Add incoming webhook
-        </Button>
-      </div>
-      <p id="room-hooks-note" className="caption-style text-subtle">
-        Not available yet.
-      </p>
-    </section>
-  );
 }
 
 export default function RoomSettings({
@@ -268,7 +250,7 @@ export default function RoomSettings({
                 })}
               </ul>
             </section>
-            <RoomHooksPlaceholder />
+            <RoomHooks open={open} roomId={conversation.id} roomName={conversation.name} />
           </div>
           {error?.area === "room" && (
             <p role="alert" className="caption-style text-danger border-line-strong border-t px-6 pt-3 max-md:px-4">

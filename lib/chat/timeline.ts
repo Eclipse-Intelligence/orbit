@@ -82,6 +82,7 @@ export function localMessage(input: { clientKey: string; conversationId: string;
     editedAt: null,
     deletedAt: null,
     createdAt: input.at,
+    hook: null,
   };
 }
 

@@ -44,6 +44,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     editedAt: null,
     deletedAt: null,
     createdAt: input.at,
+    hook: null,
     ...input,
   };
 }

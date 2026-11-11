@@ -3,10 +3,12 @@
 import { memo, useId, useRef, useState, type PointerEvent } from "react";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
+import Tag from "@/components/_ui/tag";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import MentionInput from "@/components/assistant/mention-input";
 import { AvatarStack, ChatAvatar, useChat, type ChatPane } from "@/components/chat/chat-context";
 import { focusComposer } from "@/components/chat/composer";
+import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
@@ -197,6 +199,8 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             {clockTime(message.createdAt)}
           </time>
         </span>
+      ) : message.hook ? (
+        <HookAvatar />
       ) : (
         <ChatAvatar person={author} size="lg" />
       )}
@@ -204,6 +208,11 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         {!continuation && (
           <div className="flex items-baseline gap-2">
             <span className="truncate text-[14px] font-medium">{message.author.name}</span>
+            {message.hook && (
+              <Tag size="sm" className="h-[18px] self-center text-[11px]">
+                Hook
+              </Tag>
+            )}
             <time dateTime={message.createdAt} title={fullTime(message.createdAt)} className="caption-style text-subtle shrink-0 tabular-nums">
               {stamp}
             </time>
@@ -213,6 +222,8 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           <p className="text-subtle italic">Message deleted</p>
         ) : isEditing ? (
           <EditBox message={message} onDone={() => setEditing(null)} />
+        ) : message.hook ? (
+          <HookCardBody card={message.hook} body={message.body} />
         ) : (
           <MessageBody body={message.body} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
         )}
