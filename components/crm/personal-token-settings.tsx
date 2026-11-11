@@ -56,7 +56,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
     <SettingsCard
       id="personal-tokens"
       title="Personal tokens"
-      description="Lets Claude or any MCP app use Orbit as you, including reading your mail. It can't send email. Keep it private."
+      description="Lets Claude or any MCP app use Orbit as you, including reading and sending your mail. Keep it private."
     >
       <div className="flex flex-col gap-4">
         <form onSubmit={create} className="flex flex-wrap items-end gap-2">

@@ -85,13 +85,12 @@ describe("mail over MCP with a personal token", () => {
     assert.equal(listed[0].prefix, token.split("_").slice(0, 2).join("_"));
   });
 
-  it("gives a personal token the mail tools, but never a send tool, and keeps them from workspace agents", async () => {
+  it("gives a personal token the mail tools and keeps them from workspace agents", async () => {
     const personal = await rpc(token, "tools/list");
     const names = personal.body.result!.tools!.map((tool) => tool.name);
-    for (const name of ["mail_accounts", "mail_search", "mail_get_thread", "mail_read_attachments", "mail_ask", "mail_save_draft", "mail_discard_draft", "search_companies"]) {
+    for (const name of ["mail_accounts", "mail_search", "mail_get_thread", "mail_read_attachments", "mail_ask", "mail_save_draft", "mail_send", "mail_discard_draft", "search_companies"]) {
       assert.ok(names.includes(name), name);
     }
-    assert.ok(!names.some((name) => /send/.test(name)));
     const agent = await createAgent(owner.workspaceId, ["crm:read"]);
     const agentTools = (await rpc(agent.token, "tools/list")).body.result!.tools!.map((tool) => tool.name);
     assert.ok(!agentTools.some((name) => name.startsWith("mail_")));
