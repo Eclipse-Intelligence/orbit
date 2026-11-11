@@ -30,7 +30,7 @@ import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
 import { SYNC_RETRYING } from "@/lib/mail/view";
 import { grantsMailWrite, type MicrosoftToken } from "@/lib/microsoft/oauth";
-import { announceSharedMessages, syncTouchesShares } from "@/lib/mail/share-live";
+import { announceSharedThreads, ownsShares, shareVisibleRole } from "@/lib/mail/share-live";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const LOCK_GRACE_SECONDS = 60;
@@ -320,9 +320,17 @@ async function storePage(
 ) {
   const rows = messageRows(messages, source.email);
   const inserted: string[] = [];
+  const touched = new Set<string>();
+  const quiet = !shareVisibleRole(folder.role);
   if (rows.length > 0) {
-    const result = await db.query<{ id: string; inserted: boolean }>(
-      `insert into crm.mail_messages (
+    const result = await db.query<{ id: string; inserted: boolean; thread_key: string | null; before_thread: string | null; changed: boolean }>(
+      `with before as (
+         select m.provider_message_id, m.folder_id, m.is_draft, m.thread_key
+         from crm.mail_messages m
+         where m.source_id = $3 and m.provider_message_id in (select x.provider_message_id from jsonb_to_recordset($5::jsonb) as x(provider_message_id text))
+       ),
+       stored as (
+       insert into crm.mail_messages (
          workspace_id, user_id, source_id, folder_id, arrival_pending, provider_message_id, internet_message_id, thread_key, subject, snippet,
          body_html, body_text, body_truncated, from_email, from_name, to_recipients, cc_recipients, bcc_recipients,
          sent_at, received_at, is_read, is_draft, is_flagged, importance, has_attachments, categories, web_link, tracking_id, focused
@@ -364,10 +372,20 @@ async function storePage(
          web_link = excluded.web_link,
          tracking_id = excluded.tracking_id,
          focused = coalesce(excluded.focused, crm.mail_messages.focused)
-       returning id, (xmax = 0) as inserted`,
+       returning id, provider_message_id, folder_id, is_draft, thread_key, (xmax = 0) as inserted
+       )
+       select s.id, s.inserted, s.thread_key, b.thread_key as before_thread,
+         (b.provider_message_id is not null and (b.folder_id <> s.folder_id or b.is_draft <> s.is_draft or b.thread_key is distinct from s.thread_key)) as changed
+       from stored s left join before b on b.provider_message_id = s.provider_message_id`,
       [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows), arrivals],
     );
-    for (const row of result.rows) if (row.inserted) inserted.push(row.id);
+    for (const row of result.rows) {
+      if (row.inserted) inserted.push(row.id);
+      if (row.inserted && quiet) continue;
+      if (!row.inserted && !row.changed) continue;
+      if (row.thread_key) touched.add(row.thread_key);
+      if (row.before_thread) touched.add(row.before_thread);
+    }
   }
   for (const message of messages.filter((item) => item.partial)) {
     await db.query(
@@ -376,17 +394,23 @@ async function storePage(
     );
   }
   if (removals.moved.length > 0) {
-    await db.query(
+    const moved = await db.query<{ thread_key: string | null }>(
       `update crm.mail_messages m set folder_id = x.folder_id
        from jsonb_to_recordset($3::jsonb) as x(id text, folder_id uuid)
-       where m.source_id = $1 and m.folder_id = $2 and m.provider_message_id = x.id`,
+       where m.source_id = $1 and m.folder_id = $2 and m.provider_message_id = x.id
+       returning m.thread_key`,
       [source.id, folder.id, JSON.stringify(removals.moved)],
     );
+    for (const row of moved.rows) if (row.thread_key) touched.add(row.thread_key);
   }
   if (removals.deleted.length > 0) {
-    await db.query("delete from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[])", [folder.id, removals.deleted]);
+    const deleted = await db.query<{ thread_key: string | null }>(
+      "delete from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[]) returning thread_key",
+      [folder.id, removals.deleted],
+    );
+    if (!quiet) for (const row of deleted.rows) if (row.thread_key) touched.add(row.thread_key);
   }
-  return { stored: rows.length, inserted };
+  return { stored: rows.length, inserted, touched: [...touched] };
 }
 
 async function folderPlaces(actor: UserActor, sourceId: string): Promise<Map<string, string>> {
@@ -454,7 +478,7 @@ async function syncFolder(
   source: Source,
   folder: FolderRow,
   token: string,
-  options: { deadline: number; fetchImpl: typeof fetch; guard: boolean; places: Places },
+  options: { deadline: number; fetchImpl: typeof fetch; guard: boolean; places: Places; shares: boolean },
   report: MailSyncReport,
 ) {
   let link = folder.sync_link ?? initialDeltaUrl(folder.provider_folder_id);
@@ -474,10 +498,10 @@ async function syncFolder(
     }
     const removals = await placeRemoved(actor, source, folder, page.removed, token, options.places, options.fetchImpl, options.deadline);
     if (!removals) break;
-    let inserted: string[] = [];
+    let touched: string[] = [];
     const full = await withActor(actor, async (db) => {
       const stored = await storePage(db, actor, source, folder, page.messages, removals, live && folder.role === "inbox");
-      inserted = stored.inserted;
+      touched = stored.touched;
       report.stored += stored.stored;
       report.removed += removals.deleted.length;
       report.moved += removals.moved.length;
@@ -495,8 +519,8 @@ async function syncFolder(
       );
       return options.guard && state === "backfill" ? storageFull(db) : false;
     });
-    if (syncTouchesShares(folder.role, inserted)) {
-      await announceSharedMessages(actor.userId, inserted).catch((error) => console.error("Couldn't check shared threads after sync", error));
+    if (options.shares && touched.length > 0 && Date.now() < options.deadline) {
+      await announceSharedThreads(actor.userId, source.id, touched).catch((error) => console.error("Couldn't check shared threads after sync", error instanceof Error ? error.name : "unknown"));
     }
     if (page.deltaLink) return;
     if (!page.nextLink) return;
@@ -613,9 +637,10 @@ export async function syncMail(
         folders: new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id])),
         refreshed: stale,
       };
+      const shares = await ownsShares(actor);
       for (const folder of live) {
         if (Date.now() >= sourceDeadline) break;
-        await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false, places }, report);
+        await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false, places, shares }, report);
       }
       for (const folder of live.filter((item) => item.role === "inbox" && !item.classified_at)) {
         if (Date.now() >= sourceDeadline) break;
@@ -624,7 +649,7 @@ export async function syncMail(
       if (options.backfill !== false) {
         for (const folder of backfill) {
           if (Date.now() >= sourceDeadline || report.paused) break;
-          await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: true, places }, report);
+          await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: true, places, shares }, report);
         }
       }
     } catch (error) {

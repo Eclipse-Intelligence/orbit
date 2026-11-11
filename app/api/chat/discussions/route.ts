@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const given: ChatSubject[] = [];
   const task = searchParam(request, "task");
   const doc = searchParam(request, "doc");
-  const share = searchParam(request, "share");
+  const share = searchParam(request, "mail_thread") ?? searchParam(request, "share");
   if (task) given.push({ kind: "task", id: task });
   if (doc) given.push({ kind: "doc", id: doc });
   if (share) given.push({ kind: "mail_thread", id: share });

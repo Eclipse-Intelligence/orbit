@@ -6,6 +6,7 @@ import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
+import type { PushSender } from "@/lib/push";
 import { shownAttachments } from "@/lib/mail/attachments";
 import { graphReconnect } from "@/lib/mail/accounts";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
@@ -103,7 +104,7 @@ export async function getThreadShare(actor: UserActor, key: string): Promise<Mai
   return { shareId, people, candidates };
 }
 
-export async function shareThread(actor: UserActor, key: string, userIds: unknown): Promise<{ share: MailShareControl; added: string[] }> {
+export async function shareThread(actor: UserActor, key: string, userIds: unknown, options: { send?: PushSender } = {}): Promise<{ share: MailShareControl; added: string[] }> {
   const people = cleanPeople(userIds);
   const { sourceId, key: tk } = parseThreadKey(key);
   let row: { share_id: string; added: string[]; added_at: Stamp; others: string[] };
@@ -131,7 +132,7 @@ export async function shareThread(actor: UserActor, key: string, userIds: unknow
         title: `${senderName(actor)} shared an email with you`,
         href: sharedThreadHref(shareId),
         tag: `mail_share:${shareId}`,
-      });
+      }, { send: options.send });
     });
   }
   return { share: await getThreadShare(actor, threadKey(sourceId, tk)), added };
@@ -265,7 +266,7 @@ function ownerProblem(owner: UserActor, error: unknown): CrmError {
     return new CrmError("owner_reconnect", `Couldn't open the attachment. ${firstWord(owner.fullName, "The owner")} needs to reconnect their mailbox.`, 502);
   }
   if (error instanceof CrmError && error.status < 500) return error;
-  console.error("Shared attachment failed", error);
+  console.error("Shared attachment failed", error instanceof GraphMailError ? `Graph ${error.status}` : error instanceof Error ? error.name : "unknown");
   return new CrmError("upstream_error", "Couldn't open the attachment. Try again.", 502);
 }
 

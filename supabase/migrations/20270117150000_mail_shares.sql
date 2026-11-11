@@ -21,6 +21,8 @@ create table if not exists crm.mail_share_members (
 );
 
 create index if not exists mail_share_members_user_idx on crm.mail_share_members (user_id);
+create index if not exists mail_share_members_added_by_idx on crm.mail_share_members (added_by);
+create index if not exists mail_shares_owner_idx on crm.mail_shares (owner_user_id);
 
 alter table crm.mail_shares enable row level security;
 alter table crm.mail_shares force row level security;
@@ -219,16 +221,19 @@ stable
 security definer
 set search_path = ''
 as $$
-  select p.id, coalesce(nullif(btrim(p.full_name), ''), p.email, 'Teammate'), p.email, true, s.created_at
+  select p.id, coalesce(nullif(btrim(p.full_name), ''), 'Teammate'),
+    case when p.id = p_user or private.chat_shares_workspace(p_user, p.id) then p.email end,
+    true, s.created_at
   from crm.mail_shares s join crm.profiles p on p.id = s.owner_user_id
   where s.id = p_share and private.mail_share_open_to(p_share, p_user)
   union all
-  select * from (
-    select p.id, coalesce(nullif(btrim(p.full_name), ''), p.email, 'Teammate'), p.email, false, m.created_at
-    from crm.mail_share_members m join crm.profiles p on p.id = m.user_id
-    where m.share_id = p_share and private.mail_share_open_to(p_share, p_user)
-    order by m.created_at, p.id
-  ) members
+  select p.id, coalesce(nullif(btrim(p.full_name), ''), 'Teammate'),
+    case when p.id = p_user or s.owner_user_id = p_user or private.chat_shares_workspace(p_user, p.id) then p.email end,
+    false, m.created_at
+  from crm.mail_share_members m
+  join crm.mail_shares s on s.id = m.share_id
+  join crm.profiles p on p.id = m.user_id
+  where m.share_id = p_share and private.mail_share_open_to(p_share, p_user)
 $$;
 
 revoke all on function private.mail_share_people(uuid, uuid) from public;
@@ -305,12 +310,15 @@ stable
 security definer
 set search_path = ''
 as $$
-  select m.id, m.subject, m.from_email, m.from_name, m.to_recipients, m.cc_recipients,
-    coalesce(m.received_at, m.sent_at, m.created_at), m.has_attachments, m.snippet, m.body_html, m.body_text, m.body_truncated
-  from private.mail_share_messages(p_share) m
-  where private.mail_share_open_to(p_share, p_user)
-  order by coalesce(m.received_at, m.sent_at, m.created_at), m.id
-  limit 200
+  select newest.* from (
+    select m.id, m.subject, m.from_email, m.from_name, m.to_recipients, m.cc_recipients,
+      coalesce(m.received_at, m.sent_at, m.created_at) as at, m.has_attachments, m.snippet, m.body_html, m.body_text, m.body_truncated
+    from private.mail_share_messages(p_share) m
+    where private.mail_share_open_to(p_share, p_user)
+    order by coalesce(m.received_at, m.sent_at, m.created_at) desc, m.id desc
+    limit 200
+  ) newest
+  order by newest.at, newest.id
 $$;
 
 revoke all on function private.shared_thread(uuid, uuid) from public;
@@ -332,7 +340,7 @@ $$;
 revoke all on function private.shared_message_owner(uuid, uuid, uuid) from public;
 grant execute on function private.shared_message_owner(uuid, uuid, uuid) to crm_app;
 
-create or replace function private.mail_shares_touched(p_user uuid, p_messages uuid[])
+create or replace function private.mail_shares_touched(p_user uuid, p_source uuid, p_thread_keys text[])
 returns table (share_id uuid, member_ids uuid[])
 language sql
 stable
@@ -341,17 +349,12 @@ set search_path = ''
 as $$
   select s.id, array(select sm.user_id from crm.mail_share_members sm where sm.share_id = s.id order by sm.user_id)
   from crm.mail_shares s
-  where s.owner_user_id = p_user
-    and exists (
-      select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-      where m.id = any(p_messages) and m.user_id = p_user and m.source_id = s.source_id and m.thread_key = s.thread_key
-        and not m.is_draft and f.role not in ('drafts', 'trash', 'junk', 'outbox')
-    )
+  where s.owner_user_id = p_user and s.source_id = p_source and s.thread_key = any(p_thread_keys)
     and exists (select 1 from crm.mail_share_members sm where sm.share_id = s.id)
 $$;
 
-revoke all on function private.mail_shares_touched(uuid, uuid[]) from public;
-grant execute on function private.mail_shares_touched(uuid, uuid[]) to crm_app;
+revoke all on function private.mail_shares_touched(uuid, uuid, text[]) from public;
+grant execute on function private.mail_shares_touched(uuid, uuid, text[]) to crm_app;
 
 create or replace function private.mail_share_linked(p_owner uuid, p_member uuid, p_leaving uuid)
 returns boolean
@@ -401,11 +404,12 @@ as $$
 begin
   delete from crm.mail_share_members m
     using crm.mail_shares s
-    where s.id = m.share_id
-      and (
-        (m.user_id = old.user_id and not private.mail_share_linked(s.owner_user_id, old.user_id, null))
-        or (s.owner_user_id = old.user_id and not private.mail_share_linked(old.user_id, m.user_id, null))
-      );
+    where m.user_id = old.user_id and s.id = m.share_id
+      and not private.mail_share_linked(s.owner_user_id, old.user_id, null);
+  delete from crm.mail_share_members m
+    using crm.mail_shares s
+    where s.owner_user_id = old.user_id and m.share_id = s.id
+      and not private.mail_share_linked(old.user_id, m.user_id, null);
   return old;
 end;
 $$;

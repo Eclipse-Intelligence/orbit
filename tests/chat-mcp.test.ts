@@ -280,13 +280,13 @@ describe("Chat over MCP and in the assistant", () => {
       const root = await postMessage(mark, { conversationId, body: "Discussing the task" });
       const listed = await ok<{ conversations: { id: string }[] }>(mark, "chat_list");
       assert.ok(!listed.conversations.some((item) => item.id === conversationId));
-      const notChat = "not_found: Conversation not found. Task and doc discussions aren't reachable here.";
+      const notChat = "not_found: Conversation not found. Task, doc and shared email discussions aren't reachable here.";
       assert.equal(await refused(mark, "chat_read", { conversation_id: conversationId }), notChat);
       assert.equal(await refused(mark, "chat_read", { thread_id: root.message.id }), notChat);
       assert.equal(await refused(mark, "chat_post", { conversation_id: conversationId, text: "Via MCP" }), notChat);
       assert.equal(await refused(mark, "chat_post", { thread_id: root.message.id, text: "Via MCP" }), notChat);
-      assert.deepEqual(await runTool(mark, "team_chat", { action: "post", conversationId, text: "Via the assistant" }), { error: "Conversation not found. Task and doc discussions aren't reachable here.", field: "conversationId" });
-      assert.deepEqual(await runTool(mark, "team_chat", { action: "read", threadId: root.message.id }), { error: "Conversation not found. Task and doc discussions aren't reachable here.", field: "conversationId" });
+      assert.deepEqual(await runTool(mark, "team_chat", { action: "post", conversationId, text: "Via the assistant" }), { error: "Conversation not found. Task, doc and shared email discussions aren't reachable here.", field: "conversationId" });
+      assert.deepEqual(await runTool(mark, "team_chat", { action: "read", threadId: root.message.id }), { error: "Conversation not found. Task, doc and shared email discussions aren't reachable here.", field: "conversationId" });
       assert.equal((await sql("select 1 from crm.chat_messages where conversation_id = $1", [conversationId])).rowCount, 1);
       const card = describeAction("team_chat", { action: "post", conversationId, text: "Hi" }, await recordNames(mark, [{ action: "post", conversationId, text: "Hi" }], ["team_chat"]));
       assert.equal(card.title, "Post in a conversation Orbit can't find");

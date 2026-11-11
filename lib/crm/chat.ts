@@ -1224,7 +1224,7 @@ async function refuseOutsiders(db: Db, actor: UserActor, shareId: string, people
   );
   const names = new Map(named.rows.map((row) => [row.id, row.name]));
   const outsiders = outside.map((id) => ({ id, name: names.get(id) ?? "Someone" }));
-  const canAdd = ownerId === actor.userId;
+  const canAdd = ownerId === actor.userId && outside.every((id) => names.has(id));
   const who = outsiders.length === 1 ? outsiders[0].name : `${outsiders.length} people you tagged`;
   const verb = outsiders.length === 1 ? "isn't" : "aren't";
   const ownerName = ownerId ? (names.get(ownerId) ?? "The owner").split(/\s+/)[0] : "The owner";

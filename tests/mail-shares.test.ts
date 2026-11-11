@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { ChatLiveEvent } from "@/lib/chat/types";
-import { chatWorkSettled, getDiscussion, listMessages, openDiscussion, postMessage } from "@/lib/crm/chat";
+import { runTool } from "@/lib/assistant/tools";
+import { postChat, readChat } from "@/lib/chat/tools";
+import { chatWorkSettled, deleteMessage, editMessage, getDiscussion, listMessages, listThread, markThreadRead, openDiscussion, postMessage } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -10,6 +12,7 @@ import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
+import { savePushSubscription, type PushSender } from "@/lib/push";
 import type { MailShareLiveEvent } from "@/lib/mail/share-types";
 import {
   getSharedThread,
@@ -47,6 +50,7 @@ function graphMessage(id: string, conversationId: string, at: string, extra: Gra
 }
 
 let pending: GraphMessage[] = [];
+let parents: Record<string, string> = {};
 let graphCalls: string[] = [];
 
 const fetchImpl: typeof fetch = async (input) => {
@@ -67,6 +71,12 @@ const fetchImpl: typeof fetch = async (input) => {
   if (named) return named[1] === "inbox" ? Response.json({ id: "f-inbox" }) : Response.json({ error: { code: "ErrorFolderNotFound" } }, { status: 404 });
   if (url.startsWith(`${GRAPH}/me/mailFolders?$top=100`)) return Response.json({ value: [{ id: "f-inbox", displayName: "Inbox", childFolderCount: 0 }] });
   if (url.includes("inferenceClassification") && !url.includes("delta")) return Response.json({ value: [] });
+  const folderOf = url.match(/\/me\/messages\/([^/?]+)\?\$select=id,parentFolderId/);
+  if (folderOf) {
+    const parent = parents[decodeURIComponent(folderOf[1])];
+    return parent ? Response.json({ id: folderOf[1], parentFolderId: parent }) : Response.json({ error: { code: "ErrorItemNotFound" } }, { status: 404 });
+  }
+  if (url.includes("token=") && !url.includes("f-inbox")) return Response.json({ value: [], "@odata.deltaLink": url });
   if (url.includes("token=")) {
     const value = pending;
     pending = [];
@@ -84,6 +94,8 @@ const fetchImpl: typeof fetch = async (input) => {
 
 let mark: UserActor;
 let sam: UserActor;
+let samHome: UserActor;
+let notes: { conversationId: string; samNote: string; root: string };
 let priya: UserActor;
 let olly: UserActor;
 let key: string;
@@ -157,7 +169,8 @@ function tag(person: UserActor) {
 before(async () => {
   await resetDatabase();
   mark = await createUser("mark@eclipse.test", "Mark Ridgeon");
-  sam = await join(await createUser("sam@eclipse.test", "Sam Okafor"), "member");
+  samHome = await createUser("sam@eclipse.test", "Sam Okafor");
+  sam = await join(samHome, "member");
   priya = await join(await createUser("priya@eclipse.test", "Priya Nair"), "member");
   olly = await createUser("olly@elsewhere.test", "Olly Outside");
   await saveMailbox(mark, { email: "mark@eclipse.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
@@ -273,6 +286,94 @@ describe("reading a shared thread", () => {
   });
 });
 
+describe("long threads, other mailboxes and who sees which address", () => {
+  let longKey: string;
+  let longShare: string;
+  let dana: UserActor;
+
+  before(async () => {
+    const inbox = (await sql<{ id: string }>("select id from crm.mail_folders where source_id = $1 and role = 'inbox'", [sourceId]))[0].id;
+    await sql(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, thread_key, subject, from_email, received_at)
+       select $1, $2, $3, $4, 'long-' || n, 'conv-long', 'Long ' || n, 'tom@halden.test', timestamptz '2026-09-01T00:00:00Z' + make_interval(mins => n)
+       from generate_series(1, 255) as n`,
+      [mark.workspaceId, mark.userId, sourceId, inbox],
+    );
+    longKey = threadKey(sourceId, "conv-long");
+    const ridgeon = await createUser("ridgeon@ridgeon.test", "Ridgeon Owner");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [ridgeon.workspaceId, mark.userId]);
+    dana = await createUser("dana@ridgeon.test", "Dana Ridge");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [ridgeon.workspaceId, dana.userId]);
+  });
+
+  it("shows the newest 200 messages oldest first, with the latest subject", async () => {
+    longShare = (await shareThread(mark, longKey, [sam.userId, dana.userId])).share.shareId!;
+    const thread = await getSharedThread(sam, longShare);
+    assert.equal(thread.messages.length, 200);
+    assert.equal(thread.subject, "Long 255");
+    const newest = await sql<{ id: string }>("select id from crm.mail_messages where thread_key = 'conv-long' order by received_at desc limit 200");
+    assert.deepEqual(
+      thread.messages.map((item) => item.id),
+      newest.map((row) => row.id).reverse(),
+    );
+  });
+
+  it("leaves out a second mailbox's thread with the same key", async () => {
+    const account = (
+      await sql<{ id: string }>("insert into crm.calendar_accounts (workspace_id, user_id, email, status) values ($1, $2, 'mark@other.test', 'disconnected') returning id", [mark.workspaceId, mark.userId])
+    )[0].id;
+    const other = (
+      await sql<{ id: string }>("insert into crm.mail_sources (workspace_id, user_id, account_id, email) values ($1, $2, $3, 'mark@other.test') returning id", [
+        mark.workspaceId,
+        mark.userId,
+        account,
+      ])
+    )[0].id;
+    const folderId = (
+      await sql<{ id: string }>(
+        "insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role, sync_state) values ($1, $2, $3, 'o-inbox', 'Inbox', 'inbox', 'skipped') returning id",
+        [mark.workspaceId, mark.userId, other],
+      )
+    )[0].id;
+    const hidden = (
+      await sql<{ id: string }>(
+        `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, thread_key, subject, from_email, received_at)
+         values ($1, $2, $3, $4, 'o-1', 'conv-1', 'Other mailbox', 'x@other.test', now()) returning id`,
+        [mark.workspaceId, mark.userId, other, folderId],
+      )
+    )[0].id;
+    const shareId = (await getThreadShare(mark, key)).shareId!;
+    const thread = await getSharedThread(sam, shareId);
+    assert.ok(!thread.messages.some((item) => item.id === hidden));
+    assert.ok(!JSON.stringify(thread).includes("Other mailbox"));
+    await refused(openSharedAttachment(sam, shareId, hidden, "att-1", fetchImpl), /Email not found/);
+    assert.equal((await listSharedThreads(sam)).find((row) => row.shareId === shareId)?.count, 3);
+  });
+
+  it("shows everyone's name but an address only to the owner and people who share a workspace", async () => {
+    const emails = async (viewer: UserActor) => Object.fromEntries((await getSharedThread(viewer, longShare)).people.map((person) => [person.name, person.email]));
+    assert.deepEqual(await emails(mark), { "Mark Ridgeon": "mark@eclipse.test", "Sam Okafor": "sam@eclipse.test", "Dana Ridge": "dana@ridgeon.test" });
+    assert.deepEqual(await emails(sam), { "Mark Ridgeon": "mark@eclipse.test", "Sam Okafor": "sam@eclipse.test", "Dana Ridge": null });
+    assert.deepEqual(await emails(dana), { "Mark Ridgeon": "mark@eclipse.test", "Sam Okafor": null, "Dana Ridge": "dana@ridgeon.test" });
+  });
+
+  it("pushes generic text with no subject or body", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const send: PushSender = async (_subscription, payload) => void sent.push(JSON.parse(payload));
+    await savePushSubscription(samHome, { endpoint: "https://web.push.apple.com/sam-phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+    await removeFromShare(mark, longShare, sam.userId);
+    await shareThread(mark, longKey, [sam.userId], { send });
+    await chatWorkSettled();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].title, "Mark shared an email with you");
+    assert.equal(sent[0].body, "");
+    assert.equal(sent[0].url, `/mail?shared=${longShare}`);
+    assert.ok(!JSON.stringify(sent[0]).includes("Long"));
+    await removeFromShare(mark, longShare, sam.userId);
+    await chatWorkSettled();
+  });
+});
+
 describe("shared attachments", () => {
   it("opens attachments in the shared thread as the owner, read only", async () => {
     const shareId = (await getThreadShare(mark, key)).shareId!;
@@ -319,7 +420,8 @@ describe("notes on a shared thread", () => {
     assert.equal((await openDiscussion(mark, { kind: "mail_thread", id: shareId })).conversationId, conversationId);
     await refused(openDiscussion(priya, { kind: "mail_thread", id: shareId }), /not found/);
     await refused(getDiscussion(olly, { kind: "mail_thread", id: shareId }), /not found/);
-    await postMessage(sam, { conversationId, body: "Setup fee waiver is fine on our side." });
+    const note = (await postMessage(sam, { conversationId, body: "Setup fee waiver is fine on our side." })).message;
+    notes = { conversationId, samNote: note.id, root: "" };
     const seen = await getDiscussion(mark, { kind: "mail_thread", id: shareId });
     assert.equal(seen.count, 1);
     await refused(listMessages(priya, conversationId), /not found/);
@@ -343,14 +445,34 @@ describe("notes on a shared thread", () => {
       assert.deepEqual(error.details?.needsShare, { people: [{ id: priya.userId, name: "Priya Nair" }], canAdd: true });
       return true;
     });
+    await assert.rejects(editMessage(sam, notes.samNote, `${tag(priya)} have a look`), (error: unknown) => {
+      assert.ok(error instanceof CrmError);
+      assert.deepEqual(error.details?.needsShare, { people: [{ id: priya.userId, name: "Priya Nair" }], canAdd: false });
+      return true;
+    });
+    await assert.rejects(postMessage(mark, { conversationId, body: `${tag(olly)} can you check?` }), (error: unknown) => {
+      assert.ok(error instanceof CrmError);
+      assert.deepEqual(error.details?.needsShare, { people: [{ id: olly.userId, name: "Someone" }], canAdd: false });
+      return true;
+    });
     assert.equal((await getDiscussion(mark, { kind: "mail_thread", id: shareId })).count, 1);
+    assert.equal((await listMessages(mark, conversationId)).messages[0].body, "Setup fee waiver is fine on our side.");
     assert.deepEqual(await listSharedThreads(priya), []);
+  });
+
+  it("is out of reach of MCP and the assistant", async () => {
+    await refused(readChat(sam, { conversationId }), /^Conversation not found\. Task, doc and shared email discussions aren't reachable here\.$/);
+    await refused(postChat(sam, { conversationId, text: "From Claude" }), /shared email discussions aren't reachable here/);
+    const answer = JSON.stringify(await runTool(sam, "team_chat", { action: "read", conversationId }));
+    assert.match(answer, /shared email discussions aren't reachable here/);
+    assert.ok(!answer.includes("Setup fee waiver"));
   });
 
   it("alerts mentions and thread replies with links to the shared email", async () => {
     await sql("truncate crm.notifications, crm.push_log");
     const root = (await postMessage(mark, { conversationId, body: `${tag(sam)} can you check their quantities?` })).message;
     await postMessage(sam, { conversationId, parentId: root.id, body: "Quantities match." });
+    notes.root = root.id;
     const href = `/mail?shared=${shareId}&discussion=1`;
     assert.deepEqual(
       (await alertsFor(sam)).map((alert) => [alert.title, alert.href, alert.source, alert.body]),
@@ -373,9 +495,34 @@ describe("live updates from sync", () => {
     assert.deepEqual(shareEventsFor(priya), []);
     assert.equal((await getSharedThread(sam, shareId)).messages.length, 5);
     broadcasts = [];
-    pending = [graphMessage("m-6", "conv-2", "2026-10-06T09:00:00Z")];
+    pending = [graphMessage("m-6", "conv-2", "2026-10-06T09:00:00Z"), graphMessage("m-1", "conv-1", "2026-10-01T09:00:00Z", { hasAttachments: true })];
     await syncMail(mark, { budgetMs: 30_000, fetchImpl });
     assert.deepEqual(shareEventsFor(sam), []);
+  });
+
+  it("sends an event when a message enters or leaves the thread by a move", async () => {
+    const shareId = (await getThreadShare(mark, key)).shareId!;
+    await sql(
+      `insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role, sync_state, sync_link)
+       values ($1, $2, $3, 'f-archive', 'Archive', 'archive', 'live', $4)`,
+      [mark.workspaceId, mark.userId, sourceId, `${GRAPH}/me/mailFolders/f-archive/messages/delta?$deltatoken=a`],
+    );
+    const count = async () => (await getSharedThread(sam, shareId)).messages.length;
+    const synced = async (messages: GraphMessage[]) => {
+      broadcasts = [];
+      pending = messages;
+      await syncMail(mark, { budgetMs: 30_000, fetchImpl });
+      return shareEventsFor(sam);
+    };
+    assert.deepEqual(await synced([graphMessage("m-junk", "conv-1", "2026-10-04T12:00:00Z")]), [{ type: "message", shareId }]);
+    assert.equal(await count(), 6);
+    parents = { "m-3": "f-archive" };
+    assert.deepEqual(await synced([{ id: "m-3", "@removed": { reason: "changed" } }]), [{ type: "message", shareId }]);
+    assert.equal(await count(), 6);
+    parents = {};
+    assert.deepEqual(await synced([{ id: "m-4", "@removed": { reason: "deleted" } }]), [{ type: "message", shareId }]);
+    assert.equal(await count(), 5);
+    assert.deepEqual(await synced([{ id: "m-other", "@removed": { reason: "deleted" } }]), []);
   });
 });
 
@@ -397,6 +544,16 @@ describe("removing people", () => {
     await refused(openSharedAttachment(sam, shareId, ids["m-1"], "att-1", fetchImpl), /Email not found/);
     await refused(listMessages(sam, conversationId), /not found/);
     await refused(postMessage(sam, { conversationId, body: "Still here?" }), /not found/);
+    await refused(getDiscussion(sam, { kind: "mail_thread", id: shareId }), /not found/);
+    await refused(openDiscussion(sam, { kind: "mail_thread", id: shareId }), /not found/);
+    await refused(listThread(sam, notes.root), /not found/);
+    await refused(markThreadRead(sam, notes.root), /not found/);
+    await refused(editMessage(sam, notes.samNote, "Edited after removal"), /not found/);
+    await refused(deleteMessage(sam, notes.samNote), /not found/);
+    await sql("truncate crm.notifications, crm.push_log");
+    await postMessage(priya, { conversationId, parentId: notes.root, body: "Priya here." });
+    assert.deepEqual(await alertsFor(sam), []);
+    assert.deepEqual((await alertsFor(mark)).map((alert) => alert.title), ["Priya replied in a thread on a shared email"]);
     assert.deepEqual(await removeFromShare(mark, shareId, sam.userId), { removed: false });
     assert.equal((await getSharedThread(priya, shareId)).messages.length, 5);
   });
@@ -410,6 +567,8 @@ describe("removing people", () => {
     assert.deepEqual(shareEventsFor(sam), [{ type: "removed", shareId }]);
     assert.ok(shareEventsFor(priya).some((event) => event.type === "people"));
     await refused(getSharedThread(sam, shareId), /Conversation not found/);
+    await refused(getDiscussion(sam, { kind: "mail_thread", id: shareId }), /not found/);
+    await refused(listMessages(sam, notes.conversationId), /not found/);
     assert.deepEqual(
       (await getThreadShare(mark, key)).people.map((person) => person.name),
       ["Mark Ridgeon", "Priya Nair"],
