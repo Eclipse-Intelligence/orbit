@@ -2,12 +2,13 @@ import * as Y from "yjs";
 import { alertMembersAfterCommit } from "@/lib/alerts";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
+import { memberActor } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { isAssistantSource } from "@/lib/assistant/source";
-import type { Db } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 import { changeCounts, lineDiff } from "@/lib/docs/diff";
 import { appendText, applyDocEdit, editSummary } from "@/lib/docs/edits";
 import { pageWatched, publishLiveChange, publishLiveChanges, type LiveChange } from "@/lib/docs/live/broadcast";
@@ -329,7 +330,7 @@ async function newlyTagged(db: Db, page: { id: string; kind: DocKind; effective_
 
 function alertTagged(db: Db, actor: Actor, page: { id: string; workspace_id: string }, people: string[], now: Date) {
   if (people.length === 0) return;
-  const name = actor.type === "user" ? actor.fullName?.trim() || actor.email : actor.agentName;
+  const name = actor.type === "user" ? (actor.fullName?.trim() || actor.email).split(/\s+/)[0] : actor.agentName;
   const day = now.toLocaleDateString("en-CA", { timeZone: TAG_DAY_ZONE });
   alertMembersAfterCommit(db, actor, people, {
     source: "doc",
@@ -503,6 +504,7 @@ export type CommitOptions = {
   publish?: LiveChange[];
   baseRevision?: number;
   overwrite?: boolean;
+  keepVersions?: boolean;
   coalesceTitle?: boolean;
   now?: Date;
 };
@@ -523,7 +525,7 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
   const titleChanged = next.title !== page.title;
   if (!titleChanged && content === page.content && options.live === undefined) return { changed: false, versioned: false };
   const now = options.now ?? new Date();
-  const thorough = options.stamp.editor !== "person" || options.reason === "restored" || options.reason === "link_renamed" || options.overwrite === true;
+  const thorough = options.stamp.editor !== "person" || options.reason === "restored" || options.reason === "link_renamed" || options.overwrite === true || options.keepVersions === true;
   if (thorough) {
     const latest = await db.query<{ title: string; content: string }>(
       "select title, content from crm.page_versions where page_id = $1 order by created_at desc limit 1",
@@ -535,7 +537,7 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
         db,
         page,
         page,
-        options.overwrite && options.stamp.editor === "person" ? "edited" : "before_agent",
+        (options.overwrite || options.keepVersions) && options.stamp.editor === "person" ? "edited" : "before_agent",
         { editor: page.edited_by, userId: page.edited_by_user_id, agentId: page.edited_by_agent_id },
         options.overwrite ? "Before it was replaced after an editing conflict" : null,
       );
@@ -932,6 +934,16 @@ function checkRevision(page: FullPageRow, baseRevision: number | undefined) {
   }
 }
 
+const UNTAG_SUMMARY = "Turned people tags into text because it's private";
+
+async function untagPages(db: Db, actor: Actor, ids: string[], stamp: Stamp, provenance?: Provenance) {
+  for (const id of ids) {
+    const page = await loadPage(db, actor, id, { lock: true });
+    if (tagsPeople(page)) continue;
+    await commitPage(db, actor, page, { title: page.title, content: page.content }, { stamp, provenance, summary: UNTAG_SUMMARY, keepVersions: true });
+  }
+}
+
 export async function untagPrivatePages(db: Db, actor: Actor, provenance?: Provenance) {
   if (actor.type !== "user") return 0;
   const hidden = await db.query<{ id: string }>(
@@ -940,15 +952,48 @@ export async function untagPrivatePages(db: Db, actor: Actor, provenance?: Prove
        and exists (select 1 from crm.page_links l where l.page_id = p.id and l.target_kind = 'member')`,
     [actor.workspaceId, actor.userId],
   );
-  for (const row of hidden.rows) {
-    const page = await loadPage(db, actor, row.id, { lock: true });
-    await commitPage(db, actor, page, { title: page.title, content: page.content }, {
-      stamp: stampFor(actor, provenance),
-      provenance,
-      summary: "Turned people tags into text because it's private",
-    });
-  }
+  await untagPages(db, actor, hidden.rows.map((row) => row.id), stampFor(actor, provenance), provenance);
   return hidden.rows.length;
+}
+
+type OwnerRow = { user_id: string; workspace_id: string; workspace_name: string; role: "owner" | "admin" | "member"; email: string | null; full_name: string | null };
+
+export async function untagFolderPages(folderIds: string[]) {
+  if (folderIds.length === 0) return 0;
+  const pages = await query<{ page_id: string; user_id: string; workspace_id: string }>(
+    "select page_id::text, user_id::text, workspace_id::text from private.private_tagged_pages($1::uuid[])",
+    [folderIds],
+  );
+  const byOwner = new Map<string, { userId: string; workspaceId: string; ids: string[] }>();
+  for (const row of pages.rows) {
+    const key = `${row.user_id}:${row.workspace_id}`;
+    const entry = byOwner.get(key) ?? { userId: row.user_id, workspaceId: row.workspace_id, ids: [] };
+    entry.ids.push(row.page_id);
+    byOwner.set(key, entry);
+  }
+  let cleaned = 0;
+  for (const owner of byOwner.values()) {
+    try {
+      const membership = await query<OwnerRow>(
+        `select $1::text as user_id, m.workspace_id::text, m.workspace_name, m.role, m.email, m.full_name
+         from private.memberships_for($1) m where m.workspace_id = $2`,
+        [owner.userId, owner.workspaceId],
+      );
+      if (!membership.rows[0]) continue;
+      const actor = memberActor(membership.rows[0]);
+      await withActor(actor, (db) => untagPages(db, actor, owner.ids, { editor: "person", userId: actor.userId, agentId: null }));
+      cleaned += owner.ids.length;
+    } catch (error) {
+      console.error("Couldn't turn people tags into text", owner.userId, error);
+    }
+  }
+  return cleaned;
+}
+
+export function untagFolderPagesAfterCommit(db: Db, folderIds: string[]) {
+  afterCommit(db, async () => {
+    await untagFolderPages(folderIds);
+  });
 }
 
 async function rewriteLinksTo(db: Db, actor: Actor, pageId: string, title: string, stamp: Stamp, provenance?: Provenance) {

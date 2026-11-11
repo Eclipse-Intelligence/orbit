@@ -7,9 +7,10 @@ import { runDocAction } from "@/lib/assistant/docs";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { appendToDailyNote } from "@/lib/docs/daily-notes";
-import { createFolder, shareFolder } from "@/lib/docs/folders";
+import { createFolder, moveFolder, shareFolder } from "@/lib/docs/folders";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { createLiveDoc, liveText } from "@/lib/docs/live/ydoc";
+import { peopleTagMode } from "@/lib/docs/people-tags";
 import { createDocFromBody, patchDocFromBody } from "@/lib/docs/rest";
 import { appendToDoc, createDoc, editDoc, getDoc, moveDoc, openLiveDoc, restoreVersion, listVersions, saveDoc, shareDoc, syncLiveDoc, updateDoc } from "@/lib/docs/store";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -41,6 +42,14 @@ type AlertRow = { user_id: string; workspace_id: string; title: string; href: st
 async function docAlerts() {
   await settle();
   return (await sql<AlertRow>("select user_id::text, workspace_id::text, title, href, source from crm.notifications where source = 'doc' order by created_at, id")).rows;
+}
+
+async function eventually(check: () => Promise<boolean>, label: string) {
+  for (let tries = 0; tries < 100; tries += 1) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(`Timed out waiting for ${label}`);
 }
 
 async function memberLinks(pageId: string) {
@@ -172,7 +181,7 @@ describe("people tags in shared docs", () => {
     assert.deepEqual(first[0], {
       user_id: sam.userId,
       workspace_id: mark.workspaceId,
-      title: "Mark Ridgeon tagged you in a doc",
+      title: "Mark tagged you in a doc",
       href: `/open?workspace=${mark.workspaceId}&to=${encodeURIComponent(`/docs/${doc.id}`)}`,
       source: "doc",
     });
@@ -231,15 +240,15 @@ describe("people tags in shared docs", () => {
     assert.deepEqual(
       alerts.map((row) => [row.user_id, row.title]),
       [
-        [sam.userId, "Mark Ridgeon tagged you in a doc"],
-        [priya.userId, "Mark Ridgeon tagged you in a doc"],
+        [sam.userId, "Mark tagged you in a doc"],
+        [priya.userId, "Mark tagged you in a doc"],
       ],
     );
     const assisted = await runDocAction(sam, { action: "create", title: "Sam's", content: tag(priya, "Priya"), shared: true });
     assert.ok(assisted.doc);
     const after = await docAlerts();
     assert.equal(after.length, 3);
-    assert.deepEqual([after[2].user_id, after[2].title], [priya.userId, "Sam Okafor tagged you in a doc"]);
+    assert.deepEqual([after[2].user_id, after[2].title], [priya.userId, "Sam tagged you in a doc"]);
   });
 
   it("alerts as the agent for a workspace agent token", async () => {
@@ -304,5 +313,51 @@ describe("sharing and tags", () => {
     await shareFolder(mark, folder.id, false, PROVENANCE);
     assert.equal((await getDoc(mark, staying.id)).content, "@Priya");
     assert.deepEqual(await memberLinks(staying.id), []);
+  });
+});
+
+describe("teammates' notes in a folder that goes private", () => {
+  it("turns every author's tags into text when a shared folder is made private", async () => {
+    const folder = await createFolder(mark, { name: "Clients", shared: true }, PROVENANCE);
+    const marks = await createDoc(mark, { title: "Mark's", content: tag(priya, "Priya"), folderId: folder.id }, PROVENANCE);
+    const sams = await createDoc(sam, { title: "Sam's", content: `For ${tag(priya, "Priya")}`, folderId: folder.id }, PROVENANCE);
+    const samShared = await createDoc(sam, { title: "Sam's shared", content: tag(priya, "Priya"), folderId: folder.id, shared: true }, PROVENANCE);
+    await shareFolder(mark, folder.id, false, PROVENANCE);
+    assert.equal((await getDoc(mark, marks.id)).content, "@Priya");
+    await eventually(async () => (await getDoc(sam, sams.id)).content === "For @Priya", "Sam's note to lose its tag");
+    assert.deepEqual(await memberLinks(sams.id), []);
+    const versions = await listVersions(sam, sams.id);
+    assert.equal(versions[0].summary, "Turned people tags into text because it's private");
+    assert.equal((await getDoc(sam, samShared.id)).content, tag(priya, "Priya"));
+    assert.deepEqual(await memberLinks(samShared.id), [priya.userId]);
+  });
+
+  it("does the same when a folder that was shared through its parent moves out to the top level", async () => {
+    const top = await createFolder(mark, { name: "Shared top", shared: true }, PROVENANCE);
+    const inner = await createFolder(mark, { name: "Inner", parentId: top.id }, PROVENANCE);
+    const sams = await createDoc(sam, { title: "Sam's inner", content: `Ask ${tag(priya, "Priya")}`, folderId: inner.id }, PROVENANCE);
+    assert.deepEqual(await memberLinks(sams.id), [priya.userId]);
+    const result = await moveFolder(mark, inner.id, { parentId: null, allowVisibilityChange: true }, PROVENANCE);
+    assert.equal(result.visibility.after, "private");
+    await eventually(async () => (await getDoc(sam, sams.id)).content === "Ask @Priya", "Sam's inner note to lose its tag");
+    assert.deepEqual(await memberLinks(sams.id), []);
+  });
+});
+
+describe("who the picker offers people to", () => {
+  const owner = { id: "owner-id" };
+  it("tags in shared notes, including ones shared by their folder, for everyone", () => {
+    assert.equal(peopleTagMode({ kind: "note", shared: true, owner }, "owner-id"), "tag");
+    assert.equal(peopleTagMode({ kind: "note", shared: true, owner }, "teammate-id"), "tag");
+  });
+
+  it("asks the owner to share a private note first", () => {
+    assert.equal(peopleTagMode({ kind: "note", shared: false, owner }, "owner-id"), "share");
+    assert.equal(peopleTagMode({ kind: "note", shared: false, owner }, "teammate-id"), "none");
+    assert.equal(peopleTagMode({ kind: "note", shared: false, owner }, undefined), "none");
+  });
+
+  it("never tags in daily notes", () => {
+    assert.equal(peopleTagMode({ kind: "daily", shared: false, owner }, "owner-id"), "none");
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
@@ -205,25 +206,24 @@ export default function NoteEditor({
 
   const taggedName = tagging ? tagging.person.name.trim().split(/\s+/)[0] || tagging.person.name : "";
 
-  function refocus() {
-    requestAnimationFrame(() => liveView?.focus());
+  function closeAndFocus() {
+    flushSync(() => setAsking(false));
+    liveView?.focus();
+  }
+
+  function insertTag(asked: NonNullable<typeof tagging>) {
+    const view = liveView;
+    if (!view || liveId !== asked.pageId) return;
+    const { at, head } = asked.trigger;
+    if (head <= view.state.doc.length && view.state.sliceDoc(at, head) === asked.typed) applyMention(view, asked.trigger, asked.person);
+    else insertAtCursor(view, `@[${asked.person.name.replace(/[[\]\n]/g, " ").trim()}](member:${asked.person.id}) `);
   }
 
   async function shareAndTag() {
     const asked = tagging;
     if (!asked) return;
-    const failed = await share({ kind: "page", id: asked.pageId }, "shared");
-    const view = liveView;
-    if (failed) {
-      notify(failed, { tone: "alert" });
-      refocus();
-      return;
-    }
-    if (!view || liveId !== asked.pageId) return;
-    const { at, head } = asked.trigger;
-    if (head <= view.state.doc.length && view.state.sliceDoc(at, head) === asked.typed) applyMention(view, asked.trigger, asked.person);
-    else insertAtCursor(view, `@[${asked.person.name.replace(/[[\]\n]/g, " ").trim()}](member:${asked.person.id}) `);
-    refocus();
+    const failed = await share({ kind: "page", id: asked.pageId }, "shared", () => insertTag(asked));
+    if (failed) notify(failed, { tone: "alert" });
   }
 
   useLayoutEffect(() => {
@@ -372,8 +372,8 @@ export default function NoteEditor({
       <ConfirmDialog
         open={asking}
         onOpenChange={(open) => {
-          setAsking(open);
-          if (!open) refocus();
+          if (open) setAsking(true);
+          else closeAndFocus();
         }}
         title={`Share this doc with the workspace to tag ${taggedName}?`}
         description={`Everyone in ${workspaceName ?? "the workspace"} can then read and edit it, and ${taggedName} is told they were tagged.`}

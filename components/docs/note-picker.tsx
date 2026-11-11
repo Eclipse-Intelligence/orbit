@@ -7,6 +7,7 @@ import { useDocsNav, useDocsNow } from "@/components/docs/use-docs";
 import type { LinkTarget, NoteTitle, Page, RecordRef, TagNode } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
 import { linkMatches } from "@/lib/docs/editor/link-matches";
+import { peopleTagMode } from "@/lib/docs/people-tags";
 import { applyLink, applyMention, applyTag, type ActiveTrigger, type PickerKey } from "@/lib/docs/editor/setup";
 import { agoLabel } from "@/lib/docs/format";
 import { useDocsStore } from "@/stores/docs-store";
@@ -61,10 +62,6 @@ function RecordIcon({ kind }: { kind: RecordRef["kind"] }) {
   return <UsersIcon aria-hidden className="size-3.5" />;
 }
 
-export function sharesToTag(page: Page, viewerId: string | undefined) {
-  return page.kind === "note" && page.visibility !== "shared" && Boolean(viewerId) && page.owner.id === viewerId;
-}
-
 const NotePicker = forwardRef<
   PickerHandle,
   { view: EditorView; trigger: ActiveTrigger; page: Page; onClose: () => void; onShareToTag?: (person: RecordRef) => void; sheet?: boolean }
@@ -83,8 +80,9 @@ const NotePicker = forwardRef<
   const query = trigger.query.trim();
   const key = `${trigger.kind}:${trigger.query}`;
   const highlight = highlightState.key === key ? highlightState.index : 0;
-  const askToShare = Boolean(onShareToTag) && sharesToTag(page, viewerId);
-  const tagsPeople = page.kind === "note" && (page.visibility === "shared" || askToShare);
+  const peopleMode = peopleTagMode(page, viewerId);
+  const askToShare = peopleMode === "share" && Boolean(onShareToTag);
+  const tagsPeople = peopleMode === "tag" || askToShare;
   const setHighlight = (index: number) => setHighlightState({ key, index });
 
   const tagOptions = useMemo<Option[]>(() => {
@@ -201,7 +199,7 @@ const NotePicker = forwardRef<
     if (index >= options.length) return create();
     const option = options[index];
     if (option.type === "tag") applyTag(view, trigger, option.path);
-    else if (option.type === "record" && option.record.kind === "member" && page.visibility !== "shared") {
+    else if (option.type === "record" && option.record.kind === "member" && peopleMode !== "tag") {
       if (askToShare && onShareToTag) onShareToTag(option.record);
       return;
     } else if (option.type === "record") applyMention(view, trigger, option.record);

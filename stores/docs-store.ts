@@ -80,7 +80,7 @@ type DocsState = {
   createNote: (input?: CreateInput) => Promise<Page | null>;
   openDaily: (date: string) => Promise<Page | null>;
   move: (id: string, folderId: string | null, allowVisibilityChange?: boolean) => Promise<void>;
-  share: (target: ShareTarget, visibility: Visibility) => Promise<string | null>;
+  share: (target: ShareTarget, visibility: Visibility, onShared?: () => void) => Promise<string | null>;
   archive: (id: string) => Promise<void>;
   setAssistantCanEdit: (id: string, value: boolean) => Promise<void>;
   createFolder: (name: string, parentId: string | null) => Promise<Folder | null>;
@@ -503,10 +503,15 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     }
   },
 
-  async share(target, visibility) {
+  async share(target, visibility, onShared) {
     const current = session;
     try {
       await docsData().share(target, visibility);
+      try {
+        onShared?.();
+      } catch (error) {
+        console.error("After sharing failed", error);
+      }
       const ids = affectedBy(target);
       const fresh = await Promise.all(ids.map((id) => docsData().getPage(id).catch(() => null)));
       if (current !== session) return null;
@@ -973,6 +978,7 @@ function acknowledge(id: string, sent: Queued, previous: Acknowledged, saved: Pa
   if (renamedFrom) refreshLinked(id, renamedFrom, saved.title);
   if (navChanged || saved.kind === "daily") void store.refreshNav();
   if (queued.has(id)) return flush(id);
+  if (saved.body !== sent.body && !liveNotes.has(id) && !readers.has(id) && !inflight.has(id)) store.replaceBody(saved);
   if (!readers.has(id)) store.setSave(id, "saved");
   return Promise.resolve();
 }
