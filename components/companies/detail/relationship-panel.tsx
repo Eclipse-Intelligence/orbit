@@ -10,7 +10,7 @@ import TaskPad from "@/components/crm/task-pad";
 import { RelationshipError, RelationshipSelect, RelationshipSource, useRelationshipPicker } from "@/components/crm/relationship-picker";
 import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
-import type { CompanyContext } from "@/lib/crm/types";
+import type { CompanyContext, Member } from "@/lib/crm/types";
 import { dealHref } from "@/lib/crm/hrefs";
 
 export default function RelationshipPanel({
@@ -18,11 +18,13 @@ export default function RelationshipPanel({
   clickup,
   findEmail = false,
   viewerId,
+  members = [],
 }: {
   context: CompanyContext;
   clickup: ClickUpPicker | null;
   findEmail?: boolean;
   viewerId?: string | null;
+  members?: Member[];
 }) {
   const companyId = context.company.id;
   const picker = useRelationshipPicker("company", companyId);
@@ -111,7 +113,7 @@ export default function RelationshipPanel({
       )}
 
       <DetailSection title="Tasks" className="shadow-none">
-        <TaskPad clickup={clickup} company={{ id: companyId, name: context.company.name }} />
+        <TaskPad clickup={clickup} company={{ id: companyId, name: context.company.name }} members={members} viewerId={viewerId ?? null} />
         {context.tasks.length === 0 ? (
           <p className="caption-style text-subtle">No tasks</p>
         ) : (

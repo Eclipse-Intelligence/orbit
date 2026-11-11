@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
+import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { ClickUpBadge } from "@/components/crm/clickup";
 import RecordNotes from "@/components/docs/record-notes";
 import { relativeWhen } from "@/lib/companies";
@@ -31,18 +32,54 @@ function splitDescription(description: string | null) {
   return { text, links };
 }
 
+export type TaskAssigning = {
+  members: AssignableMember[];
+  viewerId: string;
+  tagged: string[];
+  canAssign: boolean;
+  onAssign: (ownerId: string) => void;
+};
+
+function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning }) {
+  const member = assigning.members.find((item) => item.id === task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
+  const name = member?.name ?? "No one";
+  if (!assigning.canAssign) {
+    return (
+      <span title={`Assigned to ${name}`} className="inline-flex shrink-0">
+        <MemberAvatar member={member} viewerId={assigning.viewerId} />
+        <span className="sr-only">Assigned to {name}</span>
+      </span>
+    );
+  }
+  return (
+    <AssigneePicker
+      members={assigning.members}
+      value={task.ownerId}
+      viewerId={assigning.viewerId}
+      tagged={assigning.tagged}
+      onPick={assigning.onAssign}
+      label={`Assigned to ${name}. Reassign`}
+      align="end"
+      handOnNote
+      trigger={<MemberAvatar member={member} viewerId={assigning.viewerId} className="hover:ring-line-strong hover:ring-2" />}
+    />
+  );
+}
+
 export default function ActionTask({
   task,
   completed,
   dueBadge = false,
   now,
   onComplete,
+  assigning,
 }: {
   task: Task;
   completed: boolean;
   dueBadge?: boolean;
   now: number;
   onComplete?: () => void;
+  assigning?: TaskAssigning;
 }) {
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState(false);
@@ -150,6 +187,7 @@ export default function ActionTask({
                 href={task.companyId ? companyHref(task.companyId) : undefined}
               />
             )}
+            {assigning && <Assignee task={task} assigning={assigning} />}
           </div>
         </div>
       </div>

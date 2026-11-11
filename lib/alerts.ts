@@ -4,7 +4,7 @@ import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
-import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
+import type { Actor, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { alertLink } from "@/lib/crm/workspaces";
 import { query, type Db } from "@/lib/db/pool";
 import { publishLiveBatch } from "@/lib/docs/live/broadcast";
@@ -92,13 +92,14 @@ async function memberships(userIds: string[]) {
   return byUser;
 }
 
-export async function alertTargets(actor: UserActor, recipients: string[], alert: Pick<TeamAlert, "source" | "workspaceId">): Promise<UserActor[]> {
-  const wanted = [...new Set(recipients.filter((id) => typeof id === "string" && isUuid(id)).map((id) => id.toLowerCase()))].filter((id) => id !== actor.userId);
+export async function alertTargets(actor: Actor, recipients: string[], alert: Pick<TeamAlert, "source" | "workspaceId">): Promise<UserActor[]> {
+  const sender = actor.type === "user" ? actor.userId : null;
+  const wanted = [...new Set(recipients.filter((id) => typeof id === "string" && isUuid(id)).map((id) => id.toLowerCase()))].filter((id) => id !== sender);
   if (wanted.length === 0) return [];
   const subject = landsInSubjectWorkspace(alert.source) ? alert.workspaceId ?? null : null;
   if (landsInSubjectWorkspace(alert.source) && !subject) return [];
-  const byUser = await memberships([actor.userId, ...wanted]);
-  const shared = new Set((byUser.get(actor.userId) ?? []).map((row) => row.workspace_id));
+  const byUser = await memberships(sender ? [sender, ...wanted] : wanted);
+  const shared = new Set(sender ? (byUser.get(sender) ?? []).map((row) => row.workspace_id) : [actor.workspaceId]);
   if (subject && !shared.has(subject)) return [];
   const targets: UserActor[] = [];
   for (const userId of wanted) {
@@ -164,7 +165,7 @@ async function within(work: Promise<unknown>, stopAt: number) {
 
 export type TeamAlertResult = { alerted: string[]; finished: boolean; pushFailures: number };
 
-export async function alertMembers(actor: UserActor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}): Promise<TeamAlertResult> {
+export async function alertMembers(actor: Actor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}): Promise<TeamAlertResult> {
   checkAlert(alert);
   const targets = await alertTargets(actor, recipients, alert);
   if (targets.length === 0) return { alerted: [], finished: true, pushFailures: 0 };
@@ -202,7 +203,7 @@ export async function alertMembers(actor: UserActor, recipients: string[], alert
   return { alerted: fresh.map((target) => target.userId), finished, pushFailures: failures.reduce((sum, value) => sum + value, 0) };
 }
 
-export function alertMembersAfterCommit(db: Db, actor: UserActor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}) {
+export function alertMembersAfterCommit(db: Db, actor: Actor, recipients: string[], alert: TeamAlert, options: TeamAlertOptions = {}) {
   checkAlert(alert);
   afterCommit(db, async () => {
     await alertMembers(actor, recipients, alert, options);

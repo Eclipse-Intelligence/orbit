@@ -40,6 +40,7 @@ import type {
   UpsertResult,
   WorkspaceRole,
 } from "@/lib/crm/types";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 
 const COMPANY_SQL = `
@@ -86,6 +87,7 @@ const COMPANY_SQL = `
       where t.company_id = c.id
         and t.archived_at is null
         and t.completed_at is null
+        and ${directTaskSql("t")}
     ) as open_task_count,
     ${CURRENT_FIT} as icp_score
   from crm.companies c

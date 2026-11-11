@@ -18,7 +18,7 @@ import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/c
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
-import { completeTask, listDueReminders, type DueReminder } from "@/lib/crm/tasks";
+import { completeTask, listDueReminders, updateTask, type DueReminder } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -279,6 +279,19 @@ export async function completeTaskAction(
     await completeTask(user, id, {
       provenance: { operation: "complete_task", source: "web" },
     });
+    pushLater(user, id);
+    refresh();
+    return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function assignTaskAction(id: string, ownerId: string): Promise<RecordActionState> {
+  const user = await requireUser();
+  if (!isUuid(id) || !isUuid(ownerId)) return { error: "Couldn't assign the task. Try again." };
+  try {
+    await updateTask(user, id, { ownerId }, { provenance: { operation: "assign_task", source: "web" } });
     pushLater(user, id);
     refresh();
     return { ok: true };

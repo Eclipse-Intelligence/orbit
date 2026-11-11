@@ -6,6 +6,7 @@ import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, BoardKind, OpportunityStatus } from "@/lib/crm/types";
 import { appTimeZone, parseDateTime } from "@/lib/time";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 export const STALLED_DAYS = 7;
 const REPORT_DAYS = 90;
@@ -358,6 +359,7 @@ export async function stalledDealsInDb(db: Db, actor: Actor, options: StalledOpt
        and not exists (
          select 1 from crm.tasks t
          where t.workspace_id = $1 and t.completed_at is null and t.archived_at is null and t.due_at is not null
+           and ${directTaskSql("t")}
            and t.due_at >= $5::timestamptz - make_interval(days => $6::int)
            and (t.opportunity_id = d.id or t.company_id = d.company_id or (d.primary_contact_id is not null and t.contact_id = d.primary_contact_id))
        )

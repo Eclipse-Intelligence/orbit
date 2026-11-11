@@ -1,4 +1,5 @@
 import type { Db } from "@/lib/db/pool";
+import { alertMembersAfterCommit } from "@/lib/alerts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
@@ -28,8 +29,11 @@ import {
   type TaskPriority,
   type TaskView,
   type TaskWrite,
+  type UserActor,
 } from "@/lib/crm/types";
 import { isReminderMinutes, REMINDER_LOOKAHEAD_MS } from "@/lib/crm/reminder-options";
+import { directTaskSql } from "@/lib/crm/task-access";
+import { TASKS_PATH } from "@/lib/crm/task-views";
 import { dayWindow, readDateTime } from "@/lib/time";
 
 const TASK_SQL = `
@@ -181,6 +185,41 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   return next;
 }
 
+function actorName(actor: Actor) {
+  return actor.type === "user" ? actor.fullName?.trim() || actor.email || "Someone" : actor.agentName || "An agent";
+}
+
+function silent(provenance: Provenance | undefined) {
+  return provenance?.source === "clickup";
+}
+
+function taskAlerts(db: Db, actor: Actor, before: Task | null, task: Task, provenance: Provenance | undefined) {
+  if (silent(provenance)) return;
+  const name = actorName(actor);
+  if (task.ownerId && task.ownerId !== (before?.ownerId ?? null)) {
+    const handed = Boolean(before && actor.type === "user" && before.ownerId === actor.userId);
+    alertMembersAfterCommit(db, actor, [task.ownerId], {
+      source: "task",
+      key: `task:${task.id}:owner:${task.ownerId}:${task.updatedAt}`,
+      title: handed ? `${name} handed you a task` : `${name} assigned you a task`,
+      href: TASKS_PATH,
+      tag: `task:${task.id}`,
+      workspaceId: task.workspaceId,
+    });
+  }
+  if (before && !before.completedAt && task.completedAt && task.createdByUserId) {
+    alertMembersAfterCommit(db, actor, [task.createdByUserId], {
+      source: "task",
+      key: `task:${task.id}:done:${task.completedAt}`,
+      title: `Done by ${name}`,
+      body: task.title,
+      href: `${TASKS_PATH}?view=completed`,
+      tag: `task:${task.id}`,
+      workspaceId: task.workspaceId,
+    });
+  }
+}
+
 async function readTask(db: Db, id: string) {
   const result = await db.query<TaskRow>(`${TASK_SQL} where t.id = $1`, [id]);
   return result.rows[0] ?? null;
@@ -226,10 +265,21 @@ export async function createTaskInDb(
     if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     const task = mapTask(saved);
     await recordAudit(db, actor, "task.created", "task", task.id, provenance, { after: task });
+    taskAlerts(db, actor, null, task, provenance);
     return task;
   } catch (error) {
     constraintError(error, "duplicate_task", "A matching task already exists.");
   }
+}
+
+function cannotChange(write: PreparedTask) {
+  const reassigning = write.ownerId !== undefined;
+  return new CrmError(
+    "forbidden",
+    `Only the assignee, the task's creator, a workspace owner or an admin can ${reassigning ? "reassign" : "change"} it.`,
+    403,
+    reassigning ? { field: "ownerId" } : undefined,
+  );
 }
 
 async function applyTask(
@@ -272,23 +322,31 @@ async function applyTask(
   ]);
   const before = mapTask(current);
   if (change.sets.length === 0) return { task: before, changed: false };
-  change.values.push(current.id);
-  try {
+  const handingOn =
+    actor.type === "user" &&
+    write.ownerId !== undefined &&
+    current.owner_id === actor.userId &&
+    (write.ownerId ?? null) !== actor.userId;
+  if (handingOn) {
     await db.query(
+      `insert into crm.task_participants (task_id, user_id, added_by) values ($1, $2, $2)
+       on conflict (task_id, user_id) do nothing`,
+      [current.id, actor.userId],
+    );
+  }
+  change.values.push(current.id);
+  let updated = 0;
+  try {
+    const result = await db.query(
       `update crm.tasks set ${change.sets.join(", ")} where id = $${change.values.length}`,
       change.values,
     );
+    updated = result.rowCount ?? 0;
   } catch (error) {
-    if (isPgError(error) && error.code === "42501") {
-      throw new CrmError(
-        "forbidden",
-        "Only the task's creator, a workspace owner or an admin can reassign it.",
-        403,
-        { field: "ownerId" },
-      );
-    }
+    if (isPgError(error) && error.code === "42501") throw cannotChange(write);
     constraintError(error, "duplicate_task", "A matching task already exists.");
   }
+  if (updated === 0) throw cannotChange(write);
   const saved = await readTask(db, current.id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
@@ -311,6 +369,7 @@ async function applyTask(
       change.fields,
     ),
   );
+  taskAlerts(db, actor, before, task, provenance);
   return { task, changed: true };
 }
 
@@ -329,7 +388,16 @@ export async function updateTaskInDb(
 export function mineFilter(actor: Actor, values: unknown[], alias = "t") {
   if (actor.type !== "user") return null;
   values.push(actor.userId);
-  return `(${alias}.owner_id = $${values.length} or ${alias}.owner_id is null)`;
+  return `(${alias}.owner_id = $${values.length} or (${alias}.owner_id is null and ${directTaskSql(alias)}))`;
+}
+
+export function taggedFilter(actor: Actor, values: unknown[], alias = "t") {
+  if (actor.type !== "user") return "false";
+  values.push(actor.userId);
+  const ref = `$${values.length}`;
+  return `(${alias}.owner_id is distinct from ${ref} and exists (
+    select 1 from crm.task_participants tagged where tagged.task_id = ${alias}.id and tagged.user_id = ${ref}
+  ))`;
 }
 
 export async function countOpenTasks(actor: Actor, options: { mine?: boolean } = {}) {
@@ -340,7 +408,7 @@ export async function countOpenTasks(actor: Actor, options: { mine?: boolean } =
     const result = await db.query<{ total: number }>(
       `select count(*)::int as total
        from crm.tasks t
-       where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null${mine ? ` and ${mine}` : ""}`,
+       where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null and ${directTaskSql("t")}${mine ? ` and ${mine}` : ""}`,
       values,
     );
     return result.rows[0]?.total ?? 0;
@@ -363,8 +431,10 @@ export async function listTasks(actor: Actor, query: TaskListQuery = {}) {
       values.push(query.contactId);
       where.push(`t.contact_id = $${values.length}`);
     }
-    if (query.mine) {
-      const mine = mineFilter(actor, values);
+    if (query.tagged) where.push(taggedFilter(actor, values));
+    else {
+      where.push(directTaskSql("t"));
+      const mine = query.mine ? mineFilter(actor, values) : null;
       if (mine) where.push(mine);
     }
     if (query.ownerId === "unassigned") where.push("t.owner_id is null");
@@ -591,5 +661,79 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
         contactName: task.contactName,
       };
     });
+  });
+}
+
+export const TAGGED_TASKS_PATH = `${TASKS_PATH}?who=tagged`;
+
+export async function listTaskParticipants(actor: UserActor, taskIds: string[]): Promise<Record<string, string[]>> {
+  assertScope(actor.scopes, "crm:read");
+  const ids = [...new Set(taskIds.filter(isUuid))];
+  if (ids.length === 0) return {};
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ task_id: string; user_id: string }>(
+      `select p.task_id, p.user_id from crm.task_participants p
+       where p.task_id = any($1::uuid[])
+       order by p.created_at, p.user_id`,
+      [ids],
+    );
+    const byTask: Record<string, string[]> = {};
+    for (const row of result.rows) (byTask[row.task_id] ??= []).push(row.user_id);
+    return byTask;
+  });
+}
+
+export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: string, userIds: string[]) {
+  const task = await readTask(db, taskId);
+  if (!task) throw notFound("task");
+  const wanted = [...new Set(userIds.filter(isUuid).map((id) => id.toLowerCase()))].filter((id) => id !== task.owner_id);
+  if (wanted.length === 0) return [];
+  const members = await db.query<{ user_id: string }>(
+    "select user_id from crm.workspace_members where workspace_id = $1 and user_id = any($2::uuid[])",
+    [task.workspace_id, wanted],
+  );
+  if (members.rows.length !== wanted.length) {
+    throw new CrmError("invalid_input", "Choose people in this workspace.", 400, { field: "userIds" });
+  }
+  const added = await db.query<{ user_id: string }>(
+    `insert into crm.task_participants (task_id, user_id, added_by)
+     select $1, person, $3 from unnest($2::uuid[]) as person
+     on conflict (task_id, user_id) do nothing
+     returning user_id`,
+    [taskId, wanted, actor.userId],
+  );
+  const fresh = added.rows.map((row) => row.user_id);
+  if (fresh.length > 0) {
+    alertMembersAfterCommit(db, actor, fresh, {
+      source: "task",
+      key: `task:${taskId}:tagged:${Date.now()}`,
+      title: `${actorName(actor)} tagged you in a task`,
+      href: TAGGED_TASKS_PATH,
+      tag: `task:${taskId}`,
+      workspaceId: task.workspace_id,
+    });
+  }
+  return fresh;
+}
+
+export async function addTaskParticipants(actor: UserActor, taskId: string, userIds: string[]) {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(taskId)) throw notFound("task");
+  return withActor(actor, (db) => addTaskParticipantsInDb(db, actor, taskId, userIds));
+}
+
+export async function removeTaskParticipant(actor: UserActor, taskId: string, userId: string) {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(taskId)) throw notFound("task");
+  if (!isUuid(userId)) return false;
+  return withActor(actor, async (db) => {
+    if (!(await readTask(db, taskId))) throw notFound("task");
+    const listed = await db.query("select 1 from crm.task_participants where task_id = $1 and user_id = $2", [taskId, userId]);
+    if ((listed.rowCount ?? 0) === 0) return false;
+    const removed = await db.query("delete from crm.task_participants where task_id = $1 and user_id = $2", [taskId, userId]);
+    if ((removed.rowCount ?? 0) === 0) {
+      throw new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner, an admin or the person themselves can remove someone.", 403);
+    }
+    return true;
   });
 }

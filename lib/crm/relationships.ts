@@ -8,7 +8,7 @@ import { iso, isUuid } from "@/lib/crm/mutate";
 import { listOpportunities } from "@/lib/crm/opportunities";
 import { relationshipsFor, relationshipsInDb } from "@/lib/crm/relationship-signals";
 import { assertScope } from "@/lib/crm/scopes";
-import { listTasks, mineFilter } from "@/lib/crm/tasks";
+import { listTasks, mineFilter, taggedFilter } from "@/lib/crm/tasks";
 import type {
   Actor,
   CompanyContext,
@@ -19,6 +19,7 @@ import type {
 } from "@/lib/crm/types";
 import { TASK_VIEWS } from "@/lib/crm/types";
 import { dayWindow } from "@/lib/time";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 export async function getCompanyContext(actor: Actor, id: string): Promise<CompanyContext> {
   assertScope(actor.scopes, "crm:read");
@@ -88,6 +89,7 @@ export async function findStaleRelationships(
            where t.company_id = c.id
              and t.archived_at is null
              and t.completed_at is null
+             and ${directTaskSql("t")}
          ) as open_tasks
        from crm.companies c
        left join crm.activities a
@@ -133,7 +135,7 @@ export async function listAttention(actor: Actor) {
   };
 }
 
-export async function countTaskViews(actor: Actor, options: { mine?: boolean } = {}): Promise<Record<TaskView, number>> {
+export async function countTaskViews(actor: Actor, options: { mine?: boolean; tagged?: boolean } = {}): Promise<Record<TaskView, number>> {
   assertScope(actor.scopes, "crm:read");
   const window = dayWindow();
   return withActor(actor, async (db) => {
@@ -143,7 +145,9 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean } =
       window.end.toISOString(),
       new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
     ];
-    const mine = options.mine ? mineFilter(actor, values) : null;
+    const scope = options.tagged
+      ? taggedFilter(actor, values)
+      : [directTaskSql("t"), options.mine ? mineFilter(actor, values) : null].filter(Boolean).join(" and ");
     const result = await db.query<Record<TaskView, number>>(
       `select
          count(*) filter (where t.completed_at is null)::int as "all",
@@ -164,10 +168,11 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean } =
                where open_task.company_id = c.id
                  and open_task.archived_at is null
                  and open_task.completed_at is null
+                 and ${directTaskSql("open_task")}
              )
          ) as none
        from crm.tasks t
-       where t.workspace_id = $1 and t.archived_at is null${mine ? ` and ${mine}` : ""}`,
+       where t.workspace_id = $1 and t.archived_at is null and ${scope}`,
       values,
     );
     const row = result.rows[0];
@@ -181,7 +186,7 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean } =
 export async function getDueActions(
   actor: Actor,
   view: TaskView = "today",
-  options: { mine?: boolean } = {},
+  options: { mine?: boolean; tagged?: boolean } = {},
 ): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
@@ -202,6 +207,7 @@ export async function getDueActions(
              where t.company_id = c.id
                and t.archived_at is null
                and t.completed_at is null
+               and ${directTaskSql("t")}
            )
          order by c.updated_at desc
          limit 100`,
@@ -216,6 +222,6 @@ export async function getDueActions(
       return { view, tasks: [], companies: companies.map((company) => ({ ...company, relationship: relationships[company.id] })) };
     });
   }
-  const tasks = await listTasks(actor, { view, limit: 100, mine: options.mine });
+  const tasks = await listTasks(actor, { view, limit: 100, mine: options.mine, tagged: options.tagged });
   return { view, tasks: tasks.data, companies: [] };
 }

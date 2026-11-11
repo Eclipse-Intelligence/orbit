@@ -17,6 +17,7 @@ import { mailNotifyLevel } from "@/lib/mail/notify";
 import type { PushSender } from "@/lib/push";
 import { appTimeZone, zonedParts } from "@/lib/time";
 import { writingStyle } from "@/lib/writing-style";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 const FOLLOW_UP_LOOKBACK_DAYS = 14;
 const FOLLOW_UP_WORKING_DAYS = 2;
@@ -123,7 +124,7 @@ function nextStep(freeParam: string) {
   )
   or exists (
     select 1 from crm.tasks t
-    where t.workspace_id = $2 and t.archived_at is null and t.created_at > a.occurred_at
+    where t.workspace_id = $2 and t.archived_at is null and t.created_at > a.occurred_at and ${directTaskSql("t")}
       and (t.company_id = co.id or t.contact_id in (${COMPANY_PEOPLE}))
   )
   or coalesce(ci.action_items, '[]'::jsonb) @> '[{"status": "accepted"}]'::jsonb
