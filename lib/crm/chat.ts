@@ -30,7 +30,7 @@ import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
-import { publishLiveBatch } from "@/lib/docs/live/broadcast";
+import { publishLiveBatch, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
 import { mentionsIn } from "@/lib/mentions";
 
@@ -71,11 +71,15 @@ type ConversationRow = {
 
 type MemberRow = { user_id: string; last_read_at: Stamp };
 
+export type LinkedRoom = { conversationId: string; memberIds: string[] };
+
 const THREAD_CARD_REPLIES = 2;
 const THREADS_PAGE_SIZE = 20;
+const THREADS_PAGE_MAX = 50;
 const SEARCH_LIMIT = 30;
 const MENTION_MAX = 50;
 const FORMER = "Former teammate";
+const NUL = /\u0000/g;
 
 function iso(value: Stamp): string;
 function iso(value: Stamp | null): string | null;
@@ -103,13 +107,13 @@ function messageColumns(alias = "m") {
     ), '[]'::json) else '[]'::json end as reply_authors`;
 }
 
-function toMessage(row: MessageRow): ChatMessage {
+function toMessage(row: MessageRow, viewerId: string): ChatMessage {
   return {
     id: row.id,
     conversationId: row.conversation_id,
     parentId: row.parent_id,
     author: { id: row.author_user_id, name: row.author_name || FORMER },
-    clientKey: row.client_key,
+    clientKey: row.author_user_id === viewerId ? row.client_key : null,
     body: row.body,
     mentions: row.mentions ?? [],
     replyCount: row.reply_count,
@@ -119,6 +123,10 @@ function toMessage(row: MessageRow): ChatMessage {
     deletedAt: iso(row.deleted_at),
     createdAt: iso(row.created_at),
   };
+}
+
+function forViewer(message: ChatMessage, viewerId: string): ChatMessage {
+  return message.author.id === viewerId ? message : { ...message, clientKey: null };
 }
 
 function toRoot(message: ChatMessage): ChatRoot {
@@ -142,13 +150,14 @@ function toConversation(row: ConversationRow): ChatConversation {
   };
 }
 
+const MEMBER_NAME = (member: string, profile: string) => `coalesce(nullif(btrim(${member}.name), ''), nullif(btrim(${profile}.full_name), ''), ${profile}.email)`;
+
 const CONVERSATIONS_SQL = `
   select c.id, c.kind, c.name, c.workspace_id, w.name as workspace_name, c.created_at, c.created_by, me.last_read_at,
     last.created_at as last_message_at,
     other.user_id as dm_user_id,
     case when c.kind = 'dm' then coalesce(
-      nullif(btrim(p.full_name), ''),
-      p.email,
+      ${MEMBER_NAME("other", "p")},
       (select a.author_name from crm.chat_messages a where a.conversation_id = c.id and a.author_user_id = other.user_id order by a.created_at desc limit 1)
     ) end as dm_name,
     counts.unread, counts.mentions
@@ -161,7 +170,7 @@ const CONVERSATIONS_SQL = `
     order by m.created_at desc, m.id desc limit 1
   ) last on true
   left join lateral (
-    select o.user_id from crm.chat_members o where o.conversation_id = c.id and o.user_id <> me.user_id limit 1
+    select o.user_id, o.name from crm.chat_members o where o.conversation_id = c.id and o.user_id <> me.user_id limit 1
   ) other on c.kind = 'dm'
   left join crm.profiles p on p.id = other.user_id
   cross join lateral (
@@ -191,7 +200,7 @@ function pageSize(limit: unknown, fallback = CHAT_PAGE_SIZE) {
 }
 
 function cleanBody(body: unknown) {
-  const text = typeof body === "string" ? body.replace(/\r\n?/g, "\n").trim() : "";
+  const text = typeof body === "string" ? body.replace(NUL, "").replace(/\r\n?/g, "\n").trim() : "";
   if (!text) throw new CrmError("invalid_input", "Write a message first.", 400, { field: "body" });
   if (text.length > CHAT_BODY_MAX) throw new CrmError("invalid_input", "Keep messages to 10,000 characters.", 400, { field: "body" });
   return text;
@@ -199,13 +208,15 @@ function cleanBody(body: unknown) {
 
 function memberMentions(body: string) {
   const ids = mentionsIn(body)
-    .filter((mention) => mention.kind === "member")
+    .filter((mention) => mention.kind === "member" && isUuid(mention.id))
     .map((mention) => mention.id.toLowerCase());
-  return [...new Set(ids)].slice(0, MENTION_MAX);
+  const unique = [...new Set(ids)];
+  if (unique.length > MENTION_MAX) throw new CrmError("invalid_input", "Tag up to 50 people in one message.", 400, { field: "body" });
+  return unique;
 }
 
 function cleanRoomName(name: unknown) {
-  const text = typeof name === "string" ? name.trim().replace(/^#+/, "").replace(/\s+/g, " ").trim() : "";
+  const text = typeof name === "string" ? name.replace(NUL, "").trim().replace(/^#+/, "").replace(/\s+/g, " ").trim() : "";
   if (!text) throw new CrmError("invalid_input", "Give the room a name.", 400, { field: "name" });
   if (text.length > CHAT_ROOM_NAME_MAX) throw new CrmError("invalid_input", "Keep the room name to 80 characters.", 400, { field: "name" });
   return text;
@@ -221,14 +232,14 @@ function cleanPeople(ids: unknown): string[] {
 
 function cleanClientKey(key: unknown) {
   if (typeof key !== "string") return randomUUID();
-  const trimmed = key.trim();
+  const trimmed = key.replace(NUL, "").trim();
   if (!trimmed) return randomUUID();
   if (trimmed.length > CHAT_CLIENT_KEY_MAX) throw new CrmError("invalid_input", "That message key is too long.", 400, { field: "clientKey" });
   return trimmed;
 }
 
-function actorName(actor: UserActor) {
-  return actor.fullName?.trim() || actor.email || "A teammate";
+function firstName(actor: UserActor) {
+  return actor.fullName?.trim().split(/\s+/)[0] || actor.email || "A teammate";
 }
 
 function background(task: () => Promise<void>) {
@@ -240,9 +251,17 @@ function background(task: () => Promise<void>) {
   }
 }
 
-async function broadcast(userIds: string[], event: ChatLiveEvent) {
-  const messages = [...new Set(userIds)].map((userId) => ({ topic: personTopic(userId), event: "chat" as const, payload: event }));
+async function publish(messages: LiveMessage[]) {
   await publishLiveBatch(messages).catch((error) => console.error("Chat broadcast failed", error));
+}
+
+function eventFor(userId: string, event: ChatLiveEvent): LiveMessage {
+  const payload = event.type === "message" || event.type === "edit" ? { ...event, message: forViewer(event.message, userId) } : event;
+  return { topic: personTopic(userId), event: "chat", payload };
+}
+
+async function broadcast(userIds: string[], event: ChatLiveEvent) {
+  await publish([...new Set(userIds)].map((userId) => eventFor(userId, event)));
 }
 
 function broadcastAfterCommit(db: Db, userIds: string[], event: ChatLiveEvent) {
@@ -261,9 +280,9 @@ async function memberIds(db: Db, conversationId: string) {
   return result.rows;
 }
 
-async function readMessage(db: Db, id: string) {
+async function readMessage(db: Db, id: string, viewerId: string) {
   const result = await db.query<MessageRow>(`select ${messageColumns()} from crm.chat_messages m where m.id = $1`, [id]);
-  return result.rows[0] ? toMessage(result.rows[0]) : null;
+  return result.rows[0] ? toMessage(result.rows[0], viewerId) : null;
 }
 
 export async function listConversations(actor: UserActor): Promise<ChatSidebar> {
@@ -311,11 +330,11 @@ export async function getRoom(actor: UserActor, id: string): Promise<ChatRoom> {
   return withActor(actor, async (db) => {
     const row = await readConversation(db, actor, conversationId);
     const members = await db.query<{ user_id: string; name: string | null; email: string | null; created_at: Stamp; added_by: string | null }>(
-      `select m.user_id, coalesce(nullif(btrim(p.full_name), ''), p.email) as name, p.email, m.created_at, m.added_by
+      `select m.user_id, ${MEMBER_NAME("m", "p")} as name, p.email, m.created_at, m.added_by
        from crm.chat_members m
        left join crm.profiles p on p.id = m.user_id
        where m.conversation_id = $1
-       order by m.created_at, coalesce(nullif(btrim(p.full_name), ''), p.email)`,
+       order by m.created_at, ${MEMBER_NAME("m", "p")}`,
       [conversationId],
     );
     const list: ChatMember[] = members.rows.map((member) => ({
@@ -415,18 +434,32 @@ export async function removeRoomMember(actor: UserActor, id: string, userId: str
   } catch (error) {
     chatFailure(error);
   }
-  background(async () => {
-    await broadcast([member], { type: "removed", conversationId });
-    await broadcast(
-      before.filter((other) => other !== member),
-      { type: "conversation", conversationId },
-    );
-  });
+  background(() => announceRemoval(member, [{ conversationId, memberIds: before.filter((other) => other !== member) }]));
   return { deleted };
 }
 
 export async function leaveRoom(actor: UserActor, id: string) {
   return removeRoomMember(actor, id, actor.userId);
+}
+
+export async function roomsLinkedTo(workspaceId: string, userId: string): Promise<LinkedRoom[]> {
+  const result = await query<{ conversation_id: string; member_ids: string[] }>("select conversation_id, member_ids::text[] as member_ids from private.chat_rooms_linked($1, $2)", [
+    workspaceId,
+    userId,
+  ]);
+  return result.rows.map((row) => ({ conversationId: row.conversation_id, memberIds: row.member_ids ?? [] }));
+}
+
+export async function announceRemoval(userId: string, rooms: LinkedRoom[]) {
+  if (rooms.length === 0) return;
+  const messages: LiveMessage[] = [];
+  for (const room of rooms) {
+    messages.push(eventFor(userId, { type: "removed", conversationId: room.conversationId }));
+    for (const other of new Set(room.memberIds)) {
+      if (other !== userId) messages.push(eventFor(other, { type: "conversation", conversationId: room.conversationId }));
+    }
+  }
+  await publish(messages);
 }
 
 export async function openDm(actor: UserActor, userId: string): Promise<ChatConversation> {
@@ -443,29 +476,45 @@ export async function openDm(actor: UserActor, userId: string): Promise<ChatConv
 
 type PageOptions = { before?: string | null; after?: string | null; around?: string | null; limit?: number };
 
+const VISIBLE_ROOT = `m.conversation_id = $1 and m.parent_id is null and (m.deleted_at is null or m.reply_count > 0)`;
+const ROOT_CURSOR = `(select k.created_at from crm.chat_messages k where k.id = $2 and k.conversation_id = $1)`;
+
+async function rootCursor(db: Db, conversationId: string, value: string | null | undefined) {
+  if (!value) return null;
+  const id = checkId(value, "message");
+  const result = await db.query<{ id: string; parent_id: string | null }>("select id, parent_id from crm.chat_messages where id = $1 and conversation_id = $2", [id, conversationId]);
+  const row = result.rows[0];
+  if (!row) throw notFound("message");
+  return row.parent_id ?? row.id;
+}
+
 export async function listMessages(actor: UserActor, id: string, options: PageOptions = {}): Promise<ChatPage> {
   const conversationId = checkId(id, "conversation");
   const limit = pageSize(options.limit);
   return withActor(actor, async (db) => {
     const conversation = await readConversation(db, actor, conversationId);
-    const visible = `m.conversation_id = $1 and m.parent_id is null and (m.deleted_at is null or m.reply_count > 0)`;
-    const cursor = (param: string) => `(select k.created_at from crm.chat_messages k where k.id = ${param} and k.conversation_id = $1 and k.parent_id is null)`;
-    const older = async (pivot: string | null, inclusive: boolean, count: number) => {
-      const compare = pivot ? `and (m.created_at, m.id) ${inclusive ? "<=" : "<"} (${cursor("$2")}, $2::uuid)` : "";
+    const older = async (pivot: string | null, count: number) => {
+      const compare = pivot ? `and (m.created_at, m.id) < (${ROOT_CURSOR}, $2::uuid)` : "";
       const result = await db.query<MessageRow>(
-        `select ${messageColumns()} from crm.chat_messages m where ${visible} ${compare} order by m.created_at desc, m.id desc limit ${count + 1}`,
+        `select ${messageColumns()} from crm.chat_messages m where ${VISIBLE_ROOT} ${compare} order by m.created_at desc, m.id desc limit ${count + 1}`,
         pivot ? [conversationId, pivot] : [conversationId],
       );
-      const rows = result.rows.slice(0, count).reverse();
-      return { rows, more: result.rows.length > count };
+      return { rows: result.rows.slice(0, count).reverse(), more: result.rows.length > count };
     };
     const newer = async (pivot: string, inclusive: boolean, count: number) => {
       const result = await db.query<MessageRow>(
-        `select ${messageColumns()} from crm.chat_messages m where ${visible} and (m.created_at, m.id) ${inclusive ? ">=" : ">"} (${cursor("$2")}, $2::uuid)
+        `select ${messageColumns()} from crm.chat_messages m where ${VISIBLE_ROOT} and (m.created_at, m.id) ${inclusive ? ">=" : ">"} (${ROOT_CURSOR}, $2::uuid)
          order by m.created_at, m.id limit ${count + 1}`,
         [conversationId, pivot],
       );
       return { rows: result.rows.slice(0, count), more: result.rows.length > count };
+    };
+    const beyond = async (pivot: string, side: ">=" | "<=") => {
+      const result = await db.query(`select 1 from crm.chat_messages m where ${VISIBLE_ROOT} and (m.created_at, m.id) ${side} (${ROOT_CURSOR}, $2::uuid) limit 1`, [
+        conversationId,
+        pivot,
+      ]);
+      return (result.rowCount ?? 0) > 0;
     };
     const unread = await db.query<{ id: string }>(
       `select m.id from crm.chat_messages m
@@ -475,67 +524,81 @@ export async function listMessages(actor: UserActor, id: string, options: PageOp
       [conversationId, actor.userId],
     );
     const firstUnreadId = unread.rows[0]?.id ?? null;
+    const before = await rootCursor(db, conversationId, options.before);
+    const afterId = before ? null : await rootCursor(db, conversationId, options.after);
+    const around = before || afterId ? null : options.around === "unread" ? firstUnreadId : await rootCursor(db, conversationId, options.around);
     let rows: MessageRow[];
     let hasOlder = false;
     let hasNewer = false;
-    const pick = (value: string | null | undefined) => (value ? checkId(value, "message") : null);
-    const before = pick(options.before);
-    const afterId = pick(options.after);
-    const around = options.around === "unread" ? firstUnreadId : pick(options.around);
     if (before) {
-      const page = await older(before, false, limit);
+      const page = await older(before, limit);
       rows = page.rows;
       hasOlder = page.more;
-      hasNewer = true;
+      hasNewer = await beyond(before, ">=");
     } else if (afterId) {
       const page = await newer(afterId, false, limit);
       rows = page.rows;
       hasNewer = page.more;
-      hasOlder = true;
+      hasOlder = await beyond(afterId, "<=");
     } else if (around) {
-      const above = await older(around, false, Math.floor(limit / 2));
+      const above = await older(around, Math.floor(limit / 2));
       const below = await newer(around, true, limit);
       rows = [...above.rows, ...below.rows];
       hasOlder = above.more;
       hasNewer = below.more;
     } else {
-      const page = await older(null, false, limit);
+      const page = await older(null, limit);
       rows = page.rows;
       hasOlder = page.more;
     }
-    return { messages: rows.map(toMessage), hasOlder, hasNewer, firstUnreadId, lastReadAt: iso(conversation.last_read_at) };
+    return { messages: rows.map((row) => toMessage(row, actor.userId)), hasOlder, hasNewer, firstUnreadId, lastReadAt: iso(conversation.last_read_at) };
   });
 }
 
-async function readRoot(db: Db, rootId: string) {
-  const root = await readMessage(db, rootId);
+async function readRoot(db: Db, rootId: string, viewerId: string) {
+  const root = await readMessage(db, rootId, viewerId);
   if (!root || root.parentId) throw notFound("thread");
   return root;
+}
+
+async function replyCursor(db: Db, rootId: string, value: string | null | undefined) {
+  if (!value) return null;
+  const id = checkId(value, "message");
+  const result = await db.query("select 1 from crm.chat_messages where id = $1 and parent_id = $2", [id, rootId]);
+  if ((result.rowCount ?? 0) === 0) throw notFound("message");
+  return id;
 }
 
 export async function listThread(actor: UserActor, rootId: string, options: { before?: string | null; after?: string | null; limit?: number } = {}): Promise<ChatThread> {
   const id = checkId(rootId, "thread");
   const limit = pageSize(options.limit, CHAT_PAGE_MAX);
   return withActor(actor, async (db) => {
-    const root = await readRoot(db, id);
+    const root = await readRoot(db, id, actor.userId);
     const conversation = await readConversation(db, actor, root.conversationId);
-    const cursor = (param: string) => `(select k.created_at from crm.chat_messages k where k.id = ${param} and k.parent_id = $1)`;
-    const before = options.before ? checkId(options.before, "message") : null;
-    const afterId = options.after ? checkId(options.after, "message") : null;
+    const cursor = `(select k.created_at from crm.chat_messages k where k.id = $2 and k.parent_id = $1)`;
+    const before = await replyCursor(db, id, options.before);
+    const afterId = before ? null : await replyCursor(db, id, options.after);
+    const beyond = async (pivot: string, side: ">=" | "<=") => {
+      const result = await db.query(`select 1 from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null and (m.created_at, m.id) ${side} (${cursor}, $2::uuid) limit 1`, [
+        id,
+        pivot,
+      ]);
+      return (result.rowCount ?? 0) > 0;
+    };
     let rows: MessageRow[];
     let hasOlder = false;
     let hasNewer = false;
     if (afterId) {
       const result = await db.query<MessageRow>(
-        `select ${messageColumns()} from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null and (m.created_at, m.id) > (${cursor("$2")}, $2::uuid)
+        `select ${messageColumns()} from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null and (m.created_at, m.id) > (${cursor}, $2::uuid)
          order by m.created_at, m.id limit ${limit + 1}`,
         [id, afterId],
       );
       rows = result.rows.slice(0, limit);
       hasNewer = result.rows.length > limit;
-      hasOlder = true;
+      hasOlder = await beyond(afterId, "<=");
     } else {
-      const compare = before ? `and (m.created_at, m.id) < (${cursor("$2")}, $2::uuid)` : "";
+      const compare = before ? `and (m.created_at, m.id) < (${cursor}, $2::uuid)` : "";
       const result = await db.query<MessageRow>(
         `select ${messageColumns()} from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null ${compare}
          order by m.created_at desc, m.id desc limit ${limit + 1}`,
@@ -543,24 +606,49 @@ export async function listThread(actor: UserActor, rootId: string, options: { be
       );
       rows = result.rows.slice(0, limit).reverse();
       hasOlder = result.rows.length > limit;
-      hasNewer = Boolean(before);
+      hasNewer = before ? await beyond(before, ">=") : false;
     }
     const follow = await db.query<{ last_read_at: Stamp }>("select last_read_at from crm.chat_thread_reads where message_id = $1 and user_id = $2", [id, actor.userId]);
     const lastReadAt = follow.rows[0]?.last_read_at ?? null;
-    return { conversation: toConversation(conversation), root, replies: rows.map(toMessage), hasOlder, hasNewer, following: Boolean(lastReadAt), lastReadAt: iso(lastReadAt) };
+    return {
+      conversation: toConversation(conversation),
+      root,
+      replies: rows.map((row) => toMessage(row, actor.userId)),
+      hasOlder,
+      hasNewer,
+      following: Boolean(lastReadAt),
+      lastReadAt: iso(lastReadAt),
+    };
   });
 }
 
+type ThreadsCursor = { u: 0 | 1; t: string; id: string };
+
+function readThreadsCursor(value: string | null | undefined): ThreadsCursor | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<ThreadsCursor>;
+    if ((parsed.u === 0 || parsed.u === 1) && typeof parsed.t === "string" && parsed.t.length <= 64 && !Number.isNaN(Date.parse(parsed.t)) && typeof parsed.id === "string" && isUuid(parsed.id)) {
+      return { u: parsed.u, t: parsed.t, id: parsed.id.toLowerCase() };
+    }
+  } catch {}
+  throw new CrmError("invalid_input", "That page of threads isn't valid. Reload Threads.", 400);
+}
+
+function threadsCursor(cursor: ThreadsCursor) {
+  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+
 export async function listThreads(actor: UserActor, options: { cursor?: string | null; limit?: number } = {}): Promise<ChatThreads> {
-  const limit = Math.min(50, pageSize(options.limit, THREADS_PAGE_SIZE));
-  const offset = Math.max(0, Math.min(10_000, Number.parseInt(options.cursor ?? "0", 10) || 0));
+  const limit = Math.min(THREADS_PAGE_MAX, pageSize(options.limit, THREADS_PAGE_SIZE));
+  const cursor = readThreadsCursor(options.cursor);
   return withActor(actor, async (db) => {
     const result = await db.query<
-      MessageRow & { last_read: Stamp; unread: number; unread_mentions: number; c_kind: ChatKind; c_name: string | null; dm_name: string | null }
+      MessageRow & { last_read: Stamp; unread: number; unread_mentions: number; c_kind: ChatKind; c_name: string | null; dm_name: string | null; reply_at: string }
     >(
-      `select ${messageColumns("r")}, t.last_read_at as last_read, u.unread, u.mentions as unread_mentions, c.kind as c_kind, c.name as c_name,
+      `select ${messageColumns("r")}, r.last_reply_at::text as reply_at, t.last_read_at as last_read, u.unread, u.mentions as unread_mentions, c.kind as c_kind, c.name as c_name,
          case when c.kind = 'dm' then (
-           select coalesce(nullif(btrim(p.full_name), ''), p.email) from crm.chat_members o left join crm.profiles p on p.id = o.user_id
+           select ${MEMBER_NAME("o", "p")} from crm.chat_members o left join crm.profiles p on p.id = o.user_id
            where o.conversation_id = c.id and o.user_id <> t.user_id limit 1
          ) end as dm_name
        from crm.chat_thread_reads t
@@ -575,9 +663,10 @@ export async function listThreads(actor: UserActor, options: { cursor?: string |
          ) x
        ) u
        where t.user_id = $1 and r.reply_count > 0
-       order by (u.unread > 0) desc, r.last_reply_at desc, r.id desc
-       offset $2 limit ${limit + 1}`,
-      [actor.userId, offset],
+         and ($2::integer is null or ((case when u.unread > 0 then 1 else 0 end), r.last_reply_at, r.id) < ($2::integer, $3::timestamptz, $4::uuid))
+       order by (case when u.unread > 0 then 1 else 0 end) desc, r.last_reply_at desc, r.id desc
+       limit ${limit + 1}`,
+      [actor.userId, cursor?.u ?? null, cursor?.t ?? null, cursor?.id ?? null],
     );
     const rows = result.rows.slice(0, limit);
     const latest = await db.query<MessageRow & { root_id: string }>(
@@ -589,12 +678,12 @@ export async function listThreads(actor: UserActor, options: { cursor?: string |
       [rows.map((row) => row.id)],
     );
     const byRoot = new Map<string, ChatMessage[]>();
-    for (const row of latest.rows) byRoot.set(row.root_id, [toMessage(row), ...(byRoot.get(row.root_id) ?? [])]);
+    for (const row of latest.rows) byRoot.set(row.root_id, [toMessage(row, actor.userId), ...(byRoot.get(row.root_id) ?? [])]);
     const threads: ChatThreadCard[] = rows.map((row) => {
       const replies = (byRoot.get(row.id) ?? []).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
       return {
         conversation: { id: row.conversation_id, kind: row.c_kind, name: row.c_kind === "dm" ? row.dm_name || FORMER : row.c_name ?? "" },
-        root: toMessage(row),
+        root: toMessage(row, actor.userId),
         latest: replies,
         earlier: Math.max(0, row.reply_count - replies.length),
         unread: row.unread,
@@ -602,7 +691,9 @@ export async function listThreads(actor: UserActor, options: { cursor?: string |
         lastReadAt: iso(row.last_read),
       };
     });
-    return { threads, next: result.rows.length > limit ? String(offset + limit) : null };
+    const last = rows[rows.length - 1];
+    const next = result.rows.length > limit && last ? threadsCursor({ u: last.unread > 0 ? 1 : 0, t: last.reply_at, id: last.id }) : null;
+    return { threads, next };
   });
 }
 
@@ -612,7 +703,7 @@ function likePattern(text: string) {
 
 export async function searchMessages(actor: UserActor, id: string, text: unknown, options: { limit?: number } = {}): Promise<ChatSearchResult> {
   const conversationId = checkId(id, "conversation");
-  const search = typeof text === "string" ? text.trim().slice(0, 200) : "";
+  const search = typeof text === "string" ? text.replace(NUL, "").trim().slice(0, 200) : "";
   if (!search) return { messages: [] };
   const limit = Math.min(SEARCH_LIMIT, pageSize(options.limit, SEARCH_LIMIT));
   return withActor(actor, async (db) => {
@@ -623,7 +714,7 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
        order by m.created_at desc, m.id desc limit ${limit}`,
       [conversationId, likePattern(search)],
     );
-    return { messages: result.rows.map(toMessage) };
+    return { messages: result.rows.map((row) => toMessage(row, actor.userId)) };
   });
 }
 
@@ -633,31 +724,29 @@ function chatHref(conversationId: string, message: ChatMessage) {
   return message.parentId ? `/chat/${conversationId}?thread=${message.parentId}` : `/chat/${conversationId}?message=${message.id}`;
 }
 
+const VERIFIED = { recipientsVerified: true };
+
 function scheduleAlerts(db: Db, actor: UserActor, conversation: ConversationRow, members: MemberRow[], message: ChatMessage) {
-  const name = actorName(actor);
-  const href = chatHref(conversation.id, message);
-  const tag = `chat:${conversation.id}`;
-  const base = { source: "chat" as const, href, tag, body: null };
-  const send = (recipients: string[], alert: Omit<TeamAlert, "source" | "href" | "tag" | "body">) => {
-    if (recipients.length > 0) alertMembersAfterCommit(db, actor, recipients, { ...base, ...alert });
+  const name = firstName(actor);
+  const base = { source: "chat" as const, href: chatHref(conversation.id, message), tag: `chat:${conversation.id}`, body: null };
+  const send = (recipients: string[], alert: Pick<TeamAlert, "key" | "title">) => {
+    if (recipients.length > 0) alertMembersAfterCommit(db, actor, recipients, { ...base, ...alert }, VERIFIED);
   };
+  const dm = conversation.kind === "dm";
   const others = members.filter((member) => member.user_id !== actor.userId);
-  if (conversation.kind === "dm") {
-    for (const other of others) {
-      send([other.user_id], {
-        key: `chat:dm:${conversation.id}:${millis(other.last_read_at)}`,
-        title: message.parentId ? `${name} replied in a thread` : `${name} sent you a message`,
-      });
+  const room = `#${conversation.name ?? ""}`;
+  const memberSet = new Set(others.map((member) => member.user_id));
+  const mentioned = dm ? [] : message.mentions.filter((id) => memberSet.has(id));
+  send(mentioned, { key: `chat:mention:${message.id}`, title: `${name} mentioned you in ${room}` });
+  if (!message.parentId) {
+    if (dm) {
+      for (const other of others) send([other.user_id], { key: `chat:dm:${conversation.id}:${millis(other.last_read_at)}`, title: `${name} sent you a message` });
     }
     return;
   }
-  const room = `#${conversation.name ?? ""}`;
-  const memberSet = new Set(others.map((member) => member.user_id));
-  const mentioned = message.mentions.filter((id) => memberSet.has(id));
-  send(mentioned, { key: `chat:mention:${message.id}`, title: `${name} mentioned you in ${room}` });
-  if (!message.parentId) return;
   const rootId = message.parentId;
   const skip = new Set([actor.userId, ...mentioned]);
+  const title = dm ? `${name} replied in a thread` : `${name} replied in a thread in ${room}`;
   afterCommit(db, async () => {
     const followers = await query<{ user_id: string; last_read_at: Stamp }>("select user_id, last_read_at from private.chat_thread_followers($1, $2)", [actor.userId, rootId]);
     const byKey = new Map<string, string[]>();
@@ -667,9 +756,20 @@ function scheduleAlerts(db: Db, actor: UserActor, conversation: ConversationRow,
       byKey.set(key, [...(byKey.get(key) ?? []), follower.user_id]);
     }
     for (const [key, recipients] of byKey) {
-      await alertMembers(actor, recipients, { ...base, key, title: `${name} replied in a thread in ${room}` });
+      await alertMembers(actor, recipients, { ...base, key, title }, VERIFIED);
     }
   });
+}
+
+async function existingPost(db: Db, actor: UserActor, clientKey: string, conversationId: string, parentId: string | null): Promise<ChatPost | null> {
+  const existing = await db.query<{ id: string }>("select id from crm.chat_messages where author_user_id = $1 and client_key = $2", [actor.userId, clientKey]);
+  if (!existing.rows[0]) return null;
+  const message = await readMessage(db, existing.rows[0].id, actor.userId);
+  if (!message || message.conversationId !== conversationId || message.parentId !== parentId) {
+    throw new CrmError("conflict", "That message key was already used for another message.", 409, { field: "clientKey" });
+  }
+  const root = message.parentId ? await readMessage(db, message.parentId, actor.userId) : null;
+  return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
 export async function postMessage(actor: UserActor, input: PostInput): Promise<ChatPost> {
@@ -681,6 +781,8 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
   try {
     return await withActor(actor, async (db) => {
       const conversation = await readConversation(db, actor, conversationId);
+      const earlier = await existingPost(db, actor, clientKey, conversationId, parentId);
+      if (earlier) return earlier;
       if (conversation.kind === "dm" && conversation.dm_user_id) {
         const reachable = await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]);
         if ((reachable.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
@@ -693,16 +795,12 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
         [conversationId, parentId, actor.userId, clientKey, body, mentions],
       );
       if (!inserted.rows[0]) {
-        const existing = await db.query<{ id: string }>("select id from crm.chat_messages where author_user_id = $1 and client_key = $2", [actor.userId, clientKey]);
-        const message = existing.rows[0] ? await readMessage(db, existing.rows[0].id) : null;
-        if (!message || message.conversationId !== conversationId || message.parentId !== parentId) {
-          throw new CrmError("conflict", "That message key was already used for another message.", 409, { field: "clientKey" });
-        }
-        const root = message.parentId ? await readMessage(db, message.parentId) : null;
-        return { message, root: root ? toRoot(root) : null, duplicate: true };
+        const raced = await existingPost(db, actor, clientKey, conversationId, parentId);
+        if (raced) return raced;
+        throw new CrmError("conflict", "Couldn't send. Try again.", 409);
       }
-      const message = (await readMessage(db, inserted.rows[0].id))!;
-      const rootMessage = parentId ? await readMessage(db, parentId) : null;
+      const message = (await readMessage(db, inserted.rows[0].id, actor.userId))!;
+      const rootMessage = parentId ? await readMessage(db, parentId, actor.userId) : null;
       const root = rootMessage ? toRoot(rootMessage) : null;
       if (!parentId) {
         await db.query(
@@ -726,7 +824,7 @@ export async function postMessage(actor: UserActor, input: PostInput): Promise<C
 }
 
 async function ownMessage(db: Db, actor: UserActor, id: string) {
-  const message = await readMessage(db, id);
+  const message = await readMessage(db, id, actor.userId);
   if (!message) throw notFound("message");
   if (message.author.id !== actor.userId) throw new CrmError("forbidden", "You can only change your own messages.", 403);
   if (message.deletedAt) throw new CrmError("invalid_input", "That message was deleted.", 400);
@@ -736,17 +834,13 @@ async function ownMessage(db: Db, actor: UserActor, id: string) {
 export async function editMessage(actor: UserActor, id: string, body: unknown): Promise<ChatMessage> {
   const messageId = checkId(id, "message");
   const text = cleanBody(body);
+  const mentions = memberMentions(text);
   try {
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
-      const updated = await db.query("update crm.chat_messages set body = $2, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [
-        messageId,
-        text,
-        memberMentions(text),
-        actor.userId,
-      ]);
-      if ((updated.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You can only change your own messages.", 403);
-      const message = (await readMessage(db, messageId))!;
+      const updated = await db.query("update crm.chat_messages set body = $2, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId]);
+      if ((updated.rowCount ?? 0) === 0) throw notFound("message");
+      const message = (await readMessage(db, messageId, actor.userId))!;
       const members = await memberIds(db, current.conversationId);
       broadcastAfterCommit(
         db,
@@ -766,8 +860,8 @@ export async function deleteMessage(actor: UserActor, id: string): Promise<{ del
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
       const updated = await db.query("update crm.chat_messages set deleted_at = now() where id = $1 and author_user_id = $2 and deleted_at is null", [messageId, actor.userId]);
-      if ((updated.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You can only change your own messages.", 403);
-      const rootMessage = current.parentId ? await readMessage(db, current.parentId) : null;
+      if ((updated.rowCount ?? 0) === 0) throw notFound("message");
+      const rootMessage = current.parentId ? await readMessage(db, current.parentId, actor.userId) : null;
       const members = await memberIds(db, current.conversationId);
       broadcastAfterCommit(
         db,
@@ -807,7 +901,7 @@ export async function markThreadRead(actor: UserActor, rootId: string, upTo?: st
   const id = checkId(rootId, "thread");
   const messageId = upTo ? checkId(upTo, "message") : null;
   return withActor(actor, async (db) => {
-    const root = await readRoot(db, id);
+    const root = await readRoot(db, id, actor.userId);
     const result = await db.query<{ last_read_at: Stamp }>(
       `update crm.chat_thread_reads set last_read_at = greatest(last_read_at, coalesce(
          (select m.created_at from crm.chat_messages m where m.id = $3 and m.parent_id = $1),

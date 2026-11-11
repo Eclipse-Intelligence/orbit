@@ -28,6 +28,7 @@ create index if not exists chat_conversations_workspace_idx on crm.chat_conversa
 create table if not exists crm.chat_members (
   conversation_id uuid not null references crm.chat_conversations (id) on delete cascade,
   user_id uuid not null references crm.profiles (id) on delete cascade,
+  name text not null default '',
   last_read_at timestamptz not null default now(),
   added_by uuid references crm.profiles (id) on delete set null,
   created_at timestamptz not null default now(),
@@ -52,6 +53,8 @@ create table if not exists crm.chat_messages (
   created_at timestamptz not null default clock_timestamp(),
   constraint chat_messages_client_key_check check (client_key is null or length(client_key) between 1 and 100),
   constraint chat_messages_body_check check (length(body) <= 10000),
+  constraint chat_messages_body_present check (deleted_at is not null or length(btrim(body, E' \t\n')) > 0),
+  constraint chat_messages_mentions_check check (cardinality(mentions) <= 50),
   constraint chat_messages_author_client_key unique (author_user_id, client_key)
 );
 
@@ -207,6 +210,9 @@ begin
   elsif new.body is distinct from old.body or new.mentions is distinct from old.mentions then
     new.edited_at := clock_timestamp();
     new.mentions := coalesce((select array_agg(distinct x) from unnest(new.mentions) as x where x is not null), '{}');
+    if cardinality(new.mentions) > 50 then
+      raise exception 'Tag up to 50 people in one message.' using errcode = '22023';
+    end if;
   end if;
   return new;
 end;
@@ -226,20 +232,31 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_conversation uuid;
-  v_kind text;
+  v_conversation crm.chat_conversations;
 begin
-  select m.conversation_id, c.kind into v_conversation, v_kind
+  select c.* into v_conversation
     from crm.chat_messages m join crm.chat_conversations c on c.id = m.conversation_id
     where m.id = p_root;
-  if v_conversation is null then
+  if v_conversation.id is null then
     return;
   end if;
   insert into crm.chat_thread_reads (message_id, user_id, last_read_at)
     select p_root, u.id, p_read_at
     from (select distinct x as id from unnest(p_users) as x where x is not null) u
-    where v_kind not in ('room', 'dm')
-      or exists (select 1 from crm.chat_members cm where cm.conversation_id = v_conversation and cm.user_id = u.id)
+    where case v_conversation.kind
+      when 'task' then exists (
+        select 1 from crm.tasks t
+        join crm.workspace_members wm on wm.workspace_id = t.workspace_id and wm.user_id = u.id
+        where t.id = v_conversation.task_id
+          and (t.owner_id = u.id or t.created_by_user_id = u.id or wm.role in ('owner', 'admin'))
+      )
+      when 'doc' then exists (
+        select 1 from crm.pages p
+        join crm.workspace_members wm on wm.workspace_id = p.workspace_id and wm.user_id = u.id
+        where p.id = v_conversation.page_id and p.effective_shared and p.kind = 'note'
+      )
+      else exists (select 1 from crm.chat_members cm where cm.conversation_id = v_conversation.id and cm.user_id = u.id)
+    end
   on conflict (message_id, user_id) do nothing;
 end;
 $$;
@@ -248,18 +265,21 @@ revoke all on function private.chat_follow(uuid, uuid[], timestamptz) from publi
 
 create or replace function private.chat_recount(p_root uuid)
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
+begin
+  perform 1 from crm.chat_messages r where r.id = p_root for update;
   update crm.chat_messages r
-    set reply_count = coalesce(s.replies, 0), last_reply_at = s.latest
+    set reply_count = s.replies, last_reply_at = s.latest
     from (
       select count(*)::integer as replies, max(m.created_at) as latest
       from crm.chat_messages m
       where m.parent_id = p_root and m.deleted_at is null
     ) s
-    where r.id = p_root
+    where r.id = p_root;
+end;
 $$;
 
 revoke all on function private.chat_recount(uuid) from public;
@@ -272,6 +292,7 @@ set search_path = ''
 as $$
 declare
   v_root record;
+  v_followers uuid[];
 begin
   if tg_op = 'INSERT' then
     if new.parent_id is null then
@@ -285,7 +306,11 @@ begin
           last_reply_at = greatest(coalesce(r.last_reply_at, new.created_at), new.created_at)
       where r.id = new.parent_id
       returning r.author_user_id, r.created_at into v_root;
-    perform private.chat_follow(new.parent_id, array_remove(array[v_root.author_user_id] || new.mentions, new.author_user_id), v_root.created_at);
+    v_followers := array[v_root.author_user_id] || new.mentions;
+    if exists (select 1 from crm.chat_conversations c where c.id = new.conversation_id and c.kind = 'dm') then
+      v_followers := v_followers || array(select cm.user_id from crm.chat_members cm where cm.conversation_id = new.conversation_id);
+    end if;
+    perform private.chat_follow(new.parent_id, array_remove(v_followers, new.author_user_id), v_root.created_at);
     insert into crm.chat_thread_reads (message_id, user_id, last_read_at)
       values (new.parent_id, new.author_user_id, new.created_at)
       on conflict (message_id, user_id) do update set last_read_at = greatest(crm.chat_thread_reads.last_read_at, excluded.last_read_at);
@@ -331,39 +356,96 @@ grant execute on function private.chat_shares_workspace(uuid, uuid) to crm_app;
 create or replace function private.chat_check_people(p_user uuid, p_workspace uuid, p_people uuid[])
 returns void
 language plpgsql
-stable
 security definer
 set search_path = ''
 as $$
-declare
-  v_outside text;
 begin
   if cardinality(coalesce(p_people, '{}')) > 200 then
     raise exception 'Add up to 200 people at a time.' using errcode = '22023';
   end if;
+  perform 1 from crm.workspace_members m
+    where m.user_id = any(array[p_user] || coalesce(p_people, '{}'))
+      and (p_workspace is null or m.workspace_id = p_workspace)
+    order by m.workspace_id, m.user_id
+    for share;
   if p_workspace is not null then
-    select coalesce(nullif(btrim(p.full_name), ''), p.email, 'Someone') into v_outside
-      from unnest(p_people) as x(id)
-      left join crm.profiles p on p.id = x.id
+    if exists (
+      select 1 from unnest(coalesce(p_people, '{}')) as x(id)
       where x.id is not null and not exists (select 1 from crm.workspace_members m where m.workspace_id = p_workspace and m.user_id = x.id)
-      limit 1;
-    if found then
-      raise exception '% isn''t in this room''s workspace. Only its members can join.', v_outside using errcode = '22023';
+    ) then
+      raise exception 'Someone you picked isn''t in this room''s workspace. Only its members can join.' using errcode = '22023';
     end if;
     return;
   end if;
-  select coalesce(nullif(btrim(p.full_name), ''), p.email, 'Someone') into v_outside
-    from unnest(p_people) as x(id)
-    left join crm.profiles p on p.id = x.id
+  if exists (
+    select 1 from unnest(coalesce(p_people, '{}')) as x(id)
     where x.id is not null and x.id <> p_user and not private.chat_shares_workspace(p_user, x.id)
-    limit 1;
-  if found then
-    raise exception '% doesn''t share a workspace with you.', v_outside using errcode = '22023';
+  ) then
+    raise exception 'Someone you picked doesn''t share a workspace with you.' using errcode = '22023';
   end if;
 end;
 $$;
 
 revoke all on function private.chat_check_people(uuid, uuid, uuid[]) from public;
+
+create or replace function private.chat_member_name()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  select coalesce(nullif(btrim(p.full_name), ''), p.email, '') into new.name from crm.profiles p where p.id = new.user_id;
+  new.name := coalesce(new.name, '');
+  return new;
+end;
+$$;
+
+revoke all on function private.chat_member_name() from public;
+
+drop trigger if exists chat_members_name on crm.chat_members;
+create trigger chat_members_name
+  before insert on crm.chat_members
+  for each row execute function private.chat_member_name();
+
+create or replace function private.chat_profile_renamed()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update crm.chat_members m
+    set name = coalesce(nullif(btrim(new.full_name), ''), new.email, '')
+    where m.user_id = new.id;
+  return null;
+end;
+$$;
+
+revoke all on function private.chat_profile_renamed() from public;
+
+drop trigger if exists profiles_chat_name on crm.profiles;
+create trigger profiles_chat_name
+  after update of full_name, email on crm.profiles
+  for each row
+  when (old.full_name is distinct from new.full_name or old.email is distinct from new.email)
+  execute function private.chat_profile_renamed();
+
+create or replace function private.chat_rooms_linked(p_workspace uuid, p_user uuid)
+returns table (conversation_id uuid, member_ids uuid[])
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select c.id, array(select o.user_id from crm.chat_members o where o.conversation_id = c.id and o.user_id <> p_user)
+  from crm.chat_conversations c
+  join crm.chat_members m on m.conversation_id = c.id and m.user_id = p_user
+  where c.kind = 'room' and c.workspace_id = p_workspace
+$$;
+
+revoke all on function private.chat_rooms_linked(uuid, uuid) from public;
+grant execute on function private.chat_rooms_linked(uuid, uuid) to crm_app;
 
 create or replace function private.chat_room_name(p_name text)
 returns text
@@ -436,6 +518,7 @@ begin
   v_key := least(p_user::text, p_other::text) || ':' || greatest(p_user::text, p_other::text);
   select c.id into v_id from crm.chat_conversations c where c.dm_key = v_key;
   if v_id is null then
+    perform 1 from crm.workspace_members m where m.user_id in (p_user, p_other) order by m.workspace_id, m.user_id for share;
     if not private.chat_shares_workspace(p_user, p_other) then
       raise exception 'You can only message people who share a workspace with you.' using errcode = '42501';
     end if;
@@ -492,6 +575,11 @@ declare
   v_outside text;
 begin
   if p_set_workspace and p_workspace is not null and p_workspace is distinct from v_room.workspace_id then
+    perform 1 from crm.workspace_members m
+      where m.workspace_id = p_workspace
+        and (m.user_id = p_user or m.user_id in (select cm.user_id from crm.chat_members cm where cm.conversation_id = p_room))
+      order by m.user_id
+      for share;
     if not exists (select 1 from crm.workspace_members m where m.user_id = p_user and m.workspace_id = p_workspace) then
       raise exception 'Pick one of your workspaces.' using errcode = '42501';
     end if;

@@ -1,13 +1,14 @@
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 
 export type ChatRouteContext = { params: Promise<{ id: string }> };
 
 export async function chatResponse<T>(fallback: string, run: (actor: UserActor) => Promise<T>) {
-  const actor = await getUserActor();
-  if (!actor) return Response.json({ error: "Your session ended. Sign in again." }, { status: 401 });
   try {
+    const actor = await getUserActor();
+    if (!actor) return Response.json({ error: "Your session ended. Sign in again." }, { status: 401 });
     return Response.json(await run(actor), { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
     if (error instanceof CrmError) return Response.json({ error: error.message }, { status: error.status });
@@ -27,6 +28,13 @@ export function limitParam(request: Request) {
 }
 
 export async function upToBody(request: Request) {
-  const input = (await request.json().catch(() => null)) as { upTo?: unknown } | null;
-  return typeof input?.upTo === "string" ? input.upTo : null;
+  const text = (await request.text().catch(() => "")).trim();
+  if (!text) return null;
+  let input: unknown = null;
+  try {
+    input = JSON.parse(text);
+  } catch {}
+  const upTo = input && typeof input === "object" ? (input as { upTo?: unknown }).upTo : undefined;
+  if (typeof upTo !== "string" || !isUuid(upTo)) throw new CrmError("invalid_input", "Say which message to mark read up to, or send no body to mark everything read.", 400);
+  return upTo;
 }

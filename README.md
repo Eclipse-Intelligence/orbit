@@ -90,6 +90,10 @@ What is shared and what is private:
 
 Removing someone moves their companies, contacts, deals and tasks to whoever removed them and keeps everything they logged. If they're in another of your workspaces, their email, calendar and other personal connections (AI account, Orbit Agent, phone notifications) move there; otherwise they're disconnected. Their personal MCP tokens for the workspace stop working either way. Their Granola key, Readwise token and Recall key move to their next workspace if they have one, otherwise they are deleted.
 
+## Chat
+
+Chat is one place for talking to teammates, the same in every workspace. Rooms are private to the people in them; anyone in a room can rename it, add or remove people, or leave. Someone in more than one workspace can link a room to one of them, so only that workspace's members can join, and leaving that workspace takes them out of the room. Direct messages are between two people who share a workspace. Replying to a message opens a thread on it; Threads lists every thread you started, replied in or were tagged in. Tag a teammate with @. You get an alert (bell and phone) when you're tagged, for direct messages and for replies in threads you follow, never for plain room messages. You can edit or delete only your own messages. See Chat in `docs/architecture.md` for the API and live events.
+
 ## Settings
 
 Settings has one page per area. If you are in more than one workspace, the pages are in two groups: **You** (the same in every workspace) and the current workspace, with its tile (only in that workspace). If you are in one workspace, they are one list without headings, About you is a card on General and your notes are on Learning (the old addresses go there). On wide screens the list sits down the left and `/settings` opens General. On phones `/settings` is the list, and each page has a Settings link back to it.

@@ -1,7 +1,7 @@
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
-import { parseTopic } from "@/lib/docs/live/protocol";
+import { parseTopic, type LiveEvent } from "@/lib/docs/live/protocol";
 import { pageInScope } from "@/lib/docs/store";
 
 export async function relayAllows(actor: UserActor, topic: string, send: boolean) {
@@ -24,4 +24,24 @@ export async function relayAllows(actor: UserActor, topic: string, send: boolean
     const row = result.rows[0];
     return Boolean(row) && !(send && row.archived);
   });
+}
+
+export function relayEventAllowed(topic: string, event: LiveEvent) {
+  return parseTopic(topic)?.kind === "chat" ? event === "typing" : event !== "typing";
+}
+
+export function relayPayload(actor: UserActor, topic: string, event: LiveEvent, payload: unknown) {
+  if (event !== "typing") return payload;
+  const target = parseTopic(topic);
+  const input = payload && typeof payload === "object" ? (payload as { typing?: unknown }) : {};
+  return {
+    conversationId: target?.id ?? null,
+    user: { id: actor.userId, name: actor.fullName?.trim() || actor.email || "A teammate" },
+    typing: input.typing === true,
+  };
+}
+
+export function relayRefusal(topic: string | null, send: boolean) {
+  if (topic && parseTopic(topic)?.kind === "chat") return send ? "You can't type in that conversation." : "You can't follow that conversation.";
+  return send ? "You can't edit that note." : "You can't follow that note.";
 }
