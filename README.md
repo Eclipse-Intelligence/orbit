@@ -94,6 +94,22 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 
 Chat is one place for talking to teammates, the same in every workspace. Rooms are private to the people in them; anyone in a room can rename it, add or remove people, or leave. Someone in more than one workspace can link a room to one of them, so only that workspace's members can join, and leaving that workspace takes them out of the room. Direct messages are between two people who share a workspace. Someone who leaves a workspace also leaves any other room or direct message where they no longer share a workspace with anyone else in it. Replying to a message opens a thread on it; Threads lists every thread you started, replied in or were tagged in. Tag a teammate with @. You get an alert (bell and phone) when you're tagged, for direct messages and for replies in threads you follow, never for plain room messages. You can edit or delete only your own messages. Claude (or any app that speaks MCP) can read and post in your Chat with a personal token, and the assistant can read it and, once you approve each message, post for you. See Chat in `docs/architecture.md` for the API and live events.
 
+### Incoming webhooks
+
+A room can take posts from other tools, for example Google Analytics alerts into #alerts through Zapier or Make. Anyone in the room can set one up in Room settings › Incoming webhooks: press **Add incoming webhook**, name it, and copy the URL and the secret (shown once). Pause stops posts without losing the URL, Rotate secret replaces the secret at once, and Hold to delete deletes the hook (its messages stay). Anyone in the room can delete a hook message from its menu.
+
+Point the tool at the URL with a POST, a JSON body and the secret as a Bearer token. In Zapier use **Webhooks by Zapier › Custom Request**; in Make use **HTTP › Make a request**. Add an `Idempotency-Key` header with the trigger's id so retries don't post twice.
+
+```bash
+curl -X POST https://<your-orbit>/api/chat/hooks/<hook id> \
+  -H "Authorization: Bearer ohk_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ga-weekly-2026-11-09" \
+  -d '{"title": "Weekly traffic", "text": "Sessions 4,812, up 12% on last week.", "url": "https://analytics.google.com/"}'
+```
+
+`text` is required (up to 10,000 characters); `title` (up to 200) and `url` (http or https) are optional. Any other JSON is shown as a formatted block. Bodies are capped at 32 KB and each hook can post 30 messages a minute. Hook messages never tag or alert anyone; they count as unread like any other message. Errors are JSON `{ "error" }`: 400 invalid body (not JSON, nested more than 20 levels, bad fields, or a secret in the URL), 401 wrong or missing secret, 404 unknown or deleted hook or archived room, 409 paused, 413 too large, 429 too many posts. The secret is checked before the body is read as JSON.
+
 ## Settings
 
 Settings has one page per area. If you are in more than one workspace, the pages are in two groups: **You** (the same in every workspace) and the current workspace, with its tile (only in that workspace). If you are in one workspace, they are one list without headings, About you is a card on General and your notes are on Learning (the old addresses go there). On wide screens the list sits down the left and `/settings` opens General. On phones `/settings` is the list, and each page has a Settings link back to it.
@@ -911,6 +927,7 @@ A workflow is built on a canvas, like n8n. It always starts with a When step (th
 | Create task, Add note, Update record | Act on the run's company or contact. Tasks can go to ClickUp too. Update record covers lifecycle, health, owner, industry, size, source, description, name, domain, website, LinkedIn and phone on companies, and owner, job title, company, source, notes, name, email, phone, LinkedIn, location and Sales Navigator lead on contacts. |
 | Add to or move on a board | Puts the company on a board or moves its card. |
 | Notify someone | Sends an in-app notification to you, the record's owner, or a member. |
+| Post to Chat | Posts a message, with fields from the run, in a Chat room you're in. It posts as you, with "via" and the workflow's name after your name, and it counts as unread for you like anyone else's message. It can't be edited, only deleted. Tagging people from the step isn't supported in the editor yet; tags coming from the run's fields show as plain text. A run that is picked up again never posts twice. If you've left the room, the step fails and you're told. Test runs post nothing. Only you see which room a workflow posts to. |
 | Send email | Emails the run's contact from your mailbox and logs it. |
 | New proposal | Drafts a proposal for the run's contact at their company from an active template, in pounds or dollars. With AI picks from the call, it reads the call summary and transcript (or the record's recent history) and picks products and quantities from your live product list, with optional guidance on how to choose, so there is no product list to keep up to date in a prompt. Or, with Always the products I tick, it uses those. It outputs the proposal link, title, total, products and why it chose them, for a Notify someone step. If nothing fits, it stops without a draft. Nothing is sent, and test runs create nothing. |
 | Create Linear issue | Creates an issue in the Linear team. |

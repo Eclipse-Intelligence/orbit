@@ -1,4 +1,5 @@
 import type { ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
+import { EMPTY_HOOK_CARD } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
 const GROUP_GAP_MS = 5 * 60_000;
@@ -73,6 +74,7 @@ export function localMessage(input: { clientKey: string; conversationId: string;
     conversationId: input.conversationId,
     parentId: input.parentId,
     author: { id: input.author.id, name: input.author.name },
+    via: null,
     clientKey: input.clientKey,
     body: input.body,
     mentions: input.mentions,
@@ -82,6 +84,7 @@ export function localMessage(input: { clientKey: string; conversationId: string;
     editedAt: null,
     deletedAt: null,
     createdAt: input.at,
+    hook: null,
   };
 }
 
@@ -131,11 +134,15 @@ export function replaceMessage(list: ChatMessage[], message: ChatMessage) {
   return changed ? next : list;
 }
 
+export function blankDeleted(message: ChatMessage): ChatMessage {
+  return { ...message, body: "", mentions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
+}
+
 export function removeRoot(list: ChatMessage[], id: string) {
   const target = list.find((message) => message.id === id);
   if (!target) return list;
   if (target.replyCount > 0) {
-    return list.map((message) => (message.id === id ? { ...message, body: "", mentions: [], deletedAt: message.deletedAt ?? new Date().toISOString() } : message));
+    return list.map((message) => (message.id === id ? blankDeleted(message) : message));
   }
   return list.filter((message) => message.id !== id);
 }
@@ -340,7 +347,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         return next;
       }
       const next = updateTimeline(state, conversationId, (timeline) => forgetMessage({ ...timeline, messages: removeRoot(timeline.messages, messageId) }, messageId));
-      return updateThread(next, messageId, (thread) => (thread.root ? { ...thread, root: { ...thread.root, body: "", mentions: [], deletedAt: thread.root.deletedAt ?? new Date().toISOString() } } : thread));
+      return updateThread(next, messageId, (thread) => (thread.root ? { ...thread, root: blankDeleted(thread.root) } : thread));
     }
     case "pending": {
       const { message } = action;
@@ -398,6 +405,7 @@ export function oldestServerId(messages: ChatMessage[]) {
 export function startsGroup(previous: ChatMessage | null, message: ChatMessage, sameDay: boolean) {
   if (!previous || !sameDay) return true;
   if (previous.author.id !== message.author.id || !message.author.id) return true;
+  if ((previous.via?.name ?? null) !== (message.via?.name ?? null)) return true;
   if (previous.deletedAt || previous.replyCount > 0) return true;
   return Date.parse(message.createdAt) - Date.parse(previous.createdAt) > GROUP_GAP_MS;
 }
@@ -405,7 +413,7 @@ export function startsGroup(previous: ChatMessage | null, message: ChatMessage, 
 export function lastOwnMessage(messages: ChatMessage[], viewerId: string) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.author.id === viewerId && !message.deletedAt && !isLocal(message)) return message;
+    if (message.author.id === viewerId && !message.via && !message.deletedAt && !isLocal(message)) return message;
   }
   return null;
 }

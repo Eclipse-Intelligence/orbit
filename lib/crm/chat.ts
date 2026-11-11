@@ -8,7 +8,9 @@ import {
   CHAT_PAGE_MAX,
   CHAT_PAGE_SIZE,
   CHAT_ROOM_NAME_MAX,
+  EMPTY_HOOK_CARD,
   type ChatConversation,
+  type ChatHookCard,
   type ChatKind,
   type ChatLiveEvent,
   type ChatMember,
@@ -42,6 +44,8 @@ type MessageRow = {
   parent_id: string | null;
   author_user_id: string | null;
   author_name: string;
+  via_workflow_id: string | null;
+  via_workflow_name: string | null;
   client_key: string | null;
   body: string;
   mentions: string[] | null;
@@ -51,6 +55,7 @@ type MessageRow = {
   deleted_at: Stamp | null;
   created_at: Stamp;
   reply_authors: ChatPerson[] | null;
+  hook: { title?: unknown; url?: unknown; block?: unknown } | null;
 };
 
 type ConversationRow = {
@@ -95,8 +100,8 @@ function millis(value: Stamp) {
 }
 
 function messageColumns(alias = "m") {
-  return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.author_user_id, ${alias}.author_name, ${alias}.client_key, ${alias}.body,
-    ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at,
+  return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.author_user_id, ${alias}.author_name, ${alias}.via_workflow_id, ${alias}.via_workflow_name, ${alias}.client_key, ${alias}.body,
+    ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at, ${alias}.hook,
     case when ${alias}.reply_count > 0 then coalesce((
       select json_agg(json_build_object('id', a.author_user_id, 'name', a.author_name) order by a.latest desc)
       from (
@@ -116,6 +121,7 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     conversationId: row.conversation_id,
     parentId: row.parent_id,
     author: { id: row.author_user_id, name: row.author_name || FORMER },
+    via: row.via_workflow_name ? { workflowId: row.via_workflow_id, name: row.via_workflow_name } : null,
     clientKey: row.author_user_id === viewerId ? row.client_key : null,
     body: row.body,
     mentions: row.mentions ?? [],
@@ -125,6 +131,16 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     editedAt: iso(row.edited_at),
     deletedAt: iso(row.deleted_at),
     createdAt: iso(row.created_at),
+    hook: row.deleted_at && row.hook ? { ...EMPTY_HOOK_CARD } : hookCard(row.hook),
+  };
+}
+
+export function hookCard(value: { title?: unknown; url?: unknown; block?: unknown } | null): ChatHookCard | null {
+  if (!value || typeof value !== "object") return null;
+  return {
+    title: typeof value.title === "string" && value.title ? value.title : null,
+    url: typeof value.url === "string" && /^https?:\/\//i.test(value.url) ? value.url : null,
+    block: value.block === true,
   };
 }
 
@@ -186,7 +202,7 @@ const CONVERSATIONS_SQL = `
     from (
       select 1 from crm.chat_messages m
       where m.conversation_id = c.id and m.parent_id is null and m.deleted_at is null
-        and m.created_at > me.last_read_at and m.author_user_id is distinct from me.user_id
+        and m.created_at > me.last_read_at and (m.author_user_id is distinct from me.user_id or m.via_workflow_name is not null)
       limit ${CHAT_COUNT_CAP}
     ) u
   ) counts
@@ -195,7 +211,7 @@ const CONVERSATIONS_SQL = `
     from (
       select 1 from crm.chat_messages m
       where m.conversation_id = c.id and m.parent_id is null and m.deleted_at is null
-        and m.created_at > me.last_read_at and m.author_user_id is distinct from me.user_id and me.user_id = any(m.mentions)
+        and m.created_at > me.last_read_at and (m.author_user_id is distinct from me.user_id or m.via_workflow_name is not null) and me.user_id = any(m.mentions)
       limit ${CHAT_COUNT_CAP}
     ) u
   ) mentioned
@@ -283,6 +299,10 @@ function background(task: () => Promise<void>) {
   }
 }
 
+export function chatBackground(task: () => Promise<void>) {
+  background(task);
+}
+
 function afterChatCommit(db: Db, task: () => Promise<void>) {
   afterCommit(db, tracked(task));
 }
@@ -294,6 +314,10 @@ async function publish(messages: LiveMessage[]) {
 function eventFor(userId: string, event: ChatLiveEvent): LiveMessage {
   const payload = event.type === "message" || event.type === "edit" ? { ...event, message: forViewer(event.message, userId) } : event;
   return { topic: personTopic(userId), event: "chat", payload };
+}
+
+export async function broadcastChat(userIds: string[], event: ChatLiveEvent) {
+  await broadcast(userIds, event);
 }
 
 async function broadcast(userIds: string[], event: ChatLiveEvent) {
@@ -562,7 +586,7 @@ export async function listMessages(actor: UserActor, id: string, options: PageOp
     };
     const unread = await db.query<{ id: string }>(
       `select m.id from crm.chat_messages m
-       where m.conversation_id = $1 and m.parent_id is null and m.deleted_at is null and m.author_user_id is distinct from $2
+       where m.conversation_id = $1 and m.parent_id is null and m.deleted_at is null and (m.author_user_id is distinct from $2 or m.via_workflow_name is not null)
          and m.created_at > (select r.last_read_at from crm.chat_members r where r.conversation_id = $1 and r.user_id = $2)
        order by m.created_at, m.id limit 1`,
       [conversationId, actor.userId],
@@ -782,24 +806,30 @@ const VERIFIED = { recipientsVerified: true };
 
 type AlertJob = () => Promise<void>;
 
-function alertJob(actor: UserActor, recipients: string[], alert: TeamAlert): AlertJob[] {
+function alertJob(actor: UserActor, recipients: string[], alert: TeamAlert, options: { includeSelf?: boolean } = {}): AlertJob[] {
   if (recipients.length === 0) return [];
   return [
     async () => {
-      await alertMembers(actor, recipients, alert, VERIFIED);
+      await alertMembers(actor, recipients, alert, { ...VERIFIED, ...options });
     },
   ];
 }
 
 function mentionAlert(actor: UserActor, conversation: ConversationRow, message: ChatMessage, recipients: string[]) {
-  return alertJob(actor, recipients, {
-    source: "chat",
-    href: chatHref(conversation.id, message),
-    tag: `chat:${conversation.id}`,
-    body: null,
-    key: `chat:mention:${message.id}`,
-    title: `${firstName(actor)} mentioned you in #${conversation.name ?? ""}`,
-  });
+  const sender = message.via ? `${firstName(actor)} via ${message.via.name}` : firstName(actor);
+  return alertJob(
+    actor,
+    recipients,
+    {
+      source: "chat",
+      href: chatHref(conversation.id, message),
+      tag: `chat:${conversation.id}`,
+      body: null,
+      key: `chat:mention:${message.id}`,
+      title: `${sender} mentioned you in #${conversation.name ?? ""}`.slice(0, 200),
+    },
+    { includeSelf: Boolean(message.via) },
+  );
 }
 
 function postAlerts(actor: UserActor, conversation: ConversationRow, members: MemberRow[], message: ChatMessage): AlertJob[] {
@@ -807,7 +837,7 @@ function postAlerts(actor: UserActor, conversation: ConversationRow, members: Me
   const tag = `chat:${conversation.id}`;
   const dm = conversation.kind === "dm";
   const others = members.filter((member) => member.user_id !== actor.userId);
-  const memberSet = new Set(others.map((member) => member.user_id));
+  const memberSet = new Set((message.via ? members : others).map((member) => member.user_id));
   const mentioned = dm ? [] : message.mentions.filter((id) => memberSet.has(id));
   const jobs = mentionAlert(actor, conversation, message, mentioned);
   if (!message.parentId) {
@@ -858,6 +888,18 @@ function afterPost(db: Db, userIds: string[], event: ChatLiveEvent, jobs: AlertJ
   });
 }
 
+export async function ownPostWithKey(actor: UserActor, clientKey: string): Promise<{ conversationId: string; parentId: string | null } | null> {
+  const key = cleanClientKey(clientKey);
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ conversation_id: string; parent_id: string | null }>(
+      "select conversation_id, parent_id from crm.chat_messages where author_user_id = $1 and client_key = $2",
+      [actor.userId, key],
+    );
+    const row = result.rows[0];
+    return row ? { conversationId: row.conversation_id, parentId: row.parent_id } : null;
+  });
+}
+
 async function existingPost(db: Db, actor: UserActor, clientKey: string, conversationId: string, parentId: string | null): Promise<ChatPost | null> {
   const existing = await db.query<{ id: string }>("select id from crm.chat_messages where author_user_id = $1 and client_key = $2", [actor.userId, clientKey]);
   if (!existing.rows[0]) return null;
@@ -869,7 +911,7 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
   return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
-export async function postMessage(actor: UserActor, input: PostInput, options: { charge?: () => Promise<void> } = {}): Promise<ChatPost> {
+export async function postMessage(actor: UserActor, input: PostInput, options: { viaWorkflowId?: string; charge?: () => Promise<void> } = {}): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
   const body = cleanBody(input.body);
@@ -885,12 +927,13 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
         const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
         if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
       }
+      const via = options.viaWorkflowId ?? null;
       const inserted = await db.query<{ id: string }>(
-        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, mentions)
-         values ($1, $2, $3, $4, $5, $6::uuid[])
+        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, mentions${via ? ", via_workflow_id" : ""})
+         values ($1, $2, $3, $4, $5, $6::uuid[]${via ? ", $7" : ""})
          on conflict on constraint chat_messages_author_client_key do nothing
          returning id`,
-        [conversationId, parentId, actor.userId, clientKey, body, mentions],
+        [conversationId, parentId, actor.userId, clientKey, body, mentions, ...(via ? [via] : [])],
       );
       if (!inserted.rows[0]) {
         const raced = await existingPost(db, actor, clientKey, conversationId, parentId);
@@ -900,7 +943,7 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
       const message = (await readMessage(db, inserted.rows[0].id, actor.userId))!;
       const rootMessage = parentId ? await readMessage(db, parentId, actor.userId) : null;
       const root = rootMessage ? toRoot(rootMessage) : null;
-      if (!parentId) {
+      if (!parentId && !via) {
         await db.query(
           `update crm.chat_members set last_read_at = greatest(last_read_at, (select created_at from crm.chat_messages where id = $3))
            where conversation_id = $1 and user_id = $2`,
@@ -922,6 +965,26 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
   }
 }
 
+export type MyRoom = { id: string; name: string; workspaceId: string | null };
+
+export async function findMyRooms(actor: UserActor, ref: { id?: string | null; name?: string | null }): Promise<MyRoom[]> {
+  const id = ref.id && isUuid(ref.id) ? ref.id.toLowerCase() : null;
+  const name = ref.name?.trim().replace(/^#+/, "").trim().toLowerCase() || null;
+  if (!id && !name) return [];
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string; workspace_id: string | null }>(
+      `select c.id, c.name, c.workspace_id from crm.chat_conversations c
+       join crm.chat_members me on me.conversation_id = c.id and me.user_id = $1
+       where c.kind = 'room' and c.archived_at is null
+         and (case when $2::uuid is not null then c.id = $2::uuid else lower(c.name) = $3 end)
+       order by c.created_at
+       limit 20`,
+      [actor.userId, id, name],
+    );
+    return result.rows.map((row) => ({ id: row.id, name: row.name, workspaceId: row.workspace_id }));
+  });
+}
+
 async function ownMessage(db: Db, actor: UserActor, id: string) {
   const message = await readMessage(db, id, actor.userId);
   if (!message) throw notFound("message");
@@ -939,6 +1002,7 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
     const followersBefore = new Set(followed.rows.map((row) => row.user_id));
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
+      if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
       const conversation = await readConversation(db, actor, current.conversationId);
       const updated = await db.query("update crm.chat_messages set body = $2, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId]);
       if ((updated.rowCount ?? 0) === 0) throw notFound("message");
@@ -963,8 +1027,28 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
   }
 }
 
+async function deleteHookMessage(actor: UserActor, messageId: string): Promise<{ deleted: true }> {
+  try {
+    const result = await query<{ conversation_id: string }>("select private.chat_delete_hook_message($1, $2) as conversation_id", [actor.userId, messageId]);
+    const conversationId = result.rows[0].conversation_id;
+    await withActor(actor, async (db) => {
+      const members = await memberIds(db, conversationId);
+      broadcastAfterCommit(
+        db,
+        members.map((member) => member.user_id),
+        { type: "delete", conversationId, messageId, parentId: null, root: null },
+      );
+    });
+    return { deleted: true as const };
+  } catch (error) {
+    chatFailure(error);
+  }
+}
+
 export async function deleteMessage(actor: UserActor, id: string): Promise<{ deleted: true }> {
   const messageId = checkId(id, "message");
+  const target = await withActor(actor, (db) => db.query<{ from_hook: boolean }>("select hook is not null as from_hook from crm.chat_messages where id = $1", [messageId]));
+  if (target.rows[0]?.from_hook) return deleteHookMessage(actor, messageId);
   try {
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);

@@ -1,5 +1,5 @@
 import type { ChatConversation, ChatMessage } from "@/lib/chat/types";
-import { getConversation, listChatPeople, listConversations, listMessages, listThread, openDm, postMessage } from "@/lib/crm/chat";
+import { getConversation, listChatPeople, listConversations, listMessages, listThread, openDm, ownPostWithKey, postMessage } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -26,27 +26,14 @@ export function chatConversation(conversation: ChatConversation) {
   };
 }
 
-type HookFields = { viaHookId?: string | null; hook?: { title?: unknown; url?: unknown; block?: unknown } | null };
-
-function hookOf(message: ChatMessage) {
-  const extra = message as ChatMessage & HookFields;
-  if (!extra.viaHookId && !extra.hook) return null;
-  const hook = extra.hook ?? {};
-  return {
-    title: typeof hook.title === "string" ? hook.title : null,
-    url: typeof hook.url === "string" ? hook.url : null,
-    details: hook.block === undefined || hook.block === null ? null : typeof hook.block === "string" ? hook.block : JSON.stringify(hook.block),
-  };
-}
-
 export function chatMessage(message: ChatMessage) {
-  const hook = hookOf(message);
   return {
-    ...(hook ? { fromWebhook: true, webhook: hook } : {}),
+    ...(message.hook ? { fromWebhook: true, webhook: { title: message.hook.title, url: message.hook.url, formatted: message.hook.block } } : {}),
     id: message.id,
     threadId: message.parentId,
-    author: message.author.name,
+    author: message.via ? `${message.author.name} via ${message.via.name}` : message.author.name,
     authorId: message.author.id,
+    ...(message.via ? { via: { workflowId: message.via.workflowId, name: message.via.name } } : {}),
     text: message.deletedAt ? null : message.body,
     deleted: Boolean(message.deletedAt),
     mentions: message.mentions,
@@ -106,21 +93,39 @@ export function chatTargetCount(input: ChatTargetInput) {
   return [input.conversationId, input.person, input.threadId].filter(given).length;
 }
 
-async function chatTarget(actor: UserActor, input: ChatTargetInput) {
+const KEY_USED = () => new CrmError("conflict", "That message key was already used for another message.", 409, { field: "clientKey" });
+
+type PostOptions = { charge?: () => Promise<void> };
+
+async function dmTarget(actor: UserActor, person: string, key: string | null, options: PostOptions) {
+  const personId = await chatPersonId(actor, person);
+  const earlier = key ? await ownPostWithKey(actor, key) : null;
+  if (earlier) {
+    const conversation = await getConversation(actor, earlier.conversationId).catch(() => null);
+    if (earlier.parentId || conversation?.dmUser?.id !== personId) throw KEY_USED();
+    return { conversationId: conversation.id, charge: undefined };
+  }
+  await options.charge?.();
+  const dm = await openDm(actor, personId);
+  return { conversationId: dm.id, charge: undefined };
+}
+
+async function chatTarget(actor: UserActor, input: ChatTargetInput & { key?: string | null }, options: PostOptions) {
   if (chatTargetCount(input) !== 1) throw new CrmError("invalid_input", "Pass one of a conversation id, a person or a thread id.", 400, { field: "conversationId" });
   if (given(input.threadId)) {
     const thread = await listThread(actor, input.threadId, { limit: 1 });
-    return { conversationId: thread.root.conversationId, parentId: thread.root.id };
+    return { conversationId: thread.root.conversationId, parentId: thread.root.id, charge: options.charge };
   }
-  if (given(input.person)) {
-    const dm = await openDm(actor, await chatPersonId(actor, input.person));
-    return { conversationId: dm.id, parentId: null };
-  }
-  return { conversationId: input.conversationId!, parentId: null };
+  if (given(input.person)) return { ...(await dmTarget(actor, input.person, given(input.key) ? input.key : null, options)), parentId: null };
+  return { conversationId: input.conversationId!, parentId: null, charge: options.charge };
 }
 
-export async function postChat(actor: UserActor, input: ChatTargetInput & { text: unknown; key?: string | null }, options: { charge?: () => Promise<void> } = {}) {
-  const target = await chatTarget(actor, input);
-  const posted = await postMessage(actor, { conversationId: target.conversationId, parentId: target.parentId, body: input.text, clientKey: input.key ?? undefined }, options);
+export async function postChat(actor: UserActor, input: ChatTargetInput & { text: unknown; key?: string | null }, options: PostOptions = {}) {
+  const target = await chatTarget(actor, input, options);
+  const posted = await postMessage(
+    actor,
+    { conversationId: target.conversationId, parentId: target.parentId, body: input.text, clientKey: input.key ?? undefined },
+    { charge: target.charge },
+  );
   return { posted: !posted.duplicate, duplicate: posted.duplicate, conversationId: posted.message.conversationId, message: chatMessage(posted.message) };
 }

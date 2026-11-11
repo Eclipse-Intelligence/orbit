@@ -3,10 +3,12 @@
 import { memo, useId, useRef, useState, type PointerEvent } from "react";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
+import Tag from "@/components/_ui/tag";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import MentionInput from "@/components/assistant/mention-input";
 import { AvatarStack, ChatAvatar, useChat, type ChatPane } from "@/components/chat/chat-context";
 import { focusComposer } from "@/components/chat/composer";
+import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
@@ -119,10 +121,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const deleted = Boolean(message.deletedAt);
   const error = local && message.clientKey ? failed[message.clientKey] : undefined;
   const isEditing = editing?.id === message.id && editing.pane === pane && !deleted;
-  const mentionsMe = !own && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
+  const mentionsMe = (!own || Boolean(message.via)) && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
   const canReply = !inThread && !local && !deleted;
-  const canEdit = own && !local && !deleted;
-  const canDelete = own && !deleted;
+  const canEdit = own && !local && !deleted && !message.via;
+  const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted;
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
@@ -197,13 +199,23 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             {clockTime(message.createdAt)}
           </time>
         </span>
+      ) : message.hook ? (
+        <HookAvatar />
       ) : (
         <ChatAvatar person={author} size="lg" />
       )}
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         {!continuation && (
           <div className="flex items-baseline gap-2">
-            <span className="truncate text-[14px] font-medium">{message.author.name}</span>
+            <span className="truncate text-[14px] font-medium">
+              {message.author.name}
+              {message.via && <span className="text-subtle font-normal"> via {message.via.name}</span>}
+            </span>
+            {message.hook && (
+              <Tag size="sm" className="h-[18px] self-center text-[11px]">
+                Hook
+              </Tag>
+            )}
             <time dateTime={message.createdAt} title={fullTime(message.createdAt)} className="caption-style text-subtle shrink-0 tabular-nums">
               {stamp}
             </time>
@@ -213,6 +225,8 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           <p className="text-subtle italic">Message deleted</p>
         ) : isEditing ? (
           <EditBox message={message} onDone={() => setEditing(null)} />
+        ) : message.hook ? (
+          <HookCardBody card={message.hook} body={message.body} />
         ) : (
           <MessageBody body={message.body} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
         )}

@@ -19,6 +19,7 @@ import BranchIcon from "@/public/assets/images/workflows/branch.svg";
 import EditIcon from "@/public/assets/images/workflows/edit.svg";
 import LinearIcon from "@/public/assets/images/workflows/linear.svg";
 import RepeatIcon from "@/public/assets/images/workflows/repeat.svg";
+import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import ProposalIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
@@ -45,6 +46,7 @@ export const STEP_META: Record<StepType, { icon: Icon; group: NodeGroup }> = {
   update_record: { icon: EditIcon, group: "action" },
   board: { icon: ColumnsIcon, group: "action" },
   notify: { icon: BellIcon, group: "action" },
+  post_to_chat: { icon: ChatIcon, group: "action" },
   send_email: { icon: EmailIcon, group: "action" },
   linear_issue: { icon: LinearIcon, group: "action" },
   find_records: { icon: SearchIcon, group: "logic" },
@@ -59,7 +61,7 @@ export const PALETTE: { label: string; types: StepType[] }[] = [
   { label: "AI", types: ["ai", "decide"] },
   { label: "Logic", types: ["if", "filter", "loop", "delay", "approval"] },
   { label: "Records", types: ["find_records", "upsert_record", "update_record"] },
-  { label: "Actions", types: ["create_task", "add_note", "board", "notify", "send_email", "create_proposal", "linear_issue", "webhook"] },
+  { label: "Actions", types: ["create_task", "add_note", "board", "notify", "post_to_chat", "send_email", "create_proposal", "linear_issue", "webhook"] },
 ];
 
 function text(value: unknown) {
@@ -157,6 +159,12 @@ export function nodeSummary(node: WorkflowNode) {
       return short(plain(text(c.title))) || "Write a message";
     case "send_email":
       return short(plain(text(c.subject))) || "Write the email";
+    case "post_to_chat": {
+      const room = text(c.roomName).replace(/^#+/, "");
+      if (!room) return "Choose a room";
+      const body = plain(text(c.body));
+      return short(body ? `#${room}: ${body}` : `#${room}`);
+    }
     case "create_proposal":
       return !text(c.templateId) ? "Choose a template" : text(c.products) === "fixed" ? "Draft with chosen products" : "Draft with products from the call";
     default:
