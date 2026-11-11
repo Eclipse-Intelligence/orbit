@@ -469,7 +469,7 @@ Granola, Readwise and Recall keys (`crm.granola_keys`, `crm.readwise_keys`, `crm
 
 ## Chat
 
-Chat is one place across every workspace, like Mail. Rooms (`room`) are private to their members and may be linked to a workspace, which limits who can join to that workspace's members. Direct messages (`dm`) are between two people. The same tables hold the discussions under tasks (`task`) and shared docs (`doc`), described under Task and doc discussions below. Chat is personal data like Mail: no `recordAudit`, no outbound webhooks, no workflow triggers.
+Chat is one place across every workspace, like Mail. Rooms (`room`) are private to their members and may be linked to a workspace, which limits who can join to that workspace's members. Direct messages (`dm`) are between two people. The same tables hold the discussions under tasks (`task`) and shared docs (`doc`), described under Task and doc discussions below, and the notes on shared email threads (`mail_thread`, see Shared threads under Mail mirror). Chat is personal data like Mail: no `recordAudit`, no outbound webhooks, no workflow triggers.
 
 **Tables** (migration `20270116120000_chat.sql`, forced row-level security, `authenticated` only, no agent access):
 
@@ -611,6 +611,34 @@ Cold pitches piggyback on prepared replies: when `cold_pitches` isn't `off`, `re
 ### Attachments
 
 `lib/mail/attachments.ts` lists a message's attachments from Graph (`/attachments`, inline images left out; `GET /api/mail/attachments?message=`) and streams one through `GET /api/mail/attachment` (`/attachments/{id}/$value`), served with a strict content security policy and `nosniff`; only PDFs, common images and plain text are shown inline, everything else downloads. Nothing is stored in Orbit.
+
+### Shared threads
+
+The owner of a thread can share it, read only, with people who share a workspace with them. Sharing is per thread: nothing else in the mailbox is exposed, only the owner adds or removes people (one at a time), and only the owner can reply or send. Mail actions are not audit events, so sharing records none.
+
+**Tables** (migration `20270117150000_mail_shares.sql`, forced row-level security): `crm.mail_shares` (`owner_user_id`, `source_id`, `thread_key`, unique per owner, mailbox and thread; deleted with the mailbox) and `crm.mail_share_members` (`share_id`, `user_id`, `added_by`, `created_at`). `authenticated` can only select: the owner and members see the share's `id`, `owner_user_id` and `created_at` (not its mailbox or thread key) and every member row of their shares, through `private.my_mail_share_ids()`. No policy on `mail_messages`, `mail_folders` or `mail_sources` changes, and the owner's own Mail paths are untouched: shared rows never reach archive, Remind me, reply, prepared replies, summaries or read statuses.
+
+**Definer functions** (granted only to `crm_app`, called with `query()`, never inside `withActor`): `private.mail_share_add(user, source, thread_key, people)` (the mailbox must be the caller's and the thread must have a message outside drafts, trash, junk and outbox; at most 50 people; everyone must share a workspace with the owner, checked under `for share` locks on their `workspace_members` rows; idempotent, returns the share, the newly added people and the others already in it), `private.mail_share_remove(user, share, member)` (owner only, "Only the person who shared this thread can remove people."), `private.mail_share_for_thread`, `private.mail_share_thread` (the owner's key back for a share), `private.mail_share_people(user, share)` (owner first, then members), `private.shared_threads(user)` (one row per thread shared with you: share, owner name, when you were added, subject, latest time, snippet, counterpart, message count, attachments; no bodies), `private.shared_thread(user, share)` (up to 200 messages, oldest first, with only the reader's columns: no Bcc, `web_link`, provider ids, read or flag state, folder) and `private.shared_message_owner(user, share, message)` for attachments. Every read leaves out drafts and copies in drafts, trash, junk and outbox (`private.mail_share_messages`), and answers nothing once you are removed. A trigger on `crm.workspace_members` drops a member as soon as they and the owner no longer share a workspace, whichever of them left.
+
+**Attachments** are visible to members. `openSharedAttachment` checks the message through `private.shared_message_owner`, then fetches that one attachment read only as the owner: `memberActor` from the owner's home membership and `mailSourceToken`, the token path background sync uses. If the owner's mailbox needs reconnecting the member sees "Couldn't open the attachment. Mark needs to reconnect their mailbox." with the owner's first name and no link to the owner's settings.
+
+**Notes** are a Chat discussion of kind `mail_thread` (`chat_conversations.mail_share_id`, one per share through a partial unique index, deleted with the share), opened and read like task and doc discussions with the subject `{ kind: "mail_thread", id: <share id> }`. Its audience is the owner and the share's members (`private.chat_subject_open_to`, `private.chat_follow` and the select and insert policies). Tagging someone who isn't in the share saves nothing and gives no access: `postMessage` and `editMessage` refuse with a 409 whose details carry `needsShare: { people, canAdd }` (`canAdd` only for the owner), and `postMessageAction` and `editMessageAction` pass it on as `needsShare` beside `error`, so the UI can ask "Add Sam to this thread?". The owner's message reads "Sam isn't in this thread. Add them first."; a member's "Sam isn't in this thread. Only Mark can add people." The MCP and assistant Chat tools only reach rooms and DMs.
+
+**Alerts** use source `mail_share`, land in the recipient's home workspace, carry no subject or body, and are never wrapped in a workspace switch (`alertMembers` and its push only wrap links for `task` and `doc`): "Mark shared an email with you" when added (key per share and add, linked to `/mail?shared=<share>`), "Mark mentioned you in a shared email" and "Sam replied in a thread on a shared email" (linked to `/mail?shared=<share>&discussion=1`). Owners get the same link; `GET /api/mail/shared/<id>` tells them `viewerIsOwner` with their own `threadKey` to open instead.
+
+**API for the UI.** Types are in `lib/mail/share-types.ts` (no server imports), the service in `lib/mail/shares.ts`. Reads answer `{ error }` with 401, 404 or 502 through `mailResponse`.
+
+| Call | Returns |
+| --- | --- |
+| `GET /api/mail/shared` | `{ threads: SharedThreadSummary[] }`, newest first, for the Shared tab. |
+| `GET /api/mail/shared/<id>` | `SharedThread`: `owner`, `viewerIsOwner`, `threadKey` (owner only), `subject`, `people` (owner first) and `messages` (`SharedMessage`: cleaned `html` with `rich`, or `text`). 404 "Conversation not found." for anyone outside the share. |
+| `GET /api/mail/shared/<id>/attachments?message=` | `{ attachments }` as `GET /api/mail/attachments`. |
+| `GET /api/mail/shared/<id>/attachment?message=&id=&download=1` | The file, with the same headers and inline rules as `GET /api/mail/attachment`. |
+| `GET /api/mail/share?thread=<key>` | `MailShareControl` for the owner's share control: `shareId` (null until shared), `people` and `candidates` (people who share a workspace with the owner and aren't in it). |
+| `shareThreadAction(threadKey, userIds)`, `removeFromShareAction(shareId, userId)` (`app/(crm)/mail/share-actions.ts`) | `{ ok, share, added }` or `{ ok, removed }`, else `{ error }`. |
+| `GET /api/chat/discussions?share=<id>`, `openDiscussionAction({ kind: "mail_thread", id })`, then the Chat message actions and routes | The notes, as for task and doc discussions. |
+
+**Live events** go to each person's `docs-person:<id>` channel as event `mail_share` with a `MailShareLiveEvent` payload; `watchMailShares(source, userId, onEvent, onJoined)` in `lib/docs/live/client.ts` listens on the shared person channel. `{ type: "shared", shareId }` to people just added; `{ type: "people", shareId }` to the owner and the other members when people are added or removed; `{ type: "removed", shareId }` to someone removed by the owner or by leaving a workspace (show "Mark removed you from this thread." and stop: the server already refuses them); `{ type: "message", shareId }` to members when mail sync stores a new message in the thread outside drafts, trash, junk and outbox (one `private.mail_shares_touched` lookup per synced page that inserted mail; `crm.mail_versions` only covers the owner). Refetch on each. Notes use the usual `chat` events, whose `subject` is `{ kind: "mail_thread", id }`.
 
 ### Other sending addresses
 
