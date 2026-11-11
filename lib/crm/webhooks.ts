@@ -52,6 +52,8 @@ export const WEBHOOK_EVENTS = [
   "task.updated",
   "task.archived",
   "task.undone",
+  "task.participant_added",
+  "task.participant_removed",
   "page.created",
   "page.updated",
   "page.moved",

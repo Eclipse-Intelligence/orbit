@@ -13,6 +13,7 @@ import { waitingMail, workingDaysSince, type WaitingNudge, type WaitingReminder,
 import { appTimeZone, startOfDay, zonedParts } from "@/lib/time";
 import { approvalEmail } from "@/lib/workflows/store";
 import type { RunState } from "@/lib/workflows/engine";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 export type { SnoozeChoice } from "@/lib/crm/task-snooze";
 
@@ -142,7 +143,7 @@ async function tasksInDb(db: Db, actor: UserActor, workspaceIds: string[], now: 
      from (
        select t.*, row_number() over (partition by t.workspace_id order by t.due_at asc, t.created_at asc, t.id asc) as place
        from crm.tasks t
-       where (t.owner_id = $1 or t.owner_id is null) and t.workspace_id = any($2::uuid[]) and t.archived_at is null and t.completed_at is null
+       where (t.owner_id = $1 or (t.owner_id is null and ${directTaskSql("t")})) and t.workspace_id = any($2::uuid[]) and t.archived_at is null and t.completed_at is null
          and t.due_at is not null and t.due_at < $3
      ) t
      left join crm.companies co on co.id = t.company_id

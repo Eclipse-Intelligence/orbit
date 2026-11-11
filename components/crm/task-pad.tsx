@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { DateTimePicker } from "@/components/_ui/date-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
+import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { listGroups } from "@/components/crm/clickup";
 import ReminderSelect from "@/components/crm/reminder-select";
 import { searchCompaniesAction } from "@/app/(crm)/actions";
@@ -108,6 +109,8 @@ export default function TaskPad({
   initialContact = null,
   initialCompany = null,
   autoFocus = false,
+  members = [],
+  viewerId = null,
   onAdded,
 }: {
   clickup: ClickUpPicker | null;
@@ -117,6 +120,8 @@ export default function TaskPad({
   initialContact?: PadRecord | null;
   initialCompany?: PadRecord | null;
   autoFocus?: boolean;
+  members?: AssignableMember[];
+  viewerId?: string | null;
   onAdded?: (result: { warning?: string }) => void;
 }) {
   const router = useRouter();
@@ -136,6 +141,7 @@ export default function TaskPad({
   const [company, setCompany] = useState<Override<PadRecord | null>>(startCompany);
   const [contact, setContact] = useState<Override<PadRecord | null>>(startContact);
   const [list, setList] = useState<Override<string | null>>(unset);
+  const [owner, setOwner] = useState<string | null>(viewerId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -152,6 +158,8 @@ export default function TaskPad({
   const finalContact = contact.set ? contact.value : (seen?.contact ?? null);
   const finalCompany = fixedCompany ?? (company.set ? company.value : (seen?.company ?? seen?.contact?.company ?? null));
   const finalList = clickup ? (list.set ? list.value : clickup.listId) : null;
+  const assignable = Boolean(viewerId) && members.length > 1;
+  const assignee = members.find((member) => member.id === owner) ?? null;
 
   useEffect(() => {
     const node = input.current;
@@ -266,6 +274,7 @@ export default function TaskPad({
     setCompany(startCompany());
     setContact(startContact());
     setList(unset());
+    setOwner(viewerId);
   }
 
   function reset() {
@@ -279,6 +288,7 @@ export default function TaskPad({
     setCompany(startCompany());
     setContact(startContact());
     setList(unset());
+    setOwner(viewerId);
   }
 
   async function submit() {
@@ -293,6 +303,7 @@ export default function TaskPad({
       companyId: finalCompany?.id ?? null,
       contactId: finalContact?.id ?? null,
       clickupListId: finalList,
+      ownerId: assignable ? owner : null,
     });
     setBusy(false);
     if (result.error) {
@@ -460,6 +471,21 @@ export default function TaskPad({
           {finalContact && <RecordChip label={finalContact.name} onRemove={() => setContact({ set: true, value: null })} />}
           {!fixedCompany && finalCompany && (
             <RecordChip label={finalCompany.name} onRemove={() => setCompany({ set: true, value: null })} />
+          )}
+          {assignable && viewerId && (
+            <AssigneePicker
+              members={members}
+              value={owner}
+              viewerId={viewerId}
+              onPick={setOwner}
+              label={`Assignee: ${assignee?.name ?? "No one"}. Change`}
+              trigger={
+                <span className={cn("inline-flex items-center", CHIP)}>
+                  <MemberAvatar member={assignee} viewerId={viewerId} size="xs" />
+                  <span className="truncate">{owner === viewerId ? "Me" : (assignee?.name ?? "Assign")}</span>
+                </span>
+              }
+            />
           )}
           {clickup && <ClickUpChip picker={clickup} listId={finalList} onChange={(value) => setList({ set: true, value })} />}
           {reading && <span className="caption-style text-subtle px-1">Reading…</span>}

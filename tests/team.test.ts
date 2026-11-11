@@ -9,7 +9,7 @@ import { getGranolaStatus, personalGranolaKey, removeGranolaKey, saveGranolaKey,
 import { fileInboundMessages, saveMailbox } from "@/lib/crm/inbox";
 import { syncTargets } from "@/lib/crm/scheduler";
 import { getCompanyContext } from "@/lib/crm/relationships";
-import { countOpenTasks, createTask, listDueReminders, listTasks, updateTask } from "@/lib/crm/tasks";
+import { countOpenTasks, createTask, getTask, listDueReminders, listTasks, updateTask } from "@/lib/crm/tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { acceptInvite, createInvite, getTeam, previewInvite, removeMember, revokeInvite, setMemberRole } from "@/lib/crm/team";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -129,11 +129,18 @@ describe("team", () => {
     const raw = await queryAsUser<{ total: number }>(member.userId, "select count(*)::int as total from crm.tasks where id = $1", [mine.id]);
     assert.equal(raw[0].total, 0);
 
-    await assert.rejects(updateTask(member, handed.id, { ownerId: owner.userId }), /Only the task's creator/);
+    const handedOn = await updateTask(member, handed.id, { ownerId: owner.userId });
+    assert.equal(handedOn.body.task.ownerId, owner.userId);
+    assert.equal((await getTask(member, handed.id)).ownerId, owner.userId);
+    await assert.rejects(updateTask(member, handed.id, { title: "Changed after handing on" }), /Only the assignee/);
+    assert.deepEqual(
+      (await listTasks(member, { tagged: true })).data.map((task) => task.title),
+      ["Sam to send pack"],
+    );
     const own = (await createTask(member, { title: "Ask Mark to sign", companyId })).body.task;
     const passed = await updateTask(member, own.id, { ownerId: owner.userId });
     assert.equal(passed.body.task.ownerId, owner.userId);
-    assert.equal((await listTasks(member)).total, 3);
+    assert.deepEqual((await listTasks(member)).data.map((task) => task.title).sort(), ["Ask Mark to sign", "Sam onboarding prep"]);
 
     await updateTask(owner, mine.id, { dueAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), remindMinutes: 15 });
     assert.deepEqual(

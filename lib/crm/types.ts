@@ -432,6 +432,7 @@ export type TaskListQuery = {
   query?: string;
   view?: TaskView;
   mine?: boolean;
+  tagged?: boolean;
   companyId?: string;
   contactId?: string;
   ownerId?: string | "unassigned";

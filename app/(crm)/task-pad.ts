@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
 import { createTaskWithClickUp } from "@/lib/crm/clickup";
+import { isUuid } from "@/lib/crm/mutate";
 import { isReminderMinutes } from "@/lib/crm/reminder-options";
 import { detectPadRecords, parsePadWithAi, type PadAiParse, type PadDetection } from "@/lib/crm/task-pad";
 import { TASKS_PATH } from "@/lib/crm/task-views";
@@ -33,6 +34,7 @@ export async function addPadTaskAction(input: {
   companyId: string | null;
   contactId: string | null;
   clickupListId: string | null;
+  ownerId?: string | null;
 }): Promise<{ ok?: boolean; error?: string; warning?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
@@ -46,6 +48,7 @@ export async function addPadTaskAction(input: {
         remindMinutes: dueAt && isReminderMinutes(input.remindMinutes) ? input.remindMinutes : null,
         companyId: input.companyId || null,
         contactId: input.contactId || null,
+        ownerId: typeof input.ownerId === "string" && isUuid(input.ownerId) ? input.ownerId : user.userId,
         priority: "normal",
       },
       input.clickupListId || null,

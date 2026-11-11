@@ -36,6 +36,7 @@ import {
   type WorkspaceLookup,
 } from "@/lib/extension/protocol";
 import { appTimeZone, startOfDay, zonedParts } from "@/lib/time";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 const INTERACTION_TYPES = ["email", "meeting", "call", "linkedin"];
 const ACTIVITY_KINDS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", linkedin: "LinkedIn" };
@@ -132,7 +133,7 @@ async function openTasks(db: Db, workspaceId: string, companyId: string | null, 
   const result = await db.query<TaskRow & { total: number }>(
     `select t.id, t.title, t.due_at, count(*) over ()::int as total
      from crm.tasks t
-     where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null
+     where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null and ${directTaskSql("t")}
        and (($2::uuid is not null and t.company_id = $2) or ($3::uuid is not null and t.contact_id = $3))
      order by t.due_at asc nulls last, t.created_at asc
      limit 5`,

@@ -17,6 +17,7 @@ import {
 } from "@/lib/workflows/definition";
 import { executeRun, type RunEvent, type RunState } from "@/lib/workflows/engine";
 import { starterTemplate } from "@/lib/workflows/templates";
+import { directTaskSql } from "@/lib/crm/task-access";
 
 export type WorkflowStatus = "draft" | "active" | "paused";
 
@@ -321,7 +322,7 @@ async function testEvent(actor: UserActor, definition: WorkflowDefinition, recor
     }
     if (trigger.type === "task_completed") {
       const found = await db.query<{ id: string }>(
-        `select id from crm.tasks where workspace_id = $1 and ${column} = $2 order by coalesce(completed_at, created_at) desc limit 1`,
+        `select t.id from crm.tasks t where t.workspace_id = $1 and t.${column} = $2 and ${directTaskSql("t")} order by coalesce(t.completed_at, t.created_at) desc limit 1`,
         [actor.workspaceId, record.id],
       );
       if (!found.rows[0]) throw new CrmError("invalid_input", `There's no task on this ${record.type} to test with.`, 400);
