@@ -6,6 +6,7 @@ import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseCha
 import {
   appendCards,
   chatReducer,
+  newerCursor,
   refreshCards,
   EMPTY_CHAT,
   lastOwnMessage,
@@ -267,8 +268,10 @@ describe("chat review fixes", () => {
     );
     assert.equal(loading.timelines[ROOM].stale, true);
     loading = chatReducer(loading, { type: "page", conversationId: ROOM, page: page([other]), mode: "newer" });
-    assert.equal(loading.timelines[ROOM].stale, false);
+    assert.equal(loading.timelines[ROOM].stale, true);
     assert.equal(loading.timelines[ROOM].messages.length, 2);
+    loading = chatReducer(loading, { type: "page", conversationId: ROOM, page: page([]), mode: "newer" });
+    assert.equal(loading.timelines[ROOM].stale, false);
   });
 
   it("keeps your copy until the latest page loads when later messages are still unloaded", () => {
@@ -346,5 +349,47 @@ describe("chat review fixes", () => {
       appendCards([a], [a, b]).map((item) => item.root.id),
       [a.root.id, b.root.id],
     );
+  });
+
+  it("catches up from before your own send when it lands without a live connection", () => {
+    const m1 = message({ at: "2026-11-11T09:01:00.000Z" });
+    const m2 = message({ at: "2026-11-11T09:02:00.000Z" });
+    let state = loaded([m1, m2]);
+    state = chatReducer(state, { type: "pending", message: mine("sync-1", "2026-11-11T09:05:00.000Z") });
+    const echo = message({ at: "2026-11-11T09:05:00.000Z", author: { id: ME, name: "Mark" }, clientKey: "sync-1" });
+    state = chatReducer(state, { type: "incoming", message: echo, root: null, unsynced: true });
+    assert.equal(state.timelines[ROOM].stale, true);
+    assert.equal(newerCursor(state.timelines[ROOM]), m2.id);
+    const missed = message({ at: "2026-11-11T09:03:00.000Z" });
+    state = chatReducer(state, { type: "page", conversationId: ROOM, page: page([missed, echo]), mode: "newer" });
+    assert.deepEqual(
+      state.timelines[ROOM].messages.map((item) => item.id),
+      [m1.id, m2.id, missed.id, echo.id],
+    );
+    assert.equal(newerCursor(state.timelines[ROOM]), echo.id);
+  });
+
+  it("refetches a live message that arrives while later pages are loading, and never resurrects a deleted one", () => {
+    const m1 = message({ at: "2026-11-11T09:01:00.000Z" });
+    let state = loaded([m1], { hasNewer: true });
+    const live = message({ at: "2026-11-11T09:30:00.000Z" });
+    state = chatReducer(state, { type: "incoming", message: live, root: null });
+    assert.equal(state.timelines[ROOM].stale, true);
+    const ghost = message({ at: "2026-11-11T09:10:00.000Z" });
+    state = chatReducer(state, { type: "deleted", conversationId: ROOM, messageId: ghost.id, parentId: null, root: null });
+    state = chatReducer(state, { type: "page", conversationId: ROOM, page: page([ghost], { hasNewer: false }), mode: "newer" });
+    assert.ok(!state.timelines[ROOM].messages.some((item) => item.id === ghost.id));
+    state = chatReducer(state, { type: "incoming", message: ghost, root: null });
+    assert.ok(!state.timelines[ROOM].messages.some((item) => item.id === ghost.id));
+  });
+
+  it("drops a failed Threads card reply once its text is back in the composer", () => {
+    const root = "66666666-6666-4666-8666-666666666666";
+    const reply = localMessage({ clientKey: "card-2", conversationId: ROOM, parentId: root, author: { id: ME, name: "Mark" }, body: "Hi", mentions: [], at: "2026-11-11T09:00:00.000Z" });
+    let state = chatReducer(EMPTY_CHAT, { type: "pending", message: reply });
+    state = chatReducer(state, { type: "failed", clientKey: "card-2", error: "Couldn't send. Try again." });
+    state = chatReducer(state, { type: "discard", message: reply });
+    assert.equal(state.threads[root].timeline.messages.length, 0);
+    assert.equal(state.failed["card-2"], undefined);
   });
 });

@@ -7,6 +7,7 @@ import { useChat, type ChatPane } from "@/components/chat/chat-context";
 import { dayLabel, dayOf } from "@/lib/chat/format";
 import { isLocal, startsGroup } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
+import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
 const EDGE_PX = 240;
@@ -25,6 +26,7 @@ export default function MessageList({
   dividerId,
   days,
   pane,
+  align = "end",
   hasOlder,
   hasNewer,
   focusId,
@@ -42,6 +44,7 @@ export default function MessageList({
   dividerId: string | null;
   days: boolean;
   pane: ChatPane;
+  align?: "start" | "end";
   hasOlder: boolean;
   hasNewer: boolean;
   focusId: string | null;
@@ -63,7 +66,7 @@ export default function MessageList({
   const signal = useRef(bottomSignal);
   const [far, setFar] = useState(false);
   const [unseen, setUnseen] = useState(false);
-  const [announcement, setAnnouncement] = useState("");
+  const [announcement, setAnnouncement] = useState({ text: "", count: 0 });
   const [highlight, setHighlight] = useState<string | null>(focusId);
   const bottomRef = useRef(onBottom);
   const edges = useRef({ hasOlder, hasNewer, onOlder, onNewer });
@@ -94,6 +97,19 @@ export default function MessageList({
     if (distance < EDGE_PX && edges.current.hasNewer) edges.current.onNewer();
   }, [report]);
 
+  const target = useRef({ focusId, dividerId, ready });
+  useLayoutEffect(() => {
+    target.current = { focusId, dividerId, ready };
+  });
+
+  const place = useCallback((node: HTMLElement) => {
+    placed.current = true;
+    const { focusId: focus, dividerId: divider } = target.current;
+    const element = focus ? node.querySelector<HTMLElement>(`[data-chat-message="${focus}"]`) : divider ? node.querySelector<HTMLElement>("[data-chat-divider]") : null;
+    if (element) node.scrollTop = Math.max(0, element.offsetTop - (focus ? node.clientHeight / 3 : 24));
+    else node.scrollTop = node.scrollHeight;
+  }, []);
+
   const first = messages[0]?.id ?? null;
   const last = messages[messages.length - 1] ?? null;
 
@@ -111,11 +127,7 @@ export default function MessageList({
     const previous = snapshot.current;
     let arrived: ChatMessage | null = null;
     if (ready && !placed.current) {
-      placed.current = true;
-      const target = focusId ?? dividerId;
-      const element = target ? node.querySelector<HTMLElement>(focusId ? `[data-chat-message="${focusId}"]` : "[data-chat-divider]") : null;
-      if (element) node.scrollTop = Math.max(0, element.offsetTop - (focusId ? node.clientHeight / 3 : 24));
-      else node.scrollTop = node.scrollHeight;
+      place(node);
     } else if (ready) {
       const prepended = first !== previous.first && previous.first !== null && messages.some((message) => message.id === previous.first);
       const appended = (last?.id ?? null) !== previous.last;
@@ -131,14 +143,15 @@ export default function MessageList({
     report(node);
     if (arrived) {
       const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
-      setAnnouncement(`New message from ${arrived.author.name}`);
+      const name = arrived.author.name;
+      setAnnouncement((current) => ({ text: `New message from ${name}`, count: current.count + 1 }));
       if (distance >= BOTTOM_PX) setUnseen(true);
     }
     if (!ready) return;
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
     if (hasOlder && node.scrollTop < EDGE_PX) edges.current.onOlder();
     if (hasNewer && distance < EDGE_PX) edges.current.onNewer();
-  }, [messages, first, last, ready, focusId, dividerId, viewer.id, hasNewer, hasOlder, bottomSignal, report]);
+  }, [messages, first, last, ready, focusId, dividerId, viewer.id, hasNewer, hasOlder, bottomSignal, report, place]);
 
   useEffect(() => {
     const node = scroller.current;
@@ -151,14 +164,16 @@ export default function MessageList({
         return;
       }
       const wasHidden = snapshot.current.hidden;
-      if (snapshot.current.atBottom) node.scrollTop = node.scrollHeight;
+      if (!placed.current) {
+        if (target.current.ready) place(node);
+      } else if (snapshot.current.atBottom) node.scrollTop = node.scrollHeight;
       else if (wasHidden) node.scrollTop = snapshot.current.top;
       report(node);
     });
     observer.observe(node);
     observer.observe(inner);
     return () => observer.disconnect();
-  }, [report]);
+  }, [report, place]);
 
   useEffect(() => {
     if (!highlight) return;
@@ -204,7 +219,7 @@ export default function MessageList({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={scroller} onScroll={measure} onKeyDown={onKeyDown} role="log" aria-label={label} aria-live="off" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div ref={content} className="flex min-h-full flex-col justify-end pt-3 pb-2">
+        <div ref={content} className={cn("flex min-h-full flex-col pt-3 pb-2", align === "end" ? "justify-end" : "justify-start")}>
           {hasOlder && ready && (
             <p className="caption-style text-subtle py-2 text-center" role="status">
               Loading earlier messages…
@@ -233,7 +248,8 @@ export default function MessageList({
         </div>
       </div>
       <span role="status" aria-live="polite" className="sr-only">
-        {announcement}
+        {announcement.text}
+        {announcement.count % 2 === 1 ? "\u00a0" : ""}
       </span>
       {(far || hasNewer || unseen) && ready && (
         <Button

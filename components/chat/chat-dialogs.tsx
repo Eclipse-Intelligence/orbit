@@ -213,6 +213,7 @@ export function NewMessageDialog({ open, onOpenChange, onOpened }: { open: boole
               setHighlight(0);
             }}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               if ((event.key === "ArrowDown" || event.key === "ArrowUp") && options.length > 0) {
                 event.preventDefault();
                 setHighlight((active + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length);

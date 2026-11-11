@@ -53,8 +53,8 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
   async function save() {
     if (!value.trim() || saving) return;
     setSaving(true);
-    done();
-    await edit(message, value, mentions);
+    if (await edit(message, value, mentions)) done();
+    else setSaving(false);
   }
 
   return (

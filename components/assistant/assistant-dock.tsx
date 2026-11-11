@@ -616,7 +616,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const router = useRouter();
   const pathname = usePathname();
   const { mac } = useShortcuts();
-  const { covered, lift } = useScreenState();
+  const { covered, lift, tucked } = useScreenState();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
@@ -1188,7 +1188,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
 
   if (!open) {
     return (
-      <div style={position} className={cn(placement, "transition-[bottom] duration-200 ease-power3-out", covered && "invisible")}>
+      <div style={position} className={cn(placement, "transition-[bottom] duration-200 ease-power3-out", (covered || tucked) && "invisible")}>
         <button
           type="button"
           onClick={expand}

@@ -195,8 +195,7 @@ export default function MentionInput({
         >
           <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option.name}</span>
           <span className="caption-style text-subtle w-full truncate">
-            {KIND_LABELS[option.kind]}
-            {option.detail ? ` · ${option.detail}` : ""}
+            {option.kind === "member" && option.detail ? option.detail : `${KIND_LABELS[option.kind]}${option.detail ? ` · ${option.detail}` : ""}`}
           </span>
         </button>
       </li>
@@ -206,8 +205,20 @@ export default function MentionInput({
   useLayoutEffect(() => {
     const node = inputRef.current;
     if (!autoSize || !node) return;
-    node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, autoSize)}px`;
+    const fit = () => {
+      node.style.height = "auto";
+      node.style.height = `${Math.min(node.scrollHeight, autoSize)}px`;
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    let width = node.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (node.clientWidth === width) return;
+      width = node.clientWidth;
+      fit();
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
   }, [autoSize, value, inputRef]);
 
   useLayoutEffect(() => {

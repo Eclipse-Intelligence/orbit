@@ -10,9 +10,30 @@ import { addRoomMembersAction, leaveRoomAction, removeRoomMemberAction, updateRo
 import { ChatAvatar, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar } from "@/components/chat/chat-live";
 import { usePeople } from "@/components/chat/chat-dialogs";
+import { workspaceRolesAction } from "@/app/(crm)/chat/roles";
+import type { WorkspaceRole } from "@/lib/crm/types";
 import PeopleField, { pickerOpen, type ChatCandidate } from "@/components/chat/people-field";
 import { CHAT_ROOM_NAME_MAX, type ChatRoom } from "@/lib/chat/types";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
+
+const ROLE_LABELS: Record<WorkspaceRole, string> = { owner: "Owner", admin: "Admin", member: "Member" };
+
+function useRoles(open: boolean, workspaceId: string | null) {
+  const [loaded, setLoaded] = useState<{ workspaceId: string; roles: Record<string, WorkspaceRole> } | null>(null);
+  useEffect(() => {
+    if (!open || !workspaceId) return;
+    let live = true;
+    void workspaceRolesAction(workspaceId)
+      .then((result) => {
+        if (live && "roles" in result) setLoaded({ workspaceId, roles: result.roles });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [open, workspaceId]);
+  return loaded && loaded.workspaceId === workspaceId ? loaded.roles : {};
+}
 
 function RoomHooksPlaceholder() {
   return (
@@ -21,13 +42,14 @@ function RoomHooksPlaceholder() {
         <h3 id="room-hooks" className="flex-1">
           Incoming webhooks
         </h3>
-        <Button variant="secondary" size="sm" disabled aria-disabled title="Not available yet" className="max-md:h-11">
+        <Button variant="secondary" size="sm" disabled aria-describedby="room-hooks-note" className="max-md:h-11">
           <PlusIcon aria-hidden className="size-3" />
           Add incoming webhook
-          <span className="sr-only">, not available yet</span>
         </Button>
       </div>
-      <p className="caption-style text-subtle">Not available yet.</p>
+      <p id="room-hooks-note" className="caption-style text-subtle">
+        Not available yet.
+      </p>
     </section>
   );
 }
@@ -69,6 +91,7 @@ export default function RoomSettings({
     }
   }
   const people = usePeople(open && addOpen, conversation.workspaceId);
+  const roles = useRoles(open, conversation.workspaceId);
   useEffect(() => {
     if (!status) return;
     const timer = window.setTimeout(() => setStatus(null), 2000);
@@ -226,7 +249,8 @@ export default function RoomSettings({
               <ul className="flex flex-col">
                 {room.members.map((member) => {
                   const you = member.id === viewer.id;
-                  const notes = [you ? "You" : null, member.id === room.createdBy ? "Created the room" : null].filter(Boolean).join(" · ");
+                  const role = roles[member.id];
+                  const notes = [you ? "You" : null, member.id === room.createdBy ? "Created the room" : null, role ? ROLE_LABELS[role] : null].filter(Boolean).join(" · ");
                   return (
                     <li key={member.id} className="flex items-center gap-2.5 py-1.5">
                       <ChatAvatar person={{ id: member.id, name: member.name }} size="lg" />

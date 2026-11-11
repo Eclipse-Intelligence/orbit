@@ -2,9 +2,9 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "react";
 import { deleteMessageAction, editMessageAction, postMessageAction } from "@/app/(crm)/chat/actions";
-import { refreshChatSidebar } from "@/components/chat/chat-live";
+import { chatJoined, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
-import { isLocal, newestServerId, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
+import { isLocal, newerCursor, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
 import { encodeMentions, mentionsIn, type Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -41,10 +41,19 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
   const inflight = useRef(new Set<string>());
   const reads = useRef(new Map<string, string | null>());
 
+  const repeat = useRef(new Set<string>());
   const once = useCallback((key: string, work: () => Promise<void>) => {
-    if (inflight.current.has(key)) return;
+    if (inflight.current.has(key)) {
+      repeat.current.add(key);
+      return;
+    }
     inflight.current.add(key);
-    void work().finally(() => inflight.current.delete(key));
+    const run = (): Promise<void> =>
+      work().finally(() => {
+        if (!repeat.current.delete(key)) return;
+        return run();
+      });
+    void run().finally(() => inflight.current.delete(key));
   }, []);
 
   const loadRoom = useCallback(
@@ -64,7 +73,7 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
       once(`messages:${conversationId}:${mode}:${mode === "latest" ? (around ?? "") : ""}`, async () => {
         const timeline = latest.current.timelines[conversationId];
         const before = mode === "older" ? oldestServerId(timeline?.messages ?? []) : null;
-        const after = mode === "newer" ? newestServerId(timeline?.messages ?? []) : null;
+        const after = mode === "newer" ? newerCursor(timeline) : null;
         if (mode === "older" && !before) return;
         if (mode === "newer" && !after && timeline?.status !== "ready") return;
         const effective = mode === "newer" && !after ? "latest" : mode;
@@ -85,7 +94,7 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
         const thread = latest.current.threads[rootId];
         const messages = thread?.timeline.messages ?? [];
         const before = mode === "older" ? oldestServerId(messages) : null;
-        const after = mode === "newer" ? newestServerId(messages) : null;
+        const after = mode === "newer" ? newerCursor(thread?.timeline) : null;
         if (mode === "older" && !before) return;
         const effective = mode === "newer" && (!after || !thread?.root) ? "latest" : mode;
         if (effective === "latest") dispatch({ type: "thread-loading", rootId });
@@ -106,7 +115,7 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
         error: SEND_FAILED,
       }));
       if ("ok" in result && result.ok) {
-        dispatch({ type: "incoming", message: result.message, root: result.root });
+        dispatch({ type: "incoming", message: result.message, root: result.root, unsynced: !chatJoined() });
         const key = draftKey(userId, message.conversationId, message.parentId);
         const draft = readDraft(key);
         if (draft.text && messageBody(draft.text, draft.mentions) === message.body) writeDraft(key, { text: "", mentions: [] });

@@ -12,6 +12,8 @@ export type Timeline = {
   status: "loading" | "ready" | "error";
   error: string | null;
   stale: boolean;
+  after: string | null;
+  gone: string[];
 };
 
 export type ThreadState = {
@@ -40,7 +42,7 @@ export type ChatAction =
   | { type: "thread-loading"; rootId: string }
   | { type: "thread"; thread: ChatThread; mode: PageMode }
   | { type: "thread-error"; rootId: string; error: string }
-  | { type: "incoming"; message: ChatMessage; root: ChatRoot | null }
+  | { type: "incoming"; message: ChatMessage; root: ChatRoot | null; unsynced?: boolean }
   | { type: "edited"; message: ChatMessage }
   | { type: "deleted"; conversationId: string; messageId: string; parentId: string | null; root: ChatRoot | null }
   | { type: "pending"; message: ChatMessage }
@@ -54,7 +56,7 @@ export type ChatAction =
 export const EMPTY_CHAT: ChatState = { rooms: {}, roomErrors: {}, timelines: {}, threads: {}, failed: {} };
 
 export function emptyTimeline(status: Timeline["status"] = "loading"): Timeline {
-  return { messages: [], hasOlder: false, hasNewer: false, firstUnreadId: null, lastReadAt: null, status, error: null, stale: false };
+  return { messages: [], hasOlder: false, hasNewer: false, firstUnreadId: null, lastReadAt: null, status, error: null, stale: false, after: null, gone: [] };
 }
 
 export function localId(clientKey: string) {
@@ -138,23 +140,45 @@ export function removeRoot(list: ChatMessage[], id: string) {
   return list.filter((message) => message.id !== id);
 }
 
+const GONE_KEPT = 50;
+
+function withoutGone(messages: ChatMessage[], gone: string[]) {
+  return gone.reduce((list, id) => removeRoot(list, id), messages);
+}
+
 function withPage(current: Timeline | undefined, page: { messages: ChatMessage[]; hasOlder: boolean; hasNewer: boolean }, mode: PageMode): Timeline {
   const base = current ?? emptyTimeline();
   const landed = new Set(page.messages.map((message) => message.clientKey).filter((key): key is string => Boolean(key)));
   const unsent = (message: ChatMessage) => isLocal(message) && !(message.clientKey && landed.has(message.clientKey));
   if (mode === "replace") {
-    return { ...base, messages: mergeMessages(page.messages, base.messages.filter(unsent)), hasOlder: page.hasOlder, hasNewer: page.hasNewer, status: "ready", error: null };
+    return {
+      ...base,
+      messages: withoutGone(mergeMessages(page.messages, base.messages.filter(unsent)), base.gone),
+      hasOlder: page.hasOlder,
+      hasNewer: page.hasNewer,
+      status: "ready",
+      error: null,
+      after: null,
+    };
   }
   const kept = base.messages.filter((message) => !isLocal(message) || unsent(message));
+  const known = new Set(base.messages.map((message) => message.id));
+  const caughtUp = mode === "newer" && !page.hasNewer && page.messages.every((message) => known.has(message.id));
   return {
     ...base,
-    messages: mergeMessages(kept, page.messages),
+    messages: withoutGone(mergeMessages(kept, page.messages), base.gone),
     hasOlder: mode === "older" ? page.hasOlder : base.hasOlder,
     hasNewer: mode === "newer" ? page.hasNewer : base.hasNewer,
-    stale: mode === "newer" ? false : base.stale,
+    stale: caughtUp ? false : base.stale,
+    after: mode === "newer" ? null : base.after,
     status: "ready",
     error: null,
   };
+}
+
+export function newerCursor(timeline: Timeline | undefined) {
+  if (!timeline) return null;
+  return timeline.after ?? newestServerId(timeline.messages);
 }
 
 function updateTimeline(state: ChatState, conversationId: string, update: (timeline: Timeline) => Timeline) {
@@ -187,15 +211,25 @@ function hasLocalKey(timeline: Timeline, key: string | null) {
   return Boolean(key) && timeline.messages.some((item) => isLocal(item) && item.clientKey === key);
 }
 
-export function acceptIncoming(timeline: Timeline, message: ChatMessage): Timeline {
+function markStale(timeline: Timeline) {
+  return timeline.stale ? timeline : { ...timeline, stale: true };
+}
+
+export function acceptIncoming(timeline: Timeline, message: ChatMessage, unsynced = false): Timeline {
+  if (timeline.gone.includes(message.id)) return timeline;
   if (timeline.messages.some((item) => item.id === message.id)) return { ...timeline, messages: replaceMessage(timeline.messages, message) };
   if (hasLocalKey(timeline, message.clientKey)) {
-    if (timeline.hasNewer) return timeline.stale ? timeline : { ...timeline, stale: true };
-    return { ...timeline, messages: upsertMessage(timeline.messages, message) };
+    if (timeline.hasNewer) return markStale(timeline);
+    const messages = upsertMessage(timeline.messages, message);
+    if (!unsynced) return { ...timeline, messages };
+    return { ...timeline, messages, stale: true, after: timeline.after ?? newestServerId(timeline.messages) };
   }
   if (timeline.status === "ready" && !timeline.hasNewer) return { ...timeline, messages: upsertMessage(timeline.messages, message) };
-  if (timeline.status !== "ready") return timeline.stale ? timeline : { ...timeline, stale: true };
-  return timeline;
+  return markStale(timeline);
+}
+
+function forgetMessage(timeline: Timeline, id: string) {
+  return { ...timeline, gone: [...timeline.gone.filter((item) => item !== id), id].slice(-GONE_KEPT) };
 }
 
 export function hasLocal(state: ChatState, clientKey: string) {
@@ -205,14 +239,14 @@ export function hasLocal(state: ChatState, clientKey: string) {
   );
 }
 
-function incoming(state: ChatState, message: ChatMessage, root: ChatRoot | null) {
+function incoming(state: ChatState, message: ChatMessage, root: ChatRoot | null, unsynced: boolean) {
   let next = withoutFailure(state, message.clientKey);
   if (message.parentId) {
-    next = updateThread(next, message.parentId, (thread) => ({ ...thread, root: rootFields(thread.root, root), timeline: acceptIncoming(thread.timeline, message) }));
+    next = updateThread(next, message.parentId, (thread) => ({ ...thread, root: rootFields(thread.root, root), timeline: acceptIncoming(thread.timeline, message, unsynced) }));
     if (root) next = updateTimeline(next, message.conversationId, (timeline) => ({ ...timeline, messages: applyRoot(timeline.messages, root) }));
     return next;
   }
-  return updateTimeline(next, message.conversationId, (timeline) => acceptIncoming(timeline, message));
+  return updateTimeline(next, message.conversationId, (timeline) => acceptIncoming(timeline, message, unsynced));
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -228,7 +262,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const current = state.timelines[action.conversationId];
       return {
         ...state,
-        timelines: { ...state.timelines, [action.conversationId]: current ? { ...current, status: current.status === "error" ? "loading" : current.status, error: null } : emptyTimeline() },
+        timelines: { ...state.timelines, [action.conversationId]: current ? { ...current, status: current.status === "error" ? "loading" : current.status, error: null, stale: false } : emptyTimeline() },
       };
     }
     case "page": {
@@ -245,7 +279,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "thread-loading": {
       const current = state.threads[action.rootId];
       const thread: ThreadState = current
-        ? { ...current, timeline: { ...current.timeline, status: current.timeline.status === "error" || !current.root ? "loading" : current.timeline.status, error: null } }
+        ? { ...current, timeline: { ...current.timeline, status: current.timeline.status === "error" || !current.root ? "loading" : current.timeline.status, error: null, stale: false } }
         : { conversation: null, root: null, following: false, timeline: emptyTimeline() };
       return { ...state, threads: { ...state.threads, [action.rootId]: thread } };
     }
@@ -267,7 +301,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, threads: { ...state.threads, [action.rootId]: { ...current, timeline: { ...current.timeline, status, error: action.error } } } };
     }
     case "incoming":
-      return incoming(state, action.message, action.root);
+      return incoming(state, action.message, action.root, action.unsynced === true);
     case "edited": {
       const { message } = action;
       let next = updateTimeline(state, message.conversationId, (timeline) => {
@@ -292,15 +326,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         let next = updateThread(state, parentId, (thread) => ({
           ...thread,
           root: rootFields(thread.root, root, true),
-          timeline: { ...thread.timeline, messages: thread.timeline.messages.filter((message) => message.id !== messageId) },
+          timeline: forgetMessage({ ...thread.timeline, messages: thread.timeline.messages.filter((message) => message.id !== messageId) }, messageId),
         }));
         if (root) next = updateTimeline(next, conversationId, (timeline) => ({ ...timeline, messages: applyRoot(timeline.messages, root, true) }));
         return next;
       }
-      const next = updateTimeline(state, conversationId, (timeline) => {
-        const messages = removeRoot(timeline.messages, messageId);
-        return messages === timeline.messages ? timeline : { ...timeline, messages };
-      });
+      const next = updateTimeline(state, conversationId, (timeline) => forgetMessage({ ...timeline, messages: removeRoot(timeline.messages, messageId) }, messageId));
       return updateThread(next, messageId, (thread) => (thread.root ? { ...thread, root: { ...thread.root, body: "", mentions: [], deletedAt: thread.root.deletedAt ?? new Date().toISOString() } } : thread));
     }
     case "pending": {

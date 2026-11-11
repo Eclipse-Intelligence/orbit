@@ -28,6 +28,7 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
   const root = thread?.root ?? null;
   const where = thread?.conversation ?? conversation;
   const place = where ? (where.kind === "dm" ? where.name : roomLabel(where)) : "";
+  const backLabel = where ? (where.kind === "dm" ? where.name : `# ${where.name}`) : "Chat";
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
   if (ready && !divider.ready) setDivider({ ready: true, id: firstUnreadReply(messages, timeline?.lastReadAt ?? null, viewer.id) });
 
@@ -59,9 +60,7 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" role="region" aria-labelledby={`thread-${rootId}`}>
       <header className="border-line-subtle flex h-[52px] shrink-0 items-center gap-2 border-b pr-3 pl-4 max-md:h-auto max-md:border-border max-md:px-3 max-md:py-2.5">
-        <span className="md:hidden">
-          <PhoneBack label={place || "Chat"} onClick={onClose} />
-        </span>
+        <PhoneBack label={backLabel} onClick={onClose} />
         <div className="flex min-w-0 flex-col gap-1 max-md:flex-1 max-md:items-center">
           <h3 id={`thread-${rootId}`} ref={heading} tabIndex={-1} className="outline-none">
             Thread
@@ -90,6 +89,7 @@ export default function ThreadPanel({ rootId, thread, conversation, onClose }: {
           dividerId={divider.id}
           days={false}
           pane="thread"
+          align="start"
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={null}

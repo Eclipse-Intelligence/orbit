@@ -109,6 +109,7 @@ function bottomLift() {
 export function useScreenState() {
   const [covered, setCovered] = useState(false);
   const [lift, setLift] = useState(0);
+  const [tucked, setTucked] = useState(false);
 
   useEffect(() => {
     let frame = 0;
@@ -118,6 +119,7 @@ export function useScreenState() {
     function measure() {
       frame = 0;
       setCovered(modalOpen());
+      setTucked(document.querySelector("[data-quick-add-hide]") !== null);
       const nodes = [...document.querySelectorAll<HTMLElement>("[data-quick-add-avoid]")];
       if (nodes.length !== watched.length || nodes.some((node, index) => node !== watched[index])) {
         resize.disconnect();
@@ -136,7 +138,7 @@ export function useScreenState() {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-state", "data-quick-add-avoid"],
+      attributeFilter: ["data-state", "data-quick-add-avoid", "data-quick-add-hide"],
     });
     window.addEventListener("resize", schedule);
     schedule();
@@ -148,7 +150,7 @@ export function useScreenState() {
     };
   }, []);
 
-  return { covered, lift };
+  return { covered, lift, tucked };
 }
 
 export default function QuickAdd({ viewerId }: { viewerId: string }) {
@@ -162,7 +164,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   const [notice, setNotice] = useState<(QuickAddNotice & { id: number }) | null>(null);
   const [opening, setOpening] = useState(0);
   const choosing = useRef(false);
-  const { covered, lift } = useScreenState();
+  const { covered, lift, tucked } = useScreenState();
 
   const loadSetup = useCallback(() => {
     quickAddSetupAction().then(setSetup, () => undefined);
@@ -255,7 +257,10 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
               aria-label="Quick add"
               aria-keyshortcuts="q"
               title="Quick add (Q)"
-              className="bg-primary text-primary-foreground focus-visible:ring-ring/60 ease-power3-out pointer-events-auto flex size-12 cursor-pointer items-center justify-center rounded-full shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] transition-[background-color,transform] duration-150 outline-none hover:bg-[#4b30ff] focus-visible:ring-2 active:scale-95 data-[state=open]:rotate-45"
+              className={cn(
+                "bg-primary text-primary-foreground focus-visible:ring-ring/60 ease-power3-out pointer-events-auto flex size-12 cursor-pointer items-center justify-center rounded-full shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] transition-[background-color,transform] duration-150 outline-none hover:bg-[#4b30ff] focus-visible:ring-2 active:scale-95 data-[state=open]:rotate-45",
+                tucked && !menuOpen && "invisible",
+              )}
             >
               <PlusIcon aria-hidden className="size-5" />
             </button>
