@@ -344,7 +344,7 @@ function changedSince(label: string, value: unknown, field: string, names: Map<s
   return `Can't undo: ${label} has changed since (now ${shownValue(field, value, names)}).`;
 }
 
-function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, before: Record<string, unknown>, fields: string[], provenance: Provenance, since: string | null = null) {
+function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, before: Record<string, unknown>, fields: string[], provenance: Provenance, undoing: string | null = null) {
   const plain = fields.filter((field) => !RELATIONSHIP_FIELDS.has(field) && field !== "completedAt");
   const write = Object.fromEntries(plain.map((field) => [field, before[field] ?? null]));
   return async () => {
@@ -355,7 +355,7 @@ function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, bef
     }
     if (entity === "task" && (plain.length > 0 || fields.includes("completedAt"))) {
       const completedAt = fields.includes("completedAt") ? ((before.completedAt as string | null) ?? null) : undefined;
-      await restoreTaskInDb(db, actor, id, write as TaskWrite, completedAt, provenance, since);
+      await restoreTaskInDb(db, actor, id, write as TaskWrite, completedAt, provenance, undoing);
     }
     if ((entity === "company" || entity === "contact") && fields.some((field) => RELATIONSHIP_FIELDS.has(field))) {
       const label = before.relationshipOverride;
@@ -504,7 +504,7 @@ async function describeEvent(
       if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
     }
-    run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance, iso(event.created_at));
+    run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance, changes?.taggedAssigner === true ? event.id : null);
   } else if (updateEntity) {
     return refuse(`Changed ${noun} ${entityName}`, "This change can't be undone.");
   } else if (event.event_type === "opportunity.stage_changed" && before && after && typeof before.stageId === "string") {

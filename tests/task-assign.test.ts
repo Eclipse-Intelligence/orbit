@@ -475,6 +475,26 @@ describe("task access edges", () => {
     const recent = await listRecentChanges(ada);
     assert.ok(!recent.some((change) => change.type.startsWith("task.participant_")));
 
+    const readded = (await createTask(sam, { title: "Ada untags and tags again" })).body.task;
+    await updateTask(ada, readded.id, { ownerId: priya.userId });
+    const reassigned = await lastEvent(readded.id, ada, "task.updated");
+    assert.deepEqual((await sql<{ tagged: boolean }>("select (changes ->> 'taggedAssigner')::boolean as tagged from crm.audit_events where id = $1", [reassigned]))[0].tagged, true);
+    assert.equal(await removeTaskParticipant(ada, readded.id, ada.userId), true);
+    await addTaskParticipants(ada, readded.id, [ada.userId]);
+    await undoAuditEvent(ada, reassigned, { operation: "undo_change" });
+    assert.equal((await getTask(ada, readded.id)).ownerId, sam.userId);
+    assert.deepEqual((await listTaskParticipants(ada, [readded.id]))[readded.id], [ada.userId]);
+
+    const ownRow = (await createTask(mark, { title: "Hidden assignee row", ownerId: sam.userId })).body.task;
+    await addTaskParticipants(mark, ownRow.id, [priya.userId]);
+    await updateTask(mark, ownRow.id, { ownerId: priya.userId });
+    assert.equal(await removeTaskParticipant(mark, ownRow.id, priya.userId), false);
+    assert.equal(await removeTaskParticipant(priya, ownRow.id, priya.userId), false);
+    const hiddenRemovals = await sql<{ n: number }>("select count(*)::int as n from crm.audit_events where entity_id = $1 and event_type = 'task.participant_removed'", [ownRow.id]);
+    assert.equal(hiddenRemovals[0].n, 0);
+    await updateTask(mark, ownRow.id, { ownerId: sam.userId });
+    assert.ok((await listTasks(priya, { tagged: true })).data.some((item) => item.id === ownRow.id));
+
     const followed = (await createTask(sam, { title: "Ada already follows" })).body.task;
     await addTaskParticipants(ada, followed.id, [ada.userId]);
     await updateTask(ada, followed.id, { ownerId: priya.userId });

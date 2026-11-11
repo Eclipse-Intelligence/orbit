@@ -263,9 +263,9 @@ async function keepAssignerTagged(
   nextOwner: string | null,
   provenance: Provenance | undefined,
 ) {
-  if (actor.type !== "user" || nextOwner === actor.userId || nextOwner === previousOwner) return;
-  if (nextOwner === null && canChangeTask(actor, { ownerId: null, createdByUserId: task.createdByUserId })) return;
-  await tagInDb(db, actor, task, [actor.userId], provenance);
+  if (actor.type !== "user" || nextOwner === actor.userId || nextOwner === previousOwner) return false;
+  if (nextOwner === null && canChangeTask(actor, { ownerId: null, createdByUserId: task.createdByUserId })) return false;
+  return (await tagInDb(db, actor, task, [actor.userId], provenance)).length > 0;
 }
 
 async function readTask(db: Db, id: string) {
@@ -337,7 +337,7 @@ async function applyTask(
   current: TaskRow,
   write: PreparedTask,
   provenance: Provenance | undefined,
-  options: { restoring?: boolean; since?: string | null } = {},
+  options: { restoring?: boolean; undoing?: string | null } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const links = await resolveLinks(
@@ -374,10 +374,9 @@ async function applyTask(
   if (change.sets.length === 0) return { task: before, changed: false };
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
   const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
-  if (reassigning) {
-    if (!options.restoring && !silent(provenance)) {
-      await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
-    }
+  let taggedAssigner = false;
+  if (reassigning && !options.restoring && !silent(provenance)) {
+    taggedAssigner = await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
   }
   change.values.push(current.id);
   let updated = 0;
@@ -395,12 +394,14 @@ async function applyTask(
   const saved = await readTask(db, current.id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
-  if (reassigning && options.restoring && options.since && actor.type === "user" && canChangeTask(actor, task) && !silent(provenance)) {
+  if (reassigning && options.restoring && options.undoing && actor.type === "user" && canChangeTask(actor, task) && !silent(provenance)) {
     const untagged = await db.query(
-      `delete from crm.task_participants
-       where task_id = $1 and user_id = $2 and added_by = $2 and created_at >= $3::timestamptz
-       returning user_id`,
-      [current.id, actor.userId, options.since],
+      `delete from crm.task_participants p
+       using crm.audit_events e
+       where e.id = $3 and e.entity_id = p.task_id and coalesce((e.changes ->> 'taggedAssigner')::boolean, false)
+         and p.task_id = $1 and p.user_id = $2 and p.added_by = $2 and p.created_at = e.created_at
+       returning p.user_id`,
+      [current.id, actor.userId, options.undoing],
     );
     if ((untagged.rowCount ?? 0) > 0) {
       await recordAudit(db, actor, "task.participant_removed", "task", current.id, provenance, {
@@ -422,11 +423,14 @@ async function applyTask(
     "task",
     task.id,
     provenance,
-    changedFields(
-      before as unknown as Record<string, unknown>,
-      task as unknown as Record<string, unknown>,
-      change.fields,
-    ),
+    {
+      ...changedFields(
+        before as unknown as Record<string, unknown>,
+        task as unknown as Record<string, unknown>,
+        change.fields,
+      ),
+      ...(taggedAssigner ? { taggedAssigner: true } : {}),
+    },
   );
   taskAlerts(db, actor, before, task, provenance);
   return { task, changed: true };
@@ -678,13 +682,13 @@ export async function restoreTaskInDb(
   input: TaskWrite,
   completedAt: string | null | undefined,
   provenance: Provenance,
-  since: string | null = null,
+  undoing: string | null = null,
 ) {
   const current = await readTask(db, id);
   if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;
-  return applyTask(db, actor, current, write, provenance, { restoring: true, since });
+  return applyTask(db, actor, current, write, provenance, { restoring: true, undoing });
 }
 
 export type DueReminder = {
@@ -788,6 +792,7 @@ export async function removeTaskParticipant(actor: UserActor, taskId: string, us
   return withActor(actor, async (db) => {
     const task = await readTask(db, taskId);
     if (!task) throw notFound("task");
+    if (task.owner_id === userId) return false;
     const listed = await db.query("select 1 from crm.task_participants where task_id = $1 and user_id = $2", [taskId, userId]);
     if ((listed.rowCount ?? 0) === 0) return false;
     const removed = await db.query("delete from crm.task_participants where task_id = $1 and user_id = $2", [taskId, userId]);
