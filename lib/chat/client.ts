@@ -25,8 +25,8 @@ function query(params: Record<string, string | null | undefined>) {
   return text ? `?${text}` : "";
 }
 
-function post<T>(url: string, fallback: string, body: unknown) {
-  return request<T>(url, fallback, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+function markUpTo<T>(url: string, fallback: string, upTo: string | null) {
+  return request<T>(url, fallback, upTo ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ upTo }) } : { method: "POST" });
 }
 
 export const chatApi = {
@@ -39,9 +39,9 @@ export const chatApi = {
   threads: (cursor?: string | null) => request<ChatThreads>(`/api/chat/threads${query({ cursor })}`, "Couldn't load threads. Try again."),
   people: (workspaceId?: string | null) =>
     request<{ people: (ChatPerson & { email: string | null })[] }>(`/api/chat/people${query({ workspace: workspaceId })}`, "Couldn't load people. Try again."),
-  markRead: (id: string, upTo: string | null) => post<{ lastReadAt: string }>(`/api/chat/${id}/read`, "Couldn't mark it read. Try again.", { upTo }),
+  markRead: (id: string, upTo: string | null) => markUpTo<{ lastReadAt: string }>(`/api/chat/${id}/read`, "Couldn't mark it read. Try again.", upTo),
   markThreadRead: (rootId: string, upTo: string | null) =>
-    post<{ lastReadAt: string | null }>(`/api/chat/threads/${rootId}/read`, "Couldn't mark the thread read. Try again.", { upTo }),
+    markUpTo<{ lastReadAt: string | null }>(`/api/chat/threads/${rootId}/read`, "Couldn't mark the thread read. Try again.", upTo),
 };
 
 export function newClientKey() {
