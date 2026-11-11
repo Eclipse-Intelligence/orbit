@@ -1218,16 +1218,16 @@ async function refuseOutsiders(db: Db, actor: UserActor, shareId: string, people
   const outside = wanted.filter((person) => !inside.has(person));
   if (outside.length === 0) return;
   const ownerId = audience.rows.find((row) => row.owner)?.user_id ?? null;
-  const named = await db.query<{ id: string; name: string }>(
-    "select p.id, coalesce(nullif(btrim(p.full_name), ''), p.email, 'Someone') as name from crm.profiles p where p.id = any($1::uuid[])",
+  const named = await db.query<{ id: string; name: string | null }>(
+    "select p.id, nullif(btrim(p.full_name), '') as name from crm.profiles p where p.id = any($1::uuid[])",
     [ownerId ? [...outside, ownerId] : outside],
   );
   const names = new Map(named.rows.map((row) => [row.id, row.name]));
-  const outsiders = outside.map((id) => ({ id, name: names.get(id) ?? "Someone" }));
+  const outsiders = outside.map((id) => ({ id, name: names.get(id) || "Someone" }));
   const canAdd = ownerId === actor.userId && outside.every((id) => names.has(id));
   const who = outsiders.length === 1 ? outsiders[0].name : `${outsiders.length} people you tagged`;
   const verb = outsiders.length === 1 ? "isn't" : "aren't";
-  const ownerName = ownerId ? (names.get(ownerId) ?? "The owner").split(/\s+/)[0] : "The owner";
+  const ownerName = ownerId ? (names.get(ownerId) || "The owner").split(/\s+/)[0] : "The owner";
   const message = canAdd ? `${who} ${verb} in this thread. Add them first.` : `${who} ${verb} in this thread. Only ${ownerName} can add people.`;
   throw new CrmError("conflict", message, 409, { field: "body", needsShare: { people: outsiders, canAdd } });
 }
