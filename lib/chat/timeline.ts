@@ -176,6 +176,10 @@ function withPage(current: Timeline | undefined, page: { messages: ChatMessage[]
   };
 }
 
+export function needsCatchUp(timeline: Timeline | undefined) {
+  return Boolean(timeline && timeline.status === "ready" && timeline.stale && !timeline.hasNewer);
+}
+
 export function newerCursor(timeline: Timeline | undefined) {
   if (!timeline) return null;
   return timeline.after ?? newestServerId(timeline.messages);

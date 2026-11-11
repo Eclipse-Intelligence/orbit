@@ -44,7 +44,7 @@ export function useChatActions(dispatch: Dispatch<ChatAction>, state: ChatState,
   const repeat = useRef(new Set<string>());
   const once = useCallback((key: string, work: () => Promise<void>) => {
     if (inflight.current.has(key)) {
-      repeat.current.add(key);
+      if (key.includes(":newer")) repeat.current.add(key);
       return;
     }
     inflight.current.add(key);

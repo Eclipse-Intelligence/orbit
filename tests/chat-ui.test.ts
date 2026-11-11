@@ -6,6 +6,7 @@ import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseCha
 import {
   appendCards,
   chatReducer,
+  needsCatchUp,
   newerCursor,
   refreshCards,
   EMPTY_CHAT,
@@ -392,4 +393,17 @@ describe("chat review fixes", () => {
     assert.equal(state.threads[root].timeline.messages.length, 0);
     assert.equal(state.failed["card-2"], undefined);
   });
+
+  it("leaves the page you are reading alone when someone posts, and catches up once you reach the end", () => {
+    const old = message({ at: "2026-11-11T08:00:00.000Z" });
+    let state = loaded([old], { hasNewer: true });
+    const before = state.timelines[ROOM].messages;
+    state = chatReducer(state, { type: "incoming", message: message({ at: "2026-11-11T10:00:00.000Z" }), root: null });
+    assert.equal(state.timelines[ROOM].messages, before);
+    assert.equal(state.timelines[ROOM].stale, true);
+    assert.equal(needsCatchUp(state.timelines[ROOM]), false);
+    state = chatReducer(state, { type: "page", conversationId: ROOM, page: page([message({ at: "2026-11-11T09:00:00.000Z" })], { hasNewer: false }), mode: "newer" });
+    assert.equal(needsCatchUp(state.timelines[ROOM]), true);
+  });
 });
+

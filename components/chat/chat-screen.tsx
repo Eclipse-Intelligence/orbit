@@ -18,7 +18,7 @@ import { memberIds, messageBody, useChatActions } from "@/components/chat/use-ch
 import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
 import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
-import { chatReducer, EMPTY_CHAT, localMessage, newestServerId, type ChatState } from "@/lib/chat/timeline";
+import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, newestServerId, type ChatState } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
@@ -249,19 +249,18 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   }, [threadId, loadThread]);
 
   const roomTimeline = roomId ? state.timelines[roomId] : undefined;
-  const roomStale = Boolean(roomTimeline?.stale && roomTimeline.status === "ready");
-  const roomBehind = Boolean(roomTimeline?.hasNewer);
+  const roomCatchUp = needsCatchUp(roomTimeline);
   const roomMessages = roomTimeline?.messages;
   useEffect(() => {
-    if (roomId && roomStale && roomMessages) loadMessages(roomId, roomBehind ? "latest" : "newer");
-  }, [roomId, roomStale, roomBehind, roomMessages, loadMessages]);
+    if (roomId && roomCatchUp && roomMessages) loadMessages(roomId, "newer");
+  }, [roomId, roomCatchUp, roomMessages, loadMessages]);
 
   const threadTimeline = threadId ? state.threads[threadId]?.timeline : undefined;
-  const threadStale = Boolean(threadTimeline?.stale && threadTimeline.status === "ready");
+  const threadCatchUp = needsCatchUp(threadTimeline);
   const threadMessages = threadTimeline?.messages;
   useEffect(() => {
-    if (threadId && threadStale && threadMessages) loadThread(threadId, "newer");
-  }, [threadId, threadStale, threadMessages, loadThread]);
+    if (threadId && threadCatchUp && threadMessages) loadThread(threadId, "newer");
+  }, [threadId, threadCatchUp, threadMessages, loadThread]);
 
   const wasJoined = useRef(joined);
   useEffect(() => {

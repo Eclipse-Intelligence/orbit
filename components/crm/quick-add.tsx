@@ -164,6 +164,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   const [notice, setNotice] = useState<(QuickAddNotice & { id: number }) | null>(null);
   const [opening, setOpening] = useState(0);
   const choosing = useRef(false);
+  const returnTo = useRef<HTMLElement | null>(null);
   const { covered, lift, tucked } = useScreenState();
 
   const loadSetup = useCallback(() => {
@@ -191,7 +192,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
     [loadSetup, openComposer, pathname, record],
   );
 
-  useShortcut("quick-add", () => setMenuOpen((open) => !open));
+  useShortcut("quick-add", () => changeMenu(!menuOpen));
   useShortcut("create-task", () => start("task"));
   useShortcut("create-contact", () => start("contact"));
   useShortcut("create-company", () => start("company"));
@@ -201,6 +202,11 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   useEffect(() => {
     if (menuOpen) loadSetup();
   }, [menuOpen, loadSetup]);
+
+  function changeMenu(open: boolean) {
+    if (open) returnTo.current = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    setMenuOpen(open);
+  }
 
   useEffect(() => {
     if (!notice) return;
@@ -250,7 +256,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
           </div>
         )}
         <div data-quick-add-slot="" className="contents" />
-        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenu open={menuOpen} onOpenChange={changeMenu}>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
@@ -280,6 +286,12 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
             }}
             onCloseAutoFocus={(event) => {
               if (choosing.current) event.preventDefault();
+              else if (tucked) {
+                event.preventDefault();
+                const target = returnTo.current?.isConnected ? returnTo.current : document.querySelector<HTMLElement>("[data-chat-composer] textarea");
+                target?.focus({ preventScroll: true });
+              }
+              returnTo.current = null;
               choosing.current = false;
             }}
           >
