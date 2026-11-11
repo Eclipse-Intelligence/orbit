@@ -228,8 +228,28 @@ describe("team", () => {
     const samTarget = targets.find((target) => target.actor.userId === member.userId);
     assert.equal(samTarget?.personalGranola, true);
 
+    const lookback = async () =>
+      (
+        await getAdminPool().query<{ last_synced_at: Date | null }>(
+          "select last_synced_at from crm.integration_state where source = 'granola' and workspace_id = $1 and connection_id is null",
+          [member.workspaceId],
+        )
+      ).rows[0]?.last_synced_at ?? null;
+    assert.notEqual(await lookback(), null);
+    await saveGranolaKey(member, "grn_sam_new_key_7890", { fetchImpl: granola() });
+    assert.equal(await lookback(), null);
+    const urls: string[] = [];
+    const listing: typeof fetch = async (input) => {
+      urls.push(String(input));
+      return Response.json({ notes: [], hasMore: false, cursor: null });
+    };
+    await syncGranolaFor(member, { fetchImpl: listing });
+    const since = new URL(urls[0]).searchParams.get("updated_after");
+    assert.ok(since && Date.now() - new Date(since).getTime() > 13 * 24 * 60 * 60 * 1000);
+
     await removeGranolaKey(member);
     assert.equal(await personalGranolaKey(member), null);
+    assert.equal(await lookback(), null);
     await saveGranolaKey(member, "grn_sam_key_123456", { fetchImpl: granola() });
   });
 
