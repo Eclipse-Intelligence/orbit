@@ -30,7 +30,7 @@ export type ChatContextValue = ChatTimelineActions & {
   closeThread: () => void;
   conversation: (id: string) => ChatConversation | null;
   copyLink: (message: ChatMessage) => Promise<boolean>;
-  send: (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[] }) => Promise<string | null>;
+  send: (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; discardOnFailure?: boolean }) => Promise<string | null>;
   memberNames: Map<string, string>;
 };
 

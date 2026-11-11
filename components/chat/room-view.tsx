@@ -23,17 +23,23 @@ function firstUnread(messages: ChatMessage[], lastReadAt: string | null, viewerI
 export function useVisible() {
   const [visible, setVisible] = useState(true);
   useEffect(() => {
-    const update = () => setVisible(document.visibilityState === "visible");
+    const update = () => setVisible(document.visibilityState === "visible" && document.hasFocus());
     update();
     document.addEventListener("visibilitychange", update);
-    return () => document.removeEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+    };
   }, []);
   return visible;
 }
 
 export function PhoneBack({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <Button variant="secondary" size="sm" onClick={onClick} className="h-11 max-w-[45%] shrink-0 gap-1 pr-3 pl-2 text-[13px]" aria-label={`Back to ${label}`}>
+    <Button variant="secondary" size="sm" onClick={onClick} className="h-11 max-w-[45%] min-w-11 shrink-0 gap-1 pr-3 pl-2 text-[13px] md:hidden" aria-label={`Back to ${label}`}>
       <ChevronLeftIcon aria-hidden className="size-3.5 shrink-0" />
       <span className="truncate">{label}</span>
     </Button>
@@ -141,9 +147,7 @@ export default function RoomView({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="border-line-subtle flex h-[52px] shrink-0 items-center gap-2 border-b pr-3 pl-5 max-md:h-auto max-md:border-border max-md:px-3 max-md:py-2.5">
-        <span className="md:hidden">
-          <PhoneBack label="Chat" onClick={back} />
-        </span>
+        <PhoneBack label="Chat" onClick={back} />
         <h2 className="flex min-w-0 items-center gap-1 max-md:flex-1 max-md:justify-center">
           {dm ? (
             <ChatAvatar person={info?.dmUser ?? null} size="sm" className="mr-1 max-md:hidden" />

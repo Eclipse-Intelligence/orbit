@@ -62,6 +62,7 @@ export default function PeopleField({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       if (options.length === 0) return;
       event.preventDefault();

@@ -195,7 +195,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const { loadRoom, loadMessages, loadThread, deliver } = actions;
 
   const send = useCallback(
-    (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[] }) => {
+    (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; discardOnFailure?: boolean }) => {
       const body = messageBody(input.text, input.mentions);
       if (!body || !input.conversationId) return Promise.resolve(null);
       const message = localMessage({
@@ -213,7 +213,10 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
         loadMessages(input.conversationId, "latest");
         setBottomSignal((value) => value + 1);
       }
-      return deliver(message);
+      return deliver(message).then((error) => {
+        if (error && input.discardOnFailure) dispatch({ type: "discard", message });
+        return error;
+      });
     },
     [deliver, loadMessages, me],
   );
@@ -248,15 +251,17 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const roomTimeline = roomId ? state.timelines[roomId] : undefined;
   const roomStale = Boolean(roomTimeline?.stale && roomTimeline.status === "ready");
   const roomBehind = Boolean(roomTimeline?.hasNewer);
+  const roomMessages = roomTimeline?.messages;
   useEffect(() => {
-    if (roomId && roomStale) loadMessages(roomId, roomBehind ? "latest" : "newer");
-  }, [roomId, roomStale, roomBehind, loadMessages]);
+    if (roomId && roomStale && roomMessages) loadMessages(roomId, roomBehind ? "latest" : "newer");
+  }, [roomId, roomStale, roomBehind, roomMessages, loadMessages]);
 
   const threadTimeline = threadId ? state.threads[threadId]?.timeline : undefined;
   const threadStale = Boolean(threadTimeline?.stale && threadTimeline.status === "ready");
+  const threadMessages = threadTimeline?.messages;
   useEffect(() => {
-    if (threadId && threadStale) loadThread(threadId, "newer");
-  }, [threadId, threadStale, loadThread]);
+    if (threadId && threadStale && threadMessages) loadThread(threadId, "newer");
+  }, [threadId, threadStale, threadMessages, loadThread]);
 
   const wasJoined = useRef(joined);
   useEffect(() => {
@@ -415,12 +420,12 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
 
   return (
     <ChatContext.Provider value={context}>
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <section data-quick-add-hide="" className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SectionHeader
           title="Chat"
           viewer={viewer}
           action={
-            <Button variant="secondary" size="icon" aria-label="New message" title="New message" onClick={() => setNewMessage(true)} className="md:hidden">
+            <Button variant="secondary" size="icon" aria-label="New message" title="New message" onClick={() => setNewMessage(true)} className="max-md:size-11 md:hidden">
               <ComposeIcon aria-hidden className="size-3.5" />
             </Button>
           }

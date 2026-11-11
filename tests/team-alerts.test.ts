@@ -422,7 +422,7 @@ describe("people mentions", () => {
     );
     assert.equal(empty[0].kind, "member");
     const named = await searchMentions(mark, "sam");
-    assert.deepEqual(named[0], { kind: "member", id: sam.userId, name: "Sam Member", detail: "sam@eclipse.test" });
+    assert.deepEqual(named[0], { kind: "member", id: sam.userId, name: "Sam Member", detail: "Member" });
     assert.equal((await searchMentions(mark, "mark")).some((option) => option.kind === "member"), false);
     assert.equal((await searchMentions(mark, "nobody here")).length, 0);
   });

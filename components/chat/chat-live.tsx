@@ -32,6 +32,10 @@ function setJoined(next: boolean) {
   for (const listener of joinListeners) listener();
 }
 
+export function chatJoined() {
+  return joined;
+}
+
 export function refreshChatSidebar() {
   reload();
 }
