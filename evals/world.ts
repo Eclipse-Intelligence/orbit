@@ -4,6 +4,7 @@ import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
 import { bookingUrl } from "@/lib/assistant/links";
 import { saveBrandProfile } from "@/lib/crm/brand";
 import { createCompany, updateCompany } from "@/lib/crm/companies";
+import { createRoom, postMessage } from "@/lib/crm/chat";
 import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
@@ -322,6 +323,14 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
     await updateCompany(actor, companyId, { description: change.description }, { provenance: { operation: "update_company", source: "assistant" } });
     const event = await admin.query<{ id: string }>("select id from crm.audit_events where entity_id = $1 order by created_at desc, id desc limit 1", [companyId]);
     ids.set(`change:${change.company}`, event.rows[0].id);
+  }
+  for (const chat of seed.chat ?? []) {
+    const room = await createRoom(actor, { name: chat.room, memberIds: [world.colleague.userId] });
+    ids.set(`room:${chat.room}`, room.id);
+    for (const message of chat.messages) {
+      const posted = await postMessage(message.by === "me" ? actor : world.colleague, { conversationId: room.id, body: message.text });
+      if (message.key) ids.set(`chat:${message.key}`, posted.message.id);
+    }
   }
   if (seed.booking) {
     await saveBookingPage(actor, {

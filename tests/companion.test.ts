@@ -29,6 +29,7 @@ import {
 } from "@/lib/companion/pairing";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { createCompany } from "@/lib/crm/companies";
+import { chatWorkSettled, createRoom, listMessages } from "@/lib/crm/chat";
 import { listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -131,6 +132,15 @@ describe("Orbit Agent turns", () => {
       assert.match(tool.content, /Acme Agent/);
       const blocked = await runCompanionTool(auth, job.id, { id: "evt_2", name: "create_task", arguments: '{"title":"x"}' });
       assert.equal(blocked.isError, true);
+      const chatRead = await runCompanionTool(auth, job.id, { id: "evt_3", name: "team_chat", arguments: '{"action":"read"}' });
+      assert.equal(chatRead.isError, false);
+      assert.match(chatRead.content, /"conversations"/);
+      const chatPost = await runCompanionTool(auth, job.id, {
+        id: "evt_4",
+        name: "team_chat",
+        arguments: '{"action":"post","conversationId":"00000000-0000-4000-8000-000000000009","text":"x"}',
+      });
+      assert.deepEqual(chatPost, { content: PROPOSED, isError: false });
       return {
         steps: [
           { text: "Looking up Acme.", calls: [{ id: "toolu_read", name: "search_records", arguments: '{"query":"Acme"}' }] },
@@ -161,6 +171,7 @@ describe("Orbit Agent turns", () => {
     assert.match(request.system, /every tool is already loaded/);
     assert.ok(request.tools.find((tool) => tool.name === "create_task")!.write);
     assert.ok(!request.tools.find((tool) => tool.name === "search_records")!.write);
+    assert.ok(!request.tools.find((tool) => tool.name === "team_chat")!.write);
     assert.match(request.system, /You are the assistant inside Orbit/);
 
     assert.deepEqual(
@@ -168,6 +179,8 @@ describe("Orbit Agent turns", () => {
       [
         ["search_records", "running"],
         ["search_records", "done"],
+        ["team_chat", "running"],
+        ["team_chat", "done"],
       ],
     );
     const pending = events.find((event) => event.type === "actions") as Extract<AssistantEvent, { type: "actions" }>;
@@ -206,6 +219,64 @@ describe("Orbit Agent turns", () => {
     );
     assert.deepEqual(saved.messages[1].tools.map((tool) => tool.name), ["search_records"]);
     assert.equal(saved.messages[2].actions[0].status, "done");
+  });
+
+  it("turns an Orbit Agent team_chat post into a card that posts once on approval and nothing on decline", async () => {
+    const room = (await createRoom(owner, { name: "agent-room" })).id;
+    const count = async () => (await listMessages(owner, room, { limit: 100 })).messages.length;
+    const propose = async (text: string) => {
+      const events: AssistantEvent[] = [];
+      const readArgs = JSON.stringify({ action: "read", conversationId: room });
+      const postArgs = JSON.stringify({ action: "post", conversationId: room, text });
+      await Promise.all([
+        sendMessage(owner, { message: `Tell agent-room: ${text}`, model: "claude/claude-sonnet-5-5", reasoning: "high", webSearch: false }, (event) => events.push(event), { deadline: deadline() }),
+        answer(auth, async (job) => {
+          const read = await runCompanionTool(auth, job.id, { id: "evt_chat_read", name: "team_chat", arguments: readArgs });
+          const post = await runCompanionTool(auth, job.id, { id: "evt_chat_post", name: "team_chat", arguments: postArgs });
+          assert.deepEqual(post, { content: PROPOSED, isError: false });
+          return {
+            steps: [
+              {
+                text: "Posting it.",
+                calls: [
+                  { id: "toolu_chat_read", name: "team_chat", arguments: readArgs },
+                  { id: "toolu_chat_post", name: "team_chat", arguments: postArgs },
+                ],
+              },
+            ],
+            results: { toolu_chat_read: { content: read.content, isError: false }, toolu_chat_post: { content: post.content, isError: false } },
+            sources: [],
+            model: "claude-sonnet-5-5",
+            usage: null,
+          };
+        }),
+      ]);
+      const pending = events.filter((event) => event.type === "actions").at(-1) as Extract<AssistantEvent, { type: "actions" }>;
+      assert.deepEqual(
+        pending.actions.map((action) => [action.name, action.title, action.lines, action.status]),
+        [["team_chat", "Post in #agent-room", [text], "pending"]],
+      );
+      return (events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+    };
+    const decide = (conversationId: string, approve: boolean) =>
+      Promise.all([
+        decideActions(owner, { conversationId, decisions: [{ id: "toolu_chat_post", approve }] }, () => undefined, { deadline: deadline() }),
+        answer(auth, async () => ({ steps: [{ text: approve ? "Posted." : "Left it.", calls: [] }], results: {}, sources: [], model: null, usage: null })),
+      ]);
+
+    const approved = await propose("Pilot signed");
+    assert.equal(await count(), 0);
+    await decide(approved, true);
+    assert.deepEqual((await listMessages(owner, room, { limit: 100 })).messages.map((message) => message.body), ["Pilot signed"]);
+    await assert.rejects(decideActions(owner, { conversationId: approved, decisions: [{ id: "toolu_chat_post", approve: true }] }, () => undefined, { deadline: deadline() }));
+    assert.equal(await count(), 1);
+    const saved = await getConversation(owner, approved);
+    assert.ok(saved.messages.some((message) => message.tools.some((tool) => tool.name === "team_chat")));
+
+    const declined = await propose("Do not post this");
+    await decide(declined, false);
+    assert.equal(await count(), 1);
+    await chatWorkSettled();
   });
 
   it("asks you to pair a Mac before using a Claude account, and saves a reply when the Mac is off", async () => {

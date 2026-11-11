@@ -28,6 +28,7 @@ export const OUTSIDE_TOOLS: ReadonlySet<string> = new Set([
   "list_activities",
   "list_email_attachments",
   "read_chat_file",
+  "team_chat",
 ]);
 
 function flaggedOutside(value: unknown, depth: number): boolean {
@@ -46,7 +47,18 @@ function outsideDescription(content: string) {
   }
 }
 
+function ownChatPost(content: string) {
+  try {
+    const parsed = JSON.parse(content) as { posted?: unknown; declined?: unknown; error?: unknown } | null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    return typeof parsed.posted === "boolean" || parsed.declined === true || "error" in parsed;
+  } catch {
+    return false;
+  }
+}
+
 export function outsideRead(name: string, content: string) {
+  if (name === "team_chat" && ownChatPost(content)) return hasOutsideRecord(content);
   return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && outsideDescription(content)) || hasOutsideRecord(content);
 }
 

@@ -15,6 +15,7 @@ import {
   crossWorkspaceRefusal,
   describeAction,
   findTool,
+  isWriteCall,
   loadedDomains,
   matchWorkspace,
   recordNames,
@@ -183,7 +184,7 @@ function display(row: MessageRow): DisplayMessage {
     role: row.role === "user" ? "user" : "assistant",
     content: row.content,
     tools: (row.tool_calls ?? [])
-      .filter((call) => !findTool(call.function.name)?.write && !(row.actions ?? []).some((action) => action.id === call.id))
+      .filter((call) => !isWriteCall(call.function.name, parseArgs(call.function.arguments)) && !(row.actions ?? []).some((action) => action.id === call.id))
       .map((call) => ({ id: call.id, name: call.function.name, label: toolLabel(call.function.name) })),
     actions: row.actions ?? [],
     sources: row.sources ?? [],
@@ -700,7 +701,7 @@ function companionTools(options: ToolOptions) {
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
-      write: Boolean(tool.write),
+      write: Boolean(tool.write) && !tool.reads,
     })),
     CONTINUE_RESULT_TOOL,
   ];
@@ -740,6 +741,7 @@ const CROSS_BRAND_NOUNS: Record<string, string> = {
   remember: "note",
   eclipse_action: "Eclipse action",
   linear_create_issue: "issue",
+  team_chat: "message",
 };
 
 function memoryWorkspaces(content: string) {
@@ -803,9 +805,10 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     for (const call of step.calls) {
       const tool = findTool(call.name);
       if (!tool) continue;
-      const web = !tool.write && WEB_TOOLS.has(tool.name) && isWebApproval(result.results[call.id]?.content);
+      const write = isWriteCall(call.name, parseArgs(call.arguments));
+      const web = !write && WEB_TOOLS.has(tool.name) && isWebApproval(result.results[call.id]?.content);
       if (web) gated.add(call.id);
-      (tool.write || web ? writes : reads).push(toToolCall(call));
+      (write || web ? writes : reads).push(toToolCall(call));
     }
     if (step.text.trim() || reads.length > 0) entries.push({ content: withoutMarkers(step.text).trim(), reads, step: index });
   }
@@ -1247,12 +1250,12 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       runnable
         .filter((call) => {
           const tool = findTool(call.function.name);
-          return tool && !tool.write && needsWebApproval(tool.name, parseArgs(call.function.arguments), webState);
+          return tool && !isWriteCall(call.function.name, parseArgs(call.function.arguments)) && needsWebApproval(tool.name, parseArgs(call.function.arguments), webState);
         })
         .map((call) => call.id),
     );
-    const reads = runnable.filter((call) => !findTool(call.function.name)?.write && !gated.has(call.id));
-    let writes = runnable.filter((call) => findTool(call.function.name)?.write);
+    const reads = runnable.filter((call) => !isWriteCall(call.function.name, parseArgs(call.function.arguments)) && !gated.has(call.id));
+    let writes = runnable.filter((call) => isWriteCall(call.function.name, parseArgs(call.function.arguments)));
     await Promise.all(
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
