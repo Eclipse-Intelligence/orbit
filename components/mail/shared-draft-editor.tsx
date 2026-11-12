@@ -88,7 +88,7 @@ export default function SharedDraftEditor({
         const previous = latest.current.base;
         const next = fresh.state !== "editing" || !previous ? freshText : reconcileText(previous.text, latest.current.text, freshText);
         latest.current = { ...latest.current, text: next, base: { text: freshText, version: fresh.version } };
-        setDraft(fresh);
+        setDraft((previous) => (fresh.state === "none" && previous && previous.state !== "none" ? { ...fresh, state: previous.state === "discarded" ? "discarded" : "sent" } : fresh));
         setLoadError(null);
         setBase({ text: freshText, version: fresh.version });
         setText(next);
@@ -218,18 +218,18 @@ export default function SharedDraftEditor({
             </dl>
             {subjectShown ? (
               <>
-            <label htmlFor={`${id}-subject`} className="sr-only">
-              Subject
-            </label>
-            <input
-              id={`${id}-subject`}
-              value={text.subject}
-              readOnly={locked}
-              aria-readonly={locked}
-              onChange={(event) => setText((existing) => ({ ...existing, subject: event.target.value }))}
-              placeholder="Subject"
-              className={cn("text-foreground placeholder:text-subtle mt-1 h-8 min-w-0 bg-transparent text-[16px] font-medium outline-none", locked && "caret-transparent")}
-            />
+                <label htmlFor={`${id}-subject`} className="sr-only">
+                  Subject
+                </label>
+                <input
+                  id={`${id}-subject`}
+                  value={text.subject}
+                  readOnly={locked}
+                  aria-readonly={locked}
+                  onChange={(event) => setText((existing) => ({ ...existing, subject: event.target.value }))}
+                  placeholder="Subject"
+                  className={cn("text-foreground placeholder:text-subtle mt-1 h-8 min-w-0 bg-transparent text-[16px] font-medium outline-none", locked && "caret-transparent")}
+                />
               </>
             ) : (
               <p className="mt-1 truncate text-[16px] font-medium">{text.subject || "(no subject)"}</p>

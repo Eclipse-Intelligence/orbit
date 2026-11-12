@@ -42,6 +42,7 @@ import {
 } from "@/lib/mail/identities";
 import { attachToDraft } from "@/lib/microsoft/oauth";
 import { followUpDueAt, readFollowUpBody, readFollowUpDays } from "@/lib/mail/follow-up-rules";
+import { SHARED_DRAFT_CHANGED } from "@/lib/mail/share-view";
 import { announceDraftChange, sharedDraftClosed, SHARED_TEXT_LOCKED, type ClosedShare } from "@/lib/mail/shared-drafts";
 
 export const DRAFT_MODES: DraftMode[] = ["new", "reply", "reply_all", "forward"];
@@ -680,6 +681,15 @@ async function releaseDraft(actor: UserActor, id: string) {
   });
 }
 
+async function draftStatus(db: Db, actor: UserActor, id: string) {
+  const result = await db.query<{ busy: boolean; scheduled: boolean }>(
+    `select coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy, (send_at is not null or send_error is not null) as scheduled
+     from crm.mail_drafts where id = $1 and user_id = $2`,
+    [id, actor.userId],
+  );
+  return result.rows[0] ?? null;
+}
+
 async function touchShare(db: Db, actor: UserActor, draftId: string, clearHold: boolean) {
   const touched = await db.query(
     `update crm.mail_shares set draft_version = draft_version + 1, draft_held_until = case when $3::boolean then null else draft_held_until end
@@ -689,7 +699,6 @@ async function touchShare(db: Db, actor: UserActor, draftId: string, clearHold: 
   return (touched.rowCount ?? 0) > 0;
 }
 
-export const SHARED_DRAFT_CHANGED = "The draft changed. Check it, then send.";
 
 function withDraftId(error: unknown, draftId: string) {
   return error instanceof CrmError ? new CrmError(error.code, error.message, error.status, { ...error.details, draftId }) : error;
@@ -1202,7 +1211,7 @@ export async function scheduleMailDraft(
     if (version !== undefined) await touchShare(db, actor, row.id, false);
     const result = await db.query<DraftRow>(
       `update crm.mail_drafts set send_at = $2, remind_hours = $3, signature = $4, follow_up_days = $5, follow_up_body = $6, send_error = null,
-         sending_at = case when $7::boolean then null else sending_at end
+         sending_at = case when $7::boolean and ${DRAFT_SHARE} is not null then null else sending_at end
        where id = $1 returning ${DRAFT_COLUMNS}`,
       [
         row.id,
@@ -1223,6 +1232,9 @@ export async function scheduleMailDraft(
 export async function unscheduleMailDraft(actor: UserActor, id: string): Promise<MailDraft> {
   if (!isUuid(id)) throw new CrmError("not_found", SCHEDULED_GONE, 404);
   const outcome = await withActor(actor, async (db) => {
+    const before = await draftStatus(db, actor, id);
+    if (!before) return "gone" as const;
+    if (before.busy) return "sending" as const;
     await touchShare(db, actor, id, false);
     const found = await db.query<{ busy: boolean }>(
       `select coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy from crm.mail_drafts where id = $1 and user_id = $2 for update`,
@@ -1307,6 +1319,8 @@ export async function getScheduledDraft(actor: UserActor, id: string): Promise<M
 export async function cancelScheduledDraft(actor: UserActor, id: string): Promise<MailDraft> {
   if (!isUuid(id)) throw new CrmError("not_found", SCHEDULED_GONE, 404);
   const cancelled = await withActor(actor, async (db) => {
+    const before = await draftStatus(db, actor, id);
+    if (!before?.scheduled) return null;
     await touchShare(db, actor, id, false);
     const result = await db.query<DraftRow>(
       `update crm.mail_drafts set send_at = null, send_error = null
@@ -1354,7 +1368,8 @@ export async function changeScheduledDraft(
   checkSendable(input);
   const held = await withActor(actor, async (db) => {
     const result = await db.query(
-      "update crm.mail_drafts set send_at = null, sending_at = now() where id = $1 and user_id = $2 and (send_at is not null or send_error is not null) returning id",
+      `update crm.mail_drafts set send_at = null, sending_at = case when ${DRAFT_SHARE} is null then sending_at else now() end
+       where id = $1 and user_id = $2 and (send_at is not null or send_error is not null) returning id`,
       [id, actor.userId],
     );
     return (result.rowCount ?? 0) > 0;
@@ -1365,7 +1380,11 @@ export async function changeScheduledDraft(
     return (await getScheduledDraft(actor, draft.id)) ?? draft;
   } catch (error) {
     await withActor(actor, (db) =>
-      db.query("update crm.mail_drafts set send_at = $2, send_error = $3, sending_at = null where id = $1 and send_at is null", [id, row.send_at, row.send_error]),
+      db.query(`update crm.mail_drafts set send_at = $2, send_error = $3, sending_at = case when ${DRAFT_SHARE} is null then sending_at end where id = $1 and send_at is null`, [
+        id,
+        row.send_at,
+        row.send_error,
+      ]),
     ).catch(() => undefined);
     throw error;
   }
@@ -1667,6 +1686,9 @@ type ScheduledClaim = { state: "gone" | "sending" | "scheduled" | "draft"; share
 async function claimScheduledDraft(actor: UserActor, id: string): Promise<ScheduledClaim> {
   if (!isUuid(id)) return { state: "gone", shared: null };
   return withActor(actor, async (db): Promise<ScheduledClaim> => {
+    const before = await draftStatus(db, actor, id);
+    if (!before) return { state: "gone", shared: null };
+    if (before.busy) return { state: "sending", shared: null };
     await touchShare(db, actor, id, false);
     const found = await db.query<{ scheduled: boolean; busy: boolean; subject: string | null; body: string; share_id: string | null }>(
       `select (send_at is not null or send_error is not null) as scheduled, coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy,

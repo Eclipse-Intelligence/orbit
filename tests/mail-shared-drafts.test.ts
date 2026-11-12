@@ -676,3 +676,50 @@ describe("second review fixes", () => {
     assert.deepEqual(members.map((row) => row.user_id).sort(), [sam.userId, priya.userId].sort());
   });
 });
+
+describe("third review fixes", () => {
+  async function freshShare(body: string) {
+    const draft = await saveMailDraft(mark, readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Third", body }), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    const shared = await shareDraft(mark, draft.id, [sam.userId]);
+    return { draft, shareId: shared.shareId };
+  }
+
+  async function version(shareId: string) {
+    return (await getSharedDraft(mark, shareId)).version;
+  }
+
+  it("leaves an unshared draft's sending_at alone while a scheduled change talks to Outlook", async () => {
+    const input = readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Unshared change", body: "x" });
+    const draft = await scheduleMailDraft(mark, { ...input, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    let during: Date | null | undefined;
+    const racing = outlook({
+      onPatch: async () => {
+        during = (await sql<{ sending_at: Date | null }>("select sending_at from crm.mail_drafts where id = $1", [draft.id]))[0].sending_at;
+      },
+    });
+    await changeScheduledDraft(mark, draft.id, { cc: ["ola@halden.test"] }, { origin: ORIGIN, fetchImpl: racing.fetchImpl });
+    assert.equal(during, null);
+    assert.equal((await sql<{ sending_at: Date | null }>("select sending_at from crm.mail_drafts where id = $1", [draft.id]))[0].sending_at, null);
+  });
+
+  it("doesn't bump the version when unschedule, cancel or Send do nothing", async () => {
+    const { draft, shareId } = await freshShare("No-op");
+    const start = await version(shareId);
+    await refused(cancelScheduledDraft(mark, draft.id), /no longer scheduled/);
+    assert.equal(await version(shareId), start);
+    await sql("update crm.mail_drafts set sending_at = now() where id = $1", [draft.id]);
+    await refused(unscheduleMailDraft(mark, draft.id), /no longer scheduled/);
+    await refused(sendMailDraft(mark, { ...readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Third", body: "No-op" }), id: draft.id }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl }), /Already sending/);
+    assert.equal(await version(shareId), start);
+    await sql("update crm.mail_drafts set sending_at = null where id = $1", [draft.id]);
+  });
+
+  it("shares a new draft once when several shares race", async () => {
+    const draft = await saveMailDraft(mark, readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Race", body: "Race" }), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    const results = await Promise.allSettled([1, 2, 3, 4].map(() => shareDraft(mark, draft.id, [sam.userId])));
+    const shared = results.filter((result) => result.status === "fulfilled").map((result) => (result as PromiseFulfilledResult<{ shareId: string }>).value.shareId);
+    assert.ok(shared.length >= 3);
+    assert.equal(new Set(shared).size, 1);
+    assert.equal((await sql("select id from crm.mail_shares where draft_id = $1", [draft.id])).length, 1);
+  });
+});

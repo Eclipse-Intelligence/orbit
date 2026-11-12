@@ -105,8 +105,11 @@ begin
   if v_share.id is null then
     insert into crm.mail_shares (owner_user_id, source_id, thread_key, draft_id)
       values (p_user, v_draft.source_id, null, p_draft)
-      on conflict (draft_id) where draft_id is not null do nothing;
-    select s.* into v_share from crm.mail_shares s where s.draft_id = p_draft and s.owner_user_id = p_user for update;
+      on conflict (draft_id) where draft_id is not null do nothing
+      returning * into v_share;
+    if v_share.id is null then
+      raise exception 'This draft is being shared. Try again.' using errcode = 'P0004';
+    end if;
   elsif v_share.draft_id is null then
     update crm.mail_shares s set draft_id = p_draft, draft_state = null, draft_held_until = null, draft_version = s.draft_version + 1
       where s.id = v_share.id;

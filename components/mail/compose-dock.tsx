@@ -519,12 +519,12 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       void payload.then((value) =>
         postJson<MailDraft>("/api/mail/drafts/schedule", { ...value, sendAt })
           .then(() => setSent((count) => count + 1))
-          .catch((error: Error) =>
+          .catch((error: SendFailure) =>
             showToast({
               message: `Couldn't schedule “${value.subject || "your email"}”. ${error.message}`,
               tone: "alert",
               duration: 15_000,
-              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(value) }) },
+              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(value, error) }) },
             }),
           ),
         (problem: unknown) => handedBack(problem),

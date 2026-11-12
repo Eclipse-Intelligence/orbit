@@ -5,6 +5,7 @@ import DraftShare from "@/components/mail/draft-share";
 import { useMailShareEvents, useShareResync } from "@/components/mail/share-live";
 import { DraftRequestError, fetchDraftPeople, fetchSharedDraft, holdSharedDraft, saveSharedDraftText } from "@/components/mail/shared-draft-client";
 import { HandOverError } from "@/components/mail/hand-over";
+import { SHARED_DRAFT_CHANGED } from "@/lib/mail/share-view";
 import { newerVersion, openingBase, reconcileText, sameText, textChanges, type DraftText } from "@/lib/mail/shared-text";
 import type { MailSharePerson } from "@/lib/mail/share-types";
 import Button from "@/components/_ui/button";
@@ -338,9 +339,9 @@ export default function MailComposer({
   const [sharePeople, setSharePeople] = useState<MailSharePerson[]>([]);
   const shared = useRef<{ id: string | null; opened: DraftText; base: SharedBase | null; seen: number | null; asked: number; applied: number }>({
     id: draft?.shareId ?? null,
-    opened: { subject: draft?.subject || start.subject, body: draft?.body ?? "" },
-    base: draft?.shareBase ?? null,
-    seen: draft?.shareBase?.version ?? null,
+    opened: draft?.shareBase && draft.shareBase.version < 0 ? draft.shareBase.text : { subject: draft?.subject || start.subject, body: draft?.body ?? "" },
+    base: draft?.shareBase && draft.shareBase.version >= 0 ? draft.shareBase : null,
+    seen: draft?.shareBase && draft.shareBase.version >= 0 ? draft.shareBase.version : null,
     asked: 0,
     applied: 0,
   });
@@ -404,6 +405,15 @@ export default function MailComposer({
       await loadShared();
       await mergeSharedText(false);
     }
+  }
+
+  async function refreshedVersion() {
+    const before = { subject: payload.current.subject, body: payload.current.body };
+    await loadShared();
+    const after = { subject: payload.current.subject, body: payload.current.body };
+    const base = shared.current.base;
+    if (!base || !sameText(before, after) || !sameText(base.text, after)) throw new Error(SHARED_DRAFT_CHANGED);
+    return base.version;
   }
 
   function flushSharedText() {
@@ -533,11 +543,29 @@ export default function MailComposer({
     releaseDraft(heldKey.current);
     heldKey.current = null;
     const pending = chain.current.catch(() => null);
-    const handed = () => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current, shareId: shared.current.id, shareBase: shared.current.base, ...(force ? { force } : {}) });
+    const handed = () => ({
+      ...snapshot,
+      id: draftId.current,
+      sendKey: sendKey.current,
+      shareId: shared.current.id,
+      shareBase: shared.current.base ?? { text: shared.current.opened, version: -1 },
+      ...(force ? { force } : {}),
+    });
     if (!shared.current.id) return pending.then(handed);
     return pending
       .then(() => mergeSharedText())
-      .then(() => (sending && draftId.current ? holdSharedDraft(draftId.current, true, shared.current.base?.version ?? null) : null))
+      .then(async () => {
+        const id = draftId.current;
+        if (!id) return;
+        if (!sending) {
+          await refreshedVersion();
+          return;
+        }
+        await holdSharedDraft(id, true, shared.current.base?.version ?? null).catch(async (problem: unknown) => {
+          if (!(problem instanceof DraftRequestError && problem.detail.changed)) throw problem;
+          await holdSharedDraft(id, true, await refreshedVersion());
+        });
+      })
       .then(handed, (problem: unknown) => {
         throw new HandOverError(problem instanceof Error ? problem.message : "Couldn't send. Try again.", { ...handed(), body: payload.current.body, subject: payload.current.subject });
       });
@@ -566,7 +594,12 @@ export default function MailComposer({
       onReopen,
       track,
       onUndone: () => {
-        if (sharedDraft) void handed.then((value) => (value.id ? holdSharedDraft(value.id, false).catch(() => null) : null), () => null);
+        if (sharedDraft) {
+          void handed.then(
+            (value) => (value.id ? holdSharedDraft(value.id, false).then(() => loadShared(), () => null).catch(() => null) : null),
+            () => null,
+          );
+        }
         void release();
         onUndone?.();
         tracked?.undone();
@@ -598,6 +631,7 @@ export default function MailComposer({
     setError(null);
     try {
       await unscheduleDraft(current);
+      if (shared.current.id) void loadShared().catch(() => undefined);
     } catch (problem) {
       const status = (problem as MailRequestError).status;
       if (status !== 404 && status !== 409) setScheduledFor(previous);

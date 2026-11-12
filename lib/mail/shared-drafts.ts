@@ -28,6 +28,7 @@ function firstName(name: string | null | undefined, fallback: string) {
 
 function draftFailure(error: unknown): never {
   if (isPgError(error) && error.code === "55006") throw new CrmError("conflict", error.message.trim(), 409, { locked: true });
+  if (isPgError(error) && error.code === "P0004") throw new CrmError("conflict", error.message.trim(), 409);
   if (isPgError(error) && error.code === "40001") throw new CrmError("conflict", error.message.trim(), 409, { changed: true });
   throw pgFailure(error) ?? error;
 }
@@ -101,13 +102,14 @@ export async function sharedDraftClosed(actor: UserActor, closed: ClosedShare, t
 export async function shareDraft(actor: UserActor, draftId: unknown, userIds: unknown, options: { send?: PushSender } = {}): Promise<{ shareId: string; people: MailSharePerson[]; added: string[] }> {
   if (typeof draftId !== "string" || !isUuid(draftId)) throw new CrmError("not_found", "That draft has gone. Save it again.", 404);
   const people = cleanPeople(userIds);
-  let row: { share_id: string; added: string[]; members: string[]; added_at: Stamp };
-  try {
-    const result = await query<{ share_id: string; added: string[]; members: string[]; added_at: Stamp }>(
+  const add = () =>
+    query<{ share_id: string; added: string[]; members: string[]; added_at: Stamp }>(
       "select share_id, added::text[] as added, members::text[] as members, added_at from private.mail_share_draft_add($1, $2, $3::uuid[])",
       [actor.userId, draftId.toLowerCase(), people],
     );
-    row = result.rows[0];
+  let row: { share_id: string; added: string[]; members: string[]; added_at: Stamp };
+  try {
+    row = (await add().catch((error: unknown) => (isPgError(error) && error.code === "P0004" ? add() : Promise.reject(error)))).rows[0];
   } catch (error) {
     draftFailure(error);
   }

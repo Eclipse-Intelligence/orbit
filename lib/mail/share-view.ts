@@ -13,6 +13,8 @@ export function sharedByLabel(owner: Pick<ChatPerson, "name">) {
   return `Shared by ${personFirstName(owner.name)}`;
 }
 
+export const SHARED_DRAFT_CHANGED = "The draft changed. Check it, then send.";
+
 export function onlyOwnerSends(owner: Pick<ChatPerson, "name">) {
   return `Only ${personFirstName(owner.name)} can send`;
 }
