@@ -30,6 +30,8 @@ export type CompanionSteer = { id: string; text: string };
 
 export type CompanionSteered = { id: string; step: number };
 
+export type CompanionWebStep = { id: string; status: "running" | "done" };
+
 export const PROPOSED =
   "Proposed. Orbit will show this change to the user for approval. It has not happened yet. Do not call this tool again for the same change. When you have proposed everything, say in one or two sentences what you proposed and stop.";
 

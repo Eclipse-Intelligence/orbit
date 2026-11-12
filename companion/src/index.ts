@@ -130,6 +130,7 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
       return [];
     }
   };
+  let webSteps: Promise<unknown> = Promise.resolve();
   current = { api, jobId: job.id };
   log(`Answering on ${job.request.model}…`);
   try {
@@ -148,6 +149,22 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
       onDraft: (text) => {
         pending = text;
         flush();
+      },
+      onWebStep: (step) => {
+        if (step.status === "running") log("  web search");
+        const send = () => api.webStep(job.id, step);
+        const attempts = step.status === "done" ? 3 : 1;
+        webSteps = webSteps.then(async () => {
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+              await send();
+              return;
+            } catch (error) {
+              cancelled(error);
+              if (error instanceof ApiError && error.status >= 400 && error.status < 500) return;
+            }
+          }
+        });
       },
     });
     if (cancel.signal.aborted) throw new ApiError("That question was cancelled in Orbit.", 409);

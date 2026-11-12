@@ -1324,8 +1324,16 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               )}
               {busy && (live.length > 0 || !streamed) && <LiveSteps tools={live} thinking={live.every((tool) => tool.status === "done") && !streamed} />}
               {busy && streamed && (
-                <div aria-busy="true">
-                  <Markdown text={streamed} />
+                <div className="flex flex-col gap-2">
+                  <div aria-busy="true">
+                    <Markdown text={streamed} />
+                  </div>
+                  {live.every((tool) => tool.status === "done") && (
+                    <p role="status" className="text-subtle flex items-center gap-2 text-[12px] leading-[18px]">
+                      <span aria-hidden className="bg-soft size-1.5 shrink-0 animate-pulse rounded-full" />
+                      Working…
+                    </p>
+                  )}
                 </div>
               )}
               {messages

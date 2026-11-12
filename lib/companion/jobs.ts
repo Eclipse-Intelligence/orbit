@@ -387,6 +387,16 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
   return sendResult(auth, jobId, id, toolJson(output), Boolean(output && typeof output === "object" && "error" in output));
 }
 
+export const WEB_STEP_LABEL = "Searching the web";
+
+export async function addCompanionWebStep(auth: AuthenticatedCompanion, jobId: string, body: Record<string, unknown>) {
+  await runningJob(auth, jobId);
+  if (typeof body.id !== "string" || !body.id || (body.status !== "running" && body.status !== "done")) {
+    throw new CrmError("invalid_input", "Send a web step id and a status of running or done.", 400);
+  }
+  await addEvent(auth, jobId, { type: "tool", id: `web-${body.id.slice(0, 116)}`, name: "web_search", label: WEB_STEP_LABEL, status: body.status });
+}
+
 export const DRAFT_MAX = 200_000;
 
 export async function saveCompanionDraft(auth: AuthenticatedCompanion, jobId: string, text: unknown) {

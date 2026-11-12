@@ -10,6 +10,7 @@ import type {
   CompanionSteered,
   CompanionStep,
   CompanionToolResult,
+  CompanionWebStep,
 } from "./protocol";
 import { PROPOSED } from "./protocol";
 import { shapeFor } from "./schema";
@@ -24,6 +25,7 @@ type TurnDeps = {
   signal?: AbortSignal;
   onTool?: (name: string) => void;
   onDraft?: (text: string) => void;
+  onWebStep?: (step: CompanionWebStep) => void;
   steers?: () => Promise<CompanionSteer[]>;
   steerEveryMs?: number;
 };
@@ -231,8 +233,9 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
           } else if (block.type === "tool_use") {
             if (block.name.startsWith(PREFIX)) {
               step.calls.push({ id: block.id, name: block.name.slice(PREFIX.length), arguments: JSON.stringify(block.input ?? {}) });
-            } else if (block.name === "WebSearch") {
+            } else if (block.name === "WebSearch" && !webCalls.has(block.id)) {
               webCalls.add(block.id);
+              deps.onWebStep?.({ id: block.id, status: "running" });
             }
           }
         }
@@ -243,6 +246,7 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
         for (const block of content) {
           if (block.type !== "tool_result") continue;
           if (webCalls.has(block.tool_use_id)) {
+            deps.onWebStep?.({ id: block.tool_use_id, status: "done" });
             collectSources(message.tool_use_result, sources);
             continue;
           }

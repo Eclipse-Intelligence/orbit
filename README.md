@@ -805,7 +805,7 @@ Claude account models run through Orbit Agent, a small command-line program on y
 2. In Settings › Connections, AI accounts, choose Pair a Mac. Orbit shows a command with a one-time code that works for 10 minutes:
 
    ```bash
-   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent-1.6.0.tgz orbit-agent --pair ABCD-EFGH --install
+   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent-1.7.0.tgz orbit-agent --pair ABCD-EFGH --install
    ```
 
    The version in the address is the one current when the command was shown. Every `/downloads/orbit-agent-<version>.tgz` address serves the current package (a rewrite in `next.config.ts`), so an older command or an installed agent never gets a 404. On any other Orbit address the command uses that address for the package and adds `--url <address>`.
