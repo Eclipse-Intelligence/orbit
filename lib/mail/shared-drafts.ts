@@ -26,7 +26,7 @@ function firstName(name: string | null | undefined, fallback: string) {
   return name?.trim().split(/\s+/)[0] || fallback;
 }
 
-function draftFailure(error: unknown): never {
+export function draftFailure(error: unknown): never {
   if (isPgError(error) && error.code === "55006") throw new CrmError("conflict", error.message.trim(), 409, { locked: true });
   if (isPgError(error) && error.code === "P0004") throw new CrmError("conflict", error.message.trim(), 409);
   if (isPgError(error) && error.code === "40001") throw new CrmError("conflict", error.message.trim(), 409, { changed: true });

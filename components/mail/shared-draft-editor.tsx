@@ -8,11 +8,12 @@ import { PeopleStack } from "@/components/mail/share-control";
 import { useMailShareEvents, useShareResync } from "@/components/mail/share-live";
 import { DraftRequestError, fetchSharedDraft, saveSharedDraftText } from "@/components/mail/shared-draft-client";
 import type { ChatPerson } from "@/lib/chat/types";
+import { LiveDraft, type LiveDraftStatus } from "@/lib/mail/live-draft-client";
 import { recipientList } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
 import type { MailSharePerson, SharedDraft } from "@/lib/mail/share-types";
 import { draftStateLine, onlyOwnerSends, ownerDraftTitle, personFirstName } from "@/lib/mail/share-view";
-import { newerVersion, reconcileText, sameText, textChanges, type DraftText } from "@/lib/mail/shared-text";
+import { newerVersion, type DraftText } from "@/lib/mail/shared-text";
 import { cn } from "@/lib/utils";
 import CloseIcon from "@/public/assets/images/mail/close.svg";
 import CheckIcon from "@/public/assets/images/mail/check.svg";
@@ -65,13 +66,17 @@ export default function SharedDraftEditor({
   const [base, setBase] = useState<Base | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [save, setSave] = useState<Save>({ kind: "idle" });
+  const [live, setLive] = useState<LiveDraft | null>(null);
+  const [liveStatus, setLiveStatus] = useState<LiveDraftStatus>("opening");
+  const liveRef = useRef<LiveDraft | null>(null);
+  const loadRef = useRef<() => void>(() => undefined);
   const latest = useRef({ text, base, locked: true });
   const seen = useRef<number | null>(null);
   const asked = useRef(0);
   const applied = useRef(0);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const locked = !draft || draft.state !== "editing";
-  const dirty = Boolean(base) && !sameText(base!.text, text);
+  const dirty = Boolean(base) && base!.text.subject !== text.subject;
 
   useEffect(() => {
     latest.current = { text, base, locked };
@@ -86,15 +91,41 @@ export default function SharedDraftEditor({
         seen.current = fresh.version;
         const freshText = textOf(fresh);
         const previous = latest.current.base;
-        const next = fresh.state !== "editing" || !previous ? freshText : reconcileText(previous.text, latest.current.text, freshText);
+        const local = latest.current.text;
+        const subject = fresh.state === "editing" && previous && local.subject !== previous.text.subject ? local.subject : freshText.subject;
+        const next = { subject, body: previous ? local.body : freshText.body };
         latest.current = { ...latest.current, text: next, base: { text: freshText, version: fresh.version } };
+        const open = fresh.state === "editing" || fresh.state === "sending" || fresh.state === "scheduled" || fresh.state === "failed";
+        if (open && !liveRef.current) {
+          const created = new LiveDraft({
+            shareId,
+            user: { id: viewer.id, name: viewer.name, kind: "person" },
+            base: freshText.body,
+            onLocked: () => loadRef.current(),
+            onStatus: setLiveStatus,
+            onFailure: (message) => {
+              setLoadError(message);
+              loadRef.current();
+            },
+          });
+          liveRef.current = created;
+          setLive(created);
+        } else if (!open && liveRef.current) {
+          liveRef.current.close();
+          liveRef.current = null;
+          setLive(null);
+        } else if (fresh.state === "editing") liveRef.current?.refresh();
         setDraft((previous) => (fresh.state === "none" && previous && previous.state !== "none" ? { ...fresh, state: previous.state === "discarded" ? "discarded" : "sent" } : fresh));
         setLoadError(null);
         setBase({ text: freshText, version: fresh.version });
         setText(next);
       })
       .catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Couldn't load the draft. Try again."));
-  }, [shareId]);
+  }, [shareId, viewer.id, viewer.name]);
+
+  useEffect(() => {
+    loadRef.current = load;
+  });
 
   useEffect(() => {
     load();
@@ -106,21 +137,19 @@ export default function SharedDraftEditor({
 
   useShareResync(() => {
     const now = latest.current;
-    if (!now.base || sameText(now.base.text, now.text)) load();
+    if (!now.base || now.base.text.subject === now.text.subject) load();
   });
 
   const saveNow = useCallback(() => {
     const run = chain.current.then(async () => {
       const { text: wanted, base: from, locked: blocked } = latest.current;
-      if (!from || blocked) return;
-      const changes = textChanges(from.text, wanted);
-      if (!changes) return;
+      if (!from || blocked || wanted.subject === from.text.subject) return;
       setSave({ kind: "saving" });
       try {
-        const saved = await saveSharedDraftText(shareId, changes, from.version);
+        const saved = await saveSharedDraftText(shareId, { subject: wanted.subject, body: null }, null);
         if (saved.version >= (seen.current ?? 0)) {
           seen.current = saved.version;
-          const settled = { text: wanted, version: saved.version };
+          const settled = { text: { ...from.text, subject: wanted.subject }, version: saved.version };
           latest.current = { ...latest.current, base: settled };
           setBase(settled);
         }
@@ -144,8 +173,7 @@ export default function SharedDraftEditor({
   useEffect(() => {
     const flush = () => {
       const { text: wanted, base: from, locked: blocked } = latest.current;
-      const changes = from && !blocked ? textChanges(from.text, wanted) : null;
-      if (changes && from) void saveSharedDraftText(shareId, changes, from.version, true).catch(() => undefined);
+      if (from && !blocked && wanted.subject !== from.text.subject) void saveSharedDraftText(shareId, { subject: wanted.subject, body: null }, null, true).catch(() => undefined);
     };
     const hidden = () => {
       if (document.visibilityState === "hidden") flush();
@@ -163,7 +191,7 @@ export default function SharedDraftEditor({
   const subjectShown = draft?.mode === "new" || draft?.mode === "forward";
   const gone = draft?.state === "sent" || draft?.state === "discarded" || draft?.state === "none";
   const everyone = [...people.filter((person) => person.owner), ...people.filter((person) => !person.owner)];
-  const status = save.kind === "saving" ? "Saving…" : save.kind === "saved" && !dirty ? "Saved" : "";
+  const status = liveStatus === "offline" ? "Offline" : save.kind === "saving" ? "Saving…" : save.kind === "saved" && !dirty ? "Saved" : "";
 
   return (
     <section aria-label={title} className="bg-surface-panel flex flex-col rounded-2xl">
@@ -244,6 +272,7 @@ export default function SharedDraftEditor({
               placeholder="Write the email"
               fill={false}
               readOnly={locked}
+              live={live}
             />
             {draft.signature && <p className="caption-style text-subtle pb-1 whitespace-pre-wrap">{draft.signature}</p>}
             {draft.attachments.length > 0 && (

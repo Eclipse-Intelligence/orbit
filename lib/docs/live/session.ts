@@ -142,6 +142,7 @@ type Options<Summary> = {
   transport: LiveTransport | null;
   server: LiveServer<Summary>;
   timing?: Partial<SessionTiming>;
+  topic?: string;
 };
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -163,6 +164,7 @@ export class LiveSession<Summary = unknown> {
   private readonly timing: SessionTiming;
   private readonly transport: LiveTransport | null;
   private readonly server: LiveServer<Summary>;
+  private readonly topic: string;
   private channel: LiveChannel | null = null;
   private channelToken: symbol | null = null;
   private joined = false;
@@ -215,6 +217,7 @@ export class LiveSession<Summary = unknown> {
     this.title = options.title;
     this.transport = options.transport;
     this.server = options.server;
+    this.topic = options.topic ?? docTopic(options.pageId);
     this.timing = { ...DEFAULT_TIMING, ...options.timing };
     for (const [client, clock] of options.own ?? []) this.own.set(client, clock);
     this.awareness = new Awareness(this.doc);
@@ -471,7 +474,7 @@ export class LiveSession<Summary = unknown> {
     if (!this.transport || this.channel) return;
     const token = Symbol("channel");
     this.channelToken = token;
-    this.channel = this.transport.open(docTopic(this.pageId), {
+    this.channel = this.transport.open(this.topic, {
       message: (event, payload) => {
         if (this.channelToken === token) this.receive(event, payload);
       },

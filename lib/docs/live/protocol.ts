@@ -45,7 +45,11 @@ export function chatTopic(conversationId: string) {
   return `chat:${conversationId.toLowerCase()}`;
 }
 
-export type TopicTarget = { kind: "doc" | "workspace" | "person" | "chat"; id: string };
+export function draftTopic(shareId: string) {
+  return `draft:${shareId.toLowerCase()}`;
+}
+
+export type TopicTarget = { kind: "doc" | "workspace" | "person" | "chat" | "draft"; id: string };
 
 export function parseTopic(topic: string): TopicTarget | null {
   const [prefix, id, ...rest] = topic.split(":");
@@ -54,6 +58,7 @@ export function parseTopic(topic: string): TopicTarget | null {
   if (prefix === "docs-workspace") return { kind: "workspace", id: id.toLowerCase() };
   if (prefix === "docs-person") return { kind: "person", id: id.toLowerCase() };
   if (prefix === "chat") return { kind: "chat", id: id.toLowerCase() };
+  if (prefix === "draft") return { kind: "draft", id: id.toLowerCase() };
   return null;
 }
 
@@ -62,5 +67,6 @@ export function canonicalTopic(topic: string) {
   if (!target) return null;
   if (target.kind === "doc") return docTopic(target.id);
   if (target.kind === "chat") return chatTopic(target.id);
+  if (target.kind === "draft") return draftTopic(target.id);
   return target.kind === "workspace" ? workspaceTopic(target.id) : personTopic(target.id);
 }

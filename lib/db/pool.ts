@@ -68,3 +68,20 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
 }
 
 export type Db = PoolClient;
+
+export async function appTransaction<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const result = await fn(client);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+}

@@ -2,9 +2,8 @@ import { EditorState, Transaction, type ChangeSet } from "@codemirror/state";
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type * as Y from "yjs";
 import { ySync, ySyncAnnotation, ySyncFacet, YSyncConfig } from "y-codemirror.next";
-import { liveSlot } from "@/lib/docs/editor/live-slot";
+import { external, liveSlot } from "@/lib/docs/editor/live-slot";
 import { setPresence } from "@/lib/docs/editor/presence";
-import { external } from "@/lib/docs/editor/setup";
 import { RECONCILE, type LiveSession } from "@/lib/docs/live/session";
 import { changesBetween, rebase } from "@/lib/docs/live/rebase";
 
