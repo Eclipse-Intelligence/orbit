@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type K
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { DateTimePicker } from "@/components/_ui/date-picker";
+import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { listGroups } from "@/components/crm/clickup";
@@ -28,10 +29,22 @@ import UserIcon from "@/public/assets/images/tasks/user.svg";
 type Mention = { start: number; end: number; query: string };
 type Suggestion = { kind: "company" | "contact"; option: PadOption };
 type Override<T> = { set: boolean; value: T };
+type PadContact = PadRecord & { company: PadRecord | null };
 type Variant = "card" | "inline";
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
 const unset = <T,>(): Override<T> => ({ set: false, value: undefined as T });
+
+const NOTHING: PadDetection = {
+  company: null,
+  contact: null,
+  opportunity: null,
+  contactTitle: null,
+  companyDomain: null,
+  matchedBy: null,
+  word: null,
+  ask: null,
+};
 
 const CHIP_BASE =
   "inline-flex h-7 max-w-[16rem] min-w-0 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12.5px] leading-none whitespace-nowrap outline-none transition-[background-color,color,box-shadow] duration-150 ease-power3-out focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3 [&_svg]:shrink-0";
@@ -58,6 +71,7 @@ function SearchChip({
   companyId,
   variant,
   onPick,
+  onClosed,
 }: {
   kind: PadSearchKind;
   icon: Icon;
@@ -66,14 +80,16 @@ function SearchChip({
   companyId: string | null;
   variant: Variant;
   onPick: (option: PadOption | null) => void;
+  onClosed: () => void;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ key: string; options: PadOption[] } | null>(null);
+  const [results, setResults] = useState<{ key: string; options: PadOption[]; failed?: boolean } | null>(null);
   const [highlight, setHighlight] = useState(0);
   const key = `${kind}|${companyId ?? ""}|${query.trim()}`;
-  const options = results?.key === key ? results.options : null;
+  const current = results?.key === key ? results : null;
+  const options = current && !current.failed ? current.options : null;
   const active = options && options.length > 0 ? Math.min(highlight, options.length - 1) : -1;
   const noun = kind === "contact" ? "people" : kind === "company" ? "companies" : "opportunities";
 
@@ -84,7 +100,7 @@ function SearchChip({
     const timer = window.setTimeout(() => {
       searchTaskLinksAction(kind, text, companyId).then(
         (found) => !cancelled && setResults({ key, options: found }),
-        () => !cancelled && setResults({ key, options: [] }),
+        () => !cancelled && setResults({ key, options: [], failed: true }),
       );
     }, 150);
     return () => {
@@ -108,12 +124,19 @@ function SearchChip({
           <span className="truncate">{value?.name ?? label}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(19rem,calc(100vw-2rem))] p-1">
+      <PopoverContent
+        align="start"
+        className="w-[min(19rem,calc(100vw-2rem))] p-1"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          onClosed();
+        }}
+      >
         <div className="p-1">
           <label htmlFor={`${id}-search`} className="sr-only">
             Search {noun}
           </label>
-          <input
+          <Input
             id={`${id}-search`}
             role="combobox"
             aria-expanded
@@ -128,7 +151,7 @@ function SearchChip({
               setHighlight(0);
             }}
             onKeyDown={(event) => {
-              if (!options || options.length === 0) return;
+              if (!options || options.length === 0 || event.nativeEvent.isComposing) return;
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 setHighlight((active + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length);
@@ -137,9 +160,14 @@ function SearchChip({
                 choose(options[active]);
               }
             }}
-            className="border-line-strong bg-secondary text-foreground focus-visible:border-ring placeholder:text-subtle h-8 w-full rounded-lg border px-2.5 text-[13px] outline-none max-md:h-10 max-md:text-[16px]"
+            className="h-8 px-2.5 text-[13px] max-md:h-10"
           />
         </div>
+        {current?.failed && (
+          <p role="alert" className="caption-style text-danger px-2.5 py-2">
+            Couldn&apos;t search. Try again.
+          </p>
+        )}
         <ul id={`${id}-list`} role="listbox" aria-label={noun} className="flex max-h-64 flex-col overflow-y-auto">
           {(options ?? []).map((option, index) => (
             <li
@@ -181,12 +209,14 @@ function ReminderChip({
   variant,
   onChange,
   onNeedDue,
+  onClosed,
 }: {
   due: string | null;
   value: number | null;
   variant: Variant;
   onChange: (value: number | null) => void;
   onNeedDue: () => void;
+  onClosed: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const clock = due && value !== null ? reminderClock(due, value) : null;
@@ -211,14 +241,20 @@ function ReminderChip({
           {content}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(15rem,calc(100vw-2rem))] p-1">
-        <div role="listbox" aria-label="Reminder" className="flex max-h-72 flex-col overflow-y-auto">
+      <PopoverContent
+        align="start"
+        className="w-[min(15rem,calc(100vw-2rem))] p-1"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          onClosed();
+        }}
+      >
+        <div role="group" aria-label="Reminder" className="flex max-h-72 flex-col overflow-y-auto">
           {[{ minutes: null, label: "No reminder" }, ...REMINDER_OPTIONS].map((option) => (
             <button
               key={option.label}
               type="button"
-              role="option"
-              aria-selected={option.minutes === value}
+              aria-pressed={option.minutes === value}
               onClick={() => {
                 setOpen(false);
                 onChange(option.minutes);
@@ -239,7 +275,17 @@ function ReminderChip({
   );
 }
 
-function ClickUpButton({ picker, listId, onChange }: { picker: ClickUpPicker; listId: string | null; onChange: (listId: string | null) => void }) {
+function ClickUpButton({
+  picker,
+  listId,
+  onChange,
+  onClosed,
+}: {
+  picker: ClickUpPicker;
+  listId: string | null;
+  onChange: (listId: string | null) => void;
+  onClosed: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const current = picker.lists.find((list) => list.id === listId) ?? null;
   return (
@@ -256,7 +302,14 @@ function ClickUpButton({ picker, listId, onChange }: { picker: ClickUpPicker; li
           <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(18rem,calc(100vw-2rem))] p-1.5">
+      <PopoverContent
+        align="start"
+        className="w-[min(18rem,calc(100vw-2rem))] p-1.5"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          onClosed();
+        }}
+      >
         <div className="flex max-h-72 flex-col overflow-y-auto">
           {listGroups(picker.lists).map((group) => (
             <div key={group.label} className="flex flex-col">
@@ -265,6 +318,7 @@ function ClickUpButton({ picker, listId, onChange }: { picker: ClickUpPicker; li
                 <button
                   key={list.id}
                   type="button"
+                  aria-pressed={list.id === listId}
                   onClick={() => {
                     onChange(list.id);
                     setOpen(false);
@@ -295,11 +349,13 @@ function ClickUpButton({ picker, listId, onChange }: { picker: ClickUpPicker; li
   );
 }
 
-function StaticChip({ icon: ChipIcon, label, variant }: { icon: Icon; label: string; variant: Variant }) {
+function StaticChip({ icon: ChipIcon, label, name, variant }: { icon: Icon; label: string; name: string; variant: Variant }) {
   return (
-    <span className={cn(chipClass("on", variant), "cursor-default")}>
+    <span role="img" aria-label={`${label}: ${name}`} className={cn(chipClass("on", variant), "cursor-default")}>
       <ChipIcon aria-hidden />
-      <span className="truncate">{label}</span>
+      <span aria-hidden className="truncate">
+        {name}
+      </span>
     </span>
   );
 }
@@ -334,21 +390,22 @@ export default function TaskPad({
   const input = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState("");
   const [mention, setMention] = useState<Mention | null>(null);
+  const muted = useRef<number | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [highlight, setHighlight] = useState(0);
-  const [detected, setDetected] = useState<{ text: string; value: PadDetection } | null>(null);
+  const [detected, setDetected] = useState<{ text: string; scope: string | null; value: PadDetection } | null>(null);
   const [ai, setAi] = useState<{ text: string; value: PadAiParse } | null>(null);
   const [reading, setReading] = useState(false);
   const [due, setDue] = useState<Override<string | null>>(unset);
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
-  const startContact = (): Override<PadRecord | null> => (initialContact ? { set: true, value: initialContact } : unset());
+  const startContact = (): Override<PadContact | null> => (initialContact ? { set: true, value: { ...initialContact, company: null } } : unset());
   const [company, setCompany] = useState<Override<PadRecord | null>>(startCompany);
-  const [contact, setContact] = useState<Override<PadRecord | null>>(startContact);
+  const [contact, setContact] = useState<Override<PadContact | null>>(startContact);
   const [opportunity, setOpportunity] = useState<Override<PadRecord | null>>(unset);
   const [list, setList] = useState<Override<string | null>>(unset);
   const [owner, setOwner] = useState<string | null>(viewerId);
-  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<string[]>([]);
   const [picked, setPicked] = useState<{ id: string; word: string } | null>(null);
   const [askOpen, setAskOpen] = useState(true);
   const [choice, setChoice] = useState(0);
@@ -364,23 +421,41 @@ export default function TaskPad({
   const finalDue = due.set ? due.value : autoDue;
   const autoReminder = aiFits ? ai.value.remindMinutes : parsed.remindMinutes;
   const finalReminder = finalDue ? (reminder.set ? reminder.value : autoReminder) : null;
+  const anchor = fixedCompany ?? (company.set ? company.value : null);
+  const scope = anchor?.id ?? null;
   const seen = text.trim().length >= 3 ? (detected?.value ?? null) : null;
-  const fits = (record: { company: PadRecord | null } | null | undefined) => !fixedCompany || !record?.company || record.company.id === fixedCompany.id;
-  const finalContact = contact.set ? contact.value : seen?.contact && fits(seen.contact) ? seen.contact : null;
-  const finalCompany = fixedCompany ?? (company.set ? company.value : (seen?.company ?? seen?.contact?.company ?? null));
-  const spotted = seen?.opportunity && finalCompany && finalCompany.id === seen.opportunity.companyId ? seen.opportunity : null;
-  const finalOpportunity = opportunity.set ? opportunity.value : spotted;
-  const pending = !fixedCompany && !contact.set && !company.set && !opportunity.set && detected?.text !== text;
+  const shown = resolve(seen);
+  const finalContact = shown.contact;
+  const finalCompany = shown.company;
+  const finalOpportunity = shown.opportunity;
+  const ask = shown.ask;
   const finalList = clickup ? (list.set ? list.value : clickup.listId) : null;
   const assignable = Boolean(viewerId) && members.length > 1;
   const assignee = members.find((member) => member.id === owner) ?? null;
-  const choices = seen?.ask ? seen.ask.candidates.filter(fits) : [];
-  const ask = !contact.set && !finalContact && seen?.ask && seen.ask.word !== dismissed && choices.length > 0 ? { word: seen.ask.word, candidates: choices } : null;
   const asking = ask !== null && askOpen;
-  const detectedContact = !contact.set && seen?.contact && finalContact?.id === seen.contact.id;
-  const detectedCompany = !fixedCompany && !company.set && !finalContact && seen?.company && finalCompany?.id === seen.company.id;
+  const detectedContact = shown.fromText;
+  const detectedCompany = !fixedCompany && !company.set && !contact.set && !finalContact && seen?.company && finalCompany?.id === seen.company.id;
   const confirm = seen && (detectedContact || detectedCompany) ? padConfirmLine(seen) : null;
+  const listing = mention !== null && suggestions.length > 0;
   const card = variant === "card";
+
+  function fits(record: { company: PadRecord | null } | null | undefined) {
+    return !anchor || !record?.company || record.company.id === anchor.id;
+  }
+
+  function resolve(found: PadDetection | null) {
+    const fromText = !contact.set && Boolean(found?.contact) && fits(found?.contact);
+    const person: PadContact | null = contact.set ? contact.value : fromText && found?.contact ? found.contact : null;
+    const named = found?.company && nameMarks(text, [found.company.name]).length > 0 ? found.company : null;
+    const auto = fromText ? (found?.company ?? found?.contact?.company ?? null) : (named ?? person?.company ?? null);
+    const place = fixedCompany ?? (company.set ? company.value : auto);
+    const spotted = found?.opportunity && place && place.id === found.opportunity.companyId ? found.opportunity : null;
+    const deal = opportunity.set ? opportunity.value : spotted;
+    const choices = found?.ask ? found.ask.candidates.filter(fits) : [];
+    const question =
+      !contact.set && !person && found?.ask && !dismissed.includes(found.ask.word) && choices.length > 0 ? { word: found.ask.word, candidates: choices } : null;
+    return { contact: person, company: place, opportunity: deal, ask: question, fromText };
+  }
 
   useEffect(() => {
     const node = input.current;
@@ -393,8 +468,8 @@ export default function TaskPad({
     if (text.trim().length < 3) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void detectTaskRecordsAction(text).then(
-        (value) => !cancelled && setDetected({ text, value }),
+      void detectTaskRecordsAction(text, scope).then(
+        (value) => !cancelled && setDetected({ text, scope, value }),
         () => undefined,
       );
     }, 450);
@@ -402,7 +477,7 @@ export default function TaskPad({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [text]);
+  }, [text, scope]);
 
   useEffect(() => {
     if (!parsed.unsure || text.trim().length < 4) return;
@@ -433,14 +508,17 @@ export default function TaskPad({
       void Promise.all([
         fixedCompany ? Promise.resolve([]) : searchTaskLinksAction("company", query),
         searchTaskLinksAction("contact", query, fixedCompany?.id ?? null),
-      ]).then(([companies, people]) => {
-        if (cancelled) return;
-        setSuggestions([
-          ...people.slice(0, 5).map((option) => ({ kind: "contact" as const, option })),
-          ...companies.slice(0, 5).map((option) => ({ kind: "company" as const, option })),
-        ]);
-        setHighlight(0);
-      });
+      ]).then(
+        ([companies, people]) => {
+          if (cancelled) return;
+          setSuggestions([
+            ...people.slice(0, 5).map((option) => ({ kind: "contact" as const, option })),
+            ...companies.slice(0, 5).map((option) => ({ kind: "company" as const, option })),
+          ]);
+          setHighlight(0);
+        },
+        () => !cancelled && setSuggestions([]),
+      );
     }, 150);
     return () => {
       cancelled = true;
@@ -448,23 +526,35 @@ export default function TaskPad({
     };
   }, [mention, fixedCompany]);
 
-  function refreshMention(value: string, caret: number) {
-    setMention(stripMention(value, caret));
+  function refreshMention(value: string, caret: number, typed = false) {
+    const found = stripMention(value, caret);
+    if (typed) muted.current = null;
+    setMention(found && found.start === muted.current ? null : found);
   }
 
   function linkContact(option: PadOption | null) {
-    setContact({ set: true, value: option ? { id: option.id, name: option.name } : null });
-    if (option?.company && !fixedCompany && !(company.set && company.value)) setCompany({ set: true, value: option.company });
+    setContact({ set: true, value: option ? { id: option.id, name: option.name, company: option.company } : null });
+    if (!option?.company || fixedCompany) return;
+    if (finalCompany?.id !== option.company.id) {
+      setCompany({ set: true, value: option.company });
+      if (finalOpportunity) setOpportunity({ set: true, value: null });
+    }
   }
 
   function linkCompany(option: PadOption | null) {
     setCompany({ set: true, value: option ? { id: option.id, name: option.name } : null });
-    if (!option || (finalOpportunity && option.id !== finalCompany?.id)) setOpportunity({ set: true, value: null });
+    if (option?.id !== finalCompany?.id) {
+      if (finalOpportunity) setOpportunity({ set: true, value: null });
+      if (finalContact?.company && finalContact.company.id !== option?.id) setContact({ set: true, value: null });
+    }
   }
 
   function linkOpportunity(option: PadOption | null) {
     setOpportunity({ set: true, value: option ? { id: option.id, name: option.name } : null });
-    if (option?.company && !fixedCompany && finalCompany?.id !== option.company.id) setCompany({ set: true, value: option.company });
+    if (option?.company && !fixedCompany && finalCompany?.id !== option.company.id) {
+      setCompany({ set: true, value: option.company });
+      if (finalContact?.company && finalContact.company.id !== option.company.id) setContact({ set: true, value: null });
+    }
   }
 
   function pick(suggestion: Suggestion) {
@@ -494,7 +584,7 @@ export default function TaskPad({
     if (option) {
       linkContact(option);
       if (ask) setPicked({ id: option.id, word: ask.word });
-    } else if (ask) setDismissed(ask.word);
+    } else if (ask) setDismissed((current) => [...current, ask.word]);
     setChoice(0);
     focusAt();
   }
@@ -512,10 +602,22 @@ export default function TaskPad({
     setOpportunity(unset());
     setList(unset());
     setOwner(viewerId);
-    setDismissed(null);
+    setDismissed([]);
     setPicked(null);
     setAskOpen(true);
     setChoice(0);
+  }
+
+  async function freshDetection() {
+    if (text.trim().length < 3) return { value: NOTHING, failed: false };
+    if (detected && detected.text === text && detected.scope === scope) return { value: detected.value, failed: false };
+    try {
+      const value = await detectTaskRecordsAction(text, scope);
+      setDetected({ text, scope, value });
+      return { value, failed: false };
+    } catch {
+      return { value: null, failed: true };
+    }
   }
 
   async function submit() {
@@ -523,17 +625,31 @@ export default function TaskPad({
     setBusy(true);
     setError(null);
     setWarning(null);
+    const fresh = await freshDetection();
+    const links = fresh.value ? resolve(fresh.value) : null;
+    if (
+      links &&
+      (links.contact?.id !== finalContact?.id ||
+        links.company?.id !== finalCompany?.id ||
+        links.opportunity?.id !== finalOpportunity?.id ||
+        links.ask?.word !== ask?.word)
+    ) {
+      setBusy(false);
+      focusAt();
+      return;
+    }
+    const chosen = contact.set || company.set || opportunity.set || Boolean(fixedCompany);
     const result = await addPadTaskAction({
       title,
       dueAt: finalDue,
       remindMinutes: finalReminder,
-      ...(pending
-        ? {}
-        : {
-            companyId: finalCompany?.id ?? null,
-            contactId: finalContact?.id ?? null,
-            opportunityId: finalOpportunity?.id ?? null,
-          }),
+      ...(links || chosen
+        ? {
+            companyId: (links?.company ?? finalCompany)?.id ?? null,
+            contactId: (links?.contact ?? (contact.set ? contact.value : null))?.id ?? null,
+            opportunityId: (links?.opportunity ?? (opportunity.set ? opportunity.value : null))?.id ?? null,
+          }
+        : {}),
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
     });
@@ -553,7 +669,8 @@ export default function TaskPad({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (mention && suggestions.length > 0) {
+    if (event.nativeEvent.isComposing) return;
+    if (listing) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         setHighlight((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + suggestions.length) % suggestions.length);
@@ -566,7 +683,7 @@ export default function TaskPad({
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        event.stopPropagation();
+        muted.current = mention?.start ?? null;
         setMention(null);
         return;
       }
@@ -584,7 +701,7 @@ export default function TaskPad({
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
     }
@@ -626,7 +743,7 @@ export default function TaskPad({
       <ChevronDownIcon aria-hidden className={cn("transition-transform duration-150 ease-power3-out", askOpen && "rotate-180")} />
     </button>
   ) : (
-    <SearchChip key="person" kind="contact" icon={UserIcon} label="Person" value={finalContact} companyId={fixedCompany?.id ?? null} variant={variant} onPick={linkContact} />
+    <SearchChip key="person" kind="contact" icon={UserIcon} label="Person" value={finalContact} companyId={fixedCompany?.id ?? null} variant={variant} onPick={linkContact} onClosed={() => focusAt()} />
   );
 
   const chips: ReactNode[] = [
@@ -651,12 +768,13 @@ export default function TaskPad({
       variant={variant}
       onChange={(value) => setReminder({ set: true, value })}
       onNeedDue={() => document.getElementById(`${id}-due`)?.click()}
+      onClosed={() => focusAt()}
     />,
     person,
     fixedCompany ? (
-      <StaticChip key="company" icon={BuildingIcon} label={fixedCompany.name} variant={variant} />
+      <StaticChip key="company" icon={BuildingIcon} label="Company" name={fixedCompany.name} variant={variant} />
     ) : (
-      <SearchChip key="company" kind="company" icon={BuildingIcon} label="Company" value={finalCompany} companyId={null} variant={variant} onPick={linkCompany} />
+      <SearchChip key="company" kind="company" icon={BuildingIcon} label="Company" value={finalCompany} companyId={null} variant={variant} onPick={linkCompany} onClosed={() => focusAt()} />
     ),
     <SearchChip
       key="opportunity"
@@ -667,6 +785,7 @@ export default function TaskPad({
       companyId={finalCompany?.id ?? null}
       variant={variant}
       onPick={linkOpportunity}
+      onClosed={() => focusAt()}
     />,
   ];
   if (assignable && viewerId) {
@@ -726,6 +845,9 @@ export default function TaskPad({
           autoFocus={autoFocus}
           value={text}
           data-shortcut="add-record"
+          data-mention-open={listing ? "" : undefined}
+          readOnly={busy}
+          aria-busy={busy || undefined}
           placeholder={placeholder}
           enterKeyHint="done"
           onChange={(event) => {
@@ -739,12 +861,12 @@ export default function TaskPad({
               setCompany(startCompany());
               setContact(startContact());
               setOpportunity(unset());
-              setDismissed(null);
+              setDismissed([]);
               setPicked(null);
               setAskOpen(true);
             }
             setChoice(0);
-            refreshMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
+            refreshMention(event.target.value, event.target.selectionStart ?? event.target.value.length, true);
           }}
           onSelect={(event) => refreshMention(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
           onKeyDown={onKeyDown}
@@ -756,9 +878,8 @@ export default function TaskPad({
           )}
         />
       </div>
-      {mention && suggestions.length > 0 && (
+      {listing && (
         <ul
-          role="listbox"
           aria-label="Link a contact or company"
           className={cn(
             "bg-popover border-line-strong overflow-hidden rounded-xl border p-1",
@@ -766,9 +887,10 @@ export default function TaskPad({
           )}
         >
           {suggestions.map((suggestion, index) => (
-            <li key={`${suggestion.kind}-${suggestion.option.id}`} role="option" aria-selected={index === highlight}>
+            <li key={`${suggestion.kind}-${suggestion.option.id}`}>
               <button
                 type="button"
+                aria-current={index === highlight || undefined}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => pick(suggestion)}
                 className={cn(
@@ -809,11 +931,12 @@ export default function TaskPad({
         <span id={`${id}-which-label`}>Which {ask.word}?</span>
         <span className="text-faint ml-auto max-md:hidden">Nothing is linked until you pick</span>
       </div>
-      <ul role="listbox" aria-labelledby={`${id}-which-label`} className="flex flex-col">
+      <ul aria-labelledby={`${id}-which-label`} className="flex flex-col">
         {[...ask.candidates, null].map((option, index) => (
-          <li key={option?.id ?? "none"} role="option" aria-selected={index === choice}>
+          <li key={option?.id ?? "none"}>
             <button
               type="button"
+              aria-current={index === choice || undefined}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => setChoice(index)}
               onClick={() => answer(option)}
@@ -852,6 +975,12 @@ export default function TaskPad({
         ))}
       </ul>
     </div>
+  );
+
+  const announce = (
+    <p role="status" className="sr-only">
+      {ask ? `Which ${ask.word}? ${ask.candidates.length === 1 ? "1 person" : `${ask.candidates.length} people`} to choose from, or Don't link.` : ""}
+    </p>
   );
 
   const notes = (
@@ -898,11 +1027,12 @@ export default function TaskPad({
   if (card) {
     return (
       <div className={cn("flex flex-col", className)}>
+        {announce}
         {field}
         {chipRow}
         {notes}
         <div className="flex items-center gap-2 p-3 pl-2.5 max-md:pt-3 max-md:pb-2.5">
-          {clickup && <ClickUpButton picker={clickup} listId={finalList} onChange={(value) => setList({ set: true, value })} />}
+          {clickup && <ClickUpButton picker={clickup} listId={finalList} onChange={(value) => setList({ set: true, value })} onClosed={() => focusAt()} />}
           {status}
           <span className="flex-1" />
           {add}
@@ -913,13 +1043,14 @@ export default function TaskPad({
 
   return (
     <div className={className}>
+      {announce}
       <div className="bg-surface-panel @container flex flex-col rounded-2xl shadow-[inset_0_0_0_1px_var(--line-subtle)]">
         {field}
         <div className="flex flex-wrap items-center gap-2 pr-2 pb-2 pl-3">
           {chipRow}
           <div className="order-2 ml-auto flex shrink-0 items-center gap-2 @max-[36rem]:order-4">
             {status}
-            {clickup && <ClickUpButton picker={clickup} listId={finalList} onChange={(value) => setList({ set: true, value })} />}
+            {clickup && <ClickUpButton picker={clickup} listId={finalList} onChange={(value) => setList({ set: true, value })} onClosed={() => focusAt()} />}
             {add}
           </div>
           {(confirm || which || error || warning) && <div className="order-3 flex basis-full flex-col gap-1.5 pr-1">{notes}</div>}

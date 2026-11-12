@@ -255,6 +255,51 @@ describe("task pad record detection", () => {
     const atHalden = await searchPadRecords(owner, "opportunity", "", halden);
     assert.deepEqual(atHalden.map((opportunity) => [opportunity.name, opportunity.company?.id]), [["Halden pilot", halden]]);
     const atAcme = await searchPadRecords(owner, "contact", "", acme);
-    assert.deepEqual(atAcme.map((person) => person.name).sort(), ["Jane Doe", "Priya Shah"]);
+    assert.deepEqual(atAcme.slice(0, 2).map((person) => person.name).sort(), ["Jane Doe", "Priya Shah"]);
+    assert.ok(atAcme.some((person) => person.name === "Jane Smith"), "a company only puts its people first");
+    assert.ok(!atAcme.some((person) => person.name === "Sam Okafor"), "teammates are never offered");
+  });
+
+  it("asks about an earlier shared name rather than proposing a later unique one", async () => {
+    const found = await detectPadRecords(owner, "Call Jane and Priya");
+    assert.equal(found.contact, null);
+    assert.equal(found.ask?.word, "Jane");
+  });
+
+  it("does not read the leading verb as a surname", async () => {
+    await createContact(owner, { firstName: "Bill", lastName: "Chase", email: "bill@chase-pad.test" });
+    const found = await detectPadRecords(owner, "Chase Priya for the invoice");
+    assert.equal(found.contact?.id, priya);
+    const mid = await detectPadRecords(owner, "Invoice from Chase");
+    assert.equal(mid.contact?.name, "Bill Chase");
+  });
+
+  it("counts each name on its own, so many matches never look unique", async () => {
+    for (let index = 0; index < 9; index += 1) {
+      await createContact(owner, { firstName: "John", lastName: `Tester${String.fromCharCode(65 + index)}`, email: `john${index}@many-pad.test` });
+    }
+    await createContact(owner, { firstName: "Oscar", lastName: "Lone", email: "oscar@lone-pad.test" });
+    const many = await detectPadRecords(owner, "Ask John to call Oscar");
+    assert.equal(many.contact, null);
+    assert.equal(many.ask?.word, "John");
+    assert.equal(many.ask?.candidates.length, 6);
+    const lone = await detectPadRecords(owner, "Ask Oscar to call John");
+    assert.equal(lone.contact?.name, "Oscar Lone");
+  });
+
+  it("scopes a shared first name to the company chosen on the card", async () => {
+    const found = await detectPadRecords(owner, "Call Jane", { companyId: acme });
+    assert.equal(found.contact?.name, "Jane Doe");
+    const elsewhere = await detectPadRecords(owner, "Call Priya", { companyId: halden });
+    assert.equal(elsewhere.contact, null);
+    assert.deepEqual(elsewhere.ask?.candidates.map((candidate) => candidate.name), ["Priya Shah"]);
+  });
+
+  it("finds a full name that contains a date word, but never a date word alone", async () => {
+    const media = (await createCompany(owner, { name: "Friday Media", domain: "friday-pad.test" })).body.company.id;
+    const found = await detectPadRecords(owner, "Chase Friday Media invoice");
+    assert.equal(found.company?.id, media);
+    const monday = await detectPadRecords(owner, "Call Priya Monday");
+    assert.notEqual(monday.company?.name, "Monday");
   });
 });

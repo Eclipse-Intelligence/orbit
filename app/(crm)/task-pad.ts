@@ -19,10 +19,10 @@ import {
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
-export async function detectTaskRecordsAction(text: string): Promise<PadDetection> {
+export async function detectTaskRecordsAction(text: string, companyId: string | null = null): Promise<PadDetection> {
   const user = await getUserActor();
   if (!user || typeof text !== "string") return NO_PAD_DETECTION;
-  return detectPadRecords(user, text);
+  return detectPadRecords(user, text, { companyId: typeof companyId === "string" && isUuid(companyId) ? companyId : null });
 }
 
 const SEARCH_KINDS: PadSearchKind[] = ["contact", "company", "opportunity"];

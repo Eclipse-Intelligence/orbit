@@ -165,7 +165,10 @@ function TaskSheet({ children }: { children: ReactNode }) {
     <DialogContent
       closeButton={false}
       aria-describedby={undefined}
-      className="top-[14vh] max-w-[664px] translate-y-0 rounded-2xl max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-w-none max-md:translate-x-0 max-md:rounded-t-[20px] max-md:rounded-b-none max-md:border-x-0 max-md:border-b-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:data-[keyboard]:pb-0 max-md:data-[state=closed]:slide-out-to-bottom max-md:data-[state=closed]:zoom-out-100 max-md:data-[state=open]:slide-in-from-bottom max-md:data-[state=open]:zoom-in-100"
+      onEscapeKeyDown={(event) => {
+        if (document.activeElement instanceof HTMLElement && document.activeElement.dataset.mentionOpen !== undefined) event.preventDefault();
+      }}
+      className="max-md:max-h-[var(--sheet-max,100dvh)] max-md:[&_[data-slot=scroll-area-viewport]]:max-h-[calc(var(--sheet-max,100dvh)-1.25rem)] top-[14vh] max-w-[664px] translate-y-0 rounded-2xl max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-w-none max-md:translate-x-0 max-md:rounded-t-[20px] max-md:rounded-b-none max-md:border-x-0 max-md:border-b-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:data-[keyboard]:pb-0 max-md:data-[state=closed]:slide-out-to-bottom max-md:data-[state=closed]:zoom-out-100 max-md:data-[state=open]:slide-in-from-bottom max-md:data-[state=open]:zoom-in-100"
     >
       <SheetGrab />
       {children}

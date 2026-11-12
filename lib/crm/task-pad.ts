@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
+import { isUuid } from "@/lib/crm/mutate";
 import { likePattern } from "@/lib/crm/normalize";
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
 import { assertScope } from "@/lib/crm/scopes";
@@ -62,10 +63,15 @@ function nameRanges(text: string, names: Iterable<string>) {
 }
 
 export function padNameWords(text: string) {
-  const words: string[] = [];
+  const words: { word: string; leading: boolean }[] = [];
   for (const match of text.matchAll(NAME_WORD)) {
     const word = match[0].replace(/['’]s$/u, "").replace(/['’-]+$/u, "");
-    if (word.length >= 2 && !words.includes(word)) words.push(word);
+    if (word.length < 2) continue;
+    const before = text.slice(0, match.index ?? 0).trimEnd();
+    const leading = before === "" || /[.!?:;]$/u.test(before);
+    const known = words.find((entry) => entry.word === word);
+    if (known) known.leading = known.leading && leading;
+    else words.push({ word, leading });
   }
   return words;
 }
@@ -80,10 +86,15 @@ type NameRow = {
   company_name: string | null;
 };
 
+type WordRow = NameRow & { word: string; total: number; here: number };
+
 const NAME_ROW_SQL = `select c.id, trim(concat_ws(' ', nullif(trim(c.first_name), ''), nullif(trim(c.last_name), ''))) as name,
     trim(c.first_name) as first, trim(c.last_name) as last, c.job_title, c.company_id, co.name as company_name
   from crm.contacts c
   left join crm.companies co on co.id = c.company_id`;
+
+const NOT_MEMBER = (members: string) =>
+  `lower(regexp_replace(trim(concat_ws(' ', c.first_name, c.last_name)), '\\s+', ' ', 'g')) <> all(${members}::text[])`;
 
 function option(row: NameRow): PadOption {
   return {
@@ -94,62 +105,75 @@ function option(row: NameRow): PadOption {
   };
 }
 
-async function memberFirstNames(db: Db, workspaceId: string) {
-  const result = await db.query<{ first: string | null }>(
-    `select split_part(trim(p.full_name), ' ', 1) as first
-     from crm.workspace_members m
-     join crm.profiles p on p.id = m.user_id
-     where m.workspace_id = $1`,
-    [workspaceId],
-  );
-  return new Set(result.rows.flatMap((row) => (row.first ? [folded(row.first)] : [])));
-}
-
 async function nameMatches(db: Db, workspaceId: string, text: string, companyId: string | null, members: Set<string>) {
   const words = padNameWords(text);
   if (words.length === 0) return { contact: null, ask: null };
-  const teammates = await memberFirstNames(db, workspaceId);
-  const rows = await db.query<NameRow>(
-    `${NAME_ROW_SQL}
-     where c.workspace_id = $1 and c.archived_at is null
-       and (trim(c.first_name) = any($2::text[]) or trim(c.last_name) = any($2::text[]))
-     order by c.updated_at desc, c.id
-     limit 60`,
-    [workspaceId, words],
+  const teammates = new Set([...members].map((name) => name.split(" ")[0]));
+  const rows = await db.query<WordRow>(
+    `select w.word, x.*
+     from unnest($2::text[]) with ordinality as w(word, position)
+     cross join lateral (
+       select c.id, trim(concat_ws(' ', nullif(trim(c.first_name), ''), nullif(trim(c.last_name), ''))) as name,
+         trim(c.first_name) as first, trim(c.last_name) as last, c.job_title, c.company_id, co.name as company_name,
+         (count(*) over ())::int as total,
+         (count(*) filter (where c.company_id = $4::uuid) over ())::int as here
+       from crm.contacts c
+       left join crm.companies co on co.id = c.company_id
+       where c.workspace_id = $1 and c.archived_at is null
+         and (trim(c.first_name) = w.word or (trim(c.last_name) = w.word and not (w.word = any($5::text[]))))
+         and ${NOT_MEMBER("$3")}
+       order by coalesce(c.company_id = $4::uuid, false) desc, c.updated_at desc, c.id
+       limit ${ASK_LIMIT + 1}
+     ) x
+     order by w.position`,
+    [workspaceId, words.map((entry) => entry.word), [...members], companyId, words.filter((entry) => entry.leading).map((entry) => entry.word)],
   );
-  const people = rows.rows.filter((row) => row.name && !members.has(folded(row.name)));
-  const groups = words.map((word) => {
-    const all = people.filter((row) => row.first === word || row.last === word);
-    const atCompany = companyId ? all.filter((row) => row.company_id === companyId) : [];
-    return { word, rows: atCompany.length > 0 ? atCompany : all, shared: teammates.has(folded(word)) };
-  });
-  const sure = groups.find(
-    (group) => group.rows.length === 1 && !group.shared && (!companyId || !group.rows[0].company_id || group.rows[0].company_id === companyId),
-  );
-  if (sure) return { contact: { row: sure.rows[0], word: sure.word }, ask: null };
-  const unsure = groups.find((group) => group.rows.length > 0);
-  if (!unsure) return { contact: null, ask: null };
-  return { contact: null, ask: { word: unsure.word, candidates: unsure.rows.slice(0, ASK_LIMIT).map(option) } };
+  for (const { word } of words) {
+    const all = rows.rows.filter((row) => row.word === word);
+    if (all.length === 0) continue;
+    const scoped = Boolean(companyId) && all[0].here > 0;
+    const candidates = scoped ? all.filter((row) => row.company_id === companyId) : all;
+    const count = scoped ? all[0].here : all[0].total;
+    const clash = Boolean(companyId) && !scoped && Boolean(candidates[0].company_id);
+    if (count === 1 && !teammates.has(folded(word)) && !clash) return { contact: { row: candidates[0], word }, ask: null };
+    return { contact: null, ask: { word, candidates: candidates.slice(0, ASK_LIMIT).map(option) } };
+  }
+  return { contact: null, ask: null };
 }
 
-export async function detectPadRecordsInDb(db: Db, workspaceId: string, text: string, now = new Date()): Promise<PadDetection> {
+function within(text: string, name: string, ranges: Range[]) {
+  const found = nameRanges(text, [name]);
+  return found.length > 0 && found.every((hit) => ranges.some((range) => hit.start >= range.start && hit.end <= range.end));
+}
+
+export async function detectPadRecordsInDb(
+  db: Db,
+  workspaceId: string,
+  text: string,
+  options: { now?: Date; companyId?: string | null } = {},
+): Promise<PadDetection> {
   const clean = text.slice(0, TEXT_LIMIT);
-  const dates = parseTaskText(clean, now).marks.filter((mark) => mark.kind !== "record");
+  const members = await memberNames(db, workspaceId);
+  const dates = parseTaskText(clean, options.now ?? new Date()).marks.filter((mark) => mark.kind !== "record");
   const plain = blank(clean, dates);
-  const found = await detectTaskRecordsInDb(db, workspaceId, plain, { oneWordCompanies: true });
+  let found = await detectTaskRecordsInDb(db, workspaceId, clean, { oneWordCompanies: true, members });
+  const company = found.company?.name.trim() ?? "";
+  if (company && !/\s/.test(company) && within(clean, company, dates)) {
+    found = await detectTaskRecordsInDb(db, workspaceId, plain, { oneWordCompanies: true, members });
+  }
   const result: PadDetection = { ...NO_PAD_DETECTION, ...found, matchedBy: found.contact ? "full" : null };
   if (!found.contact && plain.trim().length >= 2) {
-    const members = await memberNames(db, workspaceId);
     const named = [found.company?.name, found.opportunity?.name].filter((name): name is string => Boolean(name));
     const rest = blank(plain, [...nameRanges(plain, named), ...nameRanges(plain, members)]);
-    const matched = await nameMatches(db, workspaceId, rest, found.company?.id ?? null, members);
+    const scope = options.companyId && isUuid(options.companyId) ? options.companyId : (found.company?.id ?? null);
+    const matched = await nameMatches(db, workspaceId, rest, scope, members);
     if (matched.contact) {
       const row = matched.contact.row;
-      const company = row.company_id && row.company_name ? { id: row.company_id, name: row.company_name } : null;
-      result.contact = { id: row.id, name: row.name, company };
+      const linked = row.company_id && row.company_name ? { id: row.company_id, name: row.company_name } : null;
+      result.contact = { id: row.id, name: row.name, company: linked };
       result.matchedBy = "name";
       result.word = matched.contact.word;
-      if (!result.company && company) result.company = company;
+      if (!result.company && linked) result.company = linked;
       if (result.opportunity && result.company && result.opportunity.companyId !== result.company.id) result.opportunity = null;
     }
     result.ask = matched.ask;
@@ -162,13 +186,14 @@ export async function detectPadRecordsInDb(db: Db, workspaceId: string, text: st
     const domain = await db.query<{ domain: string | null }>("select domain from crm.companies where id = $1", [result.company.id]);
     result.companyDomain = domain.rows[0]?.domain?.trim() || null;
     const name = result.company.name.trim();
-    if (!result.contact && !/\s/.test(name) && mentionsName(plain, name, { exact: true })) result.word = name;
+    if (!result.contact && !/\s/.test(name) && mentionsName(clean, name, { exact: true })) result.word = name;
   }
   return result;
 }
 
-export async function detectPadRecords(actor: UserActor, text: string, now = new Date()): Promise<PadDetection> {
-  return withActor(actor, (db) => detectPadRecordsInDb(db, actor.workspaceId, text, now));
+export async function detectPadRecords(actor: UserActor, text: string, options: { now?: Date; companyId?: string | null } = {}): Promise<PadDetection> {
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, (db) => detectPadRecordsInDb(db, actor.workspaceId, text, options));
 }
 
 export async function searchPadRecords(actor: UserActor, kind: PadSearchKind, query: string, companyId: string | null = null): Promise<PadOption[]> {
@@ -211,16 +236,13 @@ export async function searchPadRecords(actor: UserActor, kind: PadSearchKind, qu
     const rows = await db.query<NameRow>(
       `${NAME_ROW_SQL}
        where c.workspace_id = $1 and c.archived_at is null
-         and ($2::uuid is null or c.company_id = $2::uuid)
+         and ${NOT_MEMBER("$4")}
          and ($3::text is null or concat_ws(' ', c.first_name, c.last_name) ilike $3 escape '\\' or coalesce(c.email, '') ilike $3 escape '\\')
-       order by c.updated_at desc, c.id
-       limit 20`,
-      [actor.workspaceId, companyId, pattern],
+       order by coalesce(c.company_id = $2::uuid, false) desc, c.updated_at desc, c.id
+       limit 8`,
+      [actor.workspaceId, companyId, pattern, [...members]],
     );
-    return rows.rows
-      .filter((row) => row.name && !members.has(folded(row.name)))
-      .slice(0, 8)
-      .map(option);
+    return rows.rows.filter((row) => row.name).map(option);
   });
 }
 

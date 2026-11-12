@@ -12,6 +12,7 @@ export function useKeyboardLift(ref: RefObject<HTMLElement | null>, selector = '
     const phone = window.matchMedia(PHONE);
     const clear = () => {
       node.style.bottom = "";
+      node.style.removeProperty("--sheet-max");
       delete node.dataset.keyboard;
     };
     const fit = () => {
@@ -21,6 +22,7 @@ export function useKeyboardLift(ref: RefObject<HTMLElement | null>, selector = '
       }
       const covered = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
       node.style.bottom = `${covered}px`;
+      node.style.setProperty("--sheet-max", `${Math.max(160, viewport.height - 8)}px`);
       if (covered > 80) node.dataset.keyboard = "";
       else delete node.dataset.keyboard;
     };
