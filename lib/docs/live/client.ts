@@ -5,6 +5,7 @@ import { clearLiveDraft, readDraft, readLiveDraft, writeLiveDraft } from "@/lib/
 import { setPresence } from "@/lib/docs/editor/presence";
 import { bind, lock, unbind } from "@/lib/docs/live/binding";
 import type { ChatLiveEvent, ChatTyping } from "@/lib/chat/types";
+import { MAIL_SHARE_EVENT_TYPES, type MailShareLiveEvent } from "@/lib/mail/share-types";
 import { chatTopic, personTopic, workspaceTopic, type AlertMessage, type LiveTransportKind, type LiveUser, type WritingMessage } from "@/lib/docs/live/protocol";
 import { onTrustChange, publishPresence, trustedUser, trustWriter } from "@/lib/docs/live/registry";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
@@ -581,6 +582,34 @@ export async function watchChat(source: LiveTransportKind | LiveTransport, userI
       if (closed || event !== "chat" || !payload || typeof payload !== "object") return;
       const chat = payload as ChatLiveEvent;
       if (CHAT_EVENT_TYPES.includes(chat.type) && typeof chat.conversationId === "string") onEvent(chat);
+    },
+    status: (status) => {
+      if (!closed) onJoined(status === "joined");
+    },
+  });
+  return () => {
+    closed = true;
+    channel.close();
+  };
+}
+
+export async function watchMailShares(
+  source: LiveTransportKind | LiveTransport,
+  userId: string,
+  onEvent: (event: MailShareLiveEvent) => void,
+  onJoined: (joined: boolean) => void,
+) {
+  const transport = typeof source === "string" ? await transportFor(source).catch(() => null) : source;
+  if (!transport) {
+    onJoined(false);
+    return () => {};
+  }
+  let closed = false;
+  const channel = openShared(transport, personTopic(userId), {
+    message: (event, payload) => {
+      if (closed || event !== "mail_share" || !payload || typeof payload !== "object") return;
+      const share = payload as MailShareLiveEvent;
+      if (MAIL_SHARE_EVENT_TYPES.includes(share.type) && typeof share.shareId === "string") onEvent({ type: share.type, shareId: share.shareId });
     },
     status: (status) => {
       if (!closed) onJoined(status === "joined");

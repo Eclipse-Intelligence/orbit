@@ -24,10 +24,25 @@ function size(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function MessageAttachments({ messageId, companies = [], workspaceName = "" }: { messageId: string; companies?: Company[]; workspaceName?: string }) {
+export function attachmentUrl(messageId: string, attachmentId: string, shareId: string | null = null) {
+  const query = `message=${encodeURIComponent(messageId)}&id=${encodeURIComponent(attachmentId)}`;
+  return shareId ? `/api/mail/shared/${encodeURIComponent(shareId)}/attachment?${query}` : `/api/mail/attachment?${query}`;
+}
+
+export default function MessageAttachments({
+  messageId,
+  shareId = null,
+  companies = [],
+  workspaceName = "",
+}: {
+  messageId: string;
+  shareId?: string | null;
+  companies?: Company[];
+  workspaceName?: string;
+}) {
   const ownLabel = workspaceName.trim() || "This workspace";
   const [state, setState] = useState<{ id: string; items: Attachment[] | null; error: string | null } | null>(() => {
-    const known = cachedAttachments(messageId);
+    const known = cachedAttachments(messageId, shareId);
     return known ? { id: messageId, items: known, error: null } : null;
   });
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -45,13 +60,13 @@ export default function MessageAttachments({ messageId, companies = [], workspac
 
   useEffect(() => {
     let live = true;
-    loadAttachments(messageId)
+    loadAttachments(messageId, shareId)
       .then((items) => live && setState({ id: messageId, items, error: null }))
       .catch((error: Error) => live && setState({ id: messageId, items: null, error: error.message }));
     return () => {
       live = false;
     };
-  }, [messageId]);
+  }, [messageId, shareId]);
 
   const current = state?.id === messageId ? state : null;
   if (!current) {
@@ -76,7 +91,7 @@ export default function MessageAttachments({ messageId, companies = [], workspac
       <ul aria-label="Attachments" className="flex flex-wrap gap-1.5">
         {current.items.map((item) => {
           const key = `${messageId}|${item.id}`;
-          const url = `/api/mail/attachment?message=${encodeURIComponent(messageId)}&id=${encodeURIComponent(item.id)}`;
+          const url = attachmentUrl(messageId, item.id, shareId);
           const file = { name: item.name, contentType: item.contentType, url, downloadUrl: `${url}&download=1` };
           const failed = (text: string) => setSaved({ key, text, failed: true });
           return (
@@ -91,7 +106,7 @@ export default function MessageAttachments({ messageId, companies = [], workspac
                 <span className="caption-style text-subtle shrink-0">{size(item.size)}</span>
               </AttachmentLink>
               <AttachmentDownload file={file} onError={failed} />
-              {readable(item) && (
+              {!shareId && readable(item) && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon" aria-label={`Add ${item.name} to Knowledge`} title="Add to Knowledge" disabled={saving === key} className="size-8">

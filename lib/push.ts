@@ -122,7 +122,7 @@ function failureReason(error: unknown): PushFailure {
 export async function pushToUser(
   actor: UserActor,
   message: PushMessage,
-  options: { send?: PushSender; endpoint?: string } = {},
+  options: { send?: PushSender; endpoint?: string; keepLink?: boolean } = {},
 ): Promise<{ sent: number; removed: number; failures: PushFailure[] }> {
   const subscriptions = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string; endpoint: string; p256dh: string; auth: string }>(
@@ -138,7 +138,7 @@ export async function pushToUser(
   const payload = JSON.stringify({
     title: message.title.slice(0, 120),
     body: message.body.slice(0, 400),
-    url: await alertLink(actor, message.url),
+    url: options.keepLink ? message.url : await alertLink(actor, message.url),
     tag: message.tag?.slice(0, 200),
     badge: message.badge ?? null,
   });

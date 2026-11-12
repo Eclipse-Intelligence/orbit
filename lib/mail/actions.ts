@@ -1,3 +1,4 @@
+import { chatBackground } from "@/lib/crm/chat";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -5,6 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, reconnectProblem, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
 import { sourceReconnect } from "@/lib/mail/accounts";
+import { announceSharedThreads, shareVisibleRole } from "@/lib/mail/share-live";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailView } from "@/lib/mail/view";
@@ -124,7 +126,7 @@ async function settleReminders(db: Db, actor: UserActor, sourceId: string, key: 
   }
 }
 
-async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder: string | null }[], role: MailRole, providerFolder?: string) {
+async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder: string | null }[], role: MailRole, providerFolder?: string): Promise<string[]> {
   const folders = await db.query<{ id: string; provider_folder_id: string; role: MailRole }>(
     "select id, provider_folder_id, role from crm.mail_folders where source_id = $1",
     [sourceId],
@@ -133,6 +135,17 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
     (providerFolder ? folders.rows.find((folder) => folder.provider_folder_id === providerFolder)?.id : null) ??
     folders.rows.find((folder) => folder.role === role)?.id ??
     null;
+  const before = await db.query<{ id: string; thread_key: string | null; is_draft: boolean; folder_id: string }>(
+    "select id, thread_key, is_draft, folder_id from crm.mail_messages where id = any($1::uuid[])",
+    [moved.map((item) => item.id)],
+  );
+  const current = new Map(before.rows.map((row) => [row.id, row]));
+  const roleOf = (folderId: string | null) => folders.rows.find((folder) => folder.id === folderId)?.role ?? null;
+  const shown = (folderId: string | null, draft: boolean) => {
+    const folderRole = roleOf(folderId);
+    return !draft && folderRole !== null && shareVisibleRole(folderRole);
+  };
+  const touched = new Set<string>();
   for (const item of moved) {
     const local = folders.rows.find((folder) => folder.provider_folder_id === item.folder)?.id ?? fallback;
     if (local) {
@@ -140,7 +153,17 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
     } else {
       await db.query("delete from crm.mail_messages where id = $1", [item.id]);
     }
+    const row = current.get(item.id);
+    if (row?.thread_key && shown(row.folder_id, row.is_draft) !== shown(local, row.is_draft)) touched.add(row.thread_key);
   }
+  return [...touched];
+}
+
+function announceMoves(actor: UserActor, sourceId: string, threadKeys: string[]) {
+  if (threadKeys.length === 0) return;
+  chatBackground(() =>
+    announceSharedThreads(actor.userId, sourceId, threadKeys).catch((error) => console.error("Couldn't announce shared thread changes", error instanceof Error ? error.name : "unknown")),
+  );
 }
 
 async function sourceEmail(actor: UserActor, sourceId: string) {
@@ -213,7 +236,7 @@ export async function applyMailAction(
     done.push({ row, folder: null });
   });
   if (done.length > 0) {
-    await withActor(actor, async (db) => {
+    const touched = await withActor(actor, async (db) => {
       await settleReminders(db, actor, sourceId, key, input.action, until, subject);
       const ids = done.map((item) => item.row.id);
       if (input.action === "read" || input.action === "unread") {
@@ -221,9 +244,11 @@ export async function applyMailAction(
       } else if (input.action === "flag" || input.action === "unflag") {
         await db.query("update crm.mail_messages set is_flagged = $2 where id = any($1::uuid[])", [ids, input.action === "flag"]);
       } else if (move) {
-        await recordMoves(db, sourceId, done.map((item) => ({ id: item.row.id, folder: item.folder })), move.role);
+        return recordMoves(db, sourceId, done.map((item) => ({ id: item.row.id, folder: item.folder })), move.role);
       }
+      return [];
     });
+    announceMoves(actor, sourceId, touched);
   }
   if (failures.length > 0) {
     throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
@@ -263,12 +288,14 @@ export async function moveMessages(
     done.push({ id: message.id, folder: moved.folderId, threadKey: message.threadKey });
   });
   if (done.length > 0) {
-    await withActor(actor, async (db) => {
-      await recordMoves(db, sourceId, done, role, typeof target === "string" ? undefined : target.providerFolderId);
+    const touched = await withActor(actor, async (db) => {
+      const keys = await recordMoves(db, sourceId, done, role, typeof target === "string" ? undefined : target.providerFolderId);
       if (typeof target === "string") {
         for (const key of new Set(done.map((item) => item.threadKey))) await settleReminders(db, actor, sourceId, key, target, null, null);
       }
+      return keys;
     });
+    announceMoves(actor, sourceId, touched);
   }
   return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };
 }

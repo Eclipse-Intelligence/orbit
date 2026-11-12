@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { pageHref } from "@/lib/docs/routes";
+import { sharedThreadHref } from "@/lib/mail/share-types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -8,7 +9,7 @@ export const DISCUSSION_PARAM = "discussion";
 export const TASK_PARAM = "task";
 
 export function isSubjectKind(value: unknown): value is ChatSubjectKind {
-  return value === "task" || value === "doc";
+  return value === "task" || value === "doc" || value === "mail_thread";
 }
 
 export function readSubject(input: unknown): ChatSubject | null {
@@ -23,6 +24,7 @@ export function taskPanelHref(taskId: string, options: { tagged?: boolean } = {}
 }
 
 export function discussionHref(subject: ChatSubject) {
+  if (subject.kind === "mail_thread") return sharedThreadHref(subject.id, { notes: true });
   return subject.kind === "task" ? taskPanelHref(subject.id) : `${pageHref(subject.id)}?${DISCUSSION_PARAM}=1`;
 }
 

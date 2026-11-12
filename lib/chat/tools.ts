@@ -11,7 +11,7 @@ type PostOptions = { charge?: () => Promise<void> };
 
 const NO_TEAMMATE = () => new CrmError("not_found", "Couldn't find that teammate.", 404, { field: "person" });
 
-const NOT_CHAT = () => new CrmError("not_found", "Conversation not found. Task and doc discussions aren't reachable here.", 404, { field: "conversationId" });
+const NOT_CHAT = () => new CrmError("not_found", "Conversation not found. Task, doc and shared email discussions aren't reachable here.", 404, { field: "conversationId" });
 
 function chatOnly<T extends { kind: string }>(conversation: T) {
   if (conversation.kind !== "room" && conversation.kind !== "dm") throw NOT_CHAT();

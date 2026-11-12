@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 
 export const DISCUSSION_PLACEHOLDER = "Comment… @ to tag";
+export const NOTE_PLACEHOLDER = "Note… @ to tag";
 
 export function holdEscape(discussion: Discussion | null) {
   const active = document.activeElement;
@@ -62,7 +63,17 @@ function Rows({ messages, pane }: { messages: ChatMessage[]; pane: "room" | "thr
   );
 }
 
-export function DiscussionMessages({ discussion, empty = "No comments yet.", className }: { discussion: Discussion; empty?: string; className?: string }) {
+export function DiscussionMessages({
+  discussion,
+  empty = "No comments yet.",
+  label = "Discussion",
+  className,
+}: {
+  discussion: Discussion;
+  empty?: string;
+  label?: string;
+  className?: string;
+}) {
   const { status, error, timeline, reload, loadOlder } = discussion;
   const messages = timeline?.messages ?? [];
   if (status === "loading" && !timeline) {
@@ -85,7 +96,7 @@ export function DiscussionMessages({ discussion, empty = "No comments yet.", cla
     );
   }
   return (
-    <div role="log" aria-label="Discussion" aria-live="polite" className={cn("-mx-5 flex flex-col max-md:-mx-3.5", className)}>
+    <div role="log" aria-label={label} aria-live="polite" className={cn("-mx-5 flex flex-col max-md:-mx-3.5", className)}>
       {timeline?.hasOlder && (
         <Button variant="ghost" size="sm" onClick={loadOlder} className="mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11">
           Show earlier
@@ -106,27 +117,33 @@ export function DiscussionComposer({
   parentId = null,
   autoFocus,
   onEscape,
+  noun = "comment",
 }: {
   discussion: Discussion;
   parentId?: string | null;
   autoFocus?: boolean;
   onEscape?: () => void;
+  noun?: "comment" | "note";
 }) {
   const { viewer, setEditing } = useChat();
   const messages = parentId ? (discussion.thread?.timeline.messages ?? []) : (discussion.timeline?.messages ?? []);
   const root = parentId ? discussion.thread?.root : null;
+  const prompting = Boolean(discussion.needsShare) && discussion.needsShare?.parentId === parentId;
   return (
     <Composer
+      key={discussion.composerVersion}
       id={`discussion-${parentId ?? discussion.draftId}`}
       conversationId={discussion.draftId}
       parentId={parentId}
-      placeholder={parentId ? "Reply…" : DISCUSSION_PLACEHOLDER}
-      label={parentId ? "Reply in thread" : "Comment"}
-      sendLabel={parentId ? "Send reply" : "Send comment"}
+      placeholder={parentId ? "Reply…" : noun === "note" ? NOTE_PLACEHOLDER : DISCUSSION_PLACEHOLDER}
+      label={parentId ? "Reply in thread" : noun === "note" ? "Note" : "Comment"}
+      sendLabel={parentId ? "Send reply" : noun === "note" ? "Send note" : "Send comment"}
       compact
       restoreOnFailure
+      hideFailure={prompting}
+      fallbackDraft={discussion.keptDraft?.parentId === parentId ? discussion.keptDraft : null}
       autoFocus={autoFocus}
-      disabled={Boolean(parentId) && (!root || Boolean(root.deletedAt && root.replyCount === 0))}
+      disabled={prompting || (Boolean(parentId) && (!root || Boolean(root.deletedAt && root.replyCount === 0)))}
       onEscape={onEscape}
       onSend={(text, mentions) =>
         discussion.context.send({

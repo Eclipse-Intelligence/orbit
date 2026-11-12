@@ -5,6 +5,9 @@ import { composeAccounts } from "@/lib/mail/compose";
 import { getThread, listThreads, mailNav } from "@/lib/mail/threads";
 import { readMailView, mailViewParam, type MailNav } from "@/lib/mail/view";
 import { isUuid } from "@/lib/crm/mutate";
+import { ownSharedThreadKey } from "@/lib/mail/shares";
+import { SHARE_NOTES_PARAM, SHARED_PARAM } from "@/lib/mail/share-types";
+import { readShareParam, SHARED_VIEW } from "@/lib/mail/share-view";
 
 export const dynamic = "force-dynamic";
 
@@ -29,18 +32,33 @@ export default async function MailPage({
   const view = readMailView(text(resolved.view) || "inbox");
   const query = text(resolved.q).trim().slice(0, 300);
   const account = isUuid(text(resolved.account)) ? text(resolved.account) : null;
-  const threadKey = text(resolved.thread);
+  const shared = readShareParam(text(resolved[SHARED_PARAM]));
+  const notes = text(resolved[SHARE_NOTES_PARAM]) === "1" && Boolean(shared);
   const compose = text(resolved.compose);
   const scheduledView = text(resolved.view) === "scheduled" && !query;
+  const askedShared = text(resolved.view) === SHARED_VIEW && !query;
   const navPromise = mailNav(user).catch((error) => {
     console.error("Mail nav failed", error);
     return null;
   });
-  const [page, thread, accounts] = await Promise.all([
-    scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId: account, query }),
-    threadKey ? getThread(user, threadKey, { reader: true }).catch(() => null) : Promise.resolve(null),
-    composeAccounts(user).catch(() => []),
+  const empty = { threads: [], next: null };
+  const ownerKeyPromise = shared ? ownSharedThreadKey(user, shared).catch(() => null) : Promise.resolve(null);
+  const list = () => listThreads(user, { view, sourceId: account, query });
+  const [page, thread, accounts, ownerKey] = await Promise.all([
+    scheduledView || askedShared ? Promise.resolve(empty) : shared && !query ? ownerKeyPromise.then((key) => (key ? list() : empty)) : list(),
+    ownerKeyPromise.then((key) => {
+      const wanted = key ?? (shared ? "" : text(resolved.thread));
+      return wanted ? getThread(user, wanted, { reader: true }).catch(() => null) : null;
+    }),
+    composeAccounts(user).catch((error) => {
+      console.error("Mail accounts failed", error);
+      return null;
+    }),
+    ownerKeyPromise,
   ]);
+  const sharedOpen = shared && !ownerKey ? shared : null;
+  const noMailbox = accounts !== null && accounts.length === 0;
+  const sharedView = !query && !ownerKey && !thread && (Boolean(sharedOpen) || askedShared || noMailbox);
 
   return (
     <MailScreen
@@ -53,12 +71,16 @@ export default async function MailPage({
       }}
       initialNav={PARTIAL_NAV}
       navPromise={navPromise}
-      initialQuery={{ view: scheduledView ? "scheduled" : mailViewParam(view), account, query }}
-      initialPage={page}
+      initialQuery={{ view: sharedView ? SHARED_VIEW : scheduledView ? "scheduled" : mailViewParam(view), account, query }}
+      initialPage={sharedView ? empty : page}
       initialThread={thread}
       initialCompose={thread && (compose === "reply" || compose === "prepared") ? compose : null}
+      initialShared={sharedView ? sharedOpen : null}
+      linkedShare={shared}
+      noMailbox={noMailbox}
+      initialNotes={notes}
       initialNow={requestTime()}
-      accounts={accounts}
+      accounts={accounts ?? []}
     />
   );
 }

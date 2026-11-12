@@ -5,11 +5,11 @@ import { openDiscussionAction } from "@/app/(crm)/discussions";
 import type { ChatContextValue, ChatEditing } from "@/components/chat/chat-context";
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
-import { draftKey, newClientKey, writeDraft } from "@/lib/chat/client";
+import { draftKey, newClientKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
 import type { ChatLocation } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, type ChatAction, type ChatState, type ThreadState, type Timeline } from "@/lib/chat/timeline";
-import type { ChatDiscussion, ChatMessage, ChatPerson, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
+import type { ChatDiscussion, ChatMessage, ChatNeedsShare, ChatPerson, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 
 const TIMEOUT_MS = 15_000;
@@ -26,8 +26,14 @@ const NOWHERE: ChatLocation = {
 };
 const NO_NAMES = new Map<string, string>();
 
+export type NeedsSharePrompt = ChatNeedsShare & { parentId: string | null; text: string; mentions: Mention[] };
+
 export type Discussion = {
   subject: ChatSubject;
+  needsShare: NeedsSharePrompt | null;
+  composerVersion: number;
+  keptDraft: { parentId: string | null; text: string; mentions: Mention[] } | null;
+  settleNeedsShare: (added: boolean) => void;
   context: ChatContextValue;
   conversationId: string | null;
   draftId: string;
@@ -77,7 +83,14 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
   const [editing, setEditing] = useState<ChatEditing>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const actions = useChatActions(dispatch, state, viewer.id, setNotice);
+  const [needsShare, setNeedsShare] = useState<NeedsSharePrompt | null>(null);
+  const [composerVersion, setComposerVersion] = useState(0);
+  const [keptDraft, setKeptDraft] = useState<Discussion["keptDraft"]>(null);
+  const refusals = useRef(new Map<string, ChatNeedsShare>());
+  const noteRefusal = useCallback((clientKey: string, needs: ChatNeedsShare) => {
+    refusals.current.set(clientKey, needs);
+  }, []);
+  const actions = useChatActions(dispatch, state, viewer.id, setNotice, noteRefusal);
   const { loadMessages, loadThread, deliver } = actions;
   const joined = useChatJoined();
   const subjectKey = `${enabled ? "on" : "off"}:${draftSubjectKey(subject)}`;
@@ -90,6 +103,8 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
     setServerCount(initialCount);
     setThreadId(null);
     setEditing(null);
+    setNeedsShare(null);
+    setKeptDraft(null);
     dispatch({ type: "reset" });
   }
   const latest = useRef({ conversationId, threadId, subjectKey });
@@ -276,10 +291,39 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
         at: new Date().toISOString(),
       });
       dispatch({ type: "pending", message });
-      if ((await deliver(message)) === null) sent.current?.(message);
-      return null;
+      setNeedsShare(null);
+      setKeptDraft(null);
+      const error = await deliver(message);
+      if (error === null) {
+        sent.current?.(message);
+        return null;
+      }
+      const refused = message.clientKey ? refusals.current.get(message.clientKey) : undefined;
+      if (!refused) return null;
+      refusals.current.delete(message.clientKey!);
+      dispatch({ type: "discard", message });
+      if (latest.current.subjectKey !== asked) return error;
+      writeDraft(draftKey(viewer.id, draftSubjectKey(subject), input.parentId), { text: input.text, mentions: input.mentions });
+      if (refused.canAdd) setNeedsShare({ ...refused, parentId: input.parentId, text: input.text, mentions: input.mentions });
+      return error;
     },
     [deliver, ensureConversation, subject, viewer],
+  );
+
+  const settleNeedsShare = useCallback(
+    (added: boolean) => {
+      const prompt = needsShare;
+      if (!prompt) return;
+      setNeedsShare(null);
+      const key = draftKey(viewer.id, draftSubjectKey(subject), prompt.parentId);
+      const stored = readDraft(key);
+      const current = stored.text.trim() ? stored : { text: prompt.text, mentions: prompt.mentions };
+      writeDraft(key, added ? { text: "", mentions: [] } : current);
+      setKeptDraft(added ? null : { parentId: prompt.parentId, ...current });
+      setComposerVersion((version) => version + 1);
+      if (added && current.text.trim()) void send({ parentId: prompt.parentId, text: current.text, mentions: current.mentions });
+    },
+    [needsShare, send, subject, viewer.id],
   );
 
   const openThread = useCallback(
@@ -330,6 +374,10 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
 
   return {
     subject,
+    needsShare,
+    composerVersion,
+    keptDraft,
+    settleNeedsShare,
     context,
     conversationId,
     draftId,

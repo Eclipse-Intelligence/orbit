@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { announceRemoval, roomsLostOnLeaving } from "@/lib/crm/chat";
+import { announceShareRemoval, sharesLostOnLeaving } from "@/lib/mail/shares";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -142,12 +143,19 @@ export async function removeMember(actor: UserActor, userId: string) {
         return [];
       })
     : [];
+  const shares = isUuid(userId)
+    ? await sharesLostOnLeaving(actor.workspaceId, userId).catch((error) => {
+        console.error("Couldn't read the shared emails they leave", error);
+        return [];
+      })
+    : [];
   try {
     await query("select private.team_remove($1, $2, $3)", [actor.workspaceId, actor.userId, userId]);
   } catch (error) {
     teamError(error);
   }
   await announceRemoval(userId, rooms);
+  await announceShareRemoval(shares);
 }
 
 export async function previewInvite(token: string): Promise<InvitePreview | null> {

@@ -52,6 +52,11 @@ import TrashIcon from "@/public/assets/images/mail/trash.svg";
 import UnsubscribeIcon from "@/public/assets/images/mail/unsubscribe.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import type { UnsubscribeMode } from "@/components/mail/unsubscribe-dialog";
+import { shareThreadAction } from "@/app/(crm)/mail/share-actions";
+import ShareControl, { shareLabel, useThreadShare } from "@/components/mail/share-control";
+import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
+import ThreadNotes, { useNotesLayout } from "@/components/mail/thread-notes";
+import type { ChatPerson } from "@/lib/chat/types";
 
 const MailComposer = dynamic(() => import("@/components/mail/mail-composer"), { ssr: false, loading: () => <ComposerLoading /> });
 const InviteDialog = dynamic(() => import("@/components/crm/invite-dialog"), { ssr: false });
@@ -79,7 +84,7 @@ function useMinute() {
   return useSyncExternalStore<number | null>(watchMinute, minuteNow, () => null);
 }
 
-function When({ at, className }: { at: string | null; className?: string }) {
+export function When({ at, className }: { at: string | null; className?: string }) {
   const now = useMinute();
   if (!at) return null;
   const full = mailFullWhen(at);
@@ -145,7 +150,7 @@ function MenuAction({
   );
 }
 
-function TextBody({ text, hideQuotes }: { text: string; hideQuotes: boolean }) {
+export function TextBody({ text, hideQuotes }: { text: string; hideQuotes: boolean }) {
   const [shown, setShown] = useState(false);
   const core = hideQuotes ? stripQuoted(text) : "";
   const quoted = Boolean(core) && core !== text.trim();
@@ -568,7 +573,11 @@ export default function ThreadReader({
   onUnsubscribe,
   onBlock,
   compose = null,
+  viewer,
+  notes = false,
 }: {
+  viewer: ChatPerson;
+  notes?: boolean;
   compose?: ComposeIntent | null;
   onUnsubscribe: (mode: UnsubscribeMode) => void;
   onBlock: (sender: string) => void;
@@ -930,6 +939,29 @@ export default function ThreadReader({
   useShortcut("mail-reply-all", () => startReply("reply_all"), Boolean(detail));
   useShortcut("mail-forward", () => startReply("forward"), Boolean(detail));
 
+  const shareKey = detail && target ? detail.key : null;
+  const share = useThreadShare(shareKey);
+  const shareId = share.state?.shareId ?? null;
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareFor, setShareFor] = useState(shareKey);
+  if (shareFor !== shareKey) {
+    setShareFor(shareKey);
+    setShareOpen(false);
+  }
+  const shareMembers = share.state?.people.filter((person) => !person.owner) ?? [];
+  const body = useRef<HTMLDivElement>(null);
+  const notesLayout = useNotesLayout(body, Boolean(shareId));
+
+  async function addToShare(userIds: string[]) {
+    if (!shareKey) return "Couldn't share the thread. Try again.";
+    const result = await shareThreadAction(shareKey, userIds).catch(() => ({ error: "Couldn't share the thread. Try again." }));
+    if ("ok" in result && result.ok) {
+      share.apply(result.share);
+      return null;
+    }
+    return "error" in result ? result.error : "Couldn't share the thread. Try again.";
+  }
+
   const archiveHint = useShortcutHint("mail-archive");
   const trashHint = useShortcutHint("mail-trash");
   const readHint = useShortcutHint("mail-read");
@@ -1041,9 +1073,17 @@ export default function ThreadReader({
               reason={!detail ? "Still loading" : inviteBusy ? "Reading the meeting" : null}
               onSelect={() => void makeInvite()}
             />
+            {shareKey && (
+              <DropdownMenuItem onSelect={() => setShareOpen(true)} className="sm:hidden pointer-coarse:py-2.5">
+                <UsersIcon aria-hidden className="size-3.5 shrink-0" />
+                <span className="flex-1">{shareMembers.length ? "Shared" : "Share"}</span>
+                <span className="sr-only">{shareLabel(shareMembers)}</span>
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         <span className="ml-auto flex min-w-0 items-center gap-2">
+          {shareKey && <ShareControl threadKey={shareKey} viewer={viewer} share={share} open={shareOpen} onOpenChange={setShareOpen} />}
           {summary?.split && sender && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -1075,7 +1115,8 @@ export default function ThreadReader({
       </div>
       {previous && <ThreadPeek thread={previous} own={own} side="previous" />}
       {next && <ThreadPeek thread={next} own={own} side="next" />}
-      <div ref={scroller} className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
+      <div ref={body} className="flex min-h-0 flex-1">
+      <div ref={scroller} className="min-h-0 min-w-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
         <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-[var(--floating-clearance)] sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
           {detail?.subscription && <SenderNotice subscription={detail.subscription} onUnsubscribe={onUnsubscribe} onBlock={onBlock} />}
@@ -1219,7 +1260,10 @@ export default function ThreadReader({
               <span aria-hidden className="bg-surface-hover h-24 w-full animate-pulse rounded-2xl" />
             </div>
           )}
+          {shareId && notesLayout === "below" && <ThreadNotes shareId={shareId} viewer={viewer} layout="below" reveal={notes} onAdd={addToShare} />}
         </div>
+      </div>
+      {shareId && notesLayout === "side" && <ThreadNotes shareId={shareId} viewer={viewer} layout="side" reveal={notes} onAdd={addToShare} />}
       </div>
       {invite && (
         <InviteDialog

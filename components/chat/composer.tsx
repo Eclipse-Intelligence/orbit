@@ -17,6 +17,11 @@ function subscribeNothing() {
   return () => {};
 }
 
+export function caretToEnd(area: HTMLTextAreaElement | null | undefined) {
+  if (!area || document.activeElement !== area) return;
+  area.setSelectionRange(area.value.length, area.value.length);
+}
+
 export function focusComposer(from: Element | null) {
   const scope = from?.closest("[data-chat-room-pane], [data-chat-thread-pane]") ?? document;
   scope.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea")?.focus({ preventScroll: true });
@@ -33,6 +38,8 @@ export default function Composer({
   compact,
   disabled,
   restoreOnFailure,
+  hideFailure,
+  fallbackDraft,
   onSend,
   onEditLast,
   onEscape,
@@ -48,6 +55,8 @@ export default function Composer({
   compact?: boolean;
   disabled?: boolean;
   restoreOnFailure?: boolean;
+  hideFailure?: boolean;
+  fallbackDraft?: { text: string; mentions: Mention[] } | null;
   onSend: (text: string, mentions: Mention[]) => Promise<string | null>;
   onEditLast?: () => boolean;
   onEscape?: () => void;
@@ -62,7 +71,8 @@ export default function Composer({
   const [loaded, setLoaded] = useState<string | null>(null);
   const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
   if (hydrated && loaded !== key) {
-    const draft = readDraft(key);
+    const stored = readDraft(key);
+    const draft = !stored.text.trim() && fallbackDraft?.text.trim() ? fallbackDraft : stored;
     setLoaded(key);
     setValue(draft.text);
     setMentions(draft.mentions);
@@ -98,6 +108,7 @@ export default function Composer({
       setFailure(error);
       setValue((current) => (current ? current : text));
       setMentions((current) => (current.length ? current : sent));
+      window.requestAnimationFrame(() => caretToEnd(input.current));
     });
   }
 
@@ -146,7 +157,7 @@ export default function Composer({
           disabled={!value.trim() || disabled || over}
           onMouseDown={(event) => event.preventDefault()}
           onClick={send}
-          className="max-md:size-11"
+          className={cn("max-md:size-11", compact && "pointer-coarse:size-11")}
         >
           <ArrowUpIcon aria-hidden className="size-3.5" />
         </Button>
@@ -156,7 +167,7 @@ export default function Composer({
           Messages can be up to {CHAT_BODY_MAX.toLocaleString("en-GB")} characters. This one is {length.toLocaleString("en-GB")}.
         </p>
       )}
-      {failure && (
+      {failure && !hideFailure && (
         <p role="alert" className="caption-style text-danger px-1">
           {failure}
         </p>

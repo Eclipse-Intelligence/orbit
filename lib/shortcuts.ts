@@ -186,6 +186,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-unsubscribe", label: "Unsubscribe", group: "Mail", combos: [{ key: "u", mod: true }] },
   { id: "mail-subscriptions", label: "Subscriptions", group: "Mail", href: "/mail/subscriptions", palette: true, keywords: "unsubscribe newsletters senders block research" },
   { id: "mail-flag", label: "Flag or unflag", group: "Mail", combos: [{ key: "s" }] },
+  { id: "mail-share", label: "Share the thread", group: "Mail", combos: [{ key: "s", shift: true }] },
   { id: "mail-undo", label: "Undo the last move", group: "Mail", combos: [{ key: "z" }] },
   { id: "mail-refresh", label: "Check for new mail", group: "Mail", combos: [{ key: "r", shift: true }], palette: true, keywords: "sync refresh email" },
 

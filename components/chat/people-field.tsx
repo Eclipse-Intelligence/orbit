@@ -10,7 +10,7 @@ export type ChatCandidate = ChatPerson & { email: string | null };
 
 const MAX_SHOWN = 8;
 
-export function matchPeople(people: ChatCandidate[], query: string, exclude: Set<string>) {
+export function matchPeople<T extends ChatCandidate>(people: T[], query: string, exclude: Set<string>): T[] {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return people.filter((person) => {
     if (exclude.has(person.id)) return false;
