@@ -101,6 +101,15 @@ async function setVisibility(page, state) {
 }
 
 const browser = await engine.launch(launch);
+async function goto(page, url) {
+  try {
+    await page.goto(url);
+  } catch (error) {
+    if (!/interrupted by another navigation/.test(String(error))) throw error;
+    await page.waitForLoadState("load");
+    if (page.url() !== url) await page.goto(url);
+  }
+}
 const problems = [];
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", new URL(base).hostname]);
 const blocked = new Set();
@@ -122,7 +131,7 @@ for (const [device, viewport] of [
   ["iphone", { width: 390, height: 844 }],
   ["ipad", { width: 820, height: 1180 }],
 ]) {
-  const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true, ignoreHTTPSErrors: localHttps });
+  const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true, ignoreHTTPSErrors: localHttps, serviceWorkers: "block" });
   await offline(context);
   const page = await context.newPage();
   const errors = [];
@@ -131,7 +140,7 @@ for (const [device, viewport] of [
     if (message.type() === "error" && !/401|Invalid API key|Failed to load resource/.test(message.text())) errors.push(message.text().slice(0, 120));
   });
 
-  await page.goto(`${base}/login`);
+  await goto(page, `${base}/login`);
   await page.fill('input[name="email"]', env.DEV_USER_EMAIL);
   await page.fill('input[name="password"]', env.DEV_USER_PASSWORD);
   await page.click('button[type="submit"]');
@@ -155,7 +164,7 @@ for (const [device, viewport] of [
   const noHorizontalScroll = async () => page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1);
   const fitsHeight = async () => page.evaluate(() => document.scrollingElement.scrollHeight <= window.innerHeight + 2);
 
-  await page.goto(`${base}/mail`);
+  await goto(page, `${base}/mail`);
   await page.waitForTimeout(1500);
   const hasMail = await visible(page.locator("[data-mail-row]"));
   if (hasMail) check(`${device} mail list loads`, true);
@@ -191,7 +200,7 @@ for (const [device, viewport] of [
     }
   }
 
-  await page.goto(`${base}/companies`);
+  await goto(page, `${base}/companies`);
   await page.waitForTimeout(1500);
   check(`${device} companies loads`, await visible(page.getByRole("heading", { name: "Companies" })));
   check(`${device} companies no page overflow`, await fitsHeight());
@@ -204,17 +213,17 @@ for (const [device, viewport] of [
 
   const company = await page.evaluate(async () => (await (await fetch("/companies")).text()).match(/\/companies\/([0-9a-f-]{36})/)?.[0]);
   if (company) {
-    await page.goto(`${base}${company}`);
+    await goto(page, `${base}${company}`);
     await page.waitForTimeout(1500);
     check(`${device} company page back button`, await visible(page.getByRole("link", { name: /Back to Companies/ })));
     check(`${device} company page no overflow`, await noHorizontalScroll());
     await shot("company");
   }
 
-  await page.goto(`${base}/opportunities?view=board`);
+  await goto(page, `${base}/opportunities?view=board`);
   await page.waitForTimeout(1500);
   check(`${device} board no page overflow`, await fitsHeight());
-  await page.goto(`${base}/opportunities?view=list`);
+  await goto(page, `${base}/opportunities?view=list`);
   await page.waitForTimeout(1200);
   const opportunity = page.locator('a[href^="/opportunities/"]').first();
   if ((await opportunity.count()) > 0) {
@@ -224,7 +233,7 @@ for (const [device, viewport] of [
     await shot("opportunity");
   }
 
-  await page.goto(`${base}/tasks`);
+  await goto(page, `${base}/tasks`);
   await page.waitForTimeout(1200);
   check(`${device} tasks loads`, await visible(page.getByRole("heading", { name: "Tasks" })));
   const sweepRow = sweepTask ? page.locator(`li[data-task-id="${sweepTask.id}"]`) : page.locator("li[data-task-id]").first();
@@ -291,7 +300,7 @@ for (const [device, viewport] of [
     check(`${device} task panel closes`, !(await visible(panel)));
 
     if (sweepTask?.companyId) {
-      await page.goto(`${base}/companies/${sweepTask.companyId}`);
+      await goto(page, `${base}/companies/${sweepTask.companyId}`);
       await page.waitForTimeout(1500);
       const recordRow = page.locator(`li[data-task-id="${id}"]`);
       await recordRow.locator("button[aria-expanded]").first().tap();
@@ -307,7 +316,7 @@ for (const [device, viewport] of [
 
   const callTask = await seedCallTask(device);
   if (callTask) {
-    await page.goto(`${base}/tasks`);
+    await goto(page, `${base}/tasks`);
     await page.waitForTimeout(1500);
     const row = page.locator(`li[data-task-id="${callTask.id}"]`);
     await row.locator("button[aria-expanded]").first().tap({ position: { x: 3, y: 8 } });
@@ -327,7 +336,7 @@ for (const [device, viewport] of [
     const card = page.getByRole("dialog", { name: "New email" }).filter({ hasText: /Sweep Caller/ });
     check(`${device} Email opens a compose card to the contact`, await visible(card));
     await shot("task-email");
-    await page.goto(`${base}/tasks`);
+    await goto(page, `${base}/tasks`);
     await page.waitForTimeout(1500);
     await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
     await page.waitForTimeout(800);
@@ -351,7 +360,7 @@ for (const [device, viewport] of [
 
   const undoTask = await seedCallTask(`${device}u`);
   if (undoTask) {
-    await page.goto(`${base}/tasks`);
+    await goto(page, `${base}/tasks`);
     await page.waitForTimeout(1500);
     const row = page.locator(`li[data-task-id="${undoTask.id}"]`);
     const outcome = row.getByRole("group", { name: "Done with an outcome" });
@@ -372,7 +381,7 @@ for (const [device, viewport] of [
 
   const slowTask = await seedCallTask(`${device}s`);
   if (slowTask) {
-    await page.goto(`${base}/tasks`);
+    await goto(page, `${base}/tasks`);
     await page.waitForTimeout(1500);
     const row = page.locator(`li[data-task-id="${slowTask.id}"]`);
     const outcome = row.getByRole("group", { name: "Done with an outcome" });
@@ -390,14 +399,14 @@ for (const [device, viewport] of [
     await page.waitForTimeout(4500);
     await page.unroute("**/tasks**", slow);
     check(`${device} Undo during Save reopens the task`, (await visible(page.getByText("Saved. Task reopened."))) && (await row.count()) === 1);
-    await page.goto(`${base}/tasks`);
+    await goto(page, `${base}/tasks`);
     await page.waitForTimeout(1500);
     check(`${device} the task stays open after Undo during Save`, (await page.locator(`li[data-task-id="${slowTask.id}"]`).count()) === 1);
   } else check(`${device} Undo during Save checked`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
   const panelTask = await seedCallTask(`${device}p`);
   if (panelTask) {
-    await page.goto(`${base}/tasks?task=${panelTask.id}`);
+    await goto(page, `${base}/tasks?task=${panelTask.id}`);
     await page.waitForTimeout(1800);
     const panel = page.getByRole("dialog", { name: "Task" });
     await panel.getByRole("button", { name: /^Mark .* done$/ }).tap();
@@ -412,7 +421,7 @@ for (const [device, viewport] of [
 
   const recordTask = sweepTask?.companyId ? await seedCallTask(`${device}r`) : null;
   if (recordTask) {
-    await page.goto(`${base}/companies/${sweepTask.companyId}`);
+    await goto(page, `${base}/companies/${sweepTask.companyId}`);
     await page.waitForTimeout(1800);
     const row = page.locator(`li[data-task-id="${recordTask.id}"]`);
     await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
@@ -425,11 +434,11 @@ for (const [device, viewport] of [
     await page.waitForTimeout(800);
     check(`${device} record page Skip leaves the task done`, (await row.count()) === 0);
   } else check(`${device} record page outcome checks ran`, false, sweepTask?.companyId ? "couldn't add a task" : "add a company so the sweep can check a record page");
-  await page.goto(`${base}/calendar`);
+  await goto(page, `${base}/calendar`);
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));
   await shot("calendar");
-  await page.goto(`${base}/settings/general`);
+  await goto(page, `${base}/settings/general`);
   await page.waitForTimeout(1200);
   check(`${device} settings loads`, await visible(page.getByRole("heading", { name: "General" })));
   await page.getByRole("button", { name: "Open navigation" }).tap();
@@ -442,7 +451,7 @@ for (const [device, viewport] of [
   await page.waitForTimeout(400);
   check(`${device} account menu opens`, await visible(page.getByRole("menuitem", { name: "Settings" })));
   await page.keyboard.press("Escape");
-  await page.goto(`${base}/workflows`);
+  await goto(page, `${base}/workflows`);
   await page.waitForTimeout(1200);
   check(`${device} workflows loads`, await visible(page.getByRole("heading", { name: "Workflows" })));
   check(`${device} no page errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
@@ -450,15 +459,15 @@ for (const [device, viewport] of [
 }
 
 for (const width of [1100, 1280, 1440]) {
-  const context = await browser.newContext({ viewport: { width, height: 900 }, ignoreHTTPSErrors: localHttps });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, ignoreHTTPSErrors: localHttps, serviceWorkers: "block" });
   await offline(context);
   const page = await context.newPage();
-  await page.goto(`${base}/login`);
+  await goto(page, `${base}/login`);
   await page.fill('input[name="email"]', env.DEV_USER_EMAIL);
   await page.fill('input[name="password"]', env.DEV_USER_PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
-  await page.goto(`${base}/tasks`);
+  await goto(page, `${base}/tasks`);
   await page.waitForTimeout(1500);
   const first = page.locator("li[data-task-id]").first();
   const device = `desktop ${width}`;
@@ -499,7 +508,7 @@ for (const width of [1100, 1280, 1440]) {
 
   const callTask = width === 1280 ? await seedCallTask("desk") : null;
   if (callTask) {
-    await page.goto(`${base}/tasks`);
+    await goto(page, `${base}/tasks`);
     await page.waitForTimeout(1500);
     const row = page.locator(`li[data-task-id="${callTask.id}"]`);
     await row.focus();
