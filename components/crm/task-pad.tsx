@@ -13,7 +13,19 @@ import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import type { PadAiParse, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
-import { mergeMarks, nameMarks, padConfirmLine, padNeedsConfirm, parseTaskText, reminderClock, stripMention, type PadMark } from "@/lib/task-pad";
+import {
+  mergeMarks,
+  nameMarks,
+  padConfirmLine,
+  padFits,
+  padNeedsConfirm,
+  padSaveIds,
+  parseTaskText,
+  reminderClock,
+  resolvePadLinks,
+  stripMention,
+  type PadMark,
+} from "@/lib/task-pad";
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -72,7 +84,9 @@ function SearchChip({
   variant,
   onPick,
   onClosed,
+  allow,
 }: {
+  allow?: (option: PadOption) => boolean;
   kind: PadSearchKind;
   icon: Icon;
   label: string;
@@ -89,7 +103,7 @@ function SearchChip({
   const [highlight, setHighlight] = useState(0);
   const key = `${kind}|${companyId ?? ""}|${query.trim()}`;
   const current = results?.key === key ? results : null;
-  const options = current && !current.failed ? current.options : null;
+  const options = current && !current.failed ? current.options.filter((option) => !allow || allow(option)) : null;
   const active = options && options.length > 0 ? Math.min(highlight, options.length - 1) : -1;
   const noun = kind === "contact" ? "people" : kind === "company" ? "companies" : "opportunities";
 
@@ -434,27 +448,22 @@ export default function TaskPad({
   const assignee = members.find((member) => member.id === owner) ?? null;
   const asking = ask !== null && askOpen;
   const detectedContact = shown.fromText;
-  const detectedCompany = !fixedCompany && !company.set && !contact.set && !finalContact && seen?.company && finalCompany?.id === seen.company.id;
-  const confirm = seen && (detectedContact || detectedCompany) ? padConfirmLine(seen) : null;
+  const detectedCompany = !fixedCompany && !company.set && !finalContact && seen?.company && finalCompany?.id === seen.company.id;
+  const confirm = seen && detectedContact ? padConfirmLine(seen) : seen && detectedCompany ? padConfirmLine({ ...seen, contact: null, matchedBy: null, word: companyWord(seen) }) : null;
   const listing = mention !== null && suggestions.length > 0;
   const card = variant === "card";
 
-  function fits(record: { company: PadRecord | null } | null | undefined) {
-    return !anchor || !record?.company || record.company.id === anchor.id;
+  function resolve(found: PadDetection | null) {
+    return resolvePadLinks({ text, found, fixedCompany, contact, company, opportunity, dismissed });
   }
 
-  function resolve(found: PadDetection | null) {
-    const fromText = !contact.set && Boolean(found?.contact) && fits(found?.contact);
-    const person: PadContact | null = contact.set ? contact.value : fromText && found?.contact ? found.contact : null;
-    const named = found?.company && nameMarks(text, [found.company.name]).length > 0 ? found.company : null;
-    const auto = fromText ? (found?.company ?? found?.contact?.company ?? null) : (named ?? person?.company ?? null);
-    const place = fixedCompany ?? (company.set ? company.value : auto);
-    const spotted = found?.opportunity && place && place.id === found.opportunity.companyId ? found.opportunity : null;
-    const deal = opportunity.set ? opportunity.value : spotted;
-    const choices = found?.ask ? found.ask.candidates.filter(fits) : [];
-    const question =
-      !contact.set && !person && found?.ask && !dismissed.includes(found.ask.word) && choices.length > 0 ? { word: found.ask.word, candidates: choices } : null;
-    return { contact: person, company: place, opportunity: deal, ask: question, fromText };
+  function companyWord(found: PadDetection) {
+    const name = found.company?.name.trim() ?? "";
+    return name && !/\s/.test(name) && nameMarks(text, [name]).length > 0 ? name : null;
+  }
+
+  function allowed(option: PadOption) {
+    return !fixedCompany || padFits(fixedCompany, option);
   }
 
   useEffect(() => {
@@ -512,7 +521,7 @@ export default function TaskPad({
         ([companies, people]) => {
           if (cancelled) return;
           setSuggestions([
-            ...people.slice(0, 5).map((option) => ({ kind: "contact" as const, option })),
+            ...people.filter((option) => padFits(fixedCompany, option)).slice(0, 5).map((option) => ({ kind: "contact" as const, option })),
             ...companies.slice(0, 5).map((option) => ({ kind: "company" as const, option })),
           ]);
           setHighlight(0);
@@ -526,10 +535,14 @@ export default function TaskPad({
     };
   }, [mention, fixedCompany]);
 
-  function refreshMention(value: string, caret: number, typed = false) {
+  function refreshMention(value: string, caret: number) {
     const found = stripMention(value, caret);
-    if (typed) muted.current = null;
-    setMention(found && found.start === muted.current ? null : found);
+    if (found && found.start === muted.current) {
+      setMention(null);
+      return;
+    }
+    muted.current = null;
+    setMention(found);
   }
 
   function linkContact(option: PadOption | null) {
@@ -640,7 +653,8 @@ export default function TaskPad({
           companyOneWord:
             Boolean(links.company && fresh.value.company && links.company.id === fresh.value.company.id) &&
             !/\s/.test(fresh.value.company?.name.trim() ?? "") &&
-            links.company?.id !== links.contact?.company?.id,
+            links.company?.id !== links.contact?.company?.id &&
+            !(links.opportunity && fresh.value.opportunity?.id === links.opportunity.id && fresh.value.opportunity.companyId === links.company?.id),
         },
       )
     ) {
@@ -648,18 +662,11 @@ export default function TaskPad({
       focusAt();
       return;
     }
-    const chosen = contact.set || company.set || opportunity.set || Boolean(fixedCompany);
     const result = await addPadTaskAction({
       title,
       dueAt: finalDue,
       remindMinutes: finalReminder,
-      ...(links || chosen
-        ? {
-            companyId: (links?.company ?? finalCompany)?.id ?? null,
-            contactId: (links?.contact ?? (contact.set ? contact.value : null))?.id ?? null,
-            opportunityId: (links?.opportunity ?? (opportunity.set ? opportunity.value : null))?.id ?? null,
-          }
-        : {}),
+      ...padSaveIds(links, { fixedCompany, contact, company, opportunity }),
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
     });
@@ -732,7 +739,7 @@ export default function TaskPad({
     pieces.push({ text: text.slice(mark.start, mark.end), kind: mark.kind });
     cursor = mark.end;
   }
-  pieces.push({ text: `${text.slice(cursor)}​`, kind: null });
+  pieces.push({ text: `${text.slice(cursor)}\u200b`, kind: null });
 
   const typeClass = card
     ? "text-[17px] leading-6 tracking-[-0.005em] [@media(pointer:coarse)]:text-[16px]"
@@ -753,7 +760,7 @@ export default function TaskPad({
       <ChevronDownIcon aria-hidden className={cn("transition-transform duration-150 ease-power3-out", askOpen && "rotate-180")} />
     </button>
   ) : (
-    <SearchChip key="person" kind="contact" icon={UserIcon} label="Person" value={finalContact} companyId={fixedCompany?.id ?? null} variant={variant} onPick={linkContact} onClosed={() => focusAt()} />
+    <SearchChip key="person" kind="contact" icon={UserIcon} label="Person" value={finalContact} companyId={anchor?.id ?? null} allow={allowed} variant={variant} onPick={linkContact} onClosed={() => focusAt()} />
   );
 
   const chips: ReactNode[] = [
@@ -876,7 +883,7 @@ export default function TaskPad({
               setAskOpen(true);
             }
             setChoice(0);
-            refreshMention(event.target.value, event.target.selectionStart ?? event.target.value.length, true);
+            refreshMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
           }}
           onSelect={(event) => refreshMention(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
           onKeyDown={onKeyDown}
@@ -922,17 +929,17 @@ export default function TaskPad({
   );
 
   const chipRow = (
-    <div
-      role="group"
+    <fieldset
       aria-label="Task details"
+      disabled={busy}
       className={cn(
-        "flex min-w-0 items-center gap-1.5",
+        "m-0 flex min-w-0 items-center gap-1.5 border-0 p-0 disabled:opacity-60",
         "flex-wrap max-md:flex-nowrap max-md:overflow-x-auto max-md:pr-10 max-md:[mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden",
         card ? "px-3.5" : "order-1 flex-1 max-md:-ml-3 max-md:pl-3 @max-[36rem]:basis-full",
       )}
     >
       {chips}
-    </div>
+    </fieldset>
   );
 
   const which = ask && askOpen && (

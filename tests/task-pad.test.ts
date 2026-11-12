@@ -8,7 +8,18 @@ import { detectPadRecords, searchPadRecords } from "@/lib/crm/task-pad";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { mergeMarks, nameMarks, padConfirmLine, padNeedsConfirm, parseTaskText, reminderClock, stripMention } from "@/lib/task-pad";
+import {
+  mergeMarks,
+  nameMarks,
+  padConfirmLine,
+  padNeedsConfirm,
+  padSaveIds,
+  parseTaskText,
+  reminderClock,
+  resolvePadLinks,
+  stripMention,
+  type PadPick,
+} from "@/lib/task-pad";
 import { createUser, resetDatabase } from "./helpers";
 
 const FRIDAY_10AM = new Date("2026-10-16T09:00:00Z");
@@ -153,6 +164,40 @@ describe("task pad parser", () => {
     assert.equal(padNeedsConfirm(none, { ...none, companyId: "zoom", contactByName: false, companyOneWord: true }), true, "a one-word company is shown first");
     assert.equal(padNeedsConfirm(none, { ...none, ...plain, ask: "Janet" }), true, "an ambiguous name asks first");
     assert.equal(padNeedsConfirm({ ...none, ask: "Janet" }, { ...none, ...plain, ask: "Janet" }), false, "a question already shown saves unlinked");
+  });
+
+  it("works out the card's links from what was found and what was set by hand", () => {
+    const acme = { id: "acme", name: "Acme" };
+    const beta = { id: "beta", name: "Beta" };
+    const jane = { id: "jane", name: "Jane Doe", company: acme };
+    const rebuild = { id: "rebuild", name: "Website rebuild", companyId: "acme" };
+    const unset = <T,>(): PadPick<T> => ({ set: false, value: undefined as T });
+    const base = { fixedCompany: null, contact: unset<typeof jane | null>(), company: unset<typeof acme | null>(), opportunity: unset<typeof acme | null>(), dismissed: [] };
+    const found = { company: null, contact: null, opportunity: null, ask: null };
+
+    const deal = resolvePadLinks({ ...base, text: "Send Website rebuild proposal", found: { ...found, company: acme, opportunity: rebuild } });
+    assert.deepEqual([deal.company?.id, deal.opportunity?.id], ["acme", "rebuild"], "an opportunity named alone brings its company");
+    assert.deepEqual(padSaveIds(deal, base), { companyId: "acme", opportunityId: "rebuild" });
+
+    const named = resolvePadLinks({ ...base, text: "Call Jane", found: { ...found, company: acme, contact: jane } });
+    assert.equal(named.contact?.id, "jane");
+    const unlinked = { ...base, contact: { set: true, value: null } };
+    const dropped = resolvePadLinks({ ...unlinked, text: "Call Jane", found: { ...found, company: acme, contact: jane } });
+    assert.deepEqual([dropped.contact, dropped.company], [null, null], "Don't link drops a company that only came from the person");
+    assert.deepEqual(padSaveIds(dropped, unlinked), { contactId: null });
+    const kept = resolvePadLinks({ ...unlinked, text: "Call Jane at Acme", found: { ...found, company: acme, contact: jane } });
+    assert.equal(kept.company?.id, "acme", "a company named in the text stays");
+    const viaDeal = resolvePadLinks({ ...unlinked, text: "Call Jane about Website rebuild", found: { company: acme, contact: jane, opportunity: rebuild, ask: null } });
+    assert.deepEqual([viaDeal.company?.id, viaDeal.opportunity?.id], ["acme", "rebuild"], "a company from a named opportunity stays");
+
+    const fixed = { ...base, fixedCompany: beta };
+    const elsewhere = resolvePadLinks({ ...fixed, text: "Call Jane", found: { ...found, company: acme, contact: jane } });
+    assert.deepEqual([elsewhere.contact, elsewhere.company?.id], [null, "beta"], "a person at another company never joins a fixed company");
+
+    assert.deepEqual(padSaveIds(resolvePadLinks({ ...base, text: "Buy milk", found }), base), {}, "nothing found leaves the server rule to decide");
+    assert.deepEqual(padSaveIds(null, base), {}, "a failed check sends nothing it found");
+    assert.deepEqual(padSaveIds(null, fixed), { companyId: "beta" }, "a failed check still sends the fixed company");
+    assert.deepEqual(padSaveIds(null, { ...base, contact: { set: true, value: jane } }), { contactId: "jane" });
   });
 
   it("shows when a reminder goes off", () => {
@@ -314,5 +359,13 @@ describe("task pad record detection", () => {
     assert.equal(found.company?.id, media);
     const monday = await detectPadRecords(owner, "Call Priya Monday");
     assert.notEqual(monday.company?.name, "Monday");
+    const both = await detectPadRecords(owner, "Call Monday re Friday Media");
+    assert.equal(both.company?.id, media);
+  });
+
+  it("links an opportunity named on its own, with its company", async () => {
+    const found = await detectPadRecords(owner, "Send Halden pilot proposal");
+    assert.equal(found.opportunity?.name, "Halden pilot");
+    assert.equal(found.company?.id, halden);
   });
 });

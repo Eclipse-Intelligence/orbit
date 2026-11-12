@@ -61,7 +61,7 @@ export async function detectTaskRecordsInDb(
   db: Db,
   workspaceId: string,
   text: string,
-  options: { oneWordCompanies?: boolean; members?: Set<string> } = {},
+  options: { oneWordCompanies?: boolean; members?: Set<string>; ignore?: (name: string) => boolean } = {},
 ): Promise<DetectedTaskLinks> {
   const clean = text.trim().slice(0, TEXT_LIMIT);
   if (clean.length < MIN_NAME) return NO_DETECTION;
@@ -94,7 +94,7 @@ export async function detectTaskRecordsInDb(
   );
   const contactHits = mentioned(contacts.rows, clean, members);
   const companyHits = mentioned(
-    companies.rows.filter((row) => options.oneWordCompanies || /\s/.test(row.name.trim())),
+    companies.rows.filter((row) => (options.oneWordCompanies || /\s/.test(row.name.trim())) && !options.ignore?.(row.name.trim())),
     clean,
     members,
   );

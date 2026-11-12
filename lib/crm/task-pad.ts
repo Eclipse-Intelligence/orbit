@@ -156,11 +156,11 @@ export async function detectPadRecordsInDb(
   const members = await memberNames(db, workspaceId);
   const dates = parseTaskText(clean, options.now ?? new Date()).marks.filter((mark) => mark.kind !== "record");
   const plain = blank(clean, dates);
-  let found = await detectTaskRecordsInDb(db, workspaceId, clean, { oneWordCompanies: true, members });
-  const company = found.company?.name.trim() ?? "";
-  if (company && !/\s/.test(company) && within(clean, company, dates)) {
-    found = await detectTaskRecordsInDb(db, workspaceId, plain, { oneWordCompanies: true, members });
-  }
+  const found = await detectTaskRecordsInDb(db, workspaceId, clean, {
+    oneWordCompanies: true,
+    members,
+    ignore: (name) => !/\s/.test(name) && within(clean, name, dates),
+  });
   const result: PadDetection = { ...NO_PAD_DETECTION, ...found, matchedBy: found.contact ? "full" : null };
   if (!found.contact && plain.trim().length >= 2) {
     const named = [found.company?.name, found.opportunity?.name].filter((name): name is string => Boolean(name));

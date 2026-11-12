@@ -49,8 +49,9 @@ function padLink(value: unknown) {
 }
 
 function padLinks(input: { companyId?: unknown; contactId?: unknown; opportunityId?: unknown }) {
-  if (input.companyId === undefined && input.contactId === undefined && input.opportunityId === undefined) return {};
-  return { companyId: padLink(input.companyId), contactId: padLink(input.contactId), opportunityId: padLink(input.opportunityId) };
+  return Object.fromEntries(
+    (["companyId", "contactId", "opportunityId"] as const).flatMap((key) => (input[key] === undefined ? [] : [[key, padLink(input[key])]])),
+  ) as { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
 }
 
 export async function addPadTaskAction(input: {

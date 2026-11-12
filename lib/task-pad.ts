@@ -288,6 +288,88 @@ export function mergeMarks(marks: PadMark[]) {
   return result;
 }
 
+type PadRef = { id: string; name: string };
+type PadPerson = PadRef & { company: PadRef | null };
+type PadChoice = { id: string; name: string; detail: string | null; company: PadRef | null };
+export type PadPick<T> = { set: boolean; value: T };
+type PadFound = {
+  company: PadRef | null;
+  contact: PadPerson | null;
+  opportunity: (PadRef & { companyId: string }) | null;
+  ask: { word: string; candidates: PadChoice[] } | null;
+};
+export type PadLinks = {
+  contact: PadPerson | null;
+  company: PadRef | null;
+  opportunity: PadRef | null;
+  ask: { word: string; candidates: PadChoice[] } | null;
+  fromText: boolean;
+  personOnlyCompany: boolean;
+};
+
+type PadState = {
+  text: string;
+  found: PadFound | null;
+  fixedCompany: PadRef | null;
+  contact: PadPick<PadPerson | null>;
+  company: PadPick<PadRef | null>;
+  opportunity: PadPick<PadRef | null>;
+  dismissed: string[];
+};
+
+export function padAnchor(state: Pick<PadState, "fixedCompany" | "company">) {
+  return state.fixedCompany ?? (state.company.set ? state.company.value : null);
+}
+
+export function padFits(anchor: PadRef | null, record: { company: PadRef | null } | null | undefined) {
+  return !anchor || !record?.company || record.company.id === anchor.id;
+}
+
+export function resolvePadLinks(state: PadState): PadLinks {
+  const { found } = state;
+  const anchor = padAnchor(state);
+  const fromText = !state.contact.set && Boolean(found?.contact) && padFits(anchor, found?.contact);
+  const person = state.contact.set ? state.contact.value : fromText && found?.contact ? found.contact : null;
+  const named = Boolean(found?.company && nameMarks(state.text, [found.company.name]).length > 0);
+  const viaDeal = Boolean(found?.company && found.opportunity?.companyId === found.company.id);
+  const personOnlyCompany = Boolean(found?.company && found.contact?.company?.id === found.company.id && !named && !viaDeal);
+  const auto = fromText
+    ? (found?.company ?? found?.contact?.company ?? null)
+    : found?.company && !(personOnlyCompany && found.contact)
+      ? found.company
+      : (person?.company ?? null);
+  const company = state.fixedCompany ?? (state.company.set ? state.company.value : auto);
+  const spotted = found?.opportunity && company && company.id === found.opportunity.companyId ? found.opportunity : null;
+  const opportunity = state.opportunity.set ? state.opportunity.value : spotted;
+  const choices = found?.ask ? found.ask.candidates.filter((choice) => padFits(anchor, choice)) : [];
+  const ask =
+    !state.contact.set && !person && found?.ask && !state.dismissed.includes(found.ask.word) && choices.length > 0
+      ? { word: found.ask.word, candidates: choices }
+      : null;
+  return { contact: person, company, opportunity, ask, fromText, personOnlyCompany };
+}
+
+type SaveIds = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
+
+export function padSaveIds(
+  links: Pick<PadLinks, "contact" | "company" | "opportunity"> | null,
+  state: Pick<PadState, "fixedCompany" | "contact" | "company" | "opportunity">,
+): SaveIds {
+  const hand = <T extends PadRef>(pick: PadPick<T | null>) => (pick.set ? (pick.value?.id ?? null) : undefined);
+  const ids: SaveIds = links
+    ? {
+        companyId: links.company?.id ?? hand(state.company),
+        contactId: links.contact?.id ?? hand(state.contact),
+        opportunityId: links.opportunity?.id ?? hand(state.opportunity),
+      }
+    : {
+        companyId: state.fixedCompany?.id ?? hand(state.company),
+        contactId: hand(state.contact),
+        opportunityId: hand(state.opportunity),
+      };
+  return Object.fromEntries(Object.entries(ids).filter(([, value]) => value !== undefined));
+}
+
 type ShownLinks = { contactId: string | null; companyId: string | null; ask: string | null };
 
 export function padNeedsConfirm(shown: ShownLinks, fresh: ShownLinks & { contactByName: boolean; companyOneWord: boolean }) {
