@@ -4,8 +4,9 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useComposer } from "@/components/mail/compose-dock";
-import Button from "@/components/_ui/button";
-import { DateTimePicker } from "@/components/_ui/date-picker";
+import Button, { buttonVariants } from "@/components/_ui/button";
+import { Kbd } from "@/components/_ui/command";
+import { DueDatePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
 import { searchCompaniesAction } from "@/app/(crm)/actions";
@@ -13,6 +14,7 @@ import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { Monogram } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import ReminderSelect from "@/components/crm/reminder-select";
+import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, linkTaskAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
@@ -26,7 +28,11 @@ import { taskSnoozeChoices } from "@/lib/crm/task-snooze";
 import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
-import { appTimeZone, dateTimeInputValue } from "@/lib/time";
+import { padDueHasTime } from "@/lib/task-pad";
+import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
+import { durationLabel, localInstant } from "@/lib/crm/task-time";
+import { taskDueLabel } from "@/lib/crm/task-views";
+import { appTimeZone, dateTimeInputValue, toIsoInstant } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
@@ -120,16 +126,27 @@ function caretAt(heading: HTMLElement, x: number, y: number) {
   return null;
 }
 
-type Source = { title: string; text: string; due: string; reminder: number | null; ownerId: string | null };
+type Source = { title: string; text: string; due: string; reminder: number | null; duration: number; ownerId: string | null };
+
+export function dueValue(task: Pick<Task, "dueAt" | "dueDate" | "dueHasTime">) {
+  if (!task.dueAt) return "";
+  return task.dueHasTime ? dateTimeInputValue(task.dueAt) : (task.dueDate ?? dateTimeInputValue(task.dueAt).slice(0, 10));
+}
 
 function sourceOf(task: Task): Source {
   return {
     title: task.title,
     text: splitDescription(task.description).text,
-    due: dateTimeInputValue(task.dueAt),
+    due: dueValue(task),
     reminder: task.remindMinutes,
+    duration: task.durationMinutes,
     ownerId: task.ownerId,
   };
+}
+
+function dueWrite(value: string): TaskDetails {
+  if (!value) return { dueAt: null, remindMinutes: null };
+  return padDueHasTime(value) ? { dueAt: localInstant(value) } : { dueDate: value };
 }
 
 const drafts = new Map<string, { title?: string; text?: string }>();
@@ -155,6 +172,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
   const [text, setText] = useState(draft?.text ?? source.text);
   const [due, setDue] = useState(source.due);
   const [reminder, setReminder] = useState<number | null>(source.reminder);
+  const [duration, setDuration] = useState(source.duration);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -166,12 +184,20 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
       visible.current = false;
     };
   }, [shown]);
-  if (seen.title !== source.title || seen.text !== source.text || seen.due !== source.due || seen.reminder !== source.reminder || seen.ownerId !== source.ownerId) {
+  if (
+    seen.title !== source.title ||
+    seen.text !== source.text ||
+    seen.due !== source.due ||
+    seen.reminder !== source.reminder ||
+    seen.duration !== source.duration ||
+    seen.ownerId !== source.ownerId
+  ) {
     setSeen(source);
     if (title.trim() === seen.title) setTitle(source.title);
     if (text.trim() === seen.text) setText(source.text);
     if (due === seen.due) setDue(source.due);
     if (reminder === seen.reminder) setReminder(source.reminder);
+    if (duration === seen.duration) setDuration(source.duration);
   }
   useEffect(() => {
     sent.current = { title: source.title, text: source.text };
@@ -257,14 +283,39 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
     };
   }, []);
 
-  function changeDue(value: string) {
+  function writeDue(value: string, write: TaskDetails, nextReminder: number | null) {
     const before = { due, reminder };
     setDue(value);
-    if (!value) setReminder(null);
-    void save(value ? { dueAt: value } : { dueAt: null, remindMinutes: null }).then((ok) => {
+    setReminder(nextReminder);
+    void save(write).then((ok) => {
       if (ok) return;
       setDue(before.due);
       setReminder(before.reminder);
+    });
+  }
+
+  function changeDue(value: string) {
+    writeDue(value, dueWrite(value), value && padDueHasTime(value) ? reminder : null);
+  }
+
+  function removeTime() {
+    if (!due) return;
+    const day = due.slice(0, 10);
+    writeDue(day, { dueDate: day }, null);
+  }
+
+  function remindAt(time: string, minutes = 0) {
+    const day = due ? due.slice(0, 10) : null;
+    if (!day) return;
+    const value = `${day}T${time}`;
+    writeDue(value, { dueAt: localInstant(value), remindMinutes: minutes }, minutes);
+  }
+
+  function changeDuration(minutes: number) {
+    const before = duration;
+    setDuration(minutes);
+    void save({ durationMinutes: minutes }).then((ok) => {
+      if (!ok) setDuration(before);
     });
   }
 
@@ -287,7 +338,30 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
     } else router.refresh();
   }
 
-  return { task, canChange, title, setTitle, text, setText, due, reminder, busy, error, setError, saved, saveTitle, saveText, flush, changeDue, changeReminder, assign };
+  return {
+    task,
+    canChange,
+    title,
+    setTitle,
+    text,
+    setText,
+    due,
+    reminder,
+    duration,
+    busy,
+    error,
+    setError,
+    saved,
+    saveTitle,
+    saveText,
+    flush,
+    changeDue,
+    removeTime,
+    remindAt,
+    changeDuration,
+    changeReminder,
+    assign,
+  };
 }
 
 export type TaskDetailsState = ReturnType<typeof useTaskDetails>;
@@ -585,32 +659,80 @@ function Section({ label, count, children }: { label: string; count?: number; ch
 
 export { Section as TaskSection };
 
-function DueChips({ details, layout }: { details: TaskDetailsState; layout: "panel" | "row" }) {
-  const id = useId();
-  const task = details.task;
-  const dueLabel = task.dueAt ? formatTaskWhen({ weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }, task.dueAt) : null;
-  if (!details.canChange) {
-    return <span className="ui-style text-soft">{dueLabel ? [dueLabel, reminderLabel(task.remindMinutes)?.toLowerCase()].filter(Boolean).join(" · reminder ") : "No due date"}</span>;
+function dueState(details: TaskDetailsState) {
+  const timed = padDueHasTime(details.due);
+  const dueAt = details.due ? (padDueHasTime(details.due) ? localInstant(details.due) : toIsoInstant(details.due)) : null;
+  return { timed, dueAt };
+}
+
+function scheduleTask(details: TaskDetailsState) {
+  const { timed, dueAt } = dueState(details);
+  return { id: details.task.id, title: details.task.title, dueAt, dueHasTime: timed, durationMinutes: details.duration };
+}
+
+function ReminderChip({ details, id }: { details: TaskDetailsState; id: string }) {
+  const { timed } = dueState(details);
+  if (!details.due) return null;
+  if (!timed) {
+    return <ReminderTimePrompt title={details.task.title} day={details.due.slice(0, 10)} onSave={(time) => details.remindAt(time)} className={cn(TASK_CHIP, TOUCH, "text-subtle")} />;
   }
   return (
+    <ReminderSelect
+      id={`${id}-reminder`}
+      value={details.reminder === null ? "none" : String(details.reminder)}
+      onChange={(value) => details.changeReminder(value === "none" ? null : Number(value))}
+      className={cn(TASK_CHIP, TOUCH, details.reminder === null && "text-subtle")}
+    />
+  );
+}
+
+function ReadOnlyDue({ details }: { details: TaskDetailsState }) {
+  const [now] = useState(() => Date.now());
+  const task = details.task;
+  if (!task.dueAt) return <span className="ui-style text-soft">No due date</span>;
+  const reminder = task.dueHasTime ? reminderLabel(task.remindMinutes)?.toLowerCase() : null;
+  return (
+    <span className="ui-style text-soft">
+      {[taskDueLabel(task, now), durationLabel(task.durationMinutes)].join(" · ")}
+      {reminder ? ` · reminder ${reminder}` : ""}
+    </span>
+  );
+}
+
+function DueChips({ details, layout }: { details: TaskDetailsState; layout: "panel" | "row" }) {
+  const id = useId();
+  if (!details.canChange) return <ReadOnlyDue details={details} />;
+  const label = details.due ? (padDueHasTime(details.due) ? formatDateTimeLabel(details.due) : formatDateLabel(details.due)) : null;
+  return (
     <>
-      <DateTimePicker
+      <DueDatePicker
         id={`${id}-due`}
-        aria-label={details.due && dueLabel ? `Due ${dueLabel}. Change` : "Due date"}
+        aria-label={label ? `Due ${label}. Change` : "Due date"}
         placeholder={layout === "row" ? "Due" : "No due date"}
         value={details.due}
         onChange={details.changeDue}
         className={cn(TASK_CHIP, TOUCH, "[&_svg]:size-3.5", !details.due && "text-subtle")}
       />
-      {details.due && (
-        <ReminderSelect
-          id={`${id}-reminder`}
-          value={details.reminder === null ? "none" : String(details.reminder)}
-          onChange={(value) => details.changeReminder(value === "none" ? null : Number(value))}
-          className={cn(TASK_CHIP, TOUCH, details.reminder === null && "text-subtle")}
-        />
+      {layout === "panel" && <ScheduleChip details={details} />}
+      {layout === "row" && (
+        <>
+          <DurationMenu value={details.duration} onChange={details.changeDuration} className={cn(TASK_CHIP, TOUCH)} />
+          <ReminderChip details={details} id={id} />
+        </>
       )}
     </>
+  );
+}
+
+function ScheduleChip({ details }: { details: TaskDetailsState }) {
+  return (
+    <ScheduleMenu
+      task={scheduleTask(details)}
+      onSchedule={details.changeDue}
+      onRemoveTime={details.removeTime}
+      onDuration={details.changeDuration}
+      className={cn(TASK_CHIP, TOUCH)}
+    />
   );
 }
 
@@ -655,16 +777,29 @@ function AssigneeChip({ details, viewer, members, tagged }: { details: TaskDetai
 
 function QuickDates({ details }: { details: TaskDetailsState }) {
   const [now] = useState(() => Date.now());
-  const choices = taskSnoozeChoices(details.task.dueAt, new Date(now));
+  const { timed, dueAt } = dueState(details);
+  const choices = taskSnoozeChoices({ dueAt, dueHasTime: timed }, new Date(now));
   return (
     <>
+      <ScheduleMenu
+        task={scheduleTask(details)}
+        onSchedule={details.changeDue}
+        onRemoveTime={details.removeTime}
+        onDuration={details.changeDuration}
+        className={cn(buttonVariants({ variant: "ghost", size: "sm" }), TOUCH)}
+      >
+        Schedule
+        <Kbd aria-hidden className="ml-0.5 hidden h-4 min-w-4 px-1 lg:inline-flex [@media(pointer:coarse)]:hidden">
+          S
+        </Kbd>
+      </ScheduleMenu>
       {choices.map((choice) => (
         <Button
           key={choice.id}
           variant="ghost"
           size="sm"
           title={choice.detail}
-          onClick={() => details.changeDue(dateTimeInputValue(choice.at))}
+          onClick={() => details.changeDue(timed ? dateTimeInputValue(choice.at) : dateTimeInputValue(choice.at).slice(0, 10))}
           className={TOUCH}
         >
           {choice.label}
@@ -768,6 +903,16 @@ export default function TaskFields({
         <Field label="Due">
           <DueChips details={details} layout="panel" />
         </Field>
+        {details.canChange && (
+          <Field label="Duration">
+            <DurationMenu value={details.duration} onChange={details.changeDuration} className={cn(TASK_CHIP, TOUCH)} />
+          </Field>
+        )}
+        {details.canChange && details.due && (
+          <Field label="Remind me">
+            <ReminderChip details={details} id={task.id} />
+          </Field>
+        )}
         {team && <TaggedField details={details} viewer={viewer} members={members} people={people} tagging={tagging} />}
       </dl>
       {taskIsLinked(task) && (

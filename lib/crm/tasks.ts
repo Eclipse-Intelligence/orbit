@@ -29,12 +29,14 @@ import {
   type Task,
   type TaskListQuery,
   type TaskPriority,
+  type TaskScheduledBy,
   type TaskView,
   type TaskWrite,
   type UserActor,
 } from "@/lib/crm/types";
 import { isReminderMinutes, REMINDER_LOOKAHEAD_MS } from "@/lib/crm/reminder-options";
 import { directTaskSql } from "@/lib/crm/task-access";
+import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { dayWindow, readDateTime } from "@/lib/time";
 
@@ -45,6 +47,9 @@ const TASK_SQL = `
     t.title,
     t.description,
     t.due_at,
+    t.due_has_time,
+    t.duration_minutes,
+    t.scheduled_by,
     t.remind_minutes,
     t.completed_at,
     t.priority,
@@ -88,6 +93,9 @@ type TaskRow = {
   title: string;
   description: string | null;
   due_at: Date | string | null;
+  due_has_time: boolean;
+  duration_minutes: number;
+  scheduled_by: TaskScheduledBy | null;
   remind_minutes: number | null;
   completed_at: Date | string | null;
   priority: TaskPriority;
@@ -120,6 +128,9 @@ type PreparedTask = {
   title?: string;
   description?: string | null;
   dueAt?: string | null;
+  dueHasTime?: boolean;
+  scheduledBy?: TaskScheduledBy | null;
+  durationMinutes?: number;
   remindMinutes?: number | null;
   priority?: TaskPriority;
   ownerId?: string | null;
@@ -137,6 +148,10 @@ function mapTask(row: TaskRow): Task {
     title: row.title,
     description: row.description,
     dueAt: iso(row.due_at),
+    dueDate: taskDueDay(iso(row.due_at)),
+    dueHasTime: Boolean(row.due_has_time) && row.due_at !== null,
+    durationMinutes: row.duration_minutes ?? DEFAULT_TASK_DURATION,
+    scheduledBy: row.due_has_time ? (row.scheduled_by ?? null) : null,
     remindMinutes: row.remind_minutes,
     completedAt: iso(row.completed_at),
     priority: row.priority,
@@ -166,12 +181,37 @@ function mapTask(row: TaskRow): Task {
   };
 }
 
-function timestamp(value: string | null | undefined, field: string) {
-  if (value === undefined) return undefined;
-  if (value === null || value.trim() === "") return null;
+function blank(value: string | null | undefined) {
+  return value === null || (typeof value === "string" && value.trim() === "");
+}
+
+function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean } | undefined {
+  const input = { ...given };
+  if (input.dueAt !== undefined && input.dueDate !== undefined) {
+    if (blank(input.dueAt)) input.dueAt = undefined;
+    else if (blank(input.dueDate)) input.dueDate = undefined;
+    else throw new CrmError("invalid_input", "Send dueDate for a day or dueAt for a time, not both.", 400, { field: "dueDate" });
+  }
+  if (input.dueDate !== undefined) {
+    const value = input.dueDate;
+    if (value === null || value.trim() === "") return { dueAt: null, dueHasTime: false };
+    const reading = readDateTime(value);
+    if (!reading.ok) throw new CrmError("invalid_input", reading.error, 400, { field: "dueDate" });
+    if (!reading.dateOnly) {
+      throw new CrmError("invalid_input", "dueDate takes a day, such as 2026-11-14. Send dueAt for a time.", 400, { field: "dueDate" });
+    }
+    return { dueAt: reading.date.toISOString(), dueHasTime: false };
+  }
+  if (input.dueAt === undefined) return undefined;
+  const value = input.dueAt;
+  if (value === null || value.trim() === "") return { dueAt: null, dueHasTime: false };
   const reading = readDateTime(value);
-  if (!reading.ok) throw new CrmError("invalid_input", reading.error, 400, { field });
-  return reading.date.toISOString();
+  if (!reading.ok) throw new CrmError("invalid_input", reading.error, 400, { field: "dueAt" });
+  if (reading.dateOnly || input.dueHasTime === false) {
+    const day = taskDueDay(reading.date.toISOString());
+    return { dueAt: day ? dayStartIso(day) : reading.date.toISOString(), dueHasTime: false };
+  }
+  return { dueAt: reading.date.toISOString(), dueHasTime: true };
 }
 
 function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
@@ -184,7 +224,18 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
     throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   }
   if (input.description !== undefined) next.description = cleanText(input.description, 10000, "description");
-  if (input.dueAt !== undefined) next.dueAt = timestamp(input.dueAt, "dueAt");
+  const due = readDue(input);
+  if (due) {
+    next.dueAt = due.dueAt;
+    next.dueHasTime = due.dueHasTime;
+    next.scheduledBy = due.dueHasTime ? (input.scheduledBy ?? "person") : null;
+  }
+  if (input.durationMinutes !== undefined) {
+    if (!isTaskDuration(input.durationMinutes)) {
+      throw new CrmError("invalid_input", `Choose a duration between ${MIN_TASK_DURATION} and ${MAX_TASK_DURATION} minutes.`, 400, { field: "durationMinutes" });
+    }
+    next.durationMinutes = input.durationMinutes;
+  }
   if (input.remindMinutes !== undefined) {
     if (input.remindMinutes !== null && !isReminderMinutes(input.remindMinutes)) {
       throw new CrmError("invalid_input", "Choose a reminder.", 400, { field: "remindMinutes" });
@@ -203,6 +254,23 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   if (input.opportunityId !== undefined) next.opportunityId = input.opportunityId || null;
   if (input.completed !== undefined) next.completed = input.completed;
   return next;
+}
+
+function sameDue(write: PreparedTask, current: TaskRow) {
+  const before = iso(current.due_at);
+  const after = write.dueAt ?? null;
+  const instant = before === null || after === null ? before === after : new Date(before).getTime() === new Date(after).getTime();
+  const timed = Boolean(current.due_has_time && current.due_at);
+  return instant && (!timed || Boolean(write.dueHasTime));
+}
+
+function settleReminder(write: PreparedTask, current: { dueHasTime: boolean; remindMinutes?: number | null }) {
+  const timed = write.dueHasTime ?? current.dueHasTime;
+  if (timed) return;
+  if (write.remindMinutes !== undefined && write.remindMinutes !== null) {
+    throw new CrmError("invalid_input", "Pick a time for the reminder.", 400, { field: "remindMinutes" });
+  }
+  if (write.remindMinutes === undefined && current.remindMinutes !== null && current.remindMinutes !== undefined) write.remindMinutes = null;
 }
 
 function actorName(actor: Actor) {
@@ -302,6 +370,7 @@ export async function createTaskInDb(
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
+  settleReminder(write, { dueHasTime: false });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   let detectedLinks = Object.keys(options.detectedLinks ?? {});
@@ -326,9 +395,10 @@ export async function createTaskInDb(
     const inserted = await db.query<{ id: string }>(
       `insert into crm.tasks (
         workspace_id, title, description, due_at, completed_at, priority, owner_id,
-        company_id, contact_id, opportunity_id, created_by_user_id, created_by_agent_id, remind_minutes
+        company_id, contact_id, opportunity_id, created_by_user_id, created_by_agent_id, remind_minutes,
+        due_has_time, scheduled_by, duration_minutes
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
       ) returning id`,
       [
         actor.workspaceId,
@@ -344,6 +414,9 @@ export async function createTaskInDb(
         actorRef.userId,
         actorRef.agentId,
         write.remindMinutes ?? null,
+        write.dueHasTime ?? false,
+        write.scheduledBy ?? null,
+        write.durationMinutes ?? DEFAULT_TASK_DURATION,
       ],
     );
     const saved = await readTask(db, inserted.rows[0].id);
@@ -380,6 +453,12 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
+  if (write.dueAt !== undefined && sameDue(write, current)) {
+    delete write.dueAt;
+    delete write.dueHasTime;
+    delete write.scheduledBy;
+  }
+  settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
   const links = await resolveLinks(
     db,
     actor.workspaceId,
@@ -406,6 +485,9 @@ async function applyTask(
     [write.title !== undefined, "title", "title", write.title ?? null],
     [write.description !== undefined, "description", "description", write.description ?? null],
     [write.dueAt !== undefined, "due_at", "dueAt", write.dueAt ?? null],
+    [write.dueHasTime !== undefined, "due_has_time", "dueHasTime", write.dueHasTime ?? false],
+    [write.scheduledBy !== undefined, "scheduled_by", "scheduledBy", write.scheduledBy ?? null],
+    [write.durationMinutes !== undefined, "duration_minutes", "durationMinutes", write.durationMinutes ?? DEFAULT_TASK_DURATION],
     [write.remindMinutes !== undefined, "remind_minutes", "remindMinutes", write.remindMinutes ?? null],
     [write.priority !== undefined, "priority", "priority", write.priority ?? null],
     [write.ownerId !== undefined, "owner_id", "ownerId", write.ownerId ?? null],
@@ -789,6 +871,7 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
       `${TASK_SQL}
        where t.workspace_id = $1${mine ? ` and ${mine}` : ""}
          and t.remind_minutes is not null
+         and t.due_has_time
          and t.due_at is not null
          and t.completed_at is null
          and t.archived_at is null

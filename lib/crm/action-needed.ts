@@ -5,7 +5,8 @@ import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { onWorkingDay } from "@/lib/crm/task-snooze";
-import { updateTask } from "@/lib/crm/tasks";
+import { getTask, updateTask } from "@/lib/crm/tasks";
+import { atKeepingKind } from "@/lib/crm/task-time";
 import type { UserActor } from "@/lib/crm/types";
 import { addWorkingDays, dayKeyAt, nextWorkingDay, nonWorkingReason, wallClockAt } from "@/lib/crm/working-days";
 import { query, type Db } from "@/lib/db/pool";
@@ -42,6 +43,7 @@ export type WaitingTask = {
   workspaceId: string;
   title: string;
   dueAt: string;
+  dueHasTime: boolean;
   overdue: boolean;
   companyId: string | null;
   companyName: string | null;
@@ -128,6 +130,7 @@ type TaskRow = {
   workspace_id: string;
   title: string;
   due_at: Date;
+  due_has_time: boolean;
   created_at: Date;
   company_id: string | null;
   company_name: string | null;
@@ -138,7 +141,7 @@ type TaskRow = {
 async function tasksInDb(db: Db, actor: UserActor, workspaceIds: string[], now: Date): Promise<WaitingTask[]> {
   const start = startOfDay(now);
   const result = await db.query<TaskRow>(
-    `select t.id, t.workspace_id, t.title, t.due_at, t.created_at, t.company_id, co.name as company_name, t.contact_id,
+    `select t.id, t.workspace_id, t.title, t.due_at, t.due_has_time, t.created_at, t.company_id, co.name as company_name, t.contact_id,
        coalesce(nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''), ct.email) as contact_name
      from (
        select t.*, row_number() over (partition by t.workspace_id order by t.due_at asc, t.created_at asc, t.id asc) as place
@@ -162,6 +165,7 @@ async function tasksInDb(db: Db, actor: UserActor, workspaceIds: string[], now: 
       workspaceId: row.workspace_id,
       title: row.title,
       dueAt: due.toISOString(),
+      dueHasTime: Boolean(row.due_has_time),
       overdue: due.getTime() < start.getTime(),
       companyId: row.company_id,
       companyName: row.company_name,
@@ -271,5 +275,6 @@ export async function snoozeTask(actor: UserActor, id: string, dueAt: string, no
     throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "until" });
   }
   const at = onWorkingDay(chosen);
-  return updateTask(actor, id, { dueAt: at.toISOString() }, { provenance: { operation: "snooze_task", source: "web" } });
+  const task = await getTask(actor, id);
+  return updateTask(actor, id, atKeepingKind(task, at.toISOString()), { provenance: { operation: "snooze_task", source: "web" } });
 }

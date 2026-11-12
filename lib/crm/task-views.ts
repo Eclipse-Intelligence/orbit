@@ -1,4 +1,5 @@
 import { TASK_VIEWS, type TaskView } from "@/lib/crm/types";
+import { clockLabel } from "@/lib/crm/task-time";
 import { appTimeZone, dayWindow } from "@/lib/time";
 
 export const TASKS_PATH = "/tasks";
@@ -89,6 +90,22 @@ export function taskDueState(
     kind: "later",
     label: dateParts(due, sameYear ? { weekday: "short", day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }),
   };
+}
+
+export function taskDueLabel(
+  task: { dueAt: string | null | undefined; dueHasTime?: boolean | null },
+  now: number,
+  timeZone = appTimeZone(),
+) {
+  const state = taskDueState(task.dueAt, now, timeZone);
+  if (state.kind === "none" || !task.dueAt) return state.label;
+  const due = new Date(task.dueAt);
+  const time = task.dueHasTime ? clockLabel(task.dueAt, timeZone) : null;
+  if (state.kind === "today") return time ? `Today ${time}` : "Today";
+  const year = yearFormat(timeZone);
+  const sameYear = year.format(due) === year.format(new Date(now));
+  const day = dateParts(due, sameYear ? { weekday: "short", day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone });
+  return time ? `${day}, ${time}` : day;
 }
 
 export type TaskGroupKind = "overdue" | "today" | "upcoming" | "none";

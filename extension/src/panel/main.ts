@@ -235,7 +235,6 @@ function defaultForm() {
     stage: "",
     "t.title": "",
     "t.due": "tomorrow",
-    "t.remind": "0",
     "n.body": "",
     "m.direction": "received",
     "m.when": localDateTime(new Date()),
@@ -600,11 +599,9 @@ const actions: Actions = {
       render();
       return;
     }
-    const remind = s.form["t.remind"];
     const result = await write<TaskResponse>("/api/extension/task", {
       title,
       due: due(s.form["t.due"]),
-      remindMinutes: remind === "none" || remind === undefined ? null : Number(remind),
       contactId,
       companyId,
     });

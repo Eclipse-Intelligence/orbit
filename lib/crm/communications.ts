@@ -209,7 +209,7 @@ export async function recordCommunication(
           {
             title: `Follow up with ${who}`,
             description: withDueNote(`Suggested after a ${input.kind}.`, due),
-            dueAt: due?.dueAt ?? null,
+            dueDate: due?.dueDate ?? null,
             companyId: company.id,
             contactId,
             priority: "normal",

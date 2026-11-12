@@ -4,7 +4,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { detectPadRecords, searchPadRecords } from "@/lib/crm/task-pad";
+import { detectPadRecords, parsePadWithAi, searchPadRecords } from "@/lib/crm/task-pad";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -12,6 +12,7 @@ import {
   mergeMarks,
   nameMarks,
   padConfirmLine,
+  padDueHasTime,
   padNeedsConfirm,
   padRelease,
   padSaveIds,
@@ -58,14 +59,14 @@ describe("task pad parser", () => {
   it("understands common ways of saying when", () => {
     const cases: [string, string | null][] = [
       ["Send proposal", null],
-      ["Send proposal tomorrow", "2026-10-17T09:00"],
+      ["Send proposal tomorrow", "2026-10-17"],
       ["Review deck on 22 Oct at 10:30", "2026-10-22T10:30"],
-      ["Follow up 22/10", "2026-10-22T09:00"],
+      ["Follow up 22/10", "2026-10-22"],
       ["Chase invoice in 2 hours", "2026-10-16T12:00"],
-      ["Book flights next week", "2026-10-19T09:00"],
+      ["Book flights next week", "2026-10-19"],
       ["Email Sam tonight", "2026-10-16T19:00"],
-      ["Quarterly review December 3rd 2026", "2026-12-03T09:00"],
-      ["Renew domain 1 Feb", "2027-02-01T09:00"],
+      ["Quarterly review December 3rd 2026", "2026-12-03"],
+      ["Renew domain 1 Feb", "2027-02-01"],
       ["Finish report by end of day", "2026-10-16T17:00"],
       ["Lunch with Tom at noon", "2026-10-16T12:00"],
       ["Call mum 9am", "2026-10-17T09:00"],
@@ -73,6 +74,56 @@ describe("task pad parser", () => {
       ["Wrap up end of week", "2026-10-16T17:00"],
     ];
     for (const [text, due] of cases) assert.equal(parse(text).due, due, text);
+  });
+
+  it("keeps a day alone as date only, and gives a time only when one is typed", () => {
+    assert.equal(parse("Call Jane Monday").due, "2026-10-19");
+    assert.equal(parse("Call Jane Monday").remindMinutes, null);
+    assert.equal(parse("Call Jane Monday at 11:15").due, "2026-10-19T11:15");
+    assert.equal(parse("Call Jane Monday morning").due, "2026-10-19T09:00");
+    assert.equal(parse("Call Jane in 3 days").due, "2026-10-19");
+    const reminded = parse("Call Jane Monday, remind me 15 mins before");
+    assert.deepEqual({ due: reminded.due, remindMinutes: reminded.remindMinutes }, { due: "2026-10-19", remindMinutes: 15 });
+    assert.equal(padDueHasTime("2026-10-19"), false);
+    assert.equal(padDueHasTime("2026-10-19T09:00"), true);
+    assert.equal(padDueHasTime(null), false);
+  });
+
+  it("reads the AI fallback's date-only due and keeps the reminder it asks for", async () => {
+    const answers = [
+      { title: "Call Jane", due: "2026-10-19", remindMinutes: 15 },
+      { title: "Call Jane", due: "2026-10-19T11:15", remindMinutes: 45 },
+      { title: "Call Jane", due: null, remindMinutes: 15 },
+      { title: "Call Jane", due: "next Monday", remindMinutes: null },
+    ];
+    const prompts: string[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+      prompts.push(body.messages[0].content);
+      const content = JSON.stringify(answers[prompts.length - 1]);
+      return Response.json({ model: "test", choices: [{ message: { content }, finish_reason: "stop" }] });
+    };
+    const previous = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "llm-test";
+    try {
+      assert.deepEqual(await parsePadWithAi("ring jane after the weekend, nudge me 15 mins before", FRIDAY_10AM, { fetchImpl }), {
+        title: "Call Jane",
+        due: "2026-10-19",
+        remindMinutes: 15,
+      });
+      assert.deepEqual(await parsePadWithAi("ring jane monday 11.15, nudge me 45 mins before", FRIDAY_10AM, { fetchImpl }), {
+        title: "Call Jane",
+        due: "2026-10-19T11:15",
+        remindMinutes: 30,
+      });
+      assert.deepEqual(await parsePadWithAi("ring jane, nudge me", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
+      assert.deepEqual(await parsePadWithAi("ring jane next monday", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
+    } finally {
+      if (previous === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = previous;
+    }
+    assert.match(prompts[0], /the day alone as YYYY-MM-DD/);
+    assert.doesNotMatch(prompts[0], /09:00/);
   });
 
   it("doesn't mistake names and words for dates", () => {
@@ -87,7 +138,7 @@ describe("task pad parser", () => {
 
   it("leaves prices in the title instead of reading them as times", () => {
     const invoice = parse("Invoice £12.50 by Friday");
-    assert.deepEqual({ title: invoice.title, due: invoice.due }, { title: "Invoice £12.50", due: "2026-10-23T09:00" });
+    assert.deepEqual({ title: invoice.title, due: invoice.due }, { title: "Invoice £12.50", due: "2026-10-23" });
     for (const [text, title] of [
       ["Pay $9.15", "Pay $9.15"],
       ["Refund € 7.45 tomorrow", "Refund € 7.45"],
@@ -97,7 +148,7 @@ describe("task pad parser", () => {
     ] as const) {
       const result = parse(text);
       assert.equal(result.title, title, text);
-      assert.ok(!result.due || result.due.endsWith("T09:00"), text);
+      assert.ok(!result.due || /^\d{4}-\d{2}-\d{2}$/.test(result.due), text);
     }
     const priced = parse("Send the £12.50 invoice at 14:30");
     assert.deepEqual({ title: priced.title, due: priced.due }, { title: "Send the £12.50 invoice", due: "2026-10-16T14:30" });

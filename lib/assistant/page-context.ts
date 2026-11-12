@@ -1,3 +1,4 @@
+import { taskDueDay } from "@/lib/crm/task-time";
 import { parseThreadKey } from "@/lib/mail/threads";
 import { parseDocsRoute } from "@/lib/docs/routes";
 import { withActor } from "@/lib/crm/context";
@@ -94,11 +95,12 @@ function word(value: string | null) {
   return value && /^[a-z0-9_-]{1,40}$/i.test(value) ? value : null;
 }
 
-function londonWhen(value: Date | string | null) {
+function londonWhen(value: Date | string | null, withTime = true) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   const day = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/London" }).format(date).replace(/,/g, "");
+  if (!withTime) return day;
   const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/London" }).format(date);
   return `${day} ${time}`;
 }
@@ -255,14 +257,16 @@ async function workflow(db: Db, actor: UserActor, id: string) {
 }
 
 async function task(db: Db, actor: UserActor, id: string) {
-  const result = await db.query<{ title: string; due_at: Date | null; completed_at: Date | null }>(
-    "select title, due_at, completed_at from crm.tasks where id = $1 and workspace_id = $2 and archived_at is null",
+  const result = await db.query<{ title: string; due_at: Date | null; due_has_time: boolean; completed_at: Date | null }>(
+    "select title, due_at, due_has_time, completed_at from crm.tasks where id = $1 and workspace_id = $2 and archived_at is null",
     [id, actor.workspaceId],
   );
   const row = result.rows[0];
   if (!row) return null;
-  const due = londonWhen(row.due_at);
-  return `task ${quoted(row.title, "Untitled task")} [task id ${id}]${row.completed_at ? ", done" : due ? `, due ${due}` : ""}`;
+  const due = londonWhen(row.due_at, row.due_has_time);
+  const dueDate = taskDueDay(row.due_at ? new Date(row.due_at).toISOString() : null);
+  const timing = due && dueDate ? `, due ${due} (dueDate ${dueDate}, ${row.due_has_time ? "timed" : "date only, due any time that day"})` : "";
+  return `task ${quoted(row.title, "Untitled task")} [task id ${id}]${row.completed_at ? ", done" : timing}`;
 }
 
 async function captureItem(db: Db, actor: UserActor, value: string) {

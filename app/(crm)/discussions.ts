@@ -31,13 +31,15 @@ export async function openDiscussionAction(subject: ChatSubject): Promise<ChatRe
   }
 }
 
-export type TaskDetails = Pick<TaskWrite, "title" | "description" | "dueAt" | "remindMinutes">;
+export type TaskDetails = Pick<TaskWrite, "title" | "description" | "dueAt" | "dueDate" | "remindMinutes" | "durationMinutes">;
 
 function details(input: TaskDetails): TaskDetails {
   const write: TaskDetails = {};
   if (typeof input?.title === "string") write.title = input.title;
   if (input?.description === null || typeof input?.description === "string") write.description = input.description;
   if (input?.dueAt === null || typeof input?.dueAt === "string") write.dueAt = input.dueAt;
+  else if (input?.dueDate === null || typeof input?.dueDate === "string") write.dueDate = input.dueDate;
+  if (typeof input?.durationMinutes === "number") write.durationMinutes = input.durationMinutes;
   if (input?.remindMinutes === null || typeof input?.remindMinutes === "number") write.remindMinutes = input.remindMinutes;
   return write;
 }
@@ -51,7 +53,9 @@ function changed(task: Task, write: TaskDetails): TaskDetails {
   const next: TaskDetails = {};
   if (write.title !== undefined && write.title.trim() !== task.title) next.title = write.title;
   if (write.description !== undefined && (write.description?.trim() || null) !== (task.description?.trim() || null)) next.description = write.description;
-  if (write.dueAt !== undefined && !sameInstant(write.dueAt, task.dueAt)) next.dueAt = write.dueAt;
+  if (write.dueAt !== undefined && (!sameInstant(write.dueAt, task.dueAt) || (write.dueAt !== null && !task.dueHasTime))) next.dueAt = write.dueAt;
+  if (write.dueDate !== undefined && (write.dueDate === null ? task.dueAt !== null : task.dueHasTime || write.dueDate !== task.dueDate)) next.dueDate = write.dueDate;
+  if (write.durationMinutes !== undefined && write.durationMinutes !== task.durationMinutes) next.durationMinutes = write.durationMinutes;
   if (write.remindMinutes !== undefined && write.remindMinutes !== task.remindMinutes) next.remindMinutes = write.remindMinutes;
   return next;
 }

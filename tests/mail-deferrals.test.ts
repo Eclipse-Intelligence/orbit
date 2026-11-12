@@ -3,8 +3,9 @@ import { after, before, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
-import { dayKey } from "@/lib/crm/task-due";
-import { getTask } from "@/lib/crm/tasks";
+import { dayKey, dayKeyAt } from "@/lib/crm/task-due";
+import { clockLabel, dayStartIso } from "@/lib/crm/task-time";
+import { getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { deferralHint, deferralOptions, resolveDeferral } from "@/lib/mail/deferral-dates";
@@ -194,8 +195,10 @@ describe("not now replies", () => {
     assert.equal(task.title, "Check in with Jane Doe");
     assert.equal(task.contactName, "Jane Doe");
     assert.equal(task.companyName, "Acme");
-    assert.equal(task.dueAt, expected);
-    assert.equal(task.remindMinutes, 0);
+    assert.equal(task.dueDate, dayKeyAt(new Date(expected)));
+    assert.equal(task.dueHasTime, false);
+    assert.equal(task.dueAt, dayStartIso(task.dueDate!));
+    assert.equal(task.remindMinutes, null);
     assert.equal(task.description, `Asked to pick this up in January.\n\n[Acme pilot: proposal and next steps](/mail?thread=${encodeURIComponent(thread)})`);
     const audit = await getAdminPool().query<{ operation: string; source: string }>("select operation, source from crm.audit_events where entity_id = $1 and event_type = 'task.created'", [task.id]);
     assert.deepEqual(audit.rows, [{ operation: "defer_follow_up", source: "mail" }]);
@@ -219,9 +222,25 @@ describe("not now replies", () => {
     await moveDeferral(owner, reminder.id, later.toISOString());
     const moved = (await getAdminPool().query<{ due_at: Date }>("select due_at from crm.mail_reminders where id = $1", [reminder.id])).rows[0];
     assert.equal(moved.due_at.toISOString(), later.toISOString());
-    assert.equal((await getTask(owner, reminder.task_id)).dueAt, later.toISOString());
+    const movedTask = await getTask(owner, reminder.task_id);
+    assert.equal(movedTask.dueDate, dayKeyAt(later));
+    assert.equal(movedTask.dueHasTime, false);
     assert.equal((await getThread(owner, thread)).deferral?.at, later.toISOString());
     await assert.rejects(moveDeferral(owner, reminder.id, new Date(Date.now() - 60_000).toISOString()), /at least a minute from now/);
+
+    await updateTask(owner, reminder.task_id, { dueAt: `${dayKeyAt(later)}T15:45`, remindMinutes: 30 });
+    const further = new Date(later.getTime() + 7 * 86_400_000);
+    await moveDeferral(owner, reminder.id, further.toISOString());
+    const timed = await getTask(owner, reminder.task_id);
+    assert.equal(timed.dueDate, dayKeyAt(further));
+    assert.equal(timed.dueHasTime, true);
+    assert.equal(clockLabel(timed.dueAt!), "15:45");
+    assert.equal(timed.remindMinutes, 30);
+    const sameDay = new Date(Date.parse(`${dayKeyAt(further)}T00:00:00Z`) + 19 * 3_600_000);
+    await moveDeferral(owner, reminder.id, sameDay.toISOString());
+    const laterToday = await getTask(owner, reminder.task_id);
+    assert.equal(laterToday.dueAt, sameDay.toISOString());
+    assert.equal(laterToday.dueHasTime, true);
   });
 
   it("asks for a gentle check-in when the day comes", async () => {

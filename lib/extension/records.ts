@@ -1,3 +1,4 @@
+import { DEFAULT_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
 import { answerFor, ANSWER_SQL, type AnswerRow } from "@/lib/ai-fields/cells";
 import { readFields, scopeMembership } from "@/lib/ai-fields/fields";
 import { displayAiValue, likelihoodText, setByText } from "@/lib/ai-fields/types";
@@ -112,7 +113,7 @@ async function dealFor(db: Db, workspaceId: string, companyId: string | null, co
   return { id: row.id, name: row.name, value: moneyLabel(row.value, row.currency), board: row.pipeline_name ?? "Opportunities", stage: row.stage_name };
 }
 
-type TaskRow = { id: string; title: string; due_at: Date | string | null };
+type TaskRow = { id: string; title: string; due_at: Date | string | null; due_has_time: boolean; duration_minutes: number };
 
 function taskSummary(row: TaskRow, now = new Date()): TaskSummary {
   const dueAt = iso(row.due_at);
@@ -123,6 +124,9 @@ function taskSummary(row: TaskRow, now = new Date()): TaskSummary {
     id: row.id,
     title: row.title,
     dueAt,
+    dueDate: taskDueDay(dueAt),
+    dueHasTime: Boolean(row.due_has_time) && dueAt !== null,
+    durationMinutes: row.duration_minutes ?? DEFAULT_TASK_DURATION,
     dueLabel: dueAt ? dueLabel(dueAt, now) : null,
     overdue: due !== null && due < today,
     dueToday: due !== null && due >= today && due < tomorrow,
@@ -131,7 +135,7 @@ function taskSummary(row: TaskRow, now = new Date()): TaskSummary {
 
 async function openTasks(db: Db, workspaceId: string, companyId: string | null, contactId: string | null) {
   const result = await db.query<TaskRow & { total: number }>(
-    `select t.id, t.title, t.due_at, count(*) over ()::int as total
+    `select t.id, t.title, t.due_at, t.due_has_time, t.duration_minutes, count(*) over ()::int as total
      from crm.tasks t
      where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null and ${directTaskSql("t")}
        and (($2::uuid is not null and t.company_id = $2) or ($3::uuid is not null and t.contact_id = $3))

@@ -309,7 +309,15 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
   } else if (trigger.type === "task_completed") {
     const task = event.entityId ? await maybe(() => getTask(actor, event.entityId!, { direct: true })) : null;
     if (!task) return { vars, matches: false };
-    vars.task = { id: task.id, title: task.title, completedAt: task.completedAt, dueAt: task.dueAt };
+    vars.task = {
+      id: task.id,
+      title: task.title,
+      completedAt: task.completedAt,
+      dueAt: task.dueAt,
+      dueDate: task.dueDate,
+      dueHasTime: task.dueHasTime,
+      durationMinutes: task.durationMinutes,
+    };
     companyId = task.companyId;
     contactId = task.contactId;
   }
@@ -933,7 +941,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
         {
           title,
           description: withDueNote(render(config.notes, ctx.vars).trim() || null, due),
-          dueAt: due?.dueAt ?? null,
+          dueDate: due?.dueDate ?? null,
           ...links,
           ownerId,
           priority: "normal",

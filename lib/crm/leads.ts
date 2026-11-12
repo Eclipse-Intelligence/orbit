@@ -1,3 +1,5 @@
+import { isReminderMinutes } from "@/lib/crm/reminder-options";
+import { readDateTime } from "@/lib/time";
 import { withActor } from "@/lib/crm/context";
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
@@ -13,7 +15,7 @@ import {
 import { createOpportunityInDb } from "@/lib/crm/opportunities";
 import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
-import type { Actor, LeadInput, LeadResult, Provenance } from "@/lib/crm/types";
+import type { Actor, LeadInput, LeadResult, Provenance, TaskWrite } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { assertCalendarDate } from "@/lib/crm/validation";
 
@@ -51,6 +53,12 @@ export async function ingestLead(
   );
 }
 
+function leadTaskTimed(task: TaskWrite) {
+  if (task.dueDate !== undefined || !task.dueAt) return false;
+  const reading = readDateTime(task.dueAt);
+  return reading.ok && !reading.dateOnly;
+}
+
 async function ingestLeadInDb(
   db: Db,
   actor: Actor,
@@ -61,6 +69,10 @@ async function ingestLeadInDb(
   assertCalendarDate(input.activity?.occurredAt, "activity.occurredAt");
   assertCalendarDate(input.opportunity?.expectedCloseDate, "opportunity.expectedCloseDate");
   assertCalendarDate(input.task?.dueAt, "task.dueAt");
+  assertCalendarDate(input.task?.dueDate, "task.dueDate");
+  if (input.task?.remindMinutes !== undefined && input.task.remindMinutes !== null && !isReminderMinutes(input.task.remindMinutes)) {
+    throw new CrmError("invalid_input", "task.remindMinutes: choose a reminder, such as 15 or 60 minutes.", 400, { field: "task.remindMinutes" });
+  }
   if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
     throw new CrmError(
       "invalid_input",
@@ -169,6 +181,7 @@ async function ingestLeadInDb(
           actor,
           {
             ...input.task,
+            ...(leadTaskTimed(input.task) ? {} : { remindMinutes: null }),
             companyId:
               input.task.companyId === undefined
                 ? (result.company?.id ?? result.contact?.companyId ?? undefined)

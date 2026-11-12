@@ -11,6 +11,7 @@ import {
   createTaskWithClickUp,
   enableClickUpWebhook,
   fromClickUpDue,
+  readClickUpDue,
   getClickUpPicker,
   getClickUpSettings,
   handleClickUpWebhook,
@@ -305,12 +306,13 @@ async function importedTask(workspaceId: string, clickupTaskId: string) {
     id: string;
     title: string;
     due_at: Date | null;
+    due_has_time: boolean;
     completed_at: Date | null;
     archived_at: Date | null;
     contact_id: string | null;
     company_id: string | null;
   }>(
-    `select id, title, due_at, completed_at, archived_at, contact_id, company_id
+    `select id, title, due_at, due_has_time, completed_at, archived_at, contact_id, company_id
      from crm.tasks where workspace_id = $1 and clickup_task_id = $2`,
     [workspaceId, clickupTaskId],
   );
@@ -340,12 +342,25 @@ after(async () => {
 
 describe("clickup client", () => {
   it("converts London due dates both ways", () => {
-    assert.deepEqual(toClickUpDue("2026-11-03T14:30:00.000Z"), { due_date: Date.UTC(2026, 10, 3, 14, 30), due_date_time: true });
-    assert.deepEqual(toClickUpDue(new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString()), {
+    assert.deepEqual(toClickUpDue("2026-11-03T14:30:00.000Z", true), { due_date: Date.UTC(2026, 10, 3, 14, 30), due_date_time: true });
+    assert.deepEqual(toClickUpDue(new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(), false), {
       due_date: Date.UTC(2026, 5, 30, 23, 0),
       due_date_time: false,
     });
-    assert.deepEqual(toClickUpDue(null), { due_date: null, due_date_time: false });
+    assert.deepEqual(toClickUpDue(new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(), true), {
+      due_date: Date.UTC(2026, 5, 30, 23, 0),
+      due_date_time: true,
+    });
+    assert.deepEqual(toClickUpDue("2026-07-01T13:15:00.000Z", false), { due_date: Date.UTC(2026, 5, 30, 23, 0), due_date_time: false });
+    assert.deepEqual(toClickUpDue(null, false), { due_date: null, due_date_time: false });
+    assert.deepEqual(readClickUpDue({ due_date: String(Date.UTC(2026, 6, 1, 13, 15)), due_date_time: true }), {
+      dueAt: new Date(Date.UTC(2026, 6, 1, 13, 15)).toISOString(),
+      dueHasTime: true,
+    });
+    assert.deepEqual(readClickUpDue({ due_date: String(Date.UTC(2026, 6, 1, 13, 15)), due_date_time: false }), {
+      dueAt: new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(),
+      dueHasTime: false,
+    });
     assert.equal(
       fromClickUpDue({ due_date: String(Date.UTC(2026, 6, 1, 3, 0)) }),
       new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(),
@@ -568,6 +583,7 @@ describe("clickup sync", () => {
     assert.equal(email?.contact_id, janeId);
     assert.equal(email?.company_id, acmeId);
     assert.equal(email?.due_at?.toISOString(), new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString());
+    assert.equal(email?.due_has_time, false);
     assert.equal((await importedTask(owner.workspaceId, "bydomain"))?.company_id, globexId);
     const byUrl = await importedTask(owner.workspaceId, "byurl");
     assert.equal(byUrl?.company_id, acmeId);
@@ -601,6 +617,7 @@ describe("clickup sync", () => {
     const after = await importedTask(owner.workspaceId, "byemail");
     assert.equal(after?.title, "Intro call (moved)");
     assert.equal(after?.due_at?.toISOString(), new Date(Date.UTC(2026, 6, 8, 9, 30)).toISOString());
+    assert.equal(after?.due_has_time, true);
     assert.equal(before?.id, after?.id);
     assert.equal(puts(fake, "byemail").length, 0);
 
@@ -629,6 +646,63 @@ describe("clickup sync", () => {
     assert.equal(raced.pushed, 1);
     assert.equal((await importedTask(owner.workspaceId, "byemail"))?.title, "Newest Orbit title");
     assert.equal(remote.name, "Newest Orbit title");
+  });
+
+  it("leaves a migrated date-only task alone on a ClickUp edit, and pulls a change between timed and date only", async () => {
+    const remote = remoteTask(fake, {
+      id: "migrated",
+      listId: RELATIONSHIPS,
+      name: "Send the deck",
+      orbit: "jane@acme.com",
+      due_date: String(Date.UTC(2026, 6, 1, 8, 0)),
+      due_date_time: true,
+    });
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const imported = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(imported?.due_has_time, true);
+    await getAdminPool().query(
+      `update crm.tasks set due_at = '2026-06-30T23:00:00Z', due_has_time = false, scheduled_by = null,
+         clickup_sync = (clickup_sync - 'dueHasTime') || '{"dueAt": "2026-06-30T23:00:00.000Z"}'::jsonb
+       where id = $1`,
+      [imported!.id],
+    );
+    remote.name = "Send the deck to Jane";
+    remote.date_updated = String(Date.now() + 2_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const edited = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(edited?.title, "Send the deck to Jane");
+    assert.equal(edited?.due_at?.toISOString(), "2026-06-30T23:00:00.000Z");
+    assert.equal(edited?.due_has_time, false);
+    assert.equal(puts(fake, "migrated").length, 0);
+
+    assert.equal((await taskRow(edited!.id)).clickup_sync.remoteDueAt, "2026-07-01T08:00:00.000Z");
+    remote.due_date = String(Date.UTC(2026, 6, 1, 13, 0));
+    remote.due_date_time = true;
+    remote.date_updated = String(Date.now() + 4_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const timed = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(timed?.due_at?.toISOString(), "2026-07-01T13:00:00.000Z");
+    assert.equal(timed?.due_has_time, true);
+
+    remote.due_date_time = false;
+    remote.date_updated = String(Date.now() + 6_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const dayOnly = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(dayOnly?.due_at?.toISOString(), "2026-06-30T23:00:00.000Z");
+    assert.equal(dayOnly?.due_has_time, false);
+    assert.equal(puts(fake, "migrated").length, 0);
+
+    await updateTask(owner, dayOnly!.id, { dueAt: "2026-07-01T04:00" });
+    assert.equal(await pushClickUpTask(owner, dayOnly!.id, { fetchImpl }), "pushed");
+    delete remote.due_date_time;
+    remote.due_date = String(Date.UTC(2026, 6, 1, 3, 0));
+    remote.name = "Send the deck early";
+    remote.date_updated = String(Date.now() + 8_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const early = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(early?.title, "Send the deck early");
+    assert.equal(early?.due_at?.toISOString(), "2026-07-01T03:00:00.000Z");
+    assert.equal(early?.due_has_time, true);
   });
 
   it("archives the Orbit task when the ClickUp task is deleted", async () => {

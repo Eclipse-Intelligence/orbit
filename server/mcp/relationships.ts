@@ -166,7 +166,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         opportunityValue: z.number().nullable().optional(),
         opportunityCurrency: z.string().nullable().optional(),
         taskTitle: z.string().optional(),
-        taskDueAt: z.string().nullable().optional(),
+        taskDueDate: z.string().nullable().optional().describe("The task's due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
+        taskDueAt: z.string().nullable().optional().describe("The task's due date and time, only when the person gave a time. A time is honoured as timed and keeps the task timed; a bare date is read as date only. Send taskDueDate or taskDueAt, not both."),
         ...provenanceFields,
       },
     },
@@ -213,7 +214,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
                 }
               : undefined,
             task: args.taskTitle
-              ? { title: args.taskTitle, dueAt: args.taskDueAt }
+              ? { title: args.taskTitle, dueAt: args.taskDueAt, dueDate: args.taskDueDate }
               : undefined,
           },
           { provenance: provenance(args, "ingest_lead") },
@@ -373,11 +374,13 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "create_next_action",
     {
-      description: "Create a task, with an optional due date, assignee (ownerId, a workspace member) and company, contact, or opportunity. Look up the person and company the task is about first and pass their ids (a contact links their company too). With no ids at all, Orbit links it only when the title names exactly one contact by full name, or one company or opportunity whose name has two or more words; pass null to leave a link deliberately empty. The assignee is told.",
+      description: "Create a task, with an optional due day (dueDate) or time (dueAt), duration, assignee (ownerId, a workspace member) and company, contact, or opportunity. Look up the person and company the task is about first and pass their ids (a contact links their company too). With no ids at all, Orbit links it only when the title names exactly one contact by full name, or one company or opportunity whose name has two or more words; pass null to leave a link deliberately empty. The assignee is told.",
       inputSchema: {
         title: z.string(),
         description: z.string().nullable().optional(),
-        dueAt: z.string().nullable().optional(),
+        dueDate: z.string().nullable().optional().describe("Due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
+        dueAt: z.string().nullable().optional().describe("Due date and time, such as 2026-11-14T14:30 (London time) or an ISO instant. Only when the person gave a time. A bare date means date only. Send dueDate or dueAt, not both."),
+        durationMinutes: z.number().int().min(5).max(480).optional().describe("How long the task takes in minutes, 5 to 480. New tasks take 15."),
         priority: z.enum(TASK_PRIORITIES).optional(),
         ownerId: z.uuid().nullable().optional(),
         companyId: z.uuid().nullable().optional(),
@@ -394,6 +397,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
             title: args.title,
             description: args.description,
             dueAt: args.dueAt,
+            dueDate: args.dueDate,
+            durationMinutes: args.durationMinutes,
             priority: args.priority,
             ownerId: args.ownerId,
             companyId: args.companyId,
@@ -425,7 +430,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_due_actions",
     {
       description:
-        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none).",
+        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none). Each task has dueDate (its London day), dueHasTime (false means due any time that day; dueAt is then London midnight), durationMinutes and scheduledBy.",
       inputSchema: { view: z.enum(TASK_VIEWS).optional() },
     },
     async (args) => run(() => getDueActions(actor, args.view ?? "today")),

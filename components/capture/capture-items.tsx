@@ -407,7 +407,7 @@ function DoneCircle({ overdue, title, onClick }: { overdue: boolean; title: stri
 }
 
 function taskChoices(item: WaitingTask) {
-  return taskSnoozeChoices(item.dueAt, new Date());
+  return taskSnoozeChoices(item, new Date());
 }
 
 export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: number; clearId: string }) {
@@ -431,7 +431,7 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
       chips={
         <span className="flex min-w-0 flex-wrap items-center gap-1.5">
           <Tag size="sm" tone={item.overdue ? "red" : "amber"} className="text-[12px]">
-            {dueLabel(item.dueAt, now)}
+            {dueLabel(item.dueAt, now, undefined, item.dueHasTime)}
           </Tag>
           {record && (
             <EntityChip name={record} href={item.companyId ? companyHref(item.companyId) : item.contactId ? contactHref(item.contactId) : undefined} />

@@ -4,6 +4,7 @@ import { upsertContact } from "@/lib/crm/contacts";
 import { listActivities } from "@/lib/crm/activities";
 import { listContacts } from "@/lib/crm/contacts";
 import { listOpportunities } from "@/lib/crm/opportunities";
+import { clockLabel } from "@/lib/crm/task-time";
 import { listTasks } from "@/lib/crm/tasks";
 import { CrmError } from "@/lib/crm/errors";
 import { canonicalDomain, parseTagList } from "@/lib/crm/normalize";
@@ -353,11 +354,13 @@ export async function exportTasksCsv(actor: Actor) {
   );
   const rows = collected.rows;
   return csvExport(collected, [
-    ["Title", "Company", "Due", "Priority", "Completed"],
+    ["Title", "Company", "Due", "Due time", "Duration", "Priority", "Completed"],
     ...rows.map((task) => [
       task.title,
       task.companyName ?? "",
-      task.dueAt ?? "",
+      task.dueDate ?? "",
+      task.dueHasTime && task.dueAt ? clockLabel(task.dueAt) : "",
+      String(task.durationMinutes),
       task.priority,
       task.completedAt ?? "",
     ]),

@@ -840,13 +840,6 @@ textarea {
   gap: 12px;
 }
 
-.grid-due {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: end;
-  gap: 12px;
-}
-
 .chip-row,
 .row {
   display: flex;

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
+import { requestSchedule } from "@/components/crm/task-timing";
 import { activeRow, useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
@@ -58,6 +59,7 @@ const STRIP: { keys: string[][]; label: string; changes?: boolean }[] = [
   { keys: [["⇧↵"], ["O"]], label: "Open" },
   { keys: [["E"]], label: "Done", changes: true },
   { keys: [["H"]], label: "Remind me", changes: true },
+  { keys: [["S"]], label: "Schedule", changes: true },
   { keys: [["Z"]], label: "Undo", changes: true },
   { keys: [["Esc"]], label: "Close" },
 ];
@@ -478,6 +480,19 @@ export default function ActionsScreen({
     const task = activeTask();
     if (!task || view === "completed" || !canChange(task)) return false;
     remind(task);
+  });
+  useShortcut("task-schedule", () => {
+    const task = activeTask();
+    if (!task || view === "completed" || !canChange(task)) return false;
+    if (requestSchedule(task.id)) return;
+    leaveOutcome(task.id);
+    setExpandedId(task.id);
+    let tries = 0;
+    const retry = () => {
+      tries += 1;
+      if (!requestSchedule(task.id) && tries < 20) window.requestAnimationFrame(retry);
+    };
+    window.requestAnimationFrame(retry);
   });
   useShortcut("task-undo", () => {
     if (inPanel() || inField()) return false;

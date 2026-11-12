@@ -10,9 +10,11 @@ import type { Activity, UserActor } from "@/lib/crm/types";
 import { completeJson } from "@/lib/llm";
 import { mentionsIn, namedMentions, plainMentions } from "@/lib/mentions";
 import { londonParts } from "@/lib/task-pad";
+import { localInstant } from "@/lib/crm/task-time";
 
 const TYPES: PadActivityType[] = ["call", "email", "meeting", "note"];
 const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const DUE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$/;
 const SUGGESTION_WINDOW_HOURS = 18;
 
 export type PadActivityInput = {
@@ -82,14 +84,14 @@ export async function logPadActivity(actor: UserActor, input: PadActivityInput):
   );
 
   let warning: string | null = null;
-  if (input.followUp?.title?.trim() && LOCAL.test(input.followUp.due ?? "")) {
+  if (input.followUp?.title?.trim() && DUE.test(input.followUp.due ?? "")) {
     const picker = await getClickUpPicker(actor).catch(() => null);
     try {
       const task = await createTaskWithClickUp(
         actor,
         {
           title: input.followUp.title.trim().slice(0, 200),
-          dueAt: input.followUp.due,
+          ...(LOCAL.test(input.followUp.due) ? { dueAt: localInstant(input.followUp.due) } : { dueDate: input.followUp.due }),
           companyId,
           contactId,
           priority: "normal",
@@ -123,11 +125,11 @@ export async function tidyActivity(text: string, names: string[], now = new Date
   const result = await completeJson({
     system:
       "You tidy a CRM activity someone typed or dictated after talking to a client, in UK English. Reply with JSON only: " +
-      '{"type": "call" | "email" | "meeting" | "note", "title": string, "summary": string, "followUpTitle": string or null, "followUpDue": "YYYY-MM-DDTHH:mm" or null}. ' +
+      '{"type": "call" | "email" | "meeting" | "note", "title": string, "summary": string, "followUpTitle": string or null, "followUpDue": "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" or null}. ' +
       "title is a short headline of what happened, under 80 characters, no full stop. " +
       "summary is the useful detail as plain sentences, without filler, and empty if the title already says it all. Never invent facts. " +
       "followUpTitle is a short imperative task title if the text implies something to do next (for example 'Send Jane revised pricing'), otherwise null. " +
-      "followUpDue is when that task is due in Europe/London time, using 09:00 if no time is given, or null. " +
+      "followUpDue is when that task is due in Europe/London time, with a time only when the text gives one, otherwise the day alone as YYYY-MM-DD, or null. " +
       "No em dashes. " +
       (names.length ? `People and companies mentioned: ${names.join(", ")}. ` : "") +
       `Now is ${today} in London.`,
@@ -142,7 +144,7 @@ export async function tidyActivity(text: string, names: string[], now = new Date
     title: data.title.trim().replace(/[.]$/, "").slice(0, 120) || headline(clean),
     summary: data.summary.trim().slice(0, 4000),
     followUpTitle: data.followUpTitle?.trim().slice(0, 200) || null,
-    followUpDue: data.followUpDue && LOCAL.test(data.followUpDue) ? data.followUpDue : null,
+    followUpDue: data.followUpDue && DUE.test(data.followUpDue) ? data.followUpDue : null,
   };
 }
 

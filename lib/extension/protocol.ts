@@ -95,7 +95,17 @@ export type CompanyMatch = "linkedin" | "domain" | "name";
 
 export type DealSummary = { id: string; name: string; value: string | null; board: string; stage: string | null };
 
-export type TaskSummary = { id: string; title: string; dueAt: string | null; dueLabel: string | null; overdue: boolean; dueToday: boolean };
+export type TaskSummary = {
+  id: string;
+  title: string;
+  dueAt: string | null;
+  dueDate: string | null;
+  dueHasTime: boolean;
+  durationMinutes: number;
+  dueLabel: string | null;
+  overdue: boolean;
+  dueToday: boolean;
+};
 
 export type LastContact = { kind: string; title: string; occurredAt: string; whenLabel: string };
 

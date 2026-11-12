@@ -24,7 +24,7 @@ import {
   type Task,
 } from "@/lib/crm/types";
 import { completeJson } from "@/lib/llm";
-import { appTimeZone, zonedParts, zonedTimeToDate } from "@/lib/time";
+import { appTimeZone, zonedParts } from "@/lib/time";
 
 export const TRANSCRIPT_MAX_LENGTH = 200_000;
 const RAW_TRANSCRIPT_MAX_LENGTH = 1_000_000;
@@ -236,11 +236,6 @@ export function resolveDueDate(
     return shift(ahead);
   }
   return null;
-}
-
-export function dueAtForDay(day: string, timeZone = appTimeZone()) {
-  const [year, month, date] = day.split("-").map(Number);
-  return zonedTimeToDate({ year, month, day: date, hour: 9, minute: 0, second: 0 }, timeZone).toISOString();
 }
 
 function longDay(date: Date) {
@@ -761,7 +756,7 @@ export async function acceptActionItem(
         description: call.title
           ? `From the call on ${shortDay(day)}: ${call.title}`
           : `From the call on ${shortDay(day)}.`,
-        dueAt: dueDate ? dueAtForDay(dueDate) : null,
+        dueDate: dueDate ?? null,
         ...(someoneElse
           ? { contactId: someoneElse.id }
           : call.contact_id || call.company_id

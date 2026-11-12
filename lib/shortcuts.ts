@@ -143,6 +143,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "task-open", label: "Open in the panel", group: "Tasks", combos: [{ key: "Enter", shift: true }, { key: "o" }], priority: true },
   { id: "task-done", label: "Mark done", group: "Tasks", combos: [{ key: "e" }, { key: "d" }] },
   { id: "task-remind", label: "Remind me", group: "Tasks", combos: [{ key: "h" }] },
+  { id: "task-schedule", label: "Schedule", group: "Tasks", combos: [{ key: "s" }] },
   { id: "task-undo", label: "Undo", group: "Tasks", combos: [{ key: "z" }] },
   { id: "task-collapse", label: "Collapse or close", group: "Tasks", combos: [{ key: "Escape" }], priority: true },
   ...[1, 2, 3, 4, 5, 6].map((index) => ({

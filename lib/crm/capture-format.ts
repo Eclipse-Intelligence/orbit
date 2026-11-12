@@ -57,13 +57,14 @@ export function sinceLabel(iso: string, now: number, timeZone = appTimeZone()) {
   return `${days} days ago`;
 }
 
-export function dueLabel(iso: string, now: number, timeZone = appTimeZone()) {
+export function dueLabel(iso: string, now: number, timeZone = appTimeZone(), hasTime?: boolean) {
   const at = new Date(iso);
   const days = daysApart(at, new Date(now), timeZone);
   if (days === 1) return "Yesterday";
   if (days > 1) return `${days} days overdue`;
   const time = clock(at, timeZone);
-  return time === "00:00" ? "Today" : `Today ${time}`;
+  const timed = hasTime ?? time !== "00:00";
+  return timed ? `Today ${time}` : "Today";
 }
 
 export function pruneHidden(hidden: Set<string>, present: Iterable<string>, acting: Iterable<string> = []) {

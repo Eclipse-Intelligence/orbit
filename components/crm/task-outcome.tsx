@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import Button from "@/components/_ui/button";
-import { DateTimePicker } from "@/components/_ui/date-picker";
+import { DueDatePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
 import { TASK_CHIP } from "@/components/crm/task-fields";
@@ -11,6 +11,7 @@ import { completeTaskWithOutcomeAction } from "@/app/(crm)/task-act";
 import type { OutcomeKind, TaskOutcome } from "@/lib/crm/task-act";
 import { taskKind } from "@/lib/crm/task-kind";
 import type { Task } from "@/lib/crm/types";
+import { localInstant } from "@/lib/crm/task-time";
 import { cn } from "@/lib/utils";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
@@ -49,7 +50,7 @@ function keepDraft(taskId: string, draft: OutcomeDraft) {
 
 export function outcomeValue(draft: OutcomeDraft): TaskOutcome {
   const title = draft.nextTitle.trim();
-  return { outcomeId: draft.outcomeId, note: draft.note, kind: draft.kind, next: title ? { title, dueAt: draft.nextDue || null } : null };
+  return { outcomeId: draft.outcomeId, note: draft.note, kind: draft.kind, next: title ? { title, dueAt: draft.nextDue ? localInstant(draft.nextDue) : null } : null };
 }
 
 export function typedOutcome(draft: OutcomeDraft | null | undefined) {
@@ -362,7 +363,7 @@ export default function TaskOutcomeForm({
             }}
             className="min-w-[12em] flex-1"
           />
-          <DateTimePicker
+          <DueDatePicker
             id={`${id}-due`}
             aria-label={draft.nextDue ? "Next task due. Change" : "Next task due date"}
             placeholder="Due"

@@ -182,7 +182,7 @@ async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate) {
         withDueNote("Suggested after an email arrived.", due),
         mail?.thread_key ? mailThreadLine(mail.source_id, mail.thread_key, mail.subject) : null,
       ),
-      dueAt: due?.dueAt ?? null,
+      dueDate: due?.dueDate ?? null,
       companyId: row.company_id,
       contactId: row.contact_id,
       priority: "normal",

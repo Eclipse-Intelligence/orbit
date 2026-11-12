@@ -1,6 +1,6 @@
 # Orbit LinkedIn capture
 
-A Chrome extension that opens Orbit in Chrome's side panel next to LinkedIn and Sales Navigator. It looks up the person or company you're viewing in every workspace you connected, saves new people and companies, adds tasks and notes, logs LinkedIn messages, and updates a record from the page. Nothing is added to LinkedIn's pages.
+A Chrome extension that opens Orbit in Chrome's side panel next to LinkedIn and Sales Navigator. It looks up the person or company you're viewing in every workspace you connected, saves new people and companies, adds tasks (a day, no time, so no reminder) and notes, logs LinkedIn messages, and updates a record from the page. Nothing is added to LinkedIn's pages.
 
 ## What it reads, and when
 

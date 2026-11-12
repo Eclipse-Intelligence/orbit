@@ -339,7 +339,7 @@ export default function ActivityPad({
             >
               <span aria-hidden>{follow ? "✓" : "+"}</span>
               <span className="truncate">
-                Task: {finalFollowTitle} · {formatDateTimeLabel(followDue)}
+                Task: {finalFollowTitle} · {followDue.includes("T") ? formatDateTimeLabel(followDue) : formatDateLabel(followDue)}
               </span>
             </button>
           )}

@@ -7,6 +7,7 @@ import ActivityPad from "@/components/crm/activity-pad";
 import { cardContextAction } from "@/app/(crm)/boards";
 import { formatWhen, relativeWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
+import { taskDueLabel } from "@/lib/crm/task-views";
 import type { Activity, Task } from "@/lib/crm/types";
 
 const TYPE_LABELS: Partial<Record<Activity["type"], string>> = {
@@ -19,6 +20,7 @@ const TYPE_LABELS: Partial<Record<Activity["type"], string>> = {
 export default function BoardCardContext({ companyId, companyName }: { companyId: string; companyName: string }) {
   const [loaded, setLoaded] = useState<{ companyId: string; activities: Activity[]; tasks: Task[] } | null>(null);
   const [added, setAdded] = useState<Activity[]>([]);
+  const [now] = useState(() => Date.now());
 
   useEffect(() => {
     let live = true;
@@ -69,7 +71,7 @@ export default function BoardCardContext({ companyId, companyName }: { companyId
             {current.tasks.map((task) => (
               <li key={task.id} className="flex flex-col gap-0.5">
                 <span className="truncate text-[14px] leading-5"><TaskTitle task={task} /></span>
-                {task.dueAt && <span className="caption-style text-subtle">Due {formatWhen(task.dueAt)}</span>}
+                {task.dueAt && <span className="caption-style text-subtle">Due {taskDueLabel(task, now)}</span>}
               </li>
             ))}
           </ul>

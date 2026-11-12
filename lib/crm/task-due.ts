@@ -20,7 +20,7 @@ export { addWorkingDays, bankHolidays, christmasBreak, dayKey, dayKeyAt, nextWor
 
 export type BusyBlock = { start: number; end: number };
 
-export type DuePlan = { dueAt: string; note: string | null };
+export type DuePlan = { dueDate: string; note: string | null };
 
 const DAY_START = { hour: 9, minute: 0 };
 const DAY_END = { hour: 17, minute: 30 };
@@ -70,11 +70,16 @@ export function planTaskDue(
   now = new Date(),
   timeZone = appTimeZone(),
 ): DuePlan | null {
+  const chosen = chooseDue(input, now, timeZone);
+  return chosen ? { dueDate: dayKeyAt(new Date(chosen.at), timeZone), note: chosen.note } : null;
+}
+
+function chooseDue(input: { days?: number | null; on?: string | null; busy?: BusyBlock[] | null }, now: Date, timeZone: string) {
   const planned = plannedDay(input, now, timeZone);
   if (!planned) return null;
   const nowMs = now.getTime();
   if (planned.today && !nonWorkingReason(planned.key) && nowMs < wallClockMs(planned.key, DAY_END.hour, DAY_END.minute, timeZone)) {
-    return { dueAt: now.toISOString(), note: null };
+    return { at: now.getTime(), note: null };
   }
   const skipped = nonWorkingReason(planned.key);
   let key = nextWorkingDay(planned.today ? shiftDay(planned.key, skipped ? 0 : 1) : planned.key);
@@ -84,7 +89,7 @@ export function planTaskDue(
     for (let index = 0; index < LOOK_AHEAD_DAYS; index += 1) {
       const slot = freeSlot(key, busy, timeZone, nowMs);
       if (slot !== null) {
-        return { dueAt: new Date(slot).toISOString(), note: moveNote(planned.key, key, skipped, booked) };
+        return { at: slot, note: moveNote(planned.key, key, skipped, booked) };
       }
       booked += 1;
       key = nextWorkingDay(shiftDay(key, 1));
@@ -92,7 +97,7 @@ export function planTaskDue(
     key = nextWorkingDay(planned.today ? shiftDay(planned.key, 1) : planned.key);
     booked = 0;
   }
-  return { dueAt: new Date(wallClockMs(key, DAY_START.hour, DAY_START.minute, timeZone)).toISOString(), note: moveNote(planned.key, key, skipped, booked) };
+  return { at: wallClockMs(key, DAY_START.hour, DAY_START.minute, timeZone), note: moveNote(planned.key, key, skipped, booked) };
 }
 
 function moveNote(from: string, to: string, skipped: string | null, booked: number) {

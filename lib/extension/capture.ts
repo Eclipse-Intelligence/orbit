@@ -524,7 +524,7 @@ export async function diff(actor: UserActor, body: Input): Promise<DiffResponse>
   return result;
 }
 
-export function dueFrom(value: unknown, now = new Date()) {
+export function dueDayKey(value: unknown, now = new Date()) {
   if (value === null || value === undefined || value === "") return null;
   const timeZone = appTimeZone();
   const today = dayKeyAt(now, timeZone);
@@ -541,11 +541,7 @@ export function dueFrom(value: unknown, now = new Date()) {
     }
   }
   if (!key) throw new CrmError("invalid_input", "Choose when it's due.", 400, { field: "due" });
-  if (key === today) {
-    const endOfDay = wallClockAt(today, 17, 30, timeZone);
-    return new Date(Math.max(endOfDay, now.getTime() + 60 * 60_000)).toISOString();
-  }
-  return new Date(wallClockAt(key, 9, 0, timeZone)).toISOString();
+  return key;
 }
 
 async function linkedRecords(db: Db, actor: UserActor, body: Input) {
@@ -569,16 +565,13 @@ export async function addTask(actor: UserActor, body: Input): Promise<TaskRespon
   assertScope(actor.scopes, "tasks:write");
   const title = text(body.title, 200);
   if (!title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
-  const dueAt = dueFrom(body.due);
-  const remind = body.remindMinutes === null || body.remindMinutes === undefined ? null : body.remindMinutes;
-  if (remind !== null && !isReminderMinutes(remind)) throw new CrmError("invalid_input", "Choose a reminder from the list.", 400, { field: "remindMinutes" });
-  if (remind !== null && !dueAt) throw new CrmError("invalid_input", "Choose when it's due to set a reminder.", 400, { field: "remindMinutes" });
+  const dueDate = dueDayKey(body.due);
   return withActor(actor, async (db) => {
     const links = await linkedRecords(db, actor, body);
     const task = await createTaskInDb(
       db,
       actor,
-      { title, dueAt, remindMinutes: remind, ownerId: actor.userId, contactId: links.contactId, companyId: links.companyId },
+      { title, dueDate, ownerId: actor.userId, contactId: links.contactId, companyId: links.companyId },
       provenance("create_task", links.contact?.linkedinUrl ?? null),
     );
     return {
@@ -586,6 +579,9 @@ export async function addTask(actor: UserActor, body: Input): Promise<TaskRespon
         id: task.id,
         title: task.title,
         dueAt: task.dueAt,
+        dueDate: task.dueDate,
+        dueHasTime: task.dueHasTime,
+        durationMinutes: task.durationMinutes,
         dueLabel: task.dueAt ? dueLabel(task.dueAt) : null,
         overdue: false,
         dueToday: false,

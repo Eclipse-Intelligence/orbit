@@ -294,7 +294,7 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
               calls: [
                 {
                   name: "create_task",
-                  args: { title: "Call Wren Ashdown", ownerId: world.colleague.userId, contactId: world.id("contact:Wren Ashdown"), dueAt: `${londonDay({ weekday: 5 })}T10:00` },
+                  args: { title: "Call Wren Ashdown", ownerId: world.colleague.userId, contactId: world.id("contact:Wren Ashdown"), dueDate: londonDay({ weekday: 5 }) },
                 },
               ],
             };
@@ -307,7 +307,7 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(failed(result), []);
     const wrong = await runOnce(
       byId("write-task-for-tagged-teammate"),
-      settings(scripted([({ world }) => ({ calls: [{ name: "create_task", args: { title: "Call Wren Ashdown", contactId: world.id("contact:Wren Ashdown"), dueAt: `${londonDay({ weekday: 5 })}T10:00` } }] })])),
+      settings(scripted([({ world }) => ({ calls: [{ name: "create_task", args: { title: "Call Wren Ashdown", contactId: world.id("contact:Wren Ashdown"), dueDate: londonDay({ weekday: 5 }) } }] })])),
     );
     assert.deepEqual(failed(wrong), ["proposes create_task"]);
   });
@@ -387,7 +387,7 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
         scripted([
           ({ body, world }) => {
             seen.push(JSON.stringify(body.messages));
-            return { calls: [{ name: "update_task", args: { taskId: world.id("task:Chase Ansel if he's gone quiet"), dueAt: `${londonDay({ weekday: 1, weeks: 1 })}T09:30` } }] };
+            return { calls: [{ name: "update_task", args: { taskId: world.id("task:Chase Ansel if he's gone quiet"), dueDate: londonDay({ weekday: 1, weeks: 1 }) } }] };
           },
         ]),
       ),
