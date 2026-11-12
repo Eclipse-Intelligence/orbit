@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { memo, useEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
@@ -27,7 +27,9 @@ import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
 
-export type TaskAssigning = {
+const OUT_MS = 180;
+
+type TaskAssigning = {
   members: AssignableMember[];
   viewerId: string;
   tagged: string[];
@@ -35,8 +37,6 @@ export type TaskAssigning = {
   pending: boolean;
   onAssign: (ownerId: string) => void;
 };
-
-const OUT_MS = 180;
 
 function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning }) {
   const member = assigning.members.find((item) => item.id === task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
@@ -126,22 +126,27 @@ function useExpansion(expanded: boolean) {
   return { mounted: mounted || expanded, settle };
 }
 
-export default function ActionTask({
+const NONE: string[] = [];
+
+function ActionTask({
   task,
   completed,
   dueBadge = false,
   now,
   viewer,
-  members = [],
-  tagged = [],
+  members = NONE as unknown as AssignableMember[],
+  tagged = NONE,
   expanded = false,
   onToggle,
   onComplete,
   onOpen,
   onRemind,
+  canComplete = false,
   comments = 0,
-  assigning,
-  colleagues = [],
+  onAssign,
+  canAssign = false,
+  assignPending = false,
+  colleagues = NONE as unknown as TitleColleague[],
   canLink = false,
   keyboard = false,
   here,
@@ -155,22 +160,40 @@ export default function ActionTask({
   members?: AssignableMember[];
   tagged?: string[];
   expanded?: boolean;
-  onToggle: () => void;
-  onComplete?: () => void;
-  onOpen: () => void;
-  onRemind?: () => void;
+  onToggle: (task: Task) => void;
+  onComplete?: (task: Task) => void;
+  onOpen: (task: Task) => void;
+  onRemind?: (task: Task) => void;
+  canComplete?: boolean;
   comments?: number;
-  assigning?: TaskAssigning;
+  onAssign?: (task: Task, ownerId: string) => void;
+  canAssign?: boolean;
+  assignPending?: boolean;
   colleagues?: TitleColleague[];
   canLink?: boolean;
   keyboard?: boolean;
   here?: TitleHere;
   actions?: ReactNode;
 }) {
+  const complete = canComplete && onComplete ? () => onComplete(task) : undefined;
+  const remind = canComplete && onRemind ? () => onRemind(task) : undefined;
+  const open = () => onOpen(task);
+  const assigning: TaskAssigning | undefined = onAssign
+    ? { members, viewerId: viewer.id, tagged, canAssign, pending: assignPending, onAssign: (ownerId) => onAssign(task, ownerId) }
+    : undefined;
   const overdue = Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
   const due = dueBadge ? taskDueState(task.dueAt, now) : null;
   const canChange = canChangeTaskAs(viewer, task);
   const details = useTaskDetails(task, canChange);
+  const flushDetails = useRef(details.flush);
+  const wasExpanded = useRef(expanded);
+  useEffect(() => {
+    flushDetails.current = details.flush;
+  });
+  useEffect(() => {
+    if (wasExpanded.current && !expanded) flushDetails.current();
+    wasExpanded.current = expanded;
+  }, [expanded]);
   const preview = splitDescription(task.description).text.split("\n")[0]?.trim();
   const expansion = useExpansion(expanded);
   const row = useRef<HTMLLIElement>(null);
@@ -181,7 +204,7 @@ export default function ActionTask({
   const handlers = useRef<SwipeHandlers>({});
   const armedBefore = useRef(false);
   const timers = useRef<number[]>([]);
-  const allowed = { left: Boolean(onRemind) && !completed, right: Boolean(onComplete) && !completed };
+  const allowed = { left: Boolean(complete) && !completed, right: Boolean(remind) && !completed };
   const swipeable = !expanded && (allowed.left || allowed.right);
   const armed = offset !== 0 && swipeCommit(offset, 0, width, allowed) !== null;
 
@@ -203,18 +226,18 @@ export default function ActionTask({
       onRelease: (commit) => {
         armedBefore.current = false;
         setDragging(false);
-        if (commit === "right" && onComplete) {
-          setOffset(row.current?.offsetWidth ?? width);
+        if (commit === "left" && complete) {
+          setOffset(-(row.current?.offsetWidth ?? width));
           timers.current.push(
             window.setTimeout(() => {
-              onComplete();
+              complete();
               setOffset(0);
             }, OUT_MS),
           );
           return;
         }
         setOffset(0);
-        if (commit === "left") onRemind?.();
+        if (commit === "right") remind?.();
       },
     };
   });
@@ -230,7 +253,8 @@ export default function ActionTask({
   }, [swipeable]);
 
   const toggle = () => {
-    onToggle();
+    if (expanded) details.flush();
+    onToggle(task);
     window.requestAnimationFrame(() => {
       if (keyboard && row.current && !row.current.contains(document.activeElement)) row.current.focus({ preventScroll: true });
     });
@@ -249,13 +273,13 @@ export default function ActionTask({
           aria-hidden
           className={cn(
             "ease-power3-out absolute inset-0 flex items-center px-5 text-[13px] font-medium transition-colors duration-150",
-            offset > 0 ? "justify-start" : "justify-end",
-            !armed ? "text-soft bg-white/[0.06]" : offset > 0 ? "bg-[color-mix(in_srgb,var(--success)_78%,black)] text-white" : "bg-primary text-white",
+            offset < 0 ? "justify-end" : "justify-start",
+            !armed ? "text-soft bg-white/[0.06]" : offset < 0 ? "bg-[color-mix(in_srgb,var(--success)_78%,black)] text-white" : "bg-primary text-white",
           )}
         >
-          <span className="flex items-center gap-2">
-            {offset > 0 ? <CheckIcon className="size-[18px]" /> : <ClockIcon className="size-[18px]" />}
-            {offset > 0 ? "Done" : "Remind me"}
+          <span className={cn("ease-power3-out flex items-center gap-2 transition-transform duration-150", armed ? "scale-100" : "scale-90", offset < 0 && "flex-row-reverse")}>
+            {offset < 0 ? <CheckIcon className="size-[18px]" /> : <ClockIcon className="size-[18px]" />}
+            {offset < 0 ? "Done" : "Remind me"}
           </span>
         </span>
       )}
@@ -266,7 +290,7 @@ export default function ActionTask({
       >
         <div className={cn("flex items-start gap-2.5 px-2.5 py-2.5 @xl:min-h-11 @xl:py-1.5", expanded ? "@xl:items-start @xl:pt-3" : "@xl:items-center")}>
           <span className={cn("flex", expanded && "@xl:mt-px")}>
-            <DoneButton task={task} completed={completed} overdue={overdue} onComplete={onComplete} />
+            <DoneButton task={task} completed={completed} overdue={overdue} onComplete={complete} />
           </span>
           {expanded ? (
             <div className="flex min-w-0 flex-1 items-start gap-2">
@@ -288,7 +312,7 @@ export default function ActionTask({
             </div>
           ) : (
             <div className="flex min-w-0 flex-1 flex-col gap-1.5 @xl:flex-row @xl:items-center @xl:gap-2.5">
-              <div className="relative flex min-w-0 flex-1 flex-col @xl:justify-center">
+              <div className="relative flex min-h-11 min-w-0 flex-1 flex-col justify-center @xl:min-h-0">
                 <button
                   type="button"
                   data-row-open={keyboard ? "" : undefined}
@@ -344,8 +368,7 @@ export default function ActionTask({
           )}
         </div>
         <div
-          className="ease-power3-out grid transition-[grid-template-rows] duration-300"
-          style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
+          className={cn("ease-power3-out grid transition-[grid-template-rows] duration-300", expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}
           onTransitionEnd={(event) => {
             if (event.target === event.currentTarget) expansion.settle();
           }}
@@ -357,11 +380,11 @@ export default function ActionTask({
                 <TaskFields details={details} viewer={viewer} members={members} tagged={tagged} layout="row" done={completed} />
                 <div className="flex items-center gap-2 max-sm:pt-1">
                   <span className="flex-1 max-sm:hidden" />
-                  <Button variant="secondary" size="md" onClick={onOpen} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="max-sm:h-11 max-sm:flex-1">
+                  <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="max-sm:h-11 max-sm:flex-1">
                     Open
                   </Button>
-                  {onComplete && !completed && (
-                    <Button variant="secondary" size="md" onClick={onComplete} shortcut={keyboard ? ["E"] : undefined} className="max-sm:h-11 max-sm:flex-1">
+                  {complete && !completed && (
+                    <Button variant="secondary" size="md" onClick={complete} shortcut={keyboard ? ["E"] : undefined} className="max-sm:h-11 max-sm:flex-1">
                       <CheckIcon aria-hidden className="size-3.5" />
                       Done
                     </Button>
@@ -375,3 +398,5 @@ export default function ActionTask({
     </li>
   );
 }
+
+export default memo(ActionTask);

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useComposer } from "@/components/mail/compose-dock";
 import Button from "@/components/_ui/button";
 import { DateTimePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
@@ -39,11 +40,17 @@ export const TASK_CHIP =
 
 const TOUCH = "[@media(pointer:coarse)]:h-11";
 
+const FORMATS = new Map<string, Intl.DateTimeFormat>();
+
 export function formatTaskWhen(options: Intl.DateTimeFormatOptions, iso: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: appTimeZone(),
-    ...options,
-  }).format(new Date(iso));
+  const timeZone = appTimeZone();
+  const key = `${timeZone}|${JSON.stringify(options)}`;
+  let format = FORMATS.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-GB", { timeZone, ...options });
+    FORMATS.set(key, format);
+  }
+  return format.format(new Date(iso));
 }
 
 function fitHeight(field: HTMLTextAreaElement) {
@@ -124,16 +131,33 @@ function sourceOf(task: Task): Source {
   };
 }
 
+const drafts = new Map<string, { title?: string; text?: string }>();
+
+function keepDraft(id: string, change: { title?: string; text?: string }) {
+  drafts.set(id, { ...drafts.get(id), ...change });
+}
+
+function dropDraft(id: string, field: "title" | "text") {
+  const draft = drafts.get(id);
+  if (!draft) return;
+  delete draft[field];
+  if (draft.title === undefined && draft.text === undefined) drafts.delete(id);
+}
+
 export function useTaskDetails(task: Task, canChange: boolean) {
   const router = useRouter();
+  const composer = useComposer();
   const source = sourceOf(task);
+  const [draft] = useState(() => drafts.get(task.id));
   const [seen, setSeen] = useState(source);
-  const [title, setTitle] = useState(source.title);
-  const [text, setText] = useState(source.text);
+  const [title, setTitle] = useState(draft?.title ?? source.title);
+  const [text, setText] = useState(draft?.text ?? source.text);
   const [due, setDue] = useState(source.due);
   const [reminder, setReminder] = useState<number | null>(source.reminder);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const sent = useRef({ title: source.title, text: source.text });
   if (seen.title !== source.title || seen.text !== source.text || seen.due !== source.due || seen.reminder !== source.reminder || seen.ownerId !== source.ownerId) {
     setSeen(source);
     if (title.trim() === seen.title) setTitle(source.title);
@@ -141,6 +165,9 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     if (due === seen.due) setDue(source.due);
     if (reminder === seen.reminder) setReminder(source.reminder);
   }
+  useEffect(() => {
+    sent.current = { title: source.title, text: source.text };
+  }, [source.title, source.text]);
 
   async function save(write: TaskDetails) {
     setError(null);
@@ -152,8 +179,11 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     }
     if (result.error) {
       setError(result.error);
+      composer.showToast({ message: result.error, tone: "alert" });
       return false;
     }
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2000);
     router.refresh();
     return true;
   }
@@ -162,18 +192,36 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     if (!canChange) return;
     const next = title.trim();
     if (!next) {
-      setTitle(task.title);
+      setTitle(sent.current.title);
       return;
     }
-    if (next === task.title) return;
-    void save({ title: next });
+    const previous = sent.current.title;
+    if (next === previous) return;
+    sent.current.title = next;
+    void save({ title: next }).then((ok) => {
+      if (ok) {
+        dropDraft(task.id, "title");
+        return;
+      }
+      if (sent.current.title === next) sent.current.title = previous;
+      keepDraft(task.id, { title: next });
+    });
   }
 
   function saveText() {
     if (!canChange) return;
     const next = text.trim();
-    if (next === source.text) return;
-    void save({ description: replaceDescriptionText(task.description, next) });
+    const previous = sent.current.text;
+    if (next === previous) return;
+    sent.current.text = next;
+    void save({ description: replaceDescriptionText(task.description, next) }).then((ok) => {
+      if (ok) {
+        dropDraft(task.id, "text");
+        return;
+      }
+      if (sent.current.text === next) sent.current.text = previous;
+      keepDraft(task.id, { text: next });
+    });
   }
 
   function flush() {
@@ -181,15 +229,29 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     saveText();
   }
 
+  const latestFlush = useRef(flush);
+  useEffect(() => {
+    latestFlush.current = flush;
+  });
+  useEffect(() => () => latestFlush.current(), []);
+
   function changeDue(value: string) {
+    const before = { due, reminder };
     setDue(value);
     if (!value) setReminder(null);
-    void save(value ? { dueAt: value } : { dueAt: null, remindMinutes: null });
+    void save(value ? { dueAt: value } : { dueAt: null, remindMinutes: null }).then((ok) => {
+      if (ok) return;
+      setDue(before.due);
+      setReminder(before.reminder);
+    });
   }
 
   function changeReminder(minutes: number | null) {
+    const before = reminder;
     setReminder(minutes);
-    void save({ remindMinutes: minutes });
+    void save({ remindMinutes: minutes }).then((ok) => {
+      if (!ok) setReminder(before);
+    });
   }
 
   async function assign(ownerId: string) {
@@ -197,11 +259,13 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     setError(null);
     const result = await assignTaskAction(task.id, ownerId).catch(() => ({ error: "Couldn't assign the task. Try again." }));
     setBusy(false);
-    if (result.error) setError(result.error);
-    else router.refresh();
+    if (result.error) {
+      setError(result.error);
+      composer.showToast({ message: result.error, tone: "alert" });
+    } else router.refresh();
   }
 
-  return { task, canChange, title, setTitle, text, setText, due, reminder, busy, error, setError, saveTitle, saveText, flush, changeDue, changeReminder, assign };
+  return { task, canChange, title, setTitle, text, setText, due, reminder, busy, error, setError, saved, saveTitle, saveText, flush, changeDue, changeReminder, assign };
 }
 
 export type TaskDetailsState = ReturnType<typeof useTaskDetails>;
@@ -593,6 +657,14 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
   );
 }
 
+function SavedNote({ details }: { details: TaskDetailsState }) {
+  return (
+    <span role="status" className="caption-style text-subtle empty:hidden">
+      {details.saved ? "Saved" : ""}
+    </span>
+  );
+}
+
 export default function TaskFields({
   details,
   viewer,
@@ -645,6 +717,7 @@ export default function TaskFields({
             {details.error}
           </p>
         )}
+        <SavedNote details={details} />
       </div>
     );
   }
@@ -662,14 +735,15 @@ export default function TaskFields({
         </Field>
         {team && <TaggedField details={details} viewer={viewer} members={members} people={people} tagging={tagging} />}
       </dl>
-      <Section label="Description">
-        <Description details={details} layout="panel" />
-      </Section>
       {taskIsLinked(task) && (
         <Section label="Linked">
           <TaskLinks task={task} />
         </Section>
       )}
+      <Section label="Description">
+        <Description details={details} layout="panel" />
+      </Section>
+      <SavedNote details={details} />
     </>
   );
 }

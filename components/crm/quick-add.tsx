@@ -89,6 +89,7 @@ function modalOpen() {
   return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(
     (node) =>
       node.getAttribute("data-state") === "open" &&
+      !node.hasAttribute("data-nonmodal") &&
       !node.closest("[data-radix-popper-content-wrapper]"),
   );
 }

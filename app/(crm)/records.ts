@@ -20,7 +20,7 @@ import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
-import { completeTask, listDueReminders, reopenTask, updateTask, type DueReminder } from "@/lib/crm/tasks";
+import { completeTask, listDueReminders, updateTask, type DueReminder } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -280,21 +280,6 @@ export async function completeTaskAction(
   try {
     await completeTask(user, id, {
       provenance: { operation: "complete_task", source: "web" },
-    });
-    pushLater(user, id);
-    refresh();
-    return { ok: true };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
-export async function reopenTaskAction(id: string): Promise<RecordActionState> {
-  const user = await requireUser();
-  if (!isUuid(id)) return { error: "Couldn't undo. Try again." };
-  try {
-    await reopenTask(user, id, {
-      provenance: { operation: "reopen_task", source: "web" },
     });
     pushLater(user, id);
     refresh();

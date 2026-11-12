@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
@@ -37,28 +37,35 @@ function subscribeDesktop(onChange: () => void) {
 }
 
 function useDesktop() {
-  return useSyncExternalStore(subscribeDesktop, () => window.matchMedia(DESKTOP).matches, () => false);
+  return useSyncExternalStore<boolean | null>(subscribeDesktop, () => window.matchMedia(DESKTOP).matches, () => null);
 }
 
 function inPanel() {
   return Boolean(document.activeElement?.closest("[data-nonmodal]"));
 }
 
-const STRIP: { keys: string[][]; label: string }[] = [
+function inField() {
+  return Boolean(document.activeElement?.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+const NO_TAGS: string[] = [];
+const FOLLOW_MS = 160;
+
+const STRIP: { keys: string[][]; label: string; changes?: boolean }[] = [
   { keys: [["J"], ["K"]], label: "Move" },
   { keys: [["↵"], ["Space"]], label: "Expand" },
   { keys: [["⇧↵"], ["O"]], label: "Open" },
-  { keys: [["E"]], label: "Done" },
-  { keys: [["H"]], label: "Remind me" },
-  { keys: [["Z"]], label: "Undo" },
+  { keys: [["E"]], label: "Done", changes: true },
+  { keys: [["H"]], label: "Remind me", changes: true },
+  { keys: [["Z"]], label: "Undo", changes: true },
   { keys: [["Esc"]], label: "Close" },
 ];
 
-function KeyStrip() {
+function KeyStrip({ completed }: { completed: boolean }) {
   return (
     <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-[4.5rem] z-10 hidden justify-center px-4 lg:flex [@media(hover:none)]:hidden">
       <div className="bg-popover border-line-strong shadow-overlay caption-style text-soft flex flex-wrap items-center gap-x-4 gap-y-1 rounded-full border px-4 py-2">
-        {STRIP.map((item) => (
+        {STRIP.filter((item) => !(completed && item.changes)).map((item) => (
           <span key={item.label} className="flex items-center gap-1.5">
             {item.keys.map((keys, index) => (
               <Fragment key={index}>
@@ -206,9 +213,8 @@ export default function ActionsScreen({
         )}
       </div>
     ) : undefined;
-  const colleagues = members.map((member) => ({ id: member.id, name: member.name }));
-  const admin = viewer.role === "owner" || viewer.role === "admin";
-  const { done, message, setMessage, complete: markDone, undoLast, remind } = useTaskDone();
+  const colleagues = useMemo(() => members.map((member) => ({ id: member.id, name: member.name })), [members]);
+  const { done, message, setMessage, complete: markDone, undoLast, remind } = useTaskDone(allTasks);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selected, setSelected] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -302,8 +308,15 @@ export default function ActionsScreen({
 
   const canChange = (task: Task) => canChangeTaskAs(viewer, task);
   const shownTasks = view === "completed" ? allTasks : allTasks.filter((task) => !done.has(task.id));
-  const groups = view === "all" ? groupTasksByDue(shownTasks, now) : [{ kind: "list", label: "", tasks: shownTasks }];
+  const entries =
+    view === "all"
+      ? groupTasksByDue(shownTasks, now).flatMap((group) => [
+          { kind: "heading" as const, key: `heading:${group.kind}`, group: group.kind, label: group.label, count: group.tasks.length },
+          ...group.tasks.map((task) => ({ kind: "task" as const, key: task.id, task })),
+        ])
+      : shownTasks.map((task) => ({ kind: "task" as const, key: task.id, task }));
   const panelOpen = Boolean(panelTask);
+  const beside = desktop === true;
 
   function activeTask() {
     if (inPanel()) return null;
@@ -313,11 +326,34 @@ export default function ActionsScreen({
   }
 
   function toggle(task: Task) {
-    if (panelOpen && desktop) {
+    if (panelOpen && beside) {
       openPanel(task.id);
       return;
     }
     setExpandedId((current) => (current === task.id ? null : task.id));
+  }
+
+  const latest = useRef({ toggle, complete, remind, openPanel, assign });
+  useEffect(() => {
+    latest.current = { toggle, complete, remind, openPanel, assign };
+  });
+  const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
+  const onComplete = useCallback((task: Task) => latest.current.complete(task), []);
+  const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
+  const onOpen = useCallback((task: Task) => latest.current.openPanel(task.id), []);
+  const onAssign = useCallback((task: Task, ownerId: string) => void latest.current.assign(task.id, ownerId), []);
+  const onPanelComplete = useCallback((task: Task) => latest.current.complete(task), []);
+
+  const follow = useRef(0);
+  useEffect(() => () => window.clearTimeout(follow.current), []);
+  function followRow(row: HTMLElement) {
+    const id = row.dataset.taskId;
+    if (!id) return;
+    window.clearTimeout(follow.current);
+    follow.current = window.setTimeout(() => {
+      if (panelOpen && beside) openPanel(id);
+      else if (expandedId) setExpandedId(id);
+    }, FOLLOW_MS);
   }
 
   useShortcut("task-open", () => {
@@ -335,25 +371,16 @@ export default function ActionsScreen({
     if (!task || view === "completed" || !canChange(task)) return false;
     remind(task);
   });
-  useShortcut("task-undo", () => undoLast());
+  useShortcut("task-undo", () => {
+    if (inPanel() || inField()) return false;
+    return undoLast();
+  });
   useShortcut("task-collapse", () => {
     if (!expandedId || inPanel()) return false;
     const row = listRef.current?.querySelector<HTMLElement>(`[data-task-id="${expandedId}"]`);
     setExpandedId(null);
     if (row && row.contains(document.activeElement) && document.activeElement !== row) activateRow(row);
   });
-
-  function assigning(task: Task) {
-    if (!team) return undefined;
-    return {
-      members,
-      viewerId: viewer.id,
-      tagged: allTagged[task.id] ?? [],
-      canAssign: admin || task.ownerId === viewer.id || task.createdByUserId === viewer.id,
-      pending: assigningIds.has(task.id),
-      onAssign: (ownerId: string) => void assign(task.id, ownerId),
-    };
-  }
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -432,12 +459,7 @@ export default function ActionsScreen({
       >
       <KeyboardList
         className="flex min-h-0 flex-1 flex-col"
-        onMove={(row) => {
-          const id = row.dataset.taskId;
-          if (!id) return;
-          if (panelOpen && desktop) openPanel(id);
-          else if (expandedId) setExpandedId(id);
-        }}
+        onMove={followRow}
       >
       {view === "none" ? (
         <RecordList
@@ -464,48 +486,48 @@ export default function ActionsScreen({
         </RecordList>
       ) : (
         <RecordList count={shownTasks.length} empty={who === "tagged" ? "No tasks you're tagged in" : "No tasks"} footer={more}>
-          {groups.map((group) => (
-            <Fragment key={group.kind}>
-              {group.label && (
-                <li>
-                  <h2 className={cn("eyebrow-style flex items-center gap-2 px-4 pt-4 pb-1.5", group.kind === "overdue" ? "text-danger" : "text-subtle")}>
-                    {group.label}
-                    <span className="text-subtle tabular-nums">{group.tasks.length}</span>
-                  </h2>
-                </li>
-              )}
-              {group.tasks.map((task) => (
-                <ActionTask
-                  key={task.id}
-                  task={task}
-                  completed={view === "completed" || done.has(task.id)}
-                  dueBadge={view === "all"}
-                  now={now}
-                  viewer={viewer}
-                  members={members}
-                  tagged={allTagged[task.id] ?? []}
-                  expanded={expandedId === task.id}
-                  onToggle={() => toggle(task)}
-                  onComplete={view === "completed" || !canChange(task) ? undefined : () => complete(task)}
-                  onRemind={view === "completed" || !canChange(task) ? undefined : () => remind(task)}
-                  onOpen={() => openPanel(task.id)}
-                  comments={allDiscussions[task.id] ?? 0}
-                  assigning={assigning(task)}
-                  colleagues={colleagues}
-                  canLink={canChange(task)}
-                  keyboard
-                />
-              ))}
-            </Fragment>
-          ))}
+          {entries.map((entry) =>
+            entry.kind === "heading" ? (
+              <li key={entry.key}>
+                <h2 className={cn("eyebrow-style flex items-center gap-2 px-4 pt-4 pb-1.5", entry.group === "overdue" ? "text-danger" : "text-subtle")}>
+                  {entry.label}
+                  <span className="text-subtle tabular-nums">{entry.count}</span>
+                </h2>
+              </li>
+            ) : (
+              <ActionTask
+                key={entry.key}
+                task={entry.task}
+                completed={view === "completed" || done.has(entry.task.id)}
+                dueBadge={view === "all"}
+                now={now}
+                viewer={viewer}
+                members={members}
+                tagged={allTagged[entry.task.id] ?? NO_TAGS}
+                expanded={expandedId === entry.task.id}
+                onToggle={onToggle}
+                onComplete={onComplete}
+                onRemind={onRemind}
+                canComplete={view !== "completed" && canChange(entry.task)}
+                onOpen={onOpen}
+                comments={allDiscussions[entry.task.id] ?? 0}
+                onAssign={team ? onAssign : undefined}
+                canAssign={canChange(entry.task)}
+                assignPending={assigningIds.has(entry.task.id)}
+                colleagues={colleagues}
+                canLink={canChange(entry.task)}
+                keyboard
+              />
+            ),
+          )}
         </RecordList>
       )}
       </KeyboardList>
-      {selected && singleKeys && view !== "none" && <KeyStrip />}
+      {selected && singleKeys && view !== "none" && <KeyStrip completed={view === "completed"} />}
       </div>
       <TaskPanel
         task={panelTask ?? kept}
-        open={Boolean(panelTask)}
+        open={Boolean(panelTask) && desktop !== null}
         onOpenChange={(open) => {
           if (!open) closePanel();
         }}
@@ -513,9 +535,10 @@ export default function ActionsScreen({
         members={members}
         tagged={allTagged[(panelTask ?? kept)?.id ?? ""] ?? []}
         admins={admins}
-        modal={!desktop}
+        modal={false}
+        dimmed={!beside}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
-        onComplete={(task) => complete(task)}
+        onComplete={onPanelComplete}
       />
     </section>
   );

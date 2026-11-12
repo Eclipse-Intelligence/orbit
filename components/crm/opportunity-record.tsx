@@ -67,6 +67,7 @@ export default function OpportunityRecord({
   const openStages = stages.filter((stage) => !stage.isWon && !stage.isLost);
   const currentStage = moving ?? opportunity.stageId;
   const tasks = context.tasks.filter((task) => !task.completedAt);
+  const [openCount, setOpenCount] = useState(tasks.length);
 
   async function patch(input: OpportunityPatch) {
     setError(null);
@@ -235,8 +236,8 @@ export default function OpportunityRecord({
                 ))}
               </ol>
             </DetailSection>
-            <DetailSection title={tasks.length ? `Open tasks · ${tasks.length}` : "Open tasks"}>
-              <RecordTasks tasks={tasks.slice(0, 8)} viewer={viewer} members={members} here={{ kind: "opportunity", id: opportunity.id }} />
+            <DetailSection title={openCount ? `Open tasks · ${openCount}` : "Open tasks"}>
+              <RecordTasks tasks={tasks} limit={8} viewer={viewer} members={members} here={{ kind: "opportunity", id: opportunity.id }} onCount={setOpenCount} />
             </DetailSection>
             <RecordNotes record={{ kind: "opportunity", id: opportunity.id, name: opportunity.name }} />
           </>

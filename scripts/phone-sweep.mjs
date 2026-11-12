@@ -25,6 +25,14 @@ if (!env.DEV_USER_EMAIL || !env.DEV_USER_PASSWORD) {
 }
 
 fs.mkdirSync(out, { recursive: true });
+if (env.CRM_AGENT_TOKEN) {
+  const seeded = await fetch(`${base}/api/v1/tasks`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.CRM_AGENT_TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify({ title: "Sweep check task", dueAt: new Date(Date.now() + 2 * 3_600_000).toISOString(), companyId: null, contactId: null, opportunityId: null }),
+  }).catch(() => null);
+  if (!seeded?.ok) console.log(`could not add a task to check (${seeded?.status ?? "no answer"})`);
+}
 const browser = await engine.launch(launch);
 const problems = [];
 const check = (name, ok, detail = "") => {
@@ -129,7 +137,16 @@ for (const [device, viewport] of [
   await page.waitForTimeout(1200);
   check(`${device} tasks loads`, await visible(page.getByRole("heading", { name: "Tasks" })));
   const taskRow = page.locator("li[data-task-id]").first();
+  check(`${device} tasks has an open task to check`, (await taskRow.count()) > 0, "set CRM_AGENT_TOKEN so the sweep can add one");
   if ((await taskRow.count()) > 0) {
+    check(`${device} tasks grouped by due date`, await visible(page.getByRole("heading", { name: /^(Overdue|Today|Upcoming|No date)/ })));
+    const doneId = await taskRow.getAttribute("data-task-id");
+    await taskRow.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(500);
+    check(`${device} Done hides the task with Undo`, (await page.locator(`li[data-task-id="${doneId}"]`).count()) === 0 && (await visible(page.getByText("Task done."))));
+    await page.getByRole("button", { name: "Undo" }).last().tap();
+    await page.waitForTimeout(600);
+    check(`${device} Undo brings the task back`, (await page.locator(`li[data-task-id="${doneId}"]`).count()) === 1);
     await taskRow.locator("button[aria-expanded]").first().tap();
     await page.waitForTimeout(600);
     const expanded = page.locator("li[data-task-id]:has(button[aria-label='Collapse'])");
@@ -143,7 +160,7 @@ for (const [device, viewport] of [
     await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
     await page.waitForTimeout(600);
     check(`${device} task panel closes`, !(await visible(page.getByRole("dialog", { name: "Task" }))));
-  } else console.log(`skip ${device} task expand and panel (no open tasks)`);
+  }
   await page.goto(`${base}/calendar`);
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));

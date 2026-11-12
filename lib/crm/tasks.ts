@@ -656,10 +656,19 @@ export async function reopenTask(
   id: string,
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ task: Task }>> {
-  return updateTask(actor, id, { completed: false }, {
-    ...options,
-    provenance: options.provenance ?? { operation: "reopen_task" },
-  });
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(id)) throw notFound("task");
+  const provenance = options.provenance ?? { operation: "reopen_task" };
+  const hash = requestHash("reopen_task", { id, provenance });
+  return withActor(actor, (db) =>
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+      const current = await readTask(db, id);
+      if (!current) throw notFound("task");
+      if (!current.completed_at || current.archived_at) return { task: mapTask(current) };
+      const updated = await applyTask(db, actor, current, prepareTask({ completed: false }, "patch"), provenance);
+      return { task: updated.task };
+    }),
+  );
 }
 
 export async function archiveTask(

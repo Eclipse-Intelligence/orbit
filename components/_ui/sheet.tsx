@@ -1,13 +1,21 @@
 "use client";
 
-import type { ComponentProps } from "react";
+import { createContext, useContext, type ComponentProps } from "react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
-function Sheet(props: ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />;
+type SheetMode = { modal: boolean; dimmed: boolean };
+
+const SheetModeContext = createContext<SheetMode>({ modal: true, dimmed: true });
+
+function Sheet({ modal = true, dimmed = modal, ...props }: ComponentProps<typeof SheetPrimitive.Root> & { dimmed?: boolean }) {
+  return (
+    <SheetModeContext.Provider value={{ modal, dimmed }}>
+      <SheetPrimitive.Root data-slot="sheet" modal={modal} {...props} />
+    </SheetModeContext.Provider>
+  );
 }
 
 function SheetTrigger(props: ComponentProps<typeof SheetPrimitive.Trigger>) {
@@ -46,26 +54,36 @@ function SheetOverlay({
 
 type SheetContentProps = ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "left" | "right" | "bottom";
-  modal?: boolean;
 };
 
 function SheetContent({
   className,
   children,
   side = "right",
-  modal = true,
   onInteractOutside,
   ...props
 }: SheetContentProps) {
+  const { modal, dimmed } = useContext(SheetModeContext);
+  const beside = !modal && !dimmed;
   return (
     <SheetPrimitive.Portal>
-      {modal && <SheetOverlay />}
+      {modal ? (
+        <SheetOverlay />
+      ) : (
+        dimmed && (
+          <div
+            aria-hidden
+            data-slot="sheet-overlay"
+            className="animate-in fade-in-0 ease-power3-out fixed inset-0 z-50 bg-black/60 backdrop-blur-[6px] duration-350"
+          />
+        )
+      )}
       <SheetPrimitive.Content
         data-slot="sheet-content"
-        data-nonmodal={modal ? undefined : ""}
+        data-nonmodal={beside ? "" : undefined}
         onInteractOutside={(event) => {
           onInteractOutside?.(event);
-          if (!modal) event.preventDefault();
+          if (beside) event.preventDefault();
         }}
         className={cn(
           "bg-background text-foreground data-[state=closed]:animate-out data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:ease-power3-out fixed z-50 flex w-full flex-col duration-350 outline-none data-[state=closed]:duration-250",
@@ -74,7 +92,7 @@ function SheetContent({
           side === "left" &&
             "border-line-strong data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-dvh border-r",
           "pb-[env(safe-area-inset-bottom)]",
-          !modal && "shadow-[-24px_0_48px_rgba(0,0,0,0.35)]",
+          beside && "shadow-[-24px_0_48px_rgba(0,0,0,0.35)]",
           side === "bottom" &&
             "border-line-strong shadow-overlay data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl border-t",
           className,

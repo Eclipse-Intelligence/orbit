@@ -39,8 +39,30 @@ type TaskDueState = {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+const YEAR_FORMATS = new Map<string, Intl.DateTimeFormat>();
+const DAY_FORMATS = new Map<string, Intl.DateTimeFormat>();
+
+function yearFormat(timeZone: string) {
+  let format = YEAR_FORMATS.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone });
+    YEAR_FORMATS.set(timeZone, format);
+  }
+  return format;
+}
+
+function dayFormat(timeZone: string | undefined) {
+  const key = timeZone ?? "";
+  let format = DAY_FORMATS.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "numeric", day: "numeric", timeZone });
+    DAY_FORMATS.set(key, format);
+  }
+  return format;
+}
+
 function dateParts(date: Date, options: Intl.DateTimeFormatOptions) {
-  const parts = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "numeric", day: "numeric", timeZone: options.timeZone }).formatToParts(date);
+  const parts = dayFormat(options.timeZone).formatToParts(date);
   const pick = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value ?? "0");
   const year = pick("year");
   const month = pick("month");
@@ -60,9 +82,8 @@ export function taskDueState(
   const today = dayWindow(new Date(now), timeZone);
   if (due < today.start) return { kind: "overdue", label: "Overdue" };
   if (due < today.end) return { kind: "today", label: "Today" };
-  const sameYear =
-    new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(due) ===
-    new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(new Date(now));
+  const year = yearFormat(timeZone);
+  const sameYear = year.format(due) === year.format(new Date(now));
   return {
     kind: "later",
     label: dateParts(due, sameYear ? { weekday: "short", day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }),
