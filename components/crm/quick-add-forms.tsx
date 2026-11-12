@@ -207,22 +207,19 @@ function TagsField({ id, suggestions }: { id: string; suggestions: QuickAddSetup
 
 export function QuickTaskForm({ prefill, setup, viewerId, onDone }: FormProps) {
   return (
-    <div className="flex flex-col">
-      <DialogHeader className="py-4 pr-14">
-        <DialogTitle>{TITLES.task}</DialogTitle>
-      </DialogHeader>
-      <div className="px-6 pt-5 pb-6">
-        <TaskPad
-          clickup={setup?.clickup ?? null}
-          initialContact={prefill.contact}
-          initialCompany={prefill.company}
-          members={setup?.members ?? []}
-          viewerId={viewerId}
-          autoFocus
-          onAdded={(result) => onDone({ message: result.warning ?? "Task added", href: TASKS_PATH, link: "Open" })}
-        />
-      </div>
-    </div>
+    <>
+      <DialogTitle className="sr-only">{TITLES.task}</DialogTitle>
+      <TaskPad
+        variant="card"
+        clickup={setup?.clickup ?? null}
+        initialContact={prefill.contact}
+        initialCompany={prefill.company}
+        members={setup?.members ?? []}
+        viewerId={viewerId}
+        autoFocus
+        onAdded={(result) => onDone({ message: result.warning ?? "Task added", href: TASKS_PATH, link: "Open" })}
+      />
+    </>
   );
 }
 

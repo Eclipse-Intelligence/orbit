@@ -57,10 +57,15 @@ export async function memberNames(db: Db, workspaceId: string) {
   return new Set(result.rows.flatMap((row) => (row.name ? [folded(row.name)] : [])));
 }
 
-export async function detectTaskRecordsInDb(db: Db, workspaceId: string, text: string, options: { oneWordCompanies?: boolean } = {}): Promise<DetectedTaskLinks> {
+export async function detectTaskRecordsInDb(
+  db: Db,
+  workspaceId: string,
+  text: string,
+  options: { oneWordCompanies?: boolean; members?: Set<string>; ignore?: (name: string) => boolean } = {},
+): Promise<DetectedTaskLinks> {
   const clean = text.trim().slice(0, TEXT_LIMIT);
   if (clean.length < MIN_NAME) return NO_DETECTION;
-  const members = await memberNames(db, workspaceId);
+  const members = options.members ?? (await memberNames(db, workspaceId));
   const companies = await db.query<{ id: string; name: string }>(
     `select id, name from crm.companies
      where workspace_id = $1 and archived_at is null and char_length(name) >= $3
@@ -89,7 +94,7 @@ export async function detectTaskRecordsInDb(db: Db, workspaceId: string, text: s
   );
   const contactHits = mentioned(contacts.rows, clean, members);
   const companyHits = mentioned(
-    companies.rows.filter((row) => options.oneWordCompanies || /\s/.test(row.name.trim())),
+    companies.rows.filter((row) => (options.oneWordCompanies || /\s/.test(row.name.trim())) && !options.ignore?.(row.name.trim())),
     clean,
     members,
   );

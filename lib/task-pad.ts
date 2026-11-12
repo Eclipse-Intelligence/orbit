@@ -1,6 +1,6 @@
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
 
-export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" };
+export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" | "ask" };
 
 type PadParse = {
   title: string;
@@ -264,7 +264,7 @@ export function stripMention(text: string, caret: number) {
   return { start: at, end: caret, query };
 }
 
-export function nameMarks(text: string, names: string[]): PadMark[] {
+export function nameMarks(text: string, names: string[], kind: "record" | "ask" = "record"): PadMark[] {
   const marks: PadMark[] = [];
   for (const name of names) {
     const clean = name.trim();
@@ -272,7 +272,7 @@ export function nameMarks(text: string, names: string[]): PadMark[] {
     const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])(${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?=$|[^\\p{L}\\p{N}])`, "giu");
     for (const match of text.matchAll(pattern)) {
       const start = (match.index ?? 0) + match[1].length;
-      marks.push({ start, end: start + match[2].length, kind: "record" });
+      marks.push({ start, end: start + match[2].length, kind });
     }
   }
   return marks;
@@ -286,4 +286,137 @@ export function mergeMarks(marks: PadMark[]) {
     result.push(mark);
   }
   return result;
+}
+
+type PadRef = { id: string; name: string };
+type PadPerson = PadRef & { company: PadRef | null };
+type PadChoice = { id: string; name: string; detail: string | null; company: PadRef | null };
+export type PadPick<T> = { set: boolean; value: T; side?: boolean };
+type PadFound = {
+  company: PadRef | null;
+  contact: PadPerson | null;
+  opportunity: (PadRef & { companyId: string }) | null;
+  ask: { word: string; candidates: PadChoice[] } | null;
+};
+export type PadLinks = {
+  contact: PadPerson | null;
+  company: PadRef | null;
+  opportunity: PadRef | null;
+  ask: { word: string; candidates: PadChoice[] } | null;
+  fromText: boolean;
+  personOnlyCompany: boolean;
+};
+
+type PadState = {
+  text: string;
+  found: PadFound | null;
+  fixedCompany: PadRef | null;
+  contact: PadPick<PadPerson | null>;
+  company: PadPick<PadRef | null>;
+  opportunity: PadPick<PadRef | null>;
+  dismissed: string[];
+};
+
+export function padRelease<T>(pick: PadPick<T>): PadPick<T> {
+  return pick.side ? { set: false, value: undefined as T } : pick;
+}
+
+export function padAnchor(state: Pick<PadState, "fixedCompany" | "company">) {
+  return state.fixedCompany ?? (state.company.set ? state.company.value : null);
+}
+
+export function padFits(anchor: PadRef | null, record: { company: PadRef | null } | null | undefined) {
+  return !anchor || !record?.company || record.company.id === anchor.id;
+}
+
+export function resolvePadLinks(state: PadState): PadLinks {
+  const { found } = state;
+  const anchor = padAnchor(state);
+  const fromText = !state.contact.set && Boolean(found?.contact) && padFits(anchor, found?.contact);
+  const person = state.contact.set ? state.contact.value : fromText && found?.contact ? found.contact : null;
+  const named = Boolean(found?.company && nameMarks(state.text, [found.company.name]).length > 0);
+  const viaDeal = Boolean(found?.company && found.opportunity?.companyId === found.company.id);
+  const personOnlyCompany = Boolean(found?.company && found.contact?.company?.id === found.company.id && !named && !viaDeal);
+  const auto = fromText
+    ? (found?.company ?? found?.contact?.company ?? null)
+    : found?.company && !personOnlyCompany
+      ? found.company
+      : (person?.company ?? null);
+  const pinned = state.contact.set ? (state.contact.value?.company ?? null) : null;
+  const company = state.fixedCompany ?? (state.company.set ? state.company.value : (pinned ?? auto));
+  const spotted = found?.opportunity && company && company.id === found.opportunity.companyId ? found.opportunity : null;
+  const opportunity = state.opportunity.set ? state.opportunity.value : spotted;
+  const choices = found?.ask ? found.ask.candidates.filter((choice) => padFits(anchor, choice)) : [];
+  const ask =
+    !state.contact.set && !person && found?.ask && !state.dismissed.includes(found.ask.word) && choices.length > 0
+      ? { word: found.ask.word, candidates: choices }
+      : null;
+  return { contact: person, company, opportunity, ask, fromText, personOnlyCompany };
+}
+
+type SaveIds = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
+
+export function padSaveIds(
+  links: Pick<PadLinks, "contact" | "company" | "opportunity"> | null,
+  state: Pick<PadState, "fixedCompany" | "contact" | "company" | "opportunity">,
+): SaveIds {
+  const hand = <T extends PadRef>(pick: PadPick<T | null>) => (pick.set ? (pick.value?.id ?? null) : undefined);
+  const ids: SaveIds = links
+    ? {
+        companyId: links.company?.id ?? hand(state.company),
+        contactId: links.contact?.id ?? hand(state.contact),
+        opportunityId: links.opportunity?.id ?? hand(state.opportunity),
+      }
+    : {
+        companyId: state.fixedCompany?.id ?? hand(state.company),
+        contactId: hand(state.contact),
+        opportunityId: hand(state.opportunity),
+      };
+  return Object.fromEntries(Object.entries(ids).filter(([, value]) => value !== undefined));
+}
+
+type ShownLinks = { contactId: string | null; companyId: string | null; ask: string | null };
+
+export function padNeedsConfirm(shown: ShownLinks, fresh: ShownLinks & { contactByName: boolean; companyOneWord: boolean }) {
+  if (fresh.ask && fresh.ask !== shown.ask) return true;
+  if (fresh.contactId && fresh.contactId !== shown.contactId && fresh.contactByName) return true;
+  return Boolean(fresh.companyId && fresh.companyId !== shown.companyId && fresh.companyOneWord);
+}
+
+type ConfirmInput = {
+  contact: { name: string; company: { name: string } | null } | null;
+  contactTitle: string | null;
+  company: { name: string } | null;
+  companyDomain: string | null;
+  matchedBy: "full" | "name" | null;
+  word: string | null;
+};
+
+export function padConfirmLine(found: ConfirmInput) {
+  const only = found.word ? ` is the only ${found.word}` : "";
+  if (found.contact) {
+    const company = found.contact.company?.name || null;
+    const title = found.contactTitle?.trim() || null;
+    const role = title ? (company ? `${title} at ${company}` : title) : null;
+    const lead = role ? `${found.contact.name}, ${role}` : company ? `${found.contact.name} at ${company}` : found.contact.name;
+    if (found.matchedBy !== "name" || !only) return lead;
+    return role ? `${lead},${only}` : `${lead}${only}`;
+  }
+  if (!found.company) return null;
+  const lead = found.companyDomain ? `${found.company.name} (${found.companyDomain})` : found.company.name;
+  return `${lead}${only}`;
+}
+
+const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+
+export function reminderClock(due: string, minutes: number) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(due);
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  const at = new Date(Date.UTC(year, month - 1, day, hour, minute) - minutes * 60_000);
+  const clock = `${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}`;
+  if (at.getUTCFullYear() === year && at.getUTCMonth() === month - 1 && at.getUTCDate() === day) return clock;
+  const parts = SHORT_DAY.formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("weekday")} ${part("day")} ${part("month")}, ${clock}`;
 }
