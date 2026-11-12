@@ -13,6 +13,7 @@ export default function CopyButton({
   variant = "secondary",
   className,
   disabled,
+  ariaLabel,
 }: {
   text: string | (() => string | Promise<string>);
   label?: string;
@@ -20,6 +21,7 @@ export default function CopyButton({
   variant?: "secondary" | "ghost";
   className?: string;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
 
@@ -41,7 +43,7 @@ export default function CopyButton({
 
   const copied = state === "copied";
   return (
-    <Button variant={variant} size="sm" disabled={disabled} className={cn("min-w-[5.5rem]", className)} onClick={() => void copy()}>
+    <Button variant={variant} size="sm" disabled={disabled} aria-label={ariaLabel} className={cn("min-w-[5.5rem]", className)} onClick={() => void copy()}>
       <span aria-hidden className="relative size-3">
         <CopyIcon className={cn("absolute inset-0 size-3 transition-[opacity,scale,filter] duration-150 ease-power3-out", copied ? "scale-25 opacity-0 blur-[4px]" : "scale-100 opacity-100 blur-0")} />
         <CheckIcon className={cn("text-success absolute inset-0 size-3 transition-[opacity,scale,filter] duration-150 ease-power3-out", copied ? "scale-100 opacity-100 blur-0" : "scale-25 opacity-0 blur-[4px]")} />

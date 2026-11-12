@@ -43,7 +43,7 @@ export type ActivityTidy = {
   followUpDue: string | null;
 };
 
-function headline(text: string) {
+export function headline(text: string) {
   const clean = text.replace(/\s+/g, " ").trim();
   const first = clean.split(/(?<=[.!?])\s/)[0] ?? clean;
   return (first.length <= 120 ? first : `${first.slice(0, 119).trimEnd()}…`).replace(/[.!?]$/, "");

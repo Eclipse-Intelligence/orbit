@@ -39,6 +39,36 @@ if (env.CRM_AGENT_TOKEN) {
   else console.log(`could not add a task to check (${seeded?.status ?? "no answer"})`);
 }
 
+const sweepContacts = [];
+const sweepCallTasks = [];
+async function seedCallTask(label) {
+  if (!env.CRM_AGENT_TOKEN) return null;
+  const stamp = `${label}${Date.now().toString(36)}`;
+  const contact = await api("/contacts", {
+    method: "POST",
+    body: JSON.stringify({ firstName: "Sweep", lastName: `Caller ${stamp}`, email: `sweep-${stamp}@example.com`, phone: "+44 7700 900123", companyId: sweepTask?.companyId ?? null }),
+  });
+  if (!contact?.ok) {
+    console.log(`could not add a contact to check calls (${contact?.status ?? "no answer"})`);
+    return null;
+  }
+  const contactId = (await contact.json()).contact.id;
+  sweepContacts.push(contactId);
+  const title = `Call Sweep Caller ${stamp}`;
+  const task = await api("/tasks", { method: "POST", body: JSON.stringify({ title, contactId, dueAt: new Date(Date.now() + 3_600_000).toISOString() }) });
+  if (!task?.ok) return null;
+  const id = (await task.json()).task.id;
+  sweepCallTasks.push(id);
+  return { id, title };
+}
+
+async function skipOutcome(row) {
+  const outcome = row.getByRole("group", { name: "Done with an outcome" });
+  const offered = (await outcome.count()) > 0 && (await outcome.isVisible());
+  if (offered) await outcome.getByRole("button", { name: "Skip" }).tap();
+  return offered;
+}
+
 async function swipe(page, id, distance) {
   return page
     .evaluate(
@@ -181,13 +211,17 @@ for (const [device, viewport] of [
     check(`${device} tasks grouped by due date`, await visible(page.getByRole("heading", { name: /^(Overdue|Today|Upcoming|No date)/ })));
 
     await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(700);
+    const asked = await skipOutcome(row);
     await page.waitForTimeout(500);
-    check(`${device} Done hides the task with Undo`, (await row.count()) === 0 && (await visible(toast)));
+    check(`${device} Done hides the task with Undo`, (await row.count()) === 0 && (await visible(toast)), asked ? "after Skip" : "");
     await page.getByRole("button", { name: "Undo" }).last().tap();
     await page.waitForTimeout(600);
     check(`${device} Undo brings the task back`, (await row.count()) === 1);
 
     await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(700);
+    await skipOutcome(row);
     await page.waitForTimeout(400);
     await setVisibility(page, "hidden");
     await page.waitForTimeout(800);
@@ -245,6 +279,127 @@ for (const [device, viewport] of [
       await page.waitForTimeout(600);
     } else console.log(`skip ${device} record page task panel (no company to link the sweep task to)`);
   }
+
+  const callTask = await seedCallTask(device);
+  if (callTask) {
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    const row = page.locator(`li[data-task-id="${callTask.id}"]`);
+    await row.locator("button[aria-expanded]").first().tap({ position: { x: 3, y: 8 } });
+    await page.waitForTimeout(1200);
+    const call = row.locator('a:visible[href^="tel:"], a:visible[href^="msteams:"]').first();
+    const callHref = (await call.getAttribute("href").catch(() => null)) ?? "";
+    check(`${device} Call rings from the phone`, callHref.startsWith("tel:"), callHref);
+    const callBox = await call.boundingBox().catch(() => null);
+    check(`${device} Call is easy to tap`, Boolean(callBox && callBox.height >= 43), callBox ? `${Math.round(callBox.height)}px` : "missing");
+    check(`${device} Call leads on a call task`, ((await call.getAttribute("class").catch(() => "")) ?? "").includes("bg-primary"));
+    check(`${device} Copy and Email sit beside Call`, (await visible(row.getByRole("button", { name: /^Copy/ }))) && (await visible(row.getByRole("button", { name: "Email", exact: true }))));
+    check(`${device} the task shows its context`, await visible(row.locator("[data-task-context]")));
+    check(`${device} call task no overflow`, await noHorizontalScroll());
+    await shot("task-call");
+    await row.getByRole("button", { name: "Email", exact: true }).tap();
+    await page.waitForTimeout(1500);
+    const card = page.getByRole("dialog", { name: "New email" }).filter({ hasText: /Sweep Caller/ });
+    check(`${device} Email opens a compose card to the contact`, await visible(card));
+    await shot("task-email");
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(800);
+    const outcome = row.getByRole("group", { name: "Done with an outcome" });
+    check(`${device} Done on a linked task offers an outcome`, await visible(outcome));
+    check(`${device} Done takes effect at once with Undo`, await visible(page.getByText("Task done.")));
+    check(`${device} the outcome starts as a call`, (await outcome.getByRole("button", { name: "Call" }).getAttribute("aria-pressed").catch(() => null)) === "true");
+    const save = outcome.getByRole("button", { name: "Save" });
+    const saveBox = await save.boundingBox().catch(() => null);
+    check(`${device} Save is easy to tap`, Boolean(saveBox && saveBox.height >= 43), saveBox ? `${Math.round(saveBox.height)}px` : "missing");
+    check(`${device} outcome no overflow`, await noHorizontalScroll());
+    await outcome.getByRole("textbox", { name: "What happened" }).fill("Checked by the sweep");
+    await outcome.getByRole("textbox", { name: "Next task" }).fill("Sweep follow-up");
+    await shot("task-outcome");
+    await save.tap();
+    await page.waitForTimeout(1500);
+    check(`${device} Save completes and logs the outcome`, (await row.count()) === 0 && (await visible(page.getByText(/Task done\. Note saved\. Next task added\./))));
+    const followUp = page.locator("li[data-task-id]").filter({ hasText: "Sweep follow-up" }).first();
+    if ((await followUp.count()) > 0) sweepCallTasks.push(await followUp.getAttribute("data-task-id"));
+  } else check(`${device} call, email and outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a contact");
+
+  const undoTask = await seedCallTask(`${device}u`);
+  if (undoTask) {
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    const row = page.locator(`li[data-task-id="${undoTask.id}"]`);
+    const outcome = row.getByRole("group", { name: "Done with an outcome" });
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(800);
+    const undo = page.getByRole("button", { name: "Undo" }).last();
+    check(`${device} the outcome's Done shows Undo`, await visible(undo));
+    await undo.tap();
+    await page.waitForTimeout(800);
+    check(`${device} Undo closes the outcome and keeps the task`, (await row.count()) === 1 && !(await visible(outcome)));
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(800);
+    await outcome.getByRole("textbox", { name: "What happened" }).fill("Saved by Esc in the sweep");
+    await outcome.getByRole("textbox", { name: "What happened" }).press("Escape");
+    await page.waitForTimeout(1800);
+    check(`${device} Esc with a note typed saves it`, (await row.count()) === 0 && (await visible(page.getByText(/Note saved\./).first())));
+  } else check(`${device} Undo and Esc outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
+  const slowTask = await seedCallTask(`${device}s`);
+  if (slowTask) {
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    const row = page.locator(`li[data-task-id="${slowTask.id}"]`);
+    const outcome = row.getByRole("group", { name: "Done with an outcome" });
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(800);
+    await outcome.getByRole("textbox", { name: "What happened" }).fill("Saved while Undo was pressed");
+    const slow = async (route) => {
+      if (route.request().method() === "POST" && route.request().headers()["next-action"]) await new Promise((resolve) => setTimeout(resolve, 2000));
+      await route.continue().catch(() => undefined);
+    };
+    await page.route("**/tasks**", slow);
+    await outcome.getByRole("button", { name: "Save" }).tap();
+    await page.waitForTimeout(300);
+    await page.getByRole("button", { name: "Undo" }).last().tap();
+    await page.waitForTimeout(4500);
+    await page.unroute("**/tasks**", slow);
+    check(`${device} Undo during Save reopens the task`, (await visible(page.getByText("Saved. Task reopened."))) && (await row.count()) === 1);
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    check(`${device} the task stays open after Undo during Save`, (await page.locator(`li[data-task-id="${slowTask.id}"]`).count()) === 1);
+  } else check(`${device} Undo during Save checked`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
+  const panelTask = await seedCallTask(`${device}p`);
+  if (panelTask) {
+    await page.goto(`${base}/tasks?task=${panelTask.id}`);
+    await page.waitForTimeout(1800);
+    const panel = page.getByRole("dialog", { name: "Task" });
+    await panel.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(800);
+    const inPanel = panel.getByRole("group", { name: "Done with an outcome" });
+    check(`${device} the panel's Done offers the outcome`, await visible(inPanel));
+    await shot("panel-outcome");
+    await inPanel.getByRole("button", { name: "Skip" }).tap();
+    await page.waitForTimeout(900);
+    check(`${device} Skip in the panel leaves the task done`, !(await visible(inPanel)) && (await page.locator(`li[data-task-id="${panelTask.id}"]`).count()) === 0);
+  } else check(`${device} panel outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
+  const recordTask = sweepTask?.companyId ? await seedCallTask(`${device}r`) : null;
+  if (recordTask) {
+    await page.goto(`${base}/companies/${sweepTask.companyId}`);
+    await page.waitForTimeout(1800);
+    const row = page.locator(`li[data-task-id="${recordTask.id}"]`);
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(800);
+    const outcome = row.getByRole("group", { name: "Done with an outcome" });
+    check(`${device} record page Done offers the outcome`, await visible(outcome));
+    check(`${device} record page outcome no overflow`, await noHorizontalScroll());
+    await shot("record-outcome");
+    await outcome.getByRole("button", { name: "Skip" }).tap();
+    await page.waitForTimeout(800);
+    check(`${device} record page Skip leaves the task done`, (await row.count()) === 0);
+  } else check(`${device} record page outcome checks ran`, false, sweepTask?.companyId ? "couldn't add a task" : "add a company so the sweep can check a record page");
   await page.goto(`${base}/calendar`);
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));
@@ -315,10 +470,37 @@ for (const width of [1100, 1280, 1440]) {
     : false;
   check(`${device} open Ask Orbit is usable with the panel open`, Boolean(dockBox) && (clear(dockBox) || onTop) && dockBox.width >= 300, dockBox ? `${Math.round(dockBox.width)}px wide` : "didn't open");
   await page.screenshot({ path: path.join(out, `desktop-${width}-assistant.png`) });
+
+  const callTask = width === 1280 ? await seedCallTask("desk") : null;
+  if (callTask) {
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    const row = page.locator(`li[data-task-id="${callTask.id}"]`);
+    await row.focus();
+    await page.keyboard.press("e");
+    await page.waitForTimeout(700);
+    const outcome = row.getByRole("group", { name: "Done with an outcome" });
+    check(`${device} E on a linked task offers an outcome`, await outcome.isVisible().catch(() => false));
+    check(`${device} E puts the caret in the note`, await outcome.getByRole("textbox", { name: "What happened" }).evaluate((field) => field === document.activeElement).catch(() => false));
+    check(`${device} E takes effect at once with Undo`, await page.getByText("Task done.").first().isVisible().catch(() => false));
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(700);
+    check(`${device} Esc with nothing typed leaves the task done`, (await row.count()) === 0);
+    await page.keyboard.press("z");
+    await page.waitForTimeout(900);
+    check(`${device} Z brings it back`, (await row.count()) === 1);
+    await row.locator("button[aria-expanded]").first().click({ position: { x: 3, y: 8 } });
+    await page.waitForTimeout(1200);
+    const teams = (await row.locator('a:visible[href^="msteams:"], a:visible[href^="tel:"]').first().getAttribute("href").catch(() => null)) ?? "";
+    check(`${device} Call opens Teams on desktop`, teams.startsWith("msteams:"), teams);
+  } else if (width === 1280) check(`${device} keyboard outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
   await context.close();
 }
 
 if (sweepTask) await api(`/tasks/${sweepTask.id}`, { method: "DELETE" });
+for (const id of sweepCallTasks) if (id) await api(`/tasks/${id}`, { method: "DELETE" });
+for (const id of sweepContacts) await api(`/contacts/${id}`, { method: "DELETE" });
 
 console.log(problems.length ? `\n${problems.length} problems. Screenshots are in ${out}` : `\nall checks passed. Screenshots are in ${out}`);
 await browser.close();
