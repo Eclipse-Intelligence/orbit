@@ -1331,9 +1331,9 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               {messages
                 .filter((message) => message.waiting)
                 .map((message) => (
-                  <div key={message.id} className="flex flex-col items-end gap-1">
+                  <div key={message.id} className="flex flex-col gap-1">
                     <Message message={message} busy={busy} onDecide={decide} />
-                    <p className="caption-style text-subtle">{!busy && cardsWaiting ? "Orbit reads this once you answer the changes above" : "Sent while Orbit was working"}</p>
+                    <p className="caption-style text-subtle text-right">{!busy && cardsWaiting ? "Orbit reads this once you answer the changes above" : "Sent while Orbit was working"}</p>
                   </div>
                 ))}
             </div>
