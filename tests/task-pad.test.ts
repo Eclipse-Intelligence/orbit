@@ -8,7 +8,7 @@ import { detectPadRecords, searchPadRecords } from "@/lib/crm/task-pad";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { mergeMarks, nameMarks, padConfirmLine, parseTaskText, reminderClock, stripMention } from "@/lib/task-pad";
+import { mergeMarks, nameMarks, padConfirmLine, padNeedsConfirm, parseTaskText, reminderClock, stripMention } from "@/lib/task-pad";
 import { createUser, resetDatabase } from "./helpers";
 
 const FRIDAY_10AM = new Date("2026-10-16T09:00:00Z");
@@ -140,6 +140,19 @@ describe("task pad parser", () => {
     assert.equal(padConfirmLine({ ...base, contact: { name: "Jane Cooper", company: null }, matchedBy: "full" }), "Jane Cooper");
     assert.equal(padConfirmLine({ ...base, contact: null, company: { name: "Zoom" }, companyDomain: "zoom.us", word: "Zoom" }), "Zoom (zoom.us) is the only Zoom");
     assert.equal(padConfirmLine({ ...base, contact: null }), null);
+  });
+
+  it("saves on one Enter unless the latest text needs a confirmation Mark hasn't seen", () => {
+    const none = { contactId: null, companyId: null, ask: null };
+    const plain = { contactByName: false, companyOneWord: false };
+    assert.equal(padNeedsConfirm(none, { ...none, ...plain, contactId: "raj", companyId: "halden" }), false, "a full name links straight away");
+    assert.equal(padNeedsConfirm(none, { ...none, ...plain, companyId: "halden" }), false, "a multi-word company links straight away");
+    assert.equal(padNeedsConfirm({ ...none, contactId: "jane" }, { ...none, ...plain }), false, "a stale link is dropped without asking");
+    assert.equal(padNeedsConfirm(none, { ...none, contactId: "jane", contactByName: true, companyOneWord: false }), true, "a first name is shown first");
+    assert.equal(padNeedsConfirm({ ...none, contactId: "jane" }, { ...none, contactId: "jane", contactByName: true, companyOneWord: false }), false, "a first name already shown saves");
+    assert.equal(padNeedsConfirm(none, { ...none, companyId: "zoom", contactByName: false, companyOneWord: true }), true, "a one-word company is shown first");
+    assert.equal(padNeedsConfirm(none, { ...none, ...plain, ask: "Janet" }), true, "an ambiguous name asks first");
+    assert.equal(padNeedsConfirm({ ...none, ask: "Janet" }, { ...none, ...plain, ask: "Janet" }), false, "a question already shown saves unlinked");
   });
 
   it("shows when a reminder goes off", () => {

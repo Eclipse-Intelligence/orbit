@@ -13,7 +13,7 @@ import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import type { PadAiParse, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
-import { mergeMarks, nameMarks, padConfirmLine, parseTaskText, reminderClock, stripMention, type PadMark } from "@/lib/task-pad";
+import { mergeMarks, nameMarks, padConfirmLine, padNeedsConfirm, parseTaskText, reminderClock, stripMention, type PadMark } from "@/lib/task-pad";
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -629,10 +629,20 @@ export default function TaskPad({
     const links = fresh.value ? resolve(fresh.value) : null;
     if (
       links &&
-      (links.contact?.id !== finalContact?.id ||
-        links.company?.id !== finalCompany?.id ||
-        links.opportunity?.id !== finalOpportunity?.id ||
-        links.ask?.word !== ask?.word)
+      fresh.value &&
+      padNeedsConfirm(
+        { contactId: finalContact?.id ?? null, companyId: finalCompany?.id ?? null, ask: ask?.word ?? null },
+        {
+          contactId: links.contact?.id ?? null,
+          companyId: links.company?.id ?? null,
+          ask: links.ask?.word ?? null,
+          contactByName: links.fromText && fresh.value.matchedBy === "name",
+          companyOneWord:
+            Boolean(links.company && fresh.value.company && links.company.id === fresh.value.company.id) &&
+            !/\s/.test(fresh.value.company?.name.trim() ?? "") &&
+            links.company?.id !== links.contact?.company?.id,
+        },
+      )
     ) {
       setBusy(false);
       focusAt();

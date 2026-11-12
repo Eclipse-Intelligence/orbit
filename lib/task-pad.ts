@@ -288,6 +288,14 @@ export function mergeMarks(marks: PadMark[]) {
   return result;
 }
 
+type ShownLinks = { contactId: string | null; companyId: string | null; ask: string | null };
+
+export function padNeedsConfirm(shown: ShownLinks, fresh: ShownLinks & { contactByName: boolean; companyOneWord: boolean }) {
+  if (fresh.ask && fresh.ask !== shown.ask) return true;
+  if (fresh.contactId && fresh.contactId !== shown.contactId && fresh.contactByName) return true;
+  return Boolean(fresh.companyId && fresh.companyId !== shown.companyId && fresh.companyOneWord);
+}
+
 type ConfirmInput = {
   contact: { name: string; company: { name: string } | null } | null;
   contactTitle: string | null;
