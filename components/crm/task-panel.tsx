@@ -6,7 +6,10 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { DateTimePicker } from "@/components/_ui/date-picker";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
+import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
+import { searchCompaniesAction } from "@/app/(crm)/actions";
+import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { Monogram } from "@/components/beautifui/record-marks";
 import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread, holdEscape } from "@/components/chat/discussion";
 import { useDiscussion } from "@/components/chat/use-discussion";
@@ -133,10 +136,56 @@ type PanelProps = {
   onClose: () => void;
 };
 
+function caretAt(heading: HTMLElement, x: number, y: number) {
+  const point = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const position = point.caretPositionFromPoint?.(x, y);
+  const range = position ? { node: position.offsetNode, offset: position.offset } : (() => {
+    const found = point.caretRangeFromPoint?.(x, y);
+    return found ? { node: found.startContainer, offset: found.startOffset } : null;
+  })();
+  if (!range || !heading.contains(range.node)) return null;
+  const walker = document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+  let total = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node === range.node) return total + range.offset;
+    total += node.textContent?.length ?? 0;
+  }
+  return null;
+}
+
+function CandidateRow({ candidate, busy, onLink }: { candidate: LinkCandidate; busy: string | null; onLink: (candidate: LinkCandidate) => void }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-white/[0.04]">
+      <Monogram name={candidate.name} className="size-6 rounded-full text-[10px]" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="ui-style text-foreground truncate">{candidate.name}</span>
+        {candidate.detail && <span className="caption-style text-subtle truncate">{candidate.detail}</span>}
+      </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={Boolean(busy)}
+        aria-busy={busy === candidate.id || undefined}
+        aria-label={`Link ${candidate.name}`}
+        onClick={() => onLink(candidate)}
+        className="[@media(pointer:coarse)]:h-11"
+      >
+        {busy === candidate.id ? "Linking…" : "Link"}
+      </Button>
+    </div>
+  );
+}
+
 function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string; onLinked: () => void }) {
-  const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
+  const searchId = useId();
+  const [found, setFound] = useState<{ candidates: LinkCandidate[]; reason: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<{ query: string; items: LinkCandidate[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,13 +193,44 @@ function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string
       .catch(() => ({ error: "Couldn't find people to link. Try again." }))
       .then((result) => {
         if (cancelled) return;
-        if ("candidates" in result && result.candidates) setCandidates(result.candidates);
-        else setError(result.error ?? "Couldn't find people to link. Try again.");
+        if ("candidates" in result && result.candidates) {
+          setFound({ candidates: result.candidates, reason: result.reason ?? null });
+          setError(null);
+        } else setError(result.error ?? "Couldn't find people to link. Try again.");
       });
     return () => {
       cancelled = true;
     };
   }, [taskId, title]);
+
+  useEffect(() => {
+    const text = query.trim();
+    if (text.length < 2) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void Promise.all([searchContactsToFileAction(text), searchCompaniesAction(text)])
+        .then(([people, companies]) => {
+          if (cancelled) return;
+          setResults({
+            query: text,
+            items: [
+              ...people.contacts.slice(0, 6).map((person) => ({
+                kind: "contact" as const,
+                id: person.id,
+                name: person.name,
+                detail: [person.jobTitle, person.companyName].filter(Boolean).join(" · ") || null,
+              })),
+              ...companies.slice(0, 4).map((company) => ({ kind: "company" as const, id: company.id, name: company.name, detail: company.domain })),
+            ],
+          });
+        })
+        .catch(() => !cancelled && setError("Couldn't search. Try again."));
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
 
   async function link(candidate: LinkCandidate) {
     if (busy) return;
@@ -159,45 +239,47 @@ function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string
     const result = await linkTaskAction(taskId, candidate.kind === "contact" ? { contactId: candidate.id } : { companyId: candidate.id }).catch(() => ({
       error: "Couldn't link the task. Try again.",
     }));
-    setBusy(null);
     if (result.error) {
+      setBusy(null);
       setError(result.error);
       return;
     }
     onLinked();
   }
 
+  const candidates = found?.candidates ?? [];
+  const withCompanies = candidates.some((candidate) => candidate.kind === "company");
+  const heading = withCompanies ? "Link a person or company" : "Link a person";
+  const searched = results && results.query === query.trim() ? results.items : null;
   return (
-    <section aria-label="Link a person" className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5">
-      <div className="flex items-center gap-2 px-0.5 pb-1">
+    <section aria-label={heading} className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 pb-1">
         <LinkIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
-        <h3 className="ui-style font-medium">Link a person</h3>
-        {candidates && candidates.length === 0 && <span className="caption-style text-subtle">No contacts match a name in this task.</span>}
+        <h3>{heading}</h3>
+        {found && <span className="caption-style text-subtle">{found.reason ?? (candidates.length === 0 ? "No one in Orbit matches a name in this task." : null)}</span>}
       </div>
-      {!candidates && !error && (
+      {!found && !error && (
         <p role="status" className="caption-style text-subtle px-0.5">
           Looking…
         </p>
       )}
-      {candidates?.map((candidate) => (
-        <div key={`${candidate.kind}:${candidate.id}`} className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-white/[0.04]">
-          <Monogram name={candidate.name} className="size-6 rounded-full text-[10px]" />
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="ui-style text-foreground truncate">{candidate.name}</span>
-            {candidate.detail && <span className="caption-style text-subtle truncate">{candidate.detail}</span>}
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={Boolean(busy)}
-            aria-label={`Link ${candidate.name}`}
-            onClick={() => void link(candidate)}
-            className="[@media(pointer:coarse)]:h-11"
-          >
-            Link
-          </Button>
-        </div>
+      {candidates.map((candidate) => (
+        <CandidateRow key={`${candidate.kind}:${candidate.id}`} candidate={candidate} busy={busy} onLink={(item) => void link(item)} />
       ))}
+      <label htmlFor={searchId} className="sr-only">
+        Someone else
+      </label>
+      <Input
+        id={searchId}
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Someone else"
+        autoComplete="off"
+        className="mt-1"
+      />
+      {query.trim().length >= 2 && searched && searched.length === 0 && <p className="caption-style text-subtle px-0.5">No matches.</p>}
+      {query.trim().length >= 2 &&
+        searched?.map((candidate) => <CandidateRow key={`found:${candidate.kind}:${candidate.id}`} candidate={candidate} busy={busy} onLink={(item) => void link(item)} />)}
       {error && (
         <p role="alert" className="caption-style text-danger px-0.5">
           {error}
@@ -227,7 +309,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
   const creator = named(task.createdByUserId);
   const description = splitDescription(task.description);
   const [title, setTitle] = useState(task.title);
-  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingTitle, setEditingTitle] = useState<number | null>(null);
   const [text, setText] = useState(description.text);
   const [due, setDue] = useState(dateTimeInputValue(task.dueAt));
   const [reminder, setReminder] = useState<number | null>(task.remindMinutes);
@@ -404,15 +486,15 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                       <h2 className="min-w-0 flex-1 leading-[1.3] break-words">
                         <TaskTitle task={task} colleagues={colleagues} viewerId={viewer.id} />
                       </h2>
-                    ) : !editingTitle ? (
+                    ) : editingTitle === null ? (
                       <div className="relative min-w-0 flex-1">
                         <button
                           type="button"
                           aria-label="Edit title"
-                          onClick={() => setEditingTitle(true)}
-                          className="absolute inset-0 cursor-text rounded-md outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
+                          onClick={() => setEditingTitle(title.length)}
+                          className="pointer-events-none absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
                         />
-                        <h2 className="pointer-events-none relative leading-[1.3] break-words">
+                        <h2 onClick={(event) => setEditingTitle(caretAt(event.currentTarget, event.clientX, event.clientY) ?? title.length)} className="relative cursor-text leading-[1.3] break-words">
                           <TaskTitle task={{ ...task, title }} colleagues={colleagues} viewerId={viewer.id} />
                         </h2>
                       </div>
@@ -425,10 +507,11 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                         value={title}
                         maxLength={200}
                         autoFocus
+                        onFocus={(event) => event.currentTarget.setSelectionRange(editingTitle, editingTitle)}
                         onChange={(event) => setTitle(event.target.value.replace(/\n/g, " "))}
                         onBlur={() => {
                           saveTitle();
-                          setEditingTitle(false);
+                          setEditingTitle(null);
                         }}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" && !event.nativeEvent.isComposing) {
@@ -470,14 +553,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                       ) : (
                         <span className="ui-style flex min-w-0 items-center gap-2">
                           {owner && <MemberAvatar member={owner} viewerId={viewer.id} size="xs" />}
-                          {colleague(owner) ? (
-                            <ColleagueLink colleague={colleague(owner)!} className="truncate" />
-                          ) : (
-                            <span className="truncate">{owner?.name ?? "No one"}</span>
-                          )}
+                          <span className="truncate">{owner?.name ?? "No one"}</span>
                         </span>
                       )}
-                      {team && canChange && colleague(owner) && (
+                      {colleague(owner) && (
                         <ColleagueLink colleague={colleague(owner)!} className="text-subtle hover:text-foreground inline-flex size-7 items-center justify-center rounded-full no-underline hover:bg-white/10 [@media(pointer:coarse)]:size-11">
                           <ChatIcon aria-hidden className="size-3.5" />
                         </ColleagueLink>

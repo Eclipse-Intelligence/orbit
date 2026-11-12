@@ -12,6 +12,10 @@ const dryRun = process.argv.includes("--dry-run");
 const onlyWorkspace = arg("--workspace");
 
 async function main() {
+  if (process.argv.includes("--workspace") && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(onlyWorkspace ?? "")) {
+    console.error("Give --workspace a workspace id, for example --workspace 2b1c9e4a-0000-4000-8000-000000000000.");
+    process.exit(1);
+  }
   const { getAdminPool, getPool } = await import("@/lib/db/pool");
   const { actorFor } = await import("@/lib/companion/pairing");
   const { backfillTaskLinks } = await import("@/lib/crm/task-links");

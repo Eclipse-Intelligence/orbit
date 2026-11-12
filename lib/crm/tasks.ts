@@ -4,7 +4,7 @@ import { taskPanelHref } from "@/lib/chat/discussions";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
-import { detectedIds, detectTaskRecordsInDb } from "@/lib/crm/task-detect";
+import { detectedIds, detectTaskRecordsInDb, type DetectedLinkIds, type DetectedTaskLinks } from "@/lib/crm/task-detect";
 import {
   actorIds,
   assertOwner,
@@ -286,19 +286,29 @@ export async function createTaskInDb(
   actor: Actor,
   input: TaskWrite,
   provenance?: Provenance,
-  options: { detectedLinks?: { companyId?: string; contactId?: string; opportunityId?: string } } = {},
+  options: { detectedLinks?: DetectedLinkIds; detection?: DetectedTaskLinks } = {},
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
   await assertAssignee(db, actor.workspaceId, write.ownerId);
-  const detectedLinks = Object.keys(options.detectedLinks ?? {});
+  let detectedLinks = Object.keys(options.detectedLinks ?? {});
+  let detecting = false;
   if (write.companyId === undefined && write.contactId === undefined && write.opportunityId === undefined) {
-    const found = detectedIds(await detectTaskRecordsInDb(db, actor.workspaceId, write.title));
+    const found = detectedIds(options.detection ?? (await detectTaskRecordsInDb(db, actor.workspaceId, write.title)));
     Object.assign(write, found);
     detectedLinks.push(...Object.keys(found));
+    detecting = detectedLinks.length > 0;
   }
-  const links = await resolveLinks(db, actor.workspaceId, write);
+  let links;
+  try {
+    links = await resolveLinks(db, actor.workspaceId, write);
+  } catch (error) {
+    if (!detecting || !(error instanceof CrmError)) throw error;
+    write.companyId = write.contactId = write.opportunityId = undefined;
+    detectedLinks = [];
+    links = await resolveLinks(db, actor.workspaceId, write);
+  }
   const actorRef = actorIds(actor);
   try {
     const inserted = await db.query<{ id: string }>(

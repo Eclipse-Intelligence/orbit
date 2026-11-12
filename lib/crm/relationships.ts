@@ -1,6 +1,7 @@
+import type { Db } from "@/lib/db/pool";
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { withActor } from "@/lib/crm/context";
-import { readCompanyInDb } from "@/lib/crm/companies";
+import { readCompaniesInDb, readCompanyInDb } from "@/lib/crm/companies";
 import { listActivities, listCompanyTimeline } from "@/lib/crm/activities";
 import { listContacts } from "@/lib/crm/contacts";
 import { CrmError, notFound } from "@/lib/crm/errors";
@@ -15,7 +16,6 @@ import type {
   DueActions,
   RelationshipStatus,
   StaleRelationship,
-  Task,
   TaskView,
 } from "@/lib/crm/types";
 import { TASK_VIEWS } from "@/lib/crm/types";
@@ -185,12 +185,12 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean; ta
 }
 
 export const PAGE_SIZE = 100;
-const MAX_PAGES = 100;
+export const MAX_OFFSET = 10_000;
 
 export async function getDueActions(
   actor: Actor,
   view: TaskView = "today",
-  options: { mine?: boolean; tagged?: boolean; pages?: number } = {},
+  options: { mine?: boolean; tagged?: boolean; offset?: number } = {},
 ): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
@@ -198,10 +198,12 @@ export async function getDueActions(
       field: "view",
     });
   }
-  const pages = Math.min(MAX_PAGES, Math.max(1, Math.floor(options.pages ?? 1)));
+  const offset = Math.min(MAX_OFFSET, Math.max(0, Math.floor(options.offset ?? 0)));
   if (view === "none") {
     return withActor(actor, async (db) => {
-      const without = `from crm.companies c
+      const listed = await db.query<{ id: string; total: number }>(
+        `select c.id, count(*) over ()::int as total
+         from crm.companies c
          where c.workspace_id = $1
            and c.archived_at is null
            and not exists (
@@ -211,37 +213,36 @@ export async function getDueActions(
                and t.archived_at is null
                and t.completed_at is null
                and ${directTaskSql("t")}
-           )`;
-      const counted = await db.query<{ total: number }>(`select count(*)::int as total ${without}`, [actor.workspaceId]);
-      const listed = await db.query<{ id: string }>(
-        `select c.id
-         ${without}
+           )
          order by c.updated_at desc, c.id
-         limit $2`,
-        [actor.workspaceId, pages * PAGE_SIZE],
+         limit $2 offset $3`,
+        [actor.workspaceId, PAGE_SIZE, offset],
       );
-      const companies = [];
-      for (const item of listed.rows) {
-        const company = await readCompanyInDb(db, item.id, actor.workspaceId);
-        if (company) companies.push(company);
-      }
+      const total = listed.rows[0]?.total ?? (offset > 0 ? await countWithoutTasks(db, actor) : 0);
+      const companies = await readCompaniesInDb(db, actor.workspaceId, listed.rows.map((row) => row.id));
       const relationships = await relationshipsInDb(db, actor.workspaceId, "company", companies.map((company) => company.id));
       return {
         view,
         tasks: [],
         companies: companies.map((company) => ({ ...company, relationship: relationships[company.id] })),
-        total: counted.rows[0]?.total ?? 0,
+        total,
       };
     });
   }
-  const tasks: Task[] = [];
-  let total = 0;
-  for (let page = 0; page < pages; page += 1) {
-    const listed = await listTasks(actor, { view, limit: PAGE_SIZE, offset: page * PAGE_SIZE, mine: options.mine, tagged: options.tagged });
-    const known = new Set(tasks.map((task) => task.id));
-    tasks.push(...listed.data.filter((task) => !known.has(task.id)));
-    total = listed.total;
-    if (listed.data.length < PAGE_SIZE || tasks.length >= total) break;
-  }
-  return { view, tasks, companies: [], total };
+  const listed = await listTasks(actor, { view, limit: PAGE_SIZE, offset, mine: options.mine, tagged: options.tagged });
+  return { view, tasks: listed.data, companies: [], total: listed.total };
+}
+
+async function countWithoutTasks(db: Db, actor: Actor) {
+  const counted = await db.query<{ total: number }>(
+    `select count(*)::int as total
+     from crm.companies c
+     where c.workspace_id = $1 and c.archived_at is null
+       and not exists (
+         select 1 from crm.tasks t
+         where t.company_id = c.id and t.archived_at is null and t.completed_at is null and ${directTaskSql("t")}
+       )`,
+    [actor.workspaceId],
+  );
+  return counted.rows[0]?.total ?? 0;
 }

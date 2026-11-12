@@ -1,5 +1,6 @@
 "use client";
 
+import TaskTitle from "@/components/crm/task-title";
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
@@ -379,7 +380,7 @@ export default function ContactRecord({
                   {tasks.map((task) => (
                     <li key={task.id} className="flex flex-col gap-1">
                       <span className="text-[14px] leading-5">
-                        {task.title}
+                        <TaskTitle task={task} />
                       </span>
                       <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
                         {task.dueAt && `Due ${formatWhen(task.dueAt)}`}

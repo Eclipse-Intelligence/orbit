@@ -32,10 +32,8 @@ export default async function TasksPage({
   const who = shared && resolved.who === "everyone" ? "everyone" : team && resolved.who === "tagged" ? "tagged" : "mine";
   const scope = { mine: who === "mine", tagged: who === "tagged" };
   const view = scope.tagged && asked === "none" ? DEFAULT_TASK_VIEW : asked;
-  const askedPages = typeof resolved.pages === "string" ? Number.parseInt(resolved.pages, 10) : 1;
-  const pages = Number.isFinite(askedPages) && askedPages > 1 ? Math.min(askedPages, 100) : 1;
   const [due, counts, clickup] = await Promise.all([
-    getDueActions(user, view, { ...scope, pages }),
+    getDueActions(user, view, scope),
     countTaskViews(user, scope),
     getClickUpPicker(user),
   ]);
@@ -79,7 +77,6 @@ export default async function TasksPage({
       openTask={elsewhere ? null : openTask}
       switchTo={switchTo}
       total={due.total}
-      pages={pages}
       admins={members.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.id)}
     />
   );

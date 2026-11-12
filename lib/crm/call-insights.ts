@@ -745,7 +745,8 @@ export async function acceptActionItem(
     }
     const call = await readCall(db, actor, current.activity_id);
     if (!call) throw new CrmError("not_found", "Call not found.", 404);
-    const named = (await detectTaskRecordsInDb(db, actor.workspaceId, title)).contact;
+    const detection = await detectTaskRecordsInDb(db, actor.workspaceId, title);
+    const named = detection.contact;
     const someoneElse = named && named.id !== call.contact_id ? named : null;
     const companyId =
       call.contact_id && call.contact_company_id && call.contact_company_id !== call.company_id
@@ -768,7 +769,7 @@ export async function acceptActionItem(
             : {}),
       },
       options.provenance ?? { operation: "accept_call_action" },
-      someoneElse ? { detectedLinks: { contactId: someoneElse.id, ...(someoneElse.company ? { companyId: someoneElse.company.id } : {}) } } : {},
+      someoneElse ? { detectedLinks: { contactId: someoneElse.id, ...(someoneElse.company ? { companyId: someoneElse.company.id } : {}) } } : { detection },
     );
     const next = items.map((entry) =>
       entry.id === item.id

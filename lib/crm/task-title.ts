@@ -50,14 +50,25 @@ function termsFor(task: TitleTask, colleagues: TitleColleague[], viewerId: strin
   if (task.opportunityId && task.opportunityName) {
     add(task.opportunityName, { kind: "opportunity", id: task.opportunityId, href: dealHref(task.opportunityId), name: task.opportunityName }, false, 0);
   }
+  const firsts = new Map<string, number>();
+  for (const colleague of colleagues) {
+    const first = firstWord(colleague.name).toLocaleLowerCase("en-GB");
+    firsts.set(first, (firsts.get(first) ?? 0) + 1);
+  }
   for (const colleague of colleagues) {
     if (colleague.id === viewerId) continue;
     const target: TitleTarget = { kind: "colleague", id: colleague.id, name: colleague.name };
     add(colleague.name, target, false, 1);
     const first = firstWord(colleague.name);
-    if (first !== clean(colleague.name)) add(first, target, true, 1);
+    if (first !== clean(colleague.name) && firsts.get(first.toLocaleLowerCase("en-GB")) === 1) add(first, target, true, 1);
   }
   return terms;
+}
+
+const CALENDAR_WORDS = /^\s+(Mon(day)?|Tue(s|sday)?|Wed(nesday)?|Thu(rs|rsday)?|Fri(day)?|Sat(urday)?|Sun(day)?|Jan(uary)?|Feb(ruary)?|Mar(ch)?|Apr(il)?|May|June?|July?|Aug(ust)?|Sep(t|tember)?|Oct(ober)?|Nov(ember)?|Dec(ember)?|Today|Tomorrow|Tonight|Next|This|Q[1-4])\b/;
+
+function surnameFollows(rest: string) {
+  return /^\s+\p{Lu}/u.test(rest) && !CALENDAR_WORDS.test(rest);
 }
 
 function startsUpper(value: string) {
@@ -73,7 +84,7 @@ export function taskTitleSegments(task: TitleTask, colleagues: TitleColleague[] 
     for (const match of title.matchAll(pattern)) {
       const start = (match.index ?? 0) + match[1].length;
       const text = match[2];
-      if (term.partial && !startsUpper(text)) continue;
+      if (term.partial && (!startsUpper(text) || surnameFollows(title.slice(start + text.length)))) continue;
       hits.push({ start, end: start + text.length, target: term.target, rank: term.rank });
     }
   }

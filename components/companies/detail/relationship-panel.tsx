@@ -1,5 +1,6 @@
 "use client";
 
+import TaskTitle from "@/components/crm/task-title";
 import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import DetailSection from "@/components/companies/detail/detail-section";
@@ -120,7 +121,7 @@ export default function RelationshipPanel({
           <ul className="flex flex-col gap-3">
             {context.tasks.map((task) => (
               <li key={task.id} className="flex flex-col gap-1">
-                <span className="text-[14px] leading-5">{task.title}</span>
+                <span className="text-[14px] leading-5"><TaskTitle task={task} colleagues={members} viewerId={viewerId ?? null} /></span>
                 <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
                   {task.dueAt && `Due ${formatWhen(task.dueAt)}`}
                   <ClickUpBadge task={task} />

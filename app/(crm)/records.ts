@@ -16,7 +16,7 @@ import { mergeContacts } from "@/lib/crm/merge";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
-import { linkTask, taskLinkCandidates, type LinkCandidate } from "@/lib/crm/task-links";
+import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
 import { completeTask, listDueReminders, updateTask, type DueReminder } from "@/lib/crm/tasks";
@@ -301,11 +301,11 @@ export async function assignTaskAction(id: string, ownerId: string): Promise<Rec
   }
 }
 
-export async function taskLinkCandidatesAction(id: string): Promise<{ candidates?: LinkCandidate[]; error?: string }> {
+export async function taskLinkCandidatesAction(id: string): Promise<Partial<LinkCandidates> & { error?: string }> {
   const user = await requireUser();
   if (!isUuid(id)) return { error: "Couldn't find people to link. Try again." };
   try {
-    return { candidates: await taskLinkCandidates(user, id) };
+    return await taskLinkCandidates(user, id);
   } catch (error) {
     return actionError(error);
   }

@@ -6,7 +6,8 @@ import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { ClickUpBadge } from "@/components/crm/clickup";
-import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
+import Button from "@/components/_ui/button";
+import TaskTitle from "@/components/crm/task-title";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
 import type { TitleColleague } from "@/lib/crm/task-title";
@@ -32,14 +33,6 @@ function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning })
   const member = assigning.members.find((item) => item.id === task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
   const name = member?.name ?? "No one";
   if (!assigning.canAssign) {
-    if (member && member.id !== assigning.viewerId && assigning.members.some((item) => item.id === member.id)) {
-      return (
-        <ColleagueLink colleague={member} className="inline-flex shrink-0 no-underline">
-          <MemberAvatar member={member} viewerId={assigning.viewerId} />
-          <span className="sr-only">Assigned to {name}</span>
-        </ColleagueLink>
-      );
-    }
     return (
       <span title={`Assigned to ${name}`} className="inline-flex shrink-0">
         <MemberAvatar member={member} viewerId={assigning.viewerId} />
@@ -64,12 +57,12 @@ function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning })
   );
 }
 
-function RecordChip({ href, label, icon: Icon }: { href: string; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }) {
+function RecordChip({ href, label, icon: Icon, className }: { href: string; label: string; icon: ComponentType<SVGProps<SVGSVGElement>>; className?: string }) {
   return (
     <Link
       href={href}
       title={label}
-      className="bg-secondary text-foreground inline-flex max-w-[12em] shrink-0 items-center gap-1 rounded-full py-px pr-2 pl-1.5 align-middle text-[12px] leading-5"
+      className={cn("bg-secondary text-foreground inline-flex max-w-[12em] min-w-0 shrink items-center gap-1 rounded-full py-px pr-2 pl-1.5 align-middle text-[12px] leading-5 sm:max-w-[10em] xl:max-w-[12em]", className)}
     >
       <Icon aria-hidden className="text-subtle size-3 shrink-0" />
       <span className="truncate">{label}</span>
@@ -168,11 +161,11 @@ export default function ActionTask({
               onClick={onOpen}
               className="absolute inset-0 cursor-pointer rounded-md outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
             />
-            <span className="pointer-events-none relative min-w-0 flex-1 text-[14px] leading-5 break-words sm:truncate">
+            <span className="pointer-events-none relative min-w-0 flex-1 text-[14px] leading-5 break-words sm:min-w-[12em] sm:truncate">
               <TaskTitle task={task} colleagues={colleagues} viewerId={viewerId} />
             </span>
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:max-w-[55%] sm:shrink sm:flex-nowrap sm:justify-end">
             {comments > 0 && (
               <span className="caption-style text-subtle flex shrink-0 items-center gap-1 tabular-nums" title={comments === 1 ? "1 comment" : `${comments} comments`}>
                 <ChatIcon aria-hidden className="size-3" />
@@ -192,23 +185,25 @@ export default function ActionTask({
               task.dueAt && <span className="text-subtle shrink-0 text-[13px]">{relativeWhen(task.dueAt, now)}</span>
             )}
             <ClickUpBadge task={task} />
-            {task.contactId && task.contactName && <RecordChip href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} />}
+            {task.contactId && task.contactName && <RecordChip href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} className="sm:max-lg:hidden" />}
             {task.companyName && (
               <EntityChip
                 name={task.companyName}
                 href={task.companyId ? companyHref(task.companyId) : undefined}
               />
             )}
-            {task.opportunityId && task.opportunityName && <RecordChip href={dealHref(task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} />}
+            {task.opportunityId && task.opportunityName && <RecordChip href={dealHref(task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} className="sm:max-xl:hidden" />}
             {canLink && !completed && !task.companyId && !task.contactId && !task.opportunityId && (
-              <button
-                type="button"
+              <Button
+                variant="chip"
+                size="none"
                 onClick={onOpen}
-                className="text-subtle hover:text-foreground inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset hover:bg-white/5"
+                aria-haspopup="dialog"
+                className="shrink-0 gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset max-sm:min-h-8"
               >
                 <LinkIcon aria-hidden className="size-3" />
                 Link a person
-              </button>
+              </Button>
             )}
             {assigning && <Assignee task={task} assigning={assigning} />}
           </div>

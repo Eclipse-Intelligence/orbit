@@ -196,6 +196,13 @@ export async function readCompanyInDb(db: Db, id: string, workspaceId?: string) 
   return result.rows[0] ? mapCompany(result.rows[0]) : null;
 }
 
+export async function readCompaniesInDb(db: Db, workspaceId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  const result = await db.query<CompanyRow>(`${COMPANY_SQL} where c.workspace_id = $1 and c.id = any($2::uuid[])`, [workspaceId, ids]);
+  const byId = new Map(result.rows.map((row) => [row.id, mapCompany(row)]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
+}
+
 async function readCompany(db: Db, workspaceId: string, id: string) {
   return readCompanyInDb(db, id, workspaceId);
 }
