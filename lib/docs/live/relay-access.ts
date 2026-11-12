@@ -1,6 +1,7 @@
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import { query } from "@/lib/db/pool";
 import { parseTopic, type LiveEvent } from "@/lib/docs/live/protocol";
 import { pageInScope } from "@/lib/docs/store";
 
@@ -10,6 +11,10 @@ export async function relayAllows(actor: UserActor, topic: string, send: boolean
   if (target.kind === "person") return !send && target.id === actor.userId;
   if (target.kind === "workspace") return !send && target.id === actor.workspaceId;
   if (!isUuid(target.id)) return false;
+  if (target.kind === "draft") {
+    const result = await query<{ open: boolean }>("select private.mail_share_open_to($1, $2) as open", [target.id, actor.userId]);
+    return result.rows[0]?.open === true;
+  }
   if (target.kind === "chat") {
     return withActor(actor, async (db) => {
       const result = await db.query("select 1 from crm.chat_members m where m.conversation_id = $1 and m.user_id = $2", [target.id, actor.userId]);
@@ -42,6 +47,8 @@ export function relayPayload(actor: UserActor, topic: string, event: LiveEvent, 
 }
 
 export function relayRefusal(topic: string | null, send: boolean) {
-  if (topic && parseTopic(topic)?.kind === "chat") return send ? "You can't type in that conversation." : "You can't follow that conversation.";
+  const kind = topic ? parseTopic(topic)?.kind : null;
+  if (kind === "draft") return send ? "You can't edit that draft." : "You can't follow that draft.";
+  if (kind === "chat") return send ? "You can't type in that conversation." : "You can't follow that conversation.";
   return send ? "You can't edit that note." : "You can't follow that note.";
 }

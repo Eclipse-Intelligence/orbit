@@ -25,3 +25,8 @@ export function newerVersion(seen: number | null, version: number) {
 export function openingBase(base: { text: DraftText } | null, opened: DraftText) {
   return base?.text ?? opened;
 }
+
+export function teammateText(base: DraftText | null, local: DraftText, fresh: DraftText, options: { editing: boolean; starting: boolean }): DraftText {
+  const subject = options.editing && base && local.subject !== base.subject ? local.subject : fresh.subject;
+  return { subject, body: base && !options.starting ? local.body : fresh.body };
+}

@@ -121,3 +121,4 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
   - Some SQL `raise` messages still say "Pick…" or "deals".
 - **Open decision:** should proposal and workflow emails get read statuses? Today they follow the read status setting.
 - **Safari checks:** instant send, contact emails, and the calendar notes clamp.
+- **Live drafts:** a rebuild after the live state passes 1MB drops keystrokes typed during that sync (rare; bodies are capped at 20,000 characters).

@@ -14,7 +14,7 @@ import type { MailAddress } from "@/lib/mail/types";
 export const SHARED_TEXT_LOCKED = "This draft is shared, so its subject and message can't be changed here. Send it as it is, or edit it in Mail.";
 export const DRAFT_NO_ACCESS = "You no longer have access to this draft.";
 
-const BODY_MAX = 20_000;
+export const BODY_MAX = 20_000;
 const SUBJECT_MAX = 300;
 const THREAD_TRIES = 3;
 
@@ -26,7 +26,7 @@ function firstName(name: string | null | undefined, fallback: string) {
   return name?.trim().split(/\s+/)[0] || fallback;
 }
 
-function draftFailure(error: unknown): never {
+export function draftFailure(error: unknown): never {
   if (isPgError(error) && error.code === "55006") throw new CrmError("conflict", error.message.trim(), 409, { locked: true });
   if (isPgError(error) && error.code === "P0004") throw new CrmError("conflict", error.message.trim(), 409);
   if (isPgError(error) && error.code === "40001") throw new CrmError("conflict", error.message.trim(), 409, { changed: true });

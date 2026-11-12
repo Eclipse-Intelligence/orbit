@@ -2,9 +2,8 @@ import { EditorState, Transaction, type ChangeSet } from "@codemirror/state";
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type * as Y from "yjs";
 import { ySync, ySyncAnnotation, ySyncFacet, YSyncConfig } from "y-codemirror.next";
-import { liveSlot } from "@/lib/docs/editor/live-slot";
+import { external, liveSlot } from "@/lib/docs/editor/live-slot";
 import { setPresence } from "@/lib/docs/editor/presence";
-import { external } from "@/lib/docs/editor/setup";
 import { RECONCILE, type LiveSession } from "@/lib/docs/live/session";
 import { changesBetween, rebase } from "@/lib/docs/live/rebase";
 
@@ -12,7 +11,7 @@ const remoteChange = EditorState.transactionExtender.of((transaction) =>
   transaction.annotation(ySyncAnnotation) ? { annotations: [external.of(true), Transaction.addToHistory.of(false)] } : null,
 );
 
-function applyToText(doc: Y.Doc, text: Y.Text, changes: ChangeSet) {
+export function applyToText(doc: Y.Doc, text: Y.Text, changes: ChangeSet) {
   const edits: { from: number; to: number; insert: string }[] = [];
   changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => edits.push({ from: fromA, to: toA, insert: inserted.toString() }));
   doc.transact(() => {

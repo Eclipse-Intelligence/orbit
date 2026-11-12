@@ -3,7 +3,10 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { external, liveSlot } from "@/lib/docs/editor/live-slot";
+import { presenceField } from "@/lib/docs/editor/presence";
 import { activeFormats, bodyEditorExtensions, fromProps, insertBlock, minimalChange, toggleFormat, type ActiveFormats, type FormatMarker } from "@/lib/mail/body-editor";
+import type { LiveDraft } from "@/lib/mail/live-draft-client";
 import { cn } from "@/lib/utils";
 
 const NO_FORMATS: ActiveFormats = { bold: false, italic: false };
@@ -17,6 +20,7 @@ export type BodyEditorHandle = {
   scrollIntoView: (options?: ScrollIntoViewOptions) => void;
   insertBlock: (text: string) => void;
   toggle: (marker: FormatMarker) => void;
+  setText: (text: string) => void;
 };
 
 export default function BodyEditor({
@@ -30,11 +34,13 @@ export default function BodyEditor({
   label,
   fill,
   readOnly = false,
+  live = null,
 }: {
   readOnly?: boolean;
+  live?: LiveDraft | null;
   ref?: Ref<BodyEditorHandle>;
   value: string;
-  onChange: (value: string) => void;
+  onChange: (value: string, remote: boolean) => void;
   onFiles: (files: File[]) => void;
   onFileLink: () => void;
   onFormats: (formats: ActiveFormats) => void;
@@ -47,6 +53,8 @@ export default function BodyEditor({
   const latest = useRef({ onChange, onFiles, onFileLink, onFormats });
   const initial = useRef({ value, placeholder, label, readOnly });
   const locking = useRef(new Compartment());
+  const liveHost = useRef(new Compartment());
+  const liveNow = useRef(live);
 
   useLayoutEffect(() => {
     latest.current = { onChange, onFiles, onFileLink, onFormats };
@@ -62,6 +70,7 @@ export default function BodyEditor({
         selection: { anchor: initial.current.value.length },
         extensions: [
           locking.current.of(lockedExtensions(initial.current.readOnly)),
+          liveHost.current.of([]),
           bodyEditorExtensions({
             placeholder: initial.current.placeholder,
             label: initial.current.label,
@@ -69,7 +78,9 @@ export default function BodyEditor({
             handlers: { files: (files) => latest.current.onFiles(files), fileLink: () => latest.current.onFileLink() },
           }),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(fromProps))) latest.current.onChange(update.state.doc.toString());
+            if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(fromProps))) {
+              latest.current.onChange(update.state.doc.toString(), update.transactions.every((transaction) => transaction.annotation(external) || transaction.annotation(fromProps)));
+            }
             if (update.docChanged || update.selectionSet || update.focusChanged) {
               latest.current.onFormats(update.view.hasFocus ? activeFormats(update.state) : NO_FORMATS);
             }
@@ -84,9 +95,22 @@ export default function BodyEditor({
     };
   }, []);
 
+  useLayoutEffect(() => {
+    liveNow.current = live;
+    const view = viewRef.current;
+    if (!view || !live) return;
+    const host = liveHost.current;
+    view.dispatch({ effects: host.reconfigure([liveSlot.of([]), presenceField]) });
+    live.attach(view);
+    return () => {
+      live.detach();
+      if (viewRef.current === view) view.dispatch({ effects: host.reconfigure([]) });
+    };
+  }, [live]);
+
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) return;
+    if (!view || liveNow.current) return;
     const current = view.state.doc.toString();
     if (current === value) return;
     view.dispatch({ changes: minimalChange(current, value), annotations: fromProps.of(true) });
@@ -112,6 +136,12 @@ export default function BodyEditor({
         if (!view) return;
         toggleFormat(view, marker);
         view.focus();
+      },
+      setText: (text) => {
+        const view = viewRef.current;
+        if (!view || view.state.readOnly) return;
+        const current = view.state.doc.toString();
+        if (current !== text) view.dispatch({ changes: minimalChange(current, text), userEvent: "input.replace" });
       },
     }),
     [],

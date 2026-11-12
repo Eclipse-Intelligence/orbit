@@ -1206,12 +1206,12 @@ html[data-sidebar-resizing] * {
   -webkit-box-decoration-break: clone;
 }
 
-.note-surface .note-editor .note-remote-selection {
+:is(.note-surface .note-editor, .mail-body-editor) .note-remote-selection {
   background: color-mix(in srgb, var(--cursor-color, #fff) 18%, transparent);
   border-radius: 2px;
 }
 
-.note-surface .note-editor .note-cursor {
+:is(.note-surface .note-editor, .mail-body-editor) .note-cursor {
   position: relative;
   display: inline-block;
   width: 0;
@@ -1220,7 +1220,7 @@ html[data-sidebar-resizing] * {
   text-indent: 0;
 }
 
-.note-surface .note-editor .note-cursor-bar {
+:is(.note-surface .note-editor, .mail-body-editor) .note-cursor-bar {
   position: absolute;
   top: -4px;
   bottom: -5px;
@@ -1230,7 +1230,7 @@ html[data-sidebar-resizing] * {
   background: var(--cursor-color);
 }
 
-.note-surface .note-editor .note-cursor-label {
+:is(.note-surface .note-editor, .mail-body-editor) .note-cursor-label {
   position: absolute;
   top: -3px;
   left: 5px;
@@ -1250,7 +1250,7 @@ html[data-sidebar-resizing] * {
   user-select: none;
 }
 
-.note-surface .note-editor .note-cursor-flip .note-cursor-label {
+:is(.note-surface .note-editor, .mail-body-editor) .note-cursor-flip .note-cursor-label {
   right: 3px;
   left: auto;
   border-top-left-radius: 4px;

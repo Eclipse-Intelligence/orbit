@@ -1,14 +1,14 @@
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from "@codemirror/commands";
 import { markdownKeymap } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { Annotation, EditorSelection, EditorState, Prec, type Extension, type Text } from "@codemirror/state";
+import { EditorSelection, EditorState, Prec, type Extension, type Text } from "@codemirror/state";
 import { Decoration, EditorView, keymap, placeholder, type DecorationSet, type KeyBinding } from "@codemirror/view";
 import type { Range } from "@codemirror/state";
 import type { DiffPart } from "@/lib/docs/diff";
 import { safeHref } from "@/lib/docs/editor/links";
 import { docsLanguage } from "@/lib/docs/editor/syntax";
 import { activeLines, livePreview } from "@/lib/docs/editor/preview";
-import { liveSlot } from "@/lib/docs/editor/live-slot";
+import { external, liveSlot } from "@/lib/docs/editor/live-slot";
 import { presenceField } from "@/lib/docs/editor/presence";
 import { noteTables } from "@/lib/docs/editor/tables";
 import { DeletedText } from "@/lib/docs/editor/widgets";
@@ -31,7 +31,7 @@ export type EditorBridge = {
   focusTitle: () => boolean;
 };
 
-export const external = Annotation.define<boolean>();
+export { external };
 
 export const bridge: EditorBridge = {
   resolve: () => true,

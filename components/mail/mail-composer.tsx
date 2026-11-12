@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type FormEvent } from "react";
-import DraftShare from "@/components/mail/draft-share";
+import DraftShare, { useComposeViewer } from "@/components/mail/draft-share";
 import { useMailShareEvents, useShareResync } from "@/components/mail/share-live";
 import { DraftRequestError, fetchDraftPeople, fetchSharedDraft, holdSharedDraft, saveSharedDraftText } from "@/components/mail/shared-draft-client";
 import { HandOverError } from "@/components/mail/hand-over";
 import { SHARED_DRAFT_CHANGED } from "@/lib/mail/share-view";
 import { newerVersion, openingBase, reconcileText, sameText, textChanges, type DraftText } from "@/lib/mail/shared-text";
+import { LiveDraft, liveHandBack, settleForSend } from "@/lib/mail/live-draft-client";
 import type { MailSharePerson } from "@/lib/mail/share-types";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
@@ -33,6 +34,7 @@ import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
 const SAVE_DELAY_MS = 1500;
+const LIVE_OFFLINE = "Couldn't reach Orbit. Try again.";
 const FILE_LINK_ERROR = "That's a link to a local file. Drag or paste the file itself.";
 
 export type SendPayload = {
@@ -180,6 +182,22 @@ export default function MailComposer({
   const queued = useRef(false);
   const [sendProblem, setSendProblem] = useState(draft?.sendProblem ?? null);
   const editor = useRef<BodyEditorHandle>(null);
+  const viewer = useComposeViewer();
+  const savedBody = useRef<string | null>(draft?.body ?? null);
+  const makeLive = (id: string, base: string) =>
+    new LiveDraft({
+      shareId: id,
+      user: { id: viewer?.id ?? "owner", name: viewer?.name ?? "", kind: "person" },
+      base,
+      onLocked: () => void loadShared().catch(() => undefined),
+      onFailure: (message) => setSave({ kind: "error", message }),
+      onStatus: (status) => {
+        if (status === "offline") setSave({ kind: "error", message: LIVE_OFFLINE });
+        else if (status === "live" || status === "solo") setSave((current) => (current.kind === "error" && current.message === LIVE_OFFLINE ? { kind: "saved" } : current));
+      },
+    });
+  const [live, setLive] = useState<LiveDraft | null>(() => (draft?.shareId ? makeLive(draft.shareId, draft.shareBase?.text.body ?? draft.body ?? "") : null));
+  const liveRef = useRef(live);
   const [formats, setFormats] = useState({ bold: false, italic: false });
   const payload = useRef({
     mode: start.mode,
@@ -276,8 +294,10 @@ export default function MailComposer({
       setSave({ kind: "saving" });
       try {
         await mergeSharedText();
+        await liveRef.current?.flush();
         const saved = await postJson<MailDraft>("/api/mail/drafts", snapshot);
         draftId.current = saved.id;
+        savedBody.current = saved.body;
         releaseDraft(heldKey.current);
         heldKey.current = null;
         lastSaveError.current = null;
@@ -350,6 +370,10 @@ export default function MailComposer({
     shared.current.id = shareId;
   }, [shareId]);
 
+  useEffect(() => {
+    liveRef.current = live;
+  }, [live]);
+
   const loadShared = useCallback(async () => {
     const id = shared.current.id;
     if (!id) return;
@@ -362,7 +386,8 @@ export default function MailComposer({
     if (fresh.state === "sent" || fresh.state === "discarded" || fresh.state === "none") return;
     const freshText = { subject: fresh.subject, body: fresh.body };
     const local = { subject: payload.current.subject, body: payload.current.body };
-    const next = reconcileText(openingBase(shared.current.base, shared.current.opened), local, freshText);
+    const merged = reconcileText(openingBase(shared.current.base, shared.current.opened), local, freshText);
+    const next = liveRef.current ? { ...merged, body: local.body } : merged;
     shared.current.base = { text: freshText, version: fresh.version };
     if (sameText(next, local)) return;
     payload.current = { ...payload.current, ...next };
@@ -380,8 +405,10 @@ export default function MailComposer({
 
   useShareResync(() => {
     const base = shared.current.base;
-    if (!shared.current.id || (base && !sameText(base.text, { subject: payload.current.subject, body: payload.current.body }))) return;
+    const local = { subject: payload.current.subject, body: liveRef.current ? (base?.text.body ?? "") : payload.current.body };
+    if (!shared.current.id || (base && !sameText(base.text, local))) return;
     void loadShared().catch(() => undefined);
+    liveRef.current?.refresh();
   });
 
   async function mergeSharedText(retry = true): Promise<void> {
@@ -391,6 +418,15 @@ export default function MailComposer({
     const base = shared.current.base;
     if (!base) throw new Error("Couldn't save the draft. Try again.");
     const local = { subject: payload.current.subject, body: payload.current.body };
+    if (liveRef.current) {
+      if (local.subject === base.text.subject) return;
+      const saved = await saveSharedDraftText(id, { subject: local.subject, body: null }, null);
+      if (saved.version >= (shared.current.seen ?? 0)) {
+        shared.current.base = { text: { ...base.text, subject: local.subject }, version: saved.version };
+        shared.current.seen = saved.version;
+      }
+      return;
+    }
     const changes = textChanges(base.text, local);
     if (!changes) return;
     try {
@@ -420,6 +456,10 @@ export default function MailComposer({
     const id = shared.current.id;
     const base = shared.current.base;
     if (!id || !base || discarded.current) return;
+    if (liveRef.current) {
+      if (payload.current.subject !== base.text.subject) void saveSharedDraftText(id, { subject: payload.current.subject, body: null }, null, true).catch(() => undefined);
+      return;
+    }
     const changes = textChanges(base.text, { subject: payload.current.subject, body: payload.current.body });
     if (changes) void saveSharedDraftText(id, changes, base.version, true).catch(() => undefined);
   }
@@ -538,7 +578,11 @@ export default function MailComposer({
   }
 
   function handOver(force = false, sending = false): Promise<SendPayload> {
-    const snapshot = { ...payload.current, attachments: attachments.ids, files: attachments.files };
+    const liveDraft = shared.current.id ? liveRef.current : null;
+    const release = liveDraft?.retain() ?? null;
+    const shownLive = liveDraft ? (liveDraft.text() ?? payload.current.body) : null;
+    const shownSubject = payload.current.subject;
+    const snapshot = { ...payload.current, ...(shownLive !== null ? { body: shownLive } : {}), attachments: attachments.ids, files: attachments.files };
     dirty.current = false;
     releaseDraft(heldKey.current);
     heldKey.current = null;
@@ -552,11 +596,33 @@ export default function MailComposer({
       ...(force ? { force } : {}),
     });
     if (!shared.current.id) return pending.then(handed);
+    const handBack = () => {
+      if (!liveDraft) return null;
+      const back = liveHandBack(liveDraft, snapshot.body);
+      const base: SharedBase = { text: { subject: shared.current.base?.text.subject ?? shownSubject, body: back.base }, version: back.confirmed ? (shared.current.base?.version ?? -1) : -1 };
+      return { body: back.body, base };
+    };
     return pending
       .then(() => mergeSharedText())
       .then(async () => {
         const id = draftId.current;
         if (!id) return;
+        if (liveDraft && shownLive !== null) {
+          const shareId = shared.current.id!;
+          const settled = async () => {
+            const fresh = await settleForSend(liveDraft, { subject: shownSubject, body: shownLive }, () => fetchSharedDraft(shareId), SHARED_DRAFT_CHANGED);
+            shared.current.base = { text: { subject: fresh.subject, body: fresh.body }, version: fresh.version };
+            shared.current.seen = Math.max(shared.current.seen ?? 0, fresh.version);
+            return fresh.version;
+          };
+          const version = await settled();
+          if (!sending) return;
+          await holdSharedDraft(id, true, version).catch(async (problem: unknown) => {
+            if (!(problem instanceof DraftRequestError && problem.detail.changed)) throw problem;
+            await holdSharedDraft(id, true, await settled());
+          });
+          return;
+        }
         if (!sending) {
           await refreshedVersion();
           return;
@@ -567,8 +633,15 @@ export default function MailComposer({
         });
       })
       .then(handed, (problem: unknown) => {
-        throw new HandOverError(problem instanceof Error ? problem.message : "Couldn't send. Try again.", { ...handed(), body: payload.current.body, subject: payload.current.subject });
-      });
+        const back = handBack();
+        throw new HandOverError(problem instanceof Error ? problem.message : "Couldn't send. Try again.", {
+          ...handed(),
+          ...(back ? { shareBase: back.base } : {}),
+          body: back?.body ?? payload.current.body,
+          subject: payload.current.subject,
+        });
+      })
+      .finally(() => release?.());
   }
 
   function send(event?: FormEvent, force = false) {
@@ -659,7 +732,8 @@ export default function MailComposer({
     try {
       const result = await writeWithAi({ mode: start.mode, messageId: start.messageId, to: [...to, ...cc], subject, instruction: aiText, current: body });
       setAiUndo(body);
-      change(setBody)(result.body);
+      if (liveRef.current) editor.current?.setText(result.body);
+      else change(setBody)(result.body);
       setAiOpen(false);
       setAiText("");
       window.setTimeout(() => editor.current?.focus(), 0);
@@ -820,7 +894,8 @@ export default function MailComposer({
             variant="link"
             size="none"
             onClick={() => {
-              change(setBody)(aiUndo);
+              if (liveRef.current) editor.current?.setText(aiUndo);
+              else change(setBody)(aiUndo);
               setAiUndo(null);
             }}
             className="font-normal"
@@ -832,13 +907,14 @@ export default function MailComposer({
       <BodyEditor
         ref={editor}
         value={body}
-        onChange={change(setBody)}
+        onChange={(value, remote) => (remote ? setBody(value) : change(setBody)(value))}
         onFiles={editorFiles}
         onFileLink={fileLinkDropped}
         onFormats={(next) => setFormats((current) => (current.bold === next.bold && current.italic === next.italic ? current : next))}
         label="Message"
         placeholder={start.mode === "forward" ? "Add a note" : start.mode === "new" ? "Write your email" : "Write your reply"}
         fill={card}
+        live={live}
       />
       {account?.signature && (
         <div className="flex items-start gap-3 pb-1">
@@ -933,6 +1009,10 @@ export default function MailComposer({
           onPeople={setSharePeople}
           onShared={(id, people) => {
             shared.current = { id, opened: { subject: payload.current.subject, body: payload.current.body }, base: null, seen: null, asked: 0, applied: 0 };
+            liveRef.current?.close();
+            const created = makeLive(id, savedBody.current ?? payload.current.body);
+            liveRef.current = created;
+            setLive(created);
             setShareId(id);
             setSharePeople(people);
             releaseDraft(heldKey.current);

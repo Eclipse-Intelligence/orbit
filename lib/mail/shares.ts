@@ -1,3 +1,4 @@
+import { draftTopic } from "@/lib/docs/live/protocol";
 import { alertMembers } from "@/lib/alerts";
 import { chatBackground, listChatPeople } from "@/lib/crm/chat";
 import { listMembers } from "@/lib/crm/companies";
@@ -170,7 +171,11 @@ export async function removeFromShare(actor: UserActor, shareId: string, userId:
   }
   if (row.removed) {
     chatBackground(() =>
-      publishShareEvents([...shareEvents([member], { type: "removed", shareId: id }), ...shareEvents([actor.userId, ...(row.others ?? [])], { type: "people", shareId: id })]),
+      publishShareEvents([
+        ...shareEvents([member], { type: "removed", shareId: id }),
+        ...shareEvents([actor.userId, ...(row.others ?? [])], { type: "people", shareId: id }),
+        { topic: draftTopic(id), event: "kick", payload: { user: member } },
+      ]),
     );
   }
   return { removed: row.removed };
