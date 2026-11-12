@@ -1,6 +1,7 @@
 import { isUuid } from "@/lib/crm/mutate";
 import { completeTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
+import { actorForTask } from "@/lib/crm/workspaces";
 
 const MAX_IDS = 50;
 
@@ -37,7 +38,7 @@ export async function completeTasksFromBeacon(request: Request, actor: UserActor
   const failed: string[] = [];
   for (const id of ids) {
     try {
-      await completeTask(actor, id, { provenance: { operation: "complete_task", source: "web" } });
+      await completeTask(await actorForTask(actor, id), id, { provenance: { operation: "complete_task", source: "web" } });
       completed.push(id);
     } catch {
       failed.push(id);

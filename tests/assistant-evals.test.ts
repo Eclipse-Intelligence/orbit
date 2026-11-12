@@ -262,6 +262,27 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(failed(agenda), []);
   });
 
+  it("lists the user's timed tasks as task blocks alongside meetings", async () => {
+    let listed = "";
+    const result = await runOnce(
+      byId("calendar-today"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "list_calendar_events", args: {} }] }),
+          ({ body }) => {
+            listed = JSON.stringify(body.messages);
+            return { content: "Quillfeather proposal review at 11:00, Copperleaf catch-up at 16:30, and Chase Ansel is still open from 09:30." };
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(listed, /taskBlocks/);
+    assert.match(listed, /\\"kind\\":\\"task\\"[^}]*Chase Ansel if he's gone quiet[^}]*overdue\\":true/);
+    assert.match(listed, /\\"kind\\":\\"task\\"[^}]*Send Quillfeather proposal[^}]*durationMinutes\\":15/);
+    assert.doesNotMatch(listed, /\\"kind\\":\\"task\\"[^}]*Book Fernhill follow-up/);
+  });
+
   it("still reads a site the user typed after listing a calendar with an outside description", async () => {
     let listed = "";
     const result = await runOnce(

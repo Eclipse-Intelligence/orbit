@@ -63,6 +63,36 @@ async function seedCallTask(label) {
   return { id, title };
 }
 
+function londonDay(offset) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + offset * 86_400_000));
+}
+
+async function seedBlock(page, device) {
+  if (!env.CRM_AGENT_TOKEN) return null;
+  const stamp = `${device}${Date.now().toString(36)}`;
+  await goto(page, `${base}/tasks`);
+  await page.waitForTimeout(1200);
+  const pad = page.locator('textarea[data-shortcut="add-record"]').first();
+  if ((await pad.count()) === 0 || !(await pad.isVisible())) return null;
+  await pad.click();
+  await pad.fill(`Sweep owner ${stamp}`);
+  await page.waitForTimeout(800);
+  await pad.press("Enter");
+  let mine = null;
+  for (let attempt = 0; attempt < 4 && !mine; attempt += 1) {
+    await page.waitForTimeout(1000);
+    const found = await api(`/tasks?q=${encodeURIComponent(stamp)}&view=all&limit=5`);
+    mine = found?.ok ? ((await found.json()).data ?? [])[0] : null;
+  }
+  if (!mine?.ownerId) return null;
+  const day = londonDay(1);
+  const title = `Sweep block ${stamp}`;
+  const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title, dueAt: `${day}T10:00`, durationMinutes: 30, ownerId: mine.ownerId }) });
+  if (!created?.ok) return null;
+  const id = (await created.json()).task.id;
+  return { id, title, day, ids: [mine.id, id] };
+}
+
 async function skipOutcome(row) {
   const outcome = row.getByRole("group", { name: "Done with an outcome" });
   const offered = (await outcome.count()) > 0 && (await outcome.isVisible());
@@ -503,6 +533,60 @@ for (const [device, viewport] of [
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));
   await shot("calendar");
+  const block = await seedBlock(page, device);
+  if (block) {
+    await goto(page, `${base}/calendar?date=${block.day}&view=day`);
+    await page.waitForTimeout(1500);
+    const card = page.locator(`[data-task-block="${block.id}"]`).filter({ visible: true });
+    check(`${device} calendar shows the task as a block`, await visible(card));
+    check(`${device} calendar with blocks no overflow`, await noHorizontalScroll());
+    const circle = card.getByRole("button", { name: /^Mark .* done$/ });
+    if (device === "iphone") {
+      const circleArea = await tapArea(circle);
+      check(`${device} block's done circle is easy to tap`, Boolean(circleArea && circleArea.height >= 43 && circleArea.owns), circleArea ? `${Math.round(circleArea.height)}px${circleArea.owns ? "" : ", covered"}` : "missing");
+    }
+    await shot("calendar-block");
+    await card.locator("button[data-task-id]").tap();
+    await page.waitForTimeout(900);
+    const panel = page.getByRole("dialog", { name: "Task" });
+    check(`${device} a block opens the task panel`, (await visible(panel)) && (await visible(panel.getByText(block.title).or(panel.getByRole("button", { name: "Edit title" })))));
+    await shot("calendar-task-panel");
+    await panel.getByRole("button", { name: "Close" }).tap();
+    await page.waitForTimeout(600);
+    await circle.tap();
+    await page.waitForTimeout(700);
+    check(`${device} the circle marks the block done with Undo`, (await visible(page.getByText("Task done."))) && (await visible(card.getByRole("button", { name: "Done", exact: true }))));
+    await page.getByRole("button", { name: "Undo" }).last().tap();
+    await page.waitForTimeout(800);
+    check(`${device} Undo brings the block back`, await visible(card.getByRole("button", { name: /^Mark .* done$/ })));
+    await page.getByRole("button", { name: "Calendars and tasks" }).tap();
+    await page.waitForTimeout(700);
+    const drawer = page.getByRole("dialog", { name: "Calendars and tasks" });
+    const calendarsToggle = drawer.getByRole("button", { name: /^Calendars/ });
+    check(`${device} drawer has Calendars collapsed and Tasks open`, (await calendarsToggle.getAttribute("aria-expanded")) === "false" && (await drawer.getByRole("button", { name: /^Tasks/ }).getAttribute("aria-expanded")) === "true");
+    const listRow = drawer.locator(`button[data-task-id="${block.id}"]`);
+    check(`${device} drawer lists the task`, await visible(listRow));
+    await shot("calendar-drawer");
+    await calendarsToggle.tap();
+    await page.waitForTimeout(400);
+    check(`${device} Calendars expands`, (await calendarsToggle.getAttribute("aria-expanded")) === "true");
+    await listRow.tap();
+    await page.waitForTimeout(900);
+    check(`${device} a task in the drawer opens the panel`, (await visible(page.getByRole("dialog", { name: "Task" }))) && !(await visible(drawer)));
+    await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+    await page.waitForTimeout(600);
+    await page.reload();
+    await page.waitForTimeout(1500);
+    await page.getByRole("button", { name: "Calendars and tasks" }).tap();
+    await page.waitForTimeout(700);
+    const again = page.getByRole("dialog", { name: "Calendars and tasks" }).getByRole("button", { name: /^Calendars/ });
+    check(`${device} Calendars stays expanded after a reload`, (await again.getAttribute("aria-expanded")) === "true");
+    await again.tap();
+    await page.waitForTimeout(300);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    for (const id of block.ids) await api(`/tasks/${id}`, { method: "DELETE" });
+  } else check(`${device} calendar block checks ran`, false, "set CRM_AGENT_TOKEN and keep the Add task card so the sweep can add a task");
   await goto(page, `${base}/settings/general`);
   await page.waitForTimeout(1200);
   check(`${device} settings loads`, await visible(page.getByRole("heading", { name: "General" })));
@@ -594,6 +678,31 @@ for (const width of [1100, 1280, 1440]) {
     const teams = (await row.locator('a:visible[href^="msteams:"], a:visible[href^="tel:"]').first().getAttribute("href").catch(() => null)) ?? "";
     check(`${device} Call opens Teams on desktop`, teams.startsWith("msteams:"), teams);
   } else if (width === 1280) check(`${device} keyboard outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
+  if (width === 1280) {
+    const block = await seedBlock(page, "desk");
+    if (block) {
+      await goto(page, `${base}/calendar?date=${block.day}&view=week`);
+      await page.waitForTimeout(1500);
+      const menu = page.getByRole("complementary", { name: "Calendars and tasks" });
+      check(`${device} calendar menu has Calendars and Tasks`, (await menu.getByRole("button", { name: /^Calendars/ }).isVisible()) && (await menu.getByRole("button", { name: /^Tasks/ }).isVisible()));
+      const card = page.locator(`[data-task-block="${block.id}"]`).filter({ visible: true });
+      check(`${device} the week shows the task block`, await card.isVisible().catch(() => false));
+      const box = await card.boundingBox();
+      check(`${device} a 30 minute block is two lines tall`, Boolean(box && box.height >= 28), box ? `${Math.round(box.height)}px` : "missing");
+      await page.screenshot({ path: path.join(out, `desktop-${width}-calendar.png`) });
+      await card.locator("button[data-task-id]").click();
+      await page.waitForTimeout(900);
+      check(`${device} a block opens the task panel`, await page.getByRole("dialog", { name: "Task" }).isVisible().catch(() => false));
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(500);
+      await page.getByRole("button", { name: /^Hide calendars and tasks/ }).click();
+      await page.waitForTimeout(400);
+      check(`${device} the toolbar button hides the menu`, !(await menu.isVisible().catch(() => false)));
+      await page.getByRole("button", { name: /^Show calendars and tasks/ }).click();
+      for (const id of block.ids) await api(`/tasks/${id}`, { method: "DELETE" });
+    } else check(`${device} calendar block checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+  }
 
   await context.close();
 }

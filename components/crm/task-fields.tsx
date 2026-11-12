@@ -9,15 +9,13 @@ import { Kbd } from "@/components/_ui/command";
 import { DueDatePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
-import { searchCompaniesAction } from "@/app/(crm)/actions";
-import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { Monogram } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
 import type { Viewer } from "@/components/crm/viewer";
-import { assignTaskAction, linkTaskAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
+import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
 import type { LinkCandidate } from "@/lib/crm/task-links";
 import { saveTaskDetailsAction, type TaskDetails } from "@/app/(crm)/discussions";
@@ -552,14 +550,14 @@ export function LinkPerson({ taskId, title, onLinked }: { taskId: string; title:
     if (text.length < 2) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void Promise.all([searchContactsToFileAction(text), searchCompaniesAction(text)])
-        .then(([people, companies]) => {
+      void searchTaskLinkTargetsAction(taskId, text)
+        .then(({ contacts: found, companies }) => {
           if (cancelled) return;
           setError((current) => (current === SEARCH_FAILED ? null : current));
           setResults({
             query: text,
             items: [
-              ...people.contacts.slice(0, 6).map((person) => ({
+              ...found.slice(0, 6).map((person) => ({
                 kind: "contact" as const,
                 id: person.id,
                 name: person.name,
@@ -575,7 +573,7 @@ export function LinkPerson({ taskId, title, onLinked }: { taskId: string; title:
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, taskId]);
 
   async function link(candidate: LinkCandidate) {
     if (busy) return;

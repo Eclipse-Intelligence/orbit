@@ -16,12 +16,19 @@ import type { Task, TaskWrite } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { toIsoInstant } from "@/lib/time";
+import { actorForTask } from "@/lib/crm/workspaces";
 
 const SESSION_ENDED = "Your session ended. Sign in again.";
 
+async function taskActor(id: unknown) {
+  const actor = await getUserActor();
+  if (!actor) return null;
+  return actorForTask(actor, id).catch(() => actor);
+}
+
 export async function openDiscussionAction(subject: ChatSubject): Promise<ChatResult<{ conversationId: string }>> {
   try {
-    const actor = await getUserActor();
+    const actor = subject?.kind === "task" ? await taskActor(subject.id) : await getUserActor();
     if (!actor) return { error: SESSION_ENDED };
     return { ok: true, ...(await openDiscussion(actor, subject)) };
   } catch (error) {
@@ -71,7 +78,7 @@ function refresh() {
 }
 
 export async function saveTaskDetailsAction(id: string, input: TaskDetails): Promise<{ ok?: true; error?: string }> {
-  const actor = await getUserActor();
+  const actor = await taskActor(id);
   if (!actor) return { error: SESSION_ENDED };
   if (!isUuid(id)) return { error: "Couldn't save. Try again." };
   try {
@@ -95,7 +102,7 @@ export async function saveTaskDetailsAction(id: string, input: TaskDetails): Pro
 }
 
 export async function untagTaskAction(taskId: string, userId: string): Promise<{ ok?: true; error?: string }> {
-  const actor = await getUserActor();
+  const actor = await taskActor(taskId);
   if (!actor) return { error: SESSION_ENDED };
   if (!isUuid(taskId) || !isUuid(userId)) return { error: "Couldn't remove them. Try again." };
   try {
@@ -108,7 +115,7 @@ export async function untagTaskAction(taskId: string, userId: string): Promise<{
 }
 
 export async function taskTaggedAction(taskId: string): Promise<{ tagged?: string[]; error?: string }> {
-  const actor = await getUserActor();
+  const actor = await taskActor(taskId);
   if (!actor) return { error: SESSION_ENDED };
   if (!isUuid(taskId)) return { tagged: [] };
   try {

@@ -16,8 +16,10 @@ import CalendarEventDetails, {
   type CalendarMeta,
 } from "@/components/crm/calendar-event-details";
 import { eventStyle } from "@/components/crm/calendar-grid";
+import { AgendaTaskBlock, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import { allDayKeys, daySpan } from "@/lib/calendar-view";
 import type { CalendarItem } from "@/lib/crm/calendars";
+import type { TaskBlock } from "@/lib/task-blocks";
 import { cn } from "@/lib/utils";
 
 export default function CalendarAgenda({
@@ -27,6 +29,8 @@ export default function CalendarAgenda({
   calendars,
   now,
   onNew,
+  blocks = [],
+  taskHandlers,
 }: {
   date: string;
   today: string;
@@ -34,6 +38,8 @@ export default function CalendarAgenda({
   calendars: Map<string, CalendarMeta>;
   now: number;
   onNew?: () => void;
+  blocks?: TaskBlock[];
+  taskHandlers?: TaskBlockHandlers;
 }) {
   const [open, setOpen] = useState<CalendarItem | null>(null);
   const allDay = items.filter(
@@ -49,7 +55,15 @@ export default function CalendarAgenda({
         left.startsAt.localeCompare(right.startsAt) ||
         right.endsAt.localeCompare(left.endsAt),
     );
-  const list = [...allDay, ...timed];
+  const dayBlocks = taskHandlers ? blocks.filter((block) => daySpan(block.startsAt, block.endsAt, date)) : [];
+  type Row = { kind: "event"; item: CalendarItem } | { kind: "task"; block: TaskBlock };
+  const list: Row[] = [
+    ...allDay.map((item) => ({ kind: "event" as const, item })),
+    ...[
+      ...timed.map((item) => ({ kind: "event" as const, item, at: item.startsAt, until: item.endsAt })),
+      ...dayBlocks.map((block) => ({ kind: "task" as const, block, at: block.startsAt, until: block.endsAt })),
+    ].sort((left, right) => left.at.localeCompare(right.at) || (left.kind === right.kind ? right.until.localeCompare(left.until) : left.kind === "task" ? -1 : 1)),
+  ];
   const openCalendar = open ? (calendars.get(open.calendarId) ?? null) : null;
 
   return (
@@ -67,7 +81,20 @@ export default function CalendarAgenda({
         </div>
       ) : (
         <ol className="flex flex-col gap-2" aria-label="Events">
-          {list.map((item) => {
+          {list.map((row) => {
+            if (row.kind === "task") {
+              return (
+                <li key={row.block.id}>
+                  <AgendaTaskBlock
+                    block={row.block}
+                    past={date < today || new Date(row.block.endsAt).getTime() <= now}
+                    onOpen={taskHandlers!.onOpen}
+                    onComplete={taskHandlers!.onComplete}
+                  />
+                </li>
+              );
+            }
+            const item = row.item;
             const calendar = calendars.get(item.calendarId) ?? null;
             const color = calendar?.color ?? "#9aa1ab";
             const past =

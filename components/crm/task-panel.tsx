@@ -31,6 +31,7 @@ type PanelProps = {
   onClose: () => void;
   outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
+  recordNotes?: boolean;
 };
 
 export function TaskDoneCircle({ done, disabled, title, onClick, className }: { done: boolean; disabled: boolean; title: string; onClick: () => void; className?: string }) {
@@ -66,7 +67,7 @@ function returnFocus(id: string) {
   row.querySelector<HTMLElement>("button[aria-expanded]")?.focus({ preventScroll: true });
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers }: PanelProps & { instant: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers, recordNotes = true }: PanelProps & { instant: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -261,7 +262,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                       {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
                     </div>
                   )}
-                  <RecordNotes compact record={{ kind: "task", id: task.id, name: task.title }} />
+                  {recordNotes && <RecordNotes compact record={{ kind: "task", id: task.id, name: task.title }} />}
                   <TaskSection label="Discussion" count={discussion.count}>
                     <DiscussionMessages discussion={discussion} />
                   </TaskSection>

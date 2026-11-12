@@ -1,5 +1,7 @@
 import { linkCreatedWorkspace } from "@/lib/assistant/eclipse-scope";
+import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure, tooLong } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -50,6 +52,13 @@ export async function alertLink(actor: UserActor, path: string) {
 export async function actorForWorkspace(actor: UserActor, workspaceId: string) {
   if (workspaceId === actor.workspaceId) return actor;
   return (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId) ?? actor;
+}
+
+export async function actorForTask(actor: UserActor, taskId: unknown) {
+  if (typeof taskId !== "string" || !isUuid(taskId)) return actor;
+  const found = await withActor(actor, (db) => db.query<{ workspace_id: string }>("select workspace_id from crm.tasks where id = $1", [taskId]));
+  const workspaceId = found.rows[0]?.workspace_id;
+  return workspaceId && workspaceId !== actor.workspaceId ? actorForWorkspace(actor, workspaceId) : actor;
 }
 
 export async function homeWorkspaceId(actor: UserActor) {
