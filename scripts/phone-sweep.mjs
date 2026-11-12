@@ -202,6 +202,27 @@ for (const [device, viewport] of [
   await page.goto(`${base}/tasks`);
   await page.waitForTimeout(1200);
   check(`${device} tasks loads`, await visible(page.getByRole("heading", { name: "Tasks" })));
+  const pad = page.locator('textarea[data-shortcut="add-record"]').first();
+  if (await visible(pad)) {
+    await pad.tap();
+    await pad.fill("Call Sweep Monday remind me 15 mins before");
+    await page.waitForTimeout(700);
+    check(`${device} Add task asks for a time for a reminder on a day`, await visible(page.getByRole("button", { name: "Pick a time for the reminder" })));
+    await page.getByRole("button", { name: "Duration 15m. Change" }).first().tap();
+    await page.waitForTimeout(400);
+    await page.getByRole("group", { name: "Duration" }).getByRole("button", { name: "30m" }).tap();
+    await page.waitForTimeout(400);
+    check(`${device} Add task takes a duration`, await visible(page.getByRole("button", { name: "Duration 30m. Change" })));
+    await pad.focus();
+    await pad.press("Enter");
+    await page.waitForTimeout(600);
+    check(`${device} Enter asks for the reminder time instead of saving`, (await visible(page.getByText("Pick a time for the reminder", { exact: true }))) && (await pad.inputValue()) !== "");
+    await shot("task-pad-reminder-time");
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    await pad.fill("");
+    await page.waitForTimeout(300);
+  } else console.log(`skip ${device} Add task card (not found)`);
   const sweepRow = sweepTask ? page.locator(`li[data-task-id="${sweepTask.id}"]`) : page.locator("li[data-task-id]").first();
   check(`${device} tasks has the sweep task to check`, (await sweepRow.count()) > 0, (await sweepRow.count()) > 0 ? "" : "set CRM_AGENT_TOKEN so the sweep can add one");
   if ((await sweepRow.count()) > 0) {
@@ -262,6 +283,22 @@ for (const [device, viewport] of [
     let schedule = await openSchedule();
     check(`${device} Schedule offers a date and time`, await visible(schedule.locator("button", { hasText: "Pick a date and time" })));
     await shot("task-schedule");
+    await schedule.locator("button", { hasText: "Pick a date and time" }).tap();
+    await page.waitForTimeout(400);
+    const pickForm = page.getByRole("form", { name: "Pick a date and time" });
+    check(`${device} Pick a date and time shows a date and a time`, (await visible(pickForm.getByLabel("Date", { exact: true }))) && (await visible(pickForm.getByLabel("Time", { exact: true }))));
+    check(`${device} Pick a date and time starts on a time`, /^\d\d:\d\d$/.test(await pickForm.getByLabel("Time", { exact: true }).inputValue()));
+    await shot("task-schedule-pick");
+    await pickForm.getByRole("button", { name: "Cancel" }).tap();
+    await page.waitForTimeout(400);
+    const nextFree = schedule.locator("button", { hasText: /^Next free/ });
+    await page.waitForTimeout(800);
+    if ((await visible(nextFree)) && (await nextFree.isEnabled())) {
+      await nextFree.tap();
+      await page.waitForTimeout(1500);
+      check(`${device} Next free gives the task a time today`, await visible(row.getByRole("button", { name: /^Due .*\d\d:\d\d\. Change$/ })));
+      schedule = await openSchedule();
+    } else console.log(`skip ${device} Next free (outside working hours, no free slot or no calendar)`);
     await schedule.locator("button", { hasText: /morning/ }).first().tap();
     await page.waitForTimeout(1500);
     check(`${device} Schedule sets a morning time`, await visible(row.getByRole("button", { name: /^Due .*09:00\. Change$/ })));

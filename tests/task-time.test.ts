@@ -15,11 +15,16 @@ import {
   isTaskDuration,
   isPastTime,
   isTaskOverdue,
+  localInstant,
   nextFreeStart,
   onDayKeepingKind,
+  pickTimeFor,
+  reminderBlock,
+  reminderBlockText,
   reminderTimeFor,
   scheduleChoices,
   taskDueDay,
+  wallInstant,
 } from "@/lib/crm/task-time";
 import { taskDueLabel } from "@/lib/crm/task-views";
 import { createUser, resetDatabase } from "./helpers";
@@ -115,6 +120,44 @@ describe("Schedule", () => {
     assert.equal(reminderTimeFor("2026-07-01", 0, Date.parse("2026-07-01T08:05:00Z"), LONDON), "09:15", "London summer time");
     assert.equal(isPastTime("2026-11-12", "11:00", now, LONDON), true);
     assert.equal(isPastTime("2026-11-12", "14:00", now, LONDON), false);
+  });
+
+  it("keeps the reminder itself in the future, whatever its lead", () => {
+    const now = Date.parse("2026-11-12T11:20:00Z");
+    assert.equal(reminderTimeFor("2026-11-13", 1440, now, LONDON), "11:30", "tomorrow with a day's lead starts after now plus a day");
+    assert.equal(reminderTimeFor("2026-11-13", 60, now, LONDON), "09:00");
+    assert.equal(reminderTimeFor("2026-11-12", 120, now, LONDON), "13:30");
+    assert.equal(isPastTime("2026-11-13", "09:00", now, LONDON, 1440), true);
+    assert.equal(isPastTime("2026-11-13", "14:00", now, LONDON, 1440), false);
+    assert.equal(reminderTimeFor("2026-11-13", 2880, now, LONDON), null);
+    assert.equal(reminderBlock("2026-11-13", 2880, now, LONDON), "lead");
+    assert.equal(reminderBlock("2026-11-13", 60, now, LONDON), null);
+  });
+
+  it("explains why an overdue date-only task can't take a reminder", () => {
+    const now = Date.parse("2026-11-12T11:20:00Z");
+    assert.equal(reminderBlock("2026-11-10", 0, now, LONDON), "past");
+    assert.equal(reminderBlockText("past", 0), "That day has passed. Move the task to today or later first, then set the reminder.");
+    assert.equal(reminderBlockText("lead", 1440), "Too late for this reminder on that day. Choose a shorter one or remove it.");
+    assert.equal(reminderBlock("2026-11-12", 0, Date.parse("2026-11-12T23:50:00Z"), LONDON), "lead");
+    assert.equal(reminderBlockText("lead", 0), "No time is left that day. Move the task to a later day first.");
+  });
+
+  it("starts Pick a date and time on the next quarter hour today and 09:00 on other days", () => {
+    const now = Date.parse("2026-11-12T11:20:00Z");
+    assert.equal(pickTimeFor("2026-11-12", now, LONDON), "11:30");
+    assert.equal(pickTimeFor("2026-11-13", now, LONDON), "09:00");
+    assert.equal(pickTimeFor("2026-11-10", now, LONDON), "09:00");
+  });
+
+  it("reads the hour the clocks go back as its first occurrence", () => {
+    assert.equal(localInstant("2026-10-25T01:30", LONDON), "2026-10-25T00:30:00.000Z");
+    assert.equal(localInstant("2026-10-25T00:30", LONDON), "2026-10-24T23:30:00.000Z");
+    assert.equal(localInstant("2026-10-25T02:30", LONDON), "2026-10-25T02:30:00.000Z");
+    assert.equal(localInstant("2026-07-01T14:30", LONDON), "2026-07-01T13:30:00.000Z");
+    assert.equal(localInstant("2026-11-12T14:30", LONDON), "2026-11-12T14:30:00.000Z");
+    assert.equal(localInstant("2026-11-12", LONDON), "2026-11-12");
+    assert.equal(new Date(wallInstant("2026-10-25", 1, 0, LONDON)).toISOString(), "2026-10-25T00:00:00.000Z");
   });
 
   it("lists next free today, tomorrow morning and Monday morning", () => {

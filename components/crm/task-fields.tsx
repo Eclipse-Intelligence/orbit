@@ -30,7 +30,7 @@ import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
 import { padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
-import { durationLabel } from "@/lib/crm/task-time";
+import { durationLabel, localInstant } from "@/lib/crm/task-time";
 import { taskDueLabel } from "@/lib/crm/task-views";
 import { appTimeZone, dateTimeInputValue, toIsoInstant } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -146,7 +146,7 @@ function sourceOf(task: Task): Source {
 
 function dueWrite(value: string): TaskDetails {
   if (!value) return { dueAt: null, remindMinutes: null };
-  return padDueHasTime(value) ? { dueAt: value } : { dueDate: value };
+  return padDueHasTime(value) ? { dueAt: localInstant(value) } : { dueDate: value };
 }
 
 const drafts = new Map<string, { title?: string; text?: string }>();
@@ -308,7 +308,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
     const day = due ? due.slice(0, 10) : null;
     if (!day) return;
     const value = `${day}T${time}`;
-    writeDue(value, { dueAt: value, remindMinutes: minutes }, minutes);
+    writeDue(value, { dueAt: localInstant(value), remindMinutes: minutes }, minutes);
   }
 
   function changeDuration(minutes: number) {
@@ -661,7 +661,7 @@ export { Section as TaskSection };
 
 function dueState(details: TaskDetailsState) {
   const timed = padDueHasTime(details.due);
-  const dueAt = details.due ? toIsoInstant(details.due) : null;
+  const dueAt = details.due ? (padDueHasTime(details.due) ? localInstant(details.due) : toIsoInstant(details.due)) : null;
   return { timed, dueAt };
 }
 

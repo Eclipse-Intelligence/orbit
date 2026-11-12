@@ -12,7 +12,7 @@ import { listGroups } from "@/components/crm/clickup";
 import { addPadTaskAction, detectTaskRecordsAction, parseTaskWithAiAction, searchTaskLinksAction } from "@/app/(crm)/task-pad";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
-import { DEFAULT_TASK_DURATION } from "@/lib/crm/task-time";
+import { DEFAULT_TASK_DURATION, localInstant } from "@/lib/crm/task-time";
 import type { PadAiParse, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
 import {
@@ -704,7 +704,7 @@ export default function TaskPad({
     }
     const result = await addPadTaskAction({
       title,
-      dueAt: finalDue,
+      dueAt: finalDue && padDueHasTime(finalDue) ? localInstant(finalDue) : finalDue,
       remindMinutes: finalReminder,
       durationMinutes: duration,
       ...padSaveIds(links, { fixedCompany, contact, company, opportunity }),

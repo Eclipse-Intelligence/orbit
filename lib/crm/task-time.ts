@@ -125,17 +125,55 @@ function clock(minutes: number) {
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
-export function reminderTimeFor(day: string, leadMinutes: number, now: number, timeZone = appTimeZone()) {
-  const today = dayKeyAt(new Date(now), timeZone);
-  if (day > today) return clock(MORNING.hour * 60 + MORNING.minute);
-  if (day < today) return null;
-  const wall = zonedParts(new Date(now), timeZone);
-  const minutes = wall.hour * 60 + wall.minute + Math.max(0, leadMinutes);
-  const next = Math.ceil((minutes + 1) / SCHEDULE_STEP_MINUTES) * SCHEDULE_STEP_MINUTES;
-  return next >= 24 * 60 ? null : clock(next);
+function sameWall(at: number, hour: number, minute: number, key: string, timeZone: string) {
+  const wall = zonedParts(new Date(at), timeZone);
+  return wall.hour === hour && wall.minute === minute && dayKeyAt(new Date(at), timeZone) === key;
 }
 
-export function isPastTime(day: string, time: string, now: number, timeZone = appTimeZone()) {
+export function wallInstant(key: string, hour: number, minute: number, timeZone = appTimeZone()) {
+  const at = wallClockAt(key, hour, minute, timeZone);
+  const earlier = at - 3_600_000;
+  return sameWall(earlier, hour, minute, key, timeZone) ? earlier : at;
+}
+
+const LOCAL = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/;
+
+export function localInstant(value: string, timeZone = appTimeZone()) {
+  const match = LOCAL.exec(value);
+  if (!match) return value;
+  return new Date(wallInstant(match[1], Number(match[2]), Number(match[3]), timeZone)).toISOString();
+}
+
+function reminderFits(day: string, minutes: number, leadMinutes: number, now: number, timeZone: string) {
+  return wallInstant(day, Math.floor(minutes / 60), minutes % 60, timeZone) - Math.max(0, leadMinutes) * 60_000 > now;
+}
+
+export function reminderTimeFor(day: string, leadMinutes: number, now: number, timeZone = appTimeZone()) {
+  const today = dayKeyAt(new Date(now), timeZone);
+  if (day < today) return null;
+  const morning = MORNING.hour * 60 + MORNING.minute;
+  if (day > today && reminderFits(day, morning, leadMinutes, now, timeZone)) return clock(morning);
+  for (let minutes = 0; minutes < 24 * 60; minutes += SCHEDULE_STEP_MINUTES) {
+    if (reminderFits(day, minutes, leadMinutes, now, timeZone)) return clock(minutes);
+  }
+  return null;
+}
+
+export function reminderBlock(day: string, leadMinutes: number, now: number, timeZone = appTimeZone()) {
+  if (reminderTimeFor(day, leadMinutes, now, timeZone)) return null;
+  return day < dayKeyAt(new Date(now), timeZone) ? ("past" as const) : ("lead" as const);
+}
+
+export function isPastTime(day: string, time: string, now: number, timeZone = appTimeZone(), leadMinutes = 0) {
   const [hour, minute] = time.split(":").map(Number);
-  return wallClockAt(day, hour, minute, timeZone) <= now;
+  return !reminderFits(day, hour * 60 + minute, leadMinutes, now, timeZone);
+}
+
+export function pickTimeFor(day: string, now: number, timeZone = appTimeZone()) {
+  return day === dayKeyAt(new Date(now), timeZone) ? (reminderTimeFor(day, 0, now, timeZone) ?? clock(MORNING.hour * 60 + MORNING.minute)) : clock(MORNING.hour * 60 + MORNING.minute);
+}
+
+export function reminderBlockText(block: "past" | "lead", leadMinutes: number) {
+  if (block === "past") return "That day has passed. Move the task to today or later first, then set the reminder.";
+  return leadMinutes > 0 ? "Too late for this reminder on that day. Choose a shorter one or remove it." : "No time is left that day. Move the task to a later day first.";
 }

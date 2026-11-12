@@ -18,7 +18,6 @@ import {
 } from "@/lib/crm/task-pad";
 import { isTaskDuration } from "@/lib/crm/task-time";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { padDueHasTime } from "@/lib/task-pad";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 export async function detectTaskRecordsAction(text: string, companyId: string | null = null): Promise<PadDetection> {
@@ -71,7 +70,7 @@ export async function addPadTaskAction(input: {
   if (!user) return { error: "Sign in again." };
   try {
     const due = typeof input.dueAt === "string" && input.dueAt ? input.dueAt : null;
-    const timed = padDueHasTime(due);
+    const timed = Boolean(due && due.includes("T"));
     const created = await createTaskWithClickUp(
       user,
       {

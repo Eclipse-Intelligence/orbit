@@ -10,6 +10,7 @@ import type { Activity, UserActor } from "@/lib/crm/types";
 import { completeJson } from "@/lib/llm";
 import { mentionsIn, namedMentions, plainMentions } from "@/lib/mentions";
 import { londonParts } from "@/lib/task-pad";
+import { localInstant } from "@/lib/crm/task-time";
 
 const TYPES: PadActivityType[] = ["call", "email", "meeting", "note"];
 const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
@@ -90,7 +91,7 @@ export async function logPadActivity(actor: UserActor, input: PadActivityInput):
         actor,
         {
           title: input.followUp.title.trim().slice(0, 200),
-          ...(LOCAL.test(input.followUp.due) ? { dueAt: input.followUp.due } : { dueDate: input.followUp.due }),
+          ...(LOCAL.test(input.followUp.due) ? { dueAt: localInstant(input.followUp.due) } : { dueDate: input.followUp.due }),
           companyId,
           contactId,
           priority: "normal",
