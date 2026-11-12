@@ -54,15 +54,15 @@ export function requestSchedule(taskId: string) {
 }
 
 const OPTION =
-  "ui-style text-soft hover:text-foreground focus-visible:bg-white/5 focus-visible:text-foreground disabled:text-subtle h-auto w-full justify-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left font-normal focus-visible:ring-0 active:scale-100 disabled:opacity-100 hover:bg-white/5 [@media(pointer:coarse)]:min-h-11";
+  "ui-style text-soft hover:text-foreground focus-visible:bg-white/5 focus-visible:text-foreground disabled:text-subtle h-auto w-full justify-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left font-normal focus-visible:ring-0 active:scale-100 disabled:opacity-100 hover:bg-white/5 hit [@media(pointer:coarse)]:my-2";
 
 const PILL = "ui-style tabular-nums font-normal disabled:opacity-40";
 
-const TRIGGER = "inline-flex cursor-pointer items-center";
+const TRIGGER = "hit inline-flex cursor-pointer items-center";
 
 function DurationButtons({ value, onPick }: { value: number; onPick: (minutes: number) => void }) {
   return (
-    <div role="group" aria-label="Duration" className="grid grid-cols-6 gap-1 max-sm:grid-cols-3">
+    <div role="group" aria-label="Duration" className="grid grid-cols-6 gap-1 max-sm:grid-cols-3 [@media(pointer:coarse)]:gap-x-1.5 [@media(pointer:coarse)]:gap-y-3">
       {DURATION_CHOICES.map((minutes) => (
         <Button
           key={minutes}
@@ -72,7 +72,7 @@ function DurationButtons({ value, onPick }: { value: number; onPick: (minutes: n
           onClick={() => onPick(minutes)}
           className={cn(
             PILL,
-            "h-8 rounded-lg [@media(pointer:coarse)]:h-11",
+            "hit h-8 rounded-lg",
             minutes === value ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground" : "text-soft hover:text-foreground bg-white/[0.06] hover:bg-white/10",
           )}
         >
@@ -125,10 +125,10 @@ function CustomDuration({ value, onSet }: { value: number; onSet: (minutes: numb
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
           onChange={(event) => setText(event.target.value.replace(/[^\d]/g, "").slice(0, 3))}
-          className="h-8 w-[5em] [@media(pointer:coarse)]:h-11"
+          className="h-8 w-[5em]"
         />
         <span className="caption-style text-subtle flex-1">minutes</span>
-        <Button variant="secondary" size="sm" type="submit" className="[@media(pointer:coarse)]:h-11">
+        <Button variant="secondary" size="sm" type="submit" className="hit">
           Set
         </Button>
       </form>
@@ -217,17 +217,17 @@ function PickDateTime({ task, onSave, onCancel }: { task: ScheduleTask; onSave: 
         <label htmlFor={`${id}-date`} className="sr-only">
           Date
         </label>
-        <Input id={`${id}-date`} type="date" autoFocus value={date} onChange={(event) => setDate(event.target.value)} className="h-8 min-w-0 flex-1 [@media(pointer:coarse)]:h-11" />
+        <Input id={`${id}-date`} type="date" autoFocus value={date} onChange={(event) => setDate(event.target.value)} className="h-8 min-w-0 flex-1" />
         <label htmlFor={`${id}-time`} className="sr-only">
           Time
         </label>
-        <Input id={`${id}-time`} type="time" value={time} onChange={(event) => setTime(event.target.value)} className="h-8 w-[7em] [@media(pointer:coarse)]:h-11" />
+        <Input id={`${id}-time`} type="time" value={time} onChange={(event) => setTime(event.target.value)} className="h-8 w-[7em]" />
       </div>
       <div className="flex justify-end gap-2">
-        <Button variant="secondary" size="sm" type="button" onClick={onCancel} className="[@media(pointer:coarse)]:h-11">
+        <Button variant="secondary" size="sm" type="button" onClick={onCancel} className="hit">
           Cancel
         </Button>
-        <Button variant="primary" size="sm" type="submit" disabled={!ready} className="[@media(pointer:coarse)]:h-11">
+        <Button variant="primary" size="sm" type="submit" disabled={!ready} className="hit">
           Save
         </Button>
       </div>
@@ -477,12 +477,12 @@ function ReminderForm({ title, day, lead = 0, onSave, onRemove, onClose }: Promp
         onClose();
         onRemove();
       }}
-      className="[@media(pointer:coarse)]:h-11"
+      className="hit"
     >
       No reminder
     </Button>
   ) : (
-    <Button variant="secondary" size="sm" type="button" onClick={onClose} className="[@media(pointer:coarse)]:h-11">
+    <Button variant="secondary" size="sm" type="button" onClick={onClose} className="hit">
       Cancel
     </Button>
   );
@@ -514,7 +514,7 @@ function ReminderForm({ title, day, lead = 0, onSave, onRemove, onClose }: Promp
         Pick a time for the reminder
       </span>
       <span className="caption-style text-subtle">{title} has a day but no time. The reminder makes it timed.</span>
-      <div role="group" aria-label="Times" className="flex flex-wrap gap-1.5">
+      <div role="group" aria-label="Times" className="flex flex-wrap gap-1.5 [@media(pointer:coarse)]:gap-x-2 [@media(pointer:coarse)]:gap-y-4">
         {QUICK_TIMES.map((quick) => (
           <Button
             key={quick}
@@ -525,7 +525,7 @@ function ReminderForm({ title, day, lead = 0, onSave, onRemove, onClose }: Promp
             onClick={() => setTime(quick)}
             className={cn(
               PILL,
-              "h-7 rounded-full px-2.5 [@media(pointer:coarse)]:h-11",
+              "hit h-7 rounded-full px-2.5",
               time === quick ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground" : "text-soft hover:text-foreground bg-white/[0.06] hover:bg-white/10",
             )}
           >
@@ -543,11 +543,11 @@ function ReminderForm({ title, day, lead = 0, onSave, onRemove, onClose }: Promp
           type="time"
           value={time}
           onChange={(event) => setTime(event.target.value)}
-          className="h-8 w-[7em] [@media(pointer:coarse)]:h-11"
+          className="h-8 w-[7em]"
         />
         <span className="flex-1" />
         {dismiss}
-        <Button variant="primary" size="sm" type="submit" disabled={!ready} className="[@media(pointer:coarse)]:h-11">
+        <Button variant="primary" size="sm" type="submit" disabled={!ready} className="hit">
           Save
         </Button>
       </div>
