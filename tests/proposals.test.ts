@@ -287,7 +287,7 @@ describe("proposals", () => {
     assert.equal((await openDocument(token, { track: false }))!.content.logo, logo);
   });
 
-  it("puts the company's deal in the Proposal stage, or adds one there", async () => {
+  it("puts the company's deal in the Proposal stage, or adds one there, only once the proposal is sent", async () => {
     const stages = (await listPipeline(owner)).stages;
     const newStage = stages.find((stage) => stage.name === "New")!;
     const make = async (name: string) => {
@@ -298,6 +298,9 @@ describe("proposals", () => {
 
     const fresh = await make("Freshco");
     const added = await createDocument(owner, { templateId: proposalTemplateId, companyId: fresh.companyId, contactId: fresh.contactId, items: [{ productId: pilotId }, { productId: proId }] });
+    assert.equal((await listOpportunities(owner, { companyId: fresh.companyId })).data.length, 0);
+    assert.equal((await getDocument(owner, added)).opportunityId, null);
+    await sendDocument(owner, added, { email: false });
     const deals = (await listOpportunities(owner, { companyId: fresh.companyId })).data;
     assert.equal(deals.length, 1);
     assert.equal(deals[0].stageName, "Proposal");
@@ -309,7 +312,11 @@ describe("proposals", () => {
 
     const early = await make("Earlyco");
     const deal = (await createOpportunity(owner, { companyId: early.companyId, name: "Earlyco pilot", stageId: newStage.id })).body.opportunity;
-    await createDocument(owner, { templateId: proposalTemplateId, companyId: early.companyId, contactId: early.contactId, items: [{ productId: pilotId }] });
+    const earlyDraft = await createDocument(owner, { templateId: proposalTemplateId, companyId: early.companyId, contactId: early.contactId, items: [{ productId: pilotId }] });
+    const waiting = (await listOpportunities(owner, { companyId: early.companyId })).data;
+    assert.equal(waiting[0].stageName, "New");
+    assert.equal((await getDocument(owner, earlyDraft)).opportunityId, deal.id);
+    await sendDocument(owner, earlyDraft, { email: false });
     const moved = (await listOpportunities(owner, { companyId: early.companyId })).data;
     assert.equal(moved.length, 1);
     assert.equal(moved[0].id, deal.id);

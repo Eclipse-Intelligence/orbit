@@ -408,24 +408,6 @@ export async function createDocument(
       );
       if (open.rows.length === 1) opportunityId = open.rows[0].id;
     }
-    if (template.kind === "proposal") {
-      const totals = totalsOf(items);
-      const placed = await moveToProposalStageInDb(
-        db,
-        actor,
-        {
-          companyId: company.id,
-          contactId: contact.id,
-          companyName: company.name,
-          opportunityId,
-          value: Math.round((totals.one_off + totals.monthly * 12 + totals.yearly) * 100) / 100,
-          currency,
-          ownerId,
-        },
-        { ...provenance, operation: "proposal_stage" },
-      );
-      opportunityId = placed.opportunityId;
-    }
     const result = await db.query<{ id: string }>(
       `insert into crm.documents (workspace_id, kind, template_id, title, company_id, contact_id, opportunity_id, owner_id, currency, items, blocks, settings, valid_until, created_by)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14) returning id`,
@@ -696,6 +678,26 @@ export async function sendDocument(
         "insert into crm.document_links (workspace_id, document_id, version_id, email, token_hash, token_cipher) values ($1, $2, $3, $4, $5, $6)",
         [actor.workspaceId, id, versionId, built.contactEmail.toLowerCase(), hashToken(token), encryptSecret(token)],
       );
+    }
+    if (row.kind === "proposal") {
+      const totals = totalsOf(row.items);
+      const placed = await moveToProposalStageInDb(
+        db,
+        actor,
+        {
+          companyId: row.company_id,
+          contactId: row.contact_id,
+          companyName: row.company_name,
+          opportunityId: row.opportunity_id,
+          value: Math.round((totals.one_off + totals.monthly * 12 + totals.yearly) * 100) / 100,
+          currency: row.currency,
+          ownerId: row.owner_id,
+        },
+        { ...provenance, operation: "proposal_stage" },
+      );
+      if (placed.opportunityId && placed.opportunityId !== row.opportunity_id) {
+        await db.query("update crm.documents set opportunity_id = $2 where id = $1", [id, placed.opportunityId]);
+      }
     }
     const moved = await db.query(
       "update crm.documents set status = 'sent', current_version_id = $2, sent_at = now(), withdrawn_at = null, declined_at = null, decline_reason = null, updated_at = now() where id = $1 and status = 'draft' returning id",
