@@ -6,14 +6,31 @@ import { actionError } from "@/lib/companies";
 import { createTaskWithClickUp } from "@/lib/crm/clickup";
 import { isUuid } from "@/lib/crm/mutate";
 import { isReminderMinutes } from "@/lib/crm/reminder-options";
-import { detectPadRecords, parsePadWithAi, type PadAiParse, type PadDetection } from "@/lib/crm/task-pad";
+import {
+  detectPadRecords,
+  NO_PAD_DETECTION,
+  parsePadWithAi,
+  searchPadRecords,
+  type PadAiParse,
+  type PadDetection,
+  type PadOption,
+  type PadSearchKind,
+} from "@/lib/crm/task-pad";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
-export async function detectTaskRecordsAction(text: string): Promise<PadDetection> {
+export async function detectTaskRecordsAction(text: string, companyId: string | null = null): Promise<PadDetection> {
   const user = await getUserActor();
-  if (!user || typeof text !== "string") return { company: null, contact: null, opportunity: null };
-  return detectPadRecords(user, text);
+  if (!user || typeof text !== "string") return NO_PAD_DETECTION;
+  return detectPadRecords(user, text, { companyId: typeof companyId === "string" && isUuid(companyId) ? companyId : null });
+}
+
+const SEARCH_KINDS: PadSearchKind[] = ["contact", "company", "opportunity"];
+
+export async function searchTaskLinksAction(kind: PadSearchKind, query: string, companyId: string | null = null): Promise<PadOption[]> {
+  const user = await getUserActor();
+  if (!user || !SEARCH_KINDS.includes(kind) || typeof query !== "string") return [];
+  return searchPadRecords(user, kind, query, typeof companyId === "string" && isUuid(companyId) ? companyId : null);
 }
 
 export async function parseTaskWithAiAction(text: string): Promise<PadAiParse | null> {
@@ -32,8 +49,9 @@ function padLink(value: unknown) {
 }
 
 function padLinks(input: { companyId?: unknown; contactId?: unknown; opportunityId?: unknown }) {
-  if (input.companyId === undefined && input.contactId === undefined && input.opportunityId === undefined) return {};
-  return { companyId: padLink(input.companyId), contactId: padLink(input.contactId), opportunityId: padLink(input.opportunityId) };
+  return Object.fromEntries(
+    (["companyId", "contactId", "opportunityId"] as const).flatMap((key) => (input[key] === undefined ? [] : [[key, padLink(input[key])]])),
+  ) as { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
 }
 
 export async function addPadTaskAction(input: {

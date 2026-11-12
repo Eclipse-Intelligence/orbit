@@ -116,7 +116,13 @@ export default function RelationshipPanel({
       )}
 
       <DetailSection title="Tasks" className="shadow-none">
-        <TaskPad clickup={clickup} company={{ id: companyId, name: context.company.name }} members={members} viewerId={viewerId ?? null} />
+        <TaskPad
+          clickup={clickup}
+          company={{ id: companyId, name: context.company.name }}
+          placeholder={`Next thing to do with ${context.company.name}`}
+          members={members}
+          viewerId={viewerId ?? null}
+        />
         {viewer ? (
           <RecordTasks tasks={context.tasks} viewer={viewer} members={members} here={{ kind: "company", id: companyId }} />
         ) : (
