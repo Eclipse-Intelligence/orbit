@@ -184,7 +184,7 @@ function ActionTask({
   const overdue = Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
   const due = dueBadge ? taskDueState(task.dueAt, now) : null;
   const canChange = canChangeTaskAs(viewer, task);
-  const details = useTaskDetails(task, canChange);
+  const details = useTaskDetails(task, canChange, expanded);
   const flushDetails = useRef(details.flush);
   const wasExpanded = useRef(expanded);
   useEffect(() => {
@@ -204,6 +204,7 @@ function ActionTask({
   const handlers = useRef<SwipeHandlers>({});
   const armedBefore = useRef(false);
   const timers = useRef<number[]>([]);
+  const swiped = useRef<(() => void) | null>(null);
   const allowed = { left: Boolean(complete) && !completed, right: Boolean(remind) && !completed };
   const swipeable = !expanded && (allowed.left || allowed.right);
   const armed = offset !== 0 && swipeCommit(offset, 0, width, allowed) !== null;
@@ -228,8 +229,10 @@ function ActionTask({
         setDragging(false);
         if (commit === "left" && complete) {
           setOffset(-(row.current?.offsetWidth ?? width));
+          swiped.current = complete;
           timers.current.push(
             window.setTimeout(() => {
+              swiped.current = null;
               complete();
               setOffset(0);
             }, OUT_MS),
@@ -246,9 +249,13 @@ function ActionTask({
     const element = body.current;
     const pending = timers.current;
     const stop = element && swipeable ? watchSwipe(element, () => handlers.current) : undefined;
+    const leaving = swiped;
     return () => {
       stop?.();
       pending.forEach((timer) => window.clearTimeout(timer));
+      const finish = leaving.current;
+      leaving.current = null;
+      finish?.();
     };
   }, [swipeable]);
 

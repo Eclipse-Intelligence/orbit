@@ -616,7 +616,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const router = useRouter();
   const pathname = usePathname();
   const { mac } = useShortcuts();
-  const { covered, lift, tucked } = useScreenState();
+  const { covered, lift, tucked, beside } = useScreenState();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
@@ -1182,9 +1182,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   );
   const position = {
     "--assistant-lift": `${lift}px`,
+    "--assistant-beside": `${beside}px`,
   } as CSSProperties;
   const placement =
-    "fixed z-40 bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] left-3 right-[4.75rem] md:right-auto md:left-1/2 md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] sidebar-collapsed:lg:left-1/2";
+    "fixed z-40 bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] left-3 right-[4.75rem] md:right-auto md:left-1/2 md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width)-var(--assistant-beside))/2)] sidebar-collapsed:lg:left-[calc((100vw-var(--assistant-beside))/2)]";
 
   if (!open) {
     return (
@@ -1210,7 +1211,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     <div
       style={position}
       className={cn(
-        "fixed z-40 inset-x-2 top-16 bottom-[max(calc(env(safe-area-inset-bottom)+0.5rem),var(--assistant-lift))] md:inset-x-auto md:top-auto md:bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] md:left-1/2 md:w-[min(46rem,calc(100vw-2rem))] md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] lg:w-[min(46rem,calc(100vw-var(--sidebar-width)-3rem))] sidebar-collapsed:lg:left-1/2",
+        "fixed z-40 inset-x-2 top-16 bottom-[max(calc(env(safe-area-inset-bottom)+0.5rem),var(--assistant-lift))] md:inset-x-auto md:top-auto md:bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] md:left-1/2 md:w-[min(46rem,calc(100vw-2rem))] md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] lg:w-[min(46rem,calc(100vw-var(--sidebar-width)-var(--assistant-beside)-3rem))] sidebar-collapsed:lg:left-1/2",
         covered && "invisible",
       )}
     >

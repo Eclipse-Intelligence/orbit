@@ -25,14 +25,50 @@ if (!env.DEV_USER_EMAIL || !env.DEV_USER_PASSWORD) {
 }
 
 fs.mkdirSync(out, { recursive: true });
+const api = (route, init = {}) =>
+  fetch(`${base}/api/v1${route}`, { ...init, headers: { authorization: `Bearer ${env.CRM_AGENT_TOKEN}`, "content-type": "application/json", ...init.headers } }).catch(() => null);
+let sweepTask = null;
 if (env.CRM_AGENT_TOKEN) {
-  const seeded = await fetch(`${base}/api/v1/tasks`, {
+  const listed = await api("/companies?limit=1");
+  const company = listed?.ok ? ((await listed.json()).data ?? [])[0] : null;
+  const seeded = await api("/tasks", {
     method: "POST",
-    headers: { authorization: `Bearer ${env.CRM_AGENT_TOKEN}`, "content-type": "application/json" },
-    body: JSON.stringify({ title: "Sweep check task", dueAt: new Date(Date.now() + 2 * 3_600_000).toISOString(), companyId: null, contactId: null, opportunityId: null }),
-  }).catch(() => null);
-  if (!seeded?.ok) console.log(`could not add a task to check (${seeded?.status ?? "no answer"})`);
+    body: JSON.stringify({ title: "Sweep check task", dueAt: new Date(Date.now() + 2 * 3_600_000).toISOString(), companyId: company?.id ?? null, contactId: null, opportunityId: null }),
+  });
+  if (seeded?.ok) sweepTask = { id: (await seeded.json()).task.id, companyId: company?.id ?? null };
+  else console.log(`could not add a task to check (${seeded?.status ?? "no answer"})`);
 }
+
+async function swipe(page, id, distance) {
+  return page
+    .evaluate(
+      async ({ id, distance }) => {
+        const element = document.querySelector(`li[data-task-id="${id}"] > div`);
+        const box = element.getBoundingClientRect();
+        const y = box.top + box.height / 2;
+        const x = distance < 0 ? box.right - 40 : box.left + 40;
+        const touch = (cx) => new Touch({ identifier: 1, target: element, clientX: cx, clientY: y });
+        const fire = (type, cx) => element.dispatchEvent(new TouchEvent(type, { touches: type === "touchend" ? [] : [touch(cx)], changedTouches: [touch(cx)], bubbles: true, cancelable: true }));
+        fire("touchstart", x);
+        for (let step = 1; step <= 10; step += 1) {
+          fire("touchmove", x + (distance * step) / 10);
+          await new Promise((resolve) => setTimeout(resolve, 16));
+        }
+        fire("touchend", x + distance);
+        return true;
+      },
+      { id, distance },
+    )
+    .catch(() => false);
+}
+
+async function setVisibility(page, state) {
+  await page.evaluate((value) => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, state);
+}
+
 const browser = await engine.launch(launch);
 const problems = [];
 const check = (name, ok, detail = "") => {
@@ -136,30 +172,78 @@ for (const [device, viewport] of [
   await page.goto(`${base}/tasks`);
   await page.waitForTimeout(1200);
   check(`${device} tasks loads`, await visible(page.getByRole("heading", { name: "Tasks" })));
-  const taskRow = page.locator("li[data-task-id]").first();
-  check(`${device} tasks has an open task to check`, (await taskRow.count()) > 0, "set CRM_AGENT_TOKEN so the sweep can add one");
-  if ((await taskRow.count()) > 0) {
+  const sweepRow = sweepTask ? page.locator(`li[data-task-id="${sweepTask.id}"]`) : page.locator("li[data-task-id]").first();
+  check(`${device} tasks has the sweep task to check`, (await sweepRow.count()) > 0, (await sweepRow.count()) > 0 ? "" : "set CRM_AGENT_TOKEN so the sweep can add one");
+  if ((await sweepRow.count()) > 0) {
+    const id = await sweepRow.getAttribute("data-task-id");
+    const row = page.locator(`li[data-task-id="${id}"]`);
+    const toast = page.getByText("Task done.");
     check(`${device} tasks grouped by due date`, await visible(page.getByRole("heading", { name: /^(Overdue|Today|Upcoming|No date)/ })));
-    const doneId = await taskRow.getAttribute("data-task-id");
-    await taskRow.getByRole("button", { name: /^Mark .* done$/ }).tap();
+
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
     await page.waitForTimeout(500);
-    check(`${device} Done hides the task with Undo`, (await page.locator(`li[data-task-id="${doneId}"]`).count()) === 0 && (await visible(page.getByText("Task done."))));
+    check(`${device} Done hides the task with Undo`, (await row.count()) === 0 && (await visible(toast)));
     await page.getByRole("button", { name: "Undo" }).last().tap();
     await page.waitForTimeout(600);
-    check(`${device} Undo brings the task back`, (await page.locator(`li[data-task-id="${doneId}"]`).count()) === 1);
-    await taskRow.locator("button[aria-expanded]").first().tap();
-    await page.waitForTimeout(600);
-    const expanded = page.locator("li[data-task-id]:has(button[aria-label='Collapse'])");
-    check(`${device} task expands in place`, await visible(expanded.getByRole("button", { name: "Open", exact: true })));
-    check(`${device} expanded task no overflow`, await noHorizontalScroll());
-    await shot("task-expanded");
-    await expanded.getByRole("button", { name: "Open", exact: true }).tap();
+    check(`${device} Undo brings the task back`, (await row.count()) === 1);
+
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(400);
+    await setVisibility(page, "hidden");
     await page.waitForTimeout(800);
-    check(`${device} task panel opens`, await visible(page.getByRole("dialog", { name: "Task" })));
-    await shot("task-panel");
-    await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+    await setVisibility(page, "visible");
+    await page.waitForTimeout(800);
+    check(`${device} Undo still shows after the page comes back`, await visible(toast));
+    await page.getByRole("button", { name: "Undo" }).last().tap();
+    await page.waitForTimeout(2000);
+    check(`${device} Undo after the page was hidden reopens the task`, (await row.count()) === 1);
+
+    if (await swipe(page, id, -260)) {
+      await page.waitForTimeout(700);
+      check(`${device} swipe left is Done`, (await row.count()) === 0 && (await visible(toast)));
+      await page.getByRole("button", { name: "Undo" }).last().tap();
+      await page.waitForTimeout(600);
+      await swipe(page, id, 260);
+      await page.waitForTimeout(600);
+      check(`${device} swipe right is Remind me`, await visible(page.getByRole("dialog", { name: "Remind me" })));
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(400);
+    } else console.log(`skip ${device} swipes (this browser can't simulate touch)`);
+
+    await row.locator("button[aria-expanded]").first().tap();
     await page.waitForTimeout(600);
-    check(`${device} task panel closes`, !(await visible(page.getByRole("dialog", { name: "Task" }))));
+    check(`${device} task expands in place`, await visible(row.getByRole("button", { name: "Open", exact: true })));
+    check(`${device} expanded task no overflow`, await noHorizontalScroll());
+    const note = `Checked by the sweep ${Date.now()}`;
+    const description = row.getByRole("textbox", { name: "Description" });
+    await description.fill(note);
+    await description.evaluate((field) => field.blur());
+    await page.waitForTimeout(1000);
+    check(`${device} description saves`, await visible(row.getByRole("status").filter({ hasText: "Saved" })));
+    await shot("task-expanded");
+    await row.getByRole("button", { name: "Open", exact: true }).tap();
+    await page.waitForTimeout(800);
+    const panel = page.getByRole("dialog", { name: "Task" });
+    check(`${device} task panel opens as a modal`, (await visible(panel)) && (await panel.getAttribute("aria-modal")) === "true");
+    check(`${device} task panel shows the saved description`, (await panel.getByRole("textbox", { name: "Description" }).inputValue()) === note);
+    await shot("task-panel");
+    await panel.getByRole("button", { name: "Close" }).tap();
+    await page.waitForTimeout(600);
+    check(`${device} task panel closes`, !(await visible(panel)));
+
+    if (sweepTask?.companyId) {
+      await page.goto(`${base}/companies/${sweepTask.companyId}`);
+      await page.waitForTimeout(1500);
+      const recordRow = page.locator(`li[data-task-id="${id}"]`);
+      await recordRow.locator("button[aria-expanded]").first().tap();
+      await page.waitForTimeout(600);
+      await recordRow.getByRole("button", { name: "Open", exact: true }).tap();
+      await page.waitForTimeout(800);
+      check(`${device} record page task panel opens`, await visible(page.getByRole("dialog", { name: "Task" })));
+      await shot("record-task-panel");
+      await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+      await page.waitForTimeout(600);
+    } else console.log(`skip ${device} record page task panel (no company to link the sweep task to)`);
   }
   await page.goto(`${base}/calendar`);
   await page.waitForTimeout(1200);
@@ -184,6 +268,35 @@ for (const [device, viewport] of [
   check(`${device} no page errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
   await context.close();
 }
+
+{
+  const context = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/login`);
+  await page.fill('input[name="email"]', env.DEV_USER_EMAIL);
+  await page.fill('input[name="password"]', env.DEV_USER_PASSWORD);
+  await page.click('button[type="submit"]');
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+  await page.goto(`${base}/tasks`);
+  await page.waitForTimeout(1500);
+  const first = page.locator("li[data-task-id]").first();
+  if ((await first.count()) > 0) {
+    await first.locator("button[aria-expanded]").first().click();
+    await page.waitForTimeout(400);
+    await first.getByRole("button", { name: "Open", exact: true }).click();
+    await page.waitForTimeout(900);
+    const panel = page.getByRole("dialog", { name: "Task" });
+    const panelBox = await panel.boundingBox();
+    const fab = page.locator('button[aria-label*="add" i]').last();
+    const fabBox = (await fab.count()) > 0 && (await fab.isVisible()) ? await fab.boundingBox() : null;
+    check("desktop task panel sits beside the list", (await panel.isVisible()) && (await panel.getAttribute("aria-modal")) !== "true");
+    check("desktop quick add stays usable beside the panel", Boolean(panelBox && fabBox && fabBox.x + fabBox.width <= panelBox.x));
+    await page.screenshot({ path: path.join(out, "desktop-task-panel.png") });
+  }
+  await context.close();
+}
+
+if (sweepTask) await api(`/tasks/${sweepTask.id}`, { method: "DELETE" });
 
 console.log(problems.length ? `\n${problems.length} problems. Screenshots are in ${out}` : `\nall checks passed. Screenshots are in ${out}`);
 await browser.close();

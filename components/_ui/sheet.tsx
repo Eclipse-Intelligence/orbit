@@ -6,13 +6,11 @@ import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
-type SheetMode = { modal: boolean; dimmed: boolean };
+const SheetModeContext = createContext(true);
 
-const SheetModeContext = createContext<SheetMode>({ modal: true, dimmed: true });
-
-function Sheet({ modal = true, dimmed = modal, ...props }: ComponentProps<typeof SheetPrimitive.Root> & { dimmed?: boolean }) {
+function Sheet({ modal = true, ...props }: ComponentProps<typeof SheetPrimitive.Root>) {
   return (
-    <SheetModeContext.Provider value={{ modal, dimmed }}>
+    <SheetModeContext.Provider value={modal}>
       <SheetPrimitive.Root data-slot="sheet" modal={modal} {...props} />
     </SheetModeContext.Provider>
   );
@@ -63,24 +61,15 @@ function SheetContent({
   onInteractOutside,
   ...props
 }: SheetContentProps) {
-  const { modal, dimmed } = useContext(SheetModeContext);
-  const beside = !modal && !dimmed;
+  const modal = useContext(SheetModeContext);
+  const beside = !modal;
   return (
     <SheetPrimitive.Portal>
-      {modal ? (
-        <SheetOverlay />
-      ) : (
-        dimmed && (
-          <div
-            aria-hidden
-            data-slot="sheet-overlay"
-            className="animate-in fade-in-0 ease-power3-out fixed inset-0 z-50 bg-black/60 backdrop-blur-[6px] duration-350"
-          />
-        )
-      )}
+      {modal && <SheetOverlay />}
       <SheetPrimitive.Content
         data-slot="sheet-content"
         data-nonmodal={beside ? "" : undefined}
+        aria-modal={modal ? true : undefined}
         onInteractOutside={(event) => {
           onInteractOutside?.(event);
           if (beside) event.preventDefault();

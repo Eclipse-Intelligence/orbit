@@ -147,6 +147,29 @@ describe("task list", () => {
     assert.equal(updates.length, 0);
   });
 
+  it("checks where a beacon came from and caps its size", async () => {
+    const task = (await createTask(mark, { title: "Confirm the venue" })).body.task;
+    const request = (headers: Record<string, string>, ids: string[] = [task.id]) =>
+      new Request("http://internal:3000/api/tasks/complete", { method: "POST", headers, body: JSON.stringify({ ids }) });
+    assert.equal((await completeTasksFromBeacon(request({}), mark)).status, 403);
+    assert.equal((await completeTasksFromBeacon(request({ "sec-fetch-site": "cross-site" }), mark)).status, 403);
+    assert.equal((await completeTasksFromBeacon(request({ origin: "https://orbit.example", "x-forwarded-host": "evil.example" }), mark)).status, 403);
+    const many = Array.from({ length: 51 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
+    assert.equal((await completeTasksFromBeacon(request({ "sec-fetch-site": "same-origin" }, many), mark)).status, 400);
+    assert.equal((await getTask(mark, task.id)).completedAt, null);
+    const forwarded = await completeTasksFromBeacon(request({ origin: "https://orbit.example", "x-forwarded-host": "orbit.example" }), mark);
+    assert.deepEqual(forwarded.completed, [task.id]);
+    const other = (await createTask(mark, { title: "Book the room" })).body.task;
+    const fetched = await completeTasksFromBeacon(request({ "sec-fetch-site": "same-origin" }, [other.id]), mark);
+    assert.deepEqual(fetched.completed, [other.id]);
+  });
+
+  it("refuses a reopen from someone who can't change the task, even when there is nothing to do", async () => {
+    const task = (await createTask(mark, { title: "Draft the agenda", ownerId: mark.userId })).body.task;
+    await addTaskParticipants(mark, task.id, [sam.userId]);
+    await assert.rejects(reopenTask(sam, task.id), /Only the assignee/);
+  });
+
   it("completes a task only once when two completions race", async () => {
     const task = (await createTask(mark, { title: "Send the signed order form" })).body.task;
     await Promise.all([completeTask(mark, task.id), completeTask(mark, task.id), completeTask(mark, task.id)]);

@@ -36,6 +36,7 @@ export default function RecordTasks({
   const [panelId, setPanelId] = useState<string | null>(null);
   const [kept, setKept] = useState<Task | null>(null);
   const team = useMemo<AssignableMember[]>(() => (members.length > 1 ? members.map((member) => ({ id: member.id, name: member.name })) : NO_MEMBERS), [members]);
+  const place = useMemo<TitleHere>(() => ({ kind: here.kind, id: here.id }), [here.kind, here.id]);
   const remaining = tasks.filter((task) => !done.has(task.id));
   const shown = limit ? remaining.slice(0, limit) : remaining;
   const listed = panelId ? (tasks.find((task) => task.id === panelId) ?? null) : null;
@@ -103,7 +104,7 @@ export default function RecordTasks({
               canComplete={canChangeTaskAs(viewer, task) && !task.completedAt}
               onOpen={onOpen}
               canLink={canChangeTaskAs(viewer, task) && !task.completedAt}
-              here={here}
+              here={place}
             />
           ))}
         </ul>

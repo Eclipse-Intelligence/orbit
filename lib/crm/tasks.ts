@@ -678,6 +678,7 @@ export async function reopenTask(
       await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
       const current = await readTask(db, id);
       if (!current) throw notFound("task");
+      if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
       if (!current.completed_at || current.archived_at) return { task: mapTask(current) };
       const updated = await applyTask(db, actor, current, prepareTask({ completed: false }, "patch"), provenance);
       return { task: updated.task };

@@ -111,6 +111,7 @@ export function useScreenState() {
   const [covered, setCovered] = useState(false);
   const [lift, setLift] = useState(0);
   const [tucked, setTucked] = useState(false);
+  const [beside, setBeside] = useState(0);
 
   useEffect(() => {
     let frame = 0;
@@ -121,6 +122,7 @@ export function useScreenState() {
       frame = 0;
       setCovered(modalOpen());
       setTucked(document.querySelector("[data-quick-add-hide]") !== null);
+      setBeside(Math.round(Math.max(0, ...[...document.querySelectorAll<HTMLElement>('[data-nonmodal][data-state="open"]')].map((node) => node.getBoundingClientRect().width))));
       const nodes = [...document.querySelectorAll<HTMLElement>("[data-quick-add-avoid]")];
       if (nodes.length !== watched.length || nodes.some((node, index) => node !== watched[index])) {
         resize.disconnect();
@@ -151,7 +153,7 @@ export function useScreenState() {
     };
   }, []);
 
-  return { covered, lift, tucked };
+  return { covered, lift, tucked, beside };
 }
 
 export default function QuickAdd({ viewerId }: { viewerId: string }) {
@@ -166,7 +168,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   const [opening, setOpening] = useState(0);
   const choosing = useRef(false);
   const returnTo = useRef<HTMLElement | null>(null);
-  const { covered, lift, tucked } = useScreenState();
+  const { covered, lift, tucked, beside } = useScreenState();
 
   const loadSetup = useCallback(() => {
     quickAddSetupAction().then(setSetup, () => undefined);
@@ -227,9 +229,9 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   return (
     <>
       <div
-        style={{ "--quick-add-lift": `${lift}px` } as CSSProperties}
+        style={{ "--quick-add-lift": `${lift}px`, "--quick-add-beside": `${beside}px` } as CSSProperties}
         className={cn(
-          "pointer-events-none fixed right-[calc(env(safe-area-inset-right)+1rem)] bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--quick-add-lift))] z-40 flex flex-col items-end gap-2 transition-[bottom] duration-200 ease-power3-out",
+          "pointer-events-none fixed right-[calc(env(safe-area-inset-right)+1rem+var(--quick-add-beside))] bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--quick-add-lift))] z-40 flex flex-col items-end gap-2 transition-[bottom] duration-200 ease-power3-out",
           covered && "invisible",
         )}
       >

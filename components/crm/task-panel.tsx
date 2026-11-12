@@ -166,6 +166,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
       className={cn("w-full data-[keyboard]:pb-0 md:w-[min(640px,85vw)] md:max-w-[640px] xl:w-[480px]", instant && "data-[state=open]:animate-none")}
       onKeyDown={onKeyDown}
       onEscapeKeyDown={(event) => {
+        if (event.isComposing) {
+          event.preventDefault();
+          return;
+        }
         const focused = document.activeElement;
         if (focused instanceof HTMLElement && !sheet?.contains(focused) && focused.closest(FIELD)) {
           event.preventDefault();
@@ -186,7 +190,8 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
       }}
       onOpenAutoFocus={(event) => {
         event.preventDefault();
-        if (instant) return;
+        const lost = !document.activeElement || document.activeElement === document.body;
+        if (instant && !lost) return;
         const content = event.target as HTMLElement | null;
         const first = content?.querySelector<HTMLElement>('button[aria-label="Edit title"], textarea, input');
         (first ?? content)?.focus?.({ preventScroll: true });
@@ -270,14 +275,12 @@ export default function TaskPanel({
   open,
   onOpenChange,
   modal = true,
-  dimmed = modal,
   ...rest
 }: Omit<PanelProps, "onClose" | "task"> & {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   modal?: boolean;
-  dimmed?: boolean;
 }) {
   const shown = open && task ? task.id : null;
   const [last, setLast] = useState<string | null>(shown);
@@ -287,7 +290,7 @@ export default function TaskPanel({
     setInstant(Boolean(last && shown));
   }
   return (
-    <Sheet open={open && Boolean(task)} onOpenChange={onOpenChange} modal={modal} dimmed={dimmed}>
+    <Sheet open={open && Boolean(task)} onOpenChange={onOpenChange} modal={modal}>
       {task && <TaskPanelBody key={task.id} task={task} instant={instant} onClose={() => onOpenChange(false)} {...rest} />}
     </Sheet>
   );

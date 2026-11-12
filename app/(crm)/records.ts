@@ -20,7 +20,7 @@ import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
-import { completeTask, listDueReminders, updateTask, type DueReminder } from "@/lib/crm/tasks";
+import { completeTask, getTask, listDueReminders, reopenTask, updateTask, type DueReminder } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -287,6 +287,30 @@ export async function completeTaskAction(
   } catch (error) {
     return actionError(error);
   }
+}
+
+export async function reopenTaskAction(id: string): Promise<RecordActionState> {
+  const user = await requireUser();
+  if (!isUuid(id)) return { error: "Couldn't undo. Try again." };
+  try {
+    await reopenTask(user, id, { provenance: { operation: "reopen_task", source: "web" } });
+    pushLater(user, id);
+    refresh();
+    return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function openTaskIdsAction(ids: string[]): Promise<{ open?: string[]; error?: string }> {
+  const user = await requireUser();
+  const wanted = [...new Set((Array.isArray(ids) ? ids : []).filter((id): id is string => typeof id === "string" && isUuid(id)))].slice(0, 50);
+  const open: string[] = [];
+  for (const id of wanted) {
+    const task = await getTask(user, id).catch(() => null);
+    if (task && !task.completedAt && !task.archivedAt) open.push(id);
+  }
+  return { open };
 }
 
 export async function remindTaskAction(id: string, at: string): Promise<RecordActionState> {

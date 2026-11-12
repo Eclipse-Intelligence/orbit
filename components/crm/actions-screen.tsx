@@ -254,7 +254,11 @@ export default function ActionsScreen({
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
   }, []);
 
+  const follow = useRef(0);
+  const cancelFollow = useCallback(() => window.clearTimeout(follow.current), []);
+
   const closePanel = useCallback(() => {
+    window.clearTimeout(follow.current);
     if (openedHere.current) {
       openedHere.current = false;
       window.history.back();
@@ -286,7 +290,29 @@ export default function ActionsScreen({
     const wasActive = row?.dataset.kbActive === "true";
     setExpandedId((current) => (current === task.id ? null : current));
     markDone(task);
-    if (wasActive && following) window.requestAnimationFrame(() => activateRow(following));
+    if (!wasActive) return;
+    window.requestAnimationFrame(() => {
+      if (following) activateRow(following);
+      else listRef.current?.focus({ preventScroll: true });
+    });
+  }
+
+  function completeFromPanel(task: Task) {
+    if (done.has(task.id)) return;
+    const rows = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])];
+    const index = rows.findIndex((row) => row.dataset.taskId === task.id);
+    const following = index >= 0 ? (rows[index + 1] ?? rows[index - 1] ?? null) : null;
+    setExpandedId((current) => (current === task.id ? null : current));
+    markDone(task);
+    cancelFollow();
+    const next = following?.dataset.taskId;
+    if (!following || !next) {
+      closePanel();
+      return;
+    }
+    activeRow()?.removeAttribute("data-kb-active");
+    following.setAttribute("data-kb-active", "true");
+    openPanel(next);
   }
 
   async function assign(id: string, ownerId: string) {
@@ -315,8 +341,14 @@ export default function ActionsScreen({
           ...group.tasks.map((task) => ({ kind: "task" as const, key: task.id, task })),
         ])
       : shownTasks.map((task) => ({ kind: "task" as const, key: task.id, task }));
-  const panelOpen = Boolean(panelTask);
-  const beside = desktop === true;
+  const panelVisible = Boolean(panelTask) && desktop !== null;
+  const [panelModal, setPanelModal] = useState(true);
+  const [latchedOpen, setLatchedOpen] = useState(false);
+  if (latchedOpen !== panelVisible) {
+    setLatchedOpen(panelVisible);
+    if (panelVisible) setPanelModal(desktop !== true);
+  }
+  const panelBeside = panelVisible && !panelModal;
 
   function activeTask() {
     if (inPanel()) return null;
@@ -326,32 +358,31 @@ export default function ActionsScreen({
   }
 
   function toggle(task: Task) {
-    if (panelOpen && beside) {
+    if (panelBeside) {
       openPanel(task.id);
       return;
     }
     setExpandedId((current) => (current === task.id ? null : task.id));
   }
 
-  const latest = useRef({ toggle, complete, remind, openPanel, assign });
+  const latest = useRef({ toggle, complete, completeFromPanel, remind, openPanel, assign });
   useEffect(() => {
-    latest.current = { toggle, complete, remind, openPanel, assign };
+    latest.current = { toggle, complete, completeFromPanel, remind, openPanel, assign };
   });
   const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
   const onComplete = useCallback((task: Task) => latest.current.complete(task), []);
   const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
   const onOpen = useCallback((task: Task) => latest.current.openPanel(task.id), []);
   const onAssign = useCallback((task: Task, ownerId: string) => void latest.current.assign(task.id, ownerId), []);
-  const onPanelComplete = useCallback((task: Task) => latest.current.complete(task), []);
+  const onPanelComplete = useCallback((task: Task) => latest.current.completeFromPanel(task), []);
 
-  const follow = useRef(0);
   useEffect(() => () => window.clearTimeout(follow.current), []);
   function followRow(row: HTMLElement) {
     const id = row.dataset.taskId;
     if (!id) return;
     window.clearTimeout(follow.current);
     follow.current = window.setTimeout(() => {
-      if (panelOpen && beside) openPanel(id);
+      if (panelBeside) openPanel(id);
       else if (expandedId) setExpandedId(id);
     }, FOLLOW_MS);
   }
@@ -377,6 +408,7 @@ export default function ActionsScreen({
   });
   useShortcut("task-collapse", () => {
     if (!expandedId || inPanel()) return false;
+    cancelFollow();
     const row = listRef.current?.querySelector<HTMLElement>(`[data-task-id="${expandedId}"]`);
     setExpandedId(null);
     if (row && row.contains(document.activeElement) && document.activeElement !== row) activateRow(row);
@@ -451,7 +483,10 @@ export default function ActionsScreen({
       )}
       <div
         ref={listRef}
-        className="relative flex min-h-0 flex-1 flex-col"
+        tabIndex={-1}
+        role="group"
+        aria-label="Tasks"
+        className="relative flex min-h-0 flex-1 flex-col outline-none"
         onFocus={(event) => setSelected(Boolean((event.target as HTMLElement).closest("[data-task-id]")))}
         onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSelected(false);
@@ -527,7 +562,7 @@ export default function ActionsScreen({
       </div>
       <TaskPanel
         task={panelTask ?? kept}
-        open={Boolean(panelTask) && desktop !== null}
+        open={panelVisible}
         onOpenChange={(open) => {
           if (!open) closePanel();
         }}
@@ -535,8 +570,7 @@ export default function ActionsScreen({
         members={members}
         tagged={allTagged[(panelTask ?? kept)?.id ?? ""] ?? []}
         admins={admins}
-        modal={false}
-        dimmed={!beside}
+        modal={panelModal}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}
       />

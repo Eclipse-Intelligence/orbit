@@ -144,7 +144,7 @@ function dropDraft(id: string, field: "title" | "text") {
   if (draft.title === undefined && draft.text === undefined) drafts.delete(id);
 }
 
-export function useTaskDetails(task: Task, canChange: boolean) {
+export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
   const router = useRouter();
   const composer = useComposer();
   const source = sourceOf(task);
@@ -158,6 +158,13 @@ export function useTaskDetails(task: Task, canChange: boolean) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const sent = useRef({ title: source.title, text: source.text });
+  const visible = useRef(shown);
+  useEffect(() => {
+    visible.current = shown;
+    return () => {
+      visible.current = false;
+    };
+  }, [shown]);
   if (seen.title !== source.title || seen.text !== source.text || seen.due !== source.due || seen.reminder !== source.reminder || seen.ownerId !== source.ownerId) {
     setSeen(source);
     if (title.trim() === seen.title) setTitle(source.title);
@@ -179,7 +186,7 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     }
     if (result.error) {
       setError(result.error);
-      composer.showToast({ message: result.error, tone: "alert" });
+      if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
       return false;
     }
     setSaved(true);
@@ -193,10 +200,14 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     const next = title.trim();
     if (!next) {
       setTitle(sent.current.title);
+      dropDraft(task.id, "title");
       return;
     }
     const previous = sent.current.title;
-    if (next === previous) return;
+    if (next === previous) {
+      dropDraft(task.id, "title");
+      return;
+    }
     sent.current.title = next;
     void save({ title: next }).then((ok) => {
       if (ok) {
@@ -212,7 +223,10 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     if (!canChange) return;
     const next = text.trim();
     const previous = sent.current.text;
-    if (next === previous) return;
+    if (next === previous) {
+      dropDraft(task.id, "text");
+      return;
+    }
     sent.current.text = next;
     void save({ description: replaceDescriptionText(task.description, next) }).then((ok) => {
       if (ok) {
@@ -233,7 +247,14 @@ export function useTaskDetails(task: Task, canChange: boolean) {
   useEffect(() => {
     latestFlush.current = flush;
   });
-  useEffect(() => () => latestFlush.current(), []);
+  useEffect(() => {
+    const leave = () => latestFlush.current();
+    window.addEventListener("pagehide", leave);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      latestFlush.current();
+    };
+  }, []);
 
   function changeDue(value: string) {
     const before = { due, reminder };
@@ -261,7 +282,7 @@ export function useTaskDetails(task: Task, canChange: boolean) {
     setBusy(false);
     if (result.error) {
       setError(result.error);
-      composer.showToast({ message: result.error, tone: "alert" });
+      if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
     } else router.refresh();
   }
 
