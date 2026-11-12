@@ -146,7 +146,7 @@ export function registerMailTools(server: McpServer, actor: UserActor, options: 
     "mail_save_draft",
     {
       description:
-        `Save an email as a draft in Outlook and Orbit without sending it, for the person to review in Mail${options.canSend ? " or for mail_send to send later by its draft_id" : " and send"}. mode is new, reply, reply_all or forward; replies and forwards need message_id (from mail_get_thread). body is plain text; Orbit adds the signature. Pass draft_id to update a draft you saved earlier.`,
+        `Save an email as a draft in Outlook and Orbit without sending it, for the person to review in Mail${options.canSend ? " or for mail_send to send later by its draft_id" : " and send"}. mode is new, reply, reply_all or forward; replies and forwards need message_id (from mail_get_thread). body is plain text; Orbit adds the signature. Pass draft_id to update a draft you saved earlier. A draft the person shared with teammates keeps its subject and message: a call that changes them is refused, and its other fields still save.`,
       inputSchema: {
         mode: z.enum(["new", "reply", "reply_all", "forward"]),
         message_id: z.uuid().optional(),

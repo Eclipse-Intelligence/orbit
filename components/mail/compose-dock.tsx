@@ -98,6 +98,7 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
     followUpDays: payload.followUpDays,
     followUpBody: payload.followUpBody,
     shareId: payload.shareId ?? null,
+    shareBase: payload.shareBase ?? null,
   };
 }
 
@@ -469,6 +470,15 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       const id = ++toastCounter.current;
       const timer = window.setTimeout(() => deliver(id), UNDO_MS);
       outgoing.current.set(id, { payload, timer, ...meta });
+      payload.catch((problem: unknown) => {
+        const item = outgoing.current.get(id);
+        if (!item) return;
+        window.clearTimeout(item.timer);
+        outgoing.current.delete(id);
+        dismiss(id);
+        item.onUndone?.();
+        handedBack(problem, item.track);
+      });
       setToasts((current) => [
         ...current.slice(-2),
         {
@@ -500,7 +510,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       ]);
       toastTimers.current.set(id, window.setTimeout(() => dismiss(id), UNDO_MS));
     },
-    [deliver, dismiss, openComposer],
+    [deliver, dismiss, openComposer, handedBack],
   );
 
   const scheduleSend = useCallback(

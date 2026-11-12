@@ -67,6 +67,8 @@ export default function SharedDraftEditor({
   const [save, setSave] = useState<Save>({ kind: "idle" });
   const latest = useRef({ text, base, locked: true });
   const seen = useRef<number | null>(null);
+  const asked = useRef(0);
+  const applied = useRef(0);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const locked = !draft || draft.state !== "editing";
   const dirty = Boolean(base) && !sameText(base!.text, text);
@@ -76,9 +78,11 @@ export default function SharedDraftEditor({
   });
 
   const load = useCallback(() => {
+    const ask = ++asked.current;
     fetchSharedDraft(shareId)
       .then((fresh) => {
-        if (!newerVersion(seen.current, fresh.version)) return;
+        if (ask < applied.current || !newerVersion(seen.current, fresh.version)) return;
+        applied.current = ask;
         seen.current = fresh.version;
         const freshText = textOf(fresh);
         const previous = latest.current.base;
@@ -114,10 +118,12 @@ export default function SharedDraftEditor({
       setSave({ kind: "saving" });
       try {
         const saved = await saveSharedDraftText(shareId, changes, from.version);
-        seen.current = Math.max(seen.current ?? 0, saved.version);
-        const settled = { text: wanted, version: saved.version };
-        latest.current = { ...latest.current, base: settled };
-        setBase(settled);
+        if (saved.version >= (seen.current ?? 0)) {
+          seen.current = saved.version;
+          const settled = { text: wanted, version: saved.version };
+          latest.current = { ...latest.current, base: settled };
+          setBase(settled);
+        }
         setSave({ kind: "saved" });
       } catch (error) {
         const changed = error instanceof DraftRequestError && error.detail.changed;
@@ -141,14 +147,20 @@ export default function SharedDraftEditor({
       const changes = from && !blocked ? textChanges(from.text, wanted) : null;
       if (changes && from) void saveSharedDraftText(shareId, changes, from.version, true).catch(() => undefined);
     };
+    const hidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
     window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", hidden);
     return () => {
       window.removeEventListener("pagehide", flush);
-      flush();
+      document.removeEventListener("visibilitychange", hidden);
+      void chain.current.then(flush);
     };
   }, [shareId]);
 
   const title = ownerDraftTitle(owner);
+  const subjectShown = draft?.mode === "new" || draft?.mode === "forward";
   const gone = draft?.state === "sent" || draft?.state === "discarded" || draft?.state === "none";
   const everyone = [...people.filter((person) => person.owner), ...people.filter((person) => !person.owner)];
   const status = save.kind === "saving" ? "Saving…" : save.kind === "saved" && !dirty ? "Saved" : "";
@@ -164,6 +176,11 @@ export default function SharedDraftEditor({
       </div>
       <div className="flex flex-col gap-1 px-4 pb-2">
         {draft && <SharedDraftStateLine draft={draft} owner={owner} />}
+        {loadError && draft && (
+          <p role="alert" className="caption-style text-danger">
+            {loadError}
+          </p>
+        )}
         {loadError && !draft && (
           <div className="flex flex-col items-start gap-2">
             <p role="alert" className="caption-style text-danger">
@@ -199,6 +216,8 @@ export default function SharedDraftEditor({
                 </div>
               )}
             </dl>
+            {subjectShown ? (
+              <>
             <label htmlFor={`${id}-subject`} className="sr-only">
               Subject
             </label>
@@ -211,6 +230,10 @@ export default function SharedDraftEditor({
               placeholder="Subject"
               className={cn("text-foreground placeholder:text-subtle mt-1 h-8 min-w-0 bg-transparent text-[16px] font-medium outline-none", locked && "caret-transparent")}
             />
+              </>
+            ) : (
+              <p className="mt-1 truncate text-[16px] font-medium">{text.subject || "(no subject)"}</p>
+            )}
             <BodyEditor
               value={text.body}
               onChange={(body) => setText((existing) => ({ ...existing, body }))}

@@ -105,7 +105,8 @@ begin
   if v_share.id is null then
     insert into crm.mail_shares (owner_user_id, source_id, thread_key, draft_id)
       values (p_user, v_draft.source_id, null, p_draft)
-      returning * into v_share;
+      on conflict (draft_id) where draft_id is not null do nothing;
+    select s.* into v_share from crm.mail_shares s where s.draft_id = p_draft and s.owner_user_id = p_user for update;
   elsif v_share.draft_id is null then
     update crm.mail_shares s set draft_id = p_draft, draft_state = null, draft_held_until = null, draft_version = s.draft_version + 1
       where s.id = v_share.id;
@@ -173,6 +174,9 @@ begin
     or (p_user <> v_share.owner_user_id and coalesce(v_share.draft_held_until > now(), false)) then
     raise exception '% is sending. Read only.', v_owner using errcode = '55006';
   end if;
+  if p_user <> v_share.owner_user_id and v_draft.mode in ('reply', 'reply_all') and p_subject is not null and p_subject is distinct from coalesce(v_draft.subject, '') then
+    raise exception 'Only % can change the subject of a reply.', v_owner using errcode = '22023';
+  end if;
   if p_base is not null and p_base <> v_share.draft_version then
     raise exception 'This draft changed. Saving again.' using errcode = '40001';
   end if;
@@ -213,6 +217,9 @@ set search_path = ''
 as $$
   select s.owner_user_id,
     case
+      when d.id is null and s.draft_state = 'sent' and s.sent_internet_id is not null and exists (
+        select 1 from private.mail_share_messages(s.id) m where m.internet_message_id = s.sent_internet_id
+      ) then 'none'
       when d.id is null then coalesce(s.draft_state, 'none')
       when d.send_error is not null then 'failed'
       when d.send_at is not null then 'scheduled'
@@ -268,7 +275,7 @@ begin
   if p_hold and p_version is not null and p_version <> v_share.draft_version then
     raise exception 'The draft changed. Check it, then send.' using errcode = '40001';
   end if;
-  update crm.mail_shares s set draft_held_until = case when p_hold then now() + interval '2 minutes' end where s.id = v_share.id;
+  update crm.mail_shares s set draft_held_until = case when p_hold then now() + interval '2 minutes' end, draft_version = s.draft_version + 1 where s.id = v_share.id;
   return query select v_share.id, array(select m.user_id from crm.mail_share_members m where m.share_id = v_share.id);
 end;
 $$;
@@ -293,6 +300,36 @@ grant execute on function private.mail_share_draft_members(uuid, uuid) to crm_ap
 
 drop function if exists private.mail_share_draft_closed(uuid, uuid, text, text, text);
 
+create or replace function private.mail_share_follow_sent_now(p_user uuid, p_share uuid)
+returns boolean
+language sql
+security definer
+set search_path = ''
+as $$
+  with found as (
+    select m.thread_key
+    from crm.mail_shares s
+    join crm.mail_messages m on m.user_id = s.owner_user_id and m.source_id = s.source_id
+      and coalesce(m.sent_at, m.received_at, m.created_at) > now() - interval '2 days'
+      and m.internet_message_id = s.sent_internet_id and not m.is_draft and m.thread_key is not null
+    where s.id = p_share and s.owner_user_id = p_user and s.thread_key is null and s.sent_internet_id is not null
+      and not exists (
+        select 1 from crm.mail_shares o
+        where o.owner_user_id = p_user and o.source_id = s.source_id and o.thread_key = m.thread_key
+      )
+    order by m.thread_key
+    limit 1
+  ), moved as (
+    update crm.mail_shares s set thread_key = found.thread_key
+      from found where s.id = p_share and s.owner_user_id = p_user and s.thread_key is null
+      returning s.id
+  )
+  select exists (select 1 from moved)
+$$;
+
+revoke all on function private.mail_share_follow_sent_now(uuid, uuid) from public;
+grant execute on function private.mail_share_follow_sent_now(uuid, uuid) to crm_app;
+
 create or replace function private.mail_share_draft_thread(p_user uuid, p_share uuid, p_thread_key text)
 returns boolean
 language sql
@@ -300,7 +337,7 @@ security definer
 set search_path = ''
 as $$
   with moved as (
-    update crm.mail_shares s set thread_key = p_thread_key, sent_internet_id = null
+    update crm.mail_shares s set thread_key = p_thread_key
       where s.id = p_share and s.owner_user_id = p_user and s.thread_key is null
         and p_thread_key is not null and char_length(p_thread_key) between 1 and 450
         and not exists (
@@ -325,7 +362,7 @@ as $$
     select distinct on (s.id) s.id, m.thread_key
     from crm.mail_shares s
     join crm.mail_messages m on m.source_id = s.source_id and m.thread_key = any(p_thread_keys) and m.user_id = s.owner_user_id
-      and m.internet_message_id = s.sent_internet_id
+      and m.internet_message_id = s.sent_internet_id and not m.is_draft
     where s.owner_user_id = p_user and s.source_id = p_source and s.thread_key is null and s.sent_internet_id is not null
       and not exists (
         select 1 from crm.mail_shares o
@@ -335,7 +372,7 @@ as $$
   ), found as (
     select distinct on (matched.thread_key) matched.id, matched.thread_key from matched order by matched.thread_key, matched.id
   )
-  update crm.mail_shares s set thread_key = found.thread_key, sent_internet_id = null
+  update crm.mail_shares s set thread_key = found.thread_key
     from found where s.id = found.id
     returning s.id, array(select sm.user_id from crm.mail_share_members sm where sm.share_id = s.id)
 $$;

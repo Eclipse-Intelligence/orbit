@@ -261,7 +261,7 @@ describe("remind me, send later and follow-ups", () => {
     assert.equal(racing.sends(calls), 1);
     assert.equal(due.status, "fulfilled");
     if (now.status === "rejected") {
-      assert.match(now.reason.message, /already sending|already sent/);
+      assert.match(now.reason.message, /already sending|already sent/i);
       assert.equal(due.value.sent, 1);
     } else {
       assert.equal(due.value.sent, 0);

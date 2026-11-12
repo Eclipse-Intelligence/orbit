@@ -19,6 +19,7 @@ const MAX_OPTIONS = 6;
 const SHARE_FAILED = "Couldn't share the draft. Try again.";
 const REMOVE_FAILED = "Couldn't remove them. Try again.";
 export const DRAFT_SHARE_REACH = "They can edit the subject and message. Only you can change recipients, attachments and send.";
+export const REPLY_SHARE_REACH = "They can edit the message. Only you can change the subject, recipients, attachments and send.";
 
 export function useComposeViewer() {
   return useContext(DocsContext)?.seed.viewer ?? null;
@@ -122,7 +123,7 @@ export default function DraftShare({
           aria-label={label}
           title={label}
           aria-expanded={open}
-          className={cn(members.length ? "gap-1.5 pr-2.5 pl-1.5" : "", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
+          className={cn(members.length && "h-[30px] gap-1.5 pr-2.5 pl-1.5")}
         >
           {members.length ? <PeopleStack people={members.slice(0, 3)} viewerId={viewer.id} size="sm" /> : <UsersIcon aria-hidden className="size-3.5" />}
           {members.length > 0 && <span className="max-sm:sr-only">Shared</span>}
@@ -183,8 +184,8 @@ export default function DraftShare({
           )}
           {listed.length > 0 && (
             <div className="border-line-strong mt-2 flex flex-col border-t px-2 pt-2">
-              <p className="caption-style text-subtle px-2 py-1">{shareId ? "In this draft" : "Shares with the thread"}</p>
-              <ul aria-label={shareId ? "In this draft" : "Shares with the thread"} className="flex flex-col">
+              <p className="caption-style text-subtle px-2 py-1">{shareId ? "In this draft" : "Shared with everyone on the thread"}</p>
+              <ul aria-label={shareId ? "In this draft" : "Shared with everyone on the thread"} className="flex flex-col">
                 {listed.map((person) => (
                   <li key={person.id} className="flex min-h-9 items-center gap-2.5 px-2 py-1 pointer-coarse:min-h-11">
                     <PersonAvatar person={person} viewerId={viewer.id} />
@@ -212,7 +213,7 @@ export default function DraftShare({
               {error}
             </p>
           )}
-          <p className="caption-style text-soft bg-surface-field mx-3 mt-2.5 rounded-lg px-3 py-2.5">{DRAFT_SHARE_REACH}</p>
+          <p className="caption-style text-soft bg-surface-field mx-3 mt-2.5 rounded-lg px-3 py-2.5">{fresh || mode === "forward" ? DRAFT_SHARE_REACH : REPLY_SHARE_REACH}</p>
         </div>
       </PopoverContent>
     </Popover>

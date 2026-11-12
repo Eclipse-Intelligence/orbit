@@ -79,7 +79,12 @@ export function announceDraftChange(ownerId: string, draftId: string) {
   });
 }
 
-export async function sharedDraftClosed(actor: UserActor, closed: ClosedShare, threadKey: string | null) {
+export async function sharedDraftClosed(actor: UserActor, closed: ClosedShare, threadKey: string | null, internetId: string | null) {
+  if (!threadKey && internetId) {
+    await query("select private.mail_share_follow_sent_now($1, $2)", [actor.userId, closed.id]).catch((error) =>
+      console.error("Couldn't find the shared draft's sent copy", error instanceof Error ? error.name : "unknown"),
+    );
+  }
   if (threadKey) {
     for (let attempt = 1; attempt <= THREAD_TRIES; attempt += 1) {
       try {

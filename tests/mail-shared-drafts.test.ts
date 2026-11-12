@@ -29,7 +29,7 @@ import {
 } from "@/lib/mail/compose";
 import { announceSharedThreads } from "@/lib/mail/share-live";
 import type { MailShareLiveEvent } from "@/lib/mail/share-types";
-import { getSharedDraft, holdSharedDraft, saveSharedDraft, shareDraft, SHARED_TEXT_LOCKED } from "@/lib/mail/shared-drafts";
+import { getSharedDraft, holdSharedDraft, saveSharedDraft, shareDraft, sharedDraftClosed, SHARED_TEXT_LOCKED } from "@/lib/mail/shared-drafts";
 import { getSharedThread, listSharedThreads, removeFromShare, shareThread } from "@/lib/mail/shares";
 import { syncMail } from "@/lib/mail/sync";
 import { getThread, listThreads } from "@/lib/mail/threads";
@@ -66,7 +66,7 @@ function message(id: string) {
   };
 }
 
-function outlook(options: { missing?: Set<string>; vanished?: Set<string>; onPatch?: () => Promise<void>; failCreate?: boolean; failSend?: boolean } = {}) {
+function outlook(options: { missing?: Set<string>; vanished?: Set<string>; onPatch?: () => Promise<void>; failCreate?: boolean; failSend?: boolean; failPatch?: (id: string) => boolean } = {}) {
   const calls: Call[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -80,6 +80,7 @@ function outlook(options: { missing?: Set<string>; vanished?: Set<string>; onPat
         options.onPatch = undefined;
         await hook();
       }
+      if (method === "PATCH" && options.failPatch?.(id)) return Response.json({ error: { code: "ErrorInvalidRequest", message: "Outlook refused the change." } }, { status: 400 });
       if (options.failCreate && method === "POST" && (url === `${GRAPH}/me/messages` || /\/(createReply|createReplyAll|createForward)$/.test(url))) {
         return Response.json({ error: { code: "ErrorInvalidRequest", message: "Outlook refused." } }, { status: 400 });
       }
@@ -396,7 +397,7 @@ describe("the share is the stable key", () => {
     );
     await announceSharedThreads(mark.userId, sourceId, ["conv-smtp"]);
     const followed = (await sql<{ thread_key: string | null; sent_internet_id: string | null }>("select thread_key, sent_internet_id from crm.mail_shares where id = $1", [shared.shareId]))[0];
-    assert.deepEqual(followed, { thread_key: "conv-smtp", sent_internet_id: null });
+    assert.deepEqual(followed, { thread_key: "conv-smtp", sent_internet_id: "<smtp-1@eclipse.test>" });
     assert.ok((await listSharedThreads(sam)).some((row) => row.shareId === shared.shareId && row.count === 1));
   });
 
@@ -542,5 +543,136 @@ describe("review fixes", () => {
     assert.equal(still.length, 1);
     assert.equal(still[0].send_at, null);
     assert.equal((await getSharedDraft(sam, draft.id).catch(() => null)), null);
+  });
+});
+
+describe("second review fixes", () => {
+  async function freshShare(body: string, subject = "Second") {
+    const draft = await saveMailDraft(mark, readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject, body }), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    const shared = await shareDraft(mark, draft.id, [sam.userId]);
+    return { draft, shareId: shared.shareId };
+  }
+
+  async function version(shareId: string) {
+    return (await getSharedDraft(mark, shareId)).version;
+  }
+
+  it("refuses a teammate's subject change on a reply, but not the owner's or a new email's", async () => {
+    const draft = await sharedReply("Reply subject");
+    await refused(saveSharedDraft(sam, threadShare, { subject: "Something else", body: null }), /^Only Mark can change the subject of a reply\.$/);
+    await saveSharedDraft(sam, threadShare, { subject: null, body: "Reply subject, Sam" });
+    await saveSharedDraft(mark, threadShare, { subject: "RE: Renewal pricing", body: null });
+    const { shareId } = await freshShare("New email subject");
+    await saveSharedDraft(sam, shareId, { subject: "Sam's subject", body: null });
+    await discardMailDraft(mark, draft.id, outlook().fetchImpl);
+  });
+
+  it("hands back the new draft id when Outlook lost the draft and then refused the change", async () => {
+    const { draft, shareId } = await freshShare("Split");
+    const lost = (await sql<{ provider_draft_id: string }>("select provider_draft_id from crm.mail_drafts where id = $1", [draft.id]))[0].provider_draft_id;
+    const fresh = `draft-${draftCount + 1}`;
+    await assert.rejects(
+      saveMailDraft(mark, { ...readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Second", body: "Split" }), id: draft.id, cc: [{ address: "ola@halden.test", name: null }] }, {
+        storedFiles: "replace",
+        origin: ORIGIN,
+        fetchImpl: outlook({ missing: new Set([lost]), failPatch: (id) => id === fresh }).fetchImpl,
+      }),
+      (error: unknown) => {
+        const share = error instanceof CrmError ? (error.details as { draftId?: string } | null)?.draftId : null;
+        return typeof share === "string" && share !== draft.id;
+      },
+    );
+    const now = (await sql<{ draft_id: string }>("select draft_id from crm.mail_shares where id = $1", [shareId]))[0].draft_id;
+    assert.notEqual(now, draft.id);
+    const saved = await saveMailDraft(mark, { ...readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Second", body: "Split" }), id: now, cc: [{ address: "ola@halden.test", name: null }] }, {
+      storedFiles: "replace",
+      origin: ORIGIN,
+      fetchImpl: outlook().fetchImpl,
+    });
+    assert.equal(saved.id, now);
+    assert.equal(saved.shareId, shareId);
+  });
+
+  it("finds an SMTP send's sent copy that sync imported before the send finished", async () => {
+    const { draft, shareId } = await freshShare("Early copy");
+    const folder = (await sql<{ id: string }>("select id from crm.mail_folders where source_id = $1 and role = 'inbox'", [sourceId]))[0].id;
+    await sql(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, thread_key, subject, from_email, internet_message_id, received_at, is_draft)
+       values ($1, $2, $3, $4, 'early-draft', 'conv-early', 'Second', 'mark@eclipse.test', '<early@eclipse.test>', now(), true),
+              ($1, $2, $3, $4, 'early-copy', 'conv-early', 'Second', 'mark@eclipse.test', '<early@eclipse.test>', now(), false)`,
+      [mark.workspaceId, mark.userId, sourceId, folder],
+    );
+    await sql("update crm.mail_shares set draft_id = null, draft_state = 'sent', sent_internet_id = '<early@eclipse.test>' where id = $1", [shareId]);
+    await sql("delete from crm.mail_drafts where id = $1", [draft.id]);
+    await sharedDraftClosed(mark, { id: shareId, members: [sam.userId] }, null, "<early@eclipse.test>");
+    const share = (await sql<{ thread_key: string | null }>("select thread_key from crm.mail_shares where id = $1", [shareId]))[0];
+    assert.equal(share.thread_key, "conv-early");
+    assert.equal((await getSharedDraft(sam, shareId)).state, "none");
+    assert.equal((await getSharedThread(sam, shareId)).draft, null);
+  });
+
+  it("follows only sent copies, never a draft with the same message id", async () => {
+    const { draft, shareId } = await freshShare("Draft copy");
+    const folder = (await sql<{ id: string }>("select id from crm.mail_folders where source_id = $1 and role = 'inbox'", [sourceId]))[0].id;
+    await sql(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, thread_key, subject, from_email, internet_message_id, received_at, is_draft)
+       values ($1, $2, $3, $4, 'only-draft', 'conv-only-draft', 'Second', 'mark@eclipse.test', '<only-draft@eclipse.test>', now(), true)`,
+      [mark.workspaceId, mark.userId, sourceId, folder],
+    );
+    await sql("update crm.mail_shares set draft_id = null, draft_state = 'sent', sent_internet_id = '<only-draft@eclipse.test>' where id = $1", [shareId]);
+    await sql("delete from crm.mail_drafts where id = $1", [draft.id]);
+    await announceSharedThreads(mark.userId, sourceId, ["conv-only-draft"]);
+    assert.equal((await sql<{ thread_key: string | null }>("select thread_key from crm.mail_shares where id = $1", [shareId]))[0].thread_key, null);
+    assert.equal((await getSharedDraft(sam, shareId)).state, "sent");
+  });
+
+  it("refuses scheduling over a teammate's newer save, and bumps the version on hold, schedule and unschedule", async () => {
+    const { draft, shareId } = await freshShare("Schedule check");
+    const seenByOwner = await version(shareId);
+    await saveSharedDraft(sam, shareId, { subject: null, body: "Schedule check, Sam" });
+    const at = new Date(Date.now() + 3_600_000).toISOString();
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Second", body: "x" }), id: draft.id, sendAt: at };
+    await refused(scheduleMailDraft(mark, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook().fetchImpl, shareVersion: seenByOwner }), /The draft changed/);
+    assert.equal((await getSharedDraft(sam, shareId)).state, "editing");
+    const before = await version(shareId);
+    await scheduleMailDraft(mark, input, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook().fetchImpl, shareVersion: before });
+    const scheduled = await version(shareId);
+    assert.ok(scheduled > before);
+    await unscheduleMailDraft(mark, draft.id);
+    const unscheduled = await version(shareId);
+    assert.ok(unscheduled > scheduled);
+    await holdSharedDraft(mark, draft.id, true, unscheduled);
+    const held = await version(shareId);
+    assert.ok(held > unscheduled);
+    await holdSharedDraft(mark, draft.id, false);
+    assert.ok((await version(shareId)) > held);
+  });
+
+  it("keeps the share locked against teammates while a scheduled change talks to Outlook", async () => {
+    const { draft, shareId } = await freshShare("Change lock");
+    await scheduleMailDraft(mark, { ...readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Second", body: "x" }), id: draft.id, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, {
+      storedFiles: "keep",
+      origin: ORIGIN,
+      fetchImpl: outlook().fetchImpl,
+    });
+    let during = "";
+    const racing = outlook({
+      onPatch: async () => {
+        during = (await getSharedDraft(sam, shareId)).state;
+        await refused(saveSharedDraft(sam, shareId, { subject: null, body: "Sneaky" }), /is sending/);
+      },
+    });
+    await changeScheduledDraft(mark, draft.id, { cc: ["ola@halden.test"] }, { origin: ORIGIN, fetchImpl: racing.fetchImpl });
+    assert.equal(during, "sending");
+    assert.equal((await getSharedDraft(sam, shareId)).state, "scheduled");
+    assert.equal((await sql<{ sending_at: Date | null }>("select sending_at from crm.mail_drafts where id = $1", [draft.id]))[0].sending_at, null);
+  });
+
+  it("returns the same share when a new draft is shared twice at once", async () => {
+    const draft = await saveMailDraft(mark, readDraftInput({ mode: "new", sourceId, to: ["tom@halden.test"], subject: "Twice", body: "Twice" }), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    const [first, second] = await Promise.all([shareDraft(mark, draft.id, [sam.userId]), shareDraft(mark, draft.id, [priya.userId])]);
+    assert.equal(first.shareId, second.shareId);
+    const members = await sql<{ user_id: string }>("select user_id from crm.mail_share_members where share_id = $1 order by user_id", [first.shareId]);
+    assert.deepEqual(members.map((row) => row.user_id).sort(), [sam.userId, priya.userId].sort());
   });
 });

@@ -21,3 +21,7 @@ export function textChanges(base: DraftText, local: DraftText): DraftTextChanges
 export function newerVersion(seen: number | null, version: number) {
   return seen === null || version >= seen;
 }
+
+export function openingBase(base: { text: DraftText } | null, opened: DraftText) {
+  return base?.text ?? opened;
+}

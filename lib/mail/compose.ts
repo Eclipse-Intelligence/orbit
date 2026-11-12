@@ -413,15 +413,19 @@ async function storeDraft(actor: UserActor, asked: DraftInput, options: DraftWri
   const files = mergeIds(options.attachments ?? first.found?.attachments);
   if (existing && existing.content_hash === hash && sameIds(existing.attachments ?? [], files)) return { row: existing, target, token, created };
   try {
-    await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl);
+    try {
+      await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl);
+    } catch (error) {
+      if (!(error instanceof GraphMailError && error.status === 404 && existing)) graphProblem(error, target);
+      if (existing.send_attempted_at) throw maybeSent();
+      row = await createDraft(actor, input, target, token, { ...options, previous: existing.id });
+      created = true;
+      await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl).catch((retry) =>
+        graphProblem(retry, target),
+      );
+    }
   } catch (error) {
-    if (!(error instanceof GraphMailError && error.status === 404 && existing)) graphProblem(error, target);
-    if (existing.send_attempted_at) throw maybeSent();
-    row = await createDraft(actor, input, target, token, { ...options, previous: existing.id });
-    created = true;
-    await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl).catch((retry) =>
-      graphProblem(retry, target),
-    );
+    throw asked.id && row.id !== asked.id ? withDraftId(error, row.id) : error;
   }
   const saved = await withActor(actor, async (db) => {
     const result = await db.query<DraftRow>(
@@ -671,13 +675,24 @@ async function holdNewDraft(actor: UserActor, id: string, sendKey: string | null
 
 async function releaseDraft(actor: UserActor, id: string) {
   await withActor(actor, async (db) => {
-    await releaseHold(db, actor, id);
+    await touchShare(db, actor, id, true);
     await db.query("update crm.mail_drafts set sending_at = null where id = $1 and user_id = $2", [id, actor.userId]);
   });
 }
 
-async function releaseHold(db: Db, actor: UserActor, draftId: string) {
-  await db.query("update crm.mail_shares set draft_held_until = null where owner_user_id = $1 and draft_id = $2 and draft_held_until is not null", [actor.userId, draftId]);
+async function touchShare(db: Db, actor: UserActor, draftId: string, clearHold: boolean) {
+  const touched = await db.query(
+    `update crm.mail_shares set draft_version = draft_version + 1, draft_held_until = case when $3::boolean then null else draft_held_until end
+     where owner_user_id = $1 and draft_id = $2`,
+    [actor.userId, draftId, clearHold],
+  );
+  return (touched.rowCount ?? 0) > 0;
+}
+
+export const SHARED_DRAFT_CHANGED = "The draft changed. Check it, then send.";
+
+function withDraftId(error: unknown, draftId: string) {
+  return error instanceof CrmError ? new CrmError(error.code, error.message, error.status, { ...error.details, draftId }) : error;
 }
 
 async function sendKeySent(actor: UserActor, key: string) {
@@ -1015,7 +1030,7 @@ async function finishSend(actor: UserActor, input: DraftInput, finish: Finish): 
     }
     return share;
   });
-  if (closed) await sharedDraftClosed(actor, closed, finish.identityId ? null : rowThreadKey(row));
+  if (closed) await sharedDraftClosed(actor, closed, finish.identityId ? null : rowThreadKey(row), originalId);
   const [, logged] = await Promise.all([
     ids.length ? discardAttachments(actor, ids, fetchImpl).catch(() => undefined) : Promise.resolve(),
     finish.logOnTimeline === false
@@ -1158,7 +1173,14 @@ function scheduleTime(sendAt: string) {
 export async function scheduleMailDraft(
   actor: UserActor,
   input: DraftInput & { attachments?: string[]; sendAt: string },
-  options: { origin: string | null; fetchImpl?: typeof fetch; storedFiles: StoredFiles; onDraftRow?: (id: string) => void | Promise<void> },
+  options: {
+    origin: string | null;
+    fetchImpl?: typeof fetch;
+    storedFiles: StoredFiles;
+    onDraftRow?: (id: string) => void | Promise<void>;
+    shareVersion?: number | null;
+    clearSending?: boolean;
+  },
 ): Promise<MailDraft> {
   const sharedNow = input.id ? await sharedDraftText(actor, input.id) : null;
   checkSendable(sharedNow ? { ...input, ...sharedNow } : input);
@@ -1169,8 +1191,18 @@ export async function scheduleMailDraft(
     writeDraft(actor, claimed, { origin: options.origin, fetchImpl: options.fetchImpl ?? fetch, attachments: ids, onDraftRow: options.onDraftRow }),
   );
   const scheduled = await withActor(actor, async (db) => {
+    const share = await db.query<{ draft_version: number }>("select draft_version from crm.mail_shares where owner_user_id = $1 and draft_id = $2 for update", [
+      actor.userId,
+      row.id,
+    ]);
+    const version = share.rows[0]?.draft_version;
+    if (version !== undefined && typeof options.shareVersion === "number" && options.shareVersion !== version) {
+      throw new CrmError("conflict", SHARED_DRAFT_CHANGED, 409, { changed: true, draftId: row.id });
+    }
+    if (version !== undefined) await touchShare(db, actor, row.id, false);
     const result = await db.query<DraftRow>(
-      `update crm.mail_drafts set send_at = $2, remind_hours = $3, signature = $4, follow_up_days = $5, follow_up_body = $6, send_error = null
+      `update crm.mail_drafts set send_at = $2, remind_hours = $3, signature = $4, follow_up_days = $5, follow_up_body = $6, send_error = null,
+         sending_at = case when $7::boolean then null else sending_at end
        where id = $1 returning ${DRAFT_COLUMNS}`,
       [
         row.id,
@@ -1179,6 +1211,7 @@ export async function scheduleMailDraft(
         input.signature,
         input.followUpDays ?? null,
         input.followUpDays ? (input.followUpBody ?? null) : null,
+        Boolean(options.clearSending),
       ],
     );
     return toDraft(result.rows[0]);
@@ -1190,6 +1223,7 @@ export async function scheduleMailDraft(
 export async function unscheduleMailDraft(actor: UserActor, id: string): Promise<MailDraft> {
   if (!isUuid(id)) throw new CrmError("not_found", SCHEDULED_GONE, 404);
   const outcome = await withActor(actor, async (db) => {
+    await touchShare(db, actor, id, false);
     const found = await db.query<{ busy: boolean }>(
       `select coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy from crm.mail_drafts where id = $1 and user_id = $2 for update`,
       [id, actor.userId],
@@ -1273,6 +1307,7 @@ export async function getScheduledDraft(actor: UserActor, id: string): Promise<M
 export async function cancelScheduledDraft(actor: UserActor, id: string): Promise<MailDraft> {
   if (!isUuid(id)) throw new CrmError("not_found", SCHEDULED_GONE, 404);
   const cancelled = await withActor(actor, async (db) => {
+    await touchShare(db, actor, id, false);
     const result = await db.query<DraftRow>(
       `update crm.mail_drafts set send_at = null, send_error = null
        where id = $1 and user_id = $2 and (send_at is not null or send_error is not null)
@@ -1319,18 +1354,18 @@ export async function changeScheduledDraft(
   checkSendable(input);
   const held = await withActor(actor, async (db) => {
     const result = await db.query(
-      "update crm.mail_drafts set send_at = null where id = $1 and user_id = $2 and (send_at is not null or send_error is not null) returning id",
+      "update crm.mail_drafts set send_at = null, sending_at = now() where id = $1 and user_id = $2 and (send_at is not null or send_error is not null) returning id",
       [id, actor.userId],
     );
     return (result.rowCount ?? 0) > 0;
   });
   if (!held) throw new CrmError("conflict", SCHEDULED_NOT_WAITING, 409);
   try {
-    const draft = await scheduleMailDraft(actor, { ...input, sendAt }, { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep" });
+    const draft = await scheduleMailDraft(actor, { ...input, sendAt }, { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep", clearSending: true });
     return (await getScheduledDraft(actor, draft.id)) ?? draft;
   } catch (error) {
     await withActor(actor, (db) =>
-      db.query("update crm.mail_drafts set send_at = $2, send_error = $3 where id = $1 and send_at is null", [id, row.send_at, row.send_error]),
+      db.query("update crm.mail_drafts set send_at = $2, send_error = $3, sending_at = null where id = $1 and send_at is null", [id, row.send_at, row.send_error]),
     ).catch(() => undefined);
     throw error;
   }
@@ -1374,11 +1409,12 @@ export function dueDraftInput(row: DueDraft): DraftInput & { attachments: string
 }
 
 export async function failDueDraft(actor: UserActor, id: string, message: string) {
-  await withActor(actor, async (db) => {
-    await releaseHold(db, actor, id);
+  const shared = await withActor(actor, async (db) => {
+    const touched = await touchShare(db, actor, id, true);
     await db.query("update crm.mail_drafts set send_error = $2, sending_at = null where id = $1", [id, message.slice(0, 500)]);
+    return touched;
   });
-  announceDraftChange(actor.userId, id);
+  if (shared) announceDraftChange(actor.userId, id);
 }
 
 export async function discardMailDraft(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch) {
@@ -1400,7 +1436,7 @@ export async function discardMailDraft(actor: UserActor, id: string, fetchImpl: 
     if (row.tracking_id) await db.query("delete from crm.mail_tracking where id = $1 and sent_at is null", [row.tracking_id]);
     return share;
   });
-  if (closed) await sharedDraftClosed(actor, closed, null);
+  if (closed) await sharedDraftClosed(actor, closed, null, null);
 }
 
 async function closeShareInTx(db: Db, actor: UserActor, draftId: string, state: "sent" | "discarded", internetId: string | null): Promise<ClosedShare | null> {
@@ -1631,6 +1667,7 @@ type ScheduledClaim = { state: "gone" | "sending" | "scheduled" | "draft"; share
 async function claimScheduledDraft(actor: UserActor, id: string): Promise<ScheduledClaim> {
   if (!isUuid(id)) return { state: "gone", shared: null };
   return withActor(actor, async (db): Promise<ScheduledClaim> => {
+    await touchShare(db, actor, id, false);
     const found = await db.query<{ scheduled: boolean; busy: boolean; subject: string | null; body: string; share_id: string | null }>(
       `select (send_at is not null or send_error is not null) as scheduled, coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy,
          subject, body, ${DRAFT_SHARE} as share_id
