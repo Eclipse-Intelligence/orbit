@@ -223,11 +223,11 @@ function ContactActions({ task, context, kind }: Actions) {
       </Button>
     </span>
   );
-  const bookingButton = booking ? <CopyButton key="booking" text={booking} label="Copy booking link" className={cn("h-[30px] px-3 text-[14px]", ACTION)} /> : null;
+  const bookingButton = booking ? <CopyButton key="booking" text={booking} label="Copy booking link" ariaLabel="Copy booking link" className={cn("h-[30px] px-3 text-[14px]", ACTION)} /> : null;
 
   if (lead === "call") {
     buttons.push(phone ? callButton(kind === "call") : findButton);
-    if (phone) buttons.push(<CopyButton key="copy" text={phone} label="Copy" className={cn("h-[30px] px-3 text-[14px]", ACTION)} />);
+    if (phone) buttons.push(<CopyButton key="copy" text={phone} label="Copy" ariaLabel={`Copy ${first}'s number`} className={cn("h-[30px] px-3 text-[14px]", ACTION)} />);
     buttons.push(emailButton(false), templateButton(true));
     if (thread) more.push({ key: "reply", label: "Reply on thread", icon: ReplyIcon, run: () => router.push(threadHref(thread.key, "reply")) });
     if (email) more.push({ key: "invite", label: "Invite", icon: CalendarIcon, run: () => void openInvite() });
@@ -463,7 +463,7 @@ function ContextLine({ task, context, here }: { task: Task; context: TaskContext
       <span key="activity" className="min-w-0">
         Last activity{" "}
         <b className="text-soft font-medium">
-          {title ? `${label}: ${title}` : label}, {shortDate(context.lastActivity.occurredAt)}
+          {title ? (title.toLowerCase().startsWith(label.toLowerCase()) ? title : `${label}: ${title}`) : label}, {shortDate(context.lastActivity.occurredAt)}
         </b>
       </span>,
     );

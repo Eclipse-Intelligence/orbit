@@ -221,7 +221,7 @@ export default function TaskOutcomeForm({
           data-row-key={keyboard ? "space" : undefined}
           data-outcome-skip=""
           shortcut={keyboard ? ["Esc"] : undefined}
-          className="max-sm:h-11 max-sm:flex-1"
+          className="max-sm:h-11 max-sm:flex-1 [@media(pointer:coarse)]:h-11"
         >
           Skip
         </Button>
@@ -232,7 +232,7 @@ export default function TaskOutcomeForm({
           disabled={busy}
           aria-busy={busy || undefined}
           shortcut={["⌘", "↵"]}
-          className="max-sm:h-11 max-sm:flex-1"
+          className="max-sm:h-11 max-sm:flex-1 [@media(pointer:coarse)]:h-11"
         >
           {busy ? "Saving…" : "Save"}
         </Button>
