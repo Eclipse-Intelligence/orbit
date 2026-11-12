@@ -15,6 +15,7 @@ import type {
   DueActions,
   RelationshipStatus,
   StaleRelationship,
+  Task,
   TaskView,
 } from "@/lib/crm/types";
 import { TASK_VIEWS } from "@/lib/crm/types";
@@ -183,10 +184,13 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean; ta
   });
 }
 
+export const PAGE_SIZE = 100;
+const MAX_PAGES = 100;
+
 export async function getDueActions(
   actor: Actor,
   view: TaskView = "today",
-  options: { mine?: boolean; tagged?: boolean } = {},
+  options: { mine?: boolean; tagged?: boolean; pages?: number } = {},
 ): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
@@ -194,11 +198,10 @@ export async function getDueActions(
       field: "view",
     });
   }
+  const pages = Math.min(MAX_PAGES, Math.max(1, Math.floor(options.pages ?? 1)));
   if (view === "none") {
     return withActor(actor, async (db) => {
-      const listed = await db.query<{ id: string }>(
-        `select c.id
-         from crm.companies c
+      const without = `from crm.companies c
          where c.workspace_id = $1
            and c.archived_at is null
            and not exists (
@@ -208,10 +211,14 @@ export async function getDueActions(
                and t.archived_at is null
                and t.completed_at is null
                and ${directTaskSql("t")}
-           )
-         order by c.updated_at desc
-         limit 100`,
-        [actor.workspaceId],
+           )`;
+      const counted = await db.query<{ total: number }>(`select count(*)::int as total ${without}`, [actor.workspaceId]);
+      const listed = await db.query<{ id: string }>(
+        `select c.id
+         ${without}
+         order by c.updated_at desc, c.id
+         limit $2`,
+        [actor.workspaceId, pages * PAGE_SIZE],
       );
       const companies = [];
       for (const item of listed.rows) {
@@ -219,9 +226,22 @@ export async function getDueActions(
         if (company) companies.push(company);
       }
       const relationships = await relationshipsInDb(db, actor.workspaceId, "company", companies.map((company) => company.id));
-      return { view, tasks: [], companies: companies.map((company) => ({ ...company, relationship: relationships[company.id] })) };
+      return {
+        view,
+        tasks: [],
+        companies: companies.map((company) => ({ ...company, relationship: relationships[company.id] })),
+        total: counted.rows[0]?.total ?? 0,
+      };
     });
   }
-  const tasks = await listTasks(actor, { view, limit: 100, mine: options.mine, tagged: options.tagged });
-  return { view, tasks: tasks.data, companies: [] };
+  const tasks: Task[] = [];
+  let total = 0;
+  for (let page = 0; page < pages; page += 1) {
+    const listed = await listTasks(actor, { view, limit: PAGE_SIZE, offset: page * PAGE_SIZE, mine: options.mine, tagged: options.tagged });
+    const known = new Set(tasks.map((task) => task.id));
+    tasks.push(...listed.data.filter((task) => !known.has(task.id)));
+    total = listed.total;
+    if (listed.data.length < PAGE_SIZE || tasks.length >= total) break;
+  }
+  return { view, tasks, companies: [], total };
 }

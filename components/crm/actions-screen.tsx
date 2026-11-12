@@ -47,6 +47,8 @@ export default function ActionsScreen({
   openTask = null,
   admins = [],
   switchTo = null,
+  total = 0,
+  pages = 1,
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -64,6 +66,8 @@ export default function ActionsScreen({
   openTask?: Task | null;
   admins?: string[];
   switchTo?: string | null;
+  total?: number;
+  pages?: number;
 }) {
   const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
@@ -72,8 +76,25 @@ export default function ActionsScreen({
     return `${base}${base.includes("?") ? "&" : "?"}who=${person}`;
   };
   const views = who === "tagged" ? VIEWS.filter((item) => item.id !== "none") : VIEWS;
-  const admin = viewer.role === "owner" || viewer.role === "admin";
   const router = useRouter();
+  const shown = view === "none" ? companies.length : tasks.length;
+  const moreHref = () => {
+    const base = href(view);
+    return `${base}${base.includes("?") ? "&" : "?"}pages=${pages + 1}`;
+  };
+  const more =
+    shown < total ? (
+      <div className="flex items-center gap-3 px-4 py-4">
+        <Button variant="secondary" size="md" onClick={() => router.push(moreHref(), { scroll: false })} className="max-md:h-11">
+          Show more
+        </Button>
+        <span className="caption-style text-subtle tabular-nums">
+          {shown} of {total}
+        </span>
+      </div>
+    ) : undefined;
+  const colleagues = members.map((member) => ({ id: member.id, name: member.name }));
+  const admin = viewer.role === "owner" || viewer.role === "admin";
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState<Set<string>>(() => new Set());
   const [assigningIds, setAssigningIds] = useState<Set<string>>(() => new Set());
@@ -244,6 +265,7 @@ export default function ActionsScreen({
         <RecordList
           count={companies.length}
           empty="No companies without tasks"
+          footer={more}
         >
           {companies.map((company) => (
             <RecordRow
@@ -263,7 +285,7 @@ export default function ActionsScreen({
           ))}
         </RecordList>
       ) : (
-        <RecordList count={tasks.length} empty={who === "tagged" ? "No tasks you're tagged in" : "No tasks"}>
+        <RecordList count={tasks.length} empty={who === "tagged" ? "No tasks you're tagged in" : "No tasks"} footer={more}>
           {tasks.map((task) => (
             <ActionTask
               key={task.id}
@@ -275,6 +297,9 @@ export default function ActionsScreen({
               onOpen={() => openPanel(task.id)}
               comments={discussions[task.id] ?? 0}
               assigning={assigning(task)}
+              colleagues={colleagues}
+              viewerId={viewer.id}
+              canLink={admin || task.ownerId === viewer.id || task.createdByUserId === viewer.id}
             />
           ))}
         </RecordList>

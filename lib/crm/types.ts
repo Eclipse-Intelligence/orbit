@@ -402,6 +402,8 @@ export type Task = {
   companyName: string | null;
   contactId: string | null;
   contactName: string | null;
+  contactFirstName: string | null;
+  contactLastName: string | null;
   opportunityId: string | null;
   opportunityName: string | null;
   createdByUserId: string | null;
@@ -541,4 +543,5 @@ export type DueActions = {
   view: TaskView;
   tasks: Task[];
   companies: Company[];
+  total: number;
 };

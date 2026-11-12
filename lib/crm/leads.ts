@@ -148,7 +148,7 @@ async function ingestLeadInDb(
             ...activityInput,
             companyId:
               activityInput.companyId === undefined
-                ? (result.company?.id ?? result.contact?.companyId ?? null)
+                ? (result.company?.id ?? result.contact?.companyId ?? undefined)
                 : activityInput.companyId,
             contactId:
               activityInput.contactId === undefined
@@ -171,15 +171,15 @@ async function ingestLeadInDb(
             ...input.task,
             companyId:
               input.task.companyId === undefined
-                ? (result.company?.id ?? result.contact?.companyId ?? null)
+                ? (result.company?.id ?? result.contact?.companyId ?? undefined)
                 : input.task.companyId,
             contactId:
               input.task.contactId === undefined
-                ? (result.contact?.id ?? null)
+                ? (result.contact?.id ?? undefined)
                 : input.task.contactId,
             opportunityId:
               input.task.opportunityId === undefined
-                ? (result.opportunity?.id ?? null)
+                ? (result.opportunity?.id ?? undefined)
                 : input.task.opportunityId,
           },
           provenance,

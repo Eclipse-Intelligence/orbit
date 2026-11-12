@@ -916,6 +916,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const linkTo = str(config.link) || "company";
       const companyId = linkTo !== "none" ? ((ctx.vars.company as { id?: string } | undefined)?.id ?? null) : null;
       const contactId = linkTo === "contact" ? ((ctx.vars.contact as { id?: string } | undefined)?.id ?? null) : null;
+      const links = linkTo === "none" ? { companyId: null, contactId: null, opportunityId: null } : contactId ? { contactId } : companyId ? { companyId, contactId: null } : {};
       const days = config.dueInDays === "" || config.dueInDays === undefined || config.dueInDays === null ? null : Number(config.dueInDays);
       const ownerId = await assigneeFor(ctx, config.assignee);
       const due = await scheduleTaskDue(ctx.actor, { days, on: dueDayFrom(render(config.dueDate, ctx.vars)), ownerId });
@@ -926,8 +927,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
           title,
           description: withDueNote(render(config.notes, ctx.vars).trim() || null, due),
           dueAt: due?.dueAt ?? null,
-          companyId: contactId ? undefined : companyId,
-          contactId,
+          ...links,
           ownerId,
           priority: "normal",
         },

@@ -229,6 +229,16 @@ export const CORE_TASKS: EvalTask[] = [
     checks: [card("create_task", arg.all(arg.is("ownerId", "member:Tamsin Holt"), arg.is("contactId", "contact:Wren Ashdown"), dueOn("dueAt", { weekday: 5 })))],
   }),
   task({
+    id: "write-task-links-person-and-deal",
+    suite: "core",
+    category: "propose_write",
+    origin: "Tasks plan: every task names who it is about, so the assistant looks up and passes the person and the opportunity.",
+    message: "Add a task for Monday to send Bram Kettle the Larkspur content retainer contract.",
+    checks: [
+      card("create_task", arg.all(arg.is("contactId", "contact:Bram Kettle"), arg.is("opportunityId", "deal:Larkspur content retainer"), dueOn("dueAt", { weekday: 1 }))),
+    ],
+  }),
+  task({
     id: "write-move-task-to-monday",
     suite: "core",
     category: "propose_write",

@@ -12,7 +12,7 @@ import { revalidateRecordPages } from "@/lib/revalidate";
 
 export async function detectTaskRecordsAction(text: string): Promise<PadDetection> {
   const user = await getUserActor();
-  if (!user || typeof text !== "string") return { company: null, contact: null };
+  if (!user || typeof text !== "string") return { company: null, contact: null, opportunity: null };
   return detectPadRecords(user, text);
 }
 
@@ -27,12 +27,22 @@ export async function parseTaskWithAiAction(text: string): Promise<PadAiParse | 
   }
 }
 
+function padLink(value: unknown) {
+  return typeof value === "string" && isUuid(value) ? value : null;
+}
+
+function padLinks(input: { companyId?: unknown; contactId?: unknown; opportunityId?: unknown }) {
+  if (input.companyId === undefined && input.contactId === undefined && input.opportunityId === undefined) return {};
+  return { companyId: padLink(input.companyId), contactId: padLink(input.contactId), opportunityId: padLink(input.opportunityId) };
+}
+
 export async function addPadTaskAction(input: {
   title: string;
   dueAt: string | null;
   remindMinutes: number | null;
-  companyId: string | null;
-  contactId: string | null;
+  companyId?: string | null;
+  contactId?: string | null;
+  opportunityId?: string | null;
   clickupListId: string | null;
   ownerId?: string | null;
 }): Promise<{ ok?: boolean; error?: string; warning?: string }> {
@@ -46,8 +56,7 @@ export async function addPadTaskAction(input: {
         title: typeof input.title === "string" ? input.title : "",
         dueAt,
         remindMinutes: dueAt && isReminderMinutes(input.remindMinutes) ? input.remindMinutes : null,
-        companyId: input.companyId || null,
-        contactId: input.contactId || null,
+        ...padLinks(input),
         ownerId: typeof input.ownerId === "string" && isUuid(input.ownerId) ? input.ownerId : user.userId,
         priority: "normal",
       },

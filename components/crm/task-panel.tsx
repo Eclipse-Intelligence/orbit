@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode, type SVGProps } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode, type SVGProps } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
@@ -15,7 +15,9 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import type { Viewer } from "@/components/crm/viewer";
 import RecordNotes from "@/components/docs/record-notes";
-import { assignTaskAction, completeTaskAction } from "@/app/(crm)/records";
+import { assignTaskAction, completeTaskAction, linkTaskAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
+import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
+import type { LinkCandidate } from "@/lib/crm/task-links";
 import { saveTaskDetailsAction, untagTaskAction, type TaskDetails } from "@/app/(crm)/discussions";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { reminderLabel } from "@/lib/crm/reminder-options";
@@ -25,6 +27,8 @@ import { recordHref } from "@/lib/docs/routes";
 import { appTimeZone, dateTimeInputValue } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
+import LinkIcon from "@/public/assets/images/_common/link.svg";
+import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import ContactIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
@@ -129,6 +133,80 @@ type PanelProps = {
   onClose: () => void;
 };
 
+function LinkPerson({ taskId, onLinked }: { taskId: string; onLinked: () => void }) {
+  const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void taskLinkCandidatesAction(taskId)
+      .catch(() => ({ error: "Couldn't find people to link. Try again." }))
+      .then((result) => {
+        if (cancelled) return;
+        if ("candidates" in result && result.candidates) setCandidates(result.candidates);
+        else setError(result.error ?? "Couldn't find people to link. Try again.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId]);
+
+  async function link(candidate: LinkCandidate) {
+    if (busy) return;
+    setBusy(candidate.id);
+    setError(null);
+    const result = await linkTaskAction(taskId, candidate.kind === "contact" ? { contactId: candidate.id } : { companyId: candidate.id }).catch(() => ({
+      error: "Couldn't link the task. Try again.",
+    }));
+    setBusy(null);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    onLinked();
+  }
+
+  return (
+    <section aria-label="Link a person" className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5">
+      <div className="flex items-center gap-2 px-0.5 pb-1">
+        <LinkIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
+        <h3 className="ui-style font-medium">Link a person</h3>
+        {candidates && candidates.length === 0 && <span className="caption-style text-subtle">No contacts match a name in this task.</span>}
+      </div>
+      {!candidates && !error && (
+        <p role="status" className="caption-style text-subtle px-0.5">
+          Looking…
+        </p>
+      )}
+      {candidates?.map((candidate) => (
+        <div key={`${candidate.kind}:${candidate.id}`} className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-white/[0.04]">
+          <Monogram name={candidate.name} className="size-6 rounded-full text-[10px]" />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="ui-style text-foreground truncate">{candidate.name}</span>
+            {candidate.detail && <span className="caption-style text-subtle truncate">{candidate.detail}</span>}
+          </span>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={Boolean(busy)}
+            aria-label={`Link ${candidate.name}`}
+            onClick={() => void link(candidate)}
+            className="[@media(pointer:coarse)]:h-11"
+          >
+            Link
+          </Button>
+        </div>
+      ))}
+      {error && (
+        <p role="alert" className="caption-style text-danger px-0.5">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: PanelProps) {
   const router = useRouter();
   const id = useId();
@@ -149,6 +227,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
   const creator = named(task.createdByUserId);
   const description = splitDescription(task.description);
   const [title, setTitle] = useState(task.title);
+  const [editingTitle, setEditingTitle] = useState(false);
   const [text, setText] = useState(description.text);
   const [due, setDue] = useState(dateTimeInputValue(task.dueAt));
   const [reminder, setReminder] = useState<number | null>(task.remindMinutes);
@@ -274,6 +353,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
   const dueLabel = task.dueAt ? formatIn({ weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }, task.dueAt) : null;
   const changers = [owner, creator].flatMap((person) => (person && person.id !== viewer.id && !admins.includes(person.id) ? [firstName(person.name)] : []));
   const linked = Boolean(task.companyId || task.contactId || task.opportunityId || description.links.length > 0);
+  const unlinked = !task.companyId && !task.contactId && !task.opportunityId;
+  const colleagues = members.map((member) => ({ id: member.id, name: member.name }));
+  const colleague = (person: { id: string; name: string } | null) =>
+    person && person.id !== viewer.id && members.some((member) => member.id === person.id) ? person : null;
   const thread = discussion.threadId;
 
   return (
@@ -318,7 +401,21 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                       {done && <CheckIcon className="size-3" />}
                     </span>
                     {readOnly ? (
-                      <h2 className="min-w-0 flex-1 leading-[1.3] break-words">{task.title}</h2>
+                      <h2 className="min-w-0 flex-1 leading-[1.3] break-words">
+                        <TaskTitle task={task} colleagues={colleagues} viewerId={viewer.id} />
+                      </h2>
+                    ) : !editingTitle ? (
+                      <div className="relative min-w-0 flex-1">
+                        <button
+                          type="button"
+                          aria-label="Edit title"
+                          onClick={() => setEditingTitle(true)}
+                          className="absolute inset-0 cursor-text rounded-md outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
+                        />
+                        <h2 className="pointer-events-none relative leading-[1.3] break-words">
+                          <TaskTitle task={{ ...task, title }} colleagues={colleagues} viewerId={viewer.id} />
+                        </h2>
+                      </div>
                     ) : (
                       <Textarea
                         ref={titleField}
@@ -327,8 +424,12 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                         rows={1}
                         value={title}
                         maxLength={200}
+                        autoFocus
                         onChange={(event) => setTitle(event.target.value.replace(/\n/g, " "))}
-                        onBlur={saveTitle}
+                        onBlur={() => {
+                          saveTitle();
+                          setEditingTitle(false);
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                             event.preventDefault();
@@ -339,6 +440,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                       />
                     )}
                   </div>
+                  {unlinked && canChange && !done && <LinkPerson taskId={task.id} onLinked={() => router.refresh()} />}
                   {readOnly && isTagged && (
                     <p role="note" className="caption-style text-soft flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2.5">
                       <UsersIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-blue-text)" />
@@ -368,8 +470,17 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                       ) : (
                         <span className="ui-style flex min-w-0 items-center gap-2">
                           {owner && <MemberAvatar member={owner} viewerId={viewer.id} size="xs" />}
-                          <span className="truncate">{owner?.name ?? "No one"}</span>
+                          {colleague(owner) ? (
+                            <ColleagueLink colleague={colleague(owner)!} className="truncate" />
+                          ) : (
+                            <span className="truncate">{owner?.name ?? "No one"}</span>
+                          )}
                         </span>
+                      )}
+                      {team && canChange && colleague(owner) && (
+                        <ColleagueLink colleague={colleague(owner)!} className="text-subtle hover:text-foreground inline-flex size-7 items-center justify-center rounded-full no-underline hover:bg-white/10 [@media(pointer:coarse)]:size-11">
+                          <ChatIcon aria-hidden className="size-3.5" />
+                        </ColleagueLink>
                       )}
                     </Field>
                     <Field label="Due">
@@ -412,7 +523,11 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                           return (
                             <span key={person} className={cn("inline-flex items-center [@media(pointer:coarse)]:h-11", CHIP, removable && "pr-0.5")}>
                               <MemberAvatar member={member} viewerId={viewer.id} size="xs" />
-                              <span className="truncate">{member.name}</span>
+                              {colleague(member) ? (
+                                <ColleagueLink colleague={member} className="truncate no-underline hover:underline" />
+                              ) : (
+                                <span className="truncate">{member.name}</span>
+                              )}
                               {removable && (
                                 <Button
                                   variant="ghost"

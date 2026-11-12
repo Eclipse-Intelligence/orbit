@@ -185,11 +185,17 @@ Task fields: `title`, `description`, `dueAt`, `remindMinutes` (0, 5, 10, 15, 30,
 
 `GET /api/v1/tasks` with `q`, `company_id`, `owner`, `include_archived=true`, `limit`, `offset`, and `view` (`all`, `overdue`, `today`, `upcoming`, `completed`). Without `view` it returns every open task. `all` is every open task (not completed, not archived) whatever its due date: overdue first, then by due date, undated last, then high, normal, low priority and oldest first. `today` includes open tasks with no due date. `completed` is the last 14 days.
 
-`GET /api/v1/actions?view=` returns the same tasks, up to 100, and defaults to `today` when `view` is missing or not recognised. `view=all` returns every open task in the order above. `view=none` returns companies that have no open task.
+`GET /api/v1/actions?view=` returns the same tasks, the first 100, with `total` (how many match), and defaults to `today` when `view` is missing or not recognised. `view=all` returns every open task in the order above. `view=none` returns companies that have no open task, the 100 most recently updated, with `total`. Page through more tasks with `GET /api/v1/tasks` and `offset`. The Tasks page shows the first 100 and a Show more button for the next 100.
 
 Agent tokens see every task in the workspace; people in the app only see tasks they own or created unless they are an owner or admin, plus tasks they are tagged in, which they can read but not change (changing, completing, reassigning or archiving one returns 403 `forbidden`). Task lists and counts never include tasks someone is only tagged in. `POST /api/v1/tasks` creates one (unowned unless `ownerId` is given; that member is told, as is a new `ownerId` set with `PATCH`, and the creator is told when someone else completes it). A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `GET /api/v1/tasks/:id` returns `{ "task": { ... } }`, and `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
 
 `POST /api/v1/tasks/:id/complete` marks it complete. `DELETE /api/v1/tasks/:id` archives it. Each task also carries `clickupTaskId`, `clickupListId`, `clickupUrl`, and `clickupError` (null when it is not linked to ClickUp). Changes made through the API reach ClickUp on the next sync.
+
+### Linking tasks
+
+Every way of creating a task (`POST /api/v1/tasks`, MCP, the assistant, workflows, Mail, call summaries, leads, the extension, Quick capture and the app) follows one rule. When `companyId`, `contactId` and `opportunityId` are all left out, Orbit reads the title and links the task only to a name it is sure of: a contact's full first and last name that no other contact shares, a company's full name that only one company has, or one opportunity's full name. A contact found also links their company. A first name, a surname, a name two records share, two different people in one title, and anyone whose name matches a workspace member are never linked. Any id you send is kept as sent, and `null` means deliberately none, so sending any one of the three turns the reading off. The `task.created` audit event (and its webhook `data`) carries `detectedLinks`, the fields Orbit filled in this way, such as `["companyId", "contactId"]`. Each task also carries `contactFirstName` and `contactLastName` alongside `contactName`.
+
+In the app, an unlinked task's panel offers Link a person: contacts whose first name, surname or full name is in the title (never a teammate), and companies named in full. Linking one is an ordinary update (`operation` `link_task`).
 
 ## Leads
 

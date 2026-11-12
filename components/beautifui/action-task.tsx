@@ -1,16 +1,23 @@
 "use client";
 
+import type { ComponentType, SVGProps } from "react";
+import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { ClickUpBadge } from "@/components/crm/clickup";
+import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
 import { relativeWhen } from "@/lib/companies";
-import { companyHref } from "@/lib/crm/hrefs";
+import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
+import type { TitleColleague } from "@/lib/crm/task-title";
 import { taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
+import ContactIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
+import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
+import LinkIcon from "@/public/assets/images/_common/link.svg";
 
 export type TaskAssigning = {
   members: AssignableMember[];
@@ -25,6 +32,14 @@ function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning })
   const member = assigning.members.find((item) => item.id === task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
   const name = member?.name ?? "No one";
   if (!assigning.canAssign) {
+    if (member && member.id !== assigning.viewerId && assigning.members.some((item) => item.id === member.id)) {
+      return (
+        <ColleagueLink colleague={member} className="inline-flex shrink-0 no-underline">
+          <MemberAvatar member={member} viewerId={assigning.viewerId} />
+          <span className="sr-only">Assigned to {name}</span>
+        </ColleagueLink>
+      );
+    }
     return (
       <span title={`Assigned to ${name}`} className="inline-flex shrink-0">
         <MemberAvatar member={member} viewerId={assigning.viewerId} />
@@ -49,6 +64,19 @@ function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning })
   );
 }
 
+function RecordChip({ href, label, icon: Icon }: { href: string; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }) {
+  return (
+    <Link
+      href={href}
+      title={label}
+      className="bg-secondary text-foreground inline-flex max-w-[12em] shrink-0 items-center gap-1 rounded-full py-px pr-2 pl-1.5 align-middle text-[12px] leading-5"
+    >
+      <Icon aria-hidden className="text-subtle size-3 shrink-0" />
+      <span className="truncate">{label}</span>
+    </Link>
+  );
+}
+
 export default function ActionTask({
   task,
   completed,
@@ -58,6 +86,9 @@ export default function ActionTask({
   onOpen,
   comments = 0,
   assigning,
+  colleagues = [],
+  viewerId = null,
+  canLink = false,
 }: {
   task: Task;
   completed: boolean;
@@ -67,6 +98,9 @@ export default function ActionTask({
   onOpen: () => void;
   comments?: number;
   assigning?: TaskAssigning;
+  colleagues?: TitleColleague[];
+  viewerId?: string | null;
+  canLink?: boolean;
 }) {
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
@@ -124,16 +158,20 @@ export default function ActionTask({
           )}
         </button>
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2.5">
-          <button
-            type="button"
-            data-row-open=""
-            data-row-key="space"
-            aria-haspopup="dialog"
-            onClick={onOpen}
-            className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left sm:items-center"
-          >
-            <span className="min-w-0 flex-1 text-[14px] leading-5 break-words sm:truncate">{task.title}</span>
-          </button>
+          <div className="relative flex min-w-0 flex-1 items-start gap-2 sm:items-center">
+            <button
+              type="button"
+              data-row-open=""
+              data-row-key="space"
+              aria-haspopup="dialog"
+              aria-label={task.title}
+              onClick={onOpen}
+              className="absolute inset-0 cursor-pointer rounded-md outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
+            />
+            <span className="pointer-events-none relative min-w-0 flex-1 text-[14px] leading-5 break-words sm:truncate">
+              <TaskTitle task={task} colleagues={colleagues} viewerId={viewerId} />
+            </span>
+          </div>
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
             {comments > 0 && (
               <span className="caption-style text-subtle flex shrink-0 items-center gap-1 tabular-nums" title={comments === 1 ? "1 comment" : `${comments} comments`}>
@@ -154,11 +192,23 @@ export default function ActionTask({
               task.dueAt && <span className="text-subtle shrink-0 text-[13px]">{relativeWhen(task.dueAt, now)}</span>
             )}
             <ClickUpBadge task={task} />
+            {task.contactId && task.contactName && <RecordChip href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} />}
             {task.companyName && (
               <EntityChip
                 name={task.companyName}
                 href={task.companyId ? companyHref(task.companyId) : undefined}
               />
+            )}
+            {task.opportunityId && task.opportunityName && <RecordChip href={dealHref(task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} />}
+            {canLink && !completed && !task.companyId && !task.contactId && !task.opportunityId && (
+              <button
+                type="button"
+                onClick={onOpen}
+                className="text-subtle hover:text-foreground inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset hover:bg-white/5"
+              >
+                <LinkIcon aria-hidden className="size-3" />
+                Link a person
+              </button>
             )}
             {assigning && <Assignee task={task} assigning={assigning} />}
           </div>

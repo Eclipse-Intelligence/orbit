@@ -157,6 +157,8 @@ export default function TaskPad({
   const seen = text.trim().length >= 3 ? (detected?.value ?? null) : null;
   const finalContact = contact.set ? contact.value : (seen?.contact ?? null);
   const finalCompany = fixedCompany ?? (company.set ? company.value : (seen?.company ?? seen?.contact?.company ?? null));
+  const finalOpportunity = !contact.set && !company.set && !fixedCompany ? (seen?.opportunity ?? null) : null;
+  const pending = !fixedCompany && !contact.set && !company.set && detected?.text !== text;
   const finalList = clickup ? (list.set ? list.value : clickup.listId) : null;
   const assignable = Boolean(viewerId) && members.length > 1;
   const assignee = members.find((member) => member.id === owner) ?? null;
@@ -300,8 +302,13 @@ export default function TaskPad({
       title,
       dueAt: finalDue,
       remindMinutes: finalReminder,
-      companyId: finalCompany?.id ?? null,
-      contactId: finalContact?.id ?? null,
+      ...(pending
+        ? {}
+        : {
+            companyId: finalCompany?.id ?? null,
+            contactId: finalContact?.id ?? null,
+            opportunityId: finalOpportunity?.id ?? null,
+          }),
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
     });
