@@ -4,7 +4,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import { completeTasksFromBeacon } from "@/lib/crm/task-beacon";
 import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { groupTasksByDue, taskGroupKind } from "@/lib/crm/task-views";
-import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, reopenTask } from "@/lib/crm/tasks";
+import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, reopenTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createUser, resetDatabase } from "./helpers";
@@ -168,6 +168,22 @@ describe("task list", () => {
     const task = (await createTask(mark, { title: "Draft the agenda", ownerId: mark.userId })).body.task;
     await addTaskParticipants(mark, task.id, [sam.userId]);
     await assert.rejects(reopenTask(sam, task.id), /Only the assignee/);
+  });
+
+  it("treats completed true or false that changes nothing as a no-op on every route", async () => {
+    const task = (await createTask(mark, { title: "Post the minutes", ownerId: mark.userId })).body.task;
+    const events = async () =>
+      (await sql<{ event_type: string }>("select event_type from crm.audit_events where entity_id = $1 and event_type in ('task.completed', 'task.reopened', 'task.updated') order by created_at, id", [task.id])).map((row) => row.event_type);
+    await updateTask(mark, task.id, { completed: false });
+    assert.deepEqual(await events(), []);
+    const first = (await updateTask(mark, task.id, { completed: true })).body.task;
+    await updateTask(mark, task.id, { completed: true });
+    await completeTask(mark, task.id);
+    assert.deepEqual(await events(), ["task.completed"]);
+    assert.equal((await getTask(mark, task.id)).completedAt, first.completedAt);
+    await addTaskParticipants(mark, task.id, [sam.userId]);
+    await assert.rejects(updateTask(sam, task.id, { completed: true }), /Only the assignee/);
+    await assert.rejects(completeTask(sam, task.id), /Only the assignee/);
   });
 
   it("completes a task only once when two completions race", async () => {
