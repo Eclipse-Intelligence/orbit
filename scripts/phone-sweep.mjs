@@ -322,7 +322,7 @@ for (const [device, viewport] of [
     check(`${device} Save completes and logs the outcome`, (await row.count()) === 0 && (await visible(page.getByText(/Task done\. Note saved\. Next task added\./))));
     const followUp = page.locator("li[data-task-id]").filter({ hasText: "Sweep follow-up" }).first();
     if ((await followUp.count()) > 0) sweepCallTasks.push(await followUp.getAttribute("data-task-id"));
-  } else console.log(`skip ${device} call, email and outcome checks (set CRM_AGENT_TOKEN so the sweep can add a contact)`);
+  } else check(`${device} call, email and outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a contact");
 
   const undoTask = await seedCallTask(`${device}u`);
   if (undoTask) {
@@ -343,7 +343,32 @@ for (const [device, viewport] of [
     await outcome.getByRole("textbox", { name: "What happened" }).press("Escape");
     await page.waitForTimeout(1800);
     check(`${device} Esc with a note typed saves it`, (await row.count()) === 0 && (await visible(page.getByText(/Note saved\./).first())));
-  }
+  } else check(`${device} Undo and Esc outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
+  const slowTask = await seedCallTask(`${device}s`);
+  if (slowTask) {
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    const row = page.locator(`li[data-task-id="${slowTask.id}"]`);
+    const outcome = row.getByRole("group", { name: "Done with an outcome" });
+    await row.getByRole("button", { name: /^Mark .* done$/ }).tap();
+    await page.waitForTimeout(800);
+    await outcome.getByRole("textbox", { name: "What happened" }).fill("Saved while Undo was pressed");
+    const slow = async (route) => {
+      if (route.request().method() === "POST" && route.request().headers()["next-action"]) await new Promise((resolve) => setTimeout(resolve, 2000));
+      await route.continue().catch(() => undefined);
+    };
+    await page.route("**/tasks**", slow);
+    await outcome.getByRole("button", { name: "Save" }).tap();
+    await page.waitForTimeout(300);
+    await page.getByRole("button", { name: "Undo" }).last().tap();
+    await page.waitForTimeout(4500);
+    await page.unroute("**/tasks**", slow);
+    check(`${device} Undo during Save reopens the task`, (await visible(page.getByText("Saved. Task reopened."))) && (await row.count()) === 1);
+    await page.goto(`${base}/tasks`);
+    await page.waitForTimeout(1500);
+    check(`${device} the task stays open after Undo during Save`, (await page.locator(`li[data-task-id="${slowTask.id}"]`).count()) === 1);
+  } else check(`${device} Undo during Save checked`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
   const panelTask = await seedCallTask(`${device}p`);
   if (panelTask) {
@@ -358,7 +383,7 @@ for (const [device, viewport] of [
     await inPanel.getByRole("button", { name: "Skip" }).tap();
     await page.waitForTimeout(900);
     check(`${device} Skip in the panel leaves the task done`, !(await visible(inPanel)) && (await page.locator(`li[data-task-id="${panelTask.id}"]`).count()) === 0);
-  }
+  } else check(`${device} panel outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
   const recordTask = sweepTask?.companyId ? await seedCallTask(`${device}r`) : null;
   if (recordTask) {
@@ -374,7 +399,7 @@ for (const [device, viewport] of [
     await outcome.getByRole("button", { name: "Skip" }).tap();
     await page.waitForTimeout(800);
     check(`${device} record page Skip leaves the task done`, (await row.count()) === 0);
-  }
+  } else check(`${device} record page outcome checks ran`, false, sweepTask?.companyId ? "couldn't add a task" : "add a company so the sweep can check a record page");
   await page.goto(`${base}/calendar`);
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));
@@ -468,7 +493,8 @@ for (const width of [1100, 1280, 1440]) {
     await page.waitForTimeout(1200);
     const teams = (await row.locator('a:visible[href^="msteams:"], a:visible[href^="tel:"]').first().getAttribute("href").catch(() => null)) ?? "";
     check(`${device} Call opens Teams on desktop`, teams.startsWith("msteams:"), teams);
-  }
+  } else if (width === 1280) check(`${device} keyboard outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
   await context.close();
 }
 

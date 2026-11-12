@@ -390,7 +390,7 @@ function ActionTask({
             {expansion.mounted && concluding && outcomeHandlers && (
               <div className="flex flex-col gap-3 pt-1 pr-3 pb-3 pl-3 @xl:pl-[46px]">
                 <TaskOutcomeForm
-                  key={task.id}
+                  key={outcome?.outcomeId ?? task.id}
                   task={task}
                   outcomeId={outcome?.outcomeId ?? ""}
                   focusNote={outcome?.focus ?? false}

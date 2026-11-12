@@ -215,7 +215,7 @@ export default function ActionsScreen({
       </div>
     ) : undefined;
   const colleagues = useMemo(() => members.map((member) => ({ id: member.id, name: member.name })), [members]);
-  const { done, message, setMessage, complete: markDone, release, settle, undoLast, remind } = useTaskDone(allTasks);
+  const { done, message, setMessage, complete: markDone, release, settle, abandon, undoLast, remind } = useTaskDone(allTasks);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selected, setSelected] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -311,7 +311,7 @@ export default function ActionsScreen({
     moveOn(task.id, Boolean(row && (row.dataset.kbActive === "true" || row.contains(document.activeElement))));
   }
 
-  const concluding = useTaskOutcome({ done, complete: markDone, release, settle, onClosed: concluded, onFailed: restoreOutcome });
+  const concluding = useTaskOutcome({ done, complete: markDone, release, settle, abandon, restore: true, onClosed: concluded, onFailed: restoreOutcome });
 
   function restoreOutcome(task: Task, place: OutcomePlace) {
     if (place === "row") setExpandedId(task.id);
@@ -620,7 +620,7 @@ export default function ActionsScreen({
                 viewer={viewer}
                 members={members}
                 tagged={allTagged[entry.task.id] ?? NO_TAGS}
-                expanded={expandedId === entry.task.id}
+                expanded={expandedId === entry.task.id || rowOutcome?.id === entry.task.id}
                 onToggle={onToggle}
                 onComplete={onComplete}
                 onRemind={onRemind}

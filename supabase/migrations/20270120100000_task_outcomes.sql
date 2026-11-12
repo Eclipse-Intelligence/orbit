@@ -28,7 +28,16 @@ create policy task_outcomes_insert on crm.task_outcomes
   for insert to authenticated
   with check (
     created_by = (select private.session_user_id())
-    and task_id in (select t.id from crm.tasks t)
+    and exists (
+      select 1 from crm.tasks t
+      where t.id = task_outcomes.task_id
+        and t.workspace_id in (select private.user_workspace_ids())
+        and (
+          t.owner_id = (select private.session_user_id())
+          or t.created_by_user_id = (select private.session_user_id())
+          or private.is_workspace_admin(t.workspace_id)
+        )
+    )
   );
 
 revoke all on crm.task_outcomes from anon, authenticated, crm_agent;

@@ -10,10 +10,11 @@ import { mailThreadLine } from "@/lib/crm/task-description";
 import { taskKind } from "@/lib/crm/task-kind";
 import { GET as restGetTask } from "@/app/api/v1/tasks/[id]/route";
 import { randomUUID } from "node:crypto";
-import { addTaskParticipants, createTask, getTask, listTasks, reopenTask } from "@/lib/crm/tasks";
+import { addTaskParticipants, createTask, getTask, listTasks, reopenTask, restoreTaskInDb } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { createAgent, createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
+import { withActor } from "@/lib/crm/context";
 
 let mark: UserActor;
 let sam: UserActor;
@@ -232,6 +233,24 @@ describe("task context", () => {
     assert.equal(body.task.companyPhone, null);
   });
 
+  it("finds an older email beyond the 2,000 most recent messages", async () => {
+    const person = (await createContact(mark, { companyId: northwind, firstName: "Olive", lastName: "Older", email: "olive@northwind-act.test" })).body.contact.id;
+    const task = (await createTask(mark, { title: "Call Olive", contactId: person })).body.task;
+    await message(mark, markBox, { thread: "olive", from: "mark@act.test", to: ["olive@northwind-act.test"], subject: "Long ago", at: "2025-01-10T09:00:00Z", sent: true });
+    await sql(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, thread_key, subject, from_email, to_recipients, received_at, sent_at)
+       select $1, $2, $3, $4, 'bulk-act-' || g, 'bulk-act', 'Bulk', 'bulk@else.test', '[]'::jsonb, now() - make_interval(mins => g), now() - make_interval(mins => g)
+       from generate_series(1, 2100) g`,
+      [mark.workspaceId, mark.userId, markBox.sourceId, markBox.inbox],
+    );
+    try {
+      const context = await taskContext(mark, task.id);
+      assert.equal(context.lastEmail?.subject, "Long ago");
+    } finally {
+      await sql("delete from crm.mail_messages where provider_message_id like 'bulk-act-%'");
+    }
+  });
+
   it("refuses a task the viewer can't see", async () => {
     const task = (await createTask(mark, { title: "Private follow-up", contactId: jane, ownerId: mark.userId })).body.task;
     await assert.rejects(() => taskContext(priya, task.id), /not found/i);
@@ -389,6 +408,23 @@ describe("done with an outcome", () => {
     await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [mark.workspaceId, leaver.userId]);
     const result = await completeTaskWithOutcome(mark, task.id, outcome({ next: { title: "Send Jane pricing", dueAt: null } }));
     assert.equal(result.next?.ownerId, mark.userId);
+  });
+
+  it("keeps a done task's completion time, so a second outcome window never opens", async () => {
+    const task = (await createTask(mark, { title: "Call Jane about the lease", contactId: jane })).body.task;
+    const saved = await completeTaskWithOutcome(mark, task.id, outcome({ note: "Lease agreed", kind: "call" }));
+    const restored = await withActor(mark, (db) => restoreTaskInDb(db, mark, task.id, {}, "2020-01-01T00:00:00.000Z", { operation: "undo", source: "web" }));
+    assert.equal(restored.task.completedAt, saved.task.completedAt);
+    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, outcome({ note: "Again" })), /already saved/);
+  });
+
+  it("only lets people who can change the task record an outcome directly", async () => {
+    const task = (await createTask(mark, { title: "Call Martin about the van", contactId: martin, completed: true })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    await assert.rejects(() =>
+      queryAsUser(priya.userId, "insert into crm.task_outcomes (id, task_id, completed_at, created_by) values ($1, $2, now(), $3)", [randomUUID(), task.id, priya.userId]),
+    );
+    await queryAsUser(ava.userId, "insert into crm.task_outcomes (id, task_id, completed_at, created_by) values ($1, $2, now(), $3)", [randomUUID(), task.id, ava.userId]);
   });
 
   it("just completes when nothing is entered", async () => {

@@ -225,6 +225,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                   </div>
                   {outcome && outcomeHandlers ? (
                     <TaskOutcomeForm
+                      key={outcome.outcomeId}
                       task={task}
                       outcomeId={outcome.outcomeId}
                       focusNote={outcome.focus}

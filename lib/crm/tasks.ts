@@ -394,7 +394,9 @@ async function applyTask(
   if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
   const completedAt =
     write.completedAt !== undefined
-      ? write.completedAt
+      ? write.completedAt !== null && current.completed_at
+        ? undefined
+        : write.completedAt
       : write.completed === undefined || settled
         ? undefined
         : write.completed

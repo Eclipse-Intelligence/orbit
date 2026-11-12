@@ -254,6 +254,21 @@ export function useTaskDone(tasks: Task[]) {
     [composer, expire, router],
   );
 
+  const abandon = useCallback(
+    (id: string) => {
+      if (!undone.current.has(id)) return;
+      undone.current.delete(id);
+      void (async () => {
+        const open = (await openTaskIdsAction([id]).catch(() => ({ open: [] as string[] }))).open ?? [];
+        if (open.includes(id)) return;
+        const result: Outcome = await reopenTaskAction(id).catch((): Outcome => ({ error: "Couldn't undo. Try again." }));
+        if (result.error) composer.showToast({ message: result.error, tone: "alert" });
+        router.refresh();
+      })();
+    },
+    [composer, router],
+  );
+
   const undoLast = useCallback(() => {
     const ids = [...entries.current.keys()];
     const id = ids[ids.length - 1];
@@ -287,5 +302,5 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
-  return { done, message, setMessage, complete, release, settle, undo, undoLast, remind };
+  return { done, message, setMessage, complete, release, settle, abandon, undo, undoLast, remind };
 }

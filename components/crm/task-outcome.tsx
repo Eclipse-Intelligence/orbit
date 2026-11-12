@@ -29,8 +29,8 @@ const NOT_SAVED = "Couldn't save. Try again.";
 const NOT_DONE = "Couldn't mark it done. Try again.";
 
 export type OutcomePlace = "row" | "panel";
-export type OutcomeOpen = { task: Task; focus: boolean; place: OutcomePlace; outcomeId: string };
-export type OutcomeDraft = { outcomeId: string; note: string; kind: OutcomeKind | null; nextTitle: string; nextDue: string };
+export type OutcomeOpen = { task: Task; focus: boolean; place: OutcomePlace; outcomeId: string; restoring?: boolean };
+export type OutcomeDraft = { outcomeId: string; note: string; kind: OutcomeKind | null; nextTitle: string; nextDue: string; task?: Task; stranded?: boolean };
 
 const drafts = new Map<string, OutcomeDraft>();
 
@@ -38,7 +38,7 @@ export function outcomeDraft(task: Task, outcomeId: string): OutcomeDraft {
   const kept = drafts.get(task.id);
   if (kept && kept.outcomeId === outcomeId) return kept;
   const preset = taskKind(task.title);
-  const fresh = { outcomeId, note: "", kind: preset === "todo" ? null : preset, nextTitle: "", nextDue: "" };
+  const fresh = { outcomeId, note: "", kind: preset === "todo" ? null : preset, nextTitle: "", nextDue: "", task };
   drafts.set(task.id, fresh);
   return fresh;
 }
@@ -70,11 +70,28 @@ function newOutcomeId() {
   return crypto.randomUUID();
 }
 
+function savedWhat(draft: OutcomeDraft) {
+  const note = Boolean(draft.note.trim());
+  const next = Boolean(draft.nextTitle.trim());
+  return note && next ? "Note and next task saved" : note ? "Note saved" : "Next task saved";
+}
+
+function strandedDraft(): OutcomeOpen | null {
+  for (const [id, draft] of drafts) {
+    if (!draft.stranded || !draft.task) continue;
+    drafts.set(id, { ...draft, stranded: false });
+    return { task: draft.task, focus: false, place: "row", outcomeId: draft.outcomeId, restoring: true };
+  }
+  return null;
+}
+
 export function useTaskOutcome({
   done,
   complete,
   release,
   settle,
+  abandon,
+  restore = false,
   onClosed,
   onFailed,
 }: {
@@ -82,15 +99,27 @@ export function useTaskOutcome({
   complete: (task: Task, options: { hold?: boolean }) => void;
   release: (id: string) => void;
   settle: (id: string, message: string) => boolean;
+  abandon: (id: string) => void;
+  restore?: boolean;
   onClosed?: (task: Task, place: OutcomePlace) => void;
   onFailed?: (task: Task, place: OutcomePlace) => void;
 }) {
   const composer = useComposer();
-  const [open, setOpen] = useState<OutcomeOpen | null>(null);
+  const [open, setOpen] = useState<OutcomeOpen | null>(() => (restore && typeof window !== "undefined" ? strandedDraft() : null));
   const [saving, setSaving] = useState<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
-  if (open && !done.has(open.task.id) && saving !== open.task.id) setOpen(null);
-  const outcome = open && (done.has(open.task.id) || saving === open.task.id) ? open : null;
+  const pending = useRef(new Map<string, Promise<string | null>>());
+  if (open?.restoring && done.has(open.task.id)) setOpen({ ...open, restoring: false });
+  if (open && !open.restoring && !done.has(open.task.id) && saving !== open.task.id) {
+    drafts.delete(open.task.id);
+    setOpen(null);
+  }
+  const outcome = open && (open.restoring || done.has(open.task.id) || saving === open.task.id) ? open : null;
+
+  const restoring = open?.restoring ? open.task : null;
+  useEffect(() => {
+    if (restoring) complete(restoring, { hold: true });
+  }, [restoring, complete]);
 
   function close(task: Task, place: OutcomePlace, quiet: boolean) {
     drafts.delete(task.id);
@@ -105,33 +134,37 @@ export function useTaskOutcome({
   }
 
   function save(task: Task, quiet = false): Promise<string | null> {
+    const waiting = pending.current.get(task.id);
+    if (waiting) return waiting;
     const current = outcome?.task.id === task.id ? outcome : null;
     const draft = drafts.get(task.id);
     if (!current || !draft || draft.outcomeId !== current.outcomeId) return Promise.resolve(null);
     const place = current.place;
-    const value = outcomeValue(draft);
-    const run = async () => {
+    const run = async (): Promise<string | null> => {
+      const latestDraft = drafts.get(task.id) ?? draft;
       setSaving(task.id);
-      const result = await completeTaskWithOutcomeAction(task.id, value).catch(() => ({ error: NOT_SAVED }) as { error?: string; logged?: boolean; next?: boolean; completed?: boolean });
+      const result = await completeTaskWithOutcomeAction(task.id, outcomeValue(latestDraft)).catch(
+        () => ({ error: NOT_SAVED }) as { error?: string; logged?: boolean; next?: boolean; completed?: boolean },
+      );
       setSaving(null);
-      if (result.error) {
+      if (result.error || !result.completed) {
+        const problem = result.error ?? NOT_DONE;
+        abandon(task.id);
+        if (!result.error) drafts.set(task.id, { ...latestDraft, outcomeId: newOutcomeId() });
+        const outcomeId = drafts.get(task.id)?.outcomeId ?? latestDraft.outcomeId;
+        setOpen((now) => (now?.task.id === task.id ? { ...now, outcomeId } : quiet ? { task, focus: false, place, outcomeId } : now));
         if (quiet) {
-          composer.showToast({ message: result.error, tone: "alert" });
+          composer.showToast({ message: problem, tone: "alert" });
           onFailed?.(task, place);
         }
-        return result.error;
-      }
-      if (!result.completed) {
-        release(task.id);
-        composer.showToast({ message: NOT_DONE, tone: "alert" });
-        close(task, place, quiet);
-        return null;
+        return problem;
       }
       settle(task.id, outcomeMessage(result));
       close(task, place, quiet);
       return null;
     };
-    const next = queue.current.then(run, run);
+    const next = queue.current.then(run, run).finally(() => pending.current.delete(task.id));
+    pending.current.set(task.id, next);
     queue.current = next.catch(() => undefined);
     return next;
   }
@@ -142,13 +175,26 @@ export function useTaskOutcome({
     else skip(task, quiet);
   }
 
-  function start(task: Task, focus: boolean, place: OutcomePlace) {
-    if (saving === task.id) return;
-    if (outcome && outcome.task.id !== task.id) leave(outcome.task, true);
+  function begin(task: Task, focus: boolean, place: OutcomePlace) {
     complete(task, { hold: true });
     const outcomeId = newOutcomeId();
     outcomeDraft(task, outcomeId);
     setOpen({ task, focus, place, outcomeId });
+  }
+
+  function start(task: Task, focus: boolean, place: OutcomePlace) {
+    if (saving === task.id || pending.current.has(task.id)) return;
+    if (outcome && outcome.task.id !== task.id) {
+      const previous = outcome.task;
+      if (typedOutcome(drafts.get(previous.id))) {
+        void save(previous, true).then((error) => {
+          if (!error) begin(task, focus, place);
+        });
+        return;
+      }
+      skip(previous, true);
+    }
+    begin(task, focus, place);
   }
 
   const latest = useRef(outcome);
@@ -168,14 +214,17 @@ export function useTaskOutcome({
       const current = latest.current;
       const draft = current ? drafts.get(current.task.id) : null;
       if (!current || !draft || draft.outcomeId !== current.outcomeId || !typedOutcome(draft)) return;
+      const title = current.task.title;
       void completeTaskWithOutcomeAction(current.task.id, outcomeValue(draft))
-        .catch(() => ({ error: NOT_SAVED }) as { error?: string })
+        .catch(() => ({ error: NOT_SAVED }) as { error?: string; completed?: boolean })
         .then((result) => {
-          if (result.error) toast.current({ message: `${result.error} Your note on “${current.task.title}” wasn't saved.`, tone: "alert" });
-          else {
-            drafts.delete(current.task.id);
-            toast.current({ message: `Note saved on “${current.task.title}”.` });
+          if (result.error || !result.completed) {
+            drafts.set(current.task.id, { ...draft, task: current.task, stranded: true, outcomeId: result.error ? draft.outcomeId : newOutcomeId() });
+            toast.current({ message: `Couldn't save what happened on “${title}”. It's waiting on the Tasks page.`, tone: "alert" });
+            return;
           }
+          drafts.delete(current.task.id);
+          toast.current({ message: `${savedWhat(draft)} on “${title}”.` });
         });
     };
   }, []);

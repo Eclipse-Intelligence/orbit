@@ -37,6 +37,7 @@ const OUTCOME_KINDS: OutcomeKind[] = ["call", "email", "meeting"];
 const PEOPLE_SHOWN = 8;
 const EMAIL_WINDOW_MONTHS = 12;
 const EMAIL_SCAN_LIMIT = 2000;
+const EMAIL_DEADLINE_MS = 800;
 
 function cannotChange() {
   return new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner or an admin can change it.", 403);
@@ -91,6 +92,15 @@ async function lastActivityFor(db: Db, workspaceId: string, task: Task) {
   return row ? { type: row.type, title: row.title, occurredAt: iso(row.occurred_at) ?? new Date(0).toISOString() } : null;
 }
 
+const EMAIL_MATCH = `f.role not in ('trash', 'junk', 'outbox', 'drafts')
+       and (lower(m.from_email) = $2
+         or exists (select 1 from jsonb_array_elements(m.to_recipients) r where lower(r ->> 'address') = $2)
+         or exists (select 1 from jsonb_array_elements(m.cc_recipients) r where lower(r ->> 'address') = $2))`;
+
+function lastEmailRow(row: { subject: string | null; at: Date } | undefined) {
+  return row ? { subject: row.subject, at: iso(row.at) ?? new Date(0).toISOString() } : null;
+}
+
 async function lastEmailFor(db: Db, actor: UserActor, address: string | null) {
   const email = address?.trim().toLowerCase();
   if (!email) return null;
@@ -104,16 +114,38 @@ async function lastEmailFor(db: Db, actor: UserActor, address: string | null) {
        limit ${EMAIL_SCAN_LIMIT}
      ) m
      join crm.mail_folders f on f.id = m.folder_id
-     where f.role not in ('trash', 'junk', 'outbox', 'drafts')
-       and (lower(m.from_email) = $2
-         or exists (select 1 from jsonb_array_elements(m.to_recipients) r where lower(r ->> 'address') = $2)
-         or exists (select 1 from jsonb_array_elements(m.cc_recipients) r where lower(r ->> 'address') = $2))
+     where ${EMAIL_MATCH}
      order by m.received_at desc
      limit 1`,
     [actor.userId, email],
   );
-  const row = result.rows[0];
-  return row ? { subject: row.subject, at: iso(row.at) ?? new Date(0).toISOString() } : null;
+  return lastEmailRow(result.rows[0]);
+}
+
+async function lastEmailAnywhere(db: Db, actor: UserActor, address: string | null) {
+  const email = address?.trim().toLowerCase();
+  if (!email) return null;
+  await db.query("savepoint last_email");
+  try {
+    await db.query("select set_config('statement_timeout', $1, true)", [String(EMAIL_DEADLINE_MS)]);
+    const result = await db.query<{ subject: string | null; at: Date }>(
+      `select m.subject, m.received_at as at
+       from crm.mail_messages m
+       join crm.mail_folders f on f.id = m.folder_id
+       where m.user_id = $1 and m.received_at is not null and not m.is_draft and ${EMAIL_MATCH}
+       order by m.received_at desc
+       limit 1`,
+      [actor.userId, email],
+    );
+    await db.query("rollback to savepoint last_email");
+    return lastEmailRow(result.rows[0]);
+  } catch (error) {
+    await db.query("rollback to savepoint last_email");
+    if (isPgError(error) && error.code === "57014") return null;
+    throw error;
+  } finally {
+    await db.query("release savepoint last_email");
+  }
 }
 
 async function threadFor(db: Db, actor: UserActor, description: string | null) {
@@ -165,7 +197,7 @@ export async function taskContext(actor: UserActor, taskId: string): Promise<Tas
         threadFor(db, actor, task.description),
         companyPeople(db, actor.workspaceId, task),
       ]);
-      return { opportunity, lastActivity, lastEmail, thread, people };
+      return { opportunity, lastActivity, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread, people };
     }),
     viewerBookingUrl(actor),
   ]);

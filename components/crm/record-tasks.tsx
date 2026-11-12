@@ -31,8 +31,8 @@ export default function RecordTasks({
   limit?: number;
   onCount?: (count: number) => void;
 }) {
-  const { done, message, complete, release, settle, remind } = useTaskDone(tasks);
-  const concluding = useTaskOutcome({ done, complete, release, settle, onClosed: concluded, onFailed: restoreOutcome });
+  const { done, message, complete, release, settle, abandon, remind } = useTaskDone(tasks);
+  const concluding = useTaskOutcome({ done, complete, release, settle, abandon, onClosed: concluded, onFailed: restoreOutcome });
   const outcome = concluding.outcome;
   const [now] = useState(() => Date.now());
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -167,7 +167,7 @@ export default function RecordTasks({
               viewer={viewer}
               members={team}
               colleagues={team}
-              expanded={expandedId === task.id}
+              expanded={expandedId === task.id || rowOutcome?.id === task.id}
               onToggle={onToggle}
               onComplete={onComplete}
               onRemind={onRemind}
