@@ -128,6 +128,7 @@ export function useTaskDone(tasks: Task[]) {
         open = await stillOpen(open);
       }
       open = open.filter((id) => !withdrawn.current.has(id));
+      if (open.length < ids.length) router.refresh();
       if (open.length === 0) return;
       for (const id of open) {
         const entry = entries.current.get(id);
@@ -137,6 +138,9 @@ export function useTaskDone(tasks: Task[]) {
       setDone((current) => without(current, open));
       composer.showToast({ message: NOT_DONE, tone: "alert" });
       router.refresh();
+      await wait(RECHECK_MS * 2);
+      const late = await stillOpen(open);
+      if (late.length < open.length) router.refresh();
     })();
   }, [composer, expire, router]);
 
@@ -184,11 +188,13 @@ export function useTaskDone(tasks: Task[]) {
         }
         setDone((current) => without(current, [id]));
         router.refresh();
-        await wait(RECHECK_MS);
-        const open = (await openTaskIdsAction([id]).catch(() => ({ open: [id] }))).open ?? [id];
-        if (open.includes(id)) return;
-        await reopen();
-        router.refresh();
+        for (let check = 0; check < 2; check += 1) {
+          await wait(RECHECK_MS);
+          const open = (await openTaskIdsAction([id]).catch(() => ({ open: [id] }))).open ?? [id];
+          if (open.includes(id)) continue;
+          await reopen();
+          router.refresh();
+        }
       })();
       return true;
     },

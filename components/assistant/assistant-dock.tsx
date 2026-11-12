@@ -63,7 +63,7 @@ const QUICK_ADD_SPACE = 72;
 const PILL_WIDTH = 384;
 const PILL_MIN = 224;
 const OPEN_WIDTH = 736;
-const OPEN_MIN = 448;
+const OPEN_MIN = 432;
 const CONVERSATION_KEY = "orbit-assistant-conversation";
 const CHAT_PARAM = "chat";
 

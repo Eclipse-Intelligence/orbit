@@ -269,7 +269,7 @@ for (const [device, viewport] of [
   await context.close();
 }
 
-for (const width of [1100, 1440]) {
+for (const width of [1100, 1280, 1440]) {
   const context = await browser.newContext({ viewport: { width, height: 900 } });
   const page = await context.newPage();
   await page.goto(`${base}/login`);
