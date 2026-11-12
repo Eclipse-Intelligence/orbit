@@ -10,6 +10,7 @@ import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { draftTopic, parseTopic, canonicalTopic } from "@/lib/docs/live/protocol";
+import { bind } from "@/lib/docs/live/binding";
 import { relayAllows } from "@/lib/docs/live/relay-access";
 import { LiveSession, type LiveServer, type SessionTiming } from "@/lib/docs/live/session";
 import { memoryHub } from "@/lib/docs/live/transport";
@@ -27,10 +28,16 @@ import {
   sendMailDraft,
   sendMailOnce,
 } from "@/lib/mail/compose";
-import { draftPresence, liveDraftCovered, type LiveDraftSummary } from "@/lib/mail/live-draft-client";
+import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
+import { draftPresence, LiveDraft, liveDraftCovered, settleForSend, type LiveDraftSummary } from "@/lib/mail/live-draft-client";
+import { liveDraftResponse } from "@/lib/mail/live-draft-http";
+import { SHARED_DRAFT_CHANGED } from "@/lib/mail/share-view";
+import { teammateText } from "@/lib/mail/shared-text";
 import { openLiveDraft, syncLiveDraft } from "@/lib/mail/live-draft";
 import { getSharedDraft, holdSharedDraft, saveSharedDraft, shareDraft } from "@/lib/mail/shared-drafts";
-import { removeFromShare } from "@/lib/mail/shares";
+import { removeFromShare, shareThread } from "@/lib/mail/shares";
+import { listThreads } from "@/lib/mail/threads";
 import { syncMail } from "@/lib/mail/sync";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -53,6 +60,10 @@ function outlook() {
         draftCount += 1;
         return Response.json({ id: `live-draft-${draftCount}`, conversationId: `live-conv-${draftCount}`, subject: "" }, { status: 201 });
       }
+      if (/\/(createReply|createReplyAll|createForward)$/.test(url)) {
+        draftCount += 1;
+        return Response.json({ id: `live-draft-${draftCount}`, subject: "RE: Renewal pricing", body: { contentType: "html", content: "<html><body><div>quoted</div></body></html>" } }, { status: 201 });
+      }
       if (url.endsWith("/send")) return new Response(null, { status: 202 });
       if (method === "DELETE") return new Response(null, { status: 204 });
       return Response.json({ id });
@@ -61,11 +72,34 @@ function outlook() {
     const named = url.match(/\/me\/mailFolders\/(inbox|sentitems|drafts|archive|deleteditems|junkemail|outbox)\?\$select=id$/);
     if (named) return named[1] === "inbox" ? Response.json({ id: "f-inbox" }) : Response.json({ error: { code: "ErrorFolderNotFound" } }, { status: 404 });
     if (url.startsWith(`${GRAPH}/me/mailFolders?$top=100`)) return Response.json({ value: [{ id: "f-inbox", displayName: "Inbox", childFolderCount: 0 }] });
+    if (url.includes("inferenceClassification") && !url.includes("delta")) return Response.json({ value: [] });
     const folder = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/)?.[1];
-    return Response.json({ value: [], "@odata.deltaLink": `${GRAPH}/me/mailFolders/${folder ?? "x"}/messages/delta?$deltatoken=${Date.now()}` });
+    return Response.json({ value: folder === "f-inbox" ? [inboxMessage] : [], "@odata.deltaLink": `${GRAPH}/me/mailFolders/${folder ?? "x"}/messages/delta?$deltatoken=${Date.now()}` });
   };
   return { fetchImpl, calls };
 }
+
+const inboxMessage = {
+  id: "m-live-1",
+  internetMessageId: "<m-live-1@mail.test>",
+  conversationId: "conv-live",
+  subject: "Renewal pricing",
+  bodyPreview: "Can we talk about the renewal price?",
+  body: { contentType: "html", content: "<p>Can we talk about the renewal price?</p>" },
+  from: { emailAddress: { name: "Tom Becker", address: "tom@halden.test" } },
+  toRecipients: [{ emailAddress: { name: "Mark", address: "mark@eclipse.test" } }],
+  ccRecipients: [],
+  bccRecipients: [],
+  sentDateTime: "2026-10-01T09:00:00Z",
+  receivedDateTime: "2026-10-01T09:00:05Z",
+  isRead: true,
+  isDraft: false,
+  flag: { flagStatus: "notFlagged" },
+  importance: "normal",
+  hasAttachments: false,
+  categories: [],
+  webLink: "https://outlook.office.com/mail/m-live-1",
+};
 
 function lastPatchBefore(calls: Call[], suffix: string) {
   const sendAt = calls.findIndex((call) => call.url.endsWith(suffix));
@@ -303,7 +337,9 @@ describe("every send path carries the live text", () => {
     const { fetchImpl, calls } = outlook();
     await sendMailDraft(mark, dueDraftInput(due), { storedFiles: "keep", origin: ORIGIN, fetchImpl, claimed: true });
     assert.ok(sent(calls));
-    assert.ok(calls.filter((call) => call.method === "PATCH").every((call) => JSON.stringify(call.body).includes("Wait for it, now longer")));
+    const patches = calls.filter((call) => call.method === "PATCH");
+    assert.ok(patches.length > 0);
+    assert.ok(patches.every((call) => JSON.stringify(call.body).includes("Wait for it, now longer")));
   });
 
   it("the assistant sends the live text and refuses a different body", async () => {
@@ -558,5 +594,247 @@ describe("live sessions on the draft topic", () => {
     owner.awareness.setLocalStateField("user", { id: "orbit-assistant", name: "Orbit assistant", kind: "assistant" });
     await until(() => draftPresence(teammate, sam.userId).some((entry) => entry.participant.name === "Orbit assistant"), "spoofed state arrives");
     assert.ok(draftPresence(teammate, sam.userId).every((entry) => entry.participant.kind === "person"));
+  });
+});
+
+describe("review fixes", () => {
+  it("keeps both edits when two syncs arrive at once", async () => {
+    const { shareId } = await sharedNew("Race", "Middle");
+    const owner = await client(mark, shareId);
+    const teammate = await client(sam, shareId);
+    type(owner, 0, "Start ");
+    type(teammate, "end", " end");
+    await Promise.all([push(mark, shareId, owner), push(sam, shareId, teammate)]);
+    await push(mark, shareId, owner);
+    assert.equal(await rowBody(shareId), "Start Middle end");
+  });
+
+  it("refuses a deletion while scheduled", async () => {
+    const { draft, shareId } = await sharedNew("Delete", "Keep every word");
+    const teammate = await client(sam, shareId);
+    await scheduleMailDraft(mark, { ...fresh("Delete", "ignored"), id: draft.id, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    liveText(teammate.doc).delete(4, 6);
+    await refused(push(sam, shareId, teammate), /^Scheduled\. Read only until Mark unschedules it\.$/, 409);
+    assert.equal(await rowBody(shareId), "Keep every word");
+    await cancelScheduledDraft(mark, draft.id);
+  });
+
+  it("rebuilds a stale client when the share gains a new draft, and keeps the new draft's text", async () => {
+    const thread = (await listThreads(mark, { view: { role: "inbox" } })).threads[0];
+    const share = (await shareThread(mark, thread.key, [sam.userId])).share.shareId!;
+    const reply = (body: string) => readDraftInput({ mode: "reply", messageId: thread.latestId, to: ["tom@halden.test"], subject: "RE: Renewal pricing", body });
+    const first = await saveMailDraft(mark, reply("First reply"), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    await shareDraft(mark, first.id, []);
+    const stale = await client(sam, share);
+    await discardMailDraft(mark, first.id, outlook().fetchImpl);
+    const second = await saveMailDraft(mark, reply("Second reply"), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    await shareDraft(mark, second.id, []);
+    type(stale, "end", " from the old draft");
+    const result = await push(sam, share, stale);
+    assert.equal(result.rebuilt, true);
+    assert.equal(await rowBody(share), "Second reply");
+    assert.equal(textOfReply(result.missing), "Second reply");
+    await discardMailDraft(mark, second.id, outlook().fetchImpl);
+  });
+
+  it("compacts a stored copy over 1MB into a new generation", async () => {
+    const { shareId } = await sharedNew("Big", "Small body");
+    await client(sam, shareId);
+    const heavy = new Y.Doc({ gc: false });
+    const body = liveText(heavy);
+    body.insert(0, "x".repeat(1_100_000));
+    body.delete(0, 1_100_000);
+    body.insert(0, "Small body");
+    const state = Buffer.from(Y.encodeStateAsUpdate(heavy));
+    assert.ok(state.length > 1_000_000);
+    await sql("update crm.mail_share_live set ydoc = $2 where share_id = $1", [shareId, state]);
+    const opened = await client(sam, shareId);
+    assert.equal(opened.generation, 1);
+    assert.equal(text(opened), "Small body");
+    const stored = await liveRow(shareId);
+    assert.ok(stored?.ydoc && stored.ydoc.length < 10_000);
+  });
+
+  it("tells a removed member's open channel to leave", async () => {
+    const { shareId } = await sharedNew("Kick", "Text", [sam.userId, priya.userId]);
+    await removeFromShare(mark, shareId, priya.userId);
+    await chatWorkSettled();
+    assert.ok(broadcasts.some((message) => message.topic === draftTopic(shareId) && message.event === "kick" && (message.payload as { user: string }).user === priya.userId));
+  });
+
+  it("starts a teammate's view from the new draft's text, so an old draft's text can't overwrite it", async () => {
+    const sentText = { subject: "RE: Renewal pricing", body: "Old sent text" };
+    const newText = { subject: "RE: Renewal pricing", body: "New draft text" };
+    assert.deepEqual(teammateText(sentText, sentText, newText, { editing: true, starting: true }), newText);
+    assert.deepEqual(teammateText(sentText, { ...sentText, body: "typing" }, newText, { editing: true, starting: false }), { ...newText, body: "typing" });
+    const doc = createLiveDoc(Y.encodeStateAsUpdate(createLiveDoc((() => {
+      const seed = new Y.Doc();
+      liveText(seed).insert(0, newText.body);
+      return Y.encodeStateAsUpdate(seed);
+    })())));
+    const session = new LiveSession({ pageId: "x", user: { id: "u", name: "U", kind: "person" }, doc, serverVector: Y.encodeStateVector(doc), revision: 0, title: "", transport: null, server: { sync: async () => ({ vector: Y.encodeStateVector(doc), missing: new Uint8Array([0, 0]), revision: 0 }) } });
+    bind(fakeView(teammateText(sentText, sentText, newText, { editing: true, starting: true }).body), session, newText.body);
+    assert.equal(liveText(doc).toString(), "New draft text");
+    await session.close({ save: false });
+  });
+});
+
+function textOfReply(state: Uint8Array) {
+  const doc = createLiveDoc(state);
+  const out = liveText(doc).toString();
+  doc.destroy();
+  return out;
+}
+
+function fakeView(doc: string) {
+  const view = {
+    state: EditorState.create({ doc, selection: EditorSelection.single(doc.length) }),
+    hasFocus: false,
+    dispatch(spec: TransactionSpec) {
+      view.state = view.state.update(spec).state;
+    },
+  };
+  return view as unknown as EditorView & { state: EditorState };
+}
+
+describe("the browser controller", () => {
+  const saved: Record<string, unknown> = {};
+  let actorFor: UserActor;
+
+  before(() => {
+    for (const key of ["fetch", "document", "window"]) saved[key] = (globalThis as Record<string, unknown>)[key];
+    const g = globalThis as Record<string, unknown>;
+    g.document = Object.assign(new EventTarget(), { visibilityState: "visible" });
+    g.window = new EventTarget();
+    g.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input), "http://orbit.test");
+      const shareId = decodeURIComponent(url.pathname.split("/")[4] ?? "");
+      const method = init?.method ?? "GET";
+      return liveDraftResponse(actorFor, shareId, new Request(url, { method, headers: init?.headers, body: method === "GET" ? undefined : init?.body }));
+    };
+  });
+
+  after(() => {
+    for (const [key, value] of Object.entries(saved)) (globalThis as Record<string, unknown>)[key] = value;
+  });
+
+  async function opened(live: LiveDraft) {
+    await until(() => live.current !== null && live.version !== null, "the live draft opens");
+    return live.current!;
+  }
+
+  it("keeps the session through the composer unmounting on Send, and sends what was on screen", async () => {
+    actorFor = mark;
+    const { draft, shareId } = await sharedNew("Unmount", "On the screen");
+    const live = new LiveDraft({ shareId, user: { id: mark.userId, name: "Mark", kind: "person" }, base: "On the screen" });
+    live.attach(fakeView("On the screen"));
+    const session = await opened(live);
+    session.text.delete(3, 4);
+    await session.sync();
+    session.text.insert(session.text.length, ", typed just before Send");
+    const release = live.retain();
+    const shown = { subject: "Unmount", body: live.text()! };
+    live.detach();
+    const settled = await settleForSend(live, shown, () => getSharedDraft(mark, shareId), SHARED_DRAFT_CHANGED);
+    assert.equal(settled.body, "On screen, typed just before Send");
+    await holdSharedDraft(mark, draft.id, true, settled.version);
+    release();
+    assert.equal(live.current, null);
+    assert.equal(await rowBody(shareId), "On screen, typed just before Send");
+    await holdSharedDraft(mark, draft.id, false);
+  });
+
+  it("settles when Send is pressed before the session has opened", async () => {
+    actorFor = mark;
+    const { shareId } = await sharedNew("Early", "Early text");
+    const live = new LiveDraft({ shareId, user: { id: mark.userId, name: "Mark", kind: "person" }, base: "Early text" });
+    live.attach(fakeView("Early text"));
+    const release = live.retain();
+    const shown = { subject: "Early", body: live.text() ?? "Early text" };
+    live.detach();
+    const settled = await settleForSend(live, shown, () => getSharedDraft(mark, shareId), SHARED_DRAFT_CHANGED);
+    assert.equal(settled.body, "Early text");
+    release();
+    assert.equal(live.current, null);
+  });
+
+  it("refuses to send a subject the owner hasn't seen", async () => {
+    actorFor = mark;
+    const { shareId } = await sharedNew("Seen subject", "Body");
+    const live = new LiveDraft({ shareId, user: { id: mark.userId, name: "Mark", kind: "person" }, base: "Body" });
+    live.attach(fakeView("Body"));
+    await opened(live);
+    await saveSharedDraft(sam, shareId, { subject: "Changed by Sam", body: null });
+    await assert.rejects(settleForSend(live, { subject: "Seen subject", body: "Body" }, () => getSharedDraft(mark, shareId), SHARED_DRAFT_CHANGED), new RegExp(SHARED_DRAFT_CHANGED));
+    live.close();
+  });
+
+  it("keeps a locked teammate's typing unconfirmed and unbroadcast, and saves it once unlocked", async () => {
+    actorFor = sam;
+    const { draft, shareId } = await sharedNew("Locked", "Locked text");
+    const live = new LiveDraft({ shareId, user: { id: sam.userId, name: "Sam", kind: "person" }, base: "Locked text" });
+    live.attach(fakeView("Locked text"));
+    const session = await opened(live);
+    await scheduleMailDraft(mark, { ...fresh("Locked", "ignored"), id: draft.id, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    session.text.insert(session.text.length, " typed");
+    await session.sync();
+    assert.match(live.locked ?? "", /^Scheduled/);
+    assert.equal(await rowBody(shareId), "Locked text");
+    assert.equal(session.unconfirmed(), true);
+    assert.equal(session.serverText, "Locked text");
+    await cancelScheduledDraft(mark, draft.id);
+    await session.sync();
+    await session.sync();
+    assert.equal(live.locked, null);
+    await until(async () => (await rowBody(shareId)) === "Locked text typed", "the typing saves after unlock");
+    live.close();
+  });
+
+  it("shows a failed live save as an error from flush", async () => {
+    actorFor = sam;
+    const { shareId } = await sharedNew("Fail", "Short");
+    const failures: string[] = [];
+    const live = new LiveDraft({ shareId, user: { id: sam.userId, name: "Sam", kind: "person" }, base: "Short", onFailure: (message) => failures.push(message) });
+    live.attach(fakeView("Short"));
+    const session = await opened(live);
+    session.text.insert(session.text.length, "x".repeat(20_001));
+    await assert.rejects(live.flush(), /under 20,000 characters/);
+    assert.ok(failures.some((message) => /20,000/.test(message)));
+    live.close();
+  });
+});
+
+describe("paused updates", () => {
+  it("doesn't broadcast a paused session's typing to peers", async () => {
+    const { shareId } = await sharedNew("Paused", "Base");
+    const hub = memoryHub();
+    const make = async (actor: UserActor) => {
+      const opened = await openLiveDraft(actor, shareId);
+      const doc = createLiveDoc(opened.state);
+      const live = new LiveSession<LiveDraftSummary>({
+        pageId: shareId,
+        topic: draftTopic(shareId),
+        user: { id: actor.userId, name: actor.fullName ?? "", kind: "person" },
+        doc,
+        serverVector: Y.encodeStateVector(doc),
+        revision: opened.version,
+        generation: opened.generation,
+        title: "",
+        transport: hub.transport(),
+        server: { sync: async () => { throw new Error("offline"); } },
+        timing: { ...FAST, saveMs: 60_000, saveMaxMs: 60_000, ownMs: 60_000 },
+      });
+      live.start();
+      return live;
+    };
+    const owner = await make(mark);
+    const teammate = await make(sam);
+    await until(() => owner.status !== "connecting" && teammate.status !== "connecting", "both join");
+    teammate.pauseUpdates(true);
+    teammate.text.insert(0, "hidden ");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(owner.text.toString(), "Base");
+    await owner.close({ save: false });
+    await teammate.close({ save: false });
   });
 });

@@ -13,7 +13,7 @@ import { recipientList } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
 import type { MailSharePerson, SharedDraft } from "@/lib/mail/share-types";
 import { draftStateLine, onlyOwnerSends, ownerDraftTitle, personFirstName } from "@/lib/mail/share-view";
-import { newerVersion, type DraftText } from "@/lib/mail/shared-text";
+import { newerVersion, teammateText, type DraftText } from "@/lib/mail/shared-text";
 import { cn } from "@/lib/utils";
 import CloseIcon from "@/public/assets/images/mail/close.svg";
 import CheckIcon from "@/public/assets/images/mail/check.svg";
@@ -65,6 +65,7 @@ export default function SharedDraftEditor({
   const [text, setText] = useState<DraftText>({ subject: "", body: "" });
   const [base, setBase] = useState<Base | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [liveError, setLiveError] = useState<string | null>(null);
   const [save, setSave] = useState<Save>({ kind: "idle" });
   const [live, setLive] = useState<LiveDraft | null>(null);
   const [liveStatus, setLiveStatus] = useState<LiveDraftStatus>("opening");
@@ -91,20 +92,22 @@ export default function SharedDraftEditor({
         seen.current = fresh.version;
         const freshText = textOf(fresh);
         const previous = latest.current.base;
-        const local = latest.current.text;
-        const subject = fresh.state === "editing" && previous && local.subject !== previous.text.subject ? local.subject : freshText.subject;
-        const next = { subject, body: previous ? local.body : freshText.body };
-        latest.current = { ...latest.current, text: next, base: { text: freshText, version: fresh.version } };
         const open = fresh.state === "editing" || fresh.state === "sending" || fresh.state === "scheduled" || fresh.state === "failed";
-        if (open && !liveRef.current) {
+        const starting = open && !liveRef.current;
+        const next = teammateText(previous?.text ?? null, latest.current.text, freshText, { editing: fresh.state === "editing", starting });
+        latest.current = { ...latest.current, text: next, base: { text: freshText, version: fresh.version } };
+        if (starting) {
           const created = new LiveDraft({
             shareId,
             user: { id: viewer.id, name: viewer.name, kind: "person" },
             base: freshText.body,
             onLocked: () => loadRef.current(),
-            onStatus: setLiveStatus,
+            onStatus: (status) => {
+              setLiveStatus(status);
+              if (status === "live" || status === "solo") setLiveError(null);
+            },
             onFailure: (message) => {
-              setLoadError(message);
+              setLiveError(message);
               loadRef.current();
             },
           });
@@ -126,6 +129,10 @@ export default function SharedDraftEditor({
   useEffect(() => {
     loadRef.current = load;
   });
+
+  useEffect(() => {
+    live?.setReadOnly(locked);
+  }, [live, locked]);
 
   useEffect(() => {
     load();
@@ -290,6 +297,11 @@ export default function SharedDraftEditor({
               </div>
             )}
           </>
+        )}
+        {liveError && draft && !gone && (
+          <p role="alert" className="caption-style text-danger">
+            {liveError}
+          </p>
         )}
         {save.kind === "error" && (
           <p role="alert" className="caption-style text-danger">

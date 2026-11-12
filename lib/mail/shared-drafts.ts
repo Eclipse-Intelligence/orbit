@@ -14,7 +14,7 @@ import type { MailAddress } from "@/lib/mail/types";
 export const SHARED_TEXT_LOCKED = "This draft is shared, so its subject and message can't be changed here. Send it as it is, or edit it in Mail.";
 export const DRAFT_NO_ACCESS = "You no longer have access to this draft.";
 
-const BODY_MAX = 20_000;
+export const BODY_MAX = 20_000;
 const SUBJECT_MAX = 300;
 const THREAD_TRIES = 3;
 

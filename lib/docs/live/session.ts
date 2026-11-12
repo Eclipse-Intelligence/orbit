@@ -37,6 +37,7 @@ export type SyncReply<Summary = unknown> = {
   title?: string;
   generation?: number;
   rebuilt?: boolean;
+  held?: boolean;
   summary?: Summary;
 };
 export type LiveServer<Summary = unknown> = { sync: (input: SyncInput) => Promise<SyncReply<Summary>> };
@@ -195,6 +196,7 @@ export class LiveSession<Summary = unknown> {
   private confirmedSeq = 0;
   private remoteSeq = 0;
   private keptAlive: number | null = null;
+  private paused = false;
   private own = new Map<number, number>();
   private titleDirty = false;
   private syncing: Promise<void> | null = null;
@@ -443,6 +445,12 @@ export class LiveSession<Summary = unknown> {
     return this.runSync(false);
   }
 
+  pauseUpdates(paused: boolean) {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    if (!paused && this.unconfirmed()) void this.sync();
+  }
+
   private localState(): LiveAwareness {
     return { user: this.user, saver: true, cursor: null };
   }
@@ -605,7 +613,7 @@ export class LiveSession<Summary = unknown> {
       clearTimeout(this.awarenessTimer);
       this.awarenessTimer = null;
     }
-    const updates = this.pending;
+    const updates = this.paused ? [] : this.pending;
     this.pending = [];
     const sendAwareness = this.awarenessDirty;
     this.awarenessDirty = false;
@@ -715,7 +723,7 @@ export class LiveSession<Summary = unknown> {
         const hello = payload as HelloMessage;
         if (this.foreign(hello.g)) return;
         const vector = decodeBytes(hello.sv);
-        if (this.isSaver() && vector && typeof hello.c === "number") {
+        if (this.isSaver() && !this.paused && vector && typeof hello.c === "number") {
           const diff = Y.encodeStateAsUpdate(this.doc, vector);
           const u = encodeBytes(diff);
           if (!isEmptyUpdate(diff) && u.length <= LIVE_MESSAGE_MAX) this.channel?.send("state", { to: hello.c, u, ...this.generationTag() } satisfies StateMessage);
@@ -749,6 +757,7 @@ export class LiveSession<Summary = unknown> {
       }
       case "pull":
       case "title":
+      case "kick":
         this.hint(true);
         return;
       default:
@@ -835,9 +844,9 @@ export class LiveSession<Summary = unknown> {
     } else {
       this.quietBeats += 1;
     }
-    this.confirmedSeq = Math.max(this.confirmedSeq, context.seqAtStart);
+    if (!reply.held) this.confirmedSeq = Math.max(this.confirmedSeq, context.seqAtStart);
     if (context.title !== undefined && this.title === context.title) this.titleDirty = false;
-    if (this.ownSeq === context.seqAtStart && this.remoteSeq === context.remoteAtStart && reply.revision >= this.confirmedRevision) {
+    if (!reply.held && this.ownSeq === context.seqAtStart && this.remoteSeq === context.remoteAtStart && reply.revision >= this.confirmedRevision) {
       this.confirmedText = this.text.toString();
       this.confirmedRevision = reply.revision;
     }
@@ -862,7 +871,7 @@ export class LiveSession<Summary = unknown> {
       for (const listener of this.titleListeners) listener(reply.title);
     }
     if (this.joined && this.channel) {
-      if (this.isSaver() || context.sent) this.channel.send("saved", { sv: encodeBytes(reply.vector), r: reply.revision, ...this.generationTag() } satisfies SavedMessage);
+      if (!reply.held && (this.isSaver() || context.sent)) this.channel.send("saved", { sv: encodeBytes(reply.vector), r: reply.revision, ...this.generationTag() } satisfies SavedMessage);
       if (context.title !== undefined) this.channel.send("title", { t: context.title } satisfies TitleMessage);
     }
     for (const listener of this.savedListeners) listener(reply);

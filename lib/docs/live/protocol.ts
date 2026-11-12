@@ -2,7 +2,7 @@ import type { ParticipantKind } from "@/lib/docs/client-types";
 
 export type LiveTransportKind = "supabase" | "relay";
 
-export type LiveEvent = "hello" | "state" | "update" | "awareness" | "saved" | "pull" | "title" | "writing" | "alert" | "chat" | "typing" | "mail_share";
+export type LiveEvent = "hello" | "state" | "update" | "awareness" | "saved" | "pull" | "title" | "writing" | "alert" | "chat" | "typing" | "mail_share" | "kick";
 
 export type LiveUser = { id: string; name: string; kind: ParticipantKind };
 

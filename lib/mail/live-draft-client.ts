@@ -5,10 +5,10 @@ import { setPresence } from "@/lib/docs/editor/presence";
 import { bind, unbind } from "@/lib/docs/live/binding";
 import { draftTopic, type LiveTransportKind, type LiveUser } from "@/lib/docs/live/protocol";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
-import { integratedUpdate, KEEPALIVE_MAX, LiveSession, LiveSyncError, type LiveServer, type LiveStatus, type SyncReply } from "@/lib/docs/live/session";
+import { KEEPALIVE_MAX, LiveSession, LiveSyncError, type LiveServer, type LiveStatus, type SyncReply } from "@/lib/docs/live/session";
 import { supabaseTransport } from "@/lib/docs/live/supabase-transport";
 import type { LiveTransport } from "@/lib/docs/live/transport";
-import { absoluteFrom, createLiveDoc, decodeBytes, encodeBytes, isEmptyUpdate } from "@/lib/docs/live/ydoc";
+import { absoluteFrom, createLiveDoc, decodeBytes, encodeBytes } from "@/lib/docs/live/ydoc";
 import { liveParticipant } from "@/lib/docs/participants";
 
 export type LiveDraftSummary = { version: number; locked: string | null };
@@ -40,7 +40,8 @@ type Options = {
 type Opened = { state: Uint8Array; generation: number; version: number; locked: string | null; transport: LiveTransportKind | null };
 
 export const LIVE_SEND_FAILED = "Couldn't send. Try again.";
-const UNREACHABLE = "Couldn't reach Orbit.";
+const UNREACHABLE = "Couldn't reach Orbit. Try again.";
+const UNREADABLE = "Couldn't read Orbit's reply. Try again.";
 const SIGNED_OUT = "Your session ended. Sign in again.";
 const RETRY_OPEN_MS = 3_000;
 const EMPTY_UPDATE = new Uint8Array([0, 0]);
@@ -91,7 +92,10 @@ export function draftPresence(session: LiveSession<LiveDraftSummary>, viewerId: 
 }
 
 export function liveDraftCovered(session: LiveSession<LiveDraftSummary>) {
-  return isEmptyUpdate(integratedUpdate(session.doc, session.serverState));
+  if (session.unconfirmed()) return false;
+  const server = Y.decodeStateVector(session.serverState);
+  for (const [client, clock] of Y.decodeStateVector(Y.encodeStateVector(session.doc))) if ((server.get(client) ?? 0) < clock) return false;
+  return true;
 }
 
 export class LiveDraft {
@@ -109,6 +113,9 @@ export class LiveDraft {
   private retry: ReturnType<typeof setTimeout> | null = null;
   private waiters = new Set<() => void>();
   private kind: LiveTransportKind | null = null;
+  private retained = 0;
+  private headless = false;
+  private readOnly = false;
 
   constructor(options: Options) {
     this.shareId = options.shareId;
@@ -122,10 +129,41 @@ export class LiveDraft {
   attach(view: EditorView) {
     if (this.closed) return;
     this.view = view;
+    this.headless = false;
+    if (this.session) {
+      bind(view, this.session, this.session.text.toString());
+      return;
+    }
     void this.open(this.options.base, null);
   }
 
+  retain() {
+    this.retained += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.retained -= 1;
+      if (this.retained === 0 && this.headless) {
+        this.headless = false;
+        this.detach(false);
+      }
+    };
+  }
+
+  setReadOnly(readOnly: boolean) {
+    this.readOnly = readOnly;
+    this.applyPause();
+  }
+
   detach(save = true) {
+    if (this.retained > 0 && !this.closed) {
+      const view = this.view;
+      this.view = null;
+      this.headless = true;
+      if (view && this.session) unbind(view);
+      return;
+    }
     this.token += 1;
     if (this.retry) clearTimeout(this.retry);
     this.retry = null;
@@ -154,8 +192,15 @@ export class LiveDraft {
     return this.session?.text.toString() ?? null;
   }
 
+  confirmedText() {
+    return this.session?.serverText ?? null;
+  }
+
   async flush() {
-    await this.session?.sync();
+    const session = this.session;
+    if (!session) return;
+    await session.sync();
+    if (session.failure) throw new Error(session.failure.message);
   }
 
   async settle(waitMs = 8_000): Promise<number> {
@@ -193,12 +238,16 @@ export class LiveDraft {
     this.options.onStatus?.(status);
   }
 
+  private applyPause() {
+    this.session?.pauseUpdates(this.readOnly || this.locked !== null);
+  }
+
   private setLocked(locked: string | null) {
     const was = this.locked;
     this.locked = locked;
     if (was === locked) return;
+    this.applyPause();
     this.options.onLocked?.(locked);
-    if (was && !locked && this.session?.unconfirmed()) void this.session.sync();
   }
 
   private server(): LiveServer<LiveDraftSummary> {
@@ -224,7 +273,7 @@ export class LiveDraft {
       }
       const payload = await readPayload(response);
       const vector = decodeBytes(payload.vector);
-      if (!vector) throw new LiveSyncError("Couldn't read Orbit's reply.", 502, "invalid_reply");
+      if (!vector) throw new LiveSyncError(UNREADABLE, 502, "invalid_reply");
       const version = typeof payload.version === "number" ? payload.version : 0;
       const locked = typeof payload.locked === "string" ? payload.locked : null;
       return {
@@ -233,6 +282,7 @@ export class LiveDraft {
         revision: version,
         generation: typeof payload.generation === "number" ? payload.generation : undefined,
         rebuilt: payload.rebuilt === true,
+        held: strip && input.update !== null && input.update.length > 2,
         summary: { version, locked },
       };
     };
@@ -242,7 +292,7 @@ export class LiveDraft {
   private async fetchOpen(): Promise<Opened> {
     const payload = await readPayload(await request(liveUrl(this.shareId), {}));
     const state = decodeBytes(payload.state);
-    if (!state) throw new LiveSyncError("Couldn't read Orbit's reply.", 502, "invalid_reply");
+    if (!state) throw new LiveSyncError(UNREADABLE, 502, "invalid_reply");
     return {
       state,
       generation: typeof payload.generation === "number" ? payload.generation : 0,
@@ -278,7 +328,7 @@ export class LiveDraft {
     this.kind = kind;
     const transport = kind ? await transportFor(kind).catch(() => null) : null;
     const view = this.view;
-    if (token !== this.token || this.closed || !view) return;
+    if (token !== this.token || this.closed || (!view && !this.headless)) return;
     this.version = opened.version;
     this.setLocked(opened.locked);
     const doc = createLiveDoc(opened.state);
@@ -295,14 +345,15 @@ export class LiveDraft {
       server: this.server(),
     });
     this.session = session;
-    bind(view, session, base);
-    this.stopWatching = this.watch(view, session);
+    this.applyPause();
+    if (view) bind(view, session, base);
+    this.stopWatching = this.watch(session);
     session.start();
     if (replacement) void session.sync();
     this.wakeWaiters();
   }
 
-  private watch(view: EditorView, session: LiveSession<LiveDraftSummary>) {
+  private watch(session: LiveSession<LiveDraftSummary>) {
     let queued = false;
     let stopped = false;
     const viewerId = this.options.user.id;
@@ -311,7 +362,7 @@ export class LiveDraft {
       queued = true;
       queueMicrotask(() => {
         queued = false;
-        if (!stopped) view.dispatch({ effects: setPresence.of(draftPresence(session, viewerId)) });
+        if (!stopped) this.view?.dispatch({ effects: setPresence.of(draftPresence(session, viewerId)) });
       });
     };
     const offStatus = session.subscribe(() => {
@@ -333,7 +384,7 @@ export class LiveDraft {
       this.stopWatching?.();
       this.stopWatching = null;
       this.session = null;
-      unbind(view);
+      if (this.view) unbind(this.view);
       void session.close({ save: false });
       void this.open(base, replacement?.state ? { state: replacement.state, generation: replacement.generation ?? 0, version: replacement.revision } : null);
     });
@@ -370,4 +421,18 @@ export class LiveDraft {
       window.removeEventListener("pageshow", onShow);
     };
   }
+}
+
+export type StoredDraftText = { subject: string; body: string; version: number };
+
+function sameSubject(left: string, right: string) {
+  return left.replace(/\s+/g, " ").trim() === right.replace(/\s+/g, " ").trim();
+}
+
+export async function settleForSend(live: LiveDraft, shown: { subject: string; body: string }, stored: () => Promise<StoredDraftText>, changed: string): Promise<StoredDraftText> {
+  const version = await live.settle();
+  const body = live.text();
+  const fresh = await stored();
+  if (body === null || body !== shown.body || fresh.body !== body || !sameSubject(fresh.subject, shown.subject) || fresh.version < version) throw new Error(changed);
+  return { subject: fresh.subject, body, version: fresh.version };
 }

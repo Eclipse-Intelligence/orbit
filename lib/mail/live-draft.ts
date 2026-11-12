@@ -1,16 +1,15 @@
 import * as Y from "yjs";
 import { chatBackground } from "@/lib/crm/chat";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { appTransaction, type Db } from "@/lib/db/pool";
 import { liveTransport, publishLiveBatch } from "@/lib/docs/live/broadcast";
 import { draftTopic, type LiveTransportKind } from "@/lib/docs/live/protocol";
 import { createLiveDoc, liveText, pendingLiveDoc, plainLiveDoc, setLiveText, stateFromMarkdown } from "@/lib/docs/live/ydoc";
-import { DRAFT_NO_ACCESS, draftFailure } from "@/lib/mail/shared-drafts";
+import { BODY_MAX, DRAFT_NO_ACCESS, draftFailure } from "@/lib/mail/shared-drafts";
 
 export const DRAFT_LIVE_STATE_MAX = 1_000_000;
-export const DRAFT_BODY_MAX = 20_000;
 
 const SERVER_ORIGIN = "server";
 
@@ -27,7 +26,7 @@ export type DraftLiveReply = {
   transport: LiveTransportKind | null;
 };
 
-type LockedRow = { owner_user_id: string; draft_id: string; body: string; ydoc: Buffer | null; generation: number; version: number; refusal: string | null };
+type LockedRow = { draft_id: string; body: string; ydoc: Buffer | null; generation: number; version: number; refusal: string | null };
 
 type Copy = { doc: Y.Doc; generation: number; stored: boolean };
 
@@ -76,12 +75,15 @@ async function lockDraft(db: Db, userId: string, shareId: string) {
   }
 }
 
-async function storeDraft(db: Db, userId: string, shareId: string, row: LockedRow, body: string | null, copy: Copy) {
+async function storeDraft(db: Db, userId: string, shareId: string, body: string | null, copy: Copy) {
   try {
-    const result = await db.query<{ version: number; changed: boolean }>(
-      "select version, changed from private.shared_draft_live_store($1, $2, $3, $4, $5, $6)",
-      [userId, shareId, row.draft_id, body, Buffer.from(Y.encodeStateAsUpdate(copy.doc)), copy.generation],
-    );
+    const result = await db.query<{ version: number }>("select version from private.shared_draft_live_store($1, $2, $3, $4, $5)", [
+      userId,
+      shareId,
+      body,
+      Buffer.from(Y.encodeStateAsUpdate(copy.doc)),
+      copy.generation,
+    ]);
     return result.rows[0];
   } catch (error) {
     draftFailure(error);
@@ -99,6 +101,7 @@ function announcePull(shareId: string, generation: number) {
 export async function syncLiveDraft(actor: UserActor, shareId: unknown, input: DraftLiveInput = {}): Promise<DraftLiveReply> {
   const id = checkShare(shareId);
   const outcome = await appTransaction(async (db) => {
+    await db.query("set local lock_timeout = '3s'");
     const row = await lockDraft(db, actor.userId, id);
     let copy = liveCopyOf(row);
     const rebuiltNow = copy.generation !== row.generation;
@@ -120,7 +123,7 @@ export async function syncLiveDraft(actor: UserActor, shareId: unknown, input: D
       }
     }
     const text = liveText(copy.doc).toString();
-    if (text.length > DRAFT_BODY_MAX) throw new CrmError("too_long", "Keep the message under 20,000 characters.", 413);
+    if (text.length > BODY_MAX) throw new CrmError("too_long", "Keep the message under 20,000 characters.", 413);
     if (Y.encodeStateAsUpdate(copy.doc).length > DRAFT_LIVE_STATE_MAX) {
       copy.doc.destroy();
       copy = freshCopy(text, copy.generation + 1);
@@ -129,7 +132,7 @@ export async function syncLiveDraft(actor: UserActor, shareId: unknown, input: D
     let version = row.version;
     const changed = text !== row.body;
     if (changed || !copy.stored || !sameBytes(before, Y.encodeStateVector(copy.doc)) || copy.generation !== row.generation) {
-      const stored = await storeDraft(db, actor.userId, id, row, changed ? text : null, copy);
+      const stored = await storeDraft(db, actor.userId, id, changed ? text : null, copy);
       version = stored.version;
     }
     const state = Y.encodeStateAsUpdate(copy.doc);
@@ -146,6 +149,9 @@ export async function syncLiveDraft(actor: UserActor, shareId: unknown, input: D
       locked: row.refusal,
       rebuiltNow: rebuiltNow || copy.generation !== row.generation,
     };
+  }).catch((error: unknown) => {
+    if (isPgError(error) && error.code === "55P03") throw new CrmError("busy", "Couldn't save the draft. Try again.", 503);
+    throw error;
   });
   if (outcome.rebuiltNow) announcePull(id, outcome.generation);
   return {

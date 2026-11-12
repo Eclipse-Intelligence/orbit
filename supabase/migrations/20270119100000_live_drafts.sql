@@ -80,8 +80,10 @@ $$;
 revoke all on function private.shared_draft_live_lock(uuid, uuid) from public;
 grant execute on function private.shared_draft_live_lock(uuid, uuid) to crm_app;
 
-create or replace function private.shared_draft_live_store(p_user uuid, p_share uuid, p_draft uuid, p_body text, p_ydoc bytea, p_generation integer)
-returns table (version integer, owner_user_id uuid, members uuid[], changed boolean)
+drop function if exists private.shared_draft_live_store(uuid, uuid, uuid, text, bytea, integer);
+
+create or replace function private.shared_draft_live_store(p_user uuid, p_share uuid, p_body text, p_ydoc bytea, p_generation integer)
+returns table (version integer)
 language plpgsql
 security definer
 set search_path = ''
@@ -91,14 +93,13 @@ declare
   v_share crm.mail_shares;
   v_draft crm.mail_drafts;
   v_refusal text;
-  v_changed boolean := false;
 begin
   if p_user is null or p_share is null or not private.mail_share_open_to(p_share, p_user) then
     raise exception 'You no longer have access to this draft.' using errcode = 'P0002';
   end if;
   select s.* into v_share from crm.mail_shares s where s.id = p_share for update;
   select d.* into v_draft from crm.mail_drafts d where d.id = v_share.draft_id and d.user_id = v_share.owner_user_id for update;
-  if v_draft.id is null or v_draft.id <> p_draft then
+  if v_draft.id is null then
     raise exception 'This draft was sent or discarded.' using errcode = 'P0002';
   end if;
   if p_generation is null or p_generation < 0 then
@@ -114,17 +115,66 @@ begin
     end if;
     update crm.mail_drafts d set body = p_body, updated_at = now() where d.id = v_draft.id;
     update crm.mail_shares s set draft_version = s.draft_version + 1 where s.id = v_share.id returning * into v_share;
-    v_changed := true;
   end if;
   insert into crm.mail_share_live as l (share_id, ydoc, generation, updated_at)
     values (p_share, p_ydoc, p_generation, now())
     on conflict (share_id) do update set ydoc = excluded.ydoc, generation = excluded.generation, updated_at = excluded.updated_at;
-  return query select v_share.draft_version, v_share.owner_user_id, array(select m.user_id from crm.mail_share_members m where m.share_id = v_share.id), v_changed;
+  return query select v_share.draft_version;
 end;
 $$;
 
-revoke all on function private.shared_draft_live_store(uuid, uuid, uuid, text, bytea, integer) from public;
-grant execute on function private.shared_draft_live_store(uuid, uuid, uuid, text, bytea, integer) to crm_app;
+revoke all on function private.shared_draft_live_store(uuid, uuid, text, bytea, integer) from public;
+grant execute on function private.shared_draft_live_store(uuid, uuid, text, bytea, integer) to crm_app;
+
+create or replace function private.merge_shared_draft(p_user uuid, p_share uuid, p_subject text, p_body text, p_base integer)
+returns table (version integer, owner_user_id uuid, members uuid[])
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_share crm.mail_shares;
+  v_draft crm.mail_drafts;
+  v_owner text;
+  v_refusal text;
+begin
+  if p_user is null or not private.mail_share_open_to(p_share, p_user) then
+    raise exception 'You no longer have access to this draft.' using errcode = 'P0002';
+  end if;
+  select s.* into v_share from crm.mail_shares s where s.id = p_share for update;
+  select d.* into v_draft from crm.mail_drafts d where d.id = v_share.draft_id and d.user_id = v_share.owner_user_id for update;
+  if v_draft.id is null then
+    raise exception 'This draft was sent or discarded.' using errcode = 'P0002';
+  end if;
+  if p_body is not null and char_length(p_body) > 20000 then
+    raise exception 'Keep the message under 20,000 characters.' using errcode = '22023';
+  end if;
+  if p_subject is not null and char_length(p_subject) > 300 then
+    raise exception 'Keep the subject under 300 characters.' using errcode = '22023';
+  end if;
+  v_refusal := private.shared_draft_refusal(p_user, v_share, v_draft);
+  if v_refusal is not null then
+    raise exception '%', v_refusal using errcode = '55006';
+  end if;
+  v_owner := private.mail_share_owner_first_name(v_share.owner_user_id);
+  if p_user <> v_share.owner_user_id and v_draft.mode in ('reply', 'reply_all') and p_subject is not null and p_subject is distinct from coalesce(v_draft.subject, '') then
+    raise exception 'Only % can change the subject of a reply.', v_owner using errcode = '22023';
+  end if;
+  if p_base is not null and p_base <> v_share.draft_version then
+    raise exception 'This draft changed. Saving again.' using errcode = '40001';
+  end if;
+  if coalesce(p_subject, v_draft.subject, '') is distinct from coalesce(v_draft.subject, '') or coalesce(p_body, v_draft.body) is distinct from v_draft.body then
+    update crm.mail_drafts d set subject = coalesce(p_subject, d.subject), body = coalesce(p_body, d.body), updated_at = now()
+      where d.id = v_draft.id;
+    update crm.mail_shares s set draft_version = s.draft_version + 1 where s.id = v_share.id returning * into v_share;
+  end if;
+  return query select v_share.draft_version, v_share.owner_user_id, array(select m.user_id from crm.mail_share_members m where m.share_id = v_share.id);
+end;
+$$;
+
+revoke all on function private.merge_shared_draft(uuid, uuid, text, text, integer) from public;
+grant execute on function private.merge_shared_draft(uuid, uuid, text, text, integer) to crm_app;
 
 create or replace function private.mail_share_live_reset()
 returns trigger
