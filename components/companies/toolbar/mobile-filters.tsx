@@ -293,7 +293,7 @@ export default function MobileFilters({
             size="sm"
             onClick={reset}
             disabled={activeCount === 0}
-            className="-ml-1.5"
+            className="-ml-1.5 px-[9px]"
           >
             Clear
           </Button>

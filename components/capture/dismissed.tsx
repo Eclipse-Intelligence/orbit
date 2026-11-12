@@ -177,7 +177,7 @@ export default function Dismissed({
         size="sm"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        className="text-subtle -ml-2 self-start"
+        className="text-subtle -ml-2 self-start px-[9px]"
         onClick={() => setOpen((current) => !current)}
       >
         <ChevronDownIcon aria-hidden className={cn("ease-power3-out size-3 transition-transform duration-150", !open && "-rotate-90")} />
@@ -217,7 +217,7 @@ export default function Dismissed({
               ref={moreRef}
               variant="ghost"
               size="sm"
-              className="text-subtle -ml-2 self-start"
+              className="text-subtle -ml-2 self-start px-[9px]"
               aria-disabled={loading || undefined}
               onClick={() => void showMore()}
             >

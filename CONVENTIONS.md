@@ -49,6 +49,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 - Icons are SVG files in `public/assets/images`, imported as components through SVGR (`import PlusIcon from "@/public/assets/images/_common/plus.svg"`). No icon libraries. Images, video, Rive and Lottie go through `Asset`.
 - Widths for text blocks use `em` (for example `max-w-[47.5em]`).
 - Every page works on a 390px wide phone. Check mobile and desktop.
+- Touch targets: keep controls their normal visual size and add `hit` (`app/globals.css`), which gives coarse pointers an invisible 44px hit area. Leave enough gap on coarse pointers that a hit area never covers a neighbouring control. `hit` draws an `::after`, so it needs an element that renders pseudo-elements (not an `input` or `select`) and no `overflow-hidden` on the element or a close parent (`HoldButton` clips it).
 - Every control has an accessible name. Use real `<button>`, `<label>` and `<select>` elements, and `role="alert"` or `role="status"` for messages.
 - Use the shared `ease-power*` easings and short durations for motion.
 

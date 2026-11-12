@@ -209,7 +209,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
               <span className="caption-style text-subtle truncate">{created}</span>
             </div>
             <SheetDescription className="sr-only">{task.title}</SheetDescription>
-            <SheetCloseButton label="Close" className="[@media(pointer:coarse)]:size-11" />
+            <SheetCloseButton label="Close" className="hit" />
           </SheetHeader>
           <div data-chat-room-pane className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-5 pb-4 max-md:px-3.5">

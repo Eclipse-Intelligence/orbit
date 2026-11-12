@@ -83,7 +83,7 @@ It becomes a compact command-bar card, the same component at the top of the Task
 ## Phase 3: act from the task (one PR, medium, one migration: `crm.task_outcomes`, so each Done takes one outcome)
 
 - **Contact strip.** Name, job title, phone and email, loaded by extending `TASK_SQL`. Call opens Teams (`teamsCallUrl`, `lib/phone.ts:19`) on desktop and `tel:` on phones; Copy uses `CopyButton`.
-- **No number.** A contact with no phone shows "No number" with Ask Orbit to find it (the assistant's `find_contact_details`). A company-only task offers the company's contacts to pick from, which also links the task.
+- **No number.** A contact with no phone or email shows "No number" or "No email" with Find phone or Find email beside it (the contact page's enrichment lookup), shown only when a provider for that detail is set up. When none is, or the lookup found nothing, More actions offers Ask Orbit to find details. A company-only task offers the company's contacts to pick from, which also links the task.
 - **Email.** Opens compose to the contact (`openComposer`, `components/mail/compose-dock.tsx:328`), with Use template. A task from an email offers Reply on that thread (`threadHref(key, "reply")`, `lib/mail/view.ts:191`), shown only when the thread is in the viewer's mailbox.
 - **Meeting.** Invite opens `InviteDialog` with the contact as guest. Copy booking link.
 - **Primary action by kind.** Call tasks lead with Call, email tasks with Email, meeting tasks with Invite.

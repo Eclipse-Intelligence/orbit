@@ -337,7 +337,7 @@ function ClickUpButton({
           variant="ghost"
           size="md"
           aria-label={current ? `ClickUp list: ${current.name}. Change` : "ClickUp list: not added. Change"}
-          className="min-w-0 gap-1.5 px-2.5 text-[13px] max-md:h-11"
+          className="hit min-w-0 gap-1.5 px-2.5 text-[13px]"
         >
           <ListIcon aria-hidden className="size-3.5 shrink-0" />
           <span className="truncate">{current ? current.name : "ClickUp list"}</span>
@@ -1083,7 +1083,7 @@ export default function TaskPad({
       shortcut={["↵"]}
       disabled={busy || !title.trim()}
       onClick={() => void submit()}
-      className="shrink-0 px-3.5 text-[13px] max-md:h-11 max-md:px-4 max-md:text-[14px]"
+      className="hit shrink-0 px-3.5 text-[13px] max-md:text-[14px]"
     >
       Add task
     </Button>

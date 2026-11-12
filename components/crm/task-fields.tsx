@@ -45,7 +45,7 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 export const TASK_CHIP =
   "h-7 w-auto max-w-full min-w-0 gap-1.5 rounded-full border-transparent bg-white/[0.06] px-2.5 text-[12.5px] leading-none text-soft hover:bg-white/10 hover:text-foreground";
 
-const TOUCH = "[@media(pointer:coarse)]:h-11";
+const TOUCH = "hit";
 
 const FORMATS = new Map<string, Intl.DateTimeFormat>();
 
@@ -443,7 +443,7 @@ export function TaskTitleField({
   );
 }
 
-const LINK_CHIP = "bg-secondary text-foreground inline-flex max-w-full items-center gap-1.5 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3";
+const LINK_CHIP = "bg-secondary text-foreground inline-flex max-w-full items-center gap-1.5 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 hit [@media(pointer:coarse)]:h-7 [@media(pointer:coarse)]:pr-2.5 [@media(pointer:coarse)]:pl-2";
 
 function LinkChip({ href, label, icon: Icon, mark }: { href: string; label: string; icon?: ComponentType<SVGProps<SVGSVGElement>>; mark?: ReactNode }) {
   return (
@@ -462,11 +462,11 @@ function LinksEditor({ task, canEdit, label }: { task: Task; canEdit: boolean; l
   const [editing, setEditing] = useState(false);
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
         {label && <span className="caption-style text-subtle mr-1">Linked</span>}
         <TaskLinks task={task} />
         {canEdit && (
-          <Button variant={editing ? "secondary" : "ghost"} size="sm" aria-expanded={editing} onClick={() => setEditing((current) => !current)} className="[@media(pointer:coarse)]:h-11">
+          <Button variant={editing ? "secondary" : "ghost"} size="sm" aria-expanded={editing} onClick={() => setEditing((current) => !current)} className="hit">
             Edit links
           </Button>
         )}
@@ -479,7 +479,7 @@ function LinksEditor({ task, canEdit, label }: { task: Task; canEdit: boolean; l
 export function TaskLinks({ task }: { task: Task }) {
   const links = splitDescription(task.description).links;
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
       {task.contactId && task.contactName && <LinkChip href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} />}
       {task.companyId && task.companyName && (
         <LinkChip href={companyHref(task.companyId)} label={task.companyName} mark={<Monogram name={task.companyName} className="size-4 rounded-full text-[9px]" />} />
@@ -507,7 +507,7 @@ function CandidateRow({ candidate, busy, onLink }: { candidate: LinkCandidate; b
         aria-busy={busy === candidate.id || undefined}
         aria-label={`Link ${candidate.name}`}
         onClick={() => onLink(candidate)}
-        className="[@media(pointer:coarse)]:h-11"
+        className="hit"
       >
         {busy === candidate.id ? "Linking…" : "Link"}
       </Button>
@@ -598,7 +598,7 @@ export function LinkPerson({ taskId, title, onLinked }: { taskId: string; title:
   const offered = new Set(candidates.map((candidate) => `${candidate.kind}:${candidate.id}`));
   const searched = results && results.query === query.trim() ? results.items.filter((item) => !offered.has(`${item.kind}:${item.id}`)) : null;
   return (
-    <section aria-label={heading} className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5">
+    <section aria-label={heading} className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5 [@media(pointer:coarse)]:gap-2">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 pb-1">
         <LinkIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
         <h3>{heading}</h3>
@@ -639,7 +639,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
       <dt className="caption-style text-subtle pt-1.5">{label}</dt>
-      <dd className="flex min-w-0 flex-wrap items-center gap-1.5">{children}</dd>
+      <dd className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">{children}</dd>
     </>
   );
 }
@@ -767,7 +767,7 @@ function AssigneeChip({ details, viewer, members, tagged }: { details: TaskDetai
         </span>
       )}
       {colleague && (
-        <ColleagueLink colleague={colleague} className="text-subtle hover:text-foreground inline-flex size-7 items-center justify-center rounded-full no-underline hover:bg-white/10 [@media(pointer:coarse)]:size-11">
+        <ColleagueLink colleague={colleague} className="text-subtle hover:text-foreground inline-flex size-7 items-center justify-center rounded-full no-underline hover:bg-white/10 hit [@media(pointer:coarse)]:mx-1">
           <ChatIcon aria-hidden className="size-3.5" />
         </ColleagueLink>
       )}
@@ -869,7 +869,7 @@ export default function TaskFields({
   if (layout === "row") {
     return (
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}
           {details.canChange && !done && (
@@ -940,7 +940,7 @@ function TaggedField({ details, viewer, members, people, tagging }: { details: T
         const removable = canRemoveTag(viewer, task, person);
         const colleague = member.id !== viewer.id && members.some((item) => item.id === member.id);
         return (
-          <span key={person} className={cn("inline-flex items-center", TOUCH, TASK_CHIP, removable && "pr-0.5")}>
+          <span key={person} className={cn("inline-flex items-center", TASK_CHIP, removable && "pr-0.5 [@media(pointer:coarse)]:pr-1")}>
             <MemberAvatar member={member} viewerId={viewer.id} size="xs" />
             {colleague ? <ColleagueLink colleague={member} className="truncate no-underline hover:underline" /> : <span className="truncate">{member.name}</span>}
             {removable && tagging && (
@@ -950,7 +950,7 @@ function TaggedField({ details, viewer, members, people, tagging }: { details: T
                 aria-label={person === viewer.id ? "Remove yourself" : `Remove ${member.name}`}
                 title="Remove"
                 onClick={() => tagging.remove(person)}
-                className="size-6 rounded-full [@media(pointer:coarse)]:size-11"
+                className="hit size-6 rounded-full [@media(pointer:coarse)]:ml-1"
               >
                 <XIcon aria-hidden className="size-3" />
               </Button>
