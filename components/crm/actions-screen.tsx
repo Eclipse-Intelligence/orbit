@@ -13,6 +13,7 @@ import type { AssignableMember } from "@/components/crm/assignee-picker";
 import TaskPad from "@/components/crm/task-pad";
 import TaskPanel from "@/components/crm/task-panel";
 import { canChangeTaskAs } from "@/components/crm/task-fields";
+import { finePointer, hasOutcome, useTaskOutcome } from "@/components/crm/task-outcome";
 import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
@@ -24,6 +25,7 @@ import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { TASK_PARAM } from "@/lib/chat/discussions";
 import { companyHref } from "@/lib/crm/hrefs";
 import { groupTasksByDue, tasksHref } from "@/lib/crm/task-views";
+import type { TaskOutcome } from "@/lib/crm/task-act";
 import type { Company, Task, TaskView } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
@@ -214,7 +216,7 @@ export default function ActionsScreen({
       </div>
     ) : undefined;
   const colleagues = useMemo(() => members.map((member) => ({ id: member.id, name: member.name })), [members]);
-  const { done, message, setMessage, complete: markDone, undoLast, remind } = useTaskDone(allTasks);
+  const { done, message, setMessage, complete: markDone, completeWith, undoLast, remind } = useTaskDone(allTasks);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selected, setSelected] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -281,7 +283,25 @@ export default function ActionsScreen({
   const [notFound, setNotFound] = useState(false);
   if (missing && !notFound) setNotFound(true);
 
-  function complete(task: Task) {
+  const concluding = useTaskOutcome({ finish, completeWith });
+  const outcome = concluding.outcome;
+
+  function complete(task: Task, via?: "swipe" | "key") {
+    if (done.has(task.id)) return;
+    if (outcome?.id === task.id) {
+      concluding.skip(task);
+      return;
+    }
+    if (outcome) concluding.skip(allTasks.find((item) => item.id === outcome.id) ?? task);
+    if (via !== "swipe" && view !== "completed" && hasOutcome(task)) {
+      concluding.start(task, via !== "key" && finePointer());
+      setExpandedId(task.id);
+      return;
+    }
+    finish(task);
+  }
+
+  function finish(task: Task) {
     if (done.has(task.id)) return;
     const row = listRef.current?.querySelector<HTMLElement>(`[data-task-id="${task.id}"]`);
     const rows = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])];
@@ -357,20 +377,30 @@ export default function ActionsScreen({
     return shownTasks.find((task) => task.id === row.dataset.taskId) ?? null;
   }
 
+  function leaveOutcome(next: string | null) {
+    if (!outcome || outcome.id === next) return;
+    const left = allTasks.find((item) => item.id === outcome.id);
+    if (left) concluding.skip(left);
+  }
+
   function toggle(task: Task) {
     if (panelBeside) {
       openPanel(task.id);
       return;
     }
-    setExpandedId((current) => (current === task.id ? null : task.id));
+    const next = expandedId === task.id ? null : task.id;
+    leaveOutcome(next);
+    setExpandedId(next);
   }
 
-  const latest = useRef({ toggle, complete, completeFromPanel, remind, openPanel, assign });
+  const latest = useRef({ toggle, complete, completeFromPanel, remind, openPanel, assign, skip: concluding.skip, save: concluding.save });
   useEffect(() => {
-    latest.current = { toggle, complete, completeFromPanel, remind, openPanel, assign };
+    latest.current = { toggle, complete, completeFromPanel, remind, openPanel, assign, skip: concluding.skip, save: concluding.save };
   });
   const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
-  const onComplete = useCallback((task: Task) => latest.current.complete(task), []);
+  const onComplete = useCallback((task: Task, via?: "swipe") => latest.current.complete(task, via), []);
+  const onSkip = useCallback((task: Task) => latest.current.skip(task), []);
+  const onSaveOutcome = useCallback((task: Task, value: TaskOutcome) => latest.current.save(task, value), []);
   const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
   const onOpen = useCallback((task: Task) => latest.current.openPanel(task.id), []);
   const onAssign = useCallback((task: Task, ownerId: string) => void latest.current.assign(task.id, ownerId), []);
@@ -383,7 +413,10 @@ export default function ActionsScreen({
     window.clearTimeout(follow.current);
     follow.current = window.setTimeout(() => {
       if (panelBeside) openPanel(id);
-      else if (expandedId) setExpandedId(id);
+      else if (expandedId) {
+        leaveOutcome(id);
+        setExpandedId(id);
+      }
     }, FOLLOW_MS);
   }
 
@@ -395,7 +428,7 @@ export default function ActionsScreen({
   useShortcut("task-done", () => {
     const task = activeTask();
     if (!task || view === "completed" || !canChange(task)) return false;
-    complete(task);
+    complete(task, "key");
   });
   useShortcut("task-remind", () => {
     const task = activeTask();
@@ -409,6 +442,13 @@ export default function ActionsScreen({
   useShortcut("task-collapse", () => {
     if (!expandedId || inPanel()) return false;
     cancelFollow();
+    if (outcome?.id === expandedId) {
+      const concluded = allTasks.find((item) => item.id === expandedId);
+      if (concluded) {
+        concluding.skip(concluded);
+        return;
+      }
+    }
     const row = listRef.current?.querySelector<HTMLElement>(`[data-task-id="${expandedId}"]`);
     setExpandedId(null);
     if (row && row.contains(document.activeElement) && document.activeElement !== row) activateRow(row);
@@ -552,6 +592,9 @@ export default function ActionsScreen({
                 colleagues={colleagues}
                 canLink={canChange(entry.task)}
                 keyboard
+                outcome={outcome?.id === entry.task.id ? outcome : null}
+                onSkip={onSkip}
+                onSaveOutcome={onSaveOutcome}
               />
             ),
           )}

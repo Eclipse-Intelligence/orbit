@@ -76,7 +76,7 @@ function initials(name: string) {
   return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts[parts.length - 1][0] ?? "") : "")).toUpperCase();
 }
 
-function SearchChip({
+export function SearchChip({
   kind,
   icon: ChipIcon,
   label,

@@ -100,10 +100,12 @@ export function UseTemplateButton({
   onPick,
   disabled,
   compact,
+  className,
 }: {
   onPick: (template: EmailTemplate) => void;
   disabled?: boolean;
   compact?: boolean;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null);
@@ -146,7 +148,7 @@ export function UseTemplateButton({
           data-shortcut="use-template"
           title="Use a template (⌘⇧T)"
           aria-label={compact ? "Use a template" : undefined}
-          className={compact ? "size-8 p-0" : undefined}
+          className={cn(compact && "size-8 p-0", className)}
         >
           {compact ? <TemplateIcon aria-hidden className="size-3.5" /> : "Use template"}
         </Button>

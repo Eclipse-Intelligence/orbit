@@ -52,6 +52,7 @@ const TASK_SQL = `
     p.full_name as owner_name,
     t.company_id,
     co.name as company_name,
+    nullif(trim(co.phone), '') as company_phone,
     t.contact_id,
     coalesce(
       nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''),
@@ -60,6 +61,9 @@ const TASK_SQL = `
     ) as contact_name,
     nullif(trim(ct.first_name), '') as contact_first_name,
     nullif(trim(ct.last_name), '') as contact_last_name,
+    nullif(trim(ct.job_title), '') as contact_job_title,
+    nullif(trim(ct.phone), '') as contact_phone,
+    nullif(trim(ct.email), '') as contact_email,
     t.opportunity_id,
     op.name as opportunity_name,
     t.created_by_user_id,
@@ -91,10 +95,14 @@ type TaskRow = {
   owner_name: string | null;
   company_id: string | null;
   company_name: string | null;
+  company_phone: string | null;
   contact_id: string | null;
   contact_name: string | null;
   contact_first_name: string | null;
   contact_last_name: string | null;
+  contact_job_title: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
   opportunity_id: string | null;
   opportunity_name: string | null;
   created_by_user_id: string | null;
@@ -136,10 +144,14 @@ function mapTask(row: TaskRow): Task {
     ownerName: row.owner_name,
     companyId: row.company_id,
     companyName: row.company_name,
+    companyPhone: row.company_phone,
     contactId: row.contact_id,
     contactName: row.contact_name,
     contactFirstName: row.contact_first_name,
     contactLastName: row.contact_last_name,
+    contactJobTitle: row.contact_job_title,
+    contactPhone: row.contact_phone,
+    contactEmail: row.contact_email,
     opportunityId: row.opportunity_id,
     opportunityName: row.opportunity_name,
     createdByUserId: row.created_by_user_id,

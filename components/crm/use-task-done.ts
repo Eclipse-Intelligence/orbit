@@ -214,6 +214,21 @@ export function useTaskDone(tasks: Task[]) {
     [commit, composer, undo],
   );
 
+  const completeWith = useCallback(
+    async (task: Task, run: () => Promise<Outcome & { message?: string }>) => {
+      if (entries.current.has(task.id)) return null;
+      setMessage(null);
+      const result = await run().catch((): Outcome & { message?: string } => ({ error: "Couldn't save. Try again." }));
+      if (result.error) return result.error;
+      setDone((current) => new Set(current).add(task.id));
+      setAwaiting((current) => new Set(current).add(task.id));
+      composer.showToast({ message: result.message ?? "Task done." });
+      router.refresh();
+      return null;
+    },
+    [composer, router],
+  );
+
   const undoLast = useCallback(() => {
     const ids = [...entries.current.keys()];
     const id = ids[ids.length - 1];
@@ -247,5 +262,5 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
-  return { done, message, setMessage, complete, undo, undoLast, remind };
+  return { done, message, setMessage, complete, completeWith, undo, undoLast, remind };
 }

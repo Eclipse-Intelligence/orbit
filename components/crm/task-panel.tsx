@@ -8,6 +8,7 @@ import { useDiscussion } from "@/components/chat/use-discussion";
 import { useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { activateRow } from "@/components/shortcuts/keyboard-list";
+import { TaskAct } from "@/components/crm/task-actions";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
 import RecordNotes from "@/components/docs/record-notes";
@@ -219,6 +220,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                     </span>
                     <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} />
                   </div>
+                  <TaskAct task={task} canChange={canChange} />
                   <TaskFields
                     details={details}
                     viewer={viewer}

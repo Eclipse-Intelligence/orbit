@@ -400,10 +400,14 @@ export type Task = {
   ownerName: string | null;
   companyId: string | null;
   companyName: string | null;
+  companyPhone: string | null;
   contactId: string | null;
   contactName: string | null;
   contactFirstName: string | null;
   contactLastName: string | null;
+  contactJobTitle: string | null;
+  contactPhone: string | null;
+  contactEmail: string | null;
   opportunityId: string | null;
   opportunityName: string | null;
   createdByUserId: string | null;

@@ -7,6 +7,7 @@ import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/_ui/select";
+import { ASK_ORBIT_EVENT, type AskOrbitDetail } from "@/components/assistant/ask-orbit";
 import Markdown from "@/components/assistant/markdown";
 import MentionInput from "@/components/assistant/mention-input";
 import { AttachButton, AttachmentList, fileSize, useEmailAttachments } from "@/components/crm/email-attachments";
@@ -742,6 +743,25 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     },
     open,
   );
+
+  useEffect(() => {
+    function ask(event: Event) {
+      const text = (event as CustomEvent<AskOrbitDetail>).detail?.text;
+      if (typeof text !== "string" || !text.trim()) return;
+      event.preventDefault();
+      setHistoryOpen(false);
+      setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
+      setOpen(true);
+      window.requestAnimationFrame(() => {
+        const node = input.current;
+        if (!node) return;
+        node.focus();
+        node.setSelectionRange(node.value.length, node.value.length);
+      });
+    }
+    window.addEventListener(ASK_ORBIT_EVENT, ask);
+    return () => window.removeEventListener(ASK_ORBIT_EVENT, ask);
+  }, []);
 
   const onEvent = useCallback((event: AssistantEvent) => {
     if (event.type === "conversation") {

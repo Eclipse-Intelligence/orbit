@@ -4,10 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ActionTask from "@/components/beautifui/action-task";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { canChangeTaskAs } from "@/components/crm/task-fields";
+import { finePointer, hasOutcome, useTaskOutcome } from "@/components/crm/task-outcome";
 import TaskPanel from "@/components/crm/task-panel";
 import { useTaskDone } from "@/components/crm/use-task-done";
 import type { Viewer } from "@/components/crm/viewer";
 import { taskTaggedAction } from "@/app/(crm)/discussions";
+import type { TaskOutcome } from "@/lib/crm/task-act";
 import type { TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 
@@ -30,7 +32,7 @@ export default function RecordTasks({
   limit?: number;
   onCount?: (count: number) => void;
 }) {
-  const { done, message, complete, remind } = useTaskDone(tasks);
+  const { done, message, complete, completeWith, remind } = useTaskDone(tasks);
   const [now] = useState(() => Date.now());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [panelId, setPanelId] = useState<string | null>(null);
@@ -67,12 +69,44 @@ export default function RecordTasks({
     complete(task);
   }
 
-  const latest = useRef({ finish, remind });
+  const concluding = useTaskOutcome({ finish, completeWith });
+  const outcome = concluding.outcome;
+
+  function leaveOutcome(next: string | null) {
+    if (!outcome || outcome.id === next) return;
+    const left = tasks.find((task) => task.id === outcome.id);
+    if (left) concluding.skip(left);
+  }
+
+  function conclude(task: Task, via?: "swipe") {
+    if (done.has(task.id)) return;
+    if (outcome?.id === task.id) {
+      concluding.skip(task);
+      return;
+    }
+    leaveOutcome(task.id);
+    if (via !== "swipe" && hasOutcome(task)) {
+      concluding.start(task, finePointer());
+      setExpandedId(task.id);
+      return;
+    }
+    finish(task);
+  }
+
+  function toggle(task: Task) {
+    const next = expandedId === task.id ? null : task.id;
+    leaveOutcome(next);
+    setExpandedId(next);
+  }
+
+  const latest = useRef({ finish, conclude, toggle, remind, skip: concluding.skip, save: concluding.save });
   useEffect(() => {
-    latest.current = { finish, remind };
+    latest.current = { finish, conclude, toggle, remind, skip: concluding.skip, save: concluding.save };
   });
-  const onToggle = useCallback((task: Task) => setExpandedId((current) => (current === task.id ? null : task.id)), []);
-  const onComplete = useCallback((task: Task) => latest.current.finish(task), []);
+  const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
+  const onComplete = useCallback((task: Task, via?: "swipe") => latest.current.conclude(task, via), []);
+  const onSkip = useCallback((task: Task) => latest.current.skip(task), []);
+  const onSaveOutcome = useCallback((task: Task, value: TaskOutcome) => latest.current.save(task, value), []);
   const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
   const onOpen = useCallback((task: Task) => setPanelId(task.id), []);
   const onPanelComplete = useCallback((task: Task) => {
@@ -109,6 +143,9 @@ export default function RecordTasks({
               onOpen={onOpen}
               canLink={canChangeTaskAs(viewer, task) && !task.completedAt}
               here={place}
+              outcome={outcome?.id === task.id ? outcome : null}
+              onSkip={onSkip}
+              onSaveOutcome={onSaveOutcome}
             />
           ))}
         </ul>
