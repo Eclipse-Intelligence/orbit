@@ -77,7 +77,7 @@ export async function addPadTaskAction(input: {
       {
         title: typeof input.title === "string" ? input.title : "",
         ...(timed ? { dueAt: due } : { dueDate: due }),
-        remindMinutes: timed && isReminderMinutes(input.remindMinutes) ? input.remindMinutes : null,
+        remindMinutes: due && isReminderMinutes(input.remindMinutes) ? input.remindMinutes : null,
         ...(isTaskDuration(input.durationMinutes) ? { durationMinutes: input.durationMinutes } : {}),
         ...padLinks(input),
         ownerId: typeof input.ownerId === "string" && isUuid(input.ownerId) ? input.ownerId : user.userId,

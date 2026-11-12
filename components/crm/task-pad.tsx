@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type K
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { DueDatePicker } from "@/components/_ui/date-picker";
-import { ReminderTimePrompt } from "@/components/crm/task-timing";
+import { DurationMenu, ReminderTimePrompt } from "@/components/crm/task-timing";
 import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
@@ -12,6 +12,7 @@ import { listGroups } from "@/components/crm/clickup";
 import { addPadTaskAction, detectTaskRecordsAction, parseTaskWithAiAction, searchTaskLinksAction } from "@/app/(crm)/task-pad";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
+import { DEFAULT_TASK_DURATION } from "@/lib/crm/task-time";
 import type { PadAiParse, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
 import {
@@ -229,6 +230,8 @@ function ReminderChip({
   onTime,
   onNeedDue,
   onClosed,
+  asking,
+  onAsking,
 }: {
   due: string | null;
   title: string;
@@ -238,10 +241,25 @@ function ReminderChip({
   onTime: (time: string) => void;
   onNeedDue: () => void;
   onClosed: () => void;
+  asking: boolean;
+  onAsking: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   if (due && !padDueHasTime(due)) {
-    return <ReminderTimePrompt title={title.trim() || "This task"} onSave={onTime} className={chipClass("empty", variant)} />;
+    const needed = value !== null;
+    return (
+      <ReminderTimePrompt
+        title={title.trim() || "This task"}
+        day={due.slice(0, 10)}
+        lead={value ?? 0}
+        needed={needed}
+        open={asking}
+        onOpenChange={onAsking}
+        onSave={onTime}
+        onRemove={needed ? () => onChange(null) : undefined}
+        className={chipClass(needed ? "ask" : "empty", variant)}
+      />
+    );
   }
   const clock = due && value !== null ? reminderClock(due, value) : null;
   const label = clock ? `Remind me at ${clock}. Change` : "Remind me";
@@ -422,6 +440,8 @@ export default function TaskPad({
   const [reading, setReading] = useState(false);
   const [due, setDue] = useState<Override<string | null>>(unset);
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
+  const [duration, setDuration] = useState(DEFAULT_TASK_DURATION);
+  const [askingTime, setAskingTime] = useState(false);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
   const startContact = (): Override<PadContact | null> => (initialContact ? { set: true, value: { ...initialContact, company: null } } : unset());
   const [company, setCompany] = useState<Override<PadRecord | null>>(startCompany);
@@ -444,7 +464,8 @@ export default function TaskPad({
   const autoDue = aiFits ? (ai.value.due ?? parsed.due) : parsed.due;
   const finalDue = due.set ? due.value : autoDue;
   const autoReminder = aiFits ? ai.value.remindMinutes : parsed.remindMinutes;
-  const finalReminder = padDueHasTime(finalDue) ? (reminder.set ? reminder.value : autoReminder) : null;
+  const finalReminder = finalDue ? (reminder.set ? reminder.value : autoReminder) : null;
+  const needsTime = Boolean(finalDue) && !padDueHasTime(finalDue) && finalReminder !== null;
   const anchor = fixedCompany ?? (company.set ? company.value : null);
   const scope = anchor?.id ?? null;
   const seen = text.trim().length >= 3 ? (detected?.value ?? null) : null;
@@ -623,6 +644,8 @@ export default function TaskPad({
     setAi(null);
     setDue(unset());
     setReminder(unset());
+    setDuration(DEFAULT_TASK_DURATION);
+    setAskingTime(false);
     setCompany(startCompany());
     setContact(startContact());
     setOpportunity(unset());
@@ -648,6 +671,10 @@ export default function TaskPad({
 
   async function submit() {
     if (busy || !title.trim()) return;
+    if (needsTime) {
+      setAskingTime(true);
+      return;
+    }
     setBusy(true);
     setError(null);
     setWarning(null);
@@ -679,6 +706,7 @@ export default function TaskPad({
       title,
       dueAt: finalDue,
       remindMinutes: finalReminder,
+      durationMinutes: duration,
       ...padSaveIds(links, { fixedCompany, contact, company, opportunity }),
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
@@ -791,17 +819,23 @@ export default function TaskPad({
         "[&>span]:text-inherit",
       )}
     />,
+    <DurationMenu key="duration" compact value={duration} onChange={setDuration} className={chipClass(duration === DEFAULT_TASK_DURATION ? "empty" : "on", variant)} />,
     <ReminderChip
       key="reminder"
       due={finalDue}
       title={title}
       value={finalReminder}
       variant={variant}
+      asking={askingTime}
+      onAsking={(open) => {
+        setAskingTime(open);
+        if (!open) focusAt();
+      }}
       onChange={(value) => setReminder({ set: true, value })}
       onTime={(time) => {
         if (!finalDue) return;
         setDue({ set: true, value: `${finalDue.slice(0, 10)}T${time}` });
-        setReminder({ set: true, value: 0 });
+        setReminder({ set: true, value: finalReminder ?? 0 });
       }}
       onNeedDue={() => document.getElementById(`${id}-due`)?.click()}
       onClosed={() => focusAt()}

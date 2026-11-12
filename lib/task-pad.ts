@@ -13,7 +13,6 @@ type PadParse = {
 type Day = { year: number; month: number; day: number };
 type Span = { start: number; end: number; kind: "when" | "reminder" };
 
-const DEFAULT_HOUR = 9;
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri)";
@@ -233,7 +232,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     const parts = londonParts(new Date(now.getTime() + found.exact * 60_000));
     due = `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`;
   } else if (found.date || found.time) {
-    const time = found.time ?? (found.remind !== null ? { hour: DEFAULT_HOUR, minute: 0 } : null);
+    const time = found.time;
     let day = found.date ?? today;
     if (time && !found.date && (time.hour < wall.hour || (time.hour === wall.hour && time.minute <= wall.minute))) {
       day = addDays(today, 1);

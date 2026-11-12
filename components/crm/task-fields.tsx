@@ -674,7 +674,7 @@ function ReminderChip({ details, id }: { details: TaskDetailsState; id: string }
   const { timed } = dueState(details);
   if (!details.due) return null;
   if (!timed) {
-    return <ReminderTimePrompt title={details.task.title} onSave={(time) => details.remindAt(time)} className={cn(TASK_CHIP, TOUCH, "text-subtle")} />;
+    return <ReminderTimePrompt title={details.task.title} day={details.due.slice(0, 10)} onSave={(time) => details.remindAt(time)} className={cn(TASK_CHIP, TOUCH, "text-subtle")} />;
   }
   return (
     <ReminderSelect

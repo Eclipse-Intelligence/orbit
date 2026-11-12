@@ -1,12 +1,24 @@
 "use client";
 
-import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
-import { scheduleChoicesAction } from "@/app/(crm)/task-schedule";
-import { DURATION_CHOICES, durationLabel, isTaskDuration, MAX_TASK_DURATION, MIN_TASK_DURATION, scheduleChoices, type ScheduleChoice } from "@/lib/crm/task-time";
+import { nextFreeAction } from "@/app/(crm)/task-schedule";
+import {
+  DURATION_CHOICES,
+  durationLabel,
+  durationWords,
+  isPastTime,
+  isTaskDuration,
+  MAX_TASK_DURATION,
+  MIN_TASK_DURATION,
+  nextFreeStart,
+  reminderTimeFor,
+  scheduleChoices,
+  type ScheduleChoice,
+} from "@/lib/crm/task-time";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
 import { dateTimeInputValue } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -19,6 +31,7 @@ import EditIcon from "@/public/assets/images/workflows/edit.svg";
 
 const PHONE_QUERY = "(max-width: 639px)";
 export const SCHEDULE_EVENT = "orbit:task-schedule";
+const DURATION_ERROR = `Choose a duration between ${MIN_TASK_DURATION} and ${MAX_TASK_DURATION} minutes.`;
 
 function subscribePhone(onChange: () => void) {
   const list = window.matchMedia(PHONE_QUERY);
@@ -37,7 +50,9 @@ export function requestSchedule(taskId: string) {
 }
 
 const OPTION =
-  "ui-style text-soft hover:text-foreground focus-visible:bg-white/5 focus-visible:text-foreground flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-white/5 [@media(pointer:coarse)]:min-h-11";
+  "ui-style text-soft hover:text-foreground focus-visible:bg-white/5 focus-visible:text-foreground disabled:text-subtle flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-white/5 disabled:cursor-default disabled:hover:bg-transparent [@media(pointer:coarse)]:min-h-11";
+
+const PILL = "ui-style ease-power3-out cursor-pointer tabular-nums outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-default disabled:opacity-40";
 
 function DurationButtons({ value, onPick }: { value: number; onPick: (minutes: number) => void }) {
   return (
@@ -49,7 +64,8 @@ function DurationButtons({ value, onPick }: { value: number; onPick: (minutes: n
           aria-pressed={minutes === value}
           onClick={() => onPick(minutes)}
           className={cn(
-            "ui-style ease-power3-out h-8 cursor-pointer rounded-lg tabular-nums outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring/60 [@media(pointer:coarse)]:h-11",
+            PILL,
+            "h-8 rounded-lg [@media(pointer:coarse)]:h-11",
             minutes === value ? "bg-primary text-primary-foreground" : "text-soft hover:text-foreground bg-white/[0.06] hover:bg-white/10",
           )}
         >
@@ -67,7 +83,7 @@ function CustomDuration({ value, onSet }: { value: number; onSet: (minutes: numb
   function set() {
     const minutes = Number(text.trim());
     if (!isTaskDuration(minutes)) {
-      setError(`Enter ${MIN_TASK_DURATION} to ${MAX_TASK_DURATION} minutes.`);
+      setError(DURATION_ERROR);
       return;
     }
     setError(null);
@@ -79,6 +95,7 @@ function CustomDuration({ value, onSet }: { value: number; onSet: (minutes: numb
         className="flex items-center gap-2"
         onSubmit={(event) => {
           event.preventDefault();
+          event.stopPropagation();
           set();
         }}
       >
@@ -89,8 +106,9 @@ function CustomDuration({ value, onSet }: { value: number; onSet: (minutes: numb
           placeholder="90"
           aria-label="Custom duration in minutes"
           aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
           onChange={(event) => setText(event.target.value.replace(/[^\d]/g, "").slice(0, 3))}
-          className="h-8 w-20 [@media(pointer:coarse)]:h-11"
+          className="h-8 w-[5em] [@media(pointer:coarse)]:h-11"
         />
         <span className="caption-style text-subtle flex-1">minutes</span>
         <Button variant="secondary" size="sm" type="submit" className="[@media(pointer:coarse)]:h-11">
@@ -98,7 +116,7 @@ function CustomDuration({ value, onSet }: { value: number; onSet: (minutes: numb
         </Button>
       </form>
       {error && (
-        <p role="alert" className="caption-style text-danger">
+        <p id={`${id}-error`} role="alert" className="caption-style text-danger">
           {error}
         </p>
       )}
@@ -106,7 +124,7 @@ function CustomDuration({ value, onSet }: { value: number; onSet: (minutes: numb
   );
 }
 
-export function DurationMenu({ value, onChange, className }: { value: number; onChange: (minutes: number) => void; className?: string }) {
+export function DurationMenu({ value, onChange, className, compact = false }: { value: number; onChange: (minutes: number) => void; className?: string; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const pick = (minutes: number) => {
     setOpen(false);
@@ -118,10 +136,10 @@ export function DurationMenu({ value, onChange, className }: { value: number; on
         <button type="button" aria-label={`Duration ${durationLabel(value)}. Change`} className={cn("inline-flex cursor-pointer items-center", className)}>
           <ClockIcon aria-hidden className="size-3.5 shrink-0" />
           <span className="tabular-nums">{durationLabel(value)}</span>
-          <ChevronDownIcon aria-hidden className="text-subtle size-3 shrink-0" />
+          {!compact && <ChevronDownIcon aria-hidden className="text-subtle size-3 shrink-0" />}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="flex w-[min(16rem,calc(100vw-2rem))] flex-col gap-2 p-2">
+      <PopoverContent align="start" className="flex w-[min(17em,calc(100vw-2rem))] flex-col gap-2 p-2">
         <span className="eyebrow-style text-subtle px-1 pt-1">Duration</span>
         <DurationButtons value={value} onPick={pick} />
         <div className="bg-line-strong -mx-2 h-px" />
@@ -133,22 +151,32 @@ export function DurationMenu({ value, onChange, className }: { value: number; on
 
 type ScheduleTask = { id: string; title: string; dueAt: string | null; dueHasTime: boolean; durationMinutes: number };
 
-function useChoices(open: boolean, durationMinutes: number, now: number) {
-  const [fetched, setFetched] = useState<{ duration: number; now: number; choices: ScheduleChoice[] } | null>(null);
+type FreeState = { kind: "loading" } | { kind: "slot"; choice: ScheduleChoice } | { kind: "none" } | { kind: "outside" };
+
+function useNextFree(open: boolean, durationMinutes: number, now: number): FreeState {
+  const [fetched, setFetched] = useState<{ key: string; free: ScheduleChoice | null } | null>(null);
+  const key = `${durationMinutes}|${now}`;
+  const possible = nextFreeStart(now, durationMinutes, []) !== null;
   useEffect(() => {
-    if (!open) return;
+    if (!open || !possible) return;
     let cancelled = false;
-    void scheduleChoicesAction(durationMinutes)
+    void nextFreeAction(durationMinutes)
+      .catch(() => ({ error: "Couldn't read your calendar. Try again." }))
       .then((result) => {
-        if (!cancelled && result.choices) setFetched({ duration: durationMinutes, now, choices: result.choices });
-      })
-      .catch(() => undefined);
+        if (cancelled) return;
+        if ("error" in result) {
+          setFetched({ key, free: scheduleChoices({ durationMinutes, now }).find((choice) => choice.id === "next-free") ?? null });
+          return;
+        }
+        setFetched({ key, free: result.free });
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, durationMinutes, now]);
-  if (fetched && fetched.duration === durationMinutes && fetched.now === now) return fetched.choices;
-  return scheduleChoices({ durationMinutes, now });
+  }, [open, possible, durationMinutes, now, key]);
+  if (!possible) return { kind: "outside" };
+  if (!fetched || fetched.key !== key) return { kind: "loading" };
+  return fetched.free ? { kind: "slot", choice: fetched.free } : { kind: "none" };
 }
 
 function PickDateTime({ task, onSave, onCancel }: { task: ScheduleTask; onSave: (local: string) => void; onCancel: () => void }) {
@@ -162,6 +190,7 @@ function PickDateTime({ task, onSave, onCancel }: { task: ScheduleTask; onSave: 
       className="flex flex-col gap-2.5 p-2"
       onSubmit={(event) => {
         event.preventDefault();
+        event.stopPropagation();
         if (ready) onSave(`${date}T${time}`);
       }}
     >
@@ -170,11 +199,11 @@ function PickDateTime({ task, onSave, onCancel }: { task: ScheduleTask; onSave: 
         <label htmlFor={`${id}-date`} className="sr-only">
           Date
         </label>
-        <Input id={`${id}-date`} type="date" value={date} onChange={(event) => setDate(event.target.value)} className="h-8 min-w-0 flex-1 [@media(pointer:coarse)]:h-11" />
+        <Input id={`${id}-date`} type="date" autoFocus value={date} onChange={(event) => setDate(event.target.value)} className="h-8 min-w-0 flex-1 [@media(pointer:coarse)]:h-11" />
         <label htmlFor={`${id}-time`} className="sr-only">
           Time
         </label>
-        <Input id={`${id}-time`} type="time" step={300} value={time} onChange={(event) => setTime(event.target.value)} className="h-8 w-28 [@media(pointer:coarse)]:h-11" />
+        <Input id={`${id}-time`} type="time" value={time} onChange={(event) => setTime(event.target.value)} className="h-8 w-[7em] [@media(pointer:coarse)]:h-11" />
       </div>
       <div className="flex justify-end gap-2">
         <Button variant="secondary" size="sm" type="button" onClick={onCancel} className="[@media(pointer:coarse)]:h-11">
@@ -188,38 +217,72 @@ function PickDateTime({ task, onSave, onCancel }: { task: ScheduleTask; onSave: 
   );
 }
 
+function moveFocus(event: KeyboardEvent<HTMLElement>) {
+  const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
+  if (!keys.includes(event.key)) return;
+  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)")];
+  if (items.length === 0) return;
+  event.preventDefault();
+  const index = items.indexOf(document.activeElement as HTMLButtonElement);
+  const next =
+    event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : event.key === "ArrowDown" ? (index + 1) % items.length : (index - 1 + items.length) % items.length;
+  items[next].focus();
+}
+
 function ScheduleOptions({
   task,
-  choices,
+  free,
+  fixed,
+  menu,
   onChoose,
   onPick,
   onRemoveTime,
 }: {
   task: ScheduleTask;
-  choices: ScheduleChoice[];
+  free: FreeState;
+  fixed: ScheduleChoice[];
+  menu: boolean;
   onChoose: (at: string) => void;
   onPick: () => void;
   onRemoveTime: () => void;
 }) {
+  const role = menu ? "menuitem" : undefined;
+  const separator = <div role={menu ? "separator" : undefined} aria-hidden={menu ? undefined : true} className="bg-line-strong mx-1 my-1 h-px" />;
   return (
     <>
-      {choices.map((choice) => (
-        <button key={choice.id} type="button" role="menuitem" onClick={() => onChoose(choice.at)} className={OPTION}>
-          {choice.id === "next-free" ? <ClockIcon aria-hidden className="text-subtle size-3.5 shrink-0" /> : <CalendarIcon aria-hidden className="text-subtle size-3.5 shrink-0" />}
+      {free.kind !== "outside" && (
+        <button
+          type="button"
+          role={role}
+          disabled={free.kind !== "slot"}
+          aria-busy={free.kind === "loading" || undefined}
+          onClick={() => free.kind === "slot" && onChoose(free.choice.at)}
+          className={OPTION}
+        >
+          <ClockIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{`Next free ${durationWords(task.durationMinutes)}`}</span>
+          <span className="caption-style text-subtle w-[3.5em] shrink-0 text-right tabular-nums">
+            {free.kind === "slot" ? free.choice.detail : free.kind === "none" ? "Full" : "…"}
+          </span>
+        </button>
+      )}
+      {fixed.map((choice) => (
+        <button key={choice.id} type="button" role={role} onClick={() => onChoose(choice.at)} className={OPTION}>
+          <CalendarIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{choice.label}</span>
           <span className="caption-style text-subtle shrink-0 tabular-nums">{choice.detail}</span>
         </button>
       ))}
-      <div role="separator" className="bg-line-strong mx-1 my-1 h-px" />
-      <button type="button" role="menuitem" onClick={onPick} className={OPTION}>
+      {separator}
+      <button type="button" role={role} onClick={onPick} className={OPTION}>
         <EditIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate">Pick a date and time</span>
         <ChevronRightIcon aria-hidden className="text-subtle size-3 shrink-0" />
       </button>
       {task.dueHasTime && (
         <>
-          <div role="separator" className="bg-line-strong mx-1 my-1 h-px" />
-          <button type="button" role="menuitem" onClick={onRemoveTime} className={OPTION}>
+          {separator}
+          <button type="button" role={role} onClick={onRemoveTime} className={OPTION}>
             <XIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">Remove the time</span>
             <span className="caption-style text-subtle shrink-0">Keeps the day</span>
@@ -246,10 +309,12 @@ export function ScheduleMenu({
   children?: ReactNode;
 }) {
   const phone = usePhone();
+  const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const choices = useChoices(open, task.durationMinutes, now);
+  const free = useNextFree(open, task.durationMinutes, now);
+  const fixed = scheduleChoices({ durationMinutes: task.durationMinutes, now }).filter((choice) => choice.id !== "next-free");
 
   useEffect(() => {
     const listen = (event: Event) => {
@@ -280,9 +345,19 @@ export function ScheduleMenu({
     change(false);
     onRemoveTime();
   }
+  function setDuration(minutes: number) {
+    if (minutes !== task.durationMinutes) onDuration(minutes);
+  }
 
   const trigger = (
-    <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label="Schedule" onClick={phone ? () => change(true) : undefined} className={cn("inline-flex cursor-pointer items-center", className)}>
+    <button
+      type="button"
+      aria-haspopup={phone ? "dialog" : "menu"}
+      aria-expanded={open}
+      aria-label="Schedule"
+      onClick={phone ? () => change(true) : undefined}
+      className={cn("inline-flex cursor-pointer items-center", className)}
+    >
       {children ?? (
         <>
           <ClockIcon aria-hidden className="size-3.5 shrink-0" />
@@ -292,12 +367,8 @@ export function ScheduleMenu({
       )}
     </button>
   );
-  const options = picking ? (
-    <PickDateTime task={task} onSave={save} onCancel={() => setPicking(false)} />
-  ) : (
-    <div role="menu" aria-label="Schedule" className="flex flex-col">
-      <ScheduleOptions task={task} choices={choices} onChoose={choose} onPick={() => setPicking(true)} onRemoveTime={removeTime} />
-    </div>
+  const options = (menu: boolean) => (
+    <ScheduleOptions task={task} free={free} fixed={fixed} menu={menu} onChoose={choose} onPick={() => setPicking(true)} onRemoveTime={removeTime} />
   );
 
   if (phone) {
@@ -312,13 +383,17 @@ export function ScheduleMenu({
             </div>
             <SheetCloseButton />
           </SheetHeader>
-          <div className="flex flex-col p-2">{options}</div>
-          {!picking && (
-            <div className="border-line-strong flex flex-col gap-2 border-t px-4 pt-3.5 pb-6">
-              <span className="eyebrow-style text-subtle">Duration</span>
-              <DurationButtons value={task.durationMinutes} onPick={(minutes) => minutes !== task.durationMinutes && onDuration(minutes)} />
-              <CustomDuration value={task.durationMinutes} onSet={(minutes) => minutes !== task.durationMinutes && onDuration(minutes)} />
-            </div>
+          {picking ? (
+            <PickDateTime task={task} onSave={save} onCancel={() => setPicking(false)} />
+          ) : (
+            <>
+              <div className="flex flex-col p-2">{options(false)}</div>
+              <div className="border-line-strong flex flex-col gap-2 border-t px-4 pt-3.5 pb-6">
+                <span className="eyebrow-style text-subtle">Duration</span>
+                <DurationButtons value={task.durationMinutes} onPick={setDuration} />
+                <CustomDuration value={task.durationMinutes} onSet={setDuration} />
+              </div>
+            </>
           )}
         </SheetContent>
       </Sheet>
@@ -327,91 +402,160 @@ export function ScheduleMenu({
   return (
     <Popover open={open} onOpenChange={change}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(19rem,calc(100vw-2rem))] p-1">
-        {!picking && <span className="eyebrow-style text-subtle block px-2.5 pt-2 pb-1">Schedule · {durationLabel(task.durationMinutes)}</span>}
-        {options}
+      <PopoverContent
+        align="start"
+        className="w-[min(21em,calc(100vw-2rem))] p-1"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          menuRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+        }}
+      >
+        {picking ? (
+          <PickDateTime task={task} onSave={save} onCancel={() => setPicking(false)} />
+        ) : (
+          <>
+            <span className="eyebrow-style text-subtle block px-2.5 pt-2 pb-1">Schedule · {durationLabel(task.durationMinutes)}</span>
+            <div ref={menuRef} role="menu" aria-label="Schedule" onKeyDown={moveFocus} className="flex flex-col">
+              {options(true)}
+            </div>
+          </>
+        )}
       </PopoverContent>
     </Popover>
   );
 }
 
+
 const QUICK_TIMES = ["09:00", "11:00", "14:00", "16:00"];
 
-export function ReminderTimePrompt({
-  title,
-  onSave,
-  className,
-  label = "Remind me",
-}: {
+type PromptProps = {
   title: string;
+  day: string;
+  lead?: number;
   onSave: (time: string) => void;
-  className?: string;
-  label?: string;
-}) {
+  onRemove?: () => void;
+};
+
+function ReminderForm({ title, day, lead = 0, onSave, onRemove, onClose }: PromptProps & { onClose: () => void }) {
   const id = useId();
-  const [open, setOpen] = useState(false);
-  const [time, setTime] = useState(QUICK_TIMES[0]);
+  const [now] = useState(() => Date.now());
+  const [time, setTime] = useState(() => reminderTimeFor(day, lead, Date.now()) ?? "");
   const ready = /^\d{2}:\d{2}$/.test(time);
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (next) setTime(QUICK_TIMES[0]);
+    <form
+      aria-labelledby={`${id}-title`}
+      className="flex flex-col gap-2.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!ready) return;
+        onClose();
+        requestReminderPermission();
+        onSave(time);
       }}
     >
+      <span id={`${id}-title`} className="ui-style font-medium">
+        Pick a time for the reminder
+      </span>
+      <span className="caption-style text-subtle">{title} has a day but no time. The reminder makes it timed.</span>
+      <div role="group" aria-label="Times" className="flex flex-wrap gap-1.5">
+        {QUICK_TIMES.map((quick) => (
+          <button
+            key={quick}
+            type="button"
+            aria-pressed={time === quick}
+            disabled={isPastTime(day, quick, now)}
+            onClick={() => setTime(quick)}
+            className={cn(
+              PILL,
+              "h-7 rounded-full px-2.5 [@media(pointer:coarse)]:h-11",
+              time === quick ? "bg-primary text-primary-foreground" : "text-soft hover:text-foreground bg-white/[0.06] hover:bg-white/10",
+            )}
+          >
+            {quick}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor={`${id}-time`} className="sr-only">
+          Time
+        </label>
+        <Input
+          id={`${id}-time`}
+          data-reminder-time=""
+          type="time"
+          value={time}
+          onChange={(event) => setTime(event.target.value)}
+          className="h-8 w-[7em] [@media(pointer:coarse)]:h-11"
+        />
+        <span className="flex-1" />
+        {onRemove ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            onClick={() => {
+              onClose();
+              onRemove();
+            }}
+            className="[@media(pointer:coarse)]:h-11"
+          >
+            No reminder
+          </Button>
+        ) : (
+          <Button variant="secondary" size="sm" type="button" onClick={onClose} className="[@media(pointer:coarse)]:h-11">
+            Cancel
+          </Button>
+        )}
+        <Button variant="primary" size="sm" type="submit" disabled={!ready} className="[@media(pointer:coarse)]:h-11">
+          Save
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+export function ReminderTimePrompt({
+  open: controlled,
+  onOpenChange,
+  className,
+  label = "Remind me",
+  needed = false,
+  ...props
+}: PromptProps & {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  className?: string;
+  label?: string;
+  needed?: boolean;
+}) {
+  const [inner, setInner] = useState(false);
+  const open = controlled ?? inner;
+  function change(next: boolean) {
+    setInner(next);
+    onOpenChange?.(next);
+  }
+  return (
+    <Popover open={open} onOpenChange={change}>
       <PopoverTrigger asChild>
-        <button type="button" aria-label={`${label}. Pick a time first`} className={cn("inline-flex cursor-pointer items-center", className)}>
+        <button
+          type="button"
+          aria-label={needed ? "Pick a time for the reminder" : `${label}. Pick a time first`}
+          className={cn("inline-flex cursor-pointer items-center", needed && "text-warning", className)}
+        >
           <ClockIcon aria-hidden className="size-3.5 shrink-0" />
-          <span className="truncate">{label}</span>
+          <span className="truncate">{needed ? "Pick a time" : label}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(19rem,calc(100vw-2rem))] p-3">
-        <form
-          aria-labelledby={`${id}-title`}
-          className="flex flex-col gap-2.5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!ready) return;
-            setOpen(false);
-            requestReminderPermission();
-            onSave(time);
-          }}
-        >
-          <span id={`${id}-title`} className="ui-style font-medium">
-            Pick a time for the reminder
-          </span>
-          <span className="caption-style text-subtle">{title} has a day but no time. The reminder makes it timed.</span>
-          <div role="group" aria-label="Times" className="flex flex-wrap gap-1.5">
-            {QUICK_TIMES.map((quick) => (
-              <button
-                key={quick}
-                type="button"
-                aria-pressed={time === quick}
-                onClick={() => setTime(quick)}
-                className={cn(
-                  "ui-style ease-power3-out h-7 cursor-pointer rounded-full px-2.5 tabular-nums outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring/60 [@media(pointer:coarse)]:h-11",
-                  time === quick ? "bg-primary text-primary-foreground" : "text-soft hover:text-foreground bg-white/[0.06] hover:bg-white/10",
-                )}
-              >
-                {quick}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <label htmlFor={`${id}-time`} className="sr-only">
-              Time
-            </label>
-            <Input id={`${id}-time`} type="time" step={300} value={time} onChange={(event) => setTime(event.target.value)} className="h-8 w-28 [@media(pointer:coarse)]:h-11" />
-            <span className="flex-1" />
-            <Button variant="secondary" size="sm" type="button" onClick={() => setOpen(false)} className="[@media(pointer:coarse)]:h-11">
-              Cancel
-            </Button>
-            <Button variant="primary" size="sm" type="submit" disabled={!ready} className="[@media(pointer:coarse)]:h-11">
-              Save
-            </Button>
-          </div>
-        </form>
+      <PopoverContent
+        align="start"
+        className="w-[min(20em,calc(100vw-2rem))] p-3"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement | null)?.querySelector<HTMLInputElement>("[data-reminder-time]")?.focus();
+        }}
+      >
+        <ReminderForm {...props} onClose={() => change(false)} />
       </PopoverContent>
     </Popover>
   );

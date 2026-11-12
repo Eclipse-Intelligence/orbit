@@ -1,4 +1,4 @@
-import { addWorkingDays, dayKeyAt, nextWorkingDay, shiftDay, wallClockAt, weekday } from "@/lib/crm/working-days";
+import { addWorkingDays, dayKeyAt, nextWorkingDay, nonWorkingReason, shiftDay, wallClockAt, weekday } from "@/lib/crm/working-days";
 import { appTimeZone, startOfDay, zonedParts } from "@/lib/time";
 
 export const DEFAULT_TASK_DURATION = 15;
@@ -84,10 +84,12 @@ export function durationWords(minutes: number) {
 
 export function nextFreeStart(now: number, durationMinutes: number, busy: { start: number; end: number }[], timeZone = appTimeZone()) {
   const today = dayKeyAt(new Date(now), timeZone);
+  if (nonWorkingReason(today)) return null;
+  const open = wallClockAt(today, MORNING.hour, MORNING.minute, timeZone);
   const close = wallClockAt(today, DAY_CLOSE.hour, DAY_CLOSE.minute, timeZone);
   const step = SCHEDULE_STEP_MINUTES * 60_000;
   const length = durationMinutes * 60_000;
-  let cursor = Math.ceil(now / step) * step;
+  let cursor = Math.ceil(Math.max(now, open) / step) * step;
   for (const block of [...busy].sort((left, right) => left.start - right.start)) {
     if (block.end <= cursor) continue;
     if (block.start >= cursor + length) break;
@@ -110,11 +112,30 @@ export function scheduleChoices(
   const free = nextFreeStart(input.now, input.durationMinutes, input.busy ?? [], timeZone);
   if (free !== null) {
     const at = new Date(free).toISOString();
-    choices.push({ id: "next-free", label: `Next free ${durationWords(input.durationMinutes)} today`, detail: clockLabel(at, timeZone), at });
+    choices.push({ id: "next-free", label: `Next free ${durationWords(input.durationMinutes)}`, detail: clockLabel(at, timeZone), at });
   }
   const next = addWorkingDays(today, 1);
   choices.push(morning(next, next === shiftDay(today, 1) ? "Tomorrow morning" : `${dayName(next, true)} morning`, "tomorrow", timeZone));
   const monday = nextWorkingDay(shiftDay(today, (8 - weekday(today)) % 7 || 7));
   if (monday !== next) choices.push(morning(monday, `${dayName(monday, true)} morning`, "monday", timeZone));
   return choices;
+}
+
+function clock(minutes: number) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+export function reminderTimeFor(day: string, leadMinutes: number, now: number, timeZone = appTimeZone()) {
+  const today = dayKeyAt(new Date(now), timeZone);
+  if (day > today) return clock(MORNING.hour * 60 + MORNING.minute);
+  if (day < today) return null;
+  const wall = zonedParts(new Date(now), timeZone);
+  const minutes = wall.hour * 60 + wall.minute + Math.max(0, leadMinutes);
+  const next = Math.ceil((minutes + 1) / SCHEDULE_STEP_MINUTES) * SCHEDULE_STEP_MINUTES;
+  return next >= 24 * 60 ? null : clock(next);
+}
+
+export function isPastTime(day: string, time: string, now: number, timeZone = appTimeZone()) {
+  const [hour, minute] = time.split(":").map(Number);
+  return wallClockAt(day, hour, minute, timeZone) <= now;
 }

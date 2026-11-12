@@ -4,7 +4,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { detectPadRecords, searchPadRecords } from "@/lib/crm/task-pad";
+import { detectPadRecords, parsePadWithAi, searchPadRecords } from "@/lib/crm/task-pad";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -83,10 +83,47 @@ describe("task pad parser", () => {
     assert.equal(parse("Call Jane Monday morning").due, "2026-10-19T09:00");
     assert.equal(parse("Call Jane in 3 days").due, "2026-10-19");
     const reminded = parse("Call Jane Monday, remind me 15 mins before");
-    assert.deepEqual({ due: reminded.due, remindMinutes: reminded.remindMinutes }, { due: "2026-10-19T09:00", remindMinutes: 15 });
+    assert.deepEqual({ due: reminded.due, remindMinutes: reminded.remindMinutes }, { due: "2026-10-19", remindMinutes: 15 });
     assert.equal(padDueHasTime("2026-10-19"), false);
     assert.equal(padDueHasTime("2026-10-19T09:00"), true);
     assert.equal(padDueHasTime(null), false);
+  });
+
+  it("reads the AI fallback's date-only due and keeps the reminder it asks for", async () => {
+    const answers = [
+      { title: "Call Jane", due: "2026-10-19", remindMinutes: 15 },
+      { title: "Call Jane", due: "2026-10-19T11:15", remindMinutes: 45 },
+      { title: "Call Jane", due: null, remindMinutes: 15 },
+      { title: "Call Jane", due: "next Monday", remindMinutes: null },
+    ];
+    const prompts: string[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+      prompts.push(body.messages[0].content);
+      const content = JSON.stringify(answers[prompts.length - 1]);
+      return Response.json({ model: "test", choices: [{ message: { content }, finish_reason: "stop" }] });
+    };
+    const previous = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "llm-test";
+    try {
+      assert.deepEqual(await parsePadWithAi("ring jane after the weekend, nudge me 15 mins before", FRIDAY_10AM, { fetchImpl }), {
+        title: "Call Jane",
+        due: "2026-10-19",
+        remindMinutes: 15,
+      });
+      assert.deepEqual(await parsePadWithAi("ring jane monday 11.15, nudge me 45 mins before", FRIDAY_10AM, { fetchImpl }), {
+        title: "Call Jane",
+        due: "2026-10-19T11:15",
+        remindMinutes: 30,
+      });
+      assert.deepEqual(await parsePadWithAi("ring jane, nudge me", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
+      assert.deepEqual(await parsePadWithAi("ring jane next monday", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
+    } finally {
+      if (previous === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = previous;
+    }
+    assert.match(prompts[0], /the day alone as YYYY-MM-DD/);
+    assert.doesNotMatch(prompts[0], /09:00/);
   });
 
   it("doesn't mistake names and words for dates", () => {

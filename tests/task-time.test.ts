@@ -13,9 +13,11 @@ import {
   durationLabel,
   durationWords,
   isTaskDuration,
+  isPastTime,
   isTaskOverdue,
   nextFreeStart,
   onDayKeepingKind,
+  reminderTimeFor,
   scheduleChoices,
   taskDueDay,
 } from "@/lib/crm/task-time";
@@ -96,6 +98,23 @@ describe("Schedule", () => {
     const busy = [{ start: Date.parse("2026-11-12T11:30:00Z"), end: Date.parse("2026-11-12T12:10:00Z") }];
     assert.equal(new Date(nextFreeStart(now, 15, busy, LONDON)!).toISOString(), "2026-11-12T12:15:00.000Z");
     assert.equal(nextFreeStart(Date.parse("2026-11-12T17:20:00Z"), 15, [], LONDON), null);
+    assert.equal(new Date(nextFreeStart(Date.parse("2026-11-12T06:40:00Z"), 15, [], LONDON)!).toISOString(), "2026-11-12T09:00:00.000Z", "never before 09:00");
+    assert.equal(nextFreeStart(Date.parse("2026-11-14T11:00:00Z"), 15, [], LONDON), null, "not on a Saturday");
+    assert.equal(nextFreeStart(Date.parse("2026-12-25T11:00:00Z"), 15, [], LONDON), null, "not on a bank holiday");
+    assert.equal(nextFreeStart(Date.parse("2026-11-12T17:00:00Z"), 45, [], LONDON), null, "must finish by 17:30");
+  });
+
+  it("suggests a reminder time that isn't in the past", () => {
+    const now = Date.parse("2026-11-12T11:20:00Z");
+    assert.equal(reminderTimeFor("2026-11-12", 0, now, LONDON), "11:30");
+    assert.equal(reminderTimeFor("2026-11-12", 15, now, LONDON), "11:45");
+    assert.equal(reminderTimeFor("2026-11-12", 0, Date.parse("2026-11-12T11:30:00Z"), LONDON), "11:45");
+    assert.equal(reminderTimeFor("2026-11-13", 60, now, LONDON), "09:00");
+    assert.equal(reminderTimeFor("2026-11-11", 0, now, LONDON), null);
+    assert.equal(reminderTimeFor("2026-11-12", 0, Date.parse("2026-11-12T23:50:00Z"), LONDON), null);
+    assert.equal(reminderTimeFor("2026-07-01", 0, Date.parse("2026-07-01T08:05:00Z"), LONDON), "09:15", "London summer time");
+    assert.equal(isPastTime("2026-11-12", "11:00", now, LONDON), true);
+    assert.equal(isPastTime("2026-11-12", "14:00", now, LONDON), false);
   });
 
   it("lists next free today, tomorrow morning and Monday morning", () => {
@@ -103,7 +122,7 @@ describe("Schedule", () => {
     assert.deepEqual(
       thursday.map((choice) => [choice.label, choice.detail, choice.at]),
       [
-        ["Next free 15 minutes today", "11:30", "2026-11-12T11:30:00.000Z"],
+        ["Next free 15 minutes", "11:30", "2026-11-12T11:30:00.000Z"],
         ["Tomorrow morning", "Fri 09:00", "2026-11-13T09:00:00.000Z"],
         ["Monday morning", "Mon 09:00", "2026-11-16T09:00:00.000Z"],
       ],
