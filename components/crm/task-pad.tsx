@@ -988,7 +988,7 @@ export default function TaskPad({
       disabled={busy}
       className={cn(
         "m-0 flex min-w-0 items-center gap-1.5 border-0 p-0 disabled:opacity-60",
-        "flex-wrap max-md:flex-nowrap max-md:overflow-x-auto max-md:pr-10 max-md:[mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden",
+        "flex-wrap max-md:-my-2 max-md:flex-nowrap max-md:overflow-x-auto max-md:overflow-y-hidden max-md:overscroll-x-contain max-md:py-2 max-md:pr-10 max-md:[mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden",
         card ? "px-3.5" : "order-1 flex-1 max-md:-ml-3 max-md:pl-3 @max-[36rem]:basis-full",
       )}
     >
