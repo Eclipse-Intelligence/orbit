@@ -13,6 +13,7 @@ import {
   nameMarks,
   padConfirmLine,
   padNeedsConfirm,
+  padRelease,
   padSaveIds,
   parseTaskText,
   reminderClock,
@@ -198,6 +199,18 @@ describe("task pad parser", () => {
     assert.deepEqual(padSaveIds(null, base), {}, "a failed check sends nothing it found");
     assert.deepEqual(padSaveIds(null, fixed), { companyId: "beta" }, "a failed check still sends the fixed company");
     assert.deepEqual(padSaveIds(null, { ...base, contact: { set: true, value: jane } }), { contactId: "jane" });
+
+    const bob = { id: "bob", name: "Bob Ray", company: beta };
+    const handBob = { ...base, contact: { set: true, value: bob } };
+    const retyped = resolvePadLinks({ ...handBob, text: "Call Acme", found: { ...found, company: acme } });
+    assert.deepEqual([retyped.contact?.id, retyped.company?.id], ["bob", "beta"], "a hand-picked person keeps their company when the text names another");
+    assert.deepEqual(padSaveIds(retyped, handBob), { companyId: "beta", contactId: "bob" });
+
+    const side = { set: true, value: null, side: true };
+    assert.deepEqual(padRelease(side), { set: false, value: undefined }, "a clear made by another pick is forgotten when the text changes");
+    assert.deepEqual(padRelease({ set: true, value: null }), { set: true, value: null }, "a clear Mark made himself stays");
+    const released = { ...base, contact: padRelease<typeof jane | null>(side) };
+    assert.equal(resolvePadLinks({ ...released, text: "Call Jane Doe", found: { ...found, company: acme, contact: jane } }).contact?.id, "jane");
   });
 
   it("shows when a reminder goes off", () => {

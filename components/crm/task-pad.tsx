@@ -19,6 +19,7 @@ import {
   padConfirmLine,
   padFits,
   padNeedsConfirm,
+  padRelease,
   padSaveIds,
   parseTaskText,
   reminderClock,
@@ -40,7 +41,7 @@ import UserIcon from "@/public/assets/images/tasks/user.svg";
 
 type Mention = { start: number; end: number; query: string };
 type Suggestion = { kind: "company" | "contact"; option: PadOption };
-type Override<T> = { set: boolean; value: T };
+type Override<T> = { set: boolean; value: T; side?: boolean };
 type PadContact = PadRecord & { company: PadRecord | null };
 type Variant = "card" | "inline";
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
@@ -548,26 +549,29 @@ export default function TaskPad({
   function linkContact(option: PadOption | null) {
     setContact({ set: true, value: option ? { id: option.id, name: option.name, company: option.company } : null });
     if (!option?.company || fixedCompany) return;
-    if (finalCompany?.id !== option.company.id) {
-      setCompany({ set: true, value: option.company });
-      if (finalOpportunity) setOpportunity({ set: true, value: null });
-    }
+    setCompany({ set: true, value: option.company });
+    if (finalOpportunity && finalCompany?.id !== option.company.id) setOpportunity({ set: true, value: null, side: true });
   }
 
   function linkCompany(option: PadOption | null) {
     setCompany({ set: true, value: option ? { id: option.id, name: option.name } : null });
     if (option?.id !== finalCompany?.id) {
-      if (finalOpportunity) setOpportunity({ set: true, value: null });
-      if (finalContact?.company && finalContact.company.id !== option?.id) setContact({ set: true, value: null });
+      if (finalOpportunity) setOpportunity({ set: true, value: null, side: true });
+      if (finalContact?.company && finalContact.company.id !== option?.id) setContact({ set: true, value: null, side: true });
     }
   }
 
   function linkOpportunity(option: PadOption | null) {
     setOpportunity({ set: true, value: option ? { id: option.id, name: option.name } : null });
-    if (option?.company && !fixedCompany && finalCompany?.id !== option.company.id) {
-      setCompany({ set: true, value: option.company });
-      if (finalContact?.company && finalContact.company.id !== option.company.id) setContact({ set: true, value: null });
-    }
+    if (!option?.company || fixedCompany) return;
+    setCompany({ set: true, value: option.company });
+    if (finalContact?.company && finalContact.company.id !== option.company.id) setContact({ set: true, value: null, side: true });
+  }
+
+  function forgetSideClears() {
+    setContact(padRelease);
+    setCompany(padRelease);
+    setOpportunity(padRelease);
   }
 
   function pick(suggestion: Suggestion) {
@@ -870,6 +874,7 @@ export default function TaskPad({
           onChange={(event) => {
             setText(event.target.value);
             setError(null);
+            forgetSideClears();
             if (!event.target.value.trim()) {
               setDetected(null);
               setAi(null);

@@ -291,7 +291,7 @@ export function mergeMarks(marks: PadMark[]) {
 type PadRef = { id: string; name: string };
 type PadPerson = PadRef & { company: PadRef | null };
 type PadChoice = { id: string; name: string; detail: string | null; company: PadRef | null };
-export type PadPick<T> = { set: boolean; value: T };
+export type PadPick<T> = { set: boolean; value: T; side?: boolean };
 type PadFound = {
   company: PadRef | null;
   contact: PadPerson | null;
@@ -317,6 +317,10 @@ type PadState = {
   dismissed: string[];
 };
 
+export function padRelease<T>(pick: PadPick<T>): PadPick<T> {
+  return pick.side ? { set: false, value: undefined as T } : pick;
+}
+
 export function padAnchor(state: Pick<PadState, "fixedCompany" | "company">) {
   return state.fixedCompany ?? (state.company.set ? state.company.value : null);
 }
@@ -335,10 +339,11 @@ export function resolvePadLinks(state: PadState): PadLinks {
   const personOnlyCompany = Boolean(found?.company && found.contact?.company?.id === found.company.id && !named && !viaDeal);
   const auto = fromText
     ? (found?.company ?? found?.contact?.company ?? null)
-    : found?.company && !(personOnlyCompany && found.contact)
+    : found?.company && !personOnlyCompany
       ? found.company
       : (person?.company ?? null);
-  const company = state.fixedCompany ?? (state.company.set ? state.company.value : auto);
+  const pinned = state.contact.set ? (state.contact.value?.company ?? null) : null;
+  const company = state.fixedCompany ?? (state.company.set ? state.company.value : (pinned ?? auto));
   const spotted = found?.opportunity && company && company.id === found.opportunity.companyId ? found.opportunity : null;
   const opportunity = state.opportunity.set ? state.opportunity.value : spotted;
   const choices = found?.ask ? found.ask.candidates.filter((choice) => padFits(anchor, choice)) : [];
