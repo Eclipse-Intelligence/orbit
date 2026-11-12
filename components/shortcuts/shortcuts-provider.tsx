@@ -85,7 +85,7 @@ export function useShortcutHint(id: string) {
 function overlayOpen() {
   if (document.querySelector("[data-radix-popper-content-wrapper]")) return true;
   return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(
-    (node) => node.getAttribute("data-state") === "open",
+    (node) => node.getAttribute("data-state") === "open" && !node.hasAttribute("data-nonmodal"),
   );
 }
 

@@ -58,6 +58,12 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import ClockIcon from "@/public/assets/images/companies/detail/clock.svg";
 
 const SETTINGS_KEY = "orbit-assistant-settings";
+const DOCK_MARGIN = 16;
+const QUICK_ADD_SPACE = 72;
+const PILL_WIDTH = 384;
+const PILL_MIN = 224;
+const OPEN_WIDTH = 736;
+const OPEN_MIN = 432;
 const CONVERSATION_KEY = "orbit-assistant-conversation";
 const CHAT_PARAM = "chat";
 
@@ -616,7 +622,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const router = useRouter();
   const pathname = usePathname();
   const { mac } = useShortcuts();
-  const { covered, lift, tucked } = useScreenState();
+  const { covered, lift, tucked, room } = useScreenState();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
@@ -1183,13 +1189,23 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const position = {
     "--assistant-lift": `${lift}px`,
   } as CSSProperties;
+  const end = room ? room.end - QUICK_ADD_SPACE : 0;
+  const gap = room ? end - room.start - DOCK_MARGIN * 2 : null;
+  const centre = room ? (room.start + end) / 2 : 0;
+  const pillWidth = gap === null ? null : Math.min(PILL_WIDTH, gap);
+  const pillTucked = pillWidth !== null && pillWidth < PILL_MIN;
+  const pillAt = pillWidth !== null && !pillTucked ? { left: `${centre}px` } : {};
+  const panelWidth = gap === null ? null : Math.min(OPEN_WIDTH, gap);
+  const panelBeside = panelWidth !== null && panelWidth >= OPEN_MIN;
+  const panelAt = panelBeside ? { left: `${centre}px`, width: `${panelWidth}px` } : {};
   const placement =
     "fixed z-40 bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] left-3 right-[4.75rem] md:right-auto md:left-1/2 md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] sidebar-collapsed:lg:left-1/2";
 
   if (!open) {
     return (
-      <div style={position} className={cn(placement, "transition-[bottom] duration-200 ease-power3-out", (covered || tucked) && "invisible")}>
+      <div style={{ ...position, ...pillAt }} className={cn(placement, "transition-[bottom] duration-200 ease-power3-out", (covered || tucked || pillTucked) && "invisible")}>
         <button
+          style={pillWidth !== null && !pillTucked ? { width: `${pillWidth}px` } : undefined}
           type="button"
           onClick={expand}
           aria-keyshortcuts="o"
@@ -1208,9 +1224,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
 
   return (
     <div
-      style={position}
+      style={{ ...position, ...panelAt }}
       className={cn(
-        "fixed z-40 inset-x-2 top-16 bottom-[max(calc(env(safe-area-inset-bottom)+0.5rem),var(--assistant-lift))] md:inset-x-auto md:top-auto md:bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] md:left-1/2 md:w-[min(46rem,calc(100vw-2rem))] md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] lg:w-[min(46rem,calc(100vw-var(--sidebar-width)-3rem))] sidebar-collapsed:lg:left-1/2",
+        "fixed inset-x-2 top-16 bottom-[max(calc(env(safe-area-inset-bottom)+0.5rem),var(--assistant-lift))] md:inset-x-auto md:top-auto md:bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] md:left-1/2 md:w-[min(46rem,calc(100vw-2rem))] md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] lg:w-[min(46rem,calc(100vw-var(--sidebar-width)-3rem))] sidebar-collapsed:lg:left-1/2",
+        room && !panelBeside ? "z-[60]" : "z-40",
         covered && "invisible",
       )}
     >

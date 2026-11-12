@@ -90,6 +90,7 @@ function modalOpen() {
   return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(
     (node) =>
       node.getAttribute("data-state") === "open" &&
+      !node.hasAttribute("data-nonmodal") &&
       !node.closest("[data-radix-popper-content-wrapper]"),
   );
 }
@@ -111,6 +112,8 @@ export function useScreenState() {
   const [covered, setCovered] = useState(false);
   const [lift, setLift] = useState(0);
   const [tucked, setTucked] = useState(false);
+  const [beside, setBeside] = useState(0);
+  const [room, setRoom] = useState<{ start: number; end: number } | null>(null);
 
   useEffect(() => {
     let frame = 0;
@@ -121,6 +124,17 @@ export function useScreenState() {
       frame = 0;
       setCovered(modalOpen());
       setTucked(document.querySelector("[data-quick-add-hide]") !== null);
+      const panels = [...document.querySelectorAll<HTMLElement>('[data-nonmodal][data-state="open"]')].map((node) => node.getBoundingClientRect());
+      const wide = window.matchMedia("(min-width: 64rem)").matches;
+      const width = wide ? Math.round(Math.max(0, ...panels.map((rect) => rect.width))) : 0;
+      setBeside(width);
+      if (width === 0) setRoom(null);
+      else {
+        const root = document.documentElement;
+        const sidebar = !("sidebarCollapsed" in root.dataset) ? parseFloat(getComputedStyle(root).getPropertyValue("--sidebar-width")) || 0 : 0;
+        const end = Math.round(root.clientWidth - width);
+        setRoom((current) => (current && current.start === sidebar && current.end === end ? current : { start: sidebar, end }));
+      }
       const nodes = [...document.querySelectorAll<HTMLElement>("[data-quick-add-avoid]")];
       if (nodes.length !== watched.length || nodes.some((node, index) => node !== watched[index])) {
         resize.disconnect();
@@ -141,6 +155,7 @@ export function useScreenState() {
       attributes: true,
       attributeFilter: ["data-state", "data-quick-add-avoid", "data-quick-add-hide"],
     });
+    mutations.observe(document.documentElement, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
     window.addEventListener("resize", schedule);
     schedule();
     return () => {
@@ -151,7 +166,7 @@ export function useScreenState() {
     };
   }, []);
 
-  return { covered, lift, tucked };
+  return { covered, lift, tucked, beside, room };
 }
 
 function SheetGrab() {
@@ -188,7 +203,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   const [opening, setOpening] = useState(0);
   const choosing = useRef(false);
   const returnTo = useRef<HTMLElement | null>(null);
-  const { covered, lift, tucked } = useScreenState();
+  const { covered, lift, tucked, beside } = useScreenState();
 
   const loadSetup = useCallback(() => {
     quickAddSetupAction().then(setSetup, () => undefined);
@@ -249,9 +264,9 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   return (
     <>
       <div
-        style={{ "--quick-add-lift": `${lift}px` } as CSSProperties}
+        style={{ "--quick-add-lift": `${lift}px`, "--quick-add-beside": `${beside}px` } as CSSProperties}
         className={cn(
-          "pointer-events-none fixed right-[calc(env(safe-area-inset-right)+1rem)] bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--quick-add-lift))] z-40 flex flex-col items-end gap-2 transition-[bottom] duration-200 ease-power3-out",
+          "pointer-events-none fixed right-[calc(env(safe-area-inset-right)+1rem+var(--quick-add-beside))] bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--quick-add-lift))] z-40 flex flex-col items-end gap-2 transition-[bottom] duration-200 ease-power3-out",
           covered && "invisible",
         )}
       >

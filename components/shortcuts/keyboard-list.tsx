@@ -39,10 +39,12 @@ export default function KeyboardList({
   children,
   className,
   sequence = false,
+  onMove,
 }: {
   children: ReactNode;
   className?: string;
   sequence?: boolean;
+  onMove?: (row: HTMLElement) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
@@ -86,6 +88,7 @@ export default function KeyboardList({
     const next =
       current < 0 ? (delta > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, current + delta));
     activateRow(rows[next]);
+    onMove?.(rows[next]);
     if (extend) {
       const box = rows[next].querySelector<HTMLInputElement>('[data-row-key="x"]');
       if (box && !box.checked && box.getAttribute("aria-checked") !== "true") box.click();

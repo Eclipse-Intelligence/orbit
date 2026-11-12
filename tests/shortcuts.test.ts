@@ -99,6 +99,49 @@ describe("keyboard shortcuts", () => {
     assert.equal(paletteMatches(contacts, "deals"), false);
   });
 
+  it("gives the Tasks page its keys without taking record page keys", () => {
+    const ids = (input: Parameters<typeof key>[0]) => matchingShortcuts(key(input), true).map((shortcut) => shortcut.id);
+    assert.ok(ids({ key: "e" }).includes("task-done"));
+    assert.ok(ids({ key: "d" }).includes("task-done"));
+    assert.ok(ids({ key: "h" }).includes("task-remind"));
+    assert.ok(ids({ key: "z" }).includes("task-undo"));
+    assert.ok(ids({ key: " " }).includes("task-expand"));
+    assert.ok(ids({ key: "Enter" }).includes("task-expand"));
+    assert.ok(ids({ key: "Enter", shiftKey: true }).includes("task-open"));
+    assert.ok(!ids({ key: "Enter" }).includes("task-open"));
+    assert.equal(ids({ key: "o" })[0], "task-open");
+    assert.ok(ids({ key: "o" }).includes("assistant"));
+    assert.equal(ids({ key: "Escape" })[0], "task-collapse");
+    assert.ok(ids({ key: "Escape" }).includes("back"));
+    assert.ok(ids({ key: "e" }).indexOf("task-done") < ids({ key: "e" }).indexOf("record-edit"));
+    assert.ok(ids({ key: "e" }).includes("record-edit"));
+    assert.ok(ids({ key: "j" }).indexOf("list-down") < ids({ key: "j" }).indexOf("task-move"));
+    assert.ok(ids({ key: "j" }).includes("record-next"));
+    assert.ok(ids({ key: "k" }).includes("record-prev"));
+    assert.equal(SHORTCUT_BY_ID.get("task-done")?.rowKey, undefined);
+    assert.equal(SHORTCUT_BY_ID.get("task-expand")?.rowKey, "space");
+    assert.deepEqual(shortcutKeys(SHORTCUT_BY_ID.get("task-open")!, true), ["⇧", "Enter"]);
+    assert.equal(isSingleKey(SHORTCUT_BY_ID.get("task-collapse")!), false);
+  });
+
+  it("lets Tasks keys fall through on other pages", () => {
+    for (const id of ["task-open", "task-done", "task-remind", "task-undo", "task-collapse", "task-move"]) {
+      const shortcut = SHORTCUT_BY_ID.get(id)!;
+      assert.equal(shortcut.rowKey, undefined, id);
+      assert.equal(shortcut.target, undefined, id);
+      assert.equal(shortcut.href, undefined, id);
+    }
+    const ids = (input: Parameters<typeof key>[0]) => matchingShortcuts(key(input), true).map((shortcut) => shortcut.id);
+    assert.deepEqual(ids({ key: "o" }), ["task-open", "assistant"]);
+    assert.ok(ids({ key: "e" }).includes("mail-archive"));
+    assert.ok(ids({ key: "e" }).includes("capture-done"));
+    assert.ok(ids({ key: "h" }).includes("mail-snooze"));
+    assert.ok(ids({ key: "z" }).includes("mail-undo"));
+    assert.ok(ids({ key: "z" }).includes("capture-undo"));
+    assert.ok(ids({ key: "d" }).includes("calendar-day"));
+    assert.ok(ids({ key: "E" }).includes("task-done"), "Caps Lock E still counts");
+  });
+
   it("builds list search links that keep filters and reset paging", () => {
     const params = new URLSearchParams("tag=vip&page=3&q=old");
     assert.equal(listSearchHref("/contacts", params, "q", " acme "), "/contacts?tag=vip&q=acme");

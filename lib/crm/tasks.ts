@@ -378,13 +378,15 @@ async function applyTask(
       opportunityId: current.opportunity_id,
     },
   );
+  const settled = write.completedAt === undefined && write.completed !== undefined && Boolean(current.completed_at) === write.completed;
+  if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
   const completedAt =
     write.completedAt !== undefined
       ? write.completedAt
-      : write.completed === undefined
+      : write.completed === undefined || settled
         ? undefined
         : write.completed
-          ? (iso(current.completed_at) ?? new Date().toISOString())
+          ? new Date().toISOString()
           : null;
   const change = assignColumns([
     [write.title !== undefined, "title", "title", write.title ?? null],
@@ -632,6 +634,7 @@ export async function updateTask(
   const hash = requestHash("update_task", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+      if (input.completed !== undefined) await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
       const current = await readTask(db, id);
       if (!current) throw notFound("task");
       const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
@@ -645,10 +648,45 @@ export async function completeTask(
   id: string,
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ task: Task }>> {
-  return updateTask(actor, id, { completed: true }, {
-    ...options,
-    provenance: options.provenance ?? { operation: "complete_task" },
-  });
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(id)) throw notFound("task");
+  const input: TaskWrite = { completed: true };
+  const provenance = options.provenance ?? { operation: "complete_task" };
+  const hash = requestHash("update_task", { id, input, provenance });
+  return withActor(actor, (db) =>
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+      await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
+      const current = await readTask(db, id);
+      if (!current) throw notFound("task");
+      if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
+        return { task: mapTask(current) };
+      }
+      const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
+      return { task: updated.task };
+    }),
+  );
+}
+
+export async function reopenTask(
+  actor: Actor,
+  id: string,
+  options: MutationOptions = {},
+): Promise<MutationOutcome<{ task: Task }>> {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(id)) throw notFound("task");
+  const provenance = options.provenance ?? { operation: "reopen_task" };
+  const hash = requestHash("reopen_task", { id, provenance });
+  return withActor(actor, (db) =>
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+      await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
+      const current = await readTask(db, id);
+      if (!current) throw notFound("task");
+      if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+      if (!current.completed_at || current.archived_at) return { task: mapTask(current) };
+      const updated = await applyTask(db, actor, current, prepareTask({ completed: false }, "patch"), provenance);
+      return { task: updated.task };
+    }),
+  );
 }
 
 export async function archiveTask(

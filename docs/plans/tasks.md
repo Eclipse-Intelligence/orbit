@@ -21,7 +21,7 @@ A task is the next thing to do with a person, company or opportunity, and everyt
 6. **No new assistant tools.** The assistant is at its cap of 126 (`tests/agent-docs.test.ts:83`), so existing tools are extended.
 7. **Clicking a colleague's name opens a direct message with them in Chat.**
 8. **Prepare runs automatically each morning for tasks due that day**, as well as on demand.
-9. **Phone swipes as in Capture:** right for Done, left for Remind me.
+9. **Phone swipes as in Capture:** left for Done, right for Remind me (decided by Mark, 2026-11-12).
 
 ## Phase 0: mockups (approved by Mark, 2026-11-12)
 
@@ -77,7 +77,7 @@ It becomes a compact command-bar card, the same component at the top of the Task
 - **Rows.** One-line description preview on wider screens. Done takes effect at once, with undo. Group headings in All: Overdue, Today, Upcoming, No date.
 - **Panel.** A new non-modal option on `SheetContent` (about 20 call sites keep today's default). Without the focus trap, list shortcuts are ignored while typing in the panel, and clicking another row switches the panel to that task. No repeated footer, Done on the title circle, a wider panel on iPad.
 - **Record pages.** Tasks on contact, company and opportunity pages use the same row, so they can be expanded, completed and opened.
-- **Phone.** Tap expands; Open goes to the full-width sheet. Swipe right for Done and left for Remind me, as in Capture.
+- **Phone.** Tap expands; Open goes to the full-width sheet. Swipes as in Capture: left for Done, right for Remind me.
 - **Safari.** Animate the expansion with `grid-template-rows` only. Run the WebKit sweep.
 
 ## Phase 3: act from the task (one PR, medium, no migration)

@@ -1,13 +1,19 @@
 "use client";
 
-import type { ComponentProps } from "react";
+import { createContext, useContext, type ComponentProps } from "react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
-function Sheet(props: ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />;
+const SheetModeContext = createContext(true);
+
+function Sheet({ modal = true, ...props }: ComponentProps<typeof SheetPrimitive.Root>) {
+  return (
+    <SheetModeContext.Provider value={modal}>
+      <SheetPrimitive.Root data-slot="sheet" modal={modal} {...props} />
+    </SheetModeContext.Provider>
+  );
 }
 
 function SheetTrigger(props: ComponentProps<typeof SheetPrimitive.Trigger>) {
@@ -52,13 +58,22 @@ function SheetContent({
   className,
   children,
   side = "right",
+  onInteractOutside,
   ...props
 }: SheetContentProps) {
+  const modal = useContext(SheetModeContext);
+  const beside = !modal;
   return (
     <SheetPrimitive.Portal>
-      <SheetOverlay />
+      {modal && <SheetOverlay />}
       <SheetPrimitive.Content
         data-slot="sheet-content"
+        data-nonmodal={beside ? "" : undefined}
+        aria-modal={modal ? true : undefined}
+        onInteractOutside={(event) => {
+          onInteractOutside?.(event);
+          if (beside) event.preventDefault();
+        }}
         className={cn(
           "bg-background text-foreground data-[state=closed]:animate-out data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:ease-power3-out fixed z-50 flex w-full flex-col duration-350 outline-none data-[state=closed]:duration-250",
           side === "right" &&
@@ -66,6 +81,7 @@ function SheetContent({
           side === "left" &&
             "border-line-strong data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-dvh border-r",
           "pb-[env(safe-area-inset-bottom)]",
+          beside && "shadow-[-24px_0_48px_rgba(0,0,0,0.35)]",
           side === "bottom" &&
             "border-line-strong shadow-overlay data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl border-t",
           className,
