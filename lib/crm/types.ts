@@ -393,6 +393,10 @@ export type Task = {
   title: string;
   description: string | null;
   dueAt: string | null;
+  dueDate: string | null;
+  dueHasTime: boolean;
+  durationMinutes: number;
+  scheduledBy: TaskScheduledBy | null;
   remindMinutes: number | null;
   completedAt: string | null;
   priority: TaskPriority;
@@ -421,10 +425,17 @@ export type Task = {
   updatedAt: string;
 };
 
+export const TASK_SCHEDULED_BY = ["person", "planner"] as const;
+export type TaskScheduledBy = (typeof TASK_SCHEDULED_BY)[number];
+
 export type TaskWrite = {
   title?: string;
   description?: string | null;
   dueAt?: string | null;
+  dueDate?: string | null;
+  dueHasTime?: boolean;
+  durationMinutes?: number;
+  scheduledBy?: TaskScheduledBy | null;
   remindMinutes?: number | null;
   priority?: TaskPriority;
   ownerId?: string | null;
