@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import type { Presence } from "@/lib/docs/client-types";
 import { setPresence } from "@/lib/docs/editor/presence";
 import { bind, unbind } from "@/lib/docs/live/binding";
+import { rebase } from "@/lib/docs/live/rebase";
 import { draftTopic, type LiveTransportKind, type LiveUser } from "@/lib/docs/live/protocol";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
 import { KEEPALIVE_MAX, LiveSession, LiveSyncError, type LiveServer, type LiveStatus, type SyncReply } from "@/lib/docs/live/session";
@@ -44,6 +45,8 @@ const UNREACHABLE = "Couldn't reach Orbit. Try again.";
 const UNREADABLE = "Couldn't read Orbit's reply. Try again.";
 const SIGNED_OUT = "Your session ended. Sign in again.";
 const RETRY_OPEN_MS = 3_000;
+const RETRY_OPEN_MAX_MS = 30_000;
+export const LIVE_NOT_SAVED = "Couldn't save the draft. Try again.";
 const EMPTY_UPDATE = new Uint8Array([0, 0]);
 
 const transports = new Map<LiveTransportKind, Promise<LiveTransport | null>>();
@@ -116,6 +119,8 @@ export class LiveDraft {
   private retained = 0;
   private headless = false;
   private readOnly = false;
+  private kept: string | null = null;
+  private openDelay = RETRY_OPEN_MS;
 
   constructor(options: Options) {
     this.shareId = options.shareId;
@@ -124,6 +129,10 @@ export class LiveDraft {
 
   get current() {
     return this.session;
+  }
+
+  get base() {
+    return this.options.base;
   }
 
   attach(view: EditorView) {
@@ -162,8 +171,10 @@ export class LiveDraft {
       this.view = null;
       this.headless = true;
       if (view && this.session) unbind(view);
+      else if (view) this.kept = view.state.doc.toString();
       return;
     }
+    this.kept = null;
     this.token += 1;
     if (this.retry) clearTimeout(this.retry);
     this.retry = null;
@@ -201,6 +212,7 @@ export class LiveDraft {
     if (!session) return;
     await session.sync();
     if (session.failure) throw new Error(session.failure.message);
+    if (session.unconfirmed()) throw new Error(LIVE_NOT_SAVED);
   }
 
   async settle(waitMs = 8_000): Promise<number> {
@@ -318,12 +330,15 @@ export class LiveDraft {
         return;
       }
       this.setStatus("offline");
+      const delay = this.openDelay;
+      this.openDelay = Math.min(RETRY_OPEN_MAX_MS, delay * 2);
       this.retry = setTimeout(() => {
         this.retry = null;
-        if (token === this.token && this.view) void this.open(base, null);
-      }, RETRY_OPEN_MS);
+        if (token === this.token && (this.view || this.headless)) void this.open(base, null);
+      }, delay);
       return;
     }
+    this.openDelay = RETRY_OPEN_MS;
     const kind = opened.transport ?? this.kind;
     this.kind = kind;
     const transport = kind ? await transportFor(kind).catch(() => null) : null;
@@ -347,6 +362,21 @@ export class LiveDraft {
     this.session = session;
     this.applyPause();
     if (view) bind(view, session, base);
+    else if (this.kept !== null) {
+      const kept = this.kept;
+      this.kept = null;
+      const { toShared } = rebase(base, kept, session.text.toString());
+      if (!toShared.empty) {
+        const edits: { from: number; to: number; insert: string }[] = [];
+        toShared.iterChanges((fromA, toA, _fromB, _toB, inserted) => edits.push({ from: fromA, to: toA, insert: inserted.toString() }));
+        doc.transact(() => {
+          for (const edit of edits.reverse()) {
+            if (edit.to > edit.from) session.text.delete(edit.from, edit.to - edit.from);
+            if (edit.insert) session.text.insert(edit.from, edit.insert);
+          }
+        });
+      }
+    }
     this.stopWatching = this.watch(session);
     session.start();
     if (replacement) void session.sync();
@@ -380,7 +410,8 @@ export class LiveDraft {
     const offRebuilt = session.onRebuilt(() => {
       if (this.session !== session) return;
       const replacement = session.replacement;
-      const base = session.serverText;
+      const newDraft = typeof replacement?.generation === "number" && replacement.generation !== session.generation;
+      const base = newDraft ? (this.view?.state.doc.toString() ?? session.text.toString()) : session.serverText;
       this.stopWatching?.();
       this.stopWatching = null;
       this.session = null;
@@ -435,4 +466,9 @@ export async function settleForSend(live: LiveDraft, shown: { subject: string; b
   const fresh = await stored();
   if (body === null || body !== shown.body || fresh.body !== body || !sameSubject(fresh.subject, shown.subject) || fresh.version < version) throw new Error(changed);
   return { subject: fresh.subject, body, version: fresh.version };
+}
+
+export function liveHandBack(live: LiveDraft, shownBody: string) {
+  const confirmed = live.confirmedText();
+  return { body: live.text() ?? shownBody, base: confirmed ?? live.base, confirmed: confirmed !== null };
 }

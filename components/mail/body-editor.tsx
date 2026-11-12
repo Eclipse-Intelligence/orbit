@@ -3,7 +3,7 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { liveSlot } from "@/lib/docs/editor/live-slot";
+import { external, liveSlot } from "@/lib/docs/editor/live-slot";
 import { presenceField } from "@/lib/docs/editor/presence";
 import { activeFormats, bodyEditorExtensions, fromProps, insertBlock, minimalChange, toggleFormat, type ActiveFormats, type FormatMarker } from "@/lib/mail/body-editor";
 import type { LiveDraft } from "@/lib/mail/live-draft-client";
@@ -40,7 +40,7 @@ export default function BodyEditor({
   live?: LiveDraft | null;
   ref?: Ref<BodyEditorHandle>;
   value: string;
-  onChange: (value: string) => void;
+  onChange: (value: string, remote: boolean) => void;
   onFiles: (files: File[]) => void;
   onFileLink: () => void;
   onFormats: (formats: ActiveFormats) => void;
@@ -78,7 +78,9 @@ export default function BodyEditor({
             handlers: { files: (files) => latest.current.onFiles(files), fileLink: () => latest.current.onFileLink() },
           }),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(fromProps))) latest.current.onChange(update.state.doc.toString());
+            if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(fromProps))) {
+              latest.current.onChange(update.state.doc.toString(), update.transactions.every((transaction) => transaction.annotation(external) || transaction.annotation(fromProps)));
+            }
             if (update.docChanged || update.selectionSet || update.focusChanged) {
               latest.current.onFormats(update.view.hasFocus ? activeFormats(update.state) : NO_FORMATS);
             }

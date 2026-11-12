@@ -30,7 +30,7 @@ import {
 } from "@/lib/mail/compose";
 import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { draftPresence, LiveDraft, liveDraftCovered, settleForSend, type LiveDraftSummary } from "@/lib/mail/live-draft-client";
+import { draftPresence, LiveDraft, liveDraftCovered, liveHandBack, settleForSend, type LiveDraftSummary } from "@/lib/mail/live-draft-client";
 import { liveDraftResponse } from "@/lib/mail/live-draft-http";
 import { SHARED_DRAFT_CHANGED } from "@/lib/mail/share-view";
 import { teammateText } from "@/lib/mail/shared-text";
@@ -700,6 +700,12 @@ function fakeView(doc: string) {
 describe("the browser controller", () => {
   const saved: Record<string, unknown> = {};
   let actorFor: UserActor;
+  let openGate: Promise<void> | null = null;
+  let openFails = false;
+
+  function typeInto(view: EditorView & { state: EditorState }, text: string) {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+  }
 
   before(() => {
     for (const key of ["fetch", "document", "window"]) saved[key] = (globalThis as Record<string, unknown>)[key];
@@ -710,6 +716,8 @@ describe("the browser controller", () => {
       const url = new URL(String(input), "http://orbit.test");
       const shareId = decodeURIComponent(url.pathname.split("/")[4] ?? "");
       const method = init?.method ?? "GET";
+      if (method === "GET" && openFails) return Response.json({ error: "Couldn't save the draft. Try again.", code: "busy" }, { status: 503 });
+      if (method === "GET" && openGate) await openGate;
       return liveDraftResponse(actorFor, shareId, new Request(url, { method, headers: init?.headers, body: method === "GET" ? undefined : init?.body }));
     };
   });
@@ -790,6 +798,94 @@ describe("the browser controller", () => {
     live.close();
   });
 
+  it("keeps typing made before the session opens when Send is pressed", async () => {
+    actorFor = mark;
+    const { shareId } = await sharedNew("Before open", "Stored text");
+    let letGo = () => {};
+    openGate = new Promise<void>((resolve) => (letGo = resolve));
+    const live = new LiveDraft({ shareId, user: { id: mark.userId, name: "Mark", kind: "person" }, base: "Stored text" });
+    const view = fakeView("Stored text");
+    live.attach(view);
+    typeInto(view, "Stored text, typed before it opened");
+    const release = live.retain();
+    const shown = { subject: "Before open", body: live.text() ?? view.state.doc.toString() };
+    assert.equal(shown.body, "Stored text, typed before it opened");
+    live.detach();
+    openGate = null;
+    letGo();
+    const settled = await settleForSend(live, shown, () => getSharedDraft(mark, shareId), SHARED_DRAFT_CHANGED);
+    assert.equal(settled.body, "Stored text, typed before it opened");
+    release();
+    assert.equal(await rowBody(shareId), "Stored text, typed before it opened");
+  });
+
+  it("hands back the typing and the original base when the session never opened, and the reopened composer keeps it", async () => {
+    actorFor = mark;
+    const { shareId } = await sharedNew("Never open", "Original");
+    openFails = true;
+    const live = new LiveDraft({ shareId, user: { id: mark.userId, name: "Mark", kind: "person" }, base: "Original" });
+    const view = fakeView("Original");
+    live.attach(view);
+    typeInto(view, "Original, and my typing");
+    const release = live.retain();
+    const shownBody = live.text() ?? view.state.doc.toString();
+    live.detach();
+    await assert.rejects(live.settle(300), /Couldn't send/);
+    const back = liveHandBack(live, shownBody);
+    assert.deepEqual(back, { body: "Original, and my typing", base: "Original", confirmed: false });
+    release();
+    openFails = false;
+    const reopened = new LiveDraft({ shareId, user: { id: mark.userId, name: "Mark", kind: "person" }, base: back.base });
+    const again = fakeView(back.body);
+    reopened.attach(again);
+    await opened(reopened);
+    await reopened.flush();
+    assert.equal(await rowBody(shareId), "Original, and my typing");
+    assert.equal(again.state.doc.toString(), "Original, and my typing");
+    reopened.close();
+  });
+
+  it("drops a teammate's unsent keystrokes when the share moves on to a new draft", async () => {
+    actorFor = sam;
+    const thread = (await listThreads(mark, { view: { role: "inbox" } })).threads[0];
+    const share = (await shareThread(mark, thread.key, [sam.userId])).share.shareId!;
+    const reply = (body: string) => readDraftInput({ mode: "reply", messageId: thread.latestId, to: ["tom@halden.test"], subject: "RE: Renewal pricing", body });
+    const first = await saveMailDraft(mark, reply("Old draft"), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    await shareDraft(mark, first.id, []);
+    const view = fakeView("Old draft");
+    const live = new LiveDraft({ shareId: share, user: { id: sam.userId, name: "Sam", kind: "person" }, base: "Old draft" });
+    live.attach(view);
+    const session = await opened(live);
+    session.pauseUpdates(true);
+    session.text.insert(session.text.length, " unsent");
+    typeInto(view, "Old draft unsent");
+    await discardMailDraft(mark, first.id, outlook().fetchImpl);
+    const second = await saveMailDraft(mark, reply("New draft"), { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    await shareDraft(mark, second.id, []);
+    session.pauseUpdates(false);
+    await session.sync();
+    await until(() => live.current !== null && live.current !== session, "the live draft reopens on the new draft");
+    await live.current!.sync();
+    assert.equal(live.text(), "New draft");
+    assert.equal(view.state.doc.toString(), "New draft");
+    assert.equal(await rowBody(share), "New draft");
+    live.close();
+    await discardMailDraft(mark, second.id, outlook().fetchImpl);
+  });
+
+  it("refuses to call an unsaved body saved", async () => {
+    actorFor = sam;
+    const { draft, shareId } = await sharedNew("Unsaved", "Waiting");
+    const live = new LiveDraft({ shareId, user: { id: sam.userId, name: "Sam", kind: "person" }, base: "Waiting" });
+    live.attach(fakeView("Waiting"));
+    const session = await opened(live);
+    await scheduleMailDraft(mark, { ...fresh("Unsaved", "ignored"), id: draft.id, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook().fetchImpl });
+    session.text.insert(session.text.length, " typed");
+    await assert.rejects(live.flush(), /Couldn't save the draft/);
+    live.close();
+    await cancelScheduledDraft(mark, draft.id);
+  });
+
   it("shows a failed live save as an error from flush", async () => {
     actorFor = sam;
     const { shareId } = await sharedNew("Fail", "Short");
@@ -801,6 +897,26 @@ describe("the browser controller", () => {
     await assert.rejects(live.flush(), /under 20,000 characters/);
     assert.ok(failures.some((message) => /20,000/.test(message)));
     live.close();
+  });
+});
+
+describe("lock waits", () => {
+  it("answers a retryable 503 and stores nothing when the share stays locked", async () => {
+    const { shareId } = await sharedNew("Busy", "Unchanged");
+    const teammate = await client(sam, shareId);
+    type(teammate, "end", " blocked");
+    const holder = await getAdminPool().connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select 1 from crm.mail_shares where id = $1 for update", [shareId]);
+      await refused(push(sam, shareId, teammate), /^Couldn't save the draft\. Try again\.$/, 503);
+    } finally {
+      await holder.query("rollback").catch(() => undefined);
+      holder.release();
+    }
+    assert.equal(await rowBody(shareId), "Unchanged");
+    await push(sam, shareId, teammate);
+    assert.equal(await rowBody(shareId), "Unchanged blocked");
   });
 });
 

@@ -7,7 +7,7 @@ import { DraftRequestError, fetchDraftPeople, fetchSharedDraft, holdSharedDraft,
 import { HandOverError } from "@/components/mail/hand-over";
 import { SHARED_DRAFT_CHANGED } from "@/lib/mail/share-view";
 import { newerVersion, openingBase, reconcileText, sameText, textChanges, type DraftText } from "@/lib/mail/shared-text";
-import { LiveDraft, settleForSend } from "@/lib/mail/live-draft-client";
+import { LiveDraft, liveHandBack, settleForSend } from "@/lib/mail/live-draft-client";
 import type { MailSharePerson } from "@/lib/mail/share-types";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
@@ -596,11 +596,11 @@ export default function MailComposer({
       ...(force ? { force } : {}),
     });
     if (!shared.current.id) return pending.then(handed);
-    const failedBase = (): SharedBase | null => {
-      const confirmed = liveDraft?.confirmedText();
-      return liveDraft && confirmed !== null && confirmed !== undefined
-        ? { text: { subject: shared.current.base?.text.subject ?? shownSubject, body: confirmed }, version: shared.current.base?.version ?? -1 }
-        : null;
+    const handBack = () => {
+      if (!liveDraft) return null;
+      const back = liveHandBack(liveDraft, snapshot.body);
+      const base: SharedBase = { text: { subject: shared.current.base?.text.subject ?? shownSubject, body: back.base }, version: back.confirmed ? (shared.current.base?.version ?? -1) : -1 };
+      return { body: back.body, base };
     };
     return pending
       .then(() => mergeSharedText())
@@ -633,11 +633,11 @@ export default function MailComposer({
         });
       })
       .then(handed, (problem: unknown) => {
-        const base = failedBase();
+        const back = handBack();
         throw new HandOverError(problem instanceof Error ? problem.message : "Couldn't send. Try again.", {
           ...handed(),
-          ...(base ? { shareBase: base } : {}),
-          body: liveDraft?.text() ?? payload.current.body,
+          ...(back ? { shareBase: back.base } : {}),
+          body: back?.body ?? payload.current.body,
           subject: payload.current.subject,
         });
       })
@@ -907,7 +907,7 @@ export default function MailComposer({
       <BodyEditor
         ref={editor}
         value={body}
-        onChange={change(setBody)}
+        onChange={(value, remote) => (remote ? setBody(value) : change(setBody)(value))}
         onFiles={editorFiles}
         onFileLink={fileLinkDropped}
         onFormats={(next) => setFormats((current) => (current.bold === next.bold && current.italic === next.italic ? current : next))}
