@@ -23,14 +23,20 @@ export const buttonVariants = cva(
         link: "rounded-none text-foreground underline decoration-from-font underline-offset-2 hover:text-soft",
       },
       size: {
-        sm: "p-[9px] text-[12px] leading-none",
-        md: "p-2 text-[14px] leading-none",
+        sm: "py-[9px] text-[12px] leading-none",
+        md: "py-2 text-[14px] leading-none",
         icon: "size-[30px] p-0",
         "icon-sm": "size-6 p-0",
         chip: "h-8 gap-1 px-2.5 text-[13px] leading-none",
         none: "p-0",
       },
     },
+    compoundVariants: [
+      { variant: ["primary", "secondary", "muted", "subtle", "ghost"], size: "sm", class: "px-3" },
+      { variant: ["primary", "secondary", "muted", "subtle", "ghost"], size: "md", class: "px-3.5" },
+      { variant: ["nav", "item", "chip", "link"], size: "sm", class: "px-[9px]" },
+      { variant: ["nav", "item", "chip", "link"], size: "md", class: "px-2" },
+    ],
     defaultVariants: {
       variant: "secondary",
       size: "sm",

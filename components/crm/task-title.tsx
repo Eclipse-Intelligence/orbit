@@ -39,7 +39,7 @@ function MessageAlert({ source }: { source: string }) {
       className="bg-card border-line-strong text-danger caption-style pointer-events-auto fixed bottom-24 left-1/2 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-xl border px-3 py-2 whitespace-normal shadow-lg"
     >
       {error}
-      <Button variant="ghost" size="sm" onClick={dismiss} className="text-soft max-md:h-11">
+      <Button variant="ghost" size="sm" onClick={dismiss} className="hit text-soft">
         Dismiss
       </Button>
     </span>,

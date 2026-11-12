@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { after } from "next/server";
 import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
+import { FindAvailabilityProvider } from "@/components/crm/find-availability";
 import DocsProvider from "@/components/docs/docs-provider";
 import ChatLive from "@/components/chat/chat-live";
 import MailUnread from "@/components/mail/mail-unread";
@@ -29,6 +30,7 @@ import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 import { docsSeed, emptyDocsNav } from "@/lib/docs/server";
+import { enrichmentAvailability } from "@/lib/enrichment/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -115,44 +117,47 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   ]);
 
   const capture = captures?.get(user.workspaceId) ?? null;
+  const enrichment = enrichmentAvailability();
   const choices = workspaces.map((item) => ({ ...item, waiting: item.id !== user.workspaceId && (captures?.get(item.id)?.fresh ?? 0) > 0 }));
 
   return (
     <ShortcutsProvider>
       <DocsProvider seed={docsSeed(user)} nav={emptyDocsNav(user)}>
-        <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
-          <KeepPageInPlace />
-          <MailUnread />
-          <ChatLive />
-          <Sidebar
-            boards={boards}
-            companyCount={companyCount}
-            openActionCount={openActionCount}
-            capture={capture}
-            workspace={{
-              id: user.workspaceId,
-              name: user.workspaceName,
-              viewerName: user.fullName || "",
-              choices,
-            }}
-          />
-          <CrmChrome
-            viewer={{
-              id: user.userId,
-              name: user.fullName || user.email,
-              email: user.email,
-              role: user.role,
-              workspaceName: user.workspaceName,
-              workspaceId: user.workspaceId,
-            }}
-            notifications={notifications}
-            teamUnread={teamUnread}
-            brief={brief}
-            multi={workspaces.length > 1}
-          >
-            {children}
-          </CrmChrome>
-        </main>
+        <FindAvailabilityProvider value={{ phone: enrichment.phone, email: enrichment.email }}>
+          <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
+            <KeepPageInPlace />
+            <MailUnread />
+            <ChatLive />
+            <Sidebar
+              boards={boards}
+              companyCount={companyCount}
+              openActionCount={openActionCount}
+              capture={capture}
+              workspace={{
+                id: user.workspaceId,
+                name: user.workspaceName,
+                viewerName: user.fullName || "",
+                choices,
+              }}
+            />
+            <CrmChrome
+              viewer={{
+                id: user.userId,
+                name: user.fullName || user.email,
+                email: user.email,
+                role: user.role,
+                workspaceName: user.workspaceName,
+                workspaceId: user.workspaceId,
+              }}
+              notifications={notifications}
+              teamUnread={teamUnread}
+              brief={brief}
+              multi={workspaces.length > 1}
+            >
+              {children}
+            </CrmChrome>
+          </main>
+        </FindAvailabilityProvider>
       </DocsProvider>
     </ShortcutsProvider>
   );

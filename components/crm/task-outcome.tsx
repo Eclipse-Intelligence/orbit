@@ -24,7 +24,7 @@ const KINDS: { id: OutcomeKind; label: string; icon: typeof PhoneIcon }[] = [
   { id: "meeting", label: "Meeting", icon: CalendarIcon },
 ];
 
-const TOUCH = "[@media(pointer:coarse)]:h-11";
+const TOUCH = "hit";
 const NOT_SAVED = "Couldn't save. Try again.";
 const NOT_DONE = "Couldn't mark it done. Try again.";
 
@@ -346,7 +346,7 @@ export default function TaskOutcomeForm({
         <label htmlFor={`${id}-next`} className="caption-style text-subtle">
           Next task
         </label>
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-x-3.5 [@media(pointer:coarse)]:gap-y-2">
           <Input
             id={`${id}-next`}
             value={draft.nextTitle}
@@ -377,7 +377,7 @@ export default function TaskOutcomeForm({
               aria-label="Clear next task"
               title="Clear next task"
               onClick={() => change({ nextTitle: "", nextDue: "" })}
-              className="[@media(pointer:coarse)]:size-11"
+              className="hit"
             >
               <XIcon aria-hidden className="size-3" />
             </Button>
@@ -399,7 +399,7 @@ export default function TaskOutcomeForm({
           data-row-open={keyboard ? "" : undefined}
           data-row-key={keyboard ? "space" : undefined}
           data-outcome-skip=""
-          className="max-sm:h-11 max-sm:flex-1 [@media(pointer:coarse)]:h-11"
+          className="hit max-sm:flex-1"
         >
           Skip
         </Button>
@@ -410,7 +410,7 @@ export default function TaskOutcomeForm({
           disabled={saving}
           aria-busy={saving || undefined}
           shortcut={keys}
-          className="max-sm:h-11 max-sm:flex-1 [@media(pointer:coarse)]:h-11"
+          className="hit max-sm:flex-1"
         >
           {saving ? "Saving…" : "Save"}
         </Button>

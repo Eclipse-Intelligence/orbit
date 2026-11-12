@@ -127,6 +127,18 @@ for (const [device, viewport] of [
   const visible = async (locator) => (await locator.count()) > 0 && (await locator.first().isVisible());
   const fab = page.locator('button[aria-label*="add" i]').last();
   const shot = (name) => page.screenshot({ path: path.join(out, `${device}-${name}.png`) });
+  const tapArea = (locator) =>
+    locator
+      .evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const after = getComputedStyle(element, "::after");
+        const height = after.position === "absolute" ? Math.max(box.height, parseFloat(after.height)) : box.height;
+        const x = box.left + box.width / 2;
+        const ends = [box.top + box.height / 2 - height / 2 + 1, box.top + box.height / 2 + height / 2 - 1];
+        const owns = ends.every((y) => element.contains(document.elementFromPoint(x, y)));
+        return { height, owns };
+      })
+      .catch(() => null);
   const noHorizontalScroll = async () => page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1);
   const fitsHeight = async () => page.evaluate(() => document.scrollingElement.scrollHeight <= window.innerHeight + 2);
 
@@ -290,14 +302,14 @@ for (const [device, viewport] of [
     const call = row.locator('a:visible[href^="tel:"], a:visible[href^="msteams:"]').first();
     const callHref = (await call.getAttribute("href").catch(() => null)) ?? "";
     check(`${device} Call rings from the phone`, callHref.startsWith("tel:"), callHref);
-    const callBox = await call.boundingBox().catch(() => null);
-    check(`${device} Call is easy to tap`, Boolean(callBox && callBox.height >= 43), callBox ? `${Math.round(callBox.height)}px` : "missing");
+    const callArea = await tapArea(call);
+    check(`${device} Call is easy to tap`, Boolean(callArea && callArea.height >= 43 && callArea.owns), callArea ? `${Math.round(callArea.height)}px${callArea.owns ? "" : ", covered"}` : "missing");
     check(`${device} Call leads on a call task`, ((await call.getAttribute("class").catch(() => "")) ?? "").includes("bg-primary"));
-    check(`${device} Copy and Email sit beside Call`, (await visible(row.getByRole("button", { name: /^Copy/ }))) && (await visible(row.getByRole("button", { name: "Email", exact: true }))));
+    check(`${device} Copy and Email sit beside Call`, (await visible(row.getByRole("button", { name: /^Copy/ }))) && (await visible(row.getByRole("button", { name: "Email Sweep", exact: true }))));
     check(`${device} the task shows its context`, await visible(row.locator("[data-task-context]")));
     check(`${device} call task no overflow`, await noHorizontalScroll());
     await shot("task-call");
-    await row.getByRole("button", { name: "Email", exact: true }).tap();
+    await row.getByRole("button", { name: "Email Sweep", exact: true }).tap();
     await page.waitForTimeout(1500);
     const card = page.getByRole("dialog", { name: "New email" }).filter({ hasText: /Sweep Caller/ });
     check(`${device} Email opens a compose card to the contact`, await visible(card));
@@ -311,8 +323,8 @@ for (const [device, viewport] of [
     check(`${device} Done takes effect at once with Undo`, await visible(page.getByText("Task done.")));
     check(`${device} the outcome starts as a call`, (await outcome.getByRole("button", { name: "Call" }).getAttribute("aria-pressed").catch(() => null)) === "true");
     const save = outcome.getByRole("button", { name: "Save" });
-    const saveBox = await save.boundingBox().catch(() => null);
-    check(`${device} Save is easy to tap`, Boolean(saveBox && saveBox.height >= 43), saveBox ? `${Math.round(saveBox.height)}px` : "missing");
+    const saveArea = await tapArea(save);
+    check(`${device} Save is easy to tap`, Boolean(saveArea && saveArea.height >= 43 && saveArea.owns), saveArea ? `${Math.round(saveArea.height)}px${saveArea.owns ? "" : ", covered"}` : "missing");
     check(`${device} outcome no overflow`, await noHorizontalScroll());
     await outcome.getByRole("textbox", { name: "What happened" }).fill("Checked by the sweep");
     await outcome.getByRole("textbox", { name: "Next task" }).fill("Sweep follow-up");

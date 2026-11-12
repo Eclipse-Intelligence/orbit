@@ -8,9 +8,10 @@ import Button, { buttonVariants } from "@/components/_ui/button";
 import CopyButton from "@/components/_ui/copy-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import Tag from "@/components/_ui/tag";
-import { askOrbit } from "@/components/assistant/ask-orbit";
 import { Monogram } from "@/components/beautifui/record-marks";
 import { UseTemplateButton } from "@/components/crm/email-template-picker";
+import FindDetailButton from "@/components/crm/find-detail";
+import { useFindAvailability } from "@/components/crm/find-availability";
 import type { InvitePrefill } from "@/components/crm/invite-dialog";
 import { SearchChip } from "@/components/crm/task-pad";
 import { useComposer } from "@/components/mail/compose-dock";
@@ -29,7 +30,6 @@ import { cn } from "@/lib/utils";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
-import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import MailIcon from "@/public/assets/images/mail/mail-open.svg";
@@ -40,8 +40,9 @@ const InviteDialog = dynamic(() => import("@/components/crm/invite-dialog"), { s
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
-const ACTION = "max-sm:h-11 [@media(pointer:coarse)]:h-11";
-const ICON_ACTION = "size-[34px] max-sm:size-11 [@media(pointer:coarse)]:size-11";
+const ACTION = "hit";
+const ICON_ACTION = "hit size-[34px]";
+const PILL = "hit h-[30px] px-3.5 text-[14px]";
 const TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", meeting: "Meeting", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Activity" };
 const DAY = new Map<string, Intl.DateTimeFormat>();
 
@@ -131,12 +132,6 @@ type Actions = {
   kind: TaskKind;
 };
 
-function findText(task: Task, needs: { phone: boolean; email: boolean }) {
-  const what = needs.phone && needs.email ? "a phone number and email address" : needs.phone ? "a phone number" : "an email address";
-  const name = task.contactName ?? "this contact";
-  return `Find ${what} for ${name}${task.companyName ? ` at ${task.companyName}` : ""} and save it on the contact.`;
-}
-
 function ContactActions({ task, context, kind }: Actions) {
   const router = useRouter();
   const composer = useComposer();
@@ -151,11 +146,7 @@ function ContactActions({ task, context, kind }: Actions) {
   const booking = context?.bookingUrl ?? null;
   const to = email ? [{ address: email.toLowerCase(), name: name || null }] : [];
   const lead: TaskKind = kind === "todo" ? "call" : kind;
-  const needs = lead === "call" ? !phone : !email;
-
-  function ask() {
-    if (!askOrbit(findText(task, { phone: !phone, email: !email }))) composer.showToast({ message: "Ask Orbit isn't available here.", tone: "alert" });
-  }
+  const emailLabel = task.contactFirstName || task.contactName ? `Email ${task.contactFirstName ?? task.contactName?.split(/\s+/)[0]}` : "Email";
 
   function compose(template?: EmailTemplate) {
     if (!email) return;
@@ -194,19 +185,13 @@ function ContactActions({ task, context, kind }: Actions) {
   const prefill: InvitePrefill = { guests: email ? [{ email, name: name || null, contactId: task.contactId, company: task.companyName }] : [] };
   const buttons: ReactNode[] = [];
   const more: { key: string; label: string; icon: Icon; run: () => void }[] = [];
-  const findButton = (
-    <Button key="find" variant="secondary" size="md" onClick={ask} className={ACTION}>
-      <SparkleIcon aria-hidden className="size-3.5" />
-      Ask Orbit to find it
-    </Button>
-  );
   const callButton = (primary: boolean, iconOnly = false) =>
     phone ? <CallLink key="call" phone={phone} label="Call" spoken={`Call ${first}`} primary={primary} iconOnly={iconOnly} /> : null;
   const emailButton = (primary: boolean) =>
     email ? (
       <Button key="email" variant={primary ? "primary" : "secondary"} size="md" onClick={() => compose()} className={ACTION}>
         <MailIcon aria-hidden className="size-3.5" />
-        Email
+        {emailLabel}
       </Button>
     ) : null;
   const replyButton = thread ? (
@@ -217,7 +202,7 @@ function ContactActions({ task, context, kind }: Actions) {
   ) : null;
   const templateButton = (compact: boolean) =>
     email ? (
-      <UseTemplateButton key="template" compact={compact} shortcut={false} onPick={(template) => compose(template)} className={compact ? ICON_ACTION : cn("h-[30px] px-3 text-[14px]", ACTION)} />
+      <UseTemplateButton key="template" compact={compact} shortcut={false} onPick={(template) => compose(template)} className={compact ? ICON_ACTION : PILL} />
     ) : null;
   const inviteButton = (
     <Button key="invite" variant="primary" size="md" disabled={inviting} aria-busy={inviting || undefined} onClick={() => void openInvite()} className={ACTION}>
@@ -225,33 +210,32 @@ function ContactActions({ task, context, kind }: Actions) {
       Invite
     </Button>
   );
-  const bookingButton = booking ? <CopyButton key="booking" text={booking} label="Copy booking link" ariaLabel="Copy booking link" className={cn("h-[30px] px-3 text-[14px]", ACTION)} /> : null;
+  const bookingButton = booking ? <CopyButton key="booking" text={booking} label="Copy booking link" ariaLabel="Copy booking link" className={PILL} /> : null;
 
   if (lead === "call") {
-    buttons.push(phone ? callButton(kind === "call") : findButton);
-    if (phone) buttons.push(<CopyButton key="copy" text={phone} label="Copy" ariaLabel={`Copy ${first}'s number`} className={cn("h-[30px] px-3 text-[14px]", ACTION)} />);
+    buttons.push(callButton(kind === "call"));
+    if (phone) buttons.push(<CopyButton key="copy" text={phone} label="Copy" ariaLabel={`Copy ${first}'s number`} className={PILL} />);
     buttons.push(emailButton(false), templateButton(true));
     if (thread) more.push({ key: "reply", label: "Reply on thread", icon: ReplyIcon, run: () => router.push(threadHref(thread.key, "reply")) });
     if (email) more.push({ key: "invite", label: "Invite", icon: CalendarIcon, run: () => void openInvite() });
     if (booking) more.push({ key: "booking", label: "Copy booking link", icon: CalendarIcon, run: () => copy(booking, "Booking link copied.") });
   } else if (lead === "email") {
-    buttons.push(email ? emailButton(true) : findButton, replyButton, templateButton(false));
+    buttons.push(emailButton(true), replyButton, templateButton(false));
     if (phone) buttons.push(callButton(false, true));
     if (phone) more.push({ key: "copy", label: "Copy number", icon: PhoneIcon, run: () => copy(phone, "Number copied.") });
     if (email) more.push({ key: "invite", label: "Invite", icon: CalendarIcon, run: () => void openInvite() });
     if (booking) more.push({ key: "booking", label: "Copy booking link", icon: CalendarIcon, run: () => copy(booking, "Booking link copied.") });
   } else {
-    buttons.push(email ? inviteButton : findButton, bookingButton, emailButton(false));
+    buttons.push(email ? inviteButton : null, bookingButton, emailButton(false));
     if (phone) buttons.push(callButton(false, true));
     if (phone) more.push({ key: "copy", label: "Copy number", icon: PhoneIcon, run: () => copy(phone, "Number copied.") });
     if (thread) more.push({ key: "reply", label: "Reply on thread", icon: ReplyIcon, run: () => router.push(threadHref(thread.key, "reply")) });
     if (email) buttons.push(templateButton(true));
   }
-  if (!needs && (!phone || !email)) more.push({ key: "find", label: "Ask Orbit to find details", icon: SparkleIcon, run: ask });
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-x-2.5 [@media(pointer:coarse)]:gap-y-3.5">
         {buttons}
         {more.length > 0 && (
           <DropdownMenu>
@@ -293,6 +277,7 @@ function ContactActions({ task, context, kind }: Actions) {
 }
 
 function ContactStrip({ task, context, kind, here }: Actions & { here?: TitleHere }) {
+  const find = useFindAvailability();
   const onPage = here?.kind === "contact" && here.id === task.contactId;
   if (onPage) {
     return (
@@ -331,11 +316,25 @@ function ContactStrip({ task, context, kind, here }: Actions & { here?: TitleHer
             )}
           </span>
           <span className="caption-style text-soft flex min-w-0 flex-wrap items-center gap-x-2 tabular-nums">
-            {task.contactPhone ? <span>{task.contactPhone}</span> : <span className="text-subtle">No number</span>}
+            {task.contactPhone ? (
+              <span>{task.contactPhone}</span>
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <span className="text-subtle">No number</span>
+                {find.phone && task.contactId && <FindDetailButton contactId={task.contactId} field="phone" variant="text" />}
+              </span>
+            )}
             <span aria-hidden className="text-faint">
               ·
             </span>
-            {task.contactEmail ? <span className="min-w-0 truncate">{task.contactEmail}</span> : <span className="text-subtle">No email</span>}
+            {task.contactEmail ? (
+              <span className="min-w-0 truncate">{task.contactEmail}</span>
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <span className="text-subtle">No email</span>
+                {find.email && task.contactId && <FindDetailButton contactId={task.contactId} field="email" variant="text" />}
+              </span>
+            )}
           </span>
         </div>
       </div>
@@ -361,7 +360,7 @@ function PersonRow({ person, busy, canLink, onLink }: { person: TaskPerson; busy
           aria-busy={busy === person.id || undefined}
           aria-label={`Link ${person.name}`}
           onClick={() => onLink(person)}
-          className="[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11"
+          className="hit"
         >
           {busy === person.id ? "Linking…" : "Link"}
         </Button>
