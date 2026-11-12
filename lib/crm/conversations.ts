@@ -26,6 +26,7 @@ import {
 import { CrmError, errorText, notFound } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { hasCalendarAccounts, hasCalendarFeeds } from "@/lib/crm/calendar-accounts";
+import { matchPhonesInDb, type PhoneMatch } from "@/lib/crm/call-phones";
 import { readStored } from "@/lib/crm/inbox";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -559,7 +560,7 @@ export async function lockImportKey(db: Db, scope: string, source: ConversationS
 }
 
 type NewPerson = { name: string | null; email: string };
-export type SuggestedBy = "name" | "title";
+export type SuggestedBy = "name" | "phone" | "title";
 export type UnfiledImport = ConversationImport & {
   newPeople: NewPerson[];
   suggestions: ContactSuggestion[];
@@ -618,8 +619,15 @@ async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImpo
   const byName = imports.map((item) => nameQueries(item.participants.filter((person) => !person.email).map((person) => person.name), excluded));
   const byTitle = imports.map((item) => nameQueries(titleNames(item.title), excluded));
   const lookup = await contactsByName(db, [actor.workspaceId], [...byName.flat(), ...byTitle.flat()]);
+  const byPhone: ContactSuggestion[][] = [];
+  for (const item of imports) {
+    const found = item.status === "unfiled"
+      ? await matchPhonesInDb(db, [actor.workspaceId], { title: item.title, text: item.sourceSummary, ownName: actor.fullName })
+      : [];
+    byPhone.push(found.flatMap((phone) => phoneSuggestions(phone)));
+  }
   return imports.map((item, index) => {
-    const suggested = pickSuggestions(lookup.candidates, byName[index], byTitle[index]);
+    const suggested = pickSuggestions(lookup.candidates, byName[index], byTitle[index], byPhone[index]);
     return {
       ...item,
       newPeople: candidates[index].filter((person) => !existing.has(person.email)),
@@ -629,12 +637,20 @@ async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImpo
   });
 }
 
-function pickSuggestions(candidates: Parameters<typeof inQueryOrder>[0], byName: NameQuery[], byTitle: NameQuery[]) {
-  const named = inQueryOrder(candidates, byName);
-  const found = named.length > 0 ? named : inQueryOrder(candidates, byTitle);
+function phoneSuggestions(phone: PhoneMatch): ContactSuggestion[] {
+  if (phone.suggestions.length > 0) return phone.suggestions;
+  const match = phone.match;
+  if (!match?.contactId) return [];
+  return [{ contactId: match.contactId, name: match.contactName ?? "Contact", companyName: match.companyName, email: null }];
+}
+
+function pickSuggestions(candidates: Parameters<typeof inQueryOrder>[0], byName: NameQuery[], byTitle: NameQuery[], byPhone: ContactSuggestion[]) {
+  const named = inQueryOrder(candidates, byName).map(asSuggestion);
+  const titled = inQueryOrder(candidates, byTitle).map(asSuggestion);
+  const by: SuggestedBy | null = named.length > 0 ? "name" : byPhone.length > 0 ? "phone" : titled.length > 0 ? "title" : null;
+  const found = by === "name" ? named : by === "phone" ? byPhone : titled;
   const unique = found.filter((candidate, index) => found.findIndex((other) => other.contactId === candidate.contactId) === index);
-  const by: SuggestedBy | null = unique.length === 0 ? null : named.length > 0 ? "name" : "title";
-  return { contacts: unique.slice(0, MAX_SUGGESTIONS).map(asSuggestion), by };
+  return { contacts: unique.slice(0, MAX_SUGGESTIONS), by };
 }
 
 export async function listUnfiledImports(actor: UserActor, limit = 50, options: { mine?: boolean } = {}): Promise<UnfiledImport[]> {

@@ -152,7 +152,7 @@ export async function suggestByTitleInDb(
   return inQueryOrder((await contactsByName(db, workspaceIds, queries)).candidates, queries);
 }
 
-export function suggestedWorkspace(suggested: NameCandidate[], fallback: string) {
+export function suggestedWorkspace(suggested: { workspaceId: string }[], fallback: string) {
   if (suggested.length === 0 || suggested.some((candidate) => candidate.workspaceId === fallback)) return fallback;
   return suggested[0].workspaceId;
 }
