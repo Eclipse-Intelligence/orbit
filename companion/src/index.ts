@@ -130,6 +130,7 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
       return [];
     }
   };
+  let webSteps: Promise<unknown> = Promise.resolve();
   current = { api, jobId: job.id };
   log(`Answering on ${job.request.model}…`);
   try {
@@ -148,6 +149,10 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
       onDraft: (text) => {
         pending = text;
         flush();
+      },
+      onWebStep: (step) => {
+        if (step.status === "running") log("  web search");
+        webSteps = webSteps.then(() => api.webStep(job.id, step)).catch(() => undefined);
       },
     });
     if (cancel.signal.aborted) throw new ApiError("That question was cancelled in Orbit.", 409);

@@ -4,6 +4,9 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { applyCompanionResult, decideActions, getConversation, listConversations, sendMessage, STOPPED_MESSAGE, type AssistantEvent } from "@/lib/assistant/chat";
 import {
   LOST_MESSAGE,
+  WEB_STEP_LABEL,
+  addCompanionWebStep,
+  companionJobConversation,
   cancelCompanionJob,
   checkCompanionJob,
   companionBusy,
@@ -325,6 +328,35 @@ describe("Orbit Agent turns", () => {
     assert.ok(events.some((event) => event.type === "message" && event.message.content === "Here is the start of it."));
   });
 
+  it("shows the Mac's web searches as steps without adding them to the chat", async () => {
+    const events: AssistantEvent[] = [];
+    const run = sendMessage(owner, { message: "Search please", model: "claude/claude-opus-5-5", reasoning: "low", webSearch: true }, (event) => events.push(event), {
+      deadline: deadline(),
+    });
+    let conversationId = "";
+    const job = await answer(auth, async (job) => {
+      conversationId = (await companionJobConversation(auth, job.id)).conversationId;
+      await addCompanionWebStep(auth, job.id, { id: "toolu_web", status: "running" });
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      await addCompanionWebStep(auth, job.id, { id: "toolu_web", status: "done" });
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      await assert.rejects(addCompanionWebStep(auth, job.id, { id: "toolu_web", status: "maybe" }), /running or done/);
+      return { steps: [{ text: "Found it.", calls: [] }], results: {}, sources: [], model: null, usage: null };
+    });
+    await run;
+    const steps = events.filter((event) => event.type === "tool").map((event) => ({ ...(event as object) }));
+    assert.deepEqual(steps, [
+      { type: "tool", id: "web-toolu_web", name: "web_search", label: WEB_STEP_LABEL, status: "running" },
+      { type: "tool", id: "web-toolu_web", name: "web_search", label: WEB_STEP_LABEL, status: "done" },
+    ]);
+    const saved = await getConversation(owner, conversationId);
+    assert.deepEqual(
+      saved.messages.filter((message) => message.role === "assistant").map((message) => ({ content: message.content, tools: message.tools })),
+      [{ content: "Found it.", tools: [] }],
+    );
+    await assert.rejects(addCompanionWebStep(auth, job.id, { id: "late", status: "done" }), /cancelled/);
+  });
+
   it("tells an idle Mac to check back later and keeps a busy one waiting", async () => {
     const quiet = await createUser("agent-quiet@orbit.test", "Quiet Person");
     const quietMac = (await pairMac(quiet, "Quiet Mac")).auth;
@@ -528,6 +560,7 @@ describe("companion turn runner", () => {
       tools: new Map(),
     };
     const calls: string[] = [];
+    const webSteps: unknown[] = [];
     const sdk = {
       tool: (name: string, _description: string, _schema: unknown, handler: (args: unknown) => Promise<{ content: { text: string }[] }>) => {
         seen.tools.set(name, handler);
@@ -571,6 +604,7 @@ describe("companion turn runner", () => {
           calls.push(call.name);
           return { content: '{"companies":[{"name":"Acme"}]}', isError: false };
         },
+        onWebStep: (step) => webSteps.push(step),
       },
     );
     const options = seen.options!;
@@ -591,6 +625,10 @@ describe("companion turn runner", () => {
     ]);
     assert.deepEqual(result.results, { t1: { content: '{"companies":[{"name":"Acme"}]}', isError: false } });
     assert.deepEqual(result.sources, [{ url: "https://acme.test", title: "Acme" }]);
+    assert.deepEqual(webSteps, [
+      { id: "t3", status: "running" },
+      { id: "t3", status: "done" },
+    ]);
     assert.deepEqual(cleanEnv({ ANTHROPIC_API_KEY: "x", KEEP: "y" }), { KEEP: "y" });
   });
 
