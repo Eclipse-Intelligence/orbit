@@ -35,9 +35,9 @@ export function requestHash(operation: string, payload: unknown) {
     .digest("hex");
 }
 
-export function pageWindow(limit?: number, offset?: number) {
+export function pageWindow(limit?: number, offset?: number, max = 100) {
   return {
-    limit: Math.min(100, Math.max(1, limit ?? 50)),
+    limit: Math.min(max, Math.max(1, limit ?? 50)),
     offset: Math.min(10_000, Math.max(0, offset ?? 0)),
   };
 }

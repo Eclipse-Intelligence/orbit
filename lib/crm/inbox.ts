@@ -13,6 +13,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
+import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
@@ -780,7 +781,7 @@ export async function fileInboundMessages(
   return counts;
 }
 
-type FollowUpCandidate = { companyId: string; contactId: string | null; who: string };
+type FollowUpCandidate = { companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null };
 
 async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[]) {
   const taskIds: string[] = [];
@@ -791,21 +792,25 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
     try {
       if (await companyHasOpenTask(actor.workspaceId, candidate.companyId)) continue;
       const due = await scheduleTaskDue(actor, { days: 2 });
-      const task = await withActor(actor, (db) =>
-        createTaskInDb(
+      const task = await withActor(actor, async (db) => {
+        const source = candidate.threadKey
+          ? (await db.query<{ id: string }>("select id from crm.mail_sources where connection_id = $1 and user_id = $2 limit 1", [candidate.connectionId, actor.userId])).rows[0]
+          : null;
+        const thread = source && candidate.threadKey ? mailThreadLine(source.id, candidate.threadKey, candidate.subject) : null;
+        return createTaskInDb(
           db,
           actor,
           {
             title: `Follow up with ${candidate.who}`.slice(0, 200),
-            description: withDueNote("Suggested after an email arrived.", due),
+            description: withMailThread(withDueNote("Suggested after an email arrived.", due), thread),
             dueAt: due?.dueAt ?? null,
             companyId: candidate.companyId,
             contactId: candidate.contactId,
             priority: "normal",
           },
           { operation: "suggest_follow_up", source: "microsoft" },
-        ),
-      );
+        );
+      });
       if (task) taskIds.push(task.id);
     } catch (error) {
       console.error("Could not suggest a follow-up task", error);
@@ -1013,6 +1018,9 @@ async function fileMessages(
           companyId: match.companyId,
           contactId: match.contactId,
           who: match.contactName || match.companyName || "them",
+          connectionId: mailbox.id,
+          threadKey: message.conversationId?.slice(0, 400) || null,
+          subject: message.subject ?? null,
         });
       }
     }

@@ -1,16 +1,24 @@
 "use client";
 
+import type { ComponentType, SVGProps } from "react";
+import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { ClickUpBadge } from "@/components/crm/clickup";
+import Button from "@/components/_ui/button";
+import TaskTitle from "@/components/crm/task-title";
 import { relativeWhen } from "@/lib/companies";
-import { companyHref } from "@/lib/crm/hrefs";
+import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
+import type { TitleColleague } from "@/lib/crm/task-title";
 import { taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
+import ContactIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
+import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
+import LinkIcon from "@/public/assets/images/settings/link.svg";
 
 export type TaskAssigning = {
   members: AssignableMember[];
@@ -49,6 +57,19 @@ function Assignee({ task, assigning }: { task: Task; assigning: TaskAssigning })
   );
 }
 
+function RecordChip({ href, label, icon: Icon, className }: { href: string; label: string; icon: ComponentType<SVGProps<SVGSVGElement>>; className?: string }) {
+  return (
+    <Link
+      href={href}
+      title={label}
+      className={cn("bg-secondary text-foreground inline-flex max-w-[12em] min-w-0 shrink items-center gap-1 rounded-full py-px pr-2 pl-1.5 align-middle text-[12px] leading-5 sm:max-w-[10em] xl:max-w-[12em]", className)}
+    >
+      <Icon aria-hidden className="text-subtle size-3 shrink-0" />
+      <span className="truncate">{label}</span>
+    </Link>
+  );
+}
+
 export default function ActionTask({
   task,
   completed,
@@ -58,6 +79,9 @@ export default function ActionTask({
   onOpen,
   comments = 0,
   assigning,
+  colleagues = [],
+  viewerId = null,
+  canLink = false,
 }: {
   task: Task;
   completed: boolean;
@@ -67,6 +91,9 @@ export default function ActionTask({
   onOpen: () => void;
   comments?: number;
   assigning?: TaskAssigning;
+  colleagues?: TitleColleague[];
+  viewerId?: string | null;
+  canLink?: boolean;
 }) {
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
@@ -124,17 +151,21 @@ export default function ActionTask({
           )}
         </button>
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2.5">
-          <button
-            type="button"
-            data-row-open=""
-            data-row-key="space"
-            aria-haspopup="dialog"
-            onClick={onOpen}
-            className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left sm:items-center"
-          >
-            <span className="min-w-0 flex-1 text-[14px] leading-5 break-words sm:truncate">{task.title}</span>
-          </button>
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
+          <div className="relative flex min-w-0 flex-1 items-start gap-2 sm:items-center">
+            <button
+              type="button"
+              data-row-open=""
+              data-row-key="space"
+              aria-haspopup="dialog"
+              aria-label={task.title}
+              onClick={onOpen}
+              className="absolute inset-0 cursor-pointer rounded-md outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
+            />
+            <span className="pointer-events-none relative min-w-0 flex-1 text-[14px] leading-5 break-words sm:min-w-[12em] sm:truncate">
+              <TaskTitle task={task} colleagues={colleagues} viewerId={viewerId} />
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:max-w-[55%] sm:shrink sm:flex-nowrap sm:justify-end">
             {comments > 0 && (
               <span className="caption-style text-subtle flex shrink-0 items-center gap-1 tabular-nums" title={comments === 1 ? "1 comment" : `${comments} comments`}>
                 <ChatIcon aria-hidden className="size-3" />
@@ -154,11 +185,25 @@ export default function ActionTask({
               task.dueAt && <span className="text-subtle shrink-0 text-[13px]">{relativeWhen(task.dueAt, now)}</span>
             )}
             <ClickUpBadge task={task} />
+            {task.contactId && task.contactName && <RecordChip href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} className="sm:max-lg:hidden" />}
             {task.companyName && (
               <EntityChip
                 name={task.companyName}
                 href={task.companyId ? companyHref(task.companyId) : undefined}
               />
+            )}
+            {task.opportunityId && task.opportunityName && <RecordChip href={dealHref(task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} className="sm:max-xl:hidden" />}
+            {canLink && !completed && !task.companyId && !task.contactId && !task.opportunityId && (
+              <Button
+                variant="chip"
+                size="none"
+                onClick={onOpen}
+                aria-haspopup="dialog"
+                className="shrink-0 gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset max-sm:min-h-11"
+              >
+                <LinkIcon aria-hidden className="size-3" />
+                Link a person
+              </Button>
             )}
             {assigning && <Assignee task={task} assigning={assigning} />}
           </div>

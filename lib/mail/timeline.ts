@@ -4,6 +4,7 @@ import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
 import { hasScope } from "@/lib/crm/scopes";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
+import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
@@ -166,13 +167,21 @@ async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate) {
     [row.contact_id, row.company_id],
   );
   const who = names.rows[0]?.contact || names.rows[0]?.company || "them";
+  const thread = await db.query<{ source_id: string; thread_key: string | null; subject: string | null }>(
+    "select source_id, thread_key, subject from crm.mail_messages where id = $1",
+    [row.message_id],
+  );
+  const mail = thread.rows[0];
   const due = await scheduleTaskDue(actor, { days: 2 });
   const task = await createTaskInDb(
     db,
     actor,
     {
       title: `Follow up with ${who}`.slice(0, 200),
-      description: withDueNote("Suggested after an email arrived.", due),
+      description: withMailThread(
+        withDueNote("Suggested after an email arrived.", due),
+        mail?.thread_key ? mailThreadLine(mail.source_id, mail.thread_key, mail.subject) : null,
+      ),
       dueAt: due?.dueAt ?? null,
       companyId: row.company_id,
       contactId: row.contact_id,

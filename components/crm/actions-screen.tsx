@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import RecordTransfer from "@/components/crm/record-transfer";
@@ -14,12 +14,20 @@ import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, completeTaskAction } from "@/app/(crm)/records";
+import { taskWindowAction, type TaskWindow } from "@/app/(crm)/tasks/actions";
 import { relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { TASK_PARAM } from "@/lib/chat/discussions";
 import { companyHref } from "@/lib/crm/hrefs";
 import { tasksHref } from "@/lib/crm/task-views";
 import type { Company, Task, TaskView } from "@/lib/crm/types";
+
+const MAX_WINDOW_PAGES = 20;
+
+function unique<T extends { id: string }>(items: T[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)));
+}
 
 const VIEWS: { id: TaskView; label: string }[] = [
   { id: "all", label: "All" },
@@ -47,6 +55,7 @@ export default function ActionsScreen({
   openTask = null,
   admins = [],
   switchTo = null,
+  total = 0,
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -64,6 +73,7 @@ export default function ActionsScreen({
   openTask?: Task | null;
   admins?: string[];
   switchTo?: string | null;
+  total?: number;
 }) {
   const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
@@ -72,14 +82,86 @@ export default function ActionsScreen({
     return `${base}${base.includes("?") ? "&" : "?"}who=${person}`;
   };
   const views = who === "tagged" ? VIEWS.filter((item) => item.id !== "none") : VIEWS;
-  const admin = viewer.role === "owner" || viewer.role === "admin";
   const router = useRouter();
+  const pageKey = `${view}|${who}`;
+  const [windowed, setWindowed] = useState<{ key: string; data: TaskWindow } | null>(null);
+  const [loading, startLoading] = useTransition();
+  const [moreError, setMoreError] = useState<string | null>(null);
+  const [shownKey, setShownKey] = useState(pageKey);
+  if (shownKey !== pageKey) {
+    setShownKey(pageKey);
+    setWindowed(null);
+    setMoreError(null);
+  }
+  const current = windowed && windowed.key === pageKey && windowed.data.pages > 1 ? windowed.data : null;
+  const allTasks = unique(current ? current.tasks : tasks);
+  const allCompanies = unique(current ? current.companies : companies);
+  const allTagged = current ? { ...tagged, ...current.tagged } : tagged;
+  const allDiscussions = current ? { ...discussions, ...current.discussions } : discussions;
+  const pages = current?.pages ?? 1;
+  const latestTotal = current?.total ?? total;
+  const shown = view === "none" ? allCompanies.length : allTasks.length;
+  const canLoadMore = shown < latestTotal && pages < MAX_WINDOW_PAGES;
+  const freshness = useRef({ tasks, companies });
+  useEffect(() => {
+    if (freshness.current.tasks === tasks && freshness.current.companies === companies) return;
+    freshness.current = { tasks, companies };
+    if (!current) return;
+    let cancelled = false;
+    const key = pageKey;
+    void taskWindowAction({ view, who, pages: current.pages })
+      .catch(() => ({ error: "Couldn't load more. Try again." }))
+      .then((result) => {
+        if (cancelled) return;
+        if ("error" in result) {
+          setWindowed(null);
+          setMoreError(`${result.error} Showing the first 100.`);
+          return;
+        }
+        setWindowed({ key, data: result });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tasks, companies, current, pageKey, view, who]);
+  function loadMore() {
+    setMoreError(null);
+    const key = pageKey;
+    startLoading(async () => {
+      const result = await taskWindowAction({ view, who, pages: pages + 1 }).catch(() => ({ error: "Couldn't load more. Try again." }));
+      if ("error" in result) {
+        setMoreError(result.error);
+        return;
+      }
+      setWindowed({ key, data: result });
+    });
+  }
+  const more =
+    canLoadMore || moreError ? (
+      <div className="flex flex-wrap items-center gap-3 px-4 py-4">
+        {canLoadMore && (
+          <Button variant="secondary" size="md" onClick={loadMore} disabled={loading} aria-busy={loading || undefined} className="max-md:h-11">
+            {loading ? "Loading…" : "Show more"}
+          </Button>
+        )}
+        <span role="status" className="caption-style text-subtle tabular-nums">
+          {shown} of {latestTotal}
+        </span>
+        {moreError && (
+          <span role="alert" className="caption-style text-danger">
+            {moreError}
+          </span>
+        )}
+      </div>
+    ) : undefined;
+  const colleagues = members.map((member) => ({ id: member.id, name: member.name }));
+  const admin = viewer.role === "owner" || viewer.role === "admin";
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState<Set<string>>(() => new Set());
   const [assigningIds, setAssigningIds] = useState<Set<string>>(() => new Set());
   const search = useSearchParams();
   const panelId = search.get(TASK_PARAM);
-  const listed = panelId ? (tasks.find((task) => task.id === panelId) ?? (openTask?.id === panelId ? openTask : null)) : null;
+  const listed = panelId ? (allTasks.find((task) => task.id === panelId) ?? (openTask?.id === panelId ? openTask : null)) : null;
   const [kept, setKept] = useState<Task | null>(null);
   if (listed && listed !== kept) setKept(listed);
   const panelTask = listed ?? (kept && kept.id === panelId ? kept : null);
@@ -165,7 +247,7 @@ export default function ActionsScreen({
     return {
       members,
       viewerId: viewer.id,
-      tagged: tagged[task.id] ?? [],
+      tagged: allTagged[task.id] ?? [],
       canAssign: admin || task.ownerId === viewer.id || task.createdByUserId === viewer.id,
       pending: assigningIds.has(task.id),
       onAssign: (ownerId: string) => void assign(task.id, ownerId),
@@ -242,10 +324,11 @@ export default function ActionsScreen({
       <KeyboardList className="flex min-h-0 flex-1 flex-col">
       {view === "none" ? (
         <RecordList
-          count={companies.length}
+          count={allCompanies.length}
           empty="No companies without tasks"
+          footer={more}
         >
-          {companies.map((company) => (
+          {allCompanies.map((company) => (
             <RecordRow
               key={company.id}
               mark={<Monogram name={company.name} />}
@@ -263,8 +346,8 @@ export default function ActionsScreen({
           ))}
         </RecordList>
       ) : (
-        <RecordList count={tasks.length} empty={who === "tagged" ? "No tasks you're tagged in" : "No tasks"}>
-          {tasks.map((task) => (
+        <RecordList count={allTasks.length} empty={who === "tagged" ? "No tasks you're tagged in" : "No tasks"} footer={more}>
+          {allTasks.map((task) => (
             <ActionTask
               key={task.id}
               task={task}
@@ -273,8 +356,11 @@ export default function ActionsScreen({
               now={now}
               onComplete={view === "completed" || (who === "tagged" && !admin && task.createdByUserId !== viewer.id) ? undefined : () => complete(task.id)}
               onOpen={() => openPanel(task.id)}
-              comments={discussions[task.id] ?? 0}
+              comments={allDiscussions[task.id] ?? 0}
               assigning={assigning(task)}
+              colleagues={colleagues}
+              viewerId={viewer.id}
+              canLink={admin || task.ownerId === viewer.id || task.createdByUserId === viewer.id}
             />
           ))}
         </RecordList>
@@ -288,7 +374,7 @@ export default function ActionsScreen({
         }}
         viewer={viewer}
         members={members}
-        tagged={tagged[(panelTask ?? kept)?.id ?? ""] ?? []}
+        tagged={allTagged[(panelTask ?? kept)?.id ?? ""] ?? []}
         admins={admins}
       />
     </section>

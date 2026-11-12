@@ -55,7 +55,7 @@ const DEFAULTS: Record<StepType, Record<string, unknown>> = {
   loop: { items: "", limit: 25 },
   delay: { amount: 1, unit: "days" },
   approval: { title: "", details: "" },
-  create_task: { title: "", notes: "", dueInDays: "2", assignee: "owner", link: "company", clickup: false },
+  create_task: { title: "", notes: "", dueInDays: "2", assignee: "owner", link: "contact", clickup: false },
   add_note: { title: "", body: "" },
   update_record: { object: "company", field: "lifecycle", value: "customer" },
   board: { boardId: "", stageId: "" },

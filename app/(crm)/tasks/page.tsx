@@ -76,6 +76,7 @@ export default async function TasksPage({
       discussions={discussions}
       openTask={elsewhere ? null : openTask}
       switchTo={switchTo}
+      total={due.total}
       admins={members.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.id)}
     />
   );

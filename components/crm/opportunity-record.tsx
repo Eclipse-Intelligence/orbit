@@ -1,5 +1,6 @@
 "use client";
 
+import TaskTitle from "@/components/crm/task-title";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -241,7 +242,7 @@ export default function OpportunityRecord({
                 <ul className="flex flex-col gap-2">
                   {tasks.slice(0, 8).map((task) => (
                     <li key={task.id} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
-                      <span className="min-w-0 truncate">{task.title}</span>
+                      <span className="min-w-0 truncate"><TaskTitle task={task} here={{ kind: "opportunity", id: opportunity.id }} /></span>
                       {task.dueAt && <span className="caption-style text-subtle shrink-0 tabular-nums">{instantDateLabel(task.dueAt)}</span>}
                     </li>
                   ))}

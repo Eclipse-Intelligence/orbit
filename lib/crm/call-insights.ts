@@ -7,6 +7,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, tooLong, errorText } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
+import { detectTaskRecordsInDb } from "@/lib/crm/task-detect";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import {
   ACCOUNT_HEALTH,
@@ -744,6 +745,9 @@ export async function acceptActionItem(
     }
     const call = await readCall(db, actor, current.activity_id);
     if (!call) throw new CrmError("not_found", "Call not found.", 404);
+    const detection = await detectTaskRecordsInDb(db, actor.workspaceId, title);
+    const named = detection.contact;
+    const someoneElse = named && named.id !== call.contact_id ? named : null;
     const companyId =
       call.contact_id && call.contact_company_id && call.contact_company_id !== call.company_id
         ? undefined
@@ -758,10 +762,14 @@ export async function acceptActionItem(
           ? `From the call on ${shortDay(day)}: ${call.title}`
           : `From the call on ${shortDay(day)}.`,
         dueAt: dueDate ? dueAtForDay(dueDate) : null,
-        contactId: call.contact_id,
-        ...(companyId !== undefined ? { companyId } : {}),
+        ...(someoneElse
+          ? { contactId: someoneElse.id }
+          : call.contact_id || call.company_id
+            ? { contactId: call.contact_id, ...(companyId !== undefined ? { companyId } : {}) }
+            : {}),
       },
       options.provenance ?? { operation: "accept_call_action" },
+      someoneElse ? { detectedLinks: { contactId: someoneElse.id, ...(someoneElse.company ? { companyId: someoneElse.company.id } : {}) } } : { detection },
     );
     const next = items.map((entry) =>
       entry.id === item.id

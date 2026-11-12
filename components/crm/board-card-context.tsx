@@ -1,5 +1,6 @@
 "use client";
 
+import TaskTitle from "@/components/crm/task-title";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import ActivityPad from "@/components/crm/activity-pad";
@@ -67,7 +68,7 @@ export default function BoardCardContext({ companyId, companyName }: { companyId
           <ul className="flex flex-col gap-2.5">
             {current.tasks.map((task) => (
               <li key={task.id} className="flex flex-col gap-0.5">
-                <span className="truncate text-[14px] leading-5">{task.title}</span>
+                <span className="truncate text-[14px] leading-5"><TaskTitle task={task} /></span>
                 {task.dueAt && <span className="caption-style text-subtle">Due {formatWhen(task.dueAt)}</span>}
               </li>
             ))}

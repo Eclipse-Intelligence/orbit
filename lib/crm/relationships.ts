@@ -1,6 +1,6 @@
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { withActor } from "@/lib/crm/context";
-import { readCompanyInDb } from "@/lib/crm/companies";
+import { readCompaniesInDb, readCompanyInDb } from "@/lib/crm/companies";
 import { listActivities, listCompanyTimeline } from "@/lib/crm/activities";
 import { listContacts } from "@/lib/crm/contacts";
 import { CrmError, notFound } from "@/lib/crm/errors";
@@ -183,10 +183,13 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean; ta
   });
 }
 
+export const PAGE_SIZE = 100;
+export const MAX_PAGES = 20;
+
 export async function getDueActions(
   actor: Actor,
   view: TaskView = "today",
-  options: { mine?: boolean; tagged?: boolean } = {},
+  options: { mine?: boolean; tagged?: boolean; pages?: number } = {},
 ): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
@@ -194,10 +197,11 @@ export async function getDueActions(
       field: "view",
     });
   }
+  const limit = PAGE_SIZE * Math.min(MAX_PAGES, Math.max(1, Math.floor(options.pages ?? 1)));
   if (view === "none") {
     return withActor(actor, async (db) => {
-      const listed = await db.query<{ id: string }>(
-        `select c.id
+      const listed = await db.query<{ id: string; total: number }>(
+        `select c.id, count(*) over ()::int as total
          from crm.companies c
          where c.workspace_id = $1
            and c.archived_at is null
@@ -209,19 +213,21 @@ export async function getDueActions(
                and t.completed_at is null
                and ${directTaskSql("t")}
            )
-         order by c.updated_at desc
-         limit 100`,
-        [actor.workspaceId],
+         order by c.updated_at desc, c.id
+         limit $2`,
+        [actor.workspaceId, limit],
       );
-      const companies = [];
-      for (const item of listed.rows) {
-        const company = await readCompanyInDb(db, item.id, actor.workspaceId);
-        if (company) companies.push(company);
-      }
+      const total = listed.rows[0]?.total ?? 0;
+      const companies = await readCompaniesInDb(db, actor.workspaceId, listed.rows.map((row) => row.id));
       const relationships = await relationshipsInDb(db, actor.workspaceId, "company", companies.map((company) => company.id));
-      return { view, tasks: [], companies: companies.map((company) => ({ ...company, relationship: relationships[company.id] })) };
+      return {
+        view,
+        tasks: [],
+        companies: companies.map((company) => ({ ...company, relationship: relationships[company.id] })),
+        total,
+      };
     });
   }
-  const tasks = await listTasks(actor, { view, limit: 100, mine: options.mine, tagged: options.tagged });
-  return { view, tasks: tasks.data, companies: [] };
+  const listed = await listTasks(actor, { view, limit, mine: options.mine, tagged: options.tagged }, { maxLimit: PAGE_SIZE * MAX_PAGES });
+  return { view, tasks: listed.data, companies: [], total: listed.total };
 }

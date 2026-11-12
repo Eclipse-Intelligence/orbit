@@ -4,6 +4,7 @@ import { taskPanelHref } from "@/lib/chat/discussions";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
+import { detectedIds, detectTaskRecordsInDb, type DetectedLinkIds, type DetectedTaskLinks } from "@/lib/crm/task-detect";
 import {
   actorIds,
   assertOwner,
@@ -57,6 +58,8 @@ const TASK_SQL = `
       ct.email,
       ct.phone
     ) as contact_name,
+    nullif(trim(ct.first_name), '') as contact_first_name,
+    nullif(trim(ct.last_name), '') as contact_last_name,
     t.opportunity_id,
     op.name as opportunity_name,
     t.created_by_user_id,
@@ -90,6 +93,8 @@ type TaskRow = {
   company_name: string | null;
   contact_id: string | null;
   contact_name: string | null;
+  contact_first_name: string | null;
+  contact_last_name: string | null;
   opportunity_id: string | null;
   opportunity_name: string | null;
   created_by_user_id: string | null;
@@ -133,6 +138,8 @@ function mapTask(row: TaskRow): Task {
     companyName: row.company_name,
     contactId: row.contact_id,
     contactName: row.contact_name,
+    contactFirstName: row.contact_first_name,
+    contactLastName: row.contact_last_name,
     opportunityId: row.opportunity_id,
     opportunityName: row.opportunity_name,
     createdByUserId: row.created_by_user_id,
@@ -279,12 +286,29 @@ export async function createTaskInDb(
   actor: Actor,
   input: TaskWrite,
   provenance?: Provenance,
+  options: { detectedLinks?: DetectedLinkIds; detection?: DetectedTaskLinks } = {},
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
   await assertAssignee(db, actor.workspaceId, write.ownerId);
-  const links = await resolveLinks(db, actor.workspaceId, write);
+  let detectedLinks = Object.keys(options.detectedLinks ?? {});
+  let detecting = false;
+  if (write.companyId === undefined && write.contactId === undefined && write.opportunityId === undefined) {
+    const found = detectedIds(options.detection ?? (await detectTaskRecordsInDb(db, actor.workspaceId, write.title)));
+    Object.assign(write, found);
+    detectedLinks.push(...Object.keys(found));
+    detecting = detectedLinks.length > 0;
+  }
+  let links;
+  try {
+    links = await resolveLinks(db, actor.workspaceId, write);
+  } catch (error) {
+    if (!detecting || !(error instanceof CrmError)) throw error;
+    write.companyId = write.contactId = write.opportunityId = undefined;
+    detectedLinks = [];
+    links = await resolveLinks(db, actor.workspaceId, write);
+  }
   const actorRef = actorIds(actor);
   try {
     const inserted = await db.query<{ id: string }>(
@@ -313,7 +337,10 @@ export async function createTaskInDb(
     const saved = await readTask(db, inserted.rows[0].id);
     if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     const task = mapTask(saved);
-    await recordAudit(db, actor, "task.created", "task", task.id, provenance, { after: task });
+    await recordAudit(db, actor, "task.created", "task", task.id, provenance, {
+      after: task,
+      ...(detectedLinks.length > 0 ? { detectedLinks: [...new Set(detectedLinks)] } : {}),
+    });
     if (!silent(provenance)) await keepAssignerTagged(db, actor, task, null, task.ownerId, provenance);
     taskAlerts(db, actor, null, task, provenance);
     return task;
@@ -479,9 +506,9 @@ export async function countOpenTasks(actor: Actor, options: { mine?: boolean } =
   });
 }
 
-export async function listTasks(actor: Actor, query: TaskListQuery = {}) {
+export async function listTasks(actor: Actor, query: TaskListQuery = {}, options: { maxLimit?: number } = {}) {
   assertScope(actor.scopes, "crm:read");
-  const page = pageWindow(query.limit, query.offset);
+  const page = pageWindow(query.limit, query.offset, options.maxLimit);
   const view: TaskView | undefined = query.view;
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];

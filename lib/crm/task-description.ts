@@ -57,3 +57,13 @@ export function replaceDescriptionText(original: string | null, text: string) {
   const joined = out.join("\n").trim();
   return joined || null;
 }
+
+export function mailThreadLine(sourceId: string, threadKey: string, subject: string | null) {
+  const label = (subject?.trim() || "The email").replace(/[[\]]/g, "").replace(/\s+/g, " ").slice(0, 200);
+  return `[${label}](/mail?thread=${encodeURIComponent(`${sourceId}|${threadKey}`)})`;
+}
+
+export function withMailThread(description: string | null, line: string | null) {
+  if (!line) return description;
+  return [description?.trim(), line].filter(Boolean).join("\n\n");
+}
