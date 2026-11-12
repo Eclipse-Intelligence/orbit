@@ -16,6 +16,7 @@ import {
   importConflict,
   importPlaceholder,
   importSettled,
+  internalAddresses,
   knownImportsFor,
   lockImportKey,
   memberActor,
@@ -32,6 +33,7 @@ import {
   type Participant,
 } from "@/lib/crm/conversations";
 import { looseNameKey } from "@/lib/crm/call-names";
+import { firstNamesToIgnore, matchPhonesInDb } from "@/lib/crm/call-phones";
 import { captureWorkspaceInDb, ownCallAddresses, routeCallInDb, suggestByTitleInDb, suggestedWorkspace } from "@/lib/crm/call-routing";
 import { CrmError, notSetUp } from "@/lib/crm/errors";
 import { unreachable } from "@/lib/upstream";
@@ -266,6 +268,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
   const endedAt =
     validTime(note.calendar_event?.scheduled_end_time) ?? validTime(lastLine?.end_time);
   const externalUrl = clip(note.web_url, 2000);
+  const summary = clip(note.summary_markdown ?? note.summary_text, 100_000);
   return withActor(owner, async (db) => {
     for (const workspaceId of workspaceIds) await lockImportKey(db, workspaceId, "granola", note.id);
     const known = (await knownImportsFor(db, workspaceIds, "granola", [note.id], owner.userId)).get(note.id);
@@ -284,13 +287,35 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       added += 1;
     }
     if (added > 0) route = await routeCallInDb(db, owner, open, participants, routing);
-    const byTitle = route.targets.length === 0 && route.suggested.length === 0;
+    const internal = await internalAddresses(db, owner.workspaceId, [...own]);
+    const attendeeless = participants.every((person) => !person.email || internal.isInternal(person.email));
+    const phones = route.targets.length === 0 && attendeeless
+      ? (
+          await matchPhonesInDb(
+            db,
+            open.map((item) => item.workspaceId),
+            [{ title, text: summary }],
+            await firstNamesToIgnore(db, owner.userId, ownNames),
+          )
+        )[0]
+      : [];
+    const targets = route.targets.length > 0
+      ? route.targets
+      : phones.flatMap((phone) => {
+          const actor = open.find((item) => item.workspaceId === phone.workspaceId);
+          return actor && phone.match ? [{ actor, match: phone.match }] : [];
+        });
+    const byTitle = targets.length === 0 && route.suggested.length === 0;
     const suggested = byTitle
       ? await suggestByTitleInDb(db, owner, open.map((item) => item.workspaceId), [title, note.calendar_event?.event_title], ownNames)
       : route.suggested;
-    const captureId = suggestedWorkspace(suggested, await captureWorkspaceInDb(db, owner, open, participants, [note.owner?.email, owner.email]));
-    const writes = route.targets.length > 0
-      ? route.targets
+    const phoneWorkspaces = phones.filter((phone) => !phone.match && phone.suggestions.length > 0).map((phone) => ({ workspaceId: phone.workspaceId }));
+    const captureId = suggestedWorkspace(
+      [...phoneWorkspaces, ...suggested],
+      await captureWorkspaceInDb(db, owner, open, participants, [note.owner?.email, owner.email]),
+    );
+    const writes = targets.length > 0
+      ? targets
       : [{ actor: open.find((item) => item.workspaceId === captureId) ?? owner, match: null }];
     for (const write of writes) {
       let activityId: string | null = null;
@@ -352,7 +377,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
           JSON.stringify(participants),
           externalUrl,
           transcript ? transcript.slice(0, 1_000_000) : null,
-          clip(note.summary_markdown ?? note.summary_text, 100_000),
+          summary,
           activityId ? "filed" : "unfiled",
           activityId,
           activityId ? write.match?.contactId ?? null : null,
@@ -363,7 +388,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
     if (placeholder && !writes.some((write) => write.actor.workspaceId === placeholder.workspace_id)) {
       await dropPlaceholder(db, placeholder.id);
     }
-    return route.targets.length > 0 ? "filed" : "unfiled";
+    return targets.length > 0 ? "filed" : "unfiled";
   });
 }
 

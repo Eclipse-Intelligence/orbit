@@ -684,8 +684,10 @@ function Summary({ id, text }: { id: string; text: string }) {
   );
 }
 
+const MATCHED_BY = { name: "matched by name", phone: "matched by number", title: "matched by title" } as const;
+
 function importMatch(people: string, by: UnfiledImport["suggestedBy"]) {
-  const match = by === "name" ? "matched by name" : by === "title" ? "matched by title" : "no contact matched";
+  const match = by ? MATCHED_BY[by] : "no contact matched";
   return people ? `${people}, ${match}` : match[0].toUpperCase() + match.slice(1);
 }
 
