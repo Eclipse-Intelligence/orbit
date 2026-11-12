@@ -152,7 +152,19 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
       },
       onWebStep: (step) => {
         if (step.status === "running") log("  web search");
-        webSteps = webSteps.then(() => api.webStep(job.id, step)).catch(() => undefined);
+        const send = () => api.webStep(job.id, step);
+        const attempts = step.status === "done" ? 3 : 1;
+        webSteps = webSteps.then(async () => {
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+              await send();
+              return;
+            } catch (error) {
+              cancelled(error);
+              if (error instanceof ApiError && error.status >= 400 && error.status < 500) return;
+            }
+          }
+        });
       },
     });
     if (cancel.signal.aborted) throw new ApiError("That question was cancelled in Orbit.", 409);
