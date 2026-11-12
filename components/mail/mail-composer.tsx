@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type FormEvent } from "react";
 import DraftShare from "@/components/mail/draft-share";
-import { useMailShareEvents } from "@/components/mail/share-live";
-import { fetchDraftPeople, fetchSharedDraft, holdSharedDraft, saveSharedDraftText } from "@/components/mail/shared-draft-client";
+import { useMailShareEvents, useShareResync } from "@/components/mail/share-live";
+import { DraftRequestError, fetchDraftPeople, fetchSharedDraft, holdSharedDraft, saveSharedDraftText } from "@/components/mail/shared-draft-client";
+import { HandOverError } from "@/components/mail/hand-over";
+import { newerVersion, reconcileText, sameText, textChanges, type DraftText } from "@/lib/mail/shared-text";
 import type { MailSharePerson } from "@/lib/mail/share-types";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
@@ -103,10 +105,10 @@ export default function MailComposer({
   onDiscard,
   onHeld,
   passive = false,
-  threadShared = false,
+  threadPeople = [],
 }: {
   passive?: boolean;
-  threadShared?: boolean;
+  threadPeople?: MailSharePerson[];
   onHeld?: (held: boolean) => void;
   start: ComposerStart;
   accounts: ComposeAccount[];
@@ -157,6 +159,7 @@ export default function MailComposer({
   const [followUpBody, setFollowUpBody] = useState(draft?.followUpBody ?? "");
   const [withSignature, setWithSignature] = useState(true);
   const [save, setSave] = useState<SaveState>(draft?.savedAt ? { kind: "saved" } : { kind: "idle" });
+  const lastSaveError = useRef<string | null>(null);
   const [scheduledFor, setScheduledFor] = useState(draft?.sendAt ?? null);
   const [error, setError] = useState<string | null>(null);
   const attachments = useEmailAttachments(draft?.attachments);
@@ -273,9 +276,11 @@ export default function MailComposer({
         draftId.current = saved.id;
         releaseDraft(heldKey.current);
         heldKey.current = null;
+        lastSaveError.current = null;
         setSave({ kind: "saved" });
       } catch (problem) {
         dirty.current = true;
+        lastSaveError.current = problem instanceof Error ? problem.message : "Couldn't save the draft. Try again.";
         if (flagReconnect(problem, { sourceId: snapshot.sourceId, email: account?.email ?? null })) {
           keepHeld();
           setSave({ kind: "held" });
@@ -326,54 +331,97 @@ export default function MailComposer({
 
   const [shareId, setShareId] = useState<string | null>(draft?.shareId ?? null);
   const [sharePeople, setSharePeople] = useState<MailSharePerson[]>([]);
-  const shared = useRef<{ id: string | null; text: { subject: string; body: string } }>({
+  const shared = useRef<{ id: string | null; opened: DraftText; base: { text: DraftText; version: number } | null; seen: number | null }>({
     id: draft?.shareId ?? null,
-    text: { subject: draft?.subject || start.subject, body: draft?.body ?? "" },
+    opened: { subject: draft?.subject || start.subject, body: draft?.body ?? "" },
+    base: null,
+    seen: null,
   });
 
   useEffect(() => {
     shared.current.id = shareId;
   }, [shareId]);
 
-  const refreshShared = useCallback(() => {
+  const loadShared = useCallback(async () => {
     const id = shared.current.id;
     if (!id) return;
     fetchDraftPeople(id).then(setSharePeople, () => undefined);
-    fetchSharedDraft(id)
-      .then((fresh) => {
-        if (shared.current.id !== id || fresh.state === "sent" || fresh.state === "discarded" || fresh.state === "none") return;
-        const local = payload.current;
-        const settled = local.subject === shared.current.text.subject && local.body === shared.current.text.body;
-        shared.current.text = { subject: fresh.subject, body: fresh.body };
-        if (!settled) return;
-        setSubject(fresh.subject);
-        setBody(fresh.body);
-      })
-      .catch(() => undefined);
+    const fresh = await fetchSharedDraft(id);
+    if (shared.current.id !== id || !newerVersion(shared.current.seen, fresh.version)) return;
+    shared.current.seen = fresh.version;
+    if (fresh.state === "sent" || fresh.state === "discarded" || fresh.state === "none") return;
+    const freshText = { subject: fresh.subject, body: fresh.body };
+    const local = { subject: payload.current.subject, body: payload.current.body };
+    const next = reconcileText(shared.current.base?.text ?? shared.current.opened, local, freshText);
+    shared.current.base = { text: freshText, version: fresh.version };
+    if (sameText(next, local)) return;
+    payload.current = { ...payload.current, ...next };
+    setSubject(next.subject);
+    setBody(next.body);
   }, []);
 
   useEffect(() => {
-    if (shareId) refreshShared();
-  }, [shareId, refreshShared]);
+    if (shareId) void loadShared().catch(() => undefined);
+  }, [shareId, loadShared]);
 
   useMailShareEvents((event) => {
-    if (event.shareId === shared.current.id && (event.type === "draft" || event.type === "people")) refreshShared();
+    if (event.shareId === shared.current.id && (event.type === "draft" || event.type === "people")) void loadShared().catch(() => undefined);
   });
 
-  async function mergeSharedText() {
+  useShareResync(() => {
+    const base = shared.current.base;
+    if (!shared.current.id || (base && !sameText(base.text, { subject: payload.current.subject, body: payload.current.body }))) return;
+    void loadShared().catch(() => undefined);
+  });
+
+  async function mergeSharedText(retry = true): Promise<void> {
     const id = shared.current.id;
     if (!id) return;
+    if (!shared.current.base) await loadShared();
+    const base = shared.current.base;
+    if (!base) throw new Error("Couldn't save the draft. Try again.");
     const local = { subject: payload.current.subject, body: payload.current.body };
-    const base = shared.current.text;
-    if (local.subject === base.subject && local.body === base.body) return;
-    await saveSharedDraftText(id, { subject: local.subject !== base.subject ? local.subject : null, body: local.body !== base.body ? local.body : null });
-    shared.current.text = local;
+    const changes = textChanges(base.text, local);
+    if (!changes) return;
+    try {
+      const saved = await saveSharedDraftText(id, changes, base.version);
+      shared.current.base = { text: local, version: saved.version };
+      shared.current.seen = Math.max(shared.current.seen ?? 0, saved.version);
+    } catch (problem) {
+      if (!(retry && problem instanceof DraftRequestError && problem.detail.changed)) throw problem;
+      await loadShared();
+      await mergeSharedText(false);
+    }
   }
 
-  async function ensureSaved() {
+  function flushSharedText() {
+    const id = shared.current.id;
+    const base = shared.current.base;
+    if (!id || !base || discarded.current) return;
+    const changes = textChanges(base.text, { subject: payload.current.subject, body: payload.current.body });
+    if (changes) void saveSharedDraftText(id, changes, base.version, true).catch(() => undefined);
+  }
+
+  const flushRef = useRef(flushSharedText);
+  useEffect(() => {
+    flushRef.current = flushSharedText;
+  });
+
+  useEffect(() => {
+    const flush = () => flushRef.current();
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
+
+  async function ensureSaved(): Promise<{ id: string } | { error: string }> {
+    if (!draftId.current && !payload.current.body.trim() && !payload.current.subject.trim()) return { error: "Write something first, then share it." };
     dirty.current = true;
     await saveNow();
-    return draftId.current;
+    if (draftId.current) return { id: draftId.current };
+    return { error: lastSaveError.current ?? "Couldn't save the draft. Try again." };
   }
 
   useEffect(() => {
@@ -468,13 +516,14 @@ export default function MailComposer({
     releaseDraft(heldKey.current);
     heldKey.current = null;
     const pending = chain.current.catch(() => null);
-    const settled = shared.current.id
-      ? pending
-          .then(() => mergeSharedText())
-          .catch(() => null)
-          .then(() => (sending && draftId.current ? holdSharedDraft(draftId.current, true) : null))
-      : pending;
-    return settled.then(() => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current, shareId: shared.current.id, ...(force ? { force } : {}) }));
+    const handed = () => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current, shareId: shared.current.id, ...(force ? { force } : {}) });
+    if (!shared.current.id) return pending.then(handed);
+    return pending
+      .then(() => mergeSharedText())
+      .then(() => (sending && draftId.current ? holdSharedDraft(draftId.current, true, shared.current.base?.version ?? null) : null))
+      .then(handed, (problem: unknown) => {
+        throw new HandOverError(problem instanceof Error ? problem.message : "Couldn't send. Try again.", { ...handed(), body: payload.current.body, subject: payload.current.subject });
+      });
   }
 
   function send(event?: FormEvent, force = false) {
@@ -500,7 +549,7 @@ export default function MailComposer({
       onReopen,
       track,
       onUndone: () => {
-        if (sharedDraft) void handed.then((value) => (value.id ? holdSharedDraft(value.id, false) : null));
+        if (sharedDraft) void handed.then((value) => (value.id ? holdSharedDraft(value.id, false).catch(() => null) : null), () => null);
         void release();
         onUndone?.();
         tracked?.undone();
@@ -828,10 +877,11 @@ export default function MailComposer({
           mode={start.mode}
           shareId={shareId}
           people={sharePeople}
-          threadShared={threadShared}
+          threadPeople={threadPeople}
           ensureSaved={ensureSaved}
+          onPeople={setSharePeople}
           onShared={(id, people) => {
-            shared.current = { id, text: { subject: payload.current.subject, body: payload.current.body } };
+            shared.current = { id, opened: { subject: payload.current.subject, body: payload.current.body }, base: null, seen: null };
             setShareId(id);
             setSharePeople(people);
             releaseDraft(heldKey.current);

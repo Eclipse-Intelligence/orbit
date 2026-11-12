@@ -2,14 +2,23 @@
 
 import { ShareRequestError } from "@/components/mail/share-client";
 import type { MailShareCandidate, MailSharePerson, SharedDraft } from "@/lib/mail/share-types";
+import type { DraftTextChanges } from "@/lib/mail/shared-text";
 
 const OFFLINE = "You're offline. Try again.";
 
+export class DraftRequestError extends ShareRequestError {
+  detail: { changed?: boolean; locked?: boolean };
+  constructor(message: string, status: number, detail: { changed?: boolean; locked?: boolean }) {
+    super(message, status);
+    this.detail = detail;
+  }
+}
+
 async function call<T>(url: string, init: RequestInit, fallback: string, keepalive = false): Promise<T> {
   const response = await fetch(url, { cache: "no-store", credentials: "same-origin", keepalive, ...init }).catch(() => null);
-  if (!response) throw new ShareRequestError(OFFLINE, 0);
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new ShareRequestError(body.error || fallback, response.status);
+  if (!response) throw new DraftRequestError(OFFLINE, 0, {});
+  const body = (await response.json().catch(() => ({}))) as T & { error?: string; changed?: boolean; locked?: boolean };
+  if (!response.ok) throw new DraftRequestError(body.error || fallback, response.status, { changed: body.changed, locked: body.locked });
   return body;
 }
 
@@ -21,8 +30,13 @@ export function fetchSharedDraft(shareId: string) {
   return call<SharedDraft>(`/api/mail/shared/${encodeURIComponent(shareId)}/draft`, {}, "Couldn't load the draft. Try again.");
 }
 
-export function saveSharedDraftText(shareId: string, text: { subject?: string | null; body?: string | null }) {
-  return call<{ version: number; savedAt: string }>(`/api/mail/shared/${encodeURIComponent(shareId)}/draft`, json("PUT", text), "Couldn't save the draft. Try again.");
+export function saveSharedDraftText(shareId: string, changes: DraftTextChanges, base: number | null, keepalive = false) {
+  return call<{ version: number; savedAt: string }>(
+    `/api/mail/shared/${encodeURIComponent(shareId)}/draft`,
+    json("PUT", { ...changes, base }),
+    "Couldn't save the draft. Try again.",
+    keepalive,
+  );
 }
 
 export function fetchDraftCandidates() {
@@ -37,6 +51,6 @@ export function shareDraftWith(draftId: string, people: string[]) {
   return call<{ shareId: string; people: MailSharePerson[]; added: string[] }>("/api/mail/drafts/share", json("POST", { draftId, people }), "Couldn't share the draft. Try again.");
 }
 
-export function holdSharedDraft(draftId: string, sending: boolean) {
-  return call<{ shared: boolean }>("/api/mail/drafts/hold", json("POST", { draftId, sending }), "Couldn't update the draft. Try again.", true).catch(() => ({ shared: false }));
+export function holdSharedDraft(draftId: string, sending: boolean, version: number | null = null) {
+  return call<{ shared: boolean }>("/api/mail/drafts/hold", json("POST", { draftId, sending, version }), "Couldn't send. Try again.", !sending);
 }

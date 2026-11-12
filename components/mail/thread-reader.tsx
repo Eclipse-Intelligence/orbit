@@ -1175,7 +1175,7 @@ export default function ThreadReader({
                     if (active.replaces) restoreDraft(active.replaces);
                   }}
                   onReopen={reopenSent}
-                  threadShared={shareMembers.length > 0}
+                  threadPeople={share.state?.people ?? []}
                 />
                 </div>
               ) : !target && newDraft ? (

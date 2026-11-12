@@ -24,7 +24,8 @@ export function ownerDraftTitle(owner: Pick<ChatPerson, "name">) {
 export function draftStateLine(state: SharedDraftState, owner: Pick<ChatPerson, "name">, scheduledFor: string | null) {
   const name = personFirstName(owner.name);
   if (state === "sending") return `${name} is sending. Read only.`;
-  if (state === "scheduled") return scheduledFor ? `Scheduled for ${scheduledFor}. Read only until ${name} cancels it.` : `Scheduled. Read only until ${name} cancels it.`;
+  if (state === "scheduled") return scheduledFor ? `Scheduled for ${scheduledFor}. Read only until ${name} unschedules it.` : `Scheduled. Read only until ${name} unschedules it.`;
+  if (state === "failed") return `Couldn't send. Read only until ${name} unschedules it.`;
   if (state === "sent") return `Sent by ${name}.`;
   if (state === "discarded") return `${name} discarded the draft.`;
   return null;

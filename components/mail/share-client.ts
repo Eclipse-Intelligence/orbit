@@ -91,3 +91,16 @@ export function onShareEvent(listener: ShareListener) {
     listeners.delete(listener);
   };
 }
+
+const rejoins = new Set<() => void>();
+
+export function emitShareRejoin() {
+  for (const listener of rejoins) listener();
+}
+
+export function onShareRejoin(listener: () => void) {
+  rejoins.add(listener);
+  return () => {
+    rejoins.delete(listener);
+  };
+}

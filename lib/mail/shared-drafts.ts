@@ -12,23 +12,28 @@ import { readPeople } from "@/lib/mail/shares";
 import type { MailAddress } from "@/lib/mail/types";
 
 export const SHARED_TEXT_LOCKED = "This draft is shared, so its subject and message can't be changed here. Send it as it is, or edit it in Mail.";
+export const DRAFT_NO_ACCESS = "You no longer have access to this draft.";
 
 const BODY_MAX = 20_000;
 const SUBJECT_MAX = 300;
+const THREAD_TRIES = 3;
 
 type Stamp = Date | string;
+
+export type ClosedShare = { id: string; members: string[] };
 
 function firstName(name: string | null | undefined, fallback: string) {
   return name?.trim().split(/\s+/)[0] || fallback;
 }
 
 function draftFailure(error: unknown): never {
-  if (isPgError(error) && error.code === "55006") throw new CrmError("conflict", error.message.trim(), 409);
+  if (isPgError(error) && error.code === "55006") throw new CrmError("conflict", error.message.trim(), 409, { locked: true });
+  if (isPgError(error) && error.code === "40001") throw new CrmError("conflict", error.message.trim(), 409, { changed: true });
   throw pgFailure(error) ?? error;
 }
 
 function notFound() {
-  return new CrmError("not_found", "Conversation not found.", 404);
+  return new CrmError("not_found", DRAFT_NO_ACCESS, 404);
 }
 
 function checkId(id: unknown) {
@@ -39,7 +44,7 @@ function checkId(id: unknown) {
 function cleanPeople(ids: unknown): string[] {
   if (ids === undefined || ids === null) return [];
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string" || !isUuid(id))) {
-    throw new CrmError("invalid_input", "Pick people from the list.", 400, { field: "people" });
+    throw new CrmError("invalid_input", "Choose people from the list.", 400, { field: "people" });
   }
   const unique = [...new Set((ids as string[]).map((id) => id.toLowerCase()))];
   if (unique.length > SHARE_PEOPLE_MAX) throw new CrmError("invalid_input", `Add up to ${SHARE_PEOPLE_MAX} people at a time.`, 400, { field: "people" });
@@ -72,6 +77,20 @@ export function announceDraftChange(ownerId: string, draftId: string) {
     const share = await draftShareMembers(ownerId, draftId).catch(() => null);
     if (share) await announceShare(share.shareId, [ownerId, ...share.members]);
   });
+}
+
+export async function sharedDraftClosed(actor: UserActor, closed: ClosedShare, threadKey: string | null) {
+  if (threadKey) {
+    for (let attempt = 1; attempt <= THREAD_TRIES; attempt += 1) {
+      try {
+        await query("select private.mail_share_draft_thread($1, $2, $3)", [actor.userId, closed.id, threadKey]);
+        break;
+      } catch (error) {
+        if (attempt === THREAD_TRIES) console.error("Couldn't move the shared draft to its thread", error instanceof Error ? error.name : "unknown");
+      }
+    }
+  }
+  chatBackground(() => announceShare(closed.id, [actor.userId, ...closed.members]));
 }
 
 export async function shareDraft(actor: UserActor, draftId: unknown, userIds: unknown, options: { send?: PushSender } = {}): Promise<{ shareId: string; people: MailSharePerson[]; added: string[] }> {
@@ -122,6 +141,7 @@ type DraftRow = {
   cc_recipients: MailAddress[];
   subject: string | null;
   body: string | null;
+  signature: string | null;
   attachments: SharedDraftFile[];
   send_at: Stamp | null;
   version: number;
@@ -149,6 +169,7 @@ export async function getSharedDraft(actor: UserActor, shareId: unknown): Promis
     cc: row.cc_recipients ?? [],
     subject: row.subject ?? "",
     body: row.body ?? "",
+    signature: row.signature,
     attachments: row.attachments ?? [],
     sendAt: row.send_at ? new Date(row.send_at).toISOString() : null,
     version: row.version,
@@ -160,18 +181,23 @@ export function readSharedText(value: unknown) {
   const input = (value ?? {}) as Record<string, unknown>;
   const body = typeof input.body === "string" ? input.body.replace(/\r\n/g, "\n") : null;
   if (body !== null && body.length > BODY_MAX) throw new CrmError("invalid_input", "Keep the message under 20,000 characters.", 400, { field: "body" });
-  const subject = typeof input.subject === "string" ? input.subject.replace(/\s+/g, " ").trim() : null;
+  const subject = typeof input.subject === "string" ? input.subject.replace(/[\r\n\t]+/g, " ") : null;
   if (subject !== null && subject.length > SUBJECT_MAX) throw new CrmError("invalid_input", "Keep the subject under 300 characters.", 400, { field: "subject" });
-  return { subject, body };
+  const base = typeof input.base === "number" && Number.isInteger(input.base) && input.base >= 0 ? input.base : null;
+  return { subject, body, base };
 }
 
-export async function saveSharedDraft(actor: UserActor, shareId: unknown, text: { subject: string | null; body: string | null }): Promise<{ version: number; savedAt: string }> {
+export async function saveSharedDraft(
+  actor: UserActor,
+  shareId: unknown,
+  text: { subject: string | null; body: string | null; base?: number | null },
+): Promise<{ version: number; savedAt: string }> {
   const id = checkId(shareId);
   let row: { version: number; owner_user_id: string; members: string[] };
   try {
     const result = await query<{ version: number; owner_user_id: string; members: string[] }>(
-      "select version, owner_user_id, members::text[] as members from private.merge_shared_draft($1, $2, $3, $4)",
-      [actor.userId, id, text.subject, text.body],
+      "select version, owner_user_id, members::text[] as members from private.merge_shared_draft($1, $2, $3, $4, $5)",
+      [actor.userId, id, text.subject, text.body, text.base ?? null],
     );
     row = result.rows[0];
   } catch (error) {
@@ -181,31 +207,20 @@ export async function saveSharedDraft(actor: UserActor, shareId: unknown, text: 
   return { version: row.version, savedAt: new Date().toISOString() };
 }
 
-export async function holdSharedDraft(actor: UserActor, draftId: unknown, hold: boolean): Promise<{ shared: boolean }> {
+export async function holdSharedDraft(actor: UserActor, draftId: unknown, hold: boolean, version: number | null = null): Promise<{ shared: boolean }> {
   if (typeof draftId !== "string" || !isUuid(draftId)) return { shared: false };
-  const result = await query<{ share_id: string; members: string[] }>("select share_id, members::text[] as members from private.mail_share_draft_hold($1, $2, $3)", [
-    actor.userId,
-    draftId.toLowerCase(),
-    hold,
-  ]);
-  const row = result.rows[0];
-  if (!row) return { shared: false };
-  chatBackground(() => announceShare(row.share_id, [actor.userId, ...(row.members ?? [])]));
-  return { shared: true };
-}
-
-export async function closeSharedDraft(actor: UserActor, shareId: string, state: "sent" | "discarded", sent: { threadKey: string | null; internetId: string | null } = { threadKey: null, internetId: null }) {
+  let row: { share_id: string; members: string[] } | undefined;
   try {
-    const result = await query<{ share_id: string; members: string[] }>("select share_id, members::text[] as members from private.mail_share_draft_closed($1, $2, $3, $4, $5)", [
-      actor.userId,
-      shareId,
-      state,
-      sent.threadKey,
-      sent.internetId,
-    ]);
-    const row = result.rows[0];
-    if (row) chatBackground(() => announceShare(row.share_id, [actor.userId, ...(row.members ?? [])]));
+    const result = await query<{ share_id: string; members: string[] }>(
+      "select share_id, members::text[] as members from private.mail_share_draft_hold($1, $2, $3, $4)",
+      [actor.userId, draftId.toLowerCase(), hold, version],
+    );
+    row = result.rows[0];
   } catch (error) {
-    console.error("Couldn't close the shared draft", error instanceof Error ? error.name : "unknown");
+    draftFailure(error);
   }
+  if (!row) return { shared: false };
+  const share = row;
+  chatBackground(() => announceShare(share.share_id, [actor.userId, ...(share.members ?? [])]));
+  return { shared: true };
 }

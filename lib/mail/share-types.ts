@@ -33,7 +33,7 @@ export type SharedMessage = {
   truncated: boolean;
 };
 
-export type SharedDraftState = "editing" | "sending" | "scheduled" | "sent" | "discarded" | "none";
+export type SharedDraftState = "editing" | "sending" | "scheduled" | "failed" | "sent" | "discarded" | "none";
 
 export type SharedDraftFile = { id: string; name: string; size: number; contentType: string };
 
@@ -48,6 +48,7 @@ export type SharedDraft = {
   cc: MailAddress[];
   subject: string;
   body: string;
+  signature: string | null;
   attachments: SharedDraftFile[];
   sendAt: string | null;
   version: number;
@@ -67,7 +68,9 @@ export type SharedThread = {
   draft: SharedDraftSummary | null;
 };
 
-export const SHARED_DRAFT_OPEN: readonly SharedDraftState[] = ["editing", "sending", "scheduled"];
+export const SHARED_DRAFT_OPEN: readonly SharedDraftState[] = ["editing", "sending", "scheduled", "failed"];
+
+export const SHARED_DRAFT_CLOSED: readonly SharedDraftState[] = ["sent", "discarded"];
 
 export type MailShareCandidate = ChatPerson & { email: string | null; role: "owner" | "admin" | "member" | null };
 

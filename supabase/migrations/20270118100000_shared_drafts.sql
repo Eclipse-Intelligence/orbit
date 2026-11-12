@@ -16,8 +16,9 @@ alter table crm.mail_shares add constraint mail_shares_sent_internet_id_check ch
 create unique index if not exists mail_shares_draft_idx on crm.mail_shares (draft_id) where draft_id is not null;
 create index if not exists mail_shares_owner_pending_idx on crm.mail_shares (owner_user_id, source_id) where thread_key is null and sent_internet_id is not null;
 
-grant select (draft_id) on crm.mail_shares to authenticated;
-grant update (draft_id, source_id) on crm.mail_shares to authenticated;
+revoke update on crm.mail_shares from authenticated;
+grant select (draft_id, draft_state, draft_held_until, draft_version) on crm.mail_shares to authenticated;
+grant update (draft_id, source_id, thread_key, draft_state, draft_held_until, draft_version, sent_internet_id) on crm.mail_shares to authenticated;
 
 drop policy if exists mail_shares_owner_update on crm.mail_shares;
 create policy mail_shares_owner_update on crm.mail_shares
@@ -68,12 +69,9 @@ declare
   v_people uuid[];
   v_added uuid[] := '{}';
 begin
-  select d.* into v_draft from crm.mail_drafts d where d.id = p_draft and d.user_id = p_user for update;
+  select d.* into v_draft from crm.mail_drafts d where d.id = p_draft and d.user_id = p_user;
   if v_draft.id is null then
     raise exception 'That draft has gone. Save it again.' using errcode = 'P0002';
-  end if;
-  if v_draft.send_at is not null or coalesce(v_draft.sending_at > now() - interval '10 minutes', false) or v_draft.send_attempted_at is not null then
-    raise exception 'This draft is sending or scheduled. Share it after cancelling.' using errcode = '55006';
   end if;
   v_people := array(select distinct x from unnest(coalesce(p_people, '{}')) as x where x is not null and x <> p_user);
   if cardinality(v_people) > 50 then
@@ -94,16 +92,24 @@ begin
     if v_share.draft_id is not null and v_share.draft_id <> p_draft then
       raise exception 'Another draft in this thread is shared. Send or discard it first.' using errcode = '22023';
     end if;
-    update crm.mail_shares s set draft_id = p_draft, draft_state = null, draft_held_until = null, draft_version = s.draft_version + 1
-      where s.id = v_share.id;
-    v_added := array(select m.user_id from crm.mail_share_members m where m.share_id = v_share.id);
-  elsif v_share.id is null then
-    if cardinality(v_people) = 0 then
-      raise exception 'Pick someone to share it with.' using errcode = '22023';
-    end if;
+  elsif v_share.id is null and cardinality(v_people) = 0 then
+    raise exception 'Add someone to share it with.' using errcode = '22023';
+  end if;
+  select d.* into v_draft from crm.mail_drafts d where d.id = p_draft and d.user_id = p_user for update;
+  if v_draft.id is null then
+    raise exception 'That draft has gone. Save it again.' using errcode = 'P0002';
+  end if;
+  if v_draft.send_at is not null or v_draft.send_error is not null or coalesce(v_draft.sending_at > now() - interval '10 minutes', false) or v_draft.send_attempted_at is not null then
+    raise exception 'This draft is sending or scheduled. Unschedule it first.' using errcode = '55006';
+  end if;
+  if v_share.id is null then
     insert into crm.mail_shares (owner_user_id, source_id, thread_key, draft_id)
       values (p_user, v_draft.source_id, null, p_draft)
       returning * into v_share;
+  elsif v_share.draft_id is null then
+    update crm.mail_shares s set draft_id = p_draft, draft_state = null, draft_held_until = null, draft_version = s.draft_version + 1
+      where s.id = v_share.id;
+    v_added := array(select m.user_id from crm.mail_share_members m where m.share_id = v_share.id);
   end if;
   if cardinality(v_people) > 0 then
     perform 1 from crm.workspace_members m
@@ -111,7 +117,7 @@ begin
       order by m.workspace_id, m.user_id
       for share;
     if exists (select 1 from unnest(v_people) as x(id) where not private.chat_shares_workspace(p_user, x.id)) then
-      raise exception 'Someone you picked doesn''t share a workspace with you.' using errcode = '22023';
+      raise exception 'Someone you chose doesn''t share a workspace with you.' using errcode = '22023';
     end if;
     with inserted as (
       insert into crm.mail_share_members (share_id, user_id, added_by)
@@ -128,7 +134,9 @@ $$;
 revoke all on function private.mail_share_draft_add(uuid, uuid, uuid[]) from public;
 grant execute on function private.mail_share_draft_add(uuid, uuid, uuid[]) to crm_app;
 
-create or replace function private.merge_shared_draft(p_user uuid, p_share uuid, p_subject text, p_body text)
+drop function if exists private.merge_shared_draft(uuid, uuid, text, text);
+
+create or replace function private.merge_shared_draft(p_user uuid, p_share uuid, p_subject text, p_body text, p_base integer)
 returns table (version integer, owner_user_id uuid, members uuid[])
 language plpgsql
 security definer
@@ -138,9 +146,10 @@ as $$
 declare
   v_share crm.mail_shares;
   v_draft crm.mail_drafts;
+  v_owner text;
 begin
   if p_user is null or not private.mail_share_open_to(p_share, p_user) then
-    raise exception 'Conversation not found.' using errcode = 'P0002';
+    raise exception 'You no longer have access to this draft.' using errcode = 'P0002';
   end if;
   select s.* into v_share from crm.mail_shares s where s.id = p_share for update;
   select d.* into v_draft from crm.mail_drafts d where d.id = v_share.draft_id and d.user_id = v_share.owner_user_id for update;
@@ -153,12 +162,19 @@ begin
   if p_subject is not null and char_length(p_subject) > 300 then
     raise exception 'Keep the subject under 300 characters.' using errcode = '22023';
   end if;
-  if v_draft.send_at is not null or v_draft.send_error is not null then
-    raise exception 'Scheduled. Read only until % cancels it.', private.mail_share_owner_first_name(v_share.owner_user_id) using errcode = '55006';
+  v_owner := private.mail_share_owner_first_name(v_share.owner_user_id);
+  if p_user <> v_share.owner_user_id and v_draft.send_error is not null then
+    raise exception 'Couldn''t send. Read only until % unschedules it.', v_owner using errcode = '55006';
+  end if;
+  if p_user <> v_share.owner_user_id and v_draft.send_at is not null then
+    raise exception 'Scheduled. Read only until % unschedules it.', v_owner using errcode = '55006';
   end if;
   if coalesce(v_draft.sending_at > now() - interval '10 minutes', false) or v_draft.send_attempted_at is not null
     or (p_user <> v_share.owner_user_id and coalesce(v_share.draft_held_until > now(), false)) then
-    raise exception '% is sending. Read only.', private.mail_share_owner_first_name(v_share.owner_user_id) using errcode = '55006';
+    raise exception '% is sending. Read only.', v_owner using errcode = '55006';
+  end if;
+  if p_base is not null and p_base <> v_share.draft_version then
+    raise exception 'This draft changed. Saving again.' using errcode = '40001';
   end if;
   if coalesce(p_subject, v_draft.subject, '') is distinct from coalesce(v_draft.subject, '') or coalesce(p_body, v_draft.body) is distinct from v_draft.body then
     update crm.mail_drafts d set subject = coalesce(p_subject, d.subject), body = coalesce(p_body, d.body), updated_at = now()
@@ -169,8 +185,10 @@ begin
 end;
 $$;
 
-revoke all on function private.merge_shared_draft(uuid, uuid, text, text) from public;
-grant execute on function private.merge_shared_draft(uuid, uuid, text, text) to crm_app;
+revoke all on function private.merge_shared_draft(uuid, uuid, text, text, integer) from public;
+grant execute on function private.merge_shared_draft(uuid, uuid, text, text, integer) to crm_app;
+
+drop function if exists private.shared_draft(uuid, uuid);
 
 create or replace function private.shared_draft(p_user uuid, p_share uuid)
 returns table (
@@ -182,6 +200,7 @@ returns table (
   cc_recipients jsonb,
   subject text,
   body text,
+  signature text,
   attachments jsonb,
   send_at timestamptz,
   version integer,
@@ -195,16 +214,22 @@ as $$
   select s.owner_user_id,
     case
       when d.id is null then coalesce(s.draft_state, 'none')
-      when d.send_at is not null or d.send_error is not null then 'scheduled'
+      when d.send_error is not null then 'failed'
+      when d.send_at is not null then 'scheduled'
       when private.shared_draft_sending(s, d) then 'sending'
       else 'editing'
     end,
     d.mode,
-    coalesce((select i.email from crm.send_identities i where i.id = d.identity_id and i.user_id = s.owner_user_id), src.email),
+    sender.email,
     coalesce(d.to_recipients, '[]'::jsonb),
     coalesce(d.cc_recipients, '[]'::jsonb),
     d.subject,
     d.body,
+    case when d.signature then (
+      select e.body from crm.email_signatures e
+      where e.user_id = s.owner_user_id and e.sender_email = lower(sender.email)
+      order by e.updated_at desc limit 1
+    ) end,
     coalesce((
       select jsonb_agg(jsonb_build_object('id', a.id, 'name', a.name, 'size', a.size, 'contentType', a.content_type) order by a.name)
       from crm.email_attachments a where a.id = any(d.attachments) and a.user_id = s.owner_user_id
@@ -215,26 +240,41 @@ as $$
   from crm.mail_shares s
   left join crm.mail_drafts d on d.id = s.draft_id and d.user_id = s.owner_user_id
   left join crm.mail_sources src on src.id = d.source_id
+  left join lateral (
+    select coalesce((select i.email from crm.send_identities i where i.id = d.identity_id and i.user_id = s.owner_user_id), src.email) as email
+  ) sender on true
   where s.id = p_share and private.mail_share_open_to(p_share, p_user)
 $$;
 
 revoke all on function private.shared_draft(uuid, uuid) from public;
 grant execute on function private.shared_draft(uuid, uuid) to crm_app;
 
-create or replace function private.mail_share_draft_hold(p_user uuid, p_draft uuid, p_hold boolean)
+drop function if exists private.mail_share_draft_hold(uuid, uuid, boolean);
+
+create or replace function private.mail_share_draft_hold(p_user uuid, p_draft uuid, p_hold boolean, p_version integer)
 returns table (share_id uuid, members uuid[])
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
-  update crm.mail_shares s
-    set draft_held_until = case when p_hold then now() + interval '2 minutes' end
-    where s.draft_id = p_draft and s.owner_user_id = p_user
-    returning s.id, array(select m.user_id from crm.mail_share_members m where m.share_id = s.id)
+#variable_conflict use_column
+declare
+  v_share crm.mail_shares;
+begin
+  select s.* into v_share from crm.mail_shares s where s.draft_id = p_draft and s.owner_user_id = p_user for update;
+  if v_share.id is null then
+    return;
+  end if;
+  if p_hold and p_version is not null and p_version <> v_share.draft_version then
+    raise exception 'The draft changed. Check it, then send.' using errcode = '40001';
+  end if;
+  update crm.mail_shares s set draft_held_until = case when p_hold then now() + interval '2 minutes' end where s.id = v_share.id;
+  return query select v_share.id, array(select m.user_id from crm.mail_share_members m where m.share_id = v_share.id);
+end;
 $$;
 
-revoke all on function private.mail_share_draft_hold(uuid, uuid, boolean) from public;
-grant execute on function private.mail_share_draft_hold(uuid, uuid, boolean) to crm_app;
+revoke all on function private.mail_share_draft_hold(uuid, uuid, boolean, integer) from public;
+grant execute on function private.mail_share_draft_hold(uuid, uuid, boolean, integer) to crm_app;
 
 create or replace function private.mail_share_draft_members(p_user uuid, p_draft uuid)
 returns table (share_id uuid, members uuid[])
@@ -251,46 +291,29 @@ $$;
 revoke all on function private.mail_share_draft_members(uuid, uuid) from public;
 grant execute on function private.mail_share_draft_members(uuid, uuid) to crm_app;
 
-create or replace function private.mail_share_draft_closed(p_user uuid, p_share uuid, p_state text, p_thread_key text, p_internet_id text)
-returns table (share_id uuid, members uuid[])
-language plpgsql
+drop function if exists private.mail_share_draft_closed(uuid, uuid, text, text, text);
+
+create or replace function private.mail_share_draft_thread(p_user uuid, p_share uuid, p_thread_key text)
+returns boolean
+language sql
 security definer
 set search_path = ''
 as $$
-#variable_conflict use_column
-declare
-  v_share crm.mail_shares;
-  v_thread text;
-begin
-  if p_state not in ('sent', 'discarded') then
-    raise exception 'Unknown draft state.' using errcode = '22023';
-  end if;
-  select s.* into v_share from crm.mail_shares s where s.id = p_share and s.owner_user_id = p_user for update;
-  if v_share.id is null then
-    return;
-  end if;
-  v_thread := v_share.thread_key;
-  if v_thread is null and p_state = 'sent' and p_thread_key is not null and char_length(p_thread_key) between 1 and 450
-    and not exists (
-      select 1 from crm.mail_shares o
-      where o.owner_user_id = p_user and o.source_id = v_share.source_id and o.thread_key = p_thread_key and o.id <> v_share.id
-    ) then
-    v_thread := p_thread_key;
-  end if;
-  update crm.mail_shares s set
-      draft_id = null,
-      draft_state = p_state,
-      draft_held_until = null,
-      draft_version = s.draft_version + 1,
-      thread_key = v_thread,
-      sent_internet_id = case when v_thread is null and p_state = 'sent' then left(p_internet_id, 1000) else null end
-    where s.id = v_share.id;
-  return query select v_share.id, array(select m.user_id from crm.mail_share_members m where m.share_id = v_share.id);
-end;
+  with moved as (
+    update crm.mail_shares s set thread_key = p_thread_key, sent_internet_id = null
+      where s.id = p_share and s.owner_user_id = p_user and s.thread_key is null
+        and p_thread_key is not null and char_length(p_thread_key) between 1 and 450
+        and not exists (
+          select 1 from crm.mail_shares o
+          where o.owner_user_id = p_user and o.source_id = s.source_id and o.thread_key = p_thread_key
+        )
+      returning s.id
+  )
+  select exists (select 1 from moved)
 $$;
 
-revoke all on function private.mail_share_draft_closed(uuid, uuid, text, text, text) from public;
-grant execute on function private.mail_share_draft_closed(uuid, uuid, text, text, text) to crm_app;
+revoke all on function private.mail_share_draft_thread(uuid, uuid, text) from public;
+grant execute on function private.mail_share_draft_thread(uuid, uuid, text) to crm_app;
 
 create or replace function private.mail_shares_follow_sent(p_user uuid, p_source uuid, p_thread_keys text[])
 returns table (share_id uuid, members uuid[])
@@ -298,7 +321,7 @@ language sql
 security definer
 set search_path = ''
 as $$
-  with found as (
+  with matched as (
     select distinct on (s.id) s.id, m.thread_key
     from crm.mail_shares s
     join crm.mail_messages m on m.source_id = s.source_id and m.thread_key = any(p_thread_keys) and m.user_id = s.owner_user_id
@@ -309,6 +332,8 @@ as $$
         where o.owner_user_id = p_user and o.source_id = p_source and o.thread_key = m.thread_key
       )
     order by s.id, m.thread_key
+  ), found as (
+    select distinct on (matched.thread_key) matched.id, matched.thread_key from matched order by matched.thread_key, matched.id
   )
   update crm.mail_shares s set thread_key = found.thread_key, sent_internet_id = null
     from found where s.id = found.id
