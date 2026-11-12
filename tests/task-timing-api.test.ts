@@ -5,7 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { PATCH as restUpdateTask } from "@/app/api/v1/tasks/[id]/route";
 import { POST as restCreateTask } from "@/app/api/v1/tasks/route";
 import { pageContext, readPageInput } from "@/lib/assistant/page-context";
-import { describeAction, runTool, taskTimingRefusal, toolDefinitions } from "@/lib/assistant/tools";
+import { describeAction, runTool, taskTimingRefusal, taskTimingRefusalFor, toolDefinitions } from "@/lib/assistant/tools";
 import { createTask } from "@/lib/crm/tasks";
 import { SCOPES } from "@/lib/crm/scopes";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
@@ -216,6 +216,22 @@ describe("task due day or time in the assistant", () => {
     const refused = (await runTool(owner, "create_task", { title: "Remind me", dueDate: "2027-02-02", remindMinutes: 15, sendToClickUp: false })) as { error?: string; field?: string };
     assert.equal(refused.error, "Pick a time for the reminder.");
     assert.equal(refused.field, "remindMinutes");
+  });
+
+  it("refuses a reminder on a date-only task before the card, and treats a null due field as absent", async () => {
+    assert.equal(taskTimingRefusal("update_task", { taskId: "x", dueDate: "2027-02-02", dueAt: null }), null);
+    assert.equal(taskTimingRefusal("create_task", { title: "Call", dueAt: "2027-02-02T10:00", dueDate: null, remindMinutes: 5 }), null);
+    assert.equal(taskTimingRefusal("update_task", { taskId: "x", dueAt: null, remindMinutes: 5 })?.error, "Pick a time for the reminder.");
+    const dayTask = (await createTask(owner, { title: "Email Lucy Hart", dueDate: "2027-02-04", ownerId: owner.userId })).body.task;
+    const timedTask = (await createTask(owner, { title: "Ring Lucy Hart", dueAt: "2027-02-04T10:00", ownerId: owner.userId })).body.task;
+    assert.deepEqual(await taskTimingRefusalFor(owner, "update_task", { taskId: dayTask.id, remindMinutes: 15 }), { error: "Pick a time for the reminder.", field: "remindMinutes" });
+    assert.equal(await taskTimingRefusalFor(owner, "update_task", { taskId: timedTask.id, remindMinutes: 15 }), null);
+    assert.equal(await taskTimingRefusalFor(owner, "update_task", { taskId: dayTask.id, dueAt: "2027-02-04T11:00", remindMinutes: 15 }), null);
+    const refused = (await runTool(owner, "update_task", { taskId: dayTask.id, remindMinutes: 15 })) as { error?: string; field?: string };
+    assert.equal(refused.error, "Pick a time for the reminder.");
+    assert.equal(refused.field, "remindMinutes");
+    const both = (await runTool(owner, "update_task", { taskId: dayTask.id, dueDate: "2027-02-05", dueAt: null })) as { task: TaskBody };
+    assert.equal(both.task.dueDate, "2027-02-05");
   });
 
   it("names the due day and whether it has a time in Capture and the page context", async () => {

@@ -186,6 +186,26 @@ describe("date-only and timed tasks", () => {
     assert.deepEqual(day?.slice(2, 5), ["2026-12-08", "", "15"]);
   });
 
+  it("treats a null dueAt or dueDate as absent beside the other", async () => {
+    const day = (await createTask(mark, { title: "Null time", dueDate: "2026-12-09", dueAt: null })).body.task;
+    assert.equal(day.dueDate, "2026-12-09");
+    assert.equal(day.dueHasTime, false);
+    const timed = (await createTask(mark, { title: "Null day", dueAt: "2026-12-09T11:00", dueDate: null })).body.task;
+    assert.equal(timed.dueHasTime, true);
+    const cleared = (await updateTask(mark, timed.id, { dueAt: null, dueDate: null })).body.task;
+    assert.equal(cleared.dueAt, null);
+  });
+
+  it("keeps a date-only task date only when its dueAt comes back unchanged", async () => {
+    const task = (await createTask(mark, { title: "Echoed day", dueDate: "2026-12-10" })).body.task;
+    const echoed = (await updateTask(mark, task.id, { dueAt: task.dueAt, title: "Echoed day, renamed" })).body.task;
+    assert.equal(echoed.dueHasTime, false);
+    assert.equal(echoed.scheduledBy, null);
+    await assert.rejects(updateTask(mark, task.id, { dueAt: task.dueAt, remindMinutes: 15 }), /Pick a time for the reminder\./);
+    const moved = (await updateTask(mark, task.id, { dueAt: "2026-12-10T16:00" })).body.task;
+    assert.equal(moved.dueHasTime, true);
+  });
+
   it("undoes Remove the time, bringing back the time and the reminder", async () => {
     const task = (await createTask(mark, { title: "Undo the removal", dueAt: "2026-12-03T15:00", remindMinutes: 30 })).body.task;
     await updateTask(mark, task.id, { dueDate: "2026-12-03" });
@@ -213,6 +233,7 @@ describe("routes that set a day only", () => {
     assert.equal(day.body.task?.dueAt, dayStartIso("2026-12-05"));
     assert.equal(day.body.task?.remindMinutes, null);
     await assert.rejects(ingestLead(mark, { contact: { firstName: "Lia", email: "lia@lead.test" }, task: { title: "Call Lia", dueDate: "2026-02-30" } }), /task\.dueDate: enter a real calendar date/);
+    await assert.rejects(ingestLead(mark, { contact: { firstName: "Lim", email: "lim@lead.test" }, task: { title: "Call Lim", dueDate: "2026-12-05", remindMinutes: 7 } }), /task\.remindMinutes: choose a reminder/);
   });
 
   it("makes extension tasks date only and ignores an older panel's reminder", async () => {

@@ -14,7 +14,7 @@ import {
   assistantTools,
   crossWorkspaceRefusal,
   resolveToolCall,
-  taskTimingRefusal,
+  taskTimingRefusalFor,
   describeAction,
   findTool,
   isWriteCall,
@@ -720,7 +720,7 @@ async function refusedWrites(actor: UserActor, writes: ToolCall[], switches?: To
       continue;
     }
     const timing = resolveToolCall(call.function.name, parseArgs(call.function.arguments));
-    const timingRefusal = timing ? taskTimingRefusal(timing.name, timing.args) : null;
+    const timingRefusal = timing ? await taskTimingRefusalFor(actor, timing.name, timing.args) : null;
     if (timingRefusal) {
       refused.set(call.id, timingRefusal);
       continue;

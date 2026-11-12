@@ -389,7 +389,7 @@ export async function moveDeferral(caller: UserActor, id: string, atValue: strin
     await db.query("update crm.mail_reminders set due_at = $2 where id = $1", [row.id, at.toISOString()]);
     const task = await openTask(db, row.task_id);
     if (task) {
-      await updateTaskInDb(db, actor, task.id, onDayKeepingKind(task, dayKeyAt(at)), { operation: "move_deferred_follow_up", source: "mail", sourceUrl: threadHref(row.source_id, row.thread_key) });
+      await updateTaskInDb(db, actor, task.id, task.dueHasTime && task.dueDate === dayKeyAt(at) ? { dueAt: at.toISOString() } : onDayKeepingKind(task, dayKeyAt(at)), { operation: "move_deferred_follow_up", source: "mail", sourceUrl: threadHref(row.source_id, row.thread_key) });
     }
     return { id: row.id, at: at.toISOString(), taskId: row.task_id };
   });

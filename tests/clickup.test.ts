@@ -675,21 +675,34 @@ describe("clickup sync", () => {
     assert.equal(edited?.due_has_time, false);
     assert.equal(puts(fake, "migrated").length, 0);
 
-    remote.due_date = String(Date.UTC(2026, 6, 2, 13, 0));
+    assert.equal((await taskRow(edited!.id)).clickup_sync.remoteDueAt, "2026-07-01T08:00:00.000Z");
+    remote.due_date = String(Date.UTC(2026, 6, 1, 13, 0));
     remote.due_date_time = true;
     remote.date_updated = String(Date.now() + 4_000);
     await syncClickUp({ actor: owner, force: true, fetchImpl });
     const timed = await importedTask(owner.workspaceId, "migrated");
-    assert.equal(timed?.due_at?.toISOString(), "2026-07-02T13:00:00.000Z");
+    assert.equal(timed?.due_at?.toISOString(), "2026-07-01T13:00:00.000Z");
     assert.equal(timed?.due_has_time, true);
 
     remote.due_date_time = false;
     remote.date_updated = String(Date.now() + 6_000);
     await syncClickUp({ actor: owner, force: true, fetchImpl });
     const dayOnly = await importedTask(owner.workspaceId, "migrated");
-    assert.equal(dayOnly?.due_at?.toISOString(), "2026-07-01T23:00:00.000Z");
+    assert.equal(dayOnly?.due_at?.toISOString(), "2026-06-30T23:00:00.000Z");
     assert.equal(dayOnly?.due_has_time, false);
     assert.equal(puts(fake, "migrated").length, 0);
+
+    await updateTask(owner, dayOnly!.id, { dueAt: "2026-07-01T04:00" });
+    assert.equal(await pushClickUpTask(owner, dayOnly!.id, { fetchImpl }), "pushed");
+    delete remote.due_date_time;
+    remote.due_date = String(Date.UTC(2026, 6, 1, 3, 0));
+    remote.name = "Send the deck early";
+    remote.date_updated = String(Date.now() + 8_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const early = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(early?.title, "Send the deck early");
+    assert.equal(early?.due_at?.toISOString(), "2026-07-01T03:00:00.000Z");
+    assert.equal(early?.due_has_time, true);
   });
 
   it("archives the Orbit task when the ClickUp task is deleted", async () => {

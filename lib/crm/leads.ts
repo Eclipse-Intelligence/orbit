@@ -1,3 +1,4 @@
+import { isReminderMinutes } from "@/lib/crm/reminder-options";
 import { readDateTime } from "@/lib/time";
 import { withActor } from "@/lib/crm/context";
 import { upsertCompanyInDb } from "@/lib/crm/companies";
@@ -69,6 +70,9 @@ async function ingestLeadInDb(
   assertCalendarDate(input.opportunity?.expectedCloseDate, "opportunity.expectedCloseDate");
   assertCalendarDate(input.task?.dueAt, "task.dueAt");
   assertCalendarDate(input.task?.dueDate, "task.dueDate");
+  if (input.task?.remindMinutes !== undefined && input.task.remindMinutes !== null && !isReminderMinutes(input.task.remindMinutes)) {
+    throw new CrmError("invalid_input", "task.remindMinutes: choose a reminder, such as 15 or 60 minutes.", 400, { field: "task.remindMinutes" });
+  }
   if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
     throw new CrmError(
       "invalid_input",

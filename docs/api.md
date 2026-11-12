@@ -195,7 +195,7 @@ A task is either date only or timed.
 
 - `dueDate` (`2026-11-14`) makes it date only: due any time that London day, stored at London midnight. It isn't overdue until the day is over.
 - `dueAt` with a time (`2026-11-14T14:30`, or an ISO instant) makes it timed, and later puts it on its owner's calendar. A bare date in `dueAt` is read as `dueDate`.
-- Send a time only when the person gave one. Sending both `dueDate` and `dueAt` returns 400 `invalid_input`. `null` in either clears the due date.
+- Send a time only when the person gave one. Sending a value in both `dueDate` and `dueAt` returns 400 `invalid_input`. A `null` counts as absent when the other has a value, so `{ "dueDate": "2026-12-01", "dueAt": null }` is date only. `null` on its own clears the due date.
 - A reminder needs a time: `remindMinutes` on a date-only task returns 400 "Pick a time for the reminder." Making a task date only removes its reminder.
 - Tasks carry `dueAt` (London midnight for a date-only task), `dueDate` (the London day, because London midnight in summer is the previous day in UTC), `dueHasTime`, `durationMinutes` and `scheduledBy` (`person` when someone gave it a time, `planner` when Orbit's planner placed it, null when date only).
 - Agent-token tasks are unowned, so a timed one reaches nobody's calendar until someone takes it.
@@ -210,7 +210,7 @@ In the app, an unlinked task's panel offers Link a person: contacts whose first 
 
 ## Leads
 
-`POST /api/v1/leads` accepts any of `company`, `contact`, `note`, `activity`, `opportunity`, and `task`. The lead's `task` takes `dueDate` or `dueAt` like a task: a `dueAt` with a time stays timed and keeps its `remindMinutes`; a `dueDate`, or a bare date in `dueAt`, is date only and any reminder is dropped rather than refusing the lead. Company and contact use the upsert rules. The note becomes a research activity when `activity` is omitted. The opportunity and task attach to the company and contact from the same request. The response is one object with `company`, `contact`, `activity`, `opportunity`, `task`, and the created/matched flags. The whole request is one transaction.
+`POST /api/v1/leads` accepts any of `company`, `contact`, `note`, `activity`, `opportunity`, and `task`. The lead's `task` takes `dueDate` or `dueAt` like a task. Leads are listed among the routes that set a date only, but an explicit `dueAt` with a time is honoured as timed, the same as `POST /api/v1/tasks`, because the caller gave a time; it keeps its `remindMinutes`. A `dueDate`, or a bare date in `dueAt`, is date only, and any reminder is dropped rather than refusing the lead. Company and contact use the upsert rules. The note becomes a research activity when `activity` is omitted. The opportunity and task attach to the company and contact from the same request. The response is one object with `company`, `contact`, `activity`, `opportunity`, `task`, and the created/matched flags. The whole request is one transaction.
 
 ## Context
 

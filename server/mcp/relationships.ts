@@ -167,7 +167,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         opportunityCurrency: z.string().nullable().optional(),
         taskTitle: z.string().optional(),
         taskDueDate: z.string().nullable().optional().describe("The task's due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
-        taskDueAt: z.string().nullable().optional().describe("The task's due date and time, only when the person gave a time. A bare date is read as date only. Send taskDueDate or taskDueAt, not both."),
+        taskDueAt: z.string().nullable().optional().describe("The task's due date and time, only when the person gave a time. A time is honoured as timed and keeps the task timed; a bare date is read as date only. Send taskDueDate or taskDueAt, not both."),
         ...provenanceFields,
       },
     },

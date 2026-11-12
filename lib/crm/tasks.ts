@@ -181,9 +181,16 @@ function mapTask(row: TaskRow): Task {
   };
 }
 
-function readDue(input: TaskWrite): { dueAt: string | null; dueHasTime: boolean } | undefined {
+function blank(value: string | null | undefined) {
+  return value === null || (typeof value === "string" && value.trim() === "");
+}
+
+function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean } | undefined {
+  const input = { ...given };
   if (input.dueAt !== undefined && input.dueDate !== undefined) {
-    throw new CrmError("invalid_input", "Send dueDate for a day or dueAt for a time, not both.", 400, { field: "dueDate" });
+    if (blank(input.dueAt)) input.dueAt = undefined;
+    else if (blank(input.dueDate)) input.dueDate = undefined;
+    else throw new CrmError("invalid_input", "Send dueDate for a day or dueAt for a time, not both.", 400, { field: "dueDate" });
   }
   if (input.dueDate !== undefined) {
     const value = input.dueDate;
@@ -253,7 +260,8 @@ function sameDue(write: PreparedTask, current: TaskRow) {
   const before = iso(current.due_at);
   const after = write.dueAt ?? null;
   const instant = before === null || after === null ? before === after : new Date(before).getTime() === new Date(after).getTime();
-  return instant && Boolean(write.dueHasTime) === Boolean(current.due_has_time && current.due_at);
+  const timed = Boolean(current.due_has_time && current.due_at);
+  return instant && (!timed || Boolean(write.dueHasTime));
 }
 
 function settleReminder(write: PreparedTask, current: { dueHasTime: boolean; remindMinutes?: number | null }) {

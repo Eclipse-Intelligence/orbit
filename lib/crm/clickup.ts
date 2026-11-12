@@ -109,12 +109,13 @@ type ClickUpOptions = {
   origin?: string | null;
 };
 
-type Fields = { title: string; dueAt: string | null; dueHasTime: boolean; done: boolean };
+type Fields = { title: string; dueAt: string | null; dueHasTime: boolean; done: boolean; dueGuessed?: boolean };
 
 type Snapshot = {
   title?: string;
   dueAt?: string | null;
   dueHasTime?: boolean;
+  remoteDueAt?: string | null;
   done?: boolean;
   remoteUpdatedAt?: number;
   pushedAt?: number;
@@ -356,6 +357,7 @@ function remoteFields(task: ClickUpTask): Fields {
     title: clip(task.name, 200) ?? "ClickUp task",
     dueAt: due?.dueAt ?? null,
     dueHasTime: due?.dueHasTime ?? false,
+    dueGuessed: Boolean(due && task.due_date_time !== true && task.due_date_time !== false),
     done: isDoneStatus(task.status?.type),
   };
 }
@@ -377,7 +379,7 @@ function same(key: keyof Fields, a: unknown, b: unknown) {
   return a === b;
 }
 
-const KEYS: (keyof Fields)[] = ["title", "dueAt", "done"];
+const KEYS: ("title" | "dueAt" | "done")[] = ["title", "dueAt", "done"];
 
 function snapshotOf(row: SyncRow): Snapshot {
   return row.clickup_sync && typeof row.clickup_sync === "object" ? row.clickup_sync : {};
@@ -719,16 +721,31 @@ function dueUnchanged(due: Fields, snap: Snapshot) {
   return sameDue(due, snap);
 }
 
-function mergeFields(local: Fields, remote: Fields, snap: Snapshot, localTime: number, changedAt: number) {
+function remoteDueUnchanged(remote: Fields, snap: Snapshot) {
+  if (snap.dueAt === undefined || snap.dueHasTime !== undefined) return dueUnchanged(remote, snap);
+  if (snap.remoteDueAt !== undefined) return same("dueAt", remote.dueAt, snap.remoteDueAt);
+  return dueUnchanged(remote, snap);
+}
+
+function guessedAsLocal(local: Fields, remote: Fields) {
+  if (!remote.dueGuessed || remote.dueHasTime || !local.dueHasTime || !local.dueAt || !remote.dueAt) return remote;
+  return dayKeyIn(new Date(local.dueAt)) === dayKeyIn(new Date(remote.dueAt)) ? { ...remote, dueAt: local.dueAt, dueHasTime: true } : remote;
+}
+
+function mergeFields(local: Fields, incoming: Fields, snap: Snapshot, localTime: number, changedAt: number) {
   const write: TaskWrite = {};
   const next: Snapshot = {};
+  const remote = guessedAsLocal(local, incoming);
   for (const key of KEYS) {
     if (key === "dueAt") {
       if (same(key, remote.dueAt, local.dueAt) && remote.dueHasTime === local.dueHasTime) {
         Object.assign(next, { dueAt: remote.dueAt, dueHasTime: remote.dueHasTime });
         continue;
       }
-      if (dueUnchanged(remote, snap)) continue;
+      if (remoteDueUnchanged(remote, snap)) {
+        if (snap.dueAt !== undefined && snap.dueHasTime === undefined && snap.remoteDueAt === undefined) next.remoteDueAt = incoming.dueAt;
+        continue;
+      }
       if (!dueUnchanged(local, snap) && localTime > changedAt) continue;
       write.dueAt = remote.dueAt;
       write.dueHasTime = remote.dueHasTime;

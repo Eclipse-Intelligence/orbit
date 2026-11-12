@@ -236,6 +236,11 @@ describe("not now replies", () => {
     assert.equal(timed.dueHasTime, true);
     assert.equal(clockLabel(timed.dueAt!), "15:45");
     assert.equal(timed.remindMinutes, 30);
+    const sameDay = new Date(Date.parse(`${dayKeyAt(further)}T00:00:00Z`) + 19 * 3_600_000);
+    await moveDeferral(owner, reminder.id, sameDay.toISOString());
+    const laterToday = await getTask(owner, reminder.task_id);
+    assert.equal(laterToday.dueAt, sameDay.toISOString());
+    assert.equal(laterToday.dueHasTime, true);
   });
 
   it("asks for a gentle check-in when the day comes", async () => {

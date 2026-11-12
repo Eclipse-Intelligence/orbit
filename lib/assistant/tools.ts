@@ -504,8 +504,22 @@ export function taskTimingRefusal(name: string, args: Args): { error: string; fi
   if (typeof args.remindMinutes !== "number") return null;
   const timed = at && hasTime(args.dueAt);
   if (timed) return null;
-  if (date || at || name === "create_task") return { error: "Pick a time for the reminder.", field: "remindMinutes" };
+  const cleared = args.dueAt === null || args.dueDate === null;
+  if (date || at || cleared || name === "create_task") return { error: "Pick a time for the reminder.", field: "remindMinutes" };
   return null;
+}
+
+export async function taskTimingRefusalFor(actor: UserActor, name: string, args: Args) {
+  const refused = taskTimingRefusal(name, args);
+  if (refused || name !== "update_task" || typeof args.remindMinutes !== "number") return refused;
+  if (args.dueAt !== undefined || args.dueDate !== undefined) return null;
+  const id = typeof args.taskId === "string" ? args.taskId.trim() : "";
+  if (!isUuid(id)) return null;
+  const timed = await withActor(actor, async (db) => {
+    const result = await db.query<{ due_has_time: boolean }>("select due_has_time from crm.tasks where id = $1 and workspace_id = $2", [id, actor.workspaceId]);
+    return result.rows[0]?.due_has_time ?? null;
+  }).catch(() => null);
+  return timed === false ? { error: "Pick a time for the reminder.", field: "remindMinutes" } : null;
 }
 
 function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null } {
@@ -6284,7 +6298,7 @@ export async function runTool(
   let scope: { targets: UserActor[]; all: boolean } | null = null;
   try {
     if (write) {
-      const timing = taskTimingRefusal(tool.name, resolved.args);
+      const timing = await taskTimingRefusalFor(actor, tool.name, resolved.args);
       if (timing) return timing;
       const refusal = await crossWorkspaceRefusal(actor, tool.name, resolved.args);
       if (refusal) return { error: refusal, field: "workspace" };
