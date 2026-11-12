@@ -27,6 +27,14 @@ export async function ownsShares(actor: UserActor) {
 
 export async function announceSharedThreads(ownerId: string, sourceId: string, threadKeys: string[]) {
   if (threadKeys.length === 0) return;
+  const followed = await query<{ share_id: string; members: string[] }>("select share_id, members::text[] as members from private.mail_shares_follow_sent($1, $2, $3::text[])", [
+    ownerId,
+    sourceId,
+    [...new Set(threadKeys)],
+  ]);
+  if (followed.rows.length > 0) {
+    await publishShareEvents(followed.rows.flatMap((row) => shareEvents([ownerId, ...(row.members ?? [])], { type: "draft", shareId: row.share_id })));
+  }
   const touched = await query<{ share_id: string; member_ids: string[] }>(
     "select share_id, member_ids::text[] as member_ids from private.mail_shares_touched($1, $2, $3::text[])",
     [ownerId, sourceId, [...new Set(threadKeys)]],

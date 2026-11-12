@@ -19,6 +19,7 @@ import {
   type MailShareControl,
   type MailSharePeople,
   type MailSharePerson,
+  type SharedDraftState,
   type SharedMessage,
   type SharedThread,
   type SharedThreadSummary,
@@ -75,7 +76,7 @@ function address(name: string | null, email: string | null): MailAddress | null 
   return email ? { name, address: email } : null;
 }
 
-async function readPeople(userId: string, shareId: string) {
+export async function readPeople(userId: string, shareId: string) {
   const result = await query<PersonRow>("select user_id, name, email, owner, added_at from private.mail_share_people($1, $2)", [userId, shareId]);
   const owner = result.rows.filter((row) => row.owner);
   const members = result.rows.filter((row) => !row.owner).sort((a, b) => new Date(a.added_at).getTime() - new Date(b.added_at).getTime() || (a.user_id < b.user_id ? -1 : a.user_id > b.user_id ? 1 : 0));
@@ -118,8 +119,8 @@ export async function getThreadShare(actor: UserActor, key: string): Promise<Mai
 
 export async function ownSharedThreadKey(actor: UserActor, shareId: string): Promise<string | null> {
   if (!isUuid(shareId)) return null;
-  const thread = await query<{ source_id: string; thread_key: string }>("select source_id, thread_key from private.mail_share_thread($1, $2)", [actor.userId, shareId.toLowerCase()]);
-  return thread.rows[0] ? threadKey(thread.rows[0].source_id, thread.rows[0].thread_key) : null;
+  const thread = await query<{ source_id: string; thread_key: string | null }>("select source_id, thread_key from private.mail_share_thread($1, $2)", [actor.userId, shareId.toLowerCase()]);
+  return thread.rows[0]?.thread_key ? threadKey(thread.rows[0].source_id, thread.rows[0].thread_key) : null;
 }
 
 export async function shareThread(actor: UserActor, key: string, userIds: unknown, options: { send?: PushSender } = {}): Promise<{ share: MailShareControl; added: string[] }> {
@@ -221,11 +222,14 @@ export async function getSharedThread(actor: UserActor, shareId: string): Promis
     body_text: string | null;
     body_truncated: boolean;
   }>("select * from private.shared_thread($1, $2)", [actor.userId, id]);
+  const drafted = await query<{ state: SharedDraftState; subject: string | null; body: string | null }>("select state, subject, body from private.shared_draft($1, $2)", [actor.userId, id]);
+  const draftRow = drafted.rows[0];
+  const draft = draftRow && draftRow.state !== "none" ? { state: draftRow.state, subject: draftRow.subject, snippet: draftRow.body ? draftRow.body.replace(/\s+/g, " ").trim().slice(0, 160) : null } : null;
   const viewerIsOwner = owner.id === actor.userId;
   let ownKey: string | null = null;
   if (viewerIsOwner) {
-    const thread = await query<{ source_id: string; thread_key: string }>("select source_id, thread_key from private.mail_share_thread($1, $2)", [actor.userId, id]);
-    ownKey = thread.rows[0] ? threadKey(thread.rows[0].source_id, thread.rows[0].thread_key) : null;
+    const thread = await query<{ source_id: string; thread_key: string | null }>("select source_id, thread_key from private.mail_share_thread($1, $2)", [actor.userId, id]);
+    ownKey = thread.rows[0]?.thread_key ? threadKey(thread.rows[0].source_id, thread.rows[0].thread_key) : null;
   }
   const messages: SharedMessage[] = result.rows.map((row) => {
     const html = row.body_html ? cleanEmailHtml(row.body_html) : null;
@@ -248,9 +252,10 @@ export async function getSharedThread(actor: UserActor, shareId: string): Promis
     owner: { id: owner.id, name: owner.name },
     viewerIsOwner,
     threadKey: ownKey,
-    subject: result.rows.at(-1)?.subject ?? null,
+    subject: result.rows.at(-1)?.subject ?? draft?.subject ?? null,
     people,
     messages,
+    draft,
   };
 }
 

@@ -1,5 +1,5 @@
 import type { ChatPerson } from "@/lib/chat/types";
-import type { MailShareCandidate, MailSharePerson, SharedThreadSummary } from "@/lib/mail/share-types";
+import type { MailShareCandidate, MailSharePerson, SharedDraftState, SharedThreadSummary } from "@/lib/mail/share-types";
 
 export const SHARED_VIEW = "shared";
 
@@ -11,6 +11,28 @@ export function personFirstName(name: string | null | undefined, fallback = "Som
 
 export function sharedByLabel(owner: Pick<ChatPerson, "name">) {
   return `Shared by ${personFirstName(owner.name)}`;
+}
+
+export function onlyOwnerSends(owner: Pick<ChatPerson, "name">) {
+  return `Only ${personFirstName(owner.name)} can send`;
+}
+
+export function ownerDraftTitle(owner: Pick<ChatPerson, "name">) {
+  return `${personFirstName(owner.name)}'s draft`;
+}
+
+export function draftStateLine(state: SharedDraftState, owner: Pick<ChatPerson, "name">, scheduledFor: string | null) {
+  const name = personFirstName(owner.name);
+  if (state === "sending") return `${name} is sending. Read only.`;
+  if (state === "scheduled") return scheduledFor ? `Scheduled for ${scheduledFor}. Read only until ${name} cancels it.` : `Scheduled. Read only until ${name} cancels it.`;
+  if (state === "sent") return `Sent by ${name}.`;
+  if (state === "discarded") return `${name} discarded the draft.`;
+  return null;
+}
+
+export function draftShareLabel(people: Pick<ChatPerson, "name">[]) {
+  if (people.length === 0) return "Share this draft";
+  return `Draft shared with ${joinNames(people.map((person) => personFirstName(person.name)))}`;
 }
 
 export function removedLine(owner: Pick<ChatPerson, "name">) {

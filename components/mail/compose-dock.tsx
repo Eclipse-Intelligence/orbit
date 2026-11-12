@@ -96,6 +96,7 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
     remindHours: payload.remindHours,
     followUpDays: payload.followUpDays,
     followUpBody: payload.followUpBody,
+    shareId: payload.shareId ?? null,
   };
 }
 

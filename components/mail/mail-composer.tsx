@@ -1,6 +1,10 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type FormEvent } from "react";
+import DraftShare from "@/components/mail/draft-share";
+import { useMailShareEvents } from "@/components/mail/share-live";
+import { fetchDraftPeople, fetchSharedDraft, holdSharedDraft, saveSharedDraftText } from "@/components/mail/shared-draft-client";
+import type { MailSharePerson } from "@/lib/mail/share-types";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
@@ -48,6 +52,7 @@ export type SendPayload = {
   identityId?: string | null;
   sendKey?: string | null;
   force?: boolean;
+  shareId?: string | null;
 };
 
 export type ComposerDraft = MailDraft & { sendKey?: string | null; sendProblem?: string | null; replaces?: string | null; unsaved?: boolean };
@@ -98,8 +103,10 @@ export default function MailComposer({
   onDiscard,
   onHeld,
   passive = false,
+  threadShared = false,
 }: {
   passive?: boolean;
+  threadShared?: boolean;
   onHeld?: (held: boolean) => void;
   start: ComposerStart;
   accounts: ComposeAccount[];
@@ -261,6 +268,7 @@ export default function MailComposer({
       dirty.current = false;
       setSave({ kind: "saving" });
       try {
+        await mergeSharedText();
         const saved = await postJson<MailDraft>("/api/mail/drafts", snapshot);
         draftId.current = saved.id;
         releaseDraft(heldKey.current);
@@ -279,7 +287,7 @@ export default function MailComposer({
   }
 
   function keepHeld() {
-    if (discarded.current) return;
+    if (discarded.current || shared.current.id) return;
     heldKey.current ??= crypto.randomUUID();
     const current = payload.current;
     holdDraft({
@@ -316,6 +324,58 @@ export default function MailComposer({
     keepRef.current = keepHeld;
   });
 
+  const [shareId, setShareId] = useState<string | null>(draft?.shareId ?? null);
+  const [sharePeople, setSharePeople] = useState<MailSharePerson[]>([]);
+  const shared = useRef<{ id: string | null; text: { subject: string; body: string } }>({
+    id: draft?.shareId ?? null,
+    text: { subject: draft?.subject || start.subject, body: draft?.body ?? "" },
+  });
+
+  useEffect(() => {
+    shared.current.id = shareId;
+  }, [shareId]);
+
+  const refreshShared = useCallback(() => {
+    const id = shared.current.id;
+    if (!id) return;
+    fetchDraftPeople(id).then(setSharePeople, () => undefined);
+    fetchSharedDraft(id)
+      .then((fresh) => {
+        if (shared.current.id !== id || fresh.state === "sent" || fresh.state === "discarded" || fresh.state === "none") return;
+        const local = payload.current;
+        const settled = local.subject === shared.current.text.subject && local.body === shared.current.text.body;
+        shared.current.text = { subject: fresh.subject, body: fresh.body };
+        if (!settled) return;
+        setSubject(fresh.subject);
+        setBody(fresh.body);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (shareId) refreshShared();
+  }, [shareId, refreshShared]);
+
+  useMailShareEvents((event) => {
+    if (event.shareId === shared.current.id && (event.type === "draft" || event.type === "people")) refreshShared();
+  });
+
+  async function mergeSharedText() {
+    const id = shared.current.id;
+    if (!id) return;
+    const local = { subject: payload.current.subject, body: payload.current.body };
+    const base = shared.current.text;
+    if (local.subject === base.subject && local.body === base.body) return;
+    await saveSharedDraftText(id, { subject: local.subject !== base.subject ? local.subject : null, body: local.body !== base.body ? local.body : null });
+    shared.current.text = local;
+  }
+
+  async function ensureSaved() {
+    dirty.current = true;
+    await saveNow();
+    return draftId.current;
+  }
+
   useEffect(() => {
     if (!dirty.current) return;
     const timer = window.setTimeout(() => void saveRef.current(), SAVE_DELAY_MS);
@@ -324,7 +384,7 @@ export default function MailComposer({
 
   useEffect(
     () => () => {
-      if (!dirty.current || discarded.current) return;
+      if (!dirty.current || discarded.current || shared.current.id) return;
       const snapshot = { ...payload.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       void chain.current
@@ -402,13 +462,19 @@ export default function MailComposer({
     return true;
   }
 
-  function handOver(force = false): Promise<SendPayload> {
+  function handOver(force = false, sending = false): Promise<SendPayload> {
     const snapshot = { ...payload.current, attachments: attachments.ids, files: attachments.files };
     dirty.current = false;
     releaseDraft(heldKey.current);
     heldKey.current = null;
     const pending = chain.current.catch(() => null);
-    return pending.then(() => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current, ...(force ? { force } : {}) }));
+    const settled = shared.current.id
+      ? pending
+          .then(() => mergeSharedText())
+          .catch(() => null)
+          .then(() => (sending && draftId.current ? holdSharedDraft(draftId.current, true) : null))
+      : pending;
+    return settled.then(() => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current, shareId: shared.current.id, ...(force ? { force } : {}) }));
   }
 
   function send(event?: FormEvent, force = false) {
@@ -422,9 +488,10 @@ export default function MailComposer({
     }
     queued.current = true;
     sendKey.current ??= newSendKey();
-    const handed = handOver(force);
+    const handed = handOver(force, true);
     const release = holdQueuedDraft(draftId.current, handed, start.replaces ?? null);
     const tracked = track?.();
+    const sharedDraft = Boolean(shared.current.id);
     queueSend(handed, {
       onDelivered: () => {
         onDelivered?.();
@@ -433,6 +500,7 @@ export default function MailComposer({
       onReopen,
       track,
       onUndone: () => {
+        if (sharedDraft) void handed.then((value) => (value.id ? holdSharedDraft(value.id, false) : null));
         void release();
         onUndone?.();
         tracked?.undone();
@@ -756,6 +824,20 @@ export default function MailComposer({
           }}
         />
         <AttachButton id={`${id}-attach`} onFiles={(files) => void attachments.add(files)} compact />
+        <DraftShare
+          mode={start.mode}
+          shareId={shareId}
+          people={sharePeople}
+          threadShared={threadShared}
+          ensureSaved={ensureSaved}
+          onShared={(id, people) => {
+            shared.current = { id, text: { subject: payload.current.subject, body: payload.current.body } };
+            setShareId(id);
+            setSharePeople(people);
+            releaseDraft(heldKey.current);
+            heldKey.current = null;
+          }}
+        />
         <Button variant="ghost" size="icon" aria-label="Write with AI" title={`Write with AI (${aiHint})`} onClick={openAi}>
           <SparkleIcon aria-hidden className="size-3.5" />
         </Button>

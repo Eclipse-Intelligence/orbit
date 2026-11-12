@@ -42,6 +42,7 @@ import {
 } from "@/lib/mail/identities";
 import { attachToDraft } from "@/lib/microsoft/oauth";
 import { followUpDueAt, readFollowUpBody, readFollowUpDays } from "@/lib/mail/follow-up-rules";
+import { announceDraftChange, closeSharedDraft, SHARED_TEXT_LOCKED } from "@/lib/mail/shared-drafts";
 
 export const DRAFT_MODES: DraftMode[] = ["new", "reply", "reply_all", "forward"];
 const BODY_MAX = 20_000;
@@ -173,6 +174,8 @@ function toDraft(row: DraftRow): MailDraft {
   };
 }
 
+const DRAFT_SHARE = "(select s.id from crm.mail_shares s where s.draft_id = mail_drafts.id)";
+
 const DRAFT_COLUMNS = `id, source_id, provider_draft_id, mode, reply_to, thread_key, quote_html, to_recipients, cc_recipients,
   bcc_recipients, subject, body, tracking_id, updated_at, send_at, send_error, content_hash, identity_id, attachments,
   remind_hours, follow_up_days, follow_up_body, send_attempted_at, sent_internet_id`;
@@ -264,7 +267,21 @@ async function createDraft(
         options.previous,
         result.rows[0].id,
       ]);
+      await db.query("update crm.mail_shares set draft_id = $3, source_id = $4 where owner_user_id = $1 and draft_id = $2", [
+        actor.userId,
+        options.previous,
+        result.rows[0].id,
+        target.source_id,
+      ]);
       await db.query("delete from crm.mail_drafts where id = $1 and user_id = $2", [options.previous, actor.userId]);
+    }
+    if (options.share) {
+      await db.query("update crm.mail_shares set draft_id = $3, source_id = $4 where owner_user_id = $1 and id = $2 and draft_id is null", [
+        actor.userId,
+        options.share,
+        result.rows[0].id,
+        target.source_id,
+      ]);
     }
     if (input.replaces) {
       await db.query("update crm.mail_send_keys set draft_id = $3, created_at = now() where user_id = $1 and key = $2 and sent_at is null", [
@@ -286,6 +303,7 @@ type DraftWriteOptions = {
   attachments?: string[];
   sending?: boolean;
   previous?: string;
+  share?: string | null;
   onDraftRow?: (id: string) => void | Promise<void>;
 };
 
@@ -353,11 +371,14 @@ async function withFiles(db: Db, rows: DraftRow[]): Promise<MailDraft[]> {
   }));
 }
 
-async function storeDraft(actor: UserActor, input: DraftInput, options: DraftWriteOptions) {
+async function storeDraft(actor: UserActor, asked: DraftInput, options: DraftWriteOptions) {
+  let input = asked;
   const first = await withActor(actor, async (db) => {
     const found = input.id
-      ? (await db.query<DraftRow>(`select ${DRAFT_COLUMNS} from crm.mail_drafts where id = $1 and user_id = $2`, [input.id, actor.userId])).rows[0] ?? null
+      ? (await db.query<DraftRow & { share_id: string | null }>(`select ${DRAFT_COLUMNS}, ${DRAFT_SHARE} as share_id from crm.mail_drafts where id = $1 and user_id = $2`, [input.id, actor.userId]))
+          .rows[0] ?? null
       : null;
+    if (found?.share_id) input = { ...input, subject: found.subject ?? "", body: found.body };
     const moved = Boolean(found && input.mode === "new" && input.sourceId && found.source_id !== input.sourceId);
     if (moved) return { found, moved, target: null, signature: null };
     const target =
@@ -366,11 +387,11 @@ async function storeDraft(actor: UserActor, input: DraftInput, options: DraftWri
         : await loadSourceTarget(db, actor, (found?.source_id ?? input.sourceId)!);
     return { found, moved, target, signature: input.signature ? await signatureFor(db, actor, await senderEmail(db, actor, input, target.email)) : null };
   });
-  if (first.found && first.moved) await discardMailDraft(actor, first.found.id, options.fetchImpl);
+  if (first.found && first.moved) await discardMailDraft(actor, first.found.id, options.fetchImpl, { keepShare: true });
   const existing = first.moved ? null : first.found;
   const { target, signature } = first.target ? { target: first.target, signature: first.signature } : await readDraftContext(actor, input, null);
   const token = await mailSourceToken(actor, target.source_id, options.fetchImpl);
-  let row = existing ?? (await createDraft(actor, input, target, token, options));
+  let row: DraftRow = existing ?? (await createDraft(actor, input, target, token, { ...options, share: first.moved ? first.found?.share_id : null }));
   let created = !existing;
   const html = () =>
     composeEmailHtml({ body: input.body, signature, pixel: trackingPixelUrl(options.origin, row.tracking_id), quote: row.quote_html, inline: options.inline });
@@ -772,15 +793,20 @@ async function sendDraftOnce(actor: UserActor, input: DraftInput & { attachments
     id = replaced.draftId;
     if (sendKey) await linkSendKey(actor, sendKey, id);
   }
-  const claim = id && !options.claimed ? await claimScheduledDraft(actor, id) : null;
+  const claimed = id && !options.claimed ? await claimScheduledDraft(actor, id) : null;
+  const claim = claimed?.state ?? null;
   if (claim === "gone") {
     if (sendKey && (await sendKeySent(actor, sendKey))) return { warning: null };
     throw new CrmError("conflict", DRAFT_GONE, 409);
   }
   if (claim === "sending") throw new CrmError("conflict", ALREADY_SENDING, 409);
   let current = id;
+  const shared = claimed?.shared ?? null;
+  const sending = shared ? { ...input, ...shared } : input;
+  if (shared && id) announceDraftChange(actor.userId, id);
   try {
-    return await deliverDraft(actor, { ...input, id }, {
+    if (shared) checkSendable(sending);
+    return await deliverDraft(actor, { ...sending, id }, {
       ...options,
       onDraftRow: async (row) => {
         const made = row !== current;
@@ -795,6 +821,7 @@ async function sendDraftOnce(actor: UserActor, input: DraftInput & { attachments
     if (!options.claimed && made) {
       const settle = claim === "scheduled" ? failDueDraft(actor, made, problem.message) : releaseDraft(actor, made);
       await settle.catch(() => undefined);
+      if (shared) announceDraftChange(actor.userId, made);
     }
     if (replaced?.state === "claimed" && replaces) await releaseReplaced(actor, replaces).catch(() => undefined);
     if (sendKey && !made) await dropSendKey(actor, sendKey).catch(() => undefined);
@@ -901,7 +928,8 @@ type Finish = {
 
 async function finishSend(actor: UserActor, input: DraftInput, finish: Finish): Promise<SendOutcome> {
   const { row, from, originalId, ids, summary, fetchImpl } = finish;
-  await withActor(actor, async (db) => {
+  const shareId = await withActor(actor, async (db) => {
+    const shared = await db.query<{ id: string }>("select id from crm.mail_shares where owner_user_id = $1 and draft_id = $2", [actor.userId, row.id]);
     if (row.tracking_id) {
       await db.query("update crm.mail_tracking set sent_at = now(), recipients = $2, subject = $3, sender_email = $4 where id = $1", [
         row.tracking_id,
@@ -936,7 +964,14 @@ async function finishSend(actor: UserActor, input: DraftInput, finish: Finish): 
         [actor.workspaceId, actor.userId, row.source_id, threadKey, input.remindHours, row.subject],
       );
     }
+    return shared.rows[0]?.id ?? null;
   });
+  if (shareId) {
+    await closeSharedDraft(actor, shareId, "sent", {
+      threadKey: finish.identityId ? null : rowThreadKey(row),
+      internetId: finish.identityId ? originalId : null,
+    });
+  }
   const [, logged] = await Promise.all([
     ids.length ? discardAttachments(actor, ids, fetchImpl).catch(() => undefined) : Promise.resolve(),
     finish.logOnTimeline === false
@@ -1101,6 +1136,7 @@ export async function scheduleMailDraft(
         input.followUpDays ? (input.followUpBody ?? null) : null,
       ],
     );
+    announceDraftChange(actor.userId, row.id);
     return toDraft(result.rows[0]);
   });
 }
@@ -1122,6 +1158,7 @@ export async function unscheduleMailDraft(actor: UserActor, id: string): Promise
   });
   if (outcome === "gone") throw new CrmError("not_found", SCHEDULED_GONE, 404);
   if (outcome === "sending") throw new CrmError("conflict", SCHEDULED_NOT_WAITING, 409);
+  announceDraftChange(actor.userId, outcome.id);
   return outcome;
 }
 
@@ -1139,6 +1176,32 @@ export async function listScheduledDrafts(actor: UserActor): Promise<MailDraft[]
 }
 
 type DueDraft = DraftRow & { signature: boolean };
+
+async function sharedDraftText(actor: UserActor, id: string) {
+  if (!isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ subject: string | null; body: string; share_id: string | null }>(
+      `select subject, body, ${DRAFT_SHARE} as share_id from crm.mail_drafts where id = $1 and user_id = $2`,
+      [id, actor.userId],
+    );
+    const row = result.rows[0];
+    return row?.share_id ? { subject: row.subject ?? "", body: row.body } : null;
+  });
+}
+
+function sameText(left: string, right: string) {
+  return left.replace(/\r\n/g, "\n").trim() === right.replace(/\r\n/g, "\n").trim();
+}
+
+export async function refuseSharedTextChange(actor: UserActor, id: string | null | undefined, asked: { subject?: string | null; body?: string | null }) {
+  if (!id) return null;
+  const shared = await sharedDraftText(actor, id);
+  if (!shared) return null;
+  const subjectChanged = typeof asked.subject === "string" && asked.subject.trim() !== "" && asked.subject.replace(/\s+/g, " ").trim() !== shared.subject.replace(/\s+/g, " ").trim();
+  const bodyChanged = typeof asked.body === "string" && !sameText(asked.body, shared.body);
+  if (subjectChanged || bodyChanged) throw new CrmError("conflict", SHARED_TEXT_LOCKED, 409, { field: bodyChanged ? "body" : "subject" });
+  return shared;
+}
 
 const SCHEDULED_GONE = "That scheduled email has gone. Check Sent.";
 const SCHEDULED_NOT_WAITING = "That email is no longer scheduled. Check Sent or Drafts.";
@@ -1172,7 +1235,10 @@ export async function cancelScheduledDraft(actor: UserActor, id: string): Promis
     );
     return result.rows[0] ?? null;
   });
-  if (cancelled) return toDraft(cancelled);
+  if (cancelled) {
+    announceDraftChange(actor.userId, cancelled.id);
+    return toDraft(cancelled);
+  }
   throw (await scheduledRow(actor, id)) ? new CrmError("conflict", SCHEDULED_NOT_WAITING, 409) : new CrmError("not_found", SCHEDULED_GONE, 404);
 }
 
@@ -1188,6 +1254,7 @@ export async function changeScheduledDraft(
   if (!row) throw new CrmError("not_found", SCHEDULED_GONE, 404);
   if (!waiting(row)) throw new CrmError("conflict", SCHEDULED_NOT_WAITING, 409);
   const current = dueDraftInput(row);
+  await refuseSharedTextChange(actor, row.id, { subject: changes.subject, body: changes.body });
   const body = changes.body === undefined ? current.body : changes.body.replace(/\r\n/g, "\n");
   if (body.length > BODY_MAX) throw new CrmError("invalid_input", "Keep the message under 20,000 characters.", 400, { field: "body" });
   const subject = changes.subject === undefined ? current.subject : changes.subject.replace(/\s+/g, " ").trim();
@@ -1262,12 +1329,16 @@ export function dueDraftInput(row: DueDraft): DraftInput & { attachments: string
 
 export async function failDueDraft(actor: UserActor, id: string, message: string) {
   await withActor(actor, (db) => db.query("update crm.mail_drafts set send_error = $2, sending_at = null where id = $1", [id, message.slice(0, 500)]));
+  announceDraftChange(actor.userId, id);
 }
 
-export async function discardMailDraft(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch) {
+export async function discardMailDraft(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch, options: { keepShare?: boolean } = {}) {
   if (!isUuid(id)) return;
   const row = await withActor(actor, async (db) => {
-    const result = await db.query<DraftRow>(`select ${DRAFT_COLUMNS} from crm.mail_drafts where id = $1 and user_id = $2`, [id, actor.userId]);
+    const result = await db.query<DraftRow & { share_id: string | null }>(`select ${DRAFT_COLUMNS}, ${DRAFT_SHARE} as share_id from crm.mail_drafts where id = $1 and user_id = $2`, [
+      id,
+      actor.userId,
+    ]);
     return result.rows[0] ?? null;
   });
   if (!row) return;
@@ -1278,17 +1349,19 @@ export async function discardMailDraft(actor: UserActor, id: string, fetchImpl: 
     await db.query("delete from crm.mail_messages where source_id = $1 and provider_message_id = $2", [row.source_id, row.provider_draft_id]);
     if (row.tracking_id) await db.query("delete from crm.mail_tracking where id = $1 and sent_at is null", [row.tracking_id]);
   });
+  if (row.share_id && !options.keepShare) await closeSharedDraft(actor, row.share_id, "discarded");
 }
 
 export async function threadDrafts(db: Db, actor: UserActor, sourceId: string, threadKey: string) {
-  const result = await db.query<DraftRow>(
-    `select ${DRAFT_COLUMNS} from crm.mail_drafts
+  const result = await db.query<DraftRow & { share_id: string | null }>(
+    `select ${DRAFT_COLUMNS}, ${DRAFT_SHARE} as share_id from crm.mail_drafts
      where user_id = $1 and source_id = $2 and coalesce(thread_key, 'm:' || reply_to::text) = $3
      order by updated_at desc limit 5`,
     [actor.userId, sourceId, threadKey],
   );
+  const shares = new Map(result.rows.map((row) => [row.id, row.share_id]));
   return {
-    drafts: await withFiles(db, result.rows),
+    drafts: (await withFiles(db, result.rows)).map((draft) => (shares.get(draft.id) ? { ...draft, shareId: shares.get(draft.id) } : draft)),
     providerIds: result.rows.map((row) => row.provider_draft_id),
   };
 }
@@ -1488,19 +1561,24 @@ function mergeRecipients(to: MailAddress[], cc: MailAddress[], bcc: MailAddress[
 
 const SENDING_FRESH = "interval '10 minutes'";
 
-async function claimScheduledDraft(actor: UserActor, id: string): Promise<"gone" | "sending" | "scheduled" | "draft"> {
-  if (!isUuid(id)) return "gone";
-  return withActor(actor, async (db) => {
-    const found = await db.query<{ scheduled: boolean; busy: boolean }>(
-      `select (send_at is not null or send_error is not null) as scheduled, coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy
+type SharedText = { subject: string; body: string };
+
+type ScheduledClaim = { state: "gone" | "sending" | "scheduled" | "draft"; shared: SharedText | null };
+
+async function claimScheduledDraft(actor: UserActor, id: string): Promise<ScheduledClaim> {
+  if (!isUuid(id)) return { state: "gone", shared: null };
+  return withActor(actor, async (db): Promise<ScheduledClaim> => {
+    const found = await db.query<{ scheduled: boolean; busy: boolean; subject: string | null; body: string; share_id: string | null }>(
+      `select (send_at is not null or send_error is not null) as scheduled, coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy,
+         subject, body, ${DRAFT_SHARE} as share_id
        from crm.mail_drafts where id = $1 and user_id = $2 for update`,
       [id, actor.userId],
     );
     const row = found.rows[0];
-    if (!row) return "gone";
-    if (row.busy) return "sending";
+    if (!row) return { state: "gone", shared: null };
+    if (row.busy) return { state: "sending", shared: null };
     await db.query("update crm.mail_drafts set send_at = null, send_error = null, sending_at = now() where id = $1", [id]);
-    return row.scheduled ? "scheduled" : "draft";
+    return { state: row.scheduled ? "scheduled" : "draft", shared: row.share_id ? { subject: row.subject ?? "", body: row.body } : null };
   });
 }
 
@@ -1541,6 +1619,8 @@ export async function sendForAgent(
 ) {
   const stored = input.draftId ? await storedDraft(actor, input.draftId) : null;
   if (input.draftId && !stored) throw new CrmError("not_found", "That draft isn't in Mail any more. Save it again.", 404);
+  const shared = stored ? await refuseSharedTextChange(actor, stored.id, { subject: input.subject, body: input.body }) : null;
+  if (shared) input = { ...input, subject: shared.subject, body: shared.body };
   const replyTo = input.replyTo ?? stored?.reply_to ?? null;
   const replying = Boolean(replyTo);
   const accounts = await composeAccounts(actor);

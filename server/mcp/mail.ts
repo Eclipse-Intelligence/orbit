@@ -7,7 +7,7 @@ import { askMail } from "@/lib/mail/ai";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
 import { listMailAttachments } from "@/lib/mail/attachments";
 import type { SentSaver, SmtpSender } from "@/lib/mail/identities";
-import { composeAccounts, discardMailDraft, readDraftInput, resolveSendAccount, saveMailDraft, sendMailOnce } from "@/lib/mail/compose";
+import { composeAccounts, discardMailDraft, readDraftInput, refuseSharedTextChange, resolveSendAccount, saveMailDraft, sendMailOnce } from "@/lib/mail/compose";
 import { stripQuoted } from "@/lib/mail/format";
 import { mailOrigin } from "@/lib/mail/origin";
 import { getThread, listThreads, threadKey } from "@/lib/mail/threads";
@@ -161,6 +161,7 @@ export function registerMailTools(server: McpServer, actor: UserActor, options: 
     },
     async (args) =>
       run(async () => {
+        await refuseSharedTextChange(actor, args.draft_id, { subject: args.subject, body: args.body });
         const from = args.from || args.mode === "new" ? await resolveSendAccount(actor, args.from) : { sourceId: null, identityId: null };
         const sourceId = from.sourceId;
         const draft = await saveMailDraft(
