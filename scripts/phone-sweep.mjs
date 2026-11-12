@@ -102,6 +102,17 @@ async function setVisibility(page, state) {
 
 const browser = await engine.launch(launch);
 const problems = [];
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", new URL(base).hostname]);
+const blocked = new Set();
+async function offline(context) {
+  await context.route(
+    (url) => /^(https?|wss?):$/.test(url.protocol) && !LOCAL_HOSTS.has(url.hostname),
+    (route) => {
+      blocked.add(new URL(route.request().url()).host);
+      return route.abort("blockedbyclient");
+    },
+  );
+}
 const check = (name, ok, detail = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` (${detail})` : ""}`);
   if (!ok) problems.push(name);
@@ -112,6 +123,7 @@ for (const [device, viewport] of [
   ["ipad", { width: 820, height: 1180 }],
 ]) {
   const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true, ignoreHTTPSErrors: localHttps });
+  await offline(context);
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message.slice(0, 120)));
@@ -439,6 +451,7 @@ for (const [device, viewport] of [
 
 for (const width of [1100, 1280, 1440]) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, ignoreHTTPSErrors: localHttps });
+  await offline(context);
   const page = await context.newPage();
   await page.goto(`${base}/login`);
   await page.fill('input[name="email"]', env.DEV_USER_EMAIL);
@@ -515,6 +528,7 @@ if (sweepTask) await api(`/tasks/${sweepTask.id}`, { method: "DELETE" });
 for (const id of sweepCallTasks) if (id) await api(`/tasks/${id}`, { method: "DELETE" });
 for (const id of sweepContacts) await api(`/contacts/${id}`, { method: "DELETE" });
 
+check("the browser stayed on this machine", blocked.size === 0, [...blocked].join(", "));
 console.log(problems.length ? `\n${problems.length} problems. Screenshots are in ${out}` : `\nall checks passed. Screenshots are in ${out}`);
 await browser.close();
 process.exit(problems.length ? 1 : 0);
