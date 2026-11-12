@@ -651,6 +651,17 @@ export async function completeTask(
   });
 }
 
+export async function reopenTask(
+  actor: Actor,
+  id: string,
+  options: MutationOptions = {},
+): Promise<MutationOutcome<{ task: Task }>> {
+  return updateTask(actor, id, { completed: false }, {
+    ...options,
+    provenance: options.provenance ?? { operation: "reopen_task" },
+  });
+}
+
 export async function archiveTask(
   actor: Actor,
   id: string,

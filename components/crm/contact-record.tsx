@@ -1,6 +1,6 @@
 "use client";
 
-import TaskTitle from "@/components/crm/task-title";
+import RecordTasks from "@/components/crm/record-tasks";
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
@@ -48,8 +48,6 @@ import type {
   TagCount,
   Task,
 } from "@/lib/crm/types";
-import { ClickUpBadge } from "@/components/crm/clickup";
-import { formatWhen } from "@/lib/companies";
 import { teamsCallUrl } from "@/lib/phone";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
@@ -373,23 +371,7 @@ export default function ContactRecord({
               title="Tasks"
               className="shadow-[inset_0_1px_0_var(--line-strong)]"
             >
-              {tasks.length === 0 ? (
-                <p className="caption-style text-subtle">No tasks</p>
-              ) : (
-                <ul className="flex flex-col gap-3">
-                  {tasks.map((task) => (
-                    <li key={task.id} className="flex flex-col gap-1">
-                      <span className="text-[14px] leading-5">
-                        <TaskTitle task={task} here={{ kind: "contact", id: contact.id }} />
-                      </span>
-                      <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
-                        {task.dueAt && `Due ${formatWhen(task.dueAt)}`}
-                        <ClickUpBadge task={task} />
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <RecordTasks tasks={tasks} viewer={viewer} members={members} here={{ kind: "contact", id: contact.id }} />
             </DetailSection>
             <MeetingsCard
               meetings={meetings}

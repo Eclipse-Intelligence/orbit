@@ -36,6 +36,7 @@ export type ShortcutDef = {
   palette?: boolean;
   hidden?: boolean;
   keywords?: string;
+  priority?: boolean;
 };
 
 const SEQUENCE_PREFIXES = ["g", "c"] as const;
@@ -137,8 +138,13 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "bulk-export", label: "Export the selection", group: "Selection", target: "bulk-export", palette: true },
   { id: "bulk-undo", label: "Undo archive", group: "Selection", combos: [{ key: "z" }], target: "bulk-undo" },
 
-  { id: "task-done", label: "Mark the task done", group: "Tasks", combos: [{ key: "d" }], rowKey: "d" },
-  { id: "task-expand", label: "Show task details", group: "Tasks", combos: [{ key: " " }], rowKey: "space" },
+  { id: "task-move", label: "Next and previous task", group: "Tasks", combos: [{ key: "j" }, { key: "k" }] },
+  { id: "task-expand", label: "Expand or collapse", group: "Tasks", combos: [{ key: "Enter" }, { key: " " }], rowKey: "space" },
+  { id: "task-open", label: "Open in the panel", group: "Tasks", combos: [{ key: "Enter", shift: true }, { key: "o" }], priority: true },
+  { id: "task-done", label: "Mark done", group: "Tasks", combos: [{ key: "e" }, { key: "d" }] },
+  { id: "task-remind", label: "Remind me", group: "Tasks", combos: [{ key: "h" }] },
+  { id: "task-undo", label: "Undo", group: "Tasks", combos: [{ key: "z" }] },
+  { id: "task-collapse", label: "Collapse or close", group: "Tasks", combos: [{ key: "Escape" }], priority: true },
   ...[1, 2, 3, 4, 5, 6].map((index) => ({
     id: `tab-${index}`,
     label: index === 1 ? "Switch tab (1 to 6)" : `Tab ${index}`,
@@ -252,7 +258,8 @@ export function comboMatches(combo: Combo, event: KeyEventLike, mac: boolean) {
 }
 
 export function matchingShortcuts(event: KeyEventLike, mac: boolean) {
-  return SHORTCUTS.filter((shortcut) => shortcut.combos?.some((combo) => comboMatches(combo, event, mac)));
+  const matches = SHORTCUTS.filter((shortcut) => shortcut.combos?.some((combo) => comboMatches(combo, event, mac)));
+  return [...matches.filter((shortcut) => shortcut.priority), ...matches.filter((shortcut) => !shortcut.priority)];
 }
 
 export function sequenceShortcut(prefix: string, key: string) {

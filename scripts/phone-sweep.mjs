@@ -128,6 +128,22 @@ for (const [device, viewport] of [
   await page.goto(`${base}/tasks`);
   await page.waitForTimeout(1200);
   check(`${device} tasks loads`, await visible(page.getByRole("heading", { name: "Tasks" })));
+  const taskRow = page.locator("li[data-task-id]").first();
+  if ((await taskRow.count()) > 0) {
+    await taskRow.locator("button[aria-expanded]").first().tap();
+    await page.waitForTimeout(600);
+    const expanded = page.locator("li[data-task-id]:has(button[aria-label='Collapse'])");
+    check(`${device} task expands in place`, await visible(expanded.getByRole("button", { name: "Open", exact: true })));
+    check(`${device} expanded task no overflow`, await noHorizontalScroll());
+    await shot("task-expanded");
+    await expanded.getByRole("button", { name: "Open", exact: true }).tap();
+    await page.waitForTimeout(800);
+    check(`${device} task panel opens`, await visible(page.getByRole("dialog", { name: "Task" })));
+    await shot("task-panel");
+    await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+    await page.waitForTimeout(600);
+    check(`${device} task panel closes`, !(await visible(page.getByRole("dialog", { name: "Task" }))));
+  } else console.log(`skip ${device} task expand and panel (no open tasks)`);
   await page.goto(`${base}/calendar`);
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));

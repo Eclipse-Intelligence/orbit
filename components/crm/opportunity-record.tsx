@@ -1,6 +1,6 @@
 "use client";
 
-import TaskTitle from "@/components/crm/task-title";
+import RecordTasks from "@/components/crm/record-tasks";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -236,18 +236,7 @@ export default function OpportunityRecord({
               </ol>
             </DetailSection>
             <DetailSection title={tasks.length ? `Open tasks · ${tasks.length}` : "Open tasks"}>
-              {tasks.length === 0 ? (
-                <p className="caption-style text-subtle">No tasks</p>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {tasks.slice(0, 8).map((task) => (
-                    <li key={task.id} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
-                      <span className="min-w-0 truncate"><TaskTitle task={task} here={{ kind: "opportunity", id: opportunity.id }} /></span>
-                      {task.dueAt && <span className="caption-style text-subtle shrink-0 tabular-nums">{instantDateLabel(task.dueAt)}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <RecordTasks tasks={tasks.slice(0, 8)} viewer={viewer} members={members} here={{ kind: "opportunity", id: opportunity.id }} />
             </DetailSection>
             <RecordNotes record={{ kind: "opportunity", id: opportunity.id, name: opportunity.name }} />
           </>

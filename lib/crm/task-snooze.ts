@@ -1,5 +1,5 @@
 import { addWorkingDays, dayKeyAt, nextWorkingDay, nonWorkingReason, shiftDay, wallClockAt, weekday } from "@/lib/crm/working-days";
-import { laterDetail } from "@/lib/mail/later";
+import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
 export type SnoozeChoice = { id: string; label: string; detail: string; at: string };
@@ -34,4 +34,9 @@ export function taskSnoozeChoices(dueAt: string | null, now: Date, timeZone = ap
     detail: laterDetail(choice.at, now.getTime(), timeZone),
     at: choice.at.toISOString(),
   }));
+}
+
+export function taskRemindChoices(dueAt: string | null, now: Date, timeZone = appTimeZone()): SnoozeChoice[] {
+  const later = laterOptions(now.getTime(), timeZone).filter((option) => option.id === "later");
+  return [...later, ...taskSnoozeChoices(dueAt, now, timeZone)];
 }

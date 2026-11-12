@@ -68,3 +68,31 @@ export function taskDueState(
     label: dateParts(due, sameYear ? { weekday: "short", day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }),
   };
 }
+
+export type TaskGroupKind = "overdue" | "today" | "upcoming" | "none";
+
+export const TASK_GROUP_LABELS: Record<TaskGroupKind, string> = {
+  overdue: "Overdue",
+  today: "Today",
+  upcoming: "Upcoming",
+  none: "No date",
+};
+
+const GROUP_ORDER: TaskGroupKind[] = ["overdue", "today", "upcoming", "none"];
+
+export function taskGroupKind(dueAt: string | null | undefined, now: number, timeZone = appTimeZone()): TaskGroupKind {
+  const state = taskDueState(dueAt, now, timeZone);
+  return state.kind === "later" ? "upcoming" : state.kind;
+}
+
+export function groupTasksByDue<T extends { dueAt: string | null }>(tasks: T[], now: number, timeZone = appTimeZone()) {
+  const groups = new Map<TaskGroupKind, T[]>();
+  for (const task of tasks) {
+    const kind = taskGroupKind(task.dueAt, now, timeZone);
+    groups.set(kind, [...(groups.get(kind) ?? []), task]);
+  }
+  return GROUP_ORDER.flatMap((kind) => {
+    const items = groups.get(kind);
+    return items?.length ? [{ kind, label: TASK_GROUP_LABELS[kind], tasks: items }] : [];
+  });
+}

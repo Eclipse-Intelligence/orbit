@@ -1,15 +1,15 @@
 "use client";
 
-import TaskTitle from "@/components/crm/task-title";
+import RecordTasks from "@/components/crm/record-tasks";
+import type { Viewer } from "@/components/crm/viewer";
 import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import DetailSection from "@/components/companies/detail/detail-section";
 import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
-import { ClickUpBadge } from "@/components/crm/clickup";
 import TaskPad from "@/components/crm/task-pad";
 import { RelationshipError, RelationshipSelect, RelationshipSource, useRelationshipPicker } from "@/components/crm/relationship-picker";
-import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
+import { formatMoney, relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { CompanyContext, Member } from "@/lib/crm/types";
 import { dealHref } from "@/lib/crm/hrefs";
@@ -19,12 +19,14 @@ export default function RelationshipPanel({
   clickup,
   findEmail = false,
   viewerId,
+  viewer,
   members = [],
 }: {
   context: CompanyContext;
   clickup: ClickUpPicker | null;
   findEmail?: boolean;
   viewerId?: string | null;
+  viewer?: Viewer;
   members?: Member[];
 }) {
   const companyId = context.company.id;
@@ -115,20 +117,10 @@ export default function RelationshipPanel({
 
       <DetailSection title="Tasks" className="shadow-none">
         <TaskPad clickup={clickup} company={{ id: companyId, name: context.company.name }} members={members} viewerId={viewerId ?? null} />
-        {context.tasks.length === 0 ? (
-          <p className="caption-style text-subtle">No tasks</p>
+        {viewer ? (
+          <RecordTasks tasks={context.tasks} viewer={viewer} members={members} here={{ kind: "company", id: companyId }} />
         ) : (
-          <ul className="flex flex-col gap-3">
-            {context.tasks.map((task) => (
-              <li key={task.id} className="flex flex-col gap-1">
-                <span className="text-[14px] leading-5"><TaskTitle task={task} colleagues={members} viewerId={viewerId ?? null} here={{ kind: "company", id: companyId }} /></span>
-                <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
-                  {task.dueAt && `Due ${formatWhen(task.dueAt)}`}
-                  <ClickUpBadge task={task} />
-                </span>
-              </li>
-            ))}
-          </ul>
+          context.tasks.length === 0 && <p className="caption-style text-subtle">No tasks</p>
         )}
       </DetailSection>
 

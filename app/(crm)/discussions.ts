@@ -11,7 +11,7 @@ import { pushClickUpTask } from "@/lib/crm/clickup";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { getTask, removeTaskParticipant, updateTask } from "@/lib/crm/tasks";
+import { getTask, listTaskParticipants, removeTaskParticipant, updateTask } from "@/lib/crm/tasks";
 import type { Task, TaskWrite } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
@@ -98,6 +98,17 @@ export async function untagTaskAction(taskId: string, userId: string): Promise<{
     await removeTaskParticipant(actor, taskId, userId, { operation: "untag_task", source: "web" });
     refresh();
     return { ok: true };
+  } catch (error) {
+    return { error: actionError(error).error };
+  }
+}
+
+export async function taskTaggedAction(taskId: string): Promise<{ tagged?: string[]; error?: string }> {
+  const actor = await getUserActor();
+  if (!actor) return { error: SESSION_ENDED };
+  if (!isUuid(taskId)) return { tagged: [] };
+  try {
+    return { tagged: (await listTaskParticipants(actor, [taskId]))[taskId] ?? [] };
   } catch (error) {
     return { error: actionError(error).error };
   }
