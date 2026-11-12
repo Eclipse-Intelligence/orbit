@@ -1,13 +1,15 @@
 "use client";
 
-import { memo, useEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { memo, useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
 import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { ClickUpBadge } from "@/components/crm/clickup";
 import Button from "@/components/_ui/button";
+import { TaskAct } from "@/components/crm/task-actions";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
+import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskTitle from "@/components/crm/task-title";
 import type { Viewer } from "@/components/crm/viewer";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
@@ -150,7 +152,8 @@ function ActionTask({
   canLink = false,
   keyboard = false,
   here,
-  actions,
+  outcome = null,
+  outcomeHandlers,
 }: {
   task: Task;
   completed: boolean;
@@ -161,7 +164,7 @@ function ActionTask({
   tagged?: string[];
   expanded?: boolean;
   onToggle: (task: Task) => void;
-  onComplete?: (task: Task) => void;
+  onComplete?: (task: Task, via?: "swipe") => void;
   onOpen: (task: Task) => void;
   onRemind?: (task: Task) => void;
   canComplete?: boolean;
@@ -173,9 +176,12 @@ function ActionTask({
   canLink?: boolean;
   keyboard?: boolean;
   here?: TitleHere;
-  actions?: ReactNode;
+  outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
+  outcomeHandlers?: OutcomeHandlers;
 }) {
   const complete = canComplete && onComplete ? () => onComplete(task) : undefined;
+  const swipeDone = canComplete && onComplete ? () => onComplete(task, "swipe") : undefined;
+  const concluding = Boolean(outcome && expanded && outcomeHandlers);
   const remind = canComplete && onRemind ? () => onRemind(task) : undefined;
   const open = () => onOpen(task);
   const assigning: TaskAssigning | undefined = onAssign
@@ -205,7 +211,7 @@ function ActionTask({
   const armedBefore = useRef(false);
   const timers = useRef<number[]>([]);
   const swiped = useRef<(() => void) | null>(null);
-  const allowed = { left: Boolean(complete) && !completed, right: Boolean(remind) && !completed };
+  const allowed = { left: Boolean(swipeDone) && !completed, right: Boolean(remind) && !completed };
   const swipeable = !expanded && (allowed.left || allowed.right);
   const armed = offset !== 0 && swipeCommit(offset, 0, width, allowed) !== null;
 
@@ -227,13 +233,13 @@ function ActionTask({
       onRelease: (commit) => {
         armedBefore.current = false;
         setDragging(false);
-        if (commit === "left" && complete) {
+        if (commit === "left" && swipeDone) {
           setOffset(-(row.current?.offsetWidth ?? width));
-          swiped.current = complete;
+          swiped.current = swipeDone;
           timers.current.push(
             window.setTimeout(() => {
               swiped.current = null;
-              complete();
+              swipeDone();
               setOffset(0);
             }, OUT_MS),
           );
@@ -309,9 +315,9 @@ function ActionTask({
                 size="icon"
                 aria-label="Collapse"
                 aria-expanded
-                data-row-open={keyboard ? "" : undefined}
-                data-row-key={keyboard ? "space" : undefined}
-                onClick={toggle}
+                data-row-open={keyboard && !concluding ? "" : undefined}
+                data-row-key={keyboard && !concluding ? "space" : undefined}
+                onClick={concluding ? () => outcomeHandlers?.leave(task) : toggle}
                 className="-mt-0.5 max-sm:size-11"
               >
                 <ChevronDownIcon aria-hidden className="size-3.5 rotate-180" />
@@ -381,9 +387,24 @@ function ActionTask({
           }}
         >
           <div className="min-h-0 overflow-hidden" inert={!expanded}>
-            {expansion.mounted && (
+            {expansion.mounted && concluding && outcomeHandlers && (
               <div className="flex flex-col gap-3 pt-1 pr-3 pb-3 pl-3 @xl:pl-[46px]">
-                {actions}
+                <TaskOutcomeForm
+                  key={outcome?.outcomeId ?? task.id}
+                  task={task}
+                  outcomeId={outcome?.outcomeId ?? ""}
+                  focusNote={outcome?.focus ?? false}
+                  saving={outcome?.saving ?? false}
+                  keyboard={keyboard}
+                  onSkip={() => outcomeHandlers.skip(task)}
+                  onSave={() => outcomeHandlers.save(task)}
+                  onLeave={() => outcomeHandlers.leave(task)}
+                />
+              </div>
+            )}
+            {expansion.mounted && !concluding && (
+              <div className="flex flex-col gap-3 pt-1 pr-3 pb-3 pl-3 @xl:pl-[46px]">
+                <TaskAct task={task} here={here} canChange={canChange} />
                 <TaskFields details={details} viewer={viewer} members={members} tagged={tagged} layout="row" done={completed} />
                 <div className="flex items-center gap-2 max-sm:pt-1">
                   <span className="flex-1 max-sm:hidden" />

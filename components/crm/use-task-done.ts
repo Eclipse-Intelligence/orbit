@@ -51,6 +51,7 @@ export function useTaskDone(tasks: Task[]) {
   const entries = useRef(new Map<string, Entry>());
   const beaconed = useRef(new Set<string>());
   const withdrawn = useRef(new Set<string>());
+  const undone = useRef(new Set<string>());
   const openKey = tasks
     .filter((task) => !task.completedAt)
     .map((task) => task.id)
@@ -172,6 +173,7 @@ export function useTaskDone(tasks: Task[]) {
     (id: string) => {
       const entry = entries.current.get(id);
       if (!entry) return false;
+      undone.current.add(id);
       expire(id);
       composer.dismissToast(entry.toast);
       if (!entry.sent) {
@@ -202,16 +204,69 @@ export function useTaskDone(tasks: Task[]) {
   );
 
   const complete = useCallback(
-    (task: Task) => {
+    (task: Task, options: { hold?: boolean } = {}) => {
       if (entries.current.has(task.id)) return;
       withdrawn.current.delete(task.id);
+      undone.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));
       setMessage(null);
       const toast = composer.showToast({ message: "Task done.", action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
-      const timer = window.setTimeout(() => commit(task.id), TASK_UNDO_MS);
+      const timer = options.hold ? 0 : window.setTimeout(() => commit(task.id), TASK_UNDO_MS);
       entries.current.set(task.id, { toast, timer, until: Date.now() + TASK_UNDO_MS, sent: false });
     },
     [commit, composer, undo],
+  );
+
+  const release = useCallback(
+    (id: string) => {
+      const entry = entries.current.get(id);
+      if (!entry || entry.sent) return;
+      window.clearTimeout(entry.timer);
+      entry.timer = window.setTimeout(() => commit(id), Math.max(0, entry.until - Date.now()));
+    },
+    [commit],
+  );
+
+  const settle = useCallback(
+    (id: string, message: string) => {
+      if (undone.current.has(id)) {
+        undone.current.delete(id);
+        void reopenTaskAction(id)
+          .catch((): Outcome => ({ error: "Couldn't undo. Try again." }))
+          .then((result: Outcome) => {
+            composer.showToast(result.error ? { message: `Saved, but the task is still done. ${result.error}`, tone: "alert" } : { message: "Saved. Task reopened." });
+            router.refresh();
+          });
+        return false;
+      }
+      const entry = entries.current.get(id);
+      if (entry) {
+        composer.dismissToast(entry.toast);
+        expire(id);
+      }
+      withdrawn.current.delete(id);
+      setDone((current) => new Set(current).add(id));
+      setAwaiting((current) => new Set(current).add(id));
+      composer.showToast({ message });
+      router.refresh();
+      return true;
+    },
+    [composer, expire, router],
+  );
+
+  const abandon = useCallback(
+    (id: string) => {
+      if (!undone.current.has(id)) return;
+      undone.current.delete(id);
+      void (async () => {
+        const open = (await openTaskIdsAction([id]).catch(() => ({ open: [] as string[] }))).open ?? [];
+        if (open.includes(id)) return;
+        const result: Outcome = await reopenTaskAction(id).catch((): Outcome => ({ error: "Couldn't undo. Try again." }));
+        if (result.error) composer.showToast({ message: result.error, tone: "alert" });
+        router.refresh();
+      })();
+    },
+    [composer, router],
   );
 
   const undoLast = useCallback(() => {
@@ -247,5 +302,5 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
-  return { done, message, setMessage, complete, undo, undoLast, remind };
+  return { done, message, setMessage, complete, release, settle, abandon, undo, undoLast, remind };
 }

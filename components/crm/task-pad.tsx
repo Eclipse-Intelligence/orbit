@@ -76,7 +76,7 @@ function initials(name: string) {
   return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts[parts.length - 1][0] ?? "") : "")).toUpperCase();
 }
 
-function SearchChip({
+export function SearchChip({
   kind,
   icon: ChipIcon,
   label,
@@ -207,7 +207,7 @@ function SearchChip({
           <button
             type="button"
             onClick={() => choose(null)}
-            className="ui-style text-subtle hover:text-foreground mt-1 flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-white/5"
+            className="ui-style text-subtle hover:text-foreground mt-1 flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-white/5 [@media(pointer:coarse)]:min-h-11"
           >
             <XIcon aria-hidden className="size-3" />
             Don&apos;t link

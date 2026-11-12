@@ -13,6 +13,7 @@ import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { Monogram } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import ReminderSelect from "@/components/crm/reminder-select";
+import { EditLinks } from "@/components/crm/task-actions";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, linkTaskAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
@@ -383,6 +384,24 @@ export function taskIsLinked(task: Task) {
   return Boolean(task.companyId || task.contactId || task.opportunityId || splitDescription(task.description).links.length > 0);
 }
 
+function LinksEditor({ task, canEdit, label }: { task: Task; canEdit: boolean; label?: boolean }) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {label && <span className="caption-style text-subtle mr-1">Linked</span>}
+        <TaskLinks task={task} />
+        {canEdit && (
+          <Button variant={editing ? "secondary" : "ghost"} size="sm" aria-expanded={editing} onClick={() => setEditing((current) => !current)} className="[@media(pointer:coarse)]:h-11">
+            Edit links
+          </Button>
+        )}
+      </div>
+      {editing && canEdit && <EditLinks task={task} />}
+    </div>
+  );
+}
+
 export function TaskLinks({ task }: { task: Task }) {
   const links = splitDescription(task.description).links;
   return (
@@ -726,12 +745,7 @@ export default function TaskFields({
           )}
         </div>
         <Description details={details} layout="row" />
-        {taskIsLinked(task) && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="caption-style text-subtle mr-1">Linked</span>
-            <TaskLinks task={task} />
-          </div>
-        )}
+        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label />}
         {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
         {details.error && (
           <p role="alert" className="caption-style text-danger">
@@ -758,7 +772,7 @@ export default function TaskFields({
       </dl>
       {taskIsLinked(task) && (
         <Section label="Linked">
-          <TaskLinks task={task} />
+          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} />
         </Section>
       )}
       <Section label="Description">

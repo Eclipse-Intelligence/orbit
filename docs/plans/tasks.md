@@ -80,7 +80,7 @@ It becomes a compact command-bar card, the same component at the top of the Task
 - **Phone.** Tap expands; Open goes to the full-width sheet. Swipes as in Capture: left for Done, right for Remind me.
 - **Safari.** Animate the expansion with `grid-template-rows` only. Run the WebKit sweep.
 
-## Phase 3: act from the task (one PR, medium, no migration)
+## Phase 3: act from the task (one PR, medium, one migration: `crm.task_outcomes`, so each Done takes one outcome)
 
 - **Contact strip.** Name, job title, phone and email, loaded by extending `TASK_SQL`. Call opens Teams (`teamsCallUrl`, `lib/phone.ts:19`) on desktop and `tel:` on phones; Copy uses `CopyButton`.
 - **No number.** A contact with no phone shows "No number" with Ask Orbit to find it (the assistant's `find_contact_details`). A company-only task offers the company's contacts to pick from, which also links the task.

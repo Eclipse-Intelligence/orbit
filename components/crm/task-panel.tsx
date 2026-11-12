@@ -8,6 +8,8 @@ import { useDiscussion } from "@/components/chat/use-discussion";
 import { useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { activateRow } from "@/components/shortcuts/keyboard-list";
+import { TaskAct } from "@/components/crm/task-actions";
+import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
 import RecordNotes from "@/components/docs/record-notes";
@@ -27,6 +29,8 @@ type PanelProps = {
   completed?: boolean;
   onComplete?: (task: Task) => void;
   onClose: () => void;
+  outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
+  outcomeHandlers?: OutcomeHandlers;
 };
 
 export function TaskDoneCircle({ done, disabled, title, onClick, className }: { done: boolean; disabled: boolean; title: string; onClick: () => void; className?: string }) {
@@ -62,7 +66,7 @@ function returnFocus(id: string) {
   row.querySelector<HTMLElement>("button[aria-expanded]")?.focus({ preventScroll: true });
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant }: PanelProps & { instant: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers }: PanelProps & { instant: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -219,6 +223,21 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                     </span>
                     <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} />
                   </div>
+                  {outcome && outcomeHandlers ? (
+                    <TaskOutcomeForm
+                      key={outcome.outcomeId}
+                      task={task}
+                      outcomeId={outcome.outcomeId}
+                      focusNote={outcome.focus}
+                      keyboard={false}
+                      saving={outcome.saving}
+                      onSkip={() => outcomeHandlers.skip(task)}
+                      onSave={() => outcomeHandlers.save(task)}
+                      onLeave={() => outcomeHandlers.leave(task)}
+                    />
+                  ) : (
+                    <TaskAct task={task} canChange={canChange} />
+                  )}
                   <TaskFields
                     details={details}
                     viewer={viewer}
