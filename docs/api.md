@@ -181,13 +181,24 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 ## Tasks
 
-Task fields: `title`, `description`, `dueAt`, `remindMinutes` (0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080, before the due time), `priority` (`low`, `normal`, `high`), `ownerId`, `companyId`, `contactId`, `opportunityId`, and on `PATCH` `completed`.
+Task fields: `title`, `description`, `dueDate` or `dueAt` (see Due day or time below), `durationMinutes` (5 to 480; new tasks take 15), `remindMinutes` (0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080, before the due time; needs a due time), `priority` (`low`, `normal`, `high`), `ownerId`, `companyId`, `contactId`, `opportunityId`, and on `PATCH` `completed`.
 
 `GET /api/v1/tasks` with `q`, `company_id`, `owner`, `include_archived=true`, `limit`, `offset`, and `view` (`all`, `overdue`, `today`, `upcoming`, `completed`). Without `view` it returns every open task. `all` is every open task (not completed, not archived) whatever its due date: overdue first, then by due date, undated last, then high, normal, low priority and oldest first. `today` includes open tasks with no due date. `completed` is the last 14 days.
 
 `GET /api/v1/actions?view=` returns the same tasks, the first 100, with `total` (how many match), and defaults to `today` when `view` is missing or not recognised. `view=all` returns every open task in the order above. `view=none` returns companies that have no open task, the 100 most recently updated, with `total`. Page through more tasks with `GET /api/v1/tasks` and `offset`. The Tasks page shows the first 100 and a Show more button for the next 100.
 
 Agent tokens see every task in the workspace; people in the app only see tasks they own or created unless they are an owner or admin, plus tasks they are tagged in, which they can read but not change (changing, completing, reassigning or archiving one returns 403 `forbidden`). Task lists and counts never include tasks someone is only tagged in. `POST /api/v1/tasks` creates one (unowned unless `ownerId` is given; that member is told, as is a new `ownerId` set with `PATCH`, and the creator is told when someone else completes it). A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `GET /api/v1/tasks/:id` returns `{ "task": { ... } }`, and `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
+
+### Due day or time
+
+A task is either date only or timed.
+
+- `dueDate` (`2026-11-14`) makes it date only: due any time that London day, stored at London midnight. It isn't overdue until the day is over.
+- `dueAt` with a time (`2026-11-14T14:30`, or an ISO instant) makes it timed, and later puts it on its owner's calendar. A bare date in `dueAt` is read as `dueDate`.
+- Send a time only when the person gave one. Sending both `dueDate` and `dueAt` returns 400 `invalid_input`. `null` in either clears the due date.
+- A reminder needs a time: `remindMinutes` on a date-only task returns 400 "Pick a time for the reminder." Making a task date only removes its reminder.
+- Tasks carry `dueAt` (London midnight for a date-only task), `dueDate` (the London day, because London midnight in summer is the previous day in UTC), `dueHasTime`, `durationMinutes` and `scheduledBy` (`person` when someone gave it a time, `planner` when Orbit's planner placed it, null when date only).
+- Agent-token tasks are unowned, so a timed one reaches nobody's calendar until someone takes it.
 
 `POST /api/v1/tasks/:id/complete` marks it complete. Completing is idempotent: completing a task that is already done (here, or with `completed: true`) succeeds and returns the task unchanged with no audit event, so no second `task.completed` webhook, "Done by" alert or `task_completed` workflow. Likewise `completed: false` on an open task changes nothing. Someone who can't change the task still gets 403 `forbidden`. `DELETE /api/v1/tasks/:id` archives it. Each task also carries `clickupTaskId`, `clickupListId`, `clickupUrl`, and `clickupError` (null when it is not linked to ClickUp). It also carries the linked contact's `contactJobTitle`, `contactPhone` and `contactEmail` and the linked company's own `companyPhone`, read live from those records (null when there is no such link or value); they are read only on a task, so change them on the contact or company. Changes made through the API reach ClickUp on the next sync.
 

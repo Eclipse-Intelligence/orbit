@@ -125,12 +125,14 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "update_next_action",
     {
-      description: "Update a task. Omitted fields stay unchanged. completed true marks it done. ownerId reassigns it; the assignee can hand it on and stays tagged.",
+      description: "Update a task. Omitted fields stay unchanged. dueDate makes it date only; dueAt gives it a time. completed true marks it done. ownerId reassigns it; the assignee can hand it on and stays tagged.",
       inputSchema: {
         id: z.uuid(),
         title: z.string().optional(),
         description: z.string().nullable().optional(),
-        dueAt: z.string().nullable().optional(),
+        dueDate: z.string().nullable().optional().describe("Due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
+        dueAt: z.string().nullable().optional().describe("Due date and time, such as 2026-11-14T14:30 (London time) or an ISO instant. Only when the person gave a time. A bare date means date only. Send dueDate or dueAt, not both."),
+        durationMinutes: z.number().int().min(5).max(480).optional().describe("How long the task takes in minutes, 5 to 480. New tasks take 15."),
         priority: z.enum(TASK_PRIORITIES).optional(),
         ownerId: z.uuid().nullable().optional(),
         completed: z.boolean().optional(),
@@ -150,6 +152,8 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               title: args.title,
               description: args.description,
               dueAt: args.dueAt,
+              dueDate: args.dueDate,
+              durationMinutes: args.durationMinutes,
               priority: args.priority,
               ownerId: args.ownerId,
               completed: args.completed,

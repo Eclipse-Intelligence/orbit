@@ -226,7 +226,7 @@ export const CORE_TASKS: EvalTask[] = [
     category: "propose_write",
     origin: "Teammate tags: a task for a tagged teammate about a contact, without treating the teammate as a record.",
     message: "Give {{member:Tamsin Holt}} a task to call Wren Ashdown on Friday.",
-    checks: [card("create_task", arg.all(arg.is("ownerId", "member:Tamsin Holt"), arg.is("contactId", "contact:Wren Ashdown"), dueOn("dueAt", { weekday: 5 })))],
+    checks: [card("create_task", arg.all(arg.is("ownerId", "member:Tamsin Holt"), arg.is("contactId", "contact:Wren Ashdown"), dueOn("dueDate", { weekday: 5 })))],
   }),
   task({
     id: "write-task-links-person-and-deal",
@@ -235,7 +235,7 @@ export const CORE_TASKS: EvalTask[] = [
     origin: "Tasks plan: every task names who it is about, so the assistant looks up and passes the person and the opportunity.",
     message: "Add a task for Monday to send Bram Kettle the Larkspur content retainer contract.",
     checks: [
-      card("create_task", arg.all(arg.is("contactId", "contact:Bram Kettle"), arg.is("opportunityId", "deal:Larkspur content retainer"), dueOn("dueAt", { weekday: 1 }))),
+      card("create_task", arg.all(arg.is("contactId", "contact:Bram Kettle"), arg.is("opportunityId", "deal:Larkspur content retainer"), dueOn("dueDate", { weekday: 1 }))),
     ],
   }),
   task({
@@ -244,7 +244,7 @@ export const CORE_TASKS: EvalTask[] = [
     category: "propose_write",
     origin: "Production chats, reworded: move a named task to the coming Monday.",
     message: "Shift the Send Quillfeather proposal task to Monday.",
-    checks: [card("update_task", arg.all(arg.is("taskId", "task:Send Quillfeather proposal"), dueOn("dueAt", { weekday: 1 }))), noCard("create_task")],
+    checks: [card("update_task", arg.all(arg.is("taskId", "task:Send Quillfeather proposal"), dueOn("dueDate", { weekday: 1 }))), noCard("create_task")],
   }),
   task({
     id: "write-follow-up-in-context",
@@ -256,7 +256,7 @@ export const CORE_TASKS: EvalTask[] = [
       { role: "assistant", content: "Yes. **Chase Ansel if he's gone quiet** is on your list for today at 09:30, linked to Ansel Pike at Copperleaf Digital." },
     ],
     message: "Push it back a week, to the Monday.",
-    checks: [card("update_task", arg.all(arg.is("taskId", "task:Chase Ansel if he's gone quiet"), dueOn("dueAt", { weekday: 1 }, { weekday: 1, weeks: 1 }))), noCard("create_task")],
+    checks: [card("update_task", arg.all(arg.is("taskId", "task:Chase Ansel if he's gone quiet"), dueOn("dueDate", { weekday: 1 }, { weekday: 1, weeks: 1 }))), noCard("create_task")],
   }),
   task({
     id: "write-note-on-contact",
@@ -554,7 +554,7 @@ export const CORE_TASKS: EvalTask[] = [
     message: "Tick off the Chase Sagebrook intro task, and set a task to ring Cyril Dunmore next Wednesday.",
     checks: [
       card("update_task", arg.all(arg.is("taskId", "task:Chase Sagebrook intro"), arg.equals("completed", true))),
-      card("create_task", arg.all(arg.is("contactId", "contact:Cyril Dunmore"), dueOn("dueAt", { weekday: 3 }, { nextWeek: 2 }))),
+      card("create_task", arg.all(arg.is("contactId", "contact:Cyril Dunmore"), dueOn("dueDate", { weekday: 3 }, { nextWeek: 2 }))),
     ],
   }),
   task({

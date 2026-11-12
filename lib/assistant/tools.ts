@@ -93,6 +93,7 @@ import { MOVE_LIMIT, moveRecordsToWorkspace, moveTargetNamed, previewMoveToWorks
 import { createContactAndFile, fileImport, getConversationImport, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
+import { durationLabel } from "@/lib/crm/task-time";
 import { chatConversation, chatPersonId, listChat, postChat, readChat } from "@/lib/chat/tools";
 import { CHAT_PAGE_MAX, CHAT_PAGE_SIZE } from "@/lib/chat/types";
 import { getConversation as getChatConversation, listChatPeople, listThread as listChatThread } from "@/lib/crm/chat";
@@ -487,6 +488,16 @@ function londonMidnight() {
   return parseDateTime(`${wall.year}-${pad(wall.month)}-${pad(wall.day)}T00:00`) ?? new Date();
 }
 
+function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null } {
+  if (args.dueDate !== undefined && args.dueAt !== undefined && args.dueDate !== null && args.dueAt !== null) {
+    throw new CrmError("invalid_input", "Send dueDate for a day or dueAt for a time, not both.", 400, { field: "dueDate" });
+  }
+  if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null };
+  if (args.dueDate !== undefined) return { dueDate: nullableStr(args.dueDate) ?? null };
+  if (args.dueAt !== undefined) return { dueAt: null };
+  return {};
+}
+
 function pushIfLinked(actor: UserActor, task: Task) {
   if (!task.clickupListId) return Promise.resolve();
   return pushClickUpTask(actor, task.id).then(
@@ -500,6 +511,8 @@ function shown(key: string, value: unknown) {
   const text = String(value);
   if (key === "dueAt" || key === "startLocal") return formatDateTimeLabel(text);
   if (key === "expectedCloseDate") return formatDateLabel(text);
+  if (key === "dueDate") return formatDateLabel(text);
+  if (key === "durationMinutes" && typeof value === "number") return durationLabel(value);
   if (key === "remindMinutes") return REMINDER_OPTIONS.find((option) => option.minutes === value)?.label ?? text;
   if (key === "value" && typeof value === "number") return value.toLocaleString("en-GB");
   return text;
@@ -963,11 +976,13 @@ const offsetParam = { type: "integer", description: "How many to skip, for the n
 const TASK_FIELDS = {
   title: { type: "string", description: "What needs doing." },
   description: { type: "string", description: "Extra detail, or null to clear it." },
-  dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear." },
+  dueDate: { type: "string", description: "Due day only, as YYYY-MM-DD in London time, or null to clear. Use this unless the user gave a time." },
+  dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear. Only when the user gave a time; it puts the task on their calendar. Send dueDate or dueAt, not both." },
+  durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15." },
   remindMinutes: {
     type: "integer",
     enum: REMINDER_OPTIONS.map((option) => option.minutes),
-    description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080. Needs a due date.",
+    description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080. Needs a due time (dueAt).",
   },
   priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent it is: low, normal or high. New tasks are normal unless set." },
   ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
@@ -1860,7 +1875,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_tasks",
     label: "Checking tasks",
     description:
-      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes due date, reminder, company, contact and ClickUp link and sync status.",
+      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact and ClickUp link and sync status.",
     parameters: {
       type: "object",
       properties: {
@@ -2290,7 +2305,7 @@ const TOOL_LIST: AssistantTool[] = [
           workingDaysWaiting: item.waitingDays,
           replyReady: item.ready,
         })),
-        tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
+        tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, dueHasTime: item.dueHasTime, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
         toFile: {
           emails: unknown.emails
             .filter((item) => !sensitiveCategory(item.stored))
@@ -3304,8 +3319,8 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => ({
       title: `Create task: ${str(args.title)}`,
       lines: [
-        ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
-        ...fieldLines(args, { remindMinutes: "Reminder" }),
+        ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner", dueDate: "Due", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
+        ...fieldLines(args, { durationMinutes: "Duration", remindMinutes: "Reminder" }),
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
         `ClickUp: ${args.sendToClickUp === false ? "no" : "yes"}`,
       ],
@@ -3317,7 +3332,8 @@ const TOOL_LIST: AssistantTool[] = [
         {
           title: required(args.title, "A title"),
           description: nullableStr(args.description),
-          dueAt: nullableStr(args.dueAt),
+          ...taskDueArgs(args),
+          ...(typeof args.durationMinutes === "number" ? { durationMinutes: args.durationMinutes } : {}),
           remindMinutes: str(args.dueAt) && typeof args.remindMinutes === "number" ? args.remindMinutes : null,
           priority: oneOf(args.priority, ["low", "normal", "high"] as const) ?? "normal",
           ...taskLinkArgs(args),
@@ -3333,7 +3349,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "update_task",
     label: "Updating a task",
     write: true,
-    description: "Change a task's title, detail, due date, reminder, priority or assignee, or mark it done with completed true (false reopens it). ClickUp is updated too.",
+    description: "Change a task's title, detail, due day or time, duration, reminder, priority or assignee, or mark it done with completed true (false reopens it). ClickUp is updated too.",
     parameters: {
       type: "object",
       properties: {
@@ -3346,7 +3362,7 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => ({
       title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
       lines: [
-        ...fieldLines(args, { title: "Title", dueAt: "Due", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
+        ...fieldLines(args, { title: "Title", dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
         ...fieldLines(args, { ownerId: "Owner" }, name),
       ],
     }),
@@ -3359,7 +3375,8 @@ const TOOL_LIST: AssistantTool[] = [
         {
           ...(args.title !== undefined ? { title: str(args.title) } : {}),
           ...(args.description !== undefined ? { description: nullableStr(args.description) ?? null } : {}),
-          ...(args.dueAt !== undefined ? { dueAt: nullableStr(args.dueAt) ?? null } : {}),
+          ...taskDueArgs(args),
+          ...(args.durationMinutes !== undefined && typeof args.durationMinutes === "number" ? { durationMinutes: args.durationMinutes } : {}),
           ...(args.remindMinutes !== undefined ? { remindMinutes: typeof args.remindMinutes === "number" ? args.remindMinutes : null } : {}),
           ...(args.priority !== undefined ? { priority: oneOf(args.priority, ["low", "normal", "high"] as const) } : {}),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),

@@ -249,6 +249,8 @@ const taskWriteSchema = z
     title: z.string().optional(),
     description: nullableText,
     dueAt: nullableDate,
+    dueDate: nullableDate,
+    durationMinutes: z.number().int().optional(),
     remindMinutes: z.number().int().nullable().optional(),
     priority: z.enum(TASK_PRIORITIES).optional(),
     ownerId: z.uuid().nullable().optional(),
@@ -294,7 +296,7 @@ export const bulkLeadSchema = z
         leadSchema.omit({ provenance: true }).extend({
           activity: activityWriteSchema.extend({ occurredAt: nullableText }).optional(),
           opportunity: opportunityWriteSchema.extend({ expectedCloseDate: nullableText }).optional(),
-          task: taskWriteSchema.extend({ dueAt: nullableText }).optional(),
+          task: taskWriteSchema.extend({ dueAt: nullableText, dueDate: nullableText }).optional(),
         }),
       )
       .min(1)
