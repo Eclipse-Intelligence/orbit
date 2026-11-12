@@ -109,11 +109,12 @@ type ClickUpOptions = {
   origin?: string | null;
 };
 
-type Fields = { title: string; dueAt: string | null; done: boolean };
+type Fields = { title: string; dueAt: string | null; dueHasTime: boolean; done: boolean };
 
 type Snapshot = {
   title?: string;
   dueAt?: string | null;
+  dueHasTime?: boolean;
   done?: boolean;
   remoteUpdatedAt?: number;
   pushedAt?: number;
@@ -157,6 +158,7 @@ type SyncRow = {
   title: string;
   description: string | null;
   due_at: Date | string | null;
+  due_has_time: boolean;
   completed_at: Date | string | null;
   archived_at: Date | string | null;
   updated_at: Date | string;
@@ -194,7 +196,7 @@ type ClickUpEvent = {
 };
 
 const SYNC_COLUMNS = `
-  t.id, t.title, t.description, t.due_at, t.completed_at, t.archived_at, t.updated_at,
+  t.id, t.title, t.description, t.due_at, t.due_has_time, t.completed_at, t.archived_at, t.updated_at,
   t.contact_id, t.company_id, t.owner_id, op.email as owner_email, op.other_emails as owner_other_emails,
   coalesce(nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''), ct.email, ct.phone) as contact_name,
   ct.email as contact_email,
@@ -212,6 +214,7 @@ const SYNC_FROM = `
 const DIRTY_SQL = `(
   t.title is distinct from t.clickup_sync->>'title'
   or t.due_at is distinct from (t.clickup_sync->>'dueAt')::timestamptz
+  or (t.clickup_sync ? 'dueHasTime' and t.due_has_time is distinct from (t.clickup_sync->>'dueHasTime')::boolean)
   or (t.completed_at is not null) is distinct from (t.clickup_sync->>'done')::boolean
 )`;
 
@@ -320,15 +323,16 @@ function statusFor(list: ClickUpListInfo, done: boolean) {
   );
 }
 
-export function toClickUpDue(dueAt: string | null, timeZone = appTimeZone()) {
+export function toClickUpDue(dueAt: string | null, dueHasTime: boolean, timeZone = appTimeZone()) {
   if (!dueAt) return { due_date: null, due_date_time: false };
   const date = new Date(dueAt);
+  if (dueHasTime) return { due_date: date.getTime(), due_date_time: true };
   const parts = zonedParts(date, timeZone);
-  const dateOnly = parts.hour === 0 && parts.minute === 0 && parts.second === 0;
-  return { due_date: date.getTime(), due_date_time: !dateOnly };
+  const midnight = zonedTimeToDate({ year: parts.year, month: parts.month, day: parts.day, hour: 0, minute: 0, second: 0 }, timeZone);
+  return { due_date: midnight.getTime(), due_date_time: false };
 }
 
-export function fromClickUpDue(task: Pick<ClickUpTask, "due_date" | "due_date_time">, timeZone = appTimeZone()) {
+export function readClickUpDue(task: Pick<ClickUpTask, "due_date" | "due_date_time">, timeZone = appTimeZone()) {
   if (task.due_date === null || task.due_date === undefined || task.due_date === "") return null;
   const ms = Number(task.due_date);
   if (!Number.isFinite(ms)) return null;
@@ -337,23 +341,31 @@ export function fromClickUpDue(task: Pick<ClickUpTask, "due_date" | "due_date_ti
   const dateOnly =
     task.due_date_time === false ||
     (task.due_date_time !== true && parts.minute === 0 && parts.second === 0 && (parts.hour === 0 || parts.hour === 4));
-  if (!dateOnly) return date.toISOString();
-  return zonedTimeToDate(
-    { year: parts.year, month: parts.month, day: parts.day, hour: 0, minute: 0, second: 0 },
-    timeZone,
-  ).toISOString();
+  if (!dateOnly) return { dueAt: date.toISOString(), dueHasTime: true };
+  const midnight = zonedTimeToDate({ year: parts.year, month: parts.month, day: parts.day, hour: 0, minute: 0, second: 0 }, timeZone);
+  return { dueAt: midnight.toISOString(), dueHasTime: false };
+}
+
+export function fromClickUpDue(task: Pick<ClickUpTask, "due_date" | "due_date_time">, timeZone = appTimeZone()) {
+  return readClickUpDue(task, timeZone)?.dueAt ?? null;
 }
 
 function remoteFields(task: ClickUpTask): Fields {
+  const due = readClickUpDue(task);
   return {
     title: clip(task.name, 200) ?? "ClickUp task",
-    dueAt: fromClickUpDue(task),
+    dueAt: due?.dueAt ?? null,
+    dueHasTime: due?.dueHasTime ?? false,
     done: isDoneStatus(task.status?.type),
   };
 }
 
 function localFields(row: SyncRow): Fields {
-  return { title: row.title, dueAt: iso(row.due_at), done: Boolean(row.completed_at) };
+  return { title: row.title, dueAt: iso(row.due_at), dueHasTime: Boolean(row.due_has_time) && row.due_at !== null, done: Boolean(row.completed_at) };
+}
+
+function sameDue(local: Fields, snap: Snapshot) {
+  return same("dueAt", local.dueAt, snap.dueAt) && (snap.dueHasTime === undefined || snap.dueHasTime === local.dueHasTime);
 }
 
 function same(key: keyof Fields, a: unknown, b: unknown) {
@@ -524,7 +536,7 @@ async function createRemote(s: Session, taskId: string) {
       name: local.title,
       description: clickupDescription(s.origin, row),
       assignees: await assigneesFor(s, row),
-      ...(local.dueAt ? toClickUpDue(local.dueAt) : {}),
+      ...(local.dueAt ? toClickUpDue(local.dueAt, local.dueHasTime) : {}),
     };
     if (local.done) {
       const status = statusFor(await listInfo(s, listId), true);
@@ -566,12 +578,12 @@ async function createRemote(s: Session, taskId: string) {
 async function updateRemote(s: Session, row: SyncRow) {
   const local = localFields(row);
   const snap = snapshotOf(row);
-  const dirty = KEYS.filter((key) => snap[key] === undefined || !same(key, local[key], snap[key]));
+  const dirty = KEYS.filter((key) => snap[key] === undefined || (key === "dueAt" ? !sameDue(local, snap) : !same(key, local[key], snap[key])));
   if (dirty.length === 0 || !row.clickup_task_id) return "unchanged" as const;
   try {
     const body: ClickUpTaskWrite = {};
     if (dirty.includes("title")) body.name = local.title;
-    if (dirty.includes("dueAt")) Object.assign(body, toClickUpDue(local.dueAt));
+    if (dirty.includes("dueAt")) Object.assign(body, toClickUpDue(local.dueAt, local.dueHasTime));
     if (dirty.includes("done") && row.clickup_list_id) {
       const status = statusFor(await listInfo(s, row.clickup_list_id), local.done);
       if (!status) throw new ClickUpError("That ClickUp list has no matching status.", 0);
@@ -581,6 +593,7 @@ async function updateRemote(s: Session, row: SyncRow) {
     if (!updated) return archiveDeleted(s, row);
     const next: Snapshot = { remoteUpdatedAt: remoteTime(updated), pushedAt: Date.now() };
     for (const key of dirty) Object.assign(next, { [key]: local[key] });
+    if (dirty.includes("dueAt")) next.dueHasTime = local.dueHasTime;
     await withActor(s.actor, (db) =>
       db.query(
         `update crm.tasks
@@ -711,7 +724,11 @@ function mergeFields(local: Fields, remote: Fields, snap: Snapshot, localTime: n
     if (!remoteChanged) continue;
     if (localChanged && localTime > changedAt) continue;
     if (key === "title") write.title = remote.title;
-    if (key === "dueAt") write.dueAt = remote.dueAt;
+    if (key === "dueAt") {
+      write.dueAt = remote.dueAt;
+      write.dueHasTime = remote.dueHasTime;
+      next.dueHasTime = remote.dueHasTime;
+    }
     if (key === "done") write.completed = remote.done;
     Object.assign(next, { [key]: remote[key] });
   }
@@ -781,6 +798,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
       {
         title: remote.title,
         dueAt: remote.dueAt,
+        dueHasTime: remote.dueHasTime,
         completed: remote.done,
         ...(owner ? { ownerId: owner } : {}),
         contactId: link.contactId,

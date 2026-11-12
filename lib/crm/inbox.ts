@@ -803,7 +803,7 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
           {
             title: `Follow up with ${candidate.who}`.slice(0, 200),
             description: withMailThread(withDueNote("Suggested after an email arrived.", due), thread),
-            dueAt: due?.dueAt ?? null,
+            dueDate: due?.dueDate ?? null,
             companyId: candidate.companyId,
             contactId: candidate.contactId,
             priority: "normal",

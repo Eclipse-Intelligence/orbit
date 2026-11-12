@@ -3,7 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
-import { dayKeyAt, planTaskDue } from "@/lib/crm/task-due";
+import { dayKeyAt } from "@/lib/crm/task-due";
 import { archiveTaskInDb, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
@@ -199,7 +199,7 @@ async function taskActor(actor: UserActor, id: string) {
   return (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId) ?? actor;
 }
 
-async function recordDeferral(caller: UserActor, input: DeferralInput, now = Date.now()) {
+async function recordDeferral(caller: UserActor, input: DeferralInput) {
   const email = input.fromEmail.trim().toLowerCase();
   const domain = email.split("@")[1] ?? "";
   const note = cleanNote(input.note);
@@ -245,7 +245,7 @@ async function recordDeferral(caller: UserActor, input: DeferralInput, now = Dat
     const name = (contact?.name || input.fromName?.trim() || email).slice(0, 150);
     const href = threadHref(input.sourceId, input.threadKey);
     const subject = (input.subject?.trim() || "The email").replace(/[[\]]/g, "").slice(0, 200);
-    const dueAt = planTaskDue({ on: dayKeyAt(input.at), busy: null }, new Date(now))?.dueAt ?? input.at.toISOString();
+    const dueDate = dayKeyAt(input.at);
     const task = actor.scopes.includes("tasks:write")
       ? await createTaskInDb(
           db,
@@ -253,8 +253,7 @@ async function recordDeferral(caller: UserActor, input: DeferralInput, now = Dat
           {
             title: `Check in with ${name}`,
             description: `${note}\n\n[${subject}](${href})`,
-            dueAt,
-            remindMinutes: 0,
+            dueDate,
             contactId: contact?.id ?? null,
             ...(company ? { companyId: company.id } : {}),
           },
@@ -282,7 +281,7 @@ export async function applyDeferral(actor: UserActor, candidate: { id: string; s
     await markDeferralChecked(actor, [candidate.id]);
     return null;
   }
-  return recordDeferral(actor, { messageId: candidate.id, sourceId: candidate.sourceId, threadKey: candidate.threadKey, subject: candidate.subject, fromEmail: candidate.fromEmail, fromName: candidate.fromName, note: found?.note, at }, now);
+  return recordDeferral(actor, { messageId: candidate.id, sourceId: candidate.sourceId, threadKey: candidate.threadKey, subject: candidate.subject, fromEmail: candidate.fromEmail, fromName: candidate.fromName, note: found?.note, at });
 }
 
 function emailDate(value: Date | string) {
@@ -389,7 +388,7 @@ export async function moveDeferral(caller: UserActor, id: string, atValue: strin
     await db.query("update crm.mail_reminders set due_at = $2 where id = $1", [row.id, at.toISOString()]);
     const task = await openTask(db, row.task_id);
     if (task) {
-      await updateTaskInDb(db, actor, task.id, { dueAt: at.toISOString() }, { operation: "move_deferred_follow_up", source: "mail", sourceUrl: threadHref(row.source_id, row.thread_key) });
+      await updateTaskInDb(db, actor, task.id, { dueDate: dayKeyAt(at) }, { operation: "move_deferred_follow_up", source: "mail", sourceUrl: threadHref(row.source_id, row.thread_key) });
     }
     return { id: row.id, at: at.toISOString(), taskId: row.task_id };
   });

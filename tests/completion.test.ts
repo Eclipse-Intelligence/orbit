@@ -305,6 +305,8 @@ describe("imports, pipeline, communications, and webhooks", () => {
     assert.equal(filed.contacts[0]?.email, "grace@mailco.example");
     assert.equal(filed.suggested, true);
     assert.match(filed.task?.title ?? "", /Follow up with Grace/);
+    assert.equal(filed.task?.dueHasTime, false);
+    assert.match(filed.task?.dueDate ?? "", /^\d{4}-\d{2}-\d{2}$/);
     const again = await recordCommunication(owner, {
       kind: "meeting",
       title: "Intro",

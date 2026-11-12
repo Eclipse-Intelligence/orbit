@@ -11,6 +11,7 @@ import {
   createTaskWithClickUp,
   enableClickUpWebhook,
   fromClickUpDue,
+  readClickUpDue,
   getClickUpPicker,
   getClickUpSettings,
   handleClickUpWebhook,
@@ -305,12 +306,13 @@ async function importedTask(workspaceId: string, clickupTaskId: string) {
     id: string;
     title: string;
     due_at: Date | null;
+    due_has_time: boolean;
     completed_at: Date | null;
     archived_at: Date | null;
     contact_id: string | null;
     company_id: string | null;
   }>(
-    `select id, title, due_at, completed_at, archived_at, contact_id, company_id
+    `select id, title, due_at, due_has_time, completed_at, archived_at, contact_id, company_id
      from crm.tasks where workspace_id = $1 and clickup_task_id = $2`,
     [workspaceId, clickupTaskId],
   );
@@ -340,12 +342,25 @@ after(async () => {
 
 describe("clickup client", () => {
   it("converts London due dates both ways", () => {
-    assert.deepEqual(toClickUpDue("2026-11-03T14:30:00.000Z"), { due_date: Date.UTC(2026, 10, 3, 14, 30), due_date_time: true });
-    assert.deepEqual(toClickUpDue(new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString()), {
+    assert.deepEqual(toClickUpDue("2026-11-03T14:30:00.000Z", true), { due_date: Date.UTC(2026, 10, 3, 14, 30), due_date_time: true });
+    assert.deepEqual(toClickUpDue(new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(), false), {
       due_date: Date.UTC(2026, 5, 30, 23, 0),
       due_date_time: false,
     });
-    assert.deepEqual(toClickUpDue(null), { due_date: null, due_date_time: false });
+    assert.deepEqual(toClickUpDue(new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(), true), {
+      due_date: Date.UTC(2026, 5, 30, 23, 0),
+      due_date_time: true,
+    });
+    assert.deepEqual(toClickUpDue("2026-07-01T13:15:00.000Z", false), { due_date: Date.UTC(2026, 5, 30, 23, 0), due_date_time: false });
+    assert.deepEqual(toClickUpDue(null, false), { due_date: null, due_date_time: false });
+    assert.deepEqual(readClickUpDue({ due_date: String(Date.UTC(2026, 6, 1, 13, 15)), due_date_time: true }), {
+      dueAt: new Date(Date.UTC(2026, 6, 1, 13, 15)).toISOString(),
+      dueHasTime: true,
+    });
+    assert.deepEqual(readClickUpDue({ due_date: String(Date.UTC(2026, 6, 1, 13, 15)), due_date_time: false }), {
+      dueAt: new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(),
+      dueHasTime: false,
+    });
     assert.equal(
       fromClickUpDue({ due_date: String(Date.UTC(2026, 6, 1, 3, 0)) }),
       new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString(),
@@ -568,6 +583,7 @@ describe("clickup sync", () => {
     assert.equal(email?.contact_id, janeId);
     assert.equal(email?.company_id, acmeId);
     assert.equal(email?.due_at?.toISOString(), new Date(Date.UTC(2026, 5, 30, 23, 0)).toISOString());
+    assert.equal(email?.due_has_time, false);
     assert.equal((await importedTask(owner.workspaceId, "bydomain"))?.company_id, globexId);
     const byUrl = await importedTask(owner.workspaceId, "byurl");
     assert.equal(byUrl?.company_id, acmeId);
@@ -601,6 +617,7 @@ describe("clickup sync", () => {
     const after = await importedTask(owner.workspaceId, "byemail");
     assert.equal(after?.title, "Intro call (moved)");
     assert.equal(after?.due_at?.toISOString(), new Date(Date.UTC(2026, 6, 8, 9, 30)).toISOString());
+    assert.equal(after?.due_has_time, true);
     assert.equal(before?.id, after?.id);
     assert.equal(puts(fake, "byemail").length, 0);
 

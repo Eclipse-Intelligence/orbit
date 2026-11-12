@@ -318,24 +318,9 @@ function taskForm(s: Store, a: Actions, contactId: string | null, companyId: str
     textField({ label: "Title", value: s.form["t.title"] ?? "", onInput: (value) => a.setForm("t.title", value), autofocus: true }),
     h(
       "div",
-      { class: "grid-due" },
-      h(
-        "div",
-        { class: "field" },
-        h("label", { class: "caption soft", for: dueId }, "Due"),
-        h("input", { id: dueId, class: "input", type: "date", value: dateValue, onChange: (event: Event) => a.setForm("t.due", (event.target as HTMLInputElement).value, true) }),
-      ),
-      selectField({
-        label: "Remind",
-        value: s.form["t.remind"] ?? "0",
-        options: [
-          { value: "0", label: "At due time" },
-          { value: "60", label: "1 hour before" },
-          { value: "1440", label: "1 day before" },
-          { value: "none", label: "No reminder" },
-        ],
-        onChange: (value) => a.setForm("t.remind", value),
-      }),
+      { class: "field" },
+      h("label", { class: "caption soft", for: dueId }, "Due"),
+      h("input", { id: dueId, class: "input", type: "date", value: dateValue, onChange: (event: Event) => a.setForm("t.due", (event.target as HTMLInputElement).value, true) }),
     ),
     h(
       "div",

@@ -169,6 +169,7 @@ async function ingestLeadInDb(
           actor,
           {
             ...input.task,
+            ...(input.task.dueAt ? { dueHasTime: false } : {}),
             companyId:
               input.task.companyId === undefined
                 ? (result.company?.id ?? result.contact?.companyId ?? undefined)

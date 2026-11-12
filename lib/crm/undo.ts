@@ -1,3 +1,4 @@
+import { durationLabel } from "@/lib/crm/task-time";
 import type { Db } from "@/lib/db/pool";
 import { formatDate, HEALTH_LABELS, lifecycleLabel } from "@/lib/companies";
 import {
@@ -112,6 +113,9 @@ const FIELDS: Record<EntityType, Record<string, string>> = {
     title: "Title",
     description: "Description",
     dueAt: "Due",
+    dueHasTime: "Due time",
+    scheduledBy: "Placed by",
+    durationMinutes: "Duration",
     remindMinutes: "Reminder",
     priority: "Priority",
     ownerId: "Owner",
@@ -136,6 +140,7 @@ const RELATIONSHIP_FIELDS = new Set(["relationshipOverride", "relationshipOverri
 const ID_FIELDS = new Set(["ownerId", "companyId", "contactId", "primaryContactId", "opportunityId"]);
 const DATE_FIELDS = new Set(["dueAt", "completedAt", "archivedAt", "expectedCloseDate"]);
 const DATE_TIME_FIELDS = new Set(["occurredAt"]);
+const TIMING_DETAILS = new Set(["dueHasTime", "scheduledBy"]);
 const AUTOMATIC_SOURCES = ["microsoft", "microsoft_teams", "granola", "communication"];
 const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Activity" };
 
@@ -216,6 +221,8 @@ function shownValue(field: string, value: unknown, names: Map<string, string>) {
   if (field === "relationshipOverride" && isRelationshipLabel(value)) return RELATIONSHIP_META[value].label;
   if (field === "health" && typeof value === "string" && value in HEALTH_LABELS) return HEALTH_LABELS[value as AccountHealth];
   if (field === "lifecycle" && typeof value === "string") return lifecycleLabel(value);
+  if (field === "durationMinutes" && typeof value === "number") return durationLabel(value);
+  if (field === "dueHasTime") return value ? "timed" : "date only";
   if (field === "remindMinutes") return REMINDER_OPTIONS.find((option) => option.minutes === value)?.label ?? String(value);
   if (ID_FIELDS.has(field) && typeof value === "string") return names.get(value) ?? "a record that no longer exists";
   if (DATE_FIELDS.has(field) && typeof value === "string") return formatDate(value);
@@ -493,11 +500,12 @@ async function describeEvent(
       summary = done ? `Marked task ${entityName} done` : `Reopened task ${entityName}`;
       restores = done ? `Reopens ${entityName}.` : `Marks ${entityName} done again.`;
     } else {
-      const parts = fields.fields.map(
+      const shown = fields.fields.filter((field) => !TIMING_DETAILS.has(field) || !fields.fields.includes("dueAt"));
+      const parts = shown.map(
         (field) => `${labels[field]} from ${shownValue(field, fields.before[field], names)} to ${shownValue(field, fields.after[field], names)}`,
       );
       summary = `Changed ${noun} ${entityName}: ${parts.join("; ")}`;
-      restores = `Puts back ${fields.fields.map((field) => `${labels[field]}: ${shownValue(field, fields.before[field], names)}`).join("; ")}.`;
+      restores = `Puts back ${shown.map((field) => `${labels[field]}: ${shownValue(field, fields.before[field], names)}`).join("; ")}.`;
     }
     if (current) {
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));

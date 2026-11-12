@@ -4,7 +4,6 @@ import { createActivity } from "@/lib/crm/activities";
 import {
   acceptActionItem,
   dismissActionItem,
-  dueAtForDay,
   getInsightsForActivities,
   getInsightTranscript,
   resolveDueDate,
@@ -159,8 +158,6 @@ describe("call insights", () => {
     assert.equal(resolveDueDate("end of month", thursday), "2026-10-31");
     assert.equal(resolveDueDate("soon", thursday), null);
     assert.equal(resolveDueDate("tomorrow", "2026-10-15T23:30:00.000Z"), "2026-10-17");
-    assert.equal(dueAtForDay("2026-10-16"), "2026-10-16T08:00:00.000Z");
-    assert.equal(dueAtForDay("2026-10-26"), "2026-10-26T09:00:00.000Z");
   });
 
   it("summarises a pasted transcript through the gateway", async () => {
@@ -301,7 +298,9 @@ describe("call insights", () => {
     assert.equal(accepted.task.title, "Send the revised quote");
     assert.equal(accepted.task.contactId, contactId);
     assert.equal(accepted.task.companyId, companyId);
-    assert.equal(accepted.task.dueAt, "2026-10-16T08:00:00.000Z");
+    assert.equal(accepted.task.dueAt, "2026-10-15T23:00:00.000Z");
+    assert.equal(accepted.task.dueDate, "2026-10-16");
+    assert.equal(accepted.task.dueHasTime, false);
     assert.match(accepted.task.description ?? "", /From the call on 15 Oct 2026: Call with Jane Doe/);
     const saved = accepted.insight.actionItems.find((entry) => entry.id === item.id);
     assert.equal(saved?.status, "accepted");

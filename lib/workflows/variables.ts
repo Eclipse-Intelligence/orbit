@@ -217,7 +217,12 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
     );
   }
   if (type === "task_completed") {
-    options.push({ path: "task.title", label: "Title", group: "Task" }, { path: "task.completedAt", label: "Completed", group: "Task" });
+    options.push(
+      { path: "task.title", label: "Title", group: "Task" },
+      { path: "task.completedAt", label: "Completed", group: "Task" },
+      { path: "task.dueDate", label: "Due day", group: "Task" },
+      { path: "task.durationMinutes", label: "Duration", group: "Task" },
+    );
   }
   const upstream = definition && nodeId ? ancestors(definition, nodeId) : null;
   for (const step of (definition?.nodes ?? []).filter((node) => !upstream || upstream.has(node.id))) {

@@ -1,3 +1,4 @@
+import { dayStartIso } from "@/lib/crm/task-time";
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { createActivity, listActivities } from "@/lib/crm/activities";
@@ -201,6 +202,9 @@ describe("workflows", () => {
     assert.ok(alerts.some((item) => item.title === "Acme Flows looks at risk" && item.body === "Finance may push back on renewal"));
     const followUp = (await listTasks(owner, { view: "all", companyId })).data.find((task) => task.title === "Check in with Acme Flows");
     assert.match(followUp?.description ?? "", /^Health turned At risk: Finance may push back on renewal(\n\nDue \w{3} \d{1,2} \w{3} because .+\.)?$/);
+    assert.equal(followUp?.dueHasTime, false);
+    assert.equal(followUp?.scheduledBy, null);
+    assert.equal(followUp?.dueAt, followUp?.dueDate ? dayStartIso(followUp.dueDate) : null);
     const approvals = await listApprovals(owner);
     assert.equal(approvals.length, 1);
     assert.equal(approvals[0].title, "Create Linear issues for Acme Flows?");
