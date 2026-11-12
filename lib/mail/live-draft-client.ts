@@ -2,7 +2,7 @@ import type { EditorView } from "@codemirror/view";
 import * as Y from "yjs";
 import type { Presence } from "@/lib/docs/client-types";
 import { setPresence } from "@/lib/docs/editor/presence";
-import { bind, unbind } from "@/lib/docs/live/binding";
+import { applyToText, bind, unbind } from "@/lib/docs/live/binding";
 import { rebase } from "@/lib/docs/live/rebase";
 import { draftTopic, type LiveTransportKind, type LiveUser } from "@/lib/docs/live/protocol";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
@@ -139,6 +139,7 @@ export class LiveDraft {
     if (this.closed) return;
     this.view = view;
     this.headless = false;
+    this.kept = null;
     if (this.session) {
       bind(view, this.session, this.session.text.toString());
       return;
@@ -210,9 +211,11 @@ export class LiveDraft {
   async flush() {
     const session = this.session;
     if (!session) return;
+    const typed = session.typed;
     await session.sync();
+    if (!session.failure && !session.confirmedThrough(typed)) await session.sync();
     if (session.failure) throw new Error(session.failure.message);
-    if (session.unconfirmed()) throw new Error(LIVE_NOT_SAVED);
+    if (!session.confirmedThrough(typed)) throw new Error(LIVE_NOT_SAVED);
   }
 
   async settle(waitMs = 8_000): Promise<number> {
@@ -365,16 +368,10 @@ export class LiveDraft {
     else if (this.kept !== null) {
       const kept = this.kept;
       this.kept = null;
-      const { toShared } = rebase(base, kept, session.text.toString());
-      if (!toShared.empty) {
-        const edits: { from: number; to: number; insert: string }[] = [];
-        toShared.iterChanges((fromA, toA, _fromB, _toB, inserted) => edits.push({ from: fromA, to: toA, insert: inserted.toString() }));
-        doc.transact(() => {
-          for (const edit of edits.reverse()) {
-            if (edit.to > edit.from) session.text.delete(edit.from, edit.to - edit.from);
-            if (edit.insert) session.text.insert(edit.from, edit.insert);
-          }
-        });
+      const shared = session.text.toString();
+      if (kept !== shared) {
+        const { toShared } = rebase(base, kept, shared);
+        if (!toShared.empty) applyToText(doc, session.text, toShared);
       }
     }
     this.stopWatching = this.watch(session);
@@ -412,6 +409,7 @@ export class LiveDraft {
       const replacement = session.replacement;
       const newDraft = typeof replacement?.generation === "number" && replacement.generation !== session.generation;
       const base = newDraft ? (this.view?.state.doc.toString() ?? session.text.toString()) : session.serverText;
+      this.kept = !this.view && !newDraft ? session.text.toString() : null;
       this.stopWatching?.();
       this.stopWatching = null;
       this.session = null;

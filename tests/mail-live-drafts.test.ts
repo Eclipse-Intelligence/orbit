@@ -702,6 +702,7 @@ describe("the browser controller", () => {
   let actorFor: UserActor;
   let openGate: Promise<void> | null = null;
   let openFails = false;
+  let duringPost: (() => void) | null = null;
 
   function typeInto(view: EditorView & { state: EditorState }, text: string) {
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
@@ -718,6 +719,11 @@ describe("the browser controller", () => {
       const method = init?.method ?? "GET";
       if (method === "GET" && openFails) return Response.json({ error: "Couldn't save the draft. Try again.", code: "busy" }, { status: 503 });
       if (method === "GET" && openGate) await openGate;
+      if (method === "POST" && duringPost) {
+        const hook = duringPost;
+        duringPost = null;
+        hook();
+      }
       return liveDraftResponse(actorFor, shareId, new Request(url, { method, headers: init?.headers, body: method === "GET" ? undefined : init?.body }));
     };
   });
@@ -871,6 +877,42 @@ describe("the browser controller", () => {
     assert.equal(await rowBody(share), "New draft");
     live.close();
     await discardMailDraft(mark, second.id, outlook().fetchImpl);
+  });
+
+  it("doesn't call a flush failed when typing continues during the sync", async () => {
+    actorFor = sam;
+    const { shareId } = await sharedNew("Typing on", "Start");
+    const live = new LiveDraft({ shareId, user: { id: sam.userId, name: "Sam", kind: "person" }, base: "Start" });
+    live.attach(fakeView("Start"));
+    const session = await opened(live);
+    session.text.insert(session.text.length, " one");
+    duringPost = () => session.text.insert(session.text.length, " two");
+    await live.flush();
+    assert.ok((await rowBody(shareId))?.startsWith("Start one"));
+    await live.flush();
+    assert.equal(await rowBody(shareId), "Start one two");
+    live.close();
+  });
+
+  it("doesn't double text the server already has when a headless session opens", async () => {
+    actorFor = mark;
+    const { shareId } = await sharedNew("Lost reply", "Base");
+    let letGo = () => {};
+    openGate = new Promise<void>((resolve) => (letGo = resolve));
+    const live = new LiveDraft({ shareId, user: { id: mark.userId, name: "Mark", kind: "person" }, base: "Base" });
+    const view = fakeView("Base");
+    live.attach(view);
+    typeInto(view, "Base, typed");
+    const release = live.retain();
+    live.detach();
+    await saveSharedDraft(mark, shareId, { subject: null, body: "Base, typed" });
+    openGate = null;
+    letGo();
+    await opened(live);
+    assert.equal(live.text(), "Base, typed");
+    await live.flush();
+    assert.equal(await rowBody(shareId), "Base, typed");
+    release();
   });
 
   it("refuses to call an unsaved body saved", async () => {

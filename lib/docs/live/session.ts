@@ -327,6 +327,14 @@ export class LiveSession<Summary = unknown> {
     return this.ownSeq > this.confirmedSeq || this.titleDirty || this.ownBeyond(this.serverVector);
   }
 
+  get typed() {
+    return this.ownSeq;
+  }
+
+  confirmedThrough(seq: number) {
+    return this.confirmedSeq >= seq;
+  }
+
   titlePending() {
     return this.titleDirty || this.titleTimer !== null;
   }

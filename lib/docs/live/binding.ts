@@ -11,7 +11,7 @@ const remoteChange = EditorState.transactionExtender.of((transaction) =>
   transaction.annotation(ySyncAnnotation) ? { annotations: [external.of(true), Transaction.addToHistory.of(false)] } : null,
 );
 
-function applyToText(doc: Y.Doc, text: Y.Text, changes: ChangeSet) {
+export function applyToText(doc: Y.Doc, text: Y.Text, changes: ChangeSet) {
   const edits: { from: number; to: number; insert: string }[] = [];
   changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => edits.push({ from: fromA, to: toA, insert: inserted.toString() }));
   doc.transact(() => {
