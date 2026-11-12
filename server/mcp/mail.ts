@@ -7,7 +7,7 @@ import { askMail } from "@/lib/mail/ai";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
 import { listMailAttachments } from "@/lib/mail/attachments";
 import type { SentSaver, SmtpSender } from "@/lib/mail/identities";
-import { composeAccounts, discardMailDraft, readDraftInput, resolveSendAccount, saveMailDraft, sendMailOnce } from "@/lib/mail/compose";
+import { composeAccounts, discardMailDraft, readDraftInput, refuseSharedTextChange, resolveSendAccount, saveMailDraft, sendMailOnce } from "@/lib/mail/compose";
 import { stripQuoted } from "@/lib/mail/format";
 import { mailOrigin } from "@/lib/mail/origin";
 import { getThread, listThreads, threadKey } from "@/lib/mail/threads";
@@ -146,7 +146,7 @@ export function registerMailTools(server: McpServer, actor: UserActor, options: 
     "mail_save_draft",
     {
       description:
-        `Save an email as a draft in Outlook and Orbit without sending it, for the person to review in Mail${options.canSend ? " or for mail_send to send later by its draft_id" : " and send"}. mode is new, reply, reply_all or forward; replies and forwards need message_id (from mail_get_thread). body is plain text; Orbit adds the signature. Pass draft_id to update a draft you saved earlier.`,
+        `Save an email as a draft in Outlook and Orbit without sending it, for the person to review in Mail${options.canSend ? " or for mail_send to send later by its draft_id" : " and send"}. mode is new, reply, reply_all or forward; replies and forwards need message_id (from mail_get_thread). body is plain text; Orbit adds the signature. Pass draft_id to update a draft you saved earlier. A draft the person shared with teammates keeps its subject and message: a call that changes them is refused, and its other fields still save.`,
       inputSchema: {
         mode: z.enum(["new", "reply", "reply_all", "forward"]),
         message_id: z.uuid().optional(),
@@ -161,6 +161,7 @@ export function registerMailTools(server: McpServer, actor: UserActor, options: 
     },
     async (args) =>
       run(async () => {
+        await refuseSharedTextChange(actor, args.draft_id, { subject: args.subject, body: args.body });
         const from = args.from || args.mode === "new" ? await resolveSendAccount(actor, args.from) : { sourceId: null, identityId: null };
         const sourceId = from.sourceId;
         const draft = await saveMailDraft(

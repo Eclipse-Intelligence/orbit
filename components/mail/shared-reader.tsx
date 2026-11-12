@@ -8,12 +8,13 @@ import MessageAttachments from "@/components/mail/message-attachments";
 import { PeopleStack, PersonAvatar } from "@/components/mail/share-control";
 import { fetchSharedThread, ShareRequestError } from "@/components/mail/share-client";
 import { useMailShareEvents } from "@/components/mail/share-live";
+import SharedDraftEditor, { SharedDraftStateLine } from "@/components/mail/shared-draft-editor";
 import ThreadNotes, { useNotesLayout } from "@/components/mail/thread-notes";
 import { TextBody, When } from "@/components/mail/thread-reader";
 import type { ChatPerson } from "@/lib/chat/types";
 import { personName, recipientList, snippetCore } from "@/lib/mail/format";
-import type { SharedMessage, SharedThread, SharedThreadSummary } from "@/lib/mail/share-types";
-import { NO_ACCESS, peopleLine, removedLine, sharedByLabel } from "@/lib/mail/share-view";
+import { SHARED_DRAFT_CLOSED, SHARED_DRAFT_OPEN, type SharedMessage, type SharedThread, type SharedThreadSummary } from "@/lib/mail/share-types";
+import { NO_ACCESS, peopleLine, personFirstName, removedLine, sharedByLabel } from "@/lib/mail/share-view";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
@@ -232,6 +233,8 @@ export default function SharedReader({
     if (!removed) load();
   });
 
+  const [editing, setEditing] = useState<string | null>(null);
+  const draftOpen = editing === shareId && thread?.draft?.state === "editing";
   const subject = thread?.subject ?? summary?.subject ?? null;
   const people = thread?.people ?? [];
   const others = people.filter((person) => person.id !== viewer.id && !person.owner);
@@ -245,10 +248,14 @@ export default function SharedReader({
         <span className="flex min-w-0 flex-1 items-center gap-2">
           {owner && <PersonAvatar person={owner} viewerId={viewer.id} size="sm" />}
           <span className="ui-style text-foreground truncate">{owner ? sharedByLabel(owner) : "Shared"}</span>
-          <span aria-hidden className="text-faint">
-            ·
-          </span>
-          <span className="ui-style text-subtle shrink-0">Read only</span>
+          {!draftOpen && (
+            <>
+              <span aria-hidden className="text-faint">
+                ·
+              </span>
+              <span className="ui-style text-subtle shrink-0">Read only</span>
+            </>
+          )}
         </span>
         {people.length > 0 && !removed && (
           <span className="caption-style text-subtle flex min-w-0 shrink items-center gap-1.5">
@@ -267,7 +274,35 @@ export default function SharedReader({
               </p>
             ) : thread ? (
               <>
-                <SharedMessages key={thread.shareId} thread={thread} />
+                {(thread.messages.length > 0 || !thread.draft) && <SharedMessages key={thread.shareId} thread={thread} />}
+                {owner && editing === shareId ? (
+                  <SharedDraftEditor shareId={shareId} owner={owner} people={people} viewer={viewer} onClose={() => {
+                      setEditing(null);
+                      load();
+                    }} />
+                ) : (
+                  owner &&
+                  thread.draft &&
+                  (SHARED_DRAFT_CLOSED.includes(thread.draft.state) ? (
+                    <SharedDraftStateLine draft={{ state: thread.draft.state, sendAt: null }} owner={owner} />
+                  ) : (
+                    SHARED_DRAFT_OPEN.includes(thread.draft.state) && (
+                    <div className="bg-surface-panel flex flex-wrap items-center gap-3 rounded-2xl px-4 py-3">
+                      <PersonAvatar person={owner} viewerId={viewer.id} size="md" />
+                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <span className="flex min-w-0 items-baseline gap-2">
+                          <span className="caption-style shrink-0 text-(--tag-amber-text)">Draft</span>
+                          <span className="ui-style truncate">{owner.name}</span>
+                        </span>
+                        <span className="text-subtle truncate text-[13px]">{thread.draft.snippet || thread.draft.subject || "No text yet"}</span>
+                      </span>
+                      <Button variant="secondary" size="sm" onClick={() => setEditing(shareId)} className="shrink-0 pointer-coarse:h-11">
+                        {thread.draft.state === "editing" ? `Edit with ${personFirstName(owner.name)}` : "View draft"}
+                      </Button>
+                    </div>
+                    )
+                  ))
+                )}
                 {layout === "below" && <ThreadNotes shareId={shareId} viewer={viewer} layout="below" reveal={notes} />}
               </>
             ) : loaded?.error ? (

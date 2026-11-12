@@ -267,7 +267,13 @@ describe("one-click unsubscribe POST", () => {
     };
     await assert.rejects(() => postOneClick("https://brand.test/u", { fetchImpl: guarded, lookup }), UnsubscribeRefused);
     const slow: typeof fetch = (_input, init) =>
-      new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+      new Promise((_resolve, reject) => {
+        const alive = setTimeout(() => undefined, 5_000);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(alive);
+          reject(new Error("aborted"));
+        });
+      });
     await assert.rejects(() => postOneClick("https://brand.test/u", { fetchImpl: slow, lookup, timeoutMs: 50 }), /didn't answer in time/);
     let pulled = 0;
     const huge: typeof fetch = async () =>

@@ -119,6 +119,7 @@ export function activeFormats(state: EditorState): ActiveFormats {
 
 export function toggleFormat(view: EditorView, marker: FormatMarker) {
   const state = view.state;
+  if (state.readOnly) return false;
   view.dispatch(
     state.changeByRange((range) => {
       const span = enclosingSpans(state, range)
@@ -153,6 +154,7 @@ export function toggleFormat(view: EditorView, marker: FormatMarker) {
 }
 
 export function insertBlock(view: EditorView, text: string) {
+  if (view.state.readOnly) return;
   const at = view.state.selection.main.to;
   const before = view.state.sliceDoc(at - 1, at);
   const insert = `${at > 0 && before !== "\n" ? "\n" : ""}${text}\n`;
@@ -206,4 +208,13 @@ export function bodyEditorExtensions(options: { placeholder: string; label: stri
     }),
     EditorView.editorAttributes.of({ class: "mail-body-editor" }),
   ];
+}
+
+export function minimalChange(current: string, next: string) {
+  let start = 0;
+  const shortest = Math.min(current.length, next.length);
+  while (start < shortest && current.charCodeAt(start) === next.charCodeAt(start)) start += 1;
+  let end = 0;
+  while (end < shortest - start && current.charCodeAt(current.length - 1 - end) === next.charCodeAt(next.length - 1 - end)) end += 1;
+  return { from: start, to: current.length - end, insert: next.slice(start, next.length - end) };
 }

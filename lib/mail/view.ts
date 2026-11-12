@@ -212,6 +212,7 @@ export type MailDraft = {
   remindHours?: number | null;
   followUpDays?: number | null;
   followUpBody?: string | null;
+  shareId?: string | null;
 };
 
 function mine(address: MailAddress | null | undefined, own: Set<string>) {

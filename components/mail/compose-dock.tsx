@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import type { LaterRequest } from "@/components/mail/later-picker";
 import type { ComposerDraft, ComposerStart, SendPayload, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
+import { handOverPayload } from "@/components/mail/hand-over";
 import { heldDrafts } from "@/components/mail/held-drafts";
 import { flagReconnect, hasReconnectHost, reconnectOf } from "@/components/mail/reconnect-store";
 import { MODE_LABEL } from "@/lib/mail/format";
@@ -96,6 +97,8 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
     remindHours: payload.remindHours,
     followUpDays: payload.followUpDays,
     followUpBody: payload.followUpBody,
+    shareId: payload.shareId ?? null,
+    shareBase: payload.shareBase ?? null,
   };
 }
 
@@ -415,6 +418,16 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
     [dismiss],
   );
 
+  const handedBack = useCallback(
+    (problem: unknown, track?: SendTracker) => {
+      const value = handOverPayload(problem);
+      const message = problem instanceof Error ? problem.message : "Couldn't send. Try again.";
+      if (value) openComposer({ draft: payloadDraft(value), track });
+      showToast({ message: `“${value?.subject || "Your email"}” didn't send. ${message}`, tone: "alert", duration: 15_000 });
+    },
+    [openComposer, showToast],
+  );
+
   const deliver = useCallback(
     (id: number, keepalive = false) => {
       const item = outgoing.current.get(id);
@@ -443,9 +456,13 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(payload, error), track: item.track }) },
             });
           }),
+        (problem: unknown) => {
+          item.onUndone?.();
+          handedBack(problem, item.track);
+        },
       );
     },
-    [openComposer, showToast],
+    [openComposer, showToast, handedBack],
   );
 
   const queueSend = useCallback(
@@ -453,6 +470,15 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       const id = ++toastCounter.current;
       const timer = window.setTimeout(() => deliver(id), UNDO_MS);
       outgoing.current.set(id, { payload, timer, ...meta });
+      payload.catch((problem: unknown) => {
+        const item = outgoing.current.get(id);
+        if (!item) return;
+        window.clearTimeout(item.timer);
+        outgoing.current.delete(id);
+        dismiss(id);
+        item.onUndone?.();
+        handedBack(problem, item.track);
+      });
       setToasts((current) => [
         ...current.slice(-2),
         {
@@ -466,17 +492,25 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               window.clearTimeout(item.timer);
               outgoing.current.delete(id);
               item.onUndone?.();
-              void item.payload.then((value) => {
-                const draft = payloadDraft(value);
-                if (!item.onReopen?.(draft)) openComposer({ draft, track: item.track });
-              });
+              void item.payload.then(
+                (value) => {
+                  const draft = payloadDraft(value);
+                  if (!item.onReopen?.(draft)) openComposer({ draft, track: item.track });
+                },
+                (problem: unknown) => {
+                  const value = handOverPayload(problem);
+                  if (!value) return;
+                  const draft = payloadDraft(value);
+                  if (!item.onReopen?.(draft)) openComposer({ draft, track: item.track });
+                },
+              );
             },
           },
         },
       ]);
       toastTimers.current.set(id, window.setTimeout(() => dismiss(id), UNDO_MS));
     },
-    [deliver, dismiss, openComposer],
+    [deliver, dismiss, openComposer, handedBack],
   );
 
   const scheduleSend = useCallback(
@@ -485,17 +519,18 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       void payload.then((value) =>
         postJson<MailDraft>("/api/mail/drafts/schedule", { ...value, sendAt })
           .then(() => setSent((count) => count + 1))
-          .catch((error: Error) =>
+          .catch((error: SendFailure) =>
             showToast({
               message: `Couldn't schedule “${value.subject || "your email"}”. ${error.message}`,
               tone: "alert",
               duration: 15_000,
-              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(value) }) },
+              action: { label: "Open draft", run: () => openComposer({ draft: payloadDraft(value, error) }) },
             }),
           ),
+        (problem: unknown) => handedBack(problem),
       );
     },
-    [openComposer, showToast],
+    [openComposer, showToast, handedBack],
   );
 
   const toastsRef = useRef<ShownToast[]>([]);
