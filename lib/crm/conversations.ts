@@ -26,7 +26,7 @@ import {
 import { CrmError, errorText, notFound } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { hasCalendarAccounts, hasCalendarFeeds } from "@/lib/crm/calendar-accounts";
-import { matchPhonesInDb, type PhoneMatch } from "@/lib/crm/call-phones";
+import { firstNamesToIgnore, matchPhonesInDb, phoneNumbersIn } from "@/lib/crm/call-phones";
 import { readStored } from "@/lib/crm/inbox";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -619,13 +619,16 @@ async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImpo
   const byName = imports.map((item) => nameQueries(item.participants.filter((person) => !person.email).map((person) => person.name), excluded));
   const byTitle = imports.map((item) => nameQueries(titleNames(item.title), excluded));
   const lookup = await contactsByName(db, [actor.workspaceId], [...byName.flat(), ...byTitle.flat()]);
-  const byPhone: ContactSuggestion[][] = [];
-  for (const item of imports) {
-    const found = item.status === "unfiled"
-      ? await matchPhonesInDb(db, [actor.workspaceId], { title: item.title, text: item.sourceSummary, ownName: actor.fullName })
-      : [];
-    byPhone.push(found.flatMap((phone) => phoneSuggestions(phone)));
-  }
+  const dialled = imports.map((item, index) => item.status === "unfiled" && candidates[index].length === 0 && phoneNumbersIn(item.title).length > 0);
+  const phones = dialled.some(Boolean)
+    ? await matchPhonesInDb(
+        db,
+        [actor.workspaceId],
+        imports.map((item, index) => (dialled[index] ? { title: item.title, text: item.sourceSummary } : { title: null, text: null })),
+        await firstNamesToIgnore(db, actor.userId, [actor.fullName]),
+      )
+    : imports.map(() => []);
+  const byPhone = phones.map((found) => found.flatMap((phone) => phone.suggestions));
   return imports.map((item, index) => {
     const suggested = pickSuggestions(lookup.candidates, byName[index], byTitle[index], byPhone[index]);
     return {
@@ -635,13 +638,6 @@ async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImpo
       suggestedBy: suggested.by,
     };
   });
-}
-
-function phoneSuggestions(phone: PhoneMatch): ContactSuggestion[] {
-  if (phone.suggestions.length > 0) return phone.suggestions;
-  const match = phone.match;
-  if (!match?.contactId) return [];
-  return [{ contactId: match.contactId, name: match.contactName ?? "Contact", companyName: match.companyName, email: null }];
 }
 
 function pickSuggestions(candidates: Parameters<typeof inQueryOrder>[0], byName: NameQuery[], byTitle: NameQuery[], byPhone: ContactSuggestion[]) {

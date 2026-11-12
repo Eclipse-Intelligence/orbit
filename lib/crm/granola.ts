@@ -32,7 +32,7 @@ import {
   type Participant,
 } from "@/lib/crm/conversations";
 import { looseNameKey } from "@/lib/crm/call-names";
-import { matchPhonesInDb } from "@/lib/crm/call-phones";
+import { firstNamesToIgnore, matchPhonesInDb } from "@/lib/crm/call-phones";
 import { captureWorkspaceInDb, ownCallAddresses, routeCallInDb, suggestByTitleInDb, suggestedWorkspace } from "@/lib/crm/call-routing";
 import { CrmError, notSetUp } from "@/lib/crm/errors";
 import { unreachable } from "@/lib/upstream";
@@ -286,8 +286,16 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       added += 1;
     }
     if (added > 0) route = await routeCallInDb(db, owner, open, participants, routing);
-    const phones = route.targets.length === 0
-      ? await matchPhonesInDb(db, open.map((item) => item.workspaceId), { title, text: summary, ownName: note.owner?.name ?? owner.fullName })
+    const attendeeless = participants.every((person) => !person.email || own.has(canonicalEmail(person.email) ?? ""));
+    const phones = route.targets.length === 0 && attendeeless
+      ? (
+          await matchPhonesInDb(
+            db,
+            open.map((item) => item.workspaceId),
+            [{ title, text: summary }],
+            await firstNamesToIgnore(db, owner.userId, ownNames),
+          )
+        )[0]
       : [];
     const targets = route.targets.length > 0
       ? route.targets
@@ -299,7 +307,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
     const suggested = byTitle
       ? await suggestByTitleInDb(db, owner, open.map((item) => item.workspaceId), [title, note.calendar_event?.event_title], ownNames)
       : route.suggested;
-    const phoneWorkspaces = phones.filter((phone) => phone.suggestions.length > 0).map((phone) => ({ workspaceId: phone.workspaceId }));
+    const phoneWorkspaces = phones.filter((phone) => !phone.match && phone.suggestions.length > 0).map((phone) => ({ workspaceId: phone.workspaceId }));
     const captureId = suggestedWorkspace(
       [...phoneWorkspaces, ...suggested],
       await captureWorkspaceInDb(db, owner, open, participants, [note.owner?.email, owner.email]),
