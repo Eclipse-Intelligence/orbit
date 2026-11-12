@@ -311,11 +311,16 @@ export default function ActionsScreen({
     moveOn(task.id, Boolean(row && (row.dataset.kbActive === "true" || row.contains(document.activeElement))));
   }
 
-  const concluding = useTaskOutcome({ done, complete: markDone, release, settle, onClosed: concluded });
+  const concluding = useTaskOutcome({ done, complete: markDone, release, settle, onClosed: concluded, onFailed: restoreOutcome });
+
+  function restoreOutcome(task: Task, place: OutcomePlace) {
+    if (place === "row") setExpandedId(task.id);
+    else openPanel(task.id);
+  }
   const outcome = concluding.outcome;
 
   function complete(task: Task, via?: "swipe" | "key") {
-    if (concluding.saving) return;
+    if (concluding.saving === task.id) return;
     if (outcome?.task.id === task.id) {
       concluding.leave(task);
       return;
@@ -339,7 +344,7 @@ export default function ActionsScreen({
   }
 
   function completeFromPanel(task: Task) {
-    if (concluding.saving || done.has(task.id)) return;
+    if (concluding.saving === task.id || done.has(task.id)) return;
     if (hasOutcome(task)) {
       setExpandedId((current) => (current === task.id ? null : current));
       concluding.start(task, finePointer(), "panel");
@@ -382,7 +387,9 @@ export default function ActionsScreen({
   }
 
   const canChange = (task: Task) => canChangeTaskAs(viewer, task);
-  const shownTasks = view === "completed" ? allTasks : allTasks.filter((task) => !done.has(task.id) || (outcome?.place === "row" && outcome.task.id === task.id));
+  const rowOutcome = outcome?.place === "row" ? outcome.task : null;
+  const listedTasks = view === "completed" ? allTasks : allTasks.filter((task) => !done.has(task.id) || task.id === rowOutcome?.id);
+  const shownTasks = rowOutcome && !listedTasks.some((task) => task.id === rowOutcome.id) ? [rowOutcome, ...listedTasks] : listedTasks;
   const entries =
     view === "all"
       ? groupTasksByDue(shownTasks, now).flatMap((group) => [
@@ -430,9 +437,8 @@ export default function ActionsScreen({
   const outcomeHandlers = useMemo<OutcomeHandlers>(
     () => ({
       skip: (task) => latest.current.concluding.skip(task),
-      save: (task, value) => latest.current.concluding.save(task, value),
+      save: (task) => latest.current.concluding.save(task),
       leave: (task, quiet) => latest.current.concluding.leave(task, quiet),
-      register: (id, reader) => latest.current.concluding.register(id, reader),
     }),
     [],
   );
@@ -627,7 +633,7 @@ export default function ActionsScreen({
                 colleagues={colleagues}
                 canLink={canChange(entry.task)}
                 keyboard
-                outcome={outcome?.place === "row" && outcome.task.id === entry.task.id ? { focus: outcome.focus, saving: concluding.saving === entry.task.id } : null}
+                outcome={outcome?.place === "row" && outcome.task.id === entry.task.id ? { focus: outcome.focus, saving: concluding.saving === entry.task.id, outcomeId: outcome.outcomeId } : null}
                 outcomeHandlers={outcomeHandlers}
               />
             ),
@@ -650,7 +656,7 @@ export default function ActionsScreen({
         modal={panelModal}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}
-        outcome={outcome?.place === "panel" && outcome.task.id === (panelTask ?? kept)?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id } : null}
+        outcome={outcome?.place === "panel" && outcome.task.id === (panelTask ?? kept)?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id, outcomeId: outcome.outcomeId } : null}
         outcomeHandlers={outcomeHandlers}
       />
     </section>

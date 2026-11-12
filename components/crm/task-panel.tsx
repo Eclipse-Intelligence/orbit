@@ -29,7 +29,7 @@ type PanelProps = {
   completed?: boolean;
   onComplete?: (task: Task) => void;
   onClose: () => void;
-  outcome?: { focus: boolean; saving: boolean } | null;
+  outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
 };
 
@@ -226,13 +226,13 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                   {outcome && outcomeHandlers ? (
                     <TaskOutcomeForm
                       task={task}
+                      outcomeId={outcome.outcomeId}
                       focusNote={outcome.focus}
                       keyboard={false}
                       saving={outcome.saving}
                       onSkip={() => outcomeHandlers.skip(task)}
-                      onSave={(value) => outcomeHandlers.save(task, value)}
+                      onSave={() => outcomeHandlers.save(task)}
                       onLeave={() => outcomeHandlers.leave(task)}
-                      onRegister={outcomeHandlers.register}
                     />
                   ) : (
                     <TaskAct task={task} canChange={canChange} />

@@ -32,7 +32,7 @@ export default function RecordTasks({
   onCount?: (count: number) => void;
 }) {
   const { done, message, complete, release, settle, remind } = useTaskDone(tasks);
-  const concluding = useTaskOutcome({ done, complete, release, settle, onClosed: concluded });
+  const concluding = useTaskOutcome({ done, complete, release, settle, onClosed: concluded, onFailed: restoreOutcome });
   const outcome = concluding.outcome;
   const [now] = useState(() => Date.now());
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -40,7 +40,9 @@ export default function RecordTasks({
   const [kept, setKept] = useState<Task | null>(null);
   const team = useMemo<AssignableMember[]>(() => (members.length > 1 ? members.map((member) => ({ id: member.id, name: member.name })) : NO_MEMBERS), [members]);
   const place = useMemo<TitleHere>(() => ({ kind: here.kind, id: here.id }), [here.kind, here.id]);
-  const remaining = tasks.filter((task) => !done.has(task.id) || (outcome?.place === "row" && outcome.task.id === task.id));
+  const rowOutcome = outcome?.place === "row" ? outcome.task : null;
+  const stillListed = tasks.filter((task) => !done.has(task.id) || task.id === rowOutcome?.id);
+  const remaining = rowOutcome && !stillListed.some((task) => task.id === rowOutcome.id) ? [rowOutcome, ...stillListed] : stillListed;
   const shown = limit ? remaining.slice(0, limit) : remaining;
   const listed = panelId ? (tasks.find((task) => task.id === panelId) ?? null) : null;
   if (listed && listed !== kept) setKept(listed);
@@ -70,6 +72,11 @@ export default function RecordTasks({
     complete(task);
   }
 
+  function restoreOutcome(task: Task, where: OutcomePlace) {
+    if (where === "row") setExpandedId(task.id);
+    else setPanelId(task.id);
+  }
+
   function concluded(task: Task, where: OutcomePlace) {
     setExpandedId((current) => (current === task.id ? null : current));
     if (where === "panel") setPanelId((current) => (current === task.id ? null : current));
@@ -81,7 +88,7 @@ export default function RecordTasks({
   }
 
   function conclude(task: Task, via?: "swipe") {
-    if (concluding.saving) return;
+    if (concluding.saving === task.id) return;
     if (outcome?.task.id === task.id) {
       concluding.leave(task);
       return;
@@ -97,7 +104,7 @@ export default function RecordTasks({
   }
 
   function concludeFromPanel(task: Task) {
-    if (concluding.saving || done.has(task.id)) return;
+    if (concluding.saving === task.id || done.has(task.id)) return;
     if (hasOutcome(task)) {
       setExpandedId((current) => (current === task.id ? null : current));
       concluding.start(task, finePointer(), "panel");
@@ -128,9 +135,8 @@ export default function RecordTasks({
   const outcomeHandlers = useMemo<OutcomeHandlers>(
     () => ({
       skip: (task) => latest.current.concluding.skip(task),
-      save: (task, value) => latest.current.concluding.save(task, value),
+      save: (task) => latest.current.concluding.save(task),
       leave: (task, quiet) => latest.current.concluding.leave(task, quiet),
-      register: (id, reader) => latest.current.concluding.register(id, reader),
     }),
     [],
   );
@@ -138,7 +144,7 @@ export default function RecordTasks({
   const onOpen = useCallback((task: Task) => setPanelId(task.id), []);
   const onPanelComplete = useCallback((task: Task) => latest.current.concludeFromPanel(task), []);
   const panelShown = panelTask ?? kept;
-  const panelOutcome = outcome?.place === "panel" && outcome.task.id === panelShown?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id } : null;
+  const panelOutcome = outcome?.place === "panel" && outcome.task.id === panelShown?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id, outcomeId: outcome.outcomeId } : null;
 
   return (
     <>
@@ -169,7 +175,7 @@ export default function RecordTasks({
               onOpen={onOpen}
               canLink={canChangeTaskAs(viewer, task) && !task.completedAt}
               here={place}
-              outcome={outcome?.place === "row" && outcome.task.id === task.id ? { focus: outcome.focus, saving: concluding.saving === task.id } : null}
+              outcome={outcome?.place === "row" && outcome.task.id === task.id ? { focus: outcome.focus, saving: concluding.saving === task.id, outcomeId: outcome.outcomeId } : null}
               outcomeHandlers={outcomeHandlers}
             />
           ))}

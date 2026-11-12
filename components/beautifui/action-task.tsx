@@ -176,7 +176,7 @@ function ActionTask({
   canLink?: boolean;
   keyboard?: boolean;
   here?: TitleHere;
-  outcome?: { focus: boolean; saving: boolean } | null;
+  outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
 }) {
   const complete = canComplete && onComplete ? () => onComplete(task) : undefined;
@@ -392,13 +392,13 @@ function ActionTask({
                 <TaskOutcomeForm
                   key={task.id}
                   task={task}
+                  outcomeId={outcome?.outcomeId ?? ""}
                   focusNote={outcome?.focus ?? false}
                   saving={outcome?.saving ?? false}
                   keyboard={keyboard}
                   onSkip={() => outcomeHandlers.skip(task)}
-                  onSave={(value) => outcomeHandlers.save(task, value)}
+                  onSave={() => outcomeHandlers.save(task)}
                   onLeave={() => outcomeHandlers.leave(task)}
-                  onRegister={outcomeHandlers.register}
                 />
               </div>
             )}

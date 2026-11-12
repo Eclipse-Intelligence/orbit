@@ -72,7 +72,7 @@ export async function relinkTaskAction(id: string, change: LinkChange): Promise<
   }
 }
 
-export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOutcome): Promise<{ ok?: boolean; next?: boolean; logged?: boolean; error?: string }> {
+export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOutcome): Promise<{ ok?: boolean; next?: boolean; logged?: boolean; completed?: boolean; error?: string }> {
   const user = await getUserActor();
   if (!user) return { error: SIGN_IN };
   if (typeof id !== "string" || !isUuid(id) || !outcome || typeof outcome !== "object") return { error: "Couldn't save. Try again." };
@@ -80,7 +80,7 @@ export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOut
     const saved = await completeTaskWithOutcome(user, id, outcome);
     pushLater(user, saved.next?.clickupListId ? [id, saved.next.id] : [id]);
     refresh();
-    return { ok: true, next: Boolean(saved.next), logged: Boolean(saved.activity) };
+    return { ok: true, next: Boolean(saved.next), logged: Boolean(saved.activityId), completed: Boolean(saved.task.completedAt) };
   } catch (error) {
     return actionError(error);
   }

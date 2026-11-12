@@ -9,7 +9,8 @@ import { completeTaskWithOutcome, relinkTask, taskContext } from "@/lib/crm/task
 import { mailThreadLine } from "@/lib/crm/task-description";
 import { taskKind } from "@/lib/crm/task-kind";
 import { GET as restGetTask } from "@/app/api/v1/tasks/[id]/route";
-import { addTaskParticipants, createTask, getTask, listTasks } from "@/lib/crm/tasks";
+import { randomUUID } from "node:crypto";
+import { addTaskParticipants, createTask, getTask, listTasks, reopenTask } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createAgent, createUser, resetDatabase } from "./helpers";
@@ -282,7 +283,7 @@ describe("relinking from the task", () => {
 
   it("records nothing when the links don't change", async () => {
     const task = (await createTask(mark, { title: "Ring Martin", contactId: martin })).body.task;
-    const same = await relinkTask(mark, task.id, { contactId: martin, companyId: ashby }, { operation: "link_task", source: "web" });
+    const same = await relinkTask(mark, task.id, { contactId: martin.toUpperCase(), companyId: ashby.toUpperCase() }, { operation: "link_task", source: "web" });
     assert.equal(same.contactId, martin);
     assert.equal((await audits(task.id, "task.updated")).length, 0);
   });
@@ -295,19 +296,36 @@ describe("relinking from the task", () => {
   });
 });
 
+function outcome(values: { note?: string; kind?: "call" | "email" | "meeting" | null; next?: { title: string; dueAt: string | null } | null; outcomeId?: string } = {}) {
+  return { outcomeId: values.outcomeId ?? randomUUID(), note: values.note ?? "", kind: values.kind ?? null, next: values.next ?? null };
+}
+
+async function activitiesFor(taskId: string) {
+  return sql<{ id: string; type: string; title: string; contact_id: string | null; opportunity_id: string | null }>(
+    "select id, type, title, contact_id, opportunity_id from crm.activities where metadata ->> 'taskId' = $1 order by created_at",
+    [taskId],
+  );
+}
+
+async function tasksTitled(title: string) {
+  return (await sql<{ count: number }>("select count(*)::int as count from crm.tasks where title = $1", [title]))[0].count;
+}
+
 describe("done with an outcome", () => {
   it("logs the note on the timeline, adds the next task with the same links and completes the task", async () => {
     const task = (await createTask(mark, { title: "Call Jane about the renewal", contactId: jane, opportunityId: renewal })).body.task;
-    const result = await completeTaskWithOutcome(mark, task.id, {
-      note: "Spoke to Jane. Happy with three years if the break is at 12 months.",
-      kind: "call",
-      next: { title: "Send Jane the three-year price", dueAt: "2027-06-01T09:00" },
-    });
+    const result = await completeTaskWithOutcome(
+      mark,
+      task.id,
+      outcome({ note: "Spoke to Jane. Happy with three years if the break is at 12 months.", kind: "call", next: { title: "Send Jane the three-year price", dueAt: "2027-06-01T09:00" } }),
+    );
     assert.ok(result.task.completedAt);
-    assert.equal(result.activity?.type, "call");
-    assert.equal(result.activity?.title, "Spoke to Jane");
-    assert.equal(result.activity?.contactId, jane);
-    assert.equal(result.activity?.opportunityId, renewal);
+    const [activity] = await activitiesFor(task.id);
+    assert.equal(result.activityId, activity.id);
+    assert.equal(activity.type, "call");
+    assert.equal(activity.title, "Spoke to Jane");
+    assert.equal(activity.contact_id, jane);
+    assert.equal(activity.opportunity_id, renewal);
     assert.equal(result.next?.title, "Send Jane the three-year price");
     assert.deepEqual([result.next?.contactId, result.next?.companyId, result.next?.opportunityId], [jane, northwind, renewal]);
     assert.equal(result.next?.ownerId, mark.userId);
@@ -317,28 +335,50 @@ describe("done with an outcome", () => {
     assert.equal(created[0].source, "task_outcome");
   });
 
-  it("returns the earlier result on a retry and never logs twice, even at the same time", async () => {
+  it("returns the earlier result for the same outcome, even sent twice at once", async () => {
     const task = (await createTask(mark, { title: "Call Jane back", contactId: jane })).body.task;
-    const outcome = { note: "Spoke to Jane about dates", kind: "call" as const, next: { title: "Send Jane the dates", dueAt: null } };
-    const [first, second] = await Promise.all([completeTaskWithOutcome(mark, task.id, outcome), completeTaskWithOutcome(mark, task.id, outcome)]);
-    assert.equal(first.activity?.id, second.activity?.id);
+    const value = outcome({ note: "Spoke to Jane about dates", kind: "call", next: { title: "Send Jane the dates", dueAt: null } });
+    const [first, second] = await Promise.all([completeTaskWithOutcome(mark, task.id, value), completeTaskWithOutcome(mark, task.id, value)]);
+    assert.equal(first.activityId, second.activityId);
     assert.equal(first.next?.id, second.next?.id);
-    assert.ok(first.replayed || second.replayed);
-    const retry = await completeTaskWithOutcome(mark, task.id, outcome);
-    assert.equal(retry.activity?.id, first.activity?.id);
+    assert.ok(first.replayed !== second.replayed);
+    const retry = await completeTaskWithOutcome(mark, task.id, value);
+    assert.equal(retry.activityId, first.activityId);
     assert.equal(retry.replayed, true);
-    const logged = await sql<{ count: number }>("select count(*)::int as count from crm.activities where metadata ->> 'taskId' = $1", [task.id]);
-    assert.equal(logged[0].count, 1);
-    const next = await sql<{ count: number }>("select count(*)::int as count from crm.tasks where title = 'Send Jane the dates'");
-    assert.equal(next[0].count, 1);
-    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, { ...outcome, note: "Something else" }), /already saved/);
-    await assert.rejects(() => completeTaskWithOutcome(ava, task.id, outcome), /already saved/);
+    assert.equal((await activitiesFor(task.id)).length, 1);
+    assert.equal(await tasksTitled("Send Jane the dates"), 1);
+  });
+
+  it("refuses a second outcome for the same completion, from anyone, with or without a note, whatever the links now are", async () => {
+    const task = (await createTask(mark, { title: "Call Martin about the pilot", contactId: martin })).body.task;
+    await completeTaskWithOutcome(mark, task.id, outcome({ next: { title: "Chase Martin for the PO", dueAt: null } }));
+    await assert.rejects(() => completeTaskWithOutcome(ava, task.id, outcome({ next: { title: "Chase Martin for the PO", dueAt: null } })), /already saved/);
+    assert.equal(await tasksTitled("Chase Martin for the PO"), 1);
+    await relinkTask(mark, task.id, { contactId: jane, companyId: northwind }, { operation: "link_task", source: "web" });
+    await assert.rejects(() => completeTaskWithOutcome(ava, task.id, outcome({ note: "Martin said yes", kind: "call" })), /already saved/);
+    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, outcome({ note: "Different words" })), /already saved/);
+    assert.equal((await activitiesFor(task.id)).length, 0);
+  });
+
+  it("lets a reopened task take a new outcome when it is done again, and never replays an old one as done", async () => {
+    const task = (await createTask(mark, { title: "Call Jane about the board pack", contactId: jane })).body.task;
+    const first = outcome({ note: "Sent the board pack", kind: "call" });
+    await completeTaskWithOutcome(mark, task.id, first);
+    await reopenTask(mark, task.id);
+    const stale = await completeTaskWithOutcome(mark, task.id, first);
+    assert.equal(stale.replayed, true);
+    assert.equal(stale.task.completedAt, null);
+    assert.equal((await getTask(mark, task.id)).completedAt, null);
+    const again = await completeTaskWithOutcome(mark, task.id, outcome({ note: "Sent the board pack", kind: "call" }));
+    assert.equal(again.replayed, false);
+    assert.ok(again.task.completedAt);
+    assert.equal((await activitiesFor(task.id)).length, 2);
   });
 
   it("adds the outcome to a task that is already done without completing it again", async () => {
     const task = (await createTask(mark, { title: "Call Martin about the invoice", contactId: martin, completed: true })).body.task;
-    const result = await completeTaskWithOutcome(mark, task.id, { note: "Paid now", kind: "call", next: null });
-    assert.equal(result.activity?.title, "Paid now");
+    const result = await completeTaskWithOutcome(mark, task.id, outcome({ note: "Paid now", kind: "call" }));
+    assert.ok(result.activityId);
     assert.equal(result.task.completedAt, task.completedAt);
     assert.equal((await audits(task.id, "task.completed")).length, 0);
   });
@@ -347,42 +387,39 @@ describe("done with an outcome", () => {
     const leaver = await join(await createUser("leaver@act.test", "Lee Leaver"), "member");
     const task = (await createTask(mark, { title: "Call Jane about pricing", contactId: jane, ownerId: leaver.userId })).body.task;
     await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [mark.workspaceId, leaver.userId]);
-    const result = await completeTaskWithOutcome(mark, task.id, { note: "", kind: null, next: { title: "Send Jane pricing", dueAt: null } });
+    const result = await completeTaskWithOutcome(mark, task.id, outcome({ next: { title: "Send Jane pricing", dueAt: null } }));
     assert.equal(result.next?.ownerId, mark.userId);
   });
 
-  it("just completes when nothing is entered, and never twice", async () => {
+  it("just completes when nothing is entered", async () => {
     const task = (await createTask(mark, { title: "Email Jane", contactId: jane })).body.task;
-    const first = await completeTaskWithOutcome(mark, task.id, { note: "  ", kind: null, next: null });
+    const first = await completeTaskWithOutcome(mark, task.id, outcome({ note: "  " }));
     assert.ok(first.task.completedAt);
-    assert.equal(first.activity, null);
+    assert.equal(first.activityId, null);
     assert.equal(first.next, null);
-    await completeTaskWithOutcome(mark, task.id, { note: "", kind: null, next: null });
     assert.equal((await audits(task.id, "task.completed")).length, 1);
   });
 
   it("refuses people who can't change the task and leaves nothing behind", async () => {
     const task = (await createTask(mark, { title: "Call Martin", contactId: martin })).body.task;
     await addTaskParticipants(mark, task.id, [priya.userId]);
-    const before = await sql<{ count: number }>("select count(*)::int as count from crm.activities where contact_id = $1", [martin]);
-    await assert.rejects(() => completeTaskWithOutcome(priya, task.id, { note: "Spoke to Martin", kind: "call", next: { title: "Chase Martin", dueAt: null } }), /Only the assignee/);
-    const after = await sql<{ count: number }>("select count(*)::int as count from crm.activities where contact_id = $1", [martin]);
-    assert.equal(after[0].count, before[0].count);
+    await assert.rejects(() => completeTaskWithOutcome(priya, task.id, outcome({ note: "Spoke to Martin", kind: "call", next: { title: "Chase Martin", dueAt: null } })), /Only the assignee/);
+    assert.equal((await activitiesFor(task.id)).length, 0);
     assert.equal((await getTask(mark, task.id)).completedAt, null);
-    const chase = await sql("select 1 from crm.tasks where title = 'Chase Martin'");
-    assert.equal(chase.length, 0);
+    assert.equal(await tasksTitled("Chase Martin"), 0);
   });
 
   it("lets the assignee who didn't create it complete with an outcome", async () => {
     const task = (await createTask(mark, { title: "Call Martin back", contactId: martin, ownerId: sam.userId })).body.task;
-    const result = await completeTaskWithOutcome(sam, task.id, { note: "Left a voicemail", kind: "call", next: null });
+    const result = await completeTaskWithOutcome(sam, task.id, outcome({ note: "Left a voicemail", kind: "call" }));
     assert.ok(result.task.completedAt);
-    assert.equal(result.activity?.title, "Left a voicemail");
+    assert.equal((await activitiesFor(task.id))[0]?.title, "Left a voicemail");
   });
 
-  it("asks for a link before logging a note on an unlinked task", async () => {
+  it("asks for a link before logging a note on an unlinked task, and needs an outcome id", async () => {
     const task = (await createTask(mark, { title: "Tidy the shared drive", companyId: null, contactId: null, opportunityId: null })).body.task;
-    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, { note: "Done it", kind: null, next: null }), /Link a person or company first/);
+    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, outcome({ note: "Done it" })), /Link a person or company first/);
+    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, { ...outcome(), outcomeId: "nope" }), /Couldn't save/);
     assert.equal((await getTask(mark, task.id)).completedAt, null);
   });
 });

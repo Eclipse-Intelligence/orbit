@@ -51,6 +51,7 @@ export function useTaskDone(tasks: Task[]) {
   const entries = useRef(new Map<string, Entry>());
   const beaconed = useRef(new Set<string>());
   const withdrawn = useRef(new Set<string>());
+  const undone = useRef(new Set<string>());
   const openKey = tasks
     .filter((task) => !task.completedAt)
     .map((task) => task.id)
@@ -172,6 +173,7 @@ export function useTaskDone(tasks: Task[]) {
     (id: string) => {
       const entry = entries.current.get(id);
       if (!entry) return false;
+      undone.current.add(id);
       expire(id);
       composer.dismissToast(entry.toast);
       if (!entry.sent) {
@@ -205,6 +207,7 @@ export function useTaskDone(tasks: Task[]) {
     (task: Task, options: { hold?: boolean } = {}) => {
       if (entries.current.has(task.id)) return;
       withdrawn.current.delete(task.id);
+      undone.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));
       setMessage(null);
       const toast = composer.showToast({ message: "Task done.", action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
@@ -226,6 +229,16 @@ export function useTaskDone(tasks: Task[]) {
 
   const settle = useCallback(
     (id: string, message: string) => {
+      if (undone.current.has(id)) {
+        undone.current.delete(id);
+        void reopenTaskAction(id)
+          .catch((): Outcome => ({ error: "Couldn't undo. Try again." }))
+          .then((result: Outcome) => {
+            composer.showToast(result.error ? { message: `Saved, but the task is still done. ${result.error}`, tone: "alert" } : { message: "Saved. Task reopened." });
+            router.refresh();
+          });
+        return false;
+      }
       const entry = entries.current.get(id);
       if (entry) {
         composer.dismissToast(entry.toast);
@@ -236,6 +249,7 @@ export function useTaskDone(tasks: Task[]) {
       setAwaiting((current) => new Set(current).add(id));
       composer.showToast({ message });
       router.refresh();
+      return true;
     },
     [composer, expire, router],
   );
