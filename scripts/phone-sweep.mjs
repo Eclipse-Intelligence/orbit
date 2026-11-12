@@ -17,6 +17,7 @@ const env = { ...readEnvFile(path.resolve(".env.local")), ...process.env };
 const base = (env.SWEEP_URL || "http://localhost:3000").replace(/\/$/, "");
 const out = path.resolve(env.SWEEP_OUT || "sweep-results");
 const engine = env.BROWSER === "webkit" ? webkit : chromium;
+const localHttps = /^https:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(base);
 const launch = env.BROWSER === "webkit" ? {} : env.CHROME_PATH ? { executablePath: env.CHROME_PATH } : { channel: "chrome" };
 
 if (!env.DEV_USER_EMAIL || !env.DEV_USER_PASSWORD) {
@@ -110,7 +111,7 @@ for (const [device, viewport] of [
   ["iphone", { width: 390, height: 844 }],
   ["ipad", { width: 820, height: 1180 }],
 ]) {
-  const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true });
+  const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true, ignoreHTTPSErrors: localHttps });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message.slice(0, 120)));
@@ -437,7 +438,7 @@ for (const [device, viewport] of [
 }
 
 for (const width of [1100, 1280, 1440]) {
-  const context = await browser.newContext({ viewport: { width, height: 900 } });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, ignoreHTTPSErrors: localHttps });
   const page = await context.newPage();
   await page.goto(`${base}/login`);
   await page.fill('input[name="email"]', env.DEV_USER_EMAIL);

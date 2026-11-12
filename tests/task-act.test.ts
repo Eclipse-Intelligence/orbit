@@ -203,6 +203,25 @@ describe("task context", () => {
     assert.notEqual(again.lastEmail?.subject, "Sam's private pricing");
   });
 
+  it("returns the contact's latest phone and email lookups", async () => {
+    const person = (await createContact(mark, { companyId: northwind, firstName: "Lena", lastName: "Hart" })).body.contact.id;
+    const task = (await createTask(mark, { title: "Call Lena", contactId: person })).body.task;
+    assert.deepEqual((await taskContext(mark, task.id)).lookups, {});
+    const lookup = (field: string, status: string, at: string) =>
+      sql(
+        `insert into crm.enrichment_lookups (workspace_id, record_type, record_id, field, status, provider, created_by_user_id, created_at)
+         values ($1, 'contact', $2, $3, $4, 'enrow', $5, $6)`,
+        [mark.workspaceId, person, field, status, mark.userId, at],
+      );
+    await lookup("phone", "failed", "2026-11-01T09:00:00Z");
+    await lookup("phone", "not_found", "2026-11-02T09:00:00Z");
+    await lookup("linkedin", "not_found", "2026-11-02T09:00:00Z");
+    const context = await taskContext(mark, task.id);
+    assert.equal(context.lookups.phone?.status, "not_found");
+    assert.equal(context.lookups.email, undefined);
+    assert.deepEqual(Object.keys(context.lookups), ["phone"]);
+  });
+
   it("counts cc and leaves out deleted and junk mail", async () => {
     const person = (await createContact(mark, { companyId: northwind, firstName: "Tom", lastName: "Reed", email: "tom@northwind-act.test" })).body.contact.id;
     const task = (await createTask(mark, { title: "Call Tom", contactId: person })).body.task;

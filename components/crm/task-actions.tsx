@@ -9,6 +9,7 @@ import CopyButton from "@/components/_ui/copy-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import Tag from "@/components/_ui/tag";
 import { Monogram } from "@/components/beautifui/record-marks";
+import { askOrbit } from "@/components/assistant/ask-orbit";
 import { UseTemplateButton } from "@/components/crm/email-template-picker";
 import FindDetailButton from "@/components/crm/find-detail";
 import { useFindAvailability } from "@/components/crm/find-availability";
@@ -20,6 +21,7 @@ import { renderTemplate, type EmailTemplate } from "@/lib/crm/email-template-rul
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
 import type { InviteSetup } from "@/lib/crm/invites";
 import type { LinkChange, TaskContext, TaskPerson } from "@/lib/crm/task-act";
+import type { LookupState } from "@/lib/enrichment/contacts";
 import { taskKind, type TaskKind } from "@/lib/crm/task-kind";
 import type { TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
@@ -30,6 +32,7 @@ import { cn } from "@/lib/utils";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
+import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import MailIcon from "@/public/assets/images/mail/mail-open.svg";
@@ -75,7 +78,7 @@ function firstNameOf(task: Task) {
 }
 
 function useTaskContext(task: Task) {
-  const key = `${task.id}|${task.updatedAt}|${task.contactId}|${task.companyId}|${task.opportunityId}`;
+  const key = `${task.id}|${task.updatedAt}|${task.contactId}|${task.contactEmail}|${task.contactPhone}|${task.companyId}|${task.opportunityId}`;
   const [state, setState] = useState<{ key: string; context: TaskContext | null; error: string | null } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -132,9 +135,20 @@ type Actions = {
   kind: TaskKind;
 };
 
+function findText(task: Task, needs: { phone: boolean; email: boolean }) {
+  const what = needs.phone && needs.email ? "a phone number and email address" : needs.phone ? "a phone number" : "an email address";
+  const name = task.contactName ?? "this contact";
+  return `Find ${what} for ${name}${task.companyName ? ` at ${task.companyName}` : ""} and save it on the contact.`;
+}
+
+function findable(available: boolean, lookup: LookupState | undefined) {
+  return available && lookup?.status !== "not_found";
+}
+
 function ContactActions({ task, context, kind }: Actions) {
   const router = useRouter();
   const composer = useComposer();
+  const find = useFindAvailability();
   const [invite, setInvite] = useState<{ setup: InviteSetup; at: number } | null>(null);
   const [inviting, setInviting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,7 +160,12 @@ function ContactActions({ task, context, kind }: Actions) {
   const booking = context?.bookingUrl ?? null;
   const to = email ? [{ address: email.toLowerCase(), name: name || null }] : [];
   const lead: TaskKind = kind === "todo" ? "call" : kind;
-  const emailLabel = task.contactFirstName || task.contactName ? `Email ${task.contactFirstName ?? task.contactName?.split(/\s+/)[0]}` : "Email";
+  const askPhone = !phone && !findable(find.phone, context?.lookups.phone);
+  const askEmail = !email && !findable(find.email, context?.lookups.email);
+
+  function ask() {
+    if (!askOrbit(findText(task, { phone: !phone, email: !email }))) composer.showToast({ message: "Ask Orbit isn't available here.", tone: "alert" });
+  }
 
   function compose(template?: EmailTemplate) {
     if (!email) return;
@@ -166,7 +185,7 @@ function ContactActions({ task, context, kind }: Actions) {
   }
 
   async function openInvite() {
-    if (!email || inviting) return;
+    if (inviting) return;
     setInviting(true);
     setError(null);
     const result = await taskInviteSetupAction().catch(() => ({ error: "Couldn't open the invite. Try again." }));
@@ -191,7 +210,7 @@ function ContactActions({ task, context, kind }: Actions) {
     email ? (
       <Button key="email" variant={primary ? "primary" : "secondary"} size="md" onClick={() => compose()} className={ACTION}>
         <MailIcon aria-hidden className="size-3.5" />
-        {emailLabel}
+        Email {first}
       </Button>
     ) : null;
   const replyButton = thread ? (
@@ -226,12 +245,13 @@ function ContactActions({ task, context, kind }: Actions) {
     if (email) more.push({ key: "invite", label: "Invite", icon: CalendarIcon, run: () => void openInvite() });
     if (booking) more.push({ key: "booking", label: "Copy booking link", icon: CalendarIcon, run: () => copy(booking, "Booking link copied.") });
   } else {
-    buttons.push(email ? inviteButton : null, bookingButton, emailButton(false));
+    buttons.push(inviteButton, bookingButton, emailButton(false));
     if (phone) buttons.push(callButton(false, true));
     if (phone) more.push({ key: "copy", label: "Copy number", icon: PhoneIcon, run: () => copy(phone, "Number copied.") });
     if (thread) more.push({ key: "reply", label: "Reply on thread", icon: ReplyIcon, run: () => router.push(threadHref(thread.key, "reply")) });
     if (email) buttons.push(templateButton(true));
   }
+  if (context && (askPhone || askEmail)) more.push({ key: "find", label: "Ask Orbit to find details", icon: SparkleIcon, run: ask });
 
   return (
     <>
@@ -287,11 +307,15 @@ function ContactStrip({ task, context, kind, here }: Actions & { here?: TitleHer
     );
   }
   const name = task.contactName ?? "Contact";
+  const contactId = task.contactId ?? "";
+  const findPhone = find.phone && Boolean(contactId) && !task.contactPhone;
+  const findEmail = find.email && Boolean(contactId) && !task.contactEmail;
+  const finding = findPhone || findEmail;
   return (
-    <section aria-label={name} className="flex flex-col gap-2.5 rounded-xl bg-white/[0.04] p-2.5 @2xl:flex-row @2xl:items-center">
+    <section aria-label={name} className={cn("flex flex-col gap-2.5 rounded-xl bg-white/[0.04] p-2.5 @2xl:flex-row @2xl:items-center", finding && "[@media(pointer:coarse)]:gap-y-6")}>
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <Monogram name={name} className="size-8 rounded-full text-[12px]" />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="@container/details flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             {task.contactId ? (
               <Link href={contactHref(task.contactId)} className="ui-style text-foreground truncate font-medium hover:underline">
@@ -315,27 +339,27 @@ function ContactStrip({ task, context, kind, here }: Actions & { here?: TitleHer
               </span>
             )}
           </span>
-          <span className="caption-style text-soft flex min-w-0 flex-wrap items-center gap-x-2 tabular-nums">
+          <div className={cn("caption-style text-soft flex min-w-0 flex-col items-start gap-y-0.5 tabular-nums @md/details:flex-row @md/details:items-center @md/details:gap-x-2", finding && "[@media(pointer:coarse)]:mt-3 [@media(pointer:coarse)]:gap-y-7")}>
             {task.contactPhone ? (
               <span>{task.contactPhone}</span>
             ) : (
-              <span className="inline-flex items-center gap-1">
+              <span className="flex min-w-0 flex-wrap items-center gap-x-1">
                 <span className="text-subtle">No number</span>
-                {find.phone && task.contactId && <FindDetailButton contactId={task.contactId} field="phone" variant="text" />}
+                {findPhone && <FindDetailButton contactId={contactId} field="phone" variant="text" lookup={context?.lookups.phone} className="hit" />}
               </span>
             )}
-            <span aria-hidden className="text-faint">
+            <span aria-hidden className="text-faint hidden @md/details:inline">
               ·
             </span>
             {task.contactEmail ? (
-              <span className="min-w-0 truncate">{task.contactEmail}</span>
+              <span className="max-w-full min-w-0 truncate">{task.contactEmail}</span>
             ) : (
-              <span className="inline-flex items-center gap-1">
+              <span className="flex min-w-0 flex-wrap items-center gap-x-1">
                 <span className="text-subtle">No email</span>
-                {find.email && task.contactId && <FindDetailButton contactId={task.contactId} field="email" variant="text" />}
+                {findEmail && <FindDetailButton contactId={contactId} field="email" variant="text" lookup={context?.lookups.email} className="hit" />}
               </span>
             )}
-          </span>
+          </div>
         </div>
       </div>
       <ContactActions task={task} context={context} kind={kind} />
@@ -410,7 +434,7 @@ function CompanyStrip({ task, context, kind, canChange, here, onLinked }: Action
       </div>
       {context && people.length === 0 && <p className="caption-style text-subtle border-line-subtle border-t px-0.5 pt-2">No people at {company} yet.</p>}
       {people.length > 0 && (
-        <ul aria-label={`People at ${company}`} className="border-line-subtle flex flex-col border-t pt-1">
+        <ul aria-label={`People at ${company}`} className="border-line-subtle flex flex-col border-t pt-1 [@media(pointer:coarse)]:gap-1.5">
           {people.map((person) => (
             <PersonRow key={person.id} person={person} busy={busy} canLink={canChange} onLink={(item) => void link(item)} />
           ))}

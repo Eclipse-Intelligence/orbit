@@ -524,7 +524,7 @@ export function LinkPerson({ taskId, title, onLinked }: { taskId: string; title:
   const offered = new Set(candidates.map((candidate) => `${candidate.kind}:${candidate.id}`));
   const searched = results && results.query === query.trim() ? results.items.filter((item) => !offered.has(`${item.kind}:${item.id}`)) : null;
   return (
-    <section aria-label={heading} className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5">
+    <section aria-label={heading} className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5 [@media(pointer:coarse)]:gap-2">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 pb-1">
         <LinkIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
         <h3>{heading}</h3>
@@ -795,7 +795,7 @@ function TaggedField({ details, viewer, members, people, tagging }: { details: T
         const removable = canRemoveTag(viewer, task, person);
         const colleague = member.id !== viewer.id && members.some((item) => item.id === member.id);
         return (
-          <span key={person} className={cn("inline-flex items-center", TASK_CHIP, removable && "pr-0.5")}>
+          <span key={person} className={cn("inline-flex items-center", TASK_CHIP, removable && "pr-0.5 [@media(pointer:coarse)]:pr-1")}>
             <MemberAvatar member={member} viewerId={viewer.id} size="xs" />
             {colleague ? <ColleagueLink colleague={member} className="truncate no-underline hover:underline" /> : <span className="truncate">{member.name}</span>}
             {removable && tagging && (
@@ -805,7 +805,7 @@ function TaggedField({ details, viewer, members, people, tagging }: { details: T
                 aria-label={person === viewer.id ? "Remove yourself" : `Remove ${member.name}`}
                 title="Remove"
                 onClick={() => tagging.remove(person)}
-                className="hit size-6 rounded-full"
+                className="hit size-6 rounded-full [@media(pointer:coarse)]:ml-1"
               >
                 <XIcon aria-hidden className="size-3" />
               </Button>

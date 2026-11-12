@@ -79,7 +79,7 @@ export default function ThreadFilingMenu({
             size="sm"
             disabled={busy}
             aria-label={`Filed in ${label}. Change where this email is filed`}
-            className="data-[state=open]:text-foreground -mr-1.5 max-w-full min-w-0 gap-1.5 text-[13px] font-normal data-[state=open]:bg-white/6"
+            className="data-[state=open]:text-foreground -mr-1.5 max-w-full min-w-0 gap-1.5 px-[9px] text-[13px] font-normal data-[state=open]:bg-white/6"
           >
             <Tiles list={filed} />
             <span className="truncate">{busy ? "Filing…" : `Filed in ${label}`}</span>
