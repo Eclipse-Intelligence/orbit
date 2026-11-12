@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import Button from "@/components/_ui/button";
-import { DateTimePicker } from "@/components/_ui/date-picker";
+import { DueDatePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
 import { TASK_CHIP } from "@/components/crm/task-fields";
@@ -362,7 +362,7 @@ export default function TaskOutcomeForm({
             }}
             className="min-w-[12em] flex-1"
           />
-          <DateTimePicker
+          <DueDatePicker
             id={`${id}-due`}
             aria-label={draft.nextDue ? "Next task due. Change" : "Next task due date"}
             placeholder="Due"

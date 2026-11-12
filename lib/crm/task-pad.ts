@@ -8,7 +8,7 @@ import { detectTaskRecordsInDb, folded, memberNames, mentionsName, TEXT_LIMIT, t
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
-import { londonParts, parseTaskText } from "@/lib/task-pad";
+import { londonParts, padDueHasTime, parseTaskText } from "@/lib/task-pad";
 
 export type PadRecord = { id: string; name: string };
 
@@ -268,20 +268,21 @@ export async function parsePadWithAi(text: string, now = new Date()): Promise<Pa
   const result = await completeJson({
     system:
       "You turn a short to-do written in UK English into JSON. Reply with JSON only: " +
-      '{"title": string, "due": "YYYY-MM-DDTHH:mm" or null, "remindMinutes": number or null}. ' +
+      '{"title": string, "due": "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" or null, "remindMinutes": number or null}. ' +
       "title is the task without the date, time and reminder words, starting with a capital letter. " +
-      "due is in Europe/London local time. If a day is given without a time, use 09:00. If nothing says when, due is null. " +
-      "remindMinutes is how many minutes before the due time to remind, or null if no reminder is asked for. " +
+      "due is in Europe/London local time. Give a time only when the text gives one (a clock time, or words like morning, noon, tonight or end of day). " +
+      "If a day is given without a time, due is the day alone as YYYY-MM-DD. If nothing says when, due is null. " +
+      "remindMinutes is how many minutes before the due time to remind, or null if no reminder is asked for or due has no time. " +
       `Now is ${today} in London.`,
     user: clean,
     schema: AI_SCHEMA,
     maxTokens: 300,
     timeoutMs: 12_000,
   });
-  const due = result.data.due && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(result.data.due) ? result.data.due : null;
+  const due = result.data.due && /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$/.test(result.data.due) ? result.data.due : null;
   return {
     title: result.data.title.trim().slice(0, 200) || clean,
     due,
-    remindMinutes: due ? snapReminder(result.data.remindMinutes) : null,
+    remindMinutes: padDueHasTime(due) ? snapReminder(result.data.remindMinutes) : null,
   };
 }

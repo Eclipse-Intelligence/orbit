@@ -17,7 +17,8 @@ import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
 import { splitDescription } from "@/lib/crm/task-description";
 import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
-import { taskDueState } from "@/lib/crm/task-views";
+import { durationLabel, isTaskOverdue } from "@/lib/crm/task-time";
+import { taskDueLabel, taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
@@ -187,8 +188,8 @@ function ActionTask({
   const assigning: TaskAssigning | undefined = onAssign
     ? { members, viewerId: viewer.id, tagged, canAssign, pending: assignPending, onAssign: (ownerId) => onAssign(task, ownerId) }
     : undefined;
-  const overdue = Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
-  const due = dueBadge ? taskDueState(task.dueAt, now) : null;
+  const overdue = isTaskOverdue(task, now);
+  const due = dueBadge ? { kind: taskDueState(task.dueAt, now).kind, label: taskDueLabel(task, now) } : null;
   const canChange = canChangeTaskAs(viewer, task);
   const details = useTaskDetails(task, canChange, expanded);
   const flushDetails = useRef(details.flush);
@@ -348,8 +349,15 @@ function ActionTask({
                     <span className="sr-only">{comments === 1 ? " comment" : " comments"}</span>
                   </span>
                 )}
+                {due && due.kind !== "none" && !completed && (
+                  <span className="caption-style text-subtle shrink-0 tabular-nums" title={`Duration ${durationLabel(task.durationMinutes)}`}>
+                    {durationLabel(task.durationMinutes)}
+                    <span className="sr-only"> duration</span>
+                  </span>
+                )}
                 {due ? (
-                  <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="text-[12px]">
+                  <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="gap-1 text-[12px]">
+                    {task.dueHasTime && due.kind !== "none" && <ClockIcon aria-hidden className="size-3 shrink-0" />}
                     {due.label}
                   </Tag>
                 ) : (

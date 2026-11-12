@@ -16,7 +16,9 @@ import {
   type PadOption,
   type PadSearchKind,
 } from "@/lib/crm/task-pad";
+import { isTaskDuration } from "@/lib/crm/task-time";
 import { TASKS_PATH } from "@/lib/crm/task-views";
+import { padDueHasTime } from "@/lib/task-pad";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 export async function detectTaskRecordsAction(text: string, companyId: string | null = null): Promise<PadDetection> {
@@ -63,17 +65,20 @@ export async function addPadTaskAction(input: {
   opportunityId?: string | null;
   clickupListId: string | null;
   ownerId?: string | null;
+  durationMinutes?: number | null;
 }): Promise<{ ok?: boolean; error?: string; warning?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
-    const dueAt = typeof input.dueAt === "string" && input.dueAt ? input.dueAt : null;
+    const due = typeof input.dueAt === "string" && input.dueAt ? input.dueAt : null;
+    const timed = padDueHasTime(due);
     const created = await createTaskWithClickUp(
       user,
       {
         title: typeof input.title === "string" ? input.title : "",
-        dueAt,
-        remindMinutes: dueAt && isReminderMinutes(input.remindMinutes) ? input.remindMinutes : null,
+        ...(timed ? { dueAt: due } : { dueDate: due }),
+        remindMinutes: timed && isReminderMinutes(input.remindMinutes) ? input.remindMinutes : null,
+        ...(isTaskDuration(input.durationMinutes) ? { durationMinutes: input.durationMinutes } : {}),
         ...padLinks(input),
         ownerId: typeof input.ownerId === "string" && isUuid(input.ownerId) ? input.ownerId : user.userId,
         priority: "normal",

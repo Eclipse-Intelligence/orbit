@@ -248,7 +248,16 @@ for (const [device, viewport] of [
     await page.waitForTimeout(600);
     check(`${device} task expands in place`, await visible(row.getByRole("button", { name: "Open", exact: true })));
     check(`${device} expanded task no overflow`, await noHorizontalScroll());
-    const note = `Checked by the sweep ${Date.now()}`;
+    check(`${device} expanded task shows its duration`, await visible(row.getByRole("button", { name: /^Duration / })));
+    await row.getByRole("button", { name: "Schedule" }).tap();
+    await page.waitForTimeout(600);
+    const schedule = page.getByRole("menu", { name: "Schedule" });
+    check(`${device} Schedule offers tomorrow morning`, await visible(schedule.getByRole("menuitem", { name: /morning/ }).first()));
+    check(`${device} Schedule offers a date and time`, await visible(schedule.getByRole("menuitem", { name: /Pick a date and time/ })));
+    await shot("task-schedule");
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    const note =`Checked by the sweep ${Date.now()}`;
     const description = row.getByRole("textbox", { name: "Description" });
     await description.fill(note);
     await description.evaluate((field) => field.blur());

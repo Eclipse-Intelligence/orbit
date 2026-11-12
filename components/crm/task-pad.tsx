@@ -3,7 +3,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode, type SVGProps } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import { DateTimePicker } from "@/components/_ui/date-picker";
+import { DueDatePicker } from "@/components/_ui/date-picker";
+import { ReminderTimePrompt } from "@/components/crm/task-timing";
 import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
@@ -20,6 +21,7 @@ import {
   padFits,
   padNeedsConfirm,
   padRelease,
+  padDueHasTime,
   padSaveIds,
   parseTaskText,
   reminderClock,
@@ -27,7 +29,7 @@ import {
   stripMention,
   type PadMark,
 } from "@/lib/task-pad";
-import { formatDateTimeLabel } from "@/lib/date-input";
+import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
@@ -220,20 +222,27 @@ export function SearchChip({
 
 function ReminderChip({
   due,
+  title,
   value,
   variant,
   onChange,
+  onTime,
   onNeedDue,
   onClosed,
 }: {
   due: string | null;
+  title: string;
   value: number | null;
   variant: Variant;
   onChange: (value: number | null) => void;
+  onTime: (time: string) => void;
   onNeedDue: () => void;
   onClosed: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  if (due && !padDueHasTime(due)) {
+    return <ReminderTimePrompt title={title.trim() || "This task"} onSave={onTime} className={chipClass("empty", variant)} />;
+  }
   const clock = due && value !== null ? reminderClock(due, value) : null;
   const label = clock ? `Remind me at ${clock}. Change` : "Remind me";
   const content = (
@@ -435,7 +444,7 @@ export default function TaskPad({
   const autoDue = aiFits ? (ai.value.due ?? parsed.due) : parsed.due;
   const finalDue = due.set ? due.value : autoDue;
   const autoReminder = aiFits ? ai.value.remindMinutes : parsed.remindMinutes;
-  const finalReminder = finalDue ? (reminder.set ? reminder.value : autoReminder) : null;
+  const finalReminder = padDueHasTime(finalDue) ? (reminder.set ? reminder.value : autoReminder) : null;
   const anchor = fixedCompany ?? (company.set ? company.value : null);
   const scope = anchor?.id ?? null;
   const seen = text.trim().length >= 3 ? (detected?.value ?? null) : null;
@@ -768,10 +777,10 @@ export default function TaskPad({
   );
 
   const chips: ReactNode[] = [
-    <DateTimePicker
+    <DueDatePicker
       key="due"
       id={`${id}-due`}
-      aria-label={finalDue ? `Due ${formatDateTimeLabel(finalDue)}. Change` : "Due date"}
+      aria-label={finalDue ? `Due ${padDueHasTime(finalDue) ? formatDateTimeLabel(finalDue) : formatDateLabel(finalDue)}. Change` : "Due date"}
       placeholder="Due"
       value={finalDue ?? ""}
       onChange={(value) => setDue({ set: true, value: value || null })}
@@ -785,9 +794,15 @@ export default function TaskPad({
     <ReminderChip
       key="reminder"
       due={finalDue}
+      title={title}
       value={finalReminder}
       variant={variant}
       onChange={(value) => setReminder({ set: true, value })}
+      onTime={(time) => {
+        if (!finalDue) return;
+        setDue({ set: true, value: `${finalDue.slice(0, 10)}T${time}` });
+        setReminder({ set: true, value: 0 });
+      }}
       onNeedDue={() => document.getElementById(`${id}-due`)?.click()}
       onClosed={() => focusAt()}
     />,

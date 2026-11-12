@@ -46,6 +46,12 @@ export function DateTimePicker(props: PickerProps) {
   return <PickerField {...props} withTime />;
 }
 
+export function DueDatePicker(props: PickerProps) {
+  return <PickerField {...props} withTime optionalTime />;
+}
+
+const NO_TIME = "none";
+
 function PickerField({
   id,
   name,
@@ -56,14 +62,16 @@ function PickerField({
   disabled,
   className,
   withTime,
+  optionalTime = false,
   ...aria
-}: PickerProps & { withTime: boolean }) {
+}: PickerProps & { withTime: boolean; optionalTime?: boolean }) {
   const [inner, setInner] = useState(defaultValue);
   const current = value ?? inner;
   const [open, setOpen] = useState(false);
   const parts = withTime ? splitDateTime(current) : null;
-  const selectedDate = withTime ? (parts?.date ?? null) : parseDateValue(current) ? current : null;
-  const selectedTime = parts?.time ?? DEFAULT_TIME;
+  const dayOnly = optionalTime && !parts && parseDateValue(current) ? current : null;
+  const selectedDate = withTime ? (parts?.date ?? dayOnly) : parseDateValue(current) ? current : null;
+  const selectedTime = parts?.time ?? (optionalTime ? NO_TIME : DEFAULT_TIME);
   const [view, setView] = useState(() => monthOf(selectedDate));
 
   function commit(next: string) {
@@ -72,9 +80,9 @@ function PickerField({
   }
 
   function pickDate(date: string) {
-    if (!withTime) {
+    if (!withTime || (optionalTime && !parts)) {
       commit(date);
-      setOpen(false);
+      if (!withTime) setOpen(false);
       return;
     }
     const today = dateValue(new Date());
@@ -189,13 +197,14 @@ function PickerField({
               <Select
                 value={selectedTime}
                 disabled={!selectedDate}
-                onValueChange={(time) => selectedDate && commit(joinDateTime(selectedDate, time))}
+                onValueChange={(time) => selectedDate && commit(time === NO_TIME ? selectedDate : joinDateTime(selectedDate, time))}
               >
                 <SelectTrigger aria-label="Time" className="h-8">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-64">
-                  {(TIME_OPTIONS.includes(selectedTime) ? TIME_OPTIONS : [...TIME_OPTIONS, selectedTime].sort()).map(
+                  {optionalTime && <SelectItem value={NO_TIME}>No time</SelectItem>}
+                  {(TIME_OPTIONS.includes(selectedTime) || selectedTime === NO_TIME ? TIME_OPTIONS : [...TIME_OPTIONS, selectedTime].sort()).map(
                     (time) => (
                       <SelectItem key={time} value={time}>
                         {time}

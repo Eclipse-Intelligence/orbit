@@ -233,12 +233,13 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     const parts = londonParts(new Date(now.getTime() + found.exact * 60_000));
     due = `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`;
   } else if (found.date || found.time) {
-    const time = found.time ?? { hour: DEFAULT_HOUR, minute: 0 };
+    const time = found.time ?? (found.remind !== null ? { hour: DEFAULT_HOUR, minute: 0 } : null);
     let day = found.date ?? today;
-    if (!found.date && (time.hour < wall.hour || (time.hour === wall.hour && time.minute <= wall.minute))) {
+    if (time && !found.date && (time.hour < wall.hour || (time.hour === wall.hour && time.minute <= wall.minute))) {
       day = addDays(today, 1);
     }
-    due = `${day.year}-${pad(day.month)}-${pad(day.day)}T${pad(time.hour)}:${pad(time.minute)}`;
+    const date = `${day.year}-${pad(day.month)}-${pad(day.day)}`;
+    due = time ? `${date}T${pad(time.hour)}:${pad(time.minute)}` : date;
   }
 
   const title = cleanTitle(text, spans);
@@ -408,6 +409,10 @@ export function padConfirmLine(found: ConfirmInput) {
 }
 
 const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+
+export function padDueHasTime(due: string | null | undefined) {
+  return Boolean(due && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(due));
+}
 
 export function reminderClock(due: string, minutes: number) {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(due);

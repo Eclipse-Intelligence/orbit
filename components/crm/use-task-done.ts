@@ -4,10 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useComposer } from "@/components/mail/compose-dock";
 import { completeTaskAction, openTaskIdsAction, remindTaskAction, reopenTaskAction } from "@/app/(crm)/records";
-import { onWorkingDay, taskRemindChoices } from "@/lib/crm/task-snooze";
+import { onWorkingDay, snoozeDetail, taskRemindChoices } from "@/lib/crm/task-snooze";
 import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
-import { laterDetail } from "@/lib/mail/later";
 
 export const TASK_UNDO_MS = 8_000;
 const BEACON_BATCH = 50;
@@ -281,7 +280,7 @@ export function useTaskDone(tasks: Task[]) {
       composer.pickLater({
         title: "Remind me",
         description: "Moves the due date.",
-        options: taskRemindChoices(task.dueAt, new Date(now)),
+        options: taskRemindChoices(task, new Date(now)),
         now,
         onPick: (at) => {
           setMessage(null);
@@ -293,7 +292,7 @@ export function useTaskDone(tasks: Task[]) {
                 composer.showToast({ message: result.error, tone: "alert" });
                 return;
               }
-              composer.showToast({ message: `Due ${laterDetail(onWorkingDay(new Date(at)), Date.now())}.` });
+              composer.showToast({ message: `Due ${snoozeDetail(onWorkingDay(new Date(at)), task.dueHasTime, Date.now())}.` });
               router.refresh();
             });
         },
