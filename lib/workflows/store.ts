@@ -121,10 +121,16 @@ function iso(value: Date | string | null) {
   return value ? new Date(value).toISOString() : null;
 }
 
-function withoutChatRooms(definition: WorkflowDefinition): WorkflowDefinition {
+function withoutOwnerSettings(definition: WorkflowDefinition): WorkflowDefinition {
   return {
     ...definition,
-    nodes: definition.nodes.map((node) => (node.type === "post_to_chat" ? { ...node, config: { ...node.config, roomId: "", roomName: "" } } : node)),
+    nodes: definition.nodes.map((node) =>
+      node.type === "post_to_chat"
+        ? { ...node, config: { ...node.config, roomId: "", roomName: "" } }
+        : node.type === "send_email"
+          ? { ...node, config: { ...node.config, from: "" } }
+          : node,
+    ),
   };
 }
 
@@ -159,7 +165,7 @@ function mapWorkflow(row: WorkflowRow, actor: UserActor): Workflow {
     lastRunStatus: row.last_run_status,
     runCount: row.run_count,
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
-    definition: row.owner_id === actor.userId ? definition : withoutChatRooms(definition),
+    definition: row.owner_id === actor.userId ? definition : withoutOwnerSettings(definition),
   };
 }
 
