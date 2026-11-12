@@ -80,7 +80,7 @@ export type TitleHere = { kind: "contact" | "company" | "opportunity"; id: strin
 
 export function taskTitleSegments(task: TitleTask, colleagues: TitleColleague[] = [], viewerId: string | null = null, here: TitleHere | null = null): TitleSegment[] {
   const title = task.title;
-  const hits: { start: number; end: number; target: TitleTarget; rank: number }[] = [];
+  const hits: { start: number; end: number; target: TitleTarget | null; rank: number }[] = [];
   for (const term of termsFor(task, colleagues, viewerId)) {
     const pattern = new RegExp(`(^|[^\\p{L}\\p{N}-])(${escape(term.text)})(?=$|[^\\p{L}\\p{N}-])`, "giu");
     for (const match of title.matchAll(pattern)) {
@@ -88,8 +88,8 @@ export function taskTitleSegments(task: TitleTask, colleagues: TitleColleague[] 
       const text = match[2];
       if (term.partial && !startsUpper(text)) continue;
       if (term.partial && term.target.kind === "colleague" && surnameFollows(title.slice(start + text.length))) continue;
-      if (here && term.target.kind === here.kind && term.target.id === here.id) continue;
-      hits.push({ start, end: start + text.length, target: term.target, rank: term.rank });
+      const plain = Boolean(here && term.target.kind === here.kind && term.target.id === here.id);
+      hits.push({ start, end: start + text.length, target: plain ? null : term.target, rank: term.rank });
     }
   }
   hits.sort((left, right) => left.start - right.start || right.end - right.start - (left.end - left.start) || left.rank - right.rank);

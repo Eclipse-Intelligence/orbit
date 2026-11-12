@@ -87,6 +87,12 @@ export default function ActionsScreen({
   const [windowed, setWindowed] = useState<{ key: string; data: TaskWindow } | null>(null);
   const [loading, startLoading] = useTransition();
   const [moreError, setMoreError] = useState<string | null>(null);
+  const [shownKey, setShownKey] = useState(pageKey);
+  if (shownKey !== pageKey) {
+    setShownKey(pageKey);
+    setWindowed(null);
+    setMoreError(null);
+  }
   const current = windowed && windowed.key === pageKey && windowed.data.pages > 1 ? windowed.data : null;
   const allTasks = unique(current ? current.tasks : tasks);
   const allCompanies = unique(current ? current.companies : companies);
@@ -104,10 +110,16 @@ export default function ActionsScreen({
     let cancelled = false;
     const key = pageKey;
     void taskWindowAction({ view, who, pages: current.pages })
+      .catch(() => ({ error: "Couldn't load more. Try again." }))
       .then((result) => {
-        if (!cancelled && !("error" in result)) setWindowed({ key, data: result });
-      })
-      .catch(() => undefined);
+        if (cancelled) return;
+        if ("error" in result) {
+          setWindowed(null);
+          setMoreError(`${result.error} Showing the first 100.`);
+          return;
+        }
+        setWindowed({ key, data: result });
+      });
     return () => {
       cancelled = true;
     };

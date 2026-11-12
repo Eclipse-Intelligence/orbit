@@ -373,7 +373,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "create_next_action",
     {
-      description: "Create a task, with an optional due date, assignee (ownerId, a workspace member) and company, contact, or opportunity. Look up the person and company the task is about first and pass their ids (a contact links their company too). With no ids at all, Orbit links it only when the title names exactly one contact by full name, one company or one opportunity; pass null to leave a link deliberately empty. The assignee is told.",
+      description: "Create a task, with an optional due date, assignee (ownerId, a workspace member) and company, contact, or opportunity. Look up the person and company the task is about first and pass their ids (a contact links their company too). With no ids at all, Orbit links it only when the title names exactly one contact by full name, or one company or opportunity whose name has two or more words; pass null to leave a link deliberately empty. The assignee is told.",
       inputSchema: {
         title: z.string(),
         description: z.string().nullable().optional(),

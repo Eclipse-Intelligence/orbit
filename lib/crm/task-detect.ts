@@ -57,7 +57,7 @@ export async function memberNames(db: Db, workspaceId: string) {
   return new Set(result.rows.flatMap((row) => (row.name ? [folded(row.name)] : [])));
 }
 
-export async function detectTaskRecordsInDb(db: Db, workspaceId: string, text: string): Promise<DetectedTaskLinks> {
+export async function detectTaskRecordsInDb(db: Db, workspaceId: string, text: string, options: { oneWordCompanies?: boolean } = {}): Promise<DetectedTaskLinks> {
   const clean = text.trim().slice(0, TEXT_LIMIT);
   if (clean.length < MIN_NAME) return NO_DETECTION;
   const members = await memberNames(db, workspaceId);
@@ -88,7 +88,11 @@ export async function detectTaskRecordsInDb(db: Db, workspaceId: string, text: s
     [workspaceId, clean, MIN_NAME],
   );
   const contactHits = mentioned(contacts.rows, clean, members);
-  const companyHits = mentioned(companies.rows, clean, members);
+  const companyHits = mentioned(
+    companies.rows.filter((row) => options.oneWordCompanies || /\s/.test(row.name.trim())),
+    clean,
+    members,
+  );
   const opportunityHits = mentioned(
     opportunities.rows.filter((row) => /\s/.test(row.name.trim())),
     clean,

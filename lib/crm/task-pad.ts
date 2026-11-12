@@ -10,7 +10,7 @@ export type PadRecord = { id: string; name: string };
 export type PadDetection = DetectedTaskLinks;
 
 export async function detectPadRecords(actor: UserActor, text: string): Promise<PadDetection> {
-  return withActor(actor, (db) => detectTaskRecordsInDb(db, actor.workspaceId, text));
+  return withActor(actor, (db) => detectTaskRecordsInDb(db, actor.workspaceId, text, { oneWordCompanies: true }));
 }
 
 const AI_SCHEMA = z.object({

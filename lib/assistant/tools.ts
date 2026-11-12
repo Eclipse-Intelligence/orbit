@@ -3289,7 +3289,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Creating a task",
     write: true,
     description:
-      "Create a task. Find the person, company or opportunity it is about first (search_records) and pass their ids; a task with none is linked only when its title names exactly one contact by full name, one company or one opportunity. It goes to the default ClickUp list unless sendToClickUp is false.",
+      "Create a task. Find the person, company or opportunity it is about first (search_records) and pass their ids; a task with none is linked only when its title names exactly one contact by full name, or one company or opportunity whose name has two or more words. It goes to the default ClickUp list unless sendToClickUp is false.",
     parameters: {
       type: "object",
       properties: {

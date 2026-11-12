@@ -14,6 +14,7 @@ import { createOpportunity } from "@/lib/crm/opportunities";
 import { getDueActions } from "@/lib/crm/relationships";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { detectTaskRecordsInDb } from "@/lib/crm/task-detect";
+import { detectPadRecords } from "@/lib/crm/task-pad";
 import { backfillTaskLinks, linkTask, taskLinkCandidates } from "@/lib/crm/task-links";
 import { taskTitleSegments } from "@/lib/crm/task-title";
 import { createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
@@ -127,7 +128,14 @@ describe("linking tasks on creation", () => {
       assert.deepEqual(links(task), { companyId: null, contactId: null, opportunityId: null }, title);
     }
     const named = (await createTask(mark, { title: "Renew the Zoom licence" })).body.task;
-    assert.deepEqual(links(named), { companyId: zoom, contactId: null, opportunityId: null });
+    assert.deepEqual(links(named), { companyId: null, contactId: null, opportunityId: null });
+    assert.deepEqual((await taskLinkCandidates(mark, named.id)).candidates.map((candidate) => [candidate.kind, candidate.name]), [["company", "Zoom"]]);
+    const typed = await detectPadRecords(mark, "Renew the Zoom licence");
+    assert.equal(typed.company?.id, zoom);
+    const assistant = (await runTool(mark, "create_task", { title: "Book the Zoom renewal call", sendToClickUp: false })) as { task: Task };
+    assert.equal(assistant.task.companyId, null);
+    const confirmed = (await createTask(mark, { title: "Renew the Zoom licence", companyId: typed.company!.id })).body.task;
+    assert.equal(confirmed.companyId, zoom);
   });
 
   it("prefers the longest name across kinds and never lets a contact's company replace a company named in full", async () => {
@@ -331,6 +339,7 @@ describe("Link a person and the backfill", () => {
     assert.deepEqual((await taskLinkCandidates(mark, teammate.id)).candidates, []);
     await createContact(mark, { firstName: "Sam", lastName: "Reid", email: "sam.reid@links.test" });
     assert.deepEqual((await taskLinkCandidates(mark, teammate.id)).candidates.map((candidate) => candidate.name), ["Sam Reid"]);
+    assert.equal((await taskLinkCandidates(mark, teammate.id)).reason, null);
     const possessive = (await createTask(mark, { title: "check raj's numbers", contactId: null })).body.task;
     assert.deepEqual((await taskLinkCandidates(mark, possessive.id)).candidates.map((candidate) => candidate.name), ["Raj Mehta"]);
     const grant = candidates.find((candidate) => candidate.name === "Oliver Grant")!;
@@ -468,7 +477,7 @@ describe("names in the title", () => {
     assert.deepEqual(own.filter((segment) => segment.target).map((segment) => segment.text), ["Raj"]);
     const hyphen = taskTitleSegments({ ...task, title: "Ask Raj-Kumar about Halden Group-wide pricing" }, []);
     assert.deepEqual(hyphen.filter((segment) => segment.target).map((segment) => segment.text), []);
-    const here = taskTitleSegments({ ...task, title: "Email Raj about Halden Group" }, [], null, { kind: "contact", id: "p1" });
+    const here = taskTitleSegments({ ...task, title: "Email Raj about Halden Group" }, [{ id: "u4", name: "Raj Patel" }], null, { kind: "contact", id: "p1" });
     assert.deepEqual(here.filter((segment) => segment.target).map((segment) => segment.text), ["Halden Group"]);
   });
 

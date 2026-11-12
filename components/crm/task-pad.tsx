@@ -158,7 +158,7 @@ export default function TaskPad({
   const seen = text.trim().length >= 3 ? (detected?.value ?? null) : null;
   const finalContact = contact.set ? contact.value : (seen?.contact ?? null);
   const finalCompany = fixedCompany ?? (company.set ? company.value : (seen?.company ?? seen?.contact?.company ?? null));
-  const spotted = seen?.opportunity && (!finalCompany || finalCompany.id === seen.opportunity.companyId) ? seen.opportunity : null;
+  const spotted = seen?.opportunity && finalCompany && finalCompany.id === seen.opportunity.companyId ? seen.opportunity : null;
   const finalOpportunity = opportunity.set ? opportunity.value : spotted;
   const pending = !fixedCompany && !contact.set && !company.set && !opportunity.set && detected?.text !== text;
   const finalList = clickup ? (list.set ? list.value : clickup.listId) : null;
@@ -481,7 +481,13 @@ export default function TaskPad({
           )}
           {finalContact && <RecordChip label={finalContact.name} onRemove={() => setContact({ set: true, value: null })} />}
           {!fixedCompany && finalCompany && (
-            <RecordChip label={finalCompany.name} onRemove={() => setCompany({ set: true, value: null })} />
+            <RecordChip
+              label={finalCompany.name}
+              onRemove={() => {
+                setCompany({ set: true, value: null });
+                setOpportunity({ set: true, value: null });
+              }}
+            />
           )}
           {finalOpportunity && <RecordChip label={finalOpportunity.name} onRemove={() => setOpportunity({ set: true, value: null })} />}
           {assignable && viewerId && (

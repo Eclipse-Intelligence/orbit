@@ -508,7 +508,9 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose, op
                           onClick={(event) => {
                             if (window.getSelection()?.toString()) return;
                             setEditingTitle(caretAt(event.currentTarget, event.clientX, event.clientY) ?? title.length);
-                          }} className="relative cursor-text leading-[1.3] break-words">
+                          }}
+                          className="relative cursor-text leading-[1.3] break-words"
+                        >
                           <TaskTitle task={{ ...task, title }} colleagues={colleagues} viewerId={viewer.id} />
                         </h2>
                       </div>

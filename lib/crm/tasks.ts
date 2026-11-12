@@ -508,9 +508,7 @@ export async function countOpenTasks(actor: Actor, options: { mine?: boolean } =
 
 export async function listTasks(actor: Actor, query: TaskListQuery = {}, options: { maxLimit?: number } = {}) {
   assertScope(actor.scopes, "crm:read");
-  const page = options.maxLimit
-    ? { limit: Math.min(options.maxLimit, Math.max(1, query.limit ?? 50)), offset: Math.min(10_000, Math.max(0, query.offset ?? 0)) }
-    : pageWindow(query.limit, query.offset);
+  const page = pageWindow(query.limit, query.offset, options.maxLimit);
   const view: TaskView | undefined = query.view;
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];

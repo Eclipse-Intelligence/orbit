@@ -84,8 +84,9 @@ export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<
           `select word, count(c.id)::int as count
            from unnest($2::text[]) as word
            join crm.contacts c on c.workspace_id = $1 and c.archived_at is null and (lower(trim(c.first_name)) = word or lower(trim(c.last_name)) = word)
+             and lower(regexp_replace(trim(concat_ws(' ', c.first_name, c.last_name)), '\s+', ' ', 'g')) <> all($3::text[])
            group by word order by min(array_position($2::text[], word))`,
-          [actor.workspaceId, partial.sort((left, right) => words.indexOf(left) - words.indexOf(right))],
+          [actor.workspaceId, partial.sort((left, right) => words.indexOf(left) - words.indexOf(right)), [...members]],
         )
       : { rows: [] };
     const shared = counts.rows.find((entry) => entry.count > 1);
