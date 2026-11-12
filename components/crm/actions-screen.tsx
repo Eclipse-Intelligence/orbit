@@ -306,7 +306,7 @@ export default function ActionsScreen({
     markDone(task);
     cancelFollow();
     const next = following?.dataset.taskId;
-    if (!following || !next) {
+    if (panelModal || !following || !next) {
       closePanel();
       return;
     }

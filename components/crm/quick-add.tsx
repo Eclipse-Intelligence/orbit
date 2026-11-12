@@ -112,6 +112,7 @@ export function useScreenState() {
   const [lift, setLift] = useState(0);
   const [tucked, setTucked] = useState(false);
   const [beside, setBeside] = useState(0);
+  const [room, setRoom] = useState<{ start: number; end: number } | null>(null);
 
   useEffect(() => {
     let frame = 0;
@@ -122,7 +123,17 @@ export function useScreenState() {
       frame = 0;
       setCovered(modalOpen());
       setTucked(document.querySelector("[data-quick-add-hide]") !== null);
-      setBeside(Math.round(Math.max(0, ...[...document.querySelectorAll<HTMLElement>('[data-nonmodal][data-state="open"]')].map((node) => node.getBoundingClientRect().width))));
+      const panels = [...document.querySelectorAll<HTMLElement>('[data-nonmodal][data-state="open"]')].map((node) => node.getBoundingClientRect());
+      const wide = window.matchMedia("(min-width: 64rem)").matches;
+      const width = wide ? Math.round(Math.max(0, ...panels.map((rect) => rect.width))) : 0;
+      setBeside(width);
+      if (width === 0) setRoom(null);
+      else {
+        const root = document.documentElement;
+        const sidebar = !("sidebarCollapsed" in root.dataset) ? parseFloat(getComputedStyle(root).getPropertyValue("--sidebar-width")) || 0 : 0;
+        const end = Math.round(root.clientWidth - width);
+        setRoom((current) => (current && current.start === sidebar && current.end === end ? current : { start: sidebar, end }));
+      }
       const nodes = [...document.querySelectorAll<HTMLElement>("[data-quick-add-avoid]")];
       if (nodes.length !== watched.length || nodes.some((node, index) => node !== watched[index])) {
         resize.disconnect();
@@ -143,6 +154,7 @@ export function useScreenState() {
       attributes: true,
       attributeFilter: ["data-state", "data-quick-add-avoid", "data-quick-add-hide"],
     });
+    mutations.observe(document.documentElement, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
     window.addEventListener("resize", schedule);
     schedule();
     return () => {
@@ -153,7 +165,7 @@ export function useScreenState() {
     };
   }, []);
 
-  return { covered, lift, tucked, beside };
+  return { covered, lift, tucked, beside, room };
 }
 
 export default function QuickAdd({ viewerId }: { viewerId: string }) {

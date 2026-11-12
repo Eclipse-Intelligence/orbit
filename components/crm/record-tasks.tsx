@@ -75,6 +75,10 @@ export default function RecordTasks({
   const onComplete = useCallback((task: Task) => latest.current.finish(task), []);
   const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
   const onOpen = useCallback((task: Task) => setPanelId(task.id), []);
+  const onPanelComplete = useCallback((task: Task) => {
+    setPanelId(null);
+    latest.current.finish(task);
+  }, []);
 
   return (
     <>
@@ -119,7 +123,7 @@ export default function RecordTasks({
         members={team}
         tagged={tagged && tagged.id === (panelTask ?? kept)?.id ? tagged.people : []}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
-        onComplete={onComplete}
+        onComplete={onPanelComplete}
       />
     </>
   );

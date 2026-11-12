@@ -269,8 +269,8 @@ for (const [device, viewport] of [
   await context.close();
 }
 
-{
-  const context = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+for (const width of [1100, 1440]) {
+  const context = await browser.newContext({ viewport: { width, height: 900 } });
   const page = await context.newPage();
   await page.goto(`${base}/login`);
   await page.fill('input[name="email"]', env.DEV_USER_EMAIL);
@@ -280,19 +280,41 @@ for (const [device, viewport] of [
   await page.goto(`${base}/tasks`);
   await page.waitForTimeout(1500);
   const first = page.locator("li[data-task-id]").first();
-  if ((await first.count()) > 0) {
-    await first.locator("button[aria-expanded]").first().click();
-    await page.waitForTimeout(400);
-    await first.getByRole("button", { name: "Open", exact: true }).click();
-    await page.waitForTimeout(900);
-    const panel = page.getByRole("dialog", { name: "Task" });
-    const panelBox = await panel.boundingBox();
-    const fab = page.locator('button[aria-label*="add" i]').last();
-    const fabBox = (await fab.count()) > 0 && (await fab.isVisible()) ? await fab.boundingBox() : null;
-    check("desktop task panel sits beside the list", (await panel.isVisible()) && (await panel.getAttribute("aria-modal")) !== "true");
-    check("desktop quick add stays usable beside the panel", Boolean(panelBox && fabBox && fabBox.x + fabBox.width <= panelBox.x));
-    await page.screenshot({ path: path.join(out, "desktop-task-panel.png") });
+  const device = `desktop ${width}`;
+  if ((await first.count()) === 0) {
+    check(`${device} has a task to open`, false);
+    await context.close();
+    continue;
   }
+  await first.locator("button[aria-expanded]").first().click();
+  await page.waitForTimeout(400);
+  await first.getByRole("button", { name: "Open", exact: true }).click();
+  await page.waitForTimeout(900);
+  const panel = page.getByRole("dialog", { name: "Task" });
+  const panelBox = await panel.boundingBox();
+  check(`${device} task panel sits beside the list`, (await panel.isVisible()) && (await panel.getAttribute("aria-modal")) !== "true");
+  const fab = page.getByRole("button", { name: "Quick add", exact: true });
+  const fabBox = (await fab.isVisible()) ? await fab.boundingBox() : null;
+  check(`${device} quick add stays usable beside the panel`, Boolean(panelBox && fabBox && fabBox.x + fabBox.width <= panelBox.x));
+  const pill = page.getByRole("button", { name: /^(Ask Orbit|Continue your chat)/ });
+  const pillBox = (await pill.isVisible()) ? await pill.boundingBox() : null;
+  const clear = (box) => !box || !panelBox || box.x + box.width <= panelBox.x;
+  const apart = (box) => !box || !fabBox || box.x + box.width <= fabBox.x || box.y + box.height <= fabBox.y;
+  check(`${device} closed Ask Orbit sits clear of the panel and quick add`, clear(pillBox) && apart(pillBox) && (!pillBox || pillBox.x >= 0), pillBox ? "" : "tucked away");
+  await page.screenshot({ path: path.join(out, `desktop-${width}-task-panel.png`) });
+  await page.evaluate(() => {
+    document.querySelector('[data-kb-active="true"]')?.removeAttribute("data-kb-active");
+    (document.activeElement instanceof HTMLElement ? document.activeElement : null)?.blur();
+  });
+  await page.keyboard.press("o");
+  await page.waitForTimeout(800);
+  const dock = page.getByRole("region", { name: "Orbit assistant" }).or(page.locator('section[aria-label="Orbit assistant"]')).first();
+  const dockBox = (await dock.isVisible()) ? await dock.boundingBox() : null;
+  const onTop = dockBox
+    ? await page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('section[aria-label="Orbit assistant"]')), { x: dockBox.x + dockBox.width - 24, y: dockBox.y + dockBox.height - 24 })
+    : false;
+  check(`${device} open Ask Orbit is usable with the panel open`, Boolean(dockBox) && (clear(dockBox) || onTop) && dockBox.width >= 300, dockBox ? `${Math.round(dockBox.width)}px wide` : "didn't open");
+  await page.screenshot({ path: path.join(out, `desktop-${width}-assistant.png`) });
   await context.close();
 }
 

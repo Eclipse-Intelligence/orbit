@@ -12,6 +12,11 @@ import { laterDetail } from "@/lib/mail/later";
 export const TASK_UNDO_MS = 8_000;
 const BEACON_BATCH = 50;
 const NOT_DONE = "Couldn't mark it done. Try again.";
+const RECHECK_MS = 1_500;
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 type Outcome = { error?: string };
 type Entry = { toast: number; timer: number; until: number; sent: boolean };
@@ -45,6 +50,7 @@ export function useTaskDone(tasks: Task[]) {
   const [message, setMessage] = useState<string | null>(null);
   const entries = useRef(new Map<string, Entry>());
   const beaconed = useRef(new Set<string>());
+  const withdrawn = useRef(new Set<string>());
   const openKey = tasks
     .filter((task) => !task.completedAt)
     .map((task) => task.id)
@@ -110,21 +116,28 @@ export function useTaskDone(tasks: Task[]) {
   const recheck = useCallback(() => {
     const ids = [...beaconed.current];
     beaconed.current.clear();
+    if (ids.length === 0 && entries.current.size === 0) return;
     router.refresh();
     if (ids.length === 0) return;
-    void openTaskIdsAction(ids)
-      .catch(() => ({ open: [] as string[] }))
-      .then((result) => {
-        const open = result.open ?? [];
-        if (open.length === 0) return;
-        for (const id of open) {
-          const entry = entries.current.get(id);
-          if (entry) composer.dismissToast(entry.toast);
-          expire(id);
-        }
-        setDone((current) => without(current, open));
-        composer.showToast({ message: NOT_DONE, tone: "alert" });
-      });
+    const stillOpen = async (wanted: string[]) => (await openTaskIdsAction(wanted).catch(() => ({ open: [] as string[] }))).open ?? [];
+    void (async () => {
+      await wait(RECHECK_MS);
+      let open = await stillOpen(ids);
+      if (open.length > 0) {
+        await wait(RECHECK_MS);
+        open = await stillOpen(open);
+      }
+      open = open.filter((id) => !withdrawn.current.has(id));
+      if (open.length === 0) return;
+      for (const id of open) {
+        const entry = entries.current.get(id);
+        if (entry) composer.dismissToast(entry.toast);
+        expire(id);
+      }
+      setDone((current) => without(current, open));
+      composer.showToast({ message: NOT_DONE, tone: "alert" });
+      router.refresh();
+    })();
   }, [composer, expire, router]);
 
   const latest = useRef({ flush, beacon, recheck });
@@ -133,7 +146,9 @@ export function useTaskDone(tasks: Task[]) {
   });
   useEffect(() => {
     const leave = () => latest.current.beacon();
-    const back = () => latest.current.recheck();
+    const back = (event: PageTransitionEvent) => {
+      if (event.persisted) latest.current.recheck();
+    };
     const visibility = () => {
       if (document.visibilityState === "hidden") latest.current.beacon();
       else latest.current.recheck();
@@ -159,16 +174,22 @@ export function useTaskDone(tasks: Task[]) {
         setDone((current) => without(current, [id]));
         return true;
       }
-      void reopenTaskAction(id)
-        .catch((): Outcome => ({ error: "Couldn't undo. Try again." }))
-        .then((result: Outcome) => {
-          if (result.error) {
-            composer.showToast({ message: result.error, tone: "alert" });
-            return;
-          }
-          setDone((current) => without(current, [id]));
-          router.refresh();
-        });
+      withdrawn.current.add(id);
+      void (async () => {
+        const reopen = () => reopenTaskAction(id).catch((): Outcome => ({ error: "Couldn't undo. Try again." }));
+        const result: Outcome = await reopen();
+        if (result.error) {
+          composer.showToast({ message: result.error, tone: "alert" });
+          return;
+        }
+        setDone((current) => without(current, [id]));
+        router.refresh();
+        await wait(RECHECK_MS);
+        const open = (await openTaskIdsAction([id]).catch(() => ({ open: [id] }))).open ?? [id];
+        if (open.includes(id)) return;
+        await reopen();
+        router.refresh();
+      })();
       return true;
     },
     [composer, expire, router],
@@ -177,6 +198,7 @@ export function useTaskDone(tasks: Task[]) {
   const complete = useCallback(
     (task: Task) => {
       if (entries.current.has(task.id)) return;
+      withdrawn.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));
       setMessage(null);
       const toast = composer.showToast({ message: "Task done.", action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
