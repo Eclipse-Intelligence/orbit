@@ -95,20 +95,27 @@ export default function FindDetailButton({
   const label = running ? "Searching…" : missing ? "Not found" : failed ? "Couldn't search" : variant === "text" ? `Find ${noun}` : null;
 
   return (
-    <button
-      type="button"
-      onClick={run}
-      disabled={running}
-      title={title}
-      aria-label={running ? `Searching for ${noun}` : title}
-      className={cn(
-        "relative z-10 -my-1 inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-md px-1 py-1 text-subtle transition-colors duration-150 ease-power3-out outline-none hover:bg-white/6 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-progress",
-        failed && "text-danger/80",
-        className,
+    <>
+      <button
+        type="button"
+        onClick={run}
+        disabled={running}
+        title={title}
+        aria-label={running ? `Searching for ${noun}` : title}
+        className={cn(
+          "relative z-10 -my-1 inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-md px-1 py-1 text-subtle transition-colors duration-150 ease-power3-out outline-none hover:bg-white/6 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-progress",
+          failed && "text-danger/80",
+          className,
+        )}
+      >
+        <SparkleIcon aria-hidden className={cn("size-3.5 shrink-0", running && "animate-pulse")} />
+        {label && <span className="caption-style truncate">{label}</span>}
+      </button>
+      {failed && outcome && (
+        <span aria-hidden className="caption-style text-danger/80 hidden min-w-0 basis-full [@media(pointer:coarse)]:block">
+          {outcome.title}
+        </span>
       )}
-    >
-      <SparkleIcon aria-hidden className={cn("size-3.5 shrink-0", running && "animate-pulse")} />
-      {label && <span className="caption-style truncate">{label}</span>}
-    </button>
+    </>
   );
 }

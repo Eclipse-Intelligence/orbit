@@ -10,6 +10,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import { splitDescription } from "@/lib/crm/task-description";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
+import type { LookupState } from "@/lib/enrichment/contacts";
 
 export type TaskPerson = { id: string; name: string; jobTitle: string | null; phone: string | null; email: string | null };
 
@@ -20,7 +21,10 @@ export type TaskContext = {
   thread: { key: string; subject: string | null; at: string | null } | null;
   bookingUrl: string | null;
   people: TaskPerson[];
+  lookups: TaskLookups;
 };
+
+export type TaskLookups = Partial<Record<"phone" | "email", LookupState>>;
 
 export type OutcomeKind = "call" | "email" | "meeting";
 
@@ -163,6 +167,18 @@ async function threadFor(db: Db, actor: UserActor, description: string | null) {
   return row ? { key: thread.value, subject: row.subject, at: iso(row.at) } : null;
 }
 
+async function contactLookupsFor(db: Db, workspaceId: string, contactId: string | null): Promise<TaskLookups> {
+  if (!contactId) return {};
+  const result = await db.query<{ field: "phone" | "email"; status: LookupState["status"]; provider: string | null; created_at: Date | string }>(
+    `select distinct on (field) field, status, provider, created_at
+     from crm.enrichment_lookups
+     where workspace_id = $1 and record_type = 'contact' and record_id = $2 and field in ('email', 'phone')
+     order by field, created_at desc`,
+    [workspaceId, contactId],
+  );
+  return Object.fromEntries(result.rows.map((row) => [row.field, { status: row.status, provider: row.provider, at: iso(row.created_at) ?? "" }]));
+}
+
 async function companyPeople(db: Db, workspaceId: string, task: Task) {
   if (task.contactId || !task.companyId) return [];
   const result = await db.query<{ id: string; name: string; job_title: string | null; phone: string | null; email: string | null }>(
@@ -190,14 +206,15 @@ export async function taskContext(actor: UserActor, taskId: string): Promise<Tas
     withActor(actor, async (db) => {
       const task = await readTaskInDb(db, taskId);
       if (!task || task.workspaceId !== actor.workspaceId) throw notFound("task");
-      const [opportunity, lastActivity, lastEmail, thread, people] = await Promise.all([
+      const [opportunity, lastActivity, lastEmail, thread, people, lookups] = await Promise.all([
         opportunityFor(db, actor.workspaceId, task),
         lastActivityFor(db, actor.workspaceId, task),
         lastEmailFor(db, actor, task.contactEmail),
         threadFor(db, actor, task.description),
         companyPeople(db, actor.workspaceId, task),
+        contactLookupsFor(db, actor.workspaceId, task.contactId),
       ]);
-      return { opportunity, lastActivity, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread, people };
+      return { opportunity, lastActivity, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread, people, lookups };
     }),
     viewerBookingUrl(actor),
   ]);

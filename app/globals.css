@@ -522,6 +522,22 @@ html[data-sidebar-resizing] * {
   padding-right: 2rem;
 }
 
+@utility hit {
+  position: relative;
+
+  @media (pointer: coarse) {
+    &::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      translate: -50% -50%;
+    }
+  }
+}
+
 .note-title {
   font-size: 30px;
   line-height: 1.15;

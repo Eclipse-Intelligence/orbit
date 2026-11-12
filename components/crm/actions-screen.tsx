@@ -200,7 +200,7 @@ export default function ActionsScreen({
     canLoadMore || moreError ? (
       <div className="flex flex-wrap items-center gap-3 px-4 py-4">
         {canLoadMore && (
-          <Button variant="secondary" size="md" onClick={loadMore} disabled={loading} aria-busy={loading || undefined} className="max-md:h-11">
+          <Button variant="secondary" size="md" onClick={loadMore} disabled={loading} aria-busy={loading || undefined} className="hit">
             {loading ? "Loading…" : "Show more"}
           </Button>
         )}
@@ -557,7 +557,7 @@ export default function ActionsScreen({
       {notFound && !message && (
         <p role="status" className="caption-style text-soft flex items-center gap-2 px-4 pt-3">
           Task not found.
-          <Button variant="ghost" size="sm" onClick={() => setNotFound(false)} className="max-md:h-11">
+          <Button variant="ghost" size="sm" onClick={() => setNotFound(false)} className="hit">
             Dismiss
           </Button>
         </p>

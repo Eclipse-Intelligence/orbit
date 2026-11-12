@@ -648,7 +648,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="-ml-2.5 min-w-0 shrink"
+                  className="-ml-2.5 min-w-0 shrink px-[9px]"
                   aria-label={toast.extra.label}
                   onClick={() => {
                     toast.extra!.run();

@@ -318,7 +318,7 @@ function ActionTask({
                 data-row-open={keyboard && !concluding ? "" : undefined}
                 data-row-key={keyboard && !concluding ? "space" : undefined}
                 onClick={concluding ? () => outcomeHandlers?.leave(task) : toggle}
-                className="-mt-0.5 max-sm:size-11"
+                className="hit -mt-0.5"
               >
                 <ChevronDownIcon aria-hidden className="size-3.5 rotate-180" />
               </Button>
@@ -369,7 +369,7 @@ function ActionTask({
                     size="none"
                     onClick={toggle}
                     aria-expanded={false}
-                    className="shrink-0 gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset max-sm:min-h-11"
+                    className="shrink-0 gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset hit"
                   >
                     <LinkIcon aria-hidden className="size-3" />
                     Link a person
@@ -408,11 +408,11 @@ function ActionTask({
                 <TaskFields details={details} viewer={viewer} members={members} tagged={tagged} layout="row" done={completed} />
                 <div className="flex items-center gap-2 max-sm:pt-1">
                   <span className="flex-1 max-sm:hidden" />
-                  <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="max-sm:h-11 max-sm:flex-1">
+                  <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="hit max-sm:flex-1">
                     Open
                   </Button>
                   {complete && !completed && (
-                    <Button variant="secondary" size="md" onClick={complete} shortcut={keyboard ? ["E"] : undefined} className="max-sm:h-11 max-sm:flex-1">
+                    <Button variant="secondary" size="md" onClick={complete} shortcut={keyboard ? ["E"] : undefined} className="hit max-sm:flex-1">
                       <CheckIcon aria-hidden className="size-3.5" />
                       Done
                     </Button>
