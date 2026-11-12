@@ -5,7 +5,7 @@ import { createActivityInDb } from "@/lib/crm/activities";
 import { headline } from "@/lib/crm/activity-pad";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound, tooLong } from "@/lib/crm/errors";
-import { iso, isUuid } from "@/lib/crm/mutate";
+import { iso, isUuid, replayOrRun, requestHash } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { splitDescription } from "@/lib/crm/task-description";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
@@ -30,10 +30,11 @@ export type TaskOutcome = {
   next: { title: string; dueAt: string | null } | null;
 };
 
-export type LinkChange = { kind: "contact" | "company" | "opportunity"; id: string | null };
+export type LinkChange = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
 
 const OUTCOME_KINDS: OutcomeKind[] = ["call", "email", "meeting"];
 const PEOPLE_SHOWN = 8;
+const EMAIL_WINDOW_MONTHS = 12;
 
 function cannotChange() {
   return new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner or an admin can change it.", 403);
@@ -92,12 +93,17 @@ async function lastEmailFor(db: Db, actor: UserActor, address: string | null) {
   const email = address?.trim().toLowerCase();
   if (!email) return null;
   const result = await db.query<{ subject: string | null; at: Date }>(
-    `select m.subject, coalesce(m.sent_at, m.received_at, m.created_at) as at
+    `select m.subject, m.received_at as at
      from crm.mail_messages m
-     where m.user_id = $1 and not m.is_draft
+     join crm.mail_folders f on f.id = m.folder_id
+     where m.user_id = $1
+       and m.received_at > now() - make_interval(months => ${EMAIL_WINDOW_MONTHS})
+       and not m.is_draft
+       and f.role not in ('trash', 'junk', 'outbox', 'drafts')
        and (lower(m.from_email) = $2
-         or exists (select 1 from jsonb_array_elements(m.to_recipients) r where lower(r ->> 'address') = $2))
-     order by at desc
+         or exists (select 1 from jsonb_array_elements(m.to_recipients) r where lower(r ->> 'address') = $2)
+         or exists (select 1 from jsonb_array_elements(m.cc_recipients) r where lower(r ->> 'address') = $2))
+     order by m.received_at desc
      limit 1`,
     [actor.userId, email],
   );
@@ -169,104 +175,119 @@ async function lockedTask(db: Db, actor: UserActor, taskId: string) {
   return task;
 }
 
-async function companyOf(db: Db, table: "contacts" | "opportunities", id: string | null) {
-  if (!id) return null;
-  const result = await db.query<{ company_id: string | null }>(`select company_id from crm.${table} where id = $1`, [id]);
-  if (!result.rows[0]) throw notFound(table === "contacts" ? "contact" : "opportunity");
-  return result.rows[0].company_id;
+function linkValue(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || !isUuid(value)) throw new CrmError("invalid_input", "Choose a record in this workspace.", 400);
+  return value;
 }
 
 export async function relinkTask(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(taskId)) throw notFound("task");
-  if (change.id !== null && !isUuid(change.id)) throw notFound(change.kind);
+  const write = {
+    companyId: linkValue(change.companyId),
+    contactId: linkValue(change.contactId),
+    opportunityId: linkValue(change.opportunityId),
+  };
+  if (write.companyId === undefined && write.contactId === undefined && write.opportunityId === undefined) {
+    throw new CrmError("invalid_input", "Choose a person, company or opportunity.", 400);
+  }
   return withActor(actor, async (db) => {
     const task = await lockedTask(db, actor, taskId);
-    let companyId = task.companyId;
-    let contactId = task.contactId;
-    let opportunityId = task.opportunityId;
-    const contactCompany = () => companyOf(db, "contacts", contactId);
-    const opportunityCompany = () => companyOf(db, "opportunities", opportunityId);
-    if (change.kind === "contact") {
-      contactId = change.id;
-      const company = await contactCompany();
-      if (company) companyId = company;
-      if (opportunityId && (await opportunityCompany()) !== companyId) opportunityId = null;
-    } else if (change.kind === "opportunity") {
-      opportunityId = change.id;
-      if (opportunityId) {
-        companyId = await opportunityCompany();
-        const company = await contactCompany();
-        if (contactId && company && company !== companyId) contactId = null;
-      }
-    } else {
-      const before = companyId;
-      companyId = change.id;
-      const company = await contactCompany();
-      if (contactId && company && company !== companyId && (companyId || company === before)) contactId = null;
-      if (opportunityId && (await opportunityCompany()) !== companyId) opportunityId = null;
-    }
-    const updated = await updateTaskInDb(db, actor, taskId, { companyId, contactId, opportunityId }, provenance);
+    const same = (Object.keys(write) as (keyof typeof write)[]).every((key) => write[key] === undefined || write[key] === task[key]);
+    if (same) return task;
+    const updated = await updateTaskInDb(db, actor, taskId, write, provenance);
     return updated.task;
   });
 }
 
 function cleanOutcome(input: TaskOutcome) {
-  const note = typeof input.note === "string" ? input.note.trim() : "";
+  const note = typeof input?.note === "string" ? input.note.trim() : "";
   if (note.length > 10_000) throw new CrmError("invalid_input", tooLong("the note", 10_000), 400, { field: "note" });
-  const kind = OUTCOME_KINDS.includes(input.kind as OutcomeKind) ? (input.kind as OutcomeKind) : null;
-  const title = typeof input.next?.title === "string" ? input.next.title.trim() : "";
-  const dueAt = typeof input.next?.dueAt === "string" && input.next.dueAt.trim() ? input.next.dueAt.trim() : null;
+  const kind = OUTCOME_KINDS.includes(input?.kind as OutcomeKind) ? (input.kind as OutcomeKind) : null;
+  const title = typeof input?.next?.title === "string" ? input.next.title.trim() : "";
+  const dueAt = typeof input?.next?.dueAt === "string" && input.next.dueAt.trim() ? input.next.dueAt.trim() : null;
   return { note, kind, next: title ? { title, dueAt } : null };
 }
 
-export async function completeTaskWithOutcome(
-  actor: UserActor,
-  taskId: string,
-  input: TaskOutcome,
-): Promise<{ task: Task; activity: Activity | null; next: Task | null }> {
+export function outcomeKey(taskId: string) {
+  return `task-outcome:${taskId}`;
+}
+
+async function earlierOutcome(db: Db, workspaceId: string, task: Task) {
+  const column = task.contactId ? "contact_id" : task.companyId ? "company_id" : task.opportunityId ? "opportunity_id" : null;
+  const id = task.contactId ?? task.companyId ?? task.opportunityId;
+  if (!column || !id) return null;
+  const found = await db.query<{ id: string }>(
+    `select id from crm.activities
+     where workspace_id = $1 and ${column} = $2 and metadata ->> 'source' = 'task' and metadata ->> 'taskId' = $3
+     order by created_at limit 1`,
+    [workspaceId, id, task.id],
+  );
+  return found.rows[0]?.id ?? null;
+}
+
+async function nextOwner(db: Db, workspaceId: string, ownerId: string | null, actor: UserActor) {
+  if (!ownerId) return actor.userId;
+  const member = await db.query("select 1 from crm.workspace_members where workspace_id = $1 and user_id = $2", [workspaceId, ownerId]);
+  return (member.rowCount ?? 0) > 0 ? ownerId : actor.userId;
+}
+
+export type SavedOutcome = { task: Task; activity: Activity | null; next: Task | null; replayed: boolean };
+
+export async function completeTaskWithOutcome(actor: UserActor, taskId: string, input: TaskOutcome): Promise<SavedOutcome> {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(taskId)) throw notFound("task");
   const outcome = cleanOutcome(input);
   if (outcome.note) assertScope(actor.scopes, "activities:write");
-  return withActor(actor, async (db) => {
-    const task = await lockedTask(db, actor, taskId);
-    const links = { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId };
-    let activity: Activity | null = null;
-    if (outcome.note) {
-      if (!links.companyId && !links.contactId && !links.opportunityId) {
-        throw new CrmError("invalid_input", "Link a person or company first.", 400, { field: "contactId" });
-      }
-      const title = headline(outcome.note).slice(0, 200);
-      activity = await createActivityInDb(
-        db,
-        actor,
-        {
-          type: outcome.kind ?? "note",
-          title,
-          body: outcome.note === title ? null : outcome.note,
-          ...links,
-          metadata: { source: "task", taskId: task.id },
-        },
-        { operation: "log_activity", source: "task_outcome" },
-      );
-    }
-    let next: Task | null = null;
-    if (outcome.next) {
-      next = await createTaskInDb(
-        db,
-        actor,
-        { title: outcome.next.title, dueAt: outcome.next.dueAt, ...links, ownerId: task.ownerId ?? actor.userId, priority: "normal" },
-        { operation: "create_task", source: "task_outcome" },
-      );
-      if (task.clickupListId) {
-        await db.query("update crm.tasks set clickup_list_id = $2 where id = $1", [next.id, task.clickupListId]);
-        next = { ...next, clickupListId: task.clickupListId };
-      }
-    }
-    const done = task.completedAt
-      ? task
-      : (await updateTaskInDb(db, actor, taskId, { completed: true }, { operation: "complete_task", source: "task_outcome" })).task;
-    return { task: done, activity, next };
-  });
+  const hash = requestHash("task_outcome", { taskId, outcome });
+  try {
+    return await withActor(actor, async (db) => {
+      const saved = await replayOrRun(db, actor, outcomeKey(taskId), hash, 200, async () => {
+        const task = await lockedTask(db, actor, taskId);
+        const links = { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId };
+        if ((outcome.note || outcome.next) && (await earlierOutcome(db, actor.workspaceId, task))) throw alreadySaved();
+        let activity: Activity | null = null;
+        if (outcome.note) {
+          if (!links.companyId && !links.contactId && !links.opportunityId) {
+            throw new CrmError("invalid_input", "Link a person or company first.", 400, { field: "contactId" });
+          }
+          const title = headline(outcome.note).slice(0, 200);
+          activity = await createActivityInDb(
+            db,
+            actor,
+            { type: outcome.kind ?? "note", title, body: outcome.note === title ? null : outcome.note, ...links, metadata: { source: "task", taskId: task.id } },
+            { operation: "log_activity", source: "task_outcome" },
+          );
+        }
+        let next: Task | null = null;
+        if (outcome.next) {
+          const ownerId = await nextOwner(db, actor.workspaceId, task.ownerId, actor);
+          next = await createTaskInDb(
+            db,
+            actor,
+            { title: outcome.next.title, dueAt: outcome.next.dueAt, ...links, ownerId, priority: "normal" },
+            { operation: "create_task", source: "task_outcome" },
+          );
+          if (task.clickupListId) {
+            await db.query("update crm.tasks set clickup_list_id = $2 where id = $1", [next.id, task.clickupListId]);
+            next = { ...next, clickupListId: task.clickupListId };
+          }
+        }
+        const done = task.completedAt
+          ? task
+          : (await updateTaskInDb(db, actor, taskId, { completed: true }, { operation: "complete_task", source: "task_outcome" })).task;
+        return { task: done, activity, next };
+      });
+      return { ...saved.body, replayed: saved.replayed };
+    });
+  } catch (error) {
+    if (error instanceof CrmError && error.code === "idempotency_conflict") throw alreadySaved();
+    throw error;
+  }
+}
+
+function alreadySaved() {
+  return new CrmError("conflict", "What happened on this task is already saved.", 409);
 }

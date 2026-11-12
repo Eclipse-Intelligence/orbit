@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import Button from "@/components/_ui/button";
 import { DateTimePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
@@ -24,40 +24,108 @@ const KINDS: { id: OutcomeKind; label: string; icon: typeof PhoneIcon }[] = [
 ];
 
 const TOUCH = "[@media(pointer:coarse)]:h-11";
+const NOT_SAVED = "Couldn't save. Try again.";
 
-type Finish = (task: Task) => void;
-type CompleteWith = (task: Task, run: () => Promise<{ error?: string; message?: string }>) => Promise<string | null>;
+export type OutcomePlace = "row" | "panel";
+export type OutcomeOpen = { task: Task; focus: boolean; place: OutcomePlace };
+type Reader = () => TaskOutcome;
+
+export type OutcomeHandlers = {
+  skip: (task: Task) => void;
+  save: (task: Task, value: TaskOutcome) => Promise<string | null>;
+  leave: (task: Task, quiet?: boolean) => void;
+  register: (id: string, reader: Reader) => void;
+};
 
 function outcomeMessage(result: { logged?: boolean; next?: boolean }) {
   return ["Task done.", result.logged ? "Note saved." : null, result.next ? "Next task added." : null].filter(Boolean).join(" ");
 }
 
-export function useTaskOutcome({ finish, completeWith }: { finish: Finish; completeWith: CompleteWith }) {
-  const [outcome, setOutcome] = useState<{ id: string; focus: boolean } | null>(null);
+export function typedOutcome(value: TaskOutcome | null | undefined) {
+  return Boolean(value && (value.note.trim() || value.next?.title.trim()));
+}
 
-  function close(id: string) {
-    setOutcome((current) => (current?.id === id ? null : current));
+export function useTaskOutcome({
+  done,
+  complete,
+  release,
+  settle,
+  onClosed,
+}: {
+  done: Set<string>;
+  complete: (task: Task, options: { hold?: boolean }) => void;
+  release: (id: string) => void;
+  settle: (id: string, message: string) => void;
+  onClosed?: (task: Task, place: OutcomePlace) => void;
+}) {
+  const [open, setOpen] = useState<OutcomeOpen | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+  const readers = useRef(new Map<string, Reader>());
+  if (open && !done.has(open.task.id) && saving !== open.task.id) setOpen(null);
+  const outcome = open && (done.has(open.task.id) || saving === open.task.id) ? open : null;
+
+  function close(task: Task, place: OutcomePlace, quiet: boolean) {
+    readers.current.delete(task.id);
+    setOpen((current) => (current?.task.id === task.id ? null : current));
+    if (!quiet) onClosed?.(task, place);
   }
 
-  function start(task: Task, focus: boolean) {
-    setOutcome({ id: task.id, focus });
+  function skip(task: Task, quiet = false) {
+    if (saving === task.id || outcome?.task.id !== task.id) return;
+    release(task.id);
+    close(task, outcome.place, quiet);
   }
 
-  function skip(task: Task) {
-    close(task.id);
-    finish(task);
+  async function save(task: Task, value: TaskOutcome, quiet = false) {
+    if (saving) return saving === task.id ? null : NOT_SAVED;
+    const place = outcome?.task.id === task.id ? outcome.place : "row";
+    setSaving(task.id);
+    const result = await completeTaskWithOutcomeAction(task.id, value).catch(() => ({ error: NOT_SAVED }) as { error?: string; logged?: boolean; next?: boolean });
+    setSaving(null);
+    if (result.error) return result.error;
+    settle(task.id, outcomeMessage(result));
+    close(task, place, quiet);
+    return null;
   }
 
-  async function save(task: Task, value: TaskOutcome) {
-    const error = await completeWith(task, async () => {
-      const result = await completeTaskWithOutcomeAction(task.id, value);
-      return result.error ? { error: result.error } : { message: outcomeMessage(result) };
-    });
-    if (!error) close(task.id);
-    return error;
+  function leave(task: Task, quiet = false) {
+    if (saving === task.id) return;
+    const value = readers.current.get(task.id)?.();
+    if (value && typedOutcome(value)) void save(task, value, quiet);
+    else skip(task, quiet);
   }
 
-  return { outcome, start, skip, save };
+  function start(task: Task, focus: boolean, place: OutcomePlace) {
+    if (saving) return;
+    if (outcome && outcome.task.id !== task.id) leave(outcome.task, true);
+    complete(task, { hold: true });
+    setOpen({ task, focus, place });
+  }
+
+  function register(id: string, reader: Reader) {
+    readers.current.set(id, reader);
+  }
+
+  const latest = useRef(outcome);
+  useEffect(() => {
+    latest.current = outcome;
+  });
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      const current = latest.current;
+      if (current && typedOutcome(readers.current.get(current.task.id)?.())) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    const stored = readers.current;
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      const current = latest.current;
+      const value = current ? stored.get(current.task.id)?.() : null;
+      if (current && value && typedOutcome(value)) void completeTaskWithOutcomeAction(current.task.id, value).catch(() => undefined);
+    };
+  }, []);
+
+  return { outcome, saving, start, skip, save, leave, register };
 }
 
 export function finePointer() {
@@ -73,18 +141,29 @@ function timelineOwner(task: Task) {
   return name ? `${name}'s timeline` : "the timeline";
 }
 
+function saveKeys() {
+  if (typeof navigator === "undefined") return ["Ctrl", "↵"];
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent) ? ["⌘", "↵"] : ["Ctrl", "↵"];
+}
+
 export default function TaskOutcomeForm({
   task,
   focusNote,
   keyboard,
+  saving,
   onSkip,
   onSave,
+  onLeave,
+  onRegister,
 }: {
   task: Task;
   focusNote: boolean;
   keyboard: boolean;
+  saving: boolean;
   onSkip: () => void;
   onSave: (outcome: TaskOutcome) => Promise<string | null>;
+  onLeave: () => void;
+  onRegister: (id: string, reader: Reader) => void;
 }) {
   const id = useId();
   const preset = taskKind(task.title);
@@ -92,15 +171,21 @@ export default function TaskOutcomeForm({
   const [note, setNote] = useState("");
   const [nextTitle, setNextTitle] = useState("");
   const [nextDue, setNextDue] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [keys] = useState(saveKeys);
+  const value = (): TaskOutcome => ({ note, kind, next: nextTitle.trim() ? { title: nextTitle.trim(), dueAt: nextDue || null } : null });
+  const reader = useRef(value);
+  useEffect(() => {
+    reader.current = value;
+  });
+  useEffect(() => {
+    onRegister(task.id, () => reader.current());
+  }, [onRegister, task.id]);
 
   async function save() {
-    if (busy) return;
-    setBusy(true);
+    if (saving) return;
     setError(null);
-    const problem = await onSave({ note, kind, next: nextTitle.trim() ? { title: nextTitle.trim(), dueAt: nextDue || null } : null });
-    setBusy(false);
+    const problem = await onSave(value());
     if (problem) setError(problem);
   }
 
@@ -117,29 +202,26 @@ export default function TaskOutcomeForm({
       if (target.closest("[role='dialog'], [data-radix-popper-content-wrapper]")) return;
       event.preventDefault();
       event.stopPropagation();
-      onSkip();
+      onLeave();
     }
   }
 
   return (
-    <div role="group" aria-label="Done with an outcome" data-task-outcome="" onKeyDown={onKeyDown} className="flex flex-col gap-3 rounded-xl bg-white/[0.04] p-3">
+    <div role="group" aria-label="Done with an outcome" aria-busy={saving || undefined} data-task-outcome="" onKeyDown={onKeyDown} className="flex flex-col gap-3 rounded-xl bg-white/[0.04] p-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div role="group" aria-label="Kind" className="inline-flex rounded-full bg-white/[0.05] p-0.5">
           {KINDS.map((item) => (
-            <button
+            <Button
               key={item.id}
-              type="button"
+              variant={kind === item.id ? "secondary" : "ghost"}
+              size="none"
               aria-pressed={kind === item.id}
               onClick={() => setKind((current) => (current === item.id ? null : item.id))}
-              className={cn(
-                "focus-visible:ring-ring/60 inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12.5px] leading-none outline-none transition-colors duration-150 focus-visible:ring-2",
-                TOUCH,
-                kind === item.id ? "bg-secondary text-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" : "text-subtle hover:text-foreground",
-              )}
+              className={cn("h-7 gap-1.5 px-2.5 text-[12.5px] font-normal", TOUCH, kind === item.id && "text-foreground")}
             >
               <item.icon aria-hidden className="size-3" />
               {item.label}
-            </button>
+            </Button>
           ))}
         </div>
         <span className="caption-style text-subtle flex items-center gap-1">
@@ -216,11 +298,10 @@ export default function TaskOutcomeForm({
           variant="ghost"
           size="md"
           onClick={onSkip}
-          disabled={busy}
+          disabled={saving}
           data-row-open={keyboard ? "" : undefined}
           data-row-key={keyboard ? "space" : undefined}
           data-outcome-skip=""
-          shortcut={keyboard ? ["Esc"] : undefined}
           className="max-sm:h-11 max-sm:flex-1 [@media(pointer:coarse)]:h-11"
         >
           Skip
@@ -229,12 +310,12 @@ export default function TaskOutcomeForm({
           variant="primary"
           size="md"
           onClick={() => void save()}
-          disabled={busy}
-          aria-busy={busy || undefined}
-          shortcut={["⌘", "↵"]}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          shortcut={keys}
           className="max-sm:h-11 max-sm:flex-1 [@media(pointer:coarse)]:h-11"
         >
-          {busy ? "Saving…" : "Save"}
+          {saving ? "Saving…" : "Save"}
         </Button>
       </div>
     </div>

@@ -4,12 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ActionTask from "@/components/beautifui/action-task";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { canChangeTaskAs } from "@/components/crm/task-fields";
-import { finePointer, hasOutcome, useTaskOutcome } from "@/components/crm/task-outcome";
+import { finePointer, hasOutcome, useTaskOutcome, type OutcomeHandlers, type OutcomePlace } from "@/components/crm/task-outcome";
 import TaskPanel from "@/components/crm/task-panel";
 import { useTaskDone } from "@/components/crm/use-task-done";
 import type { Viewer } from "@/components/crm/viewer";
 import { taskTaggedAction } from "@/app/(crm)/discussions";
-import type { TaskOutcome } from "@/lib/crm/task-act";
 import type { TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 
@@ -32,20 +31,22 @@ export default function RecordTasks({
   limit?: number;
   onCount?: (count: number) => void;
 }) {
-  const { done, message, complete, completeWith, remind } = useTaskDone(tasks);
+  const { done, message, complete, release, settle, remind } = useTaskDone(tasks);
+  const concluding = useTaskOutcome({ done, complete, release, settle, onClosed: concluded });
+  const outcome = concluding.outcome;
   const [now] = useState(() => Date.now());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [panelId, setPanelId] = useState<string | null>(null);
   const [kept, setKept] = useState<Task | null>(null);
   const team = useMemo<AssignableMember[]>(() => (members.length > 1 ? members.map((member) => ({ id: member.id, name: member.name })) : NO_MEMBERS), [members]);
   const place = useMemo<TitleHere>(() => ({ kind: here.kind, id: here.id }), [here.kind, here.id]);
-  const remaining = tasks.filter((task) => !done.has(task.id));
+  const remaining = tasks.filter((task) => !done.has(task.id) || (outcome?.place === "row" && outcome.task.id === task.id));
   const shown = limit ? remaining.slice(0, limit) : remaining;
   const listed = panelId ? (tasks.find((task) => task.id === panelId) ?? null) : null;
   if (listed && listed !== kept) setKept(listed);
   const panelTask = listed ?? (kept && kept.id === panelId ? kept : null);
   const [tagged, setTagged] = useState<{ id: string; people: string[] } | null>(null);
-  const openCount = remaining.filter((task) => !task.completedAt).length;
+  const openCount = tasks.filter((task) => !done.has(task.id) && !task.completedAt).length;
 
   useEffect(() => {
     onCount?.(openCount);
@@ -69,28 +70,47 @@ export default function RecordTasks({
     complete(task);
   }
 
-  const concluding = useTaskOutcome({ finish, completeWith });
-  const outcome = concluding.outcome;
+  function concluded(task: Task, where: OutcomePlace) {
+    setExpandedId((current) => (current === task.id ? null : current));
+    if (where === "panel") setPanelId((current) => (current === task.id ? null : current));
+  }
 
   function leaveOutcome(next: string | null) {
-    if (!outcome || outcome.id === next) return;
-    const left = tasks.find((task) => task.id === outcome.id);
-    if (left) concluding.skip(left);
+    if (!outcome || outcome.place !== "row" || outcome.task.id === next) return;
+    concluding.leave(outcome.task, true);
   }
 
   function conclude(task: Task, via?: "swipe") {
-    if (done.has(task.id)) return;
-    if (outcome?.id === task.id) {
-      concluding.skip(task);
+    if (concluding.saving) return;
+    if (outcome?.task.id === task.id) {
+      concluding.leave(task);
       return;
     }
-    leaveOutcome(task.id);
+    if (done.has(task.id)) return;
     if (via !== "swipe" && hasOutcome(task)) {
-      concluding.start(task, finePointer());
+      concluding.start(task, finePointer(), "row");
       setExpandedId(task.id);
       return;
     }
+    if (outcome) concluding.leave(outcome.task, true);
     finish(task);
+  }
+
+  function concludeFromPanel(task: Task) {
+    if (concluding.saving || done.has(task.id)) return;
+    if (hasOutcome(task)) {
+      setExpandedId((current) => (current === task.id ? null : current));
+      concluding.start(task, finePointer(), "panel");
+      return;
+    }
+    if (outcome) concluding.leave(outcome.task, true);
+    setPanelId(null);
+    finish(task);
+  }
+
+  function closePanel() {
+    if (outcome?.place === "panel" && outcome.task.id === panelId) concluding.leave(outcome.task, true);
+    setPanelId(null);
   }
 
   function toggle(task: Task) {
@@ -99,20 +119,26 @@ export default function RecordTasks({
     setExpandedId(next);
   }
 
-  const latest = useRef({ finish, conclude, toggle, remind, skip: concluding.skip, save: concluding.save });
+  const latest = useRef({ conclude, concludeFromPanel, toggle, remind, concluding });
   useEffect(() => {
-    latest.current = { finish, conclude, toggle, remind, skip: concluding.skip, save: concluding.save };
+    latest.current = { conclude, concludeFromPanel, toggle, remind, concluding };
   });
   const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
   const onComplete = useCallback((task: Task, via?: "swipe") => latest.current.conclude(task, via), []);
-  const onSkip = useCallback((task: Task) => latest.current.skip(task), []);
-  const onSaveOutcome = useCallback((task: Task, value: TaskOutcome) => latest.current.save(task, value), []);
+  const outcomeHandlers = useMemo<OutcomeHandlers>(
+    () => ({
+      skip: (task) => latest.current.concluding.skip(task),
+      save: (task, value) => latest.current.concluding.save(task, value),
+      leave: (task, quiet) => latest.current.concluding.leave(task, quiet),
+      register: (id, reader) => latest.current.concluding.register(id, reader),
+    }),
+    [],
+  );
   const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
   const onOpen = useCallback((task: Task) => setPanelId(task.id), []);
-  const onPanelComplete = useCallback((task: Task) => {
-    setPanelId(null);
-    latest.current.finish(task);
-  }, []);
+  const onPanelComplete = useCallback((task: Task) => latest.current.concludeFromPanel(task), []);
+  const panelShown = panelTask ?? kept;
+  const panelOutcome = outcome?.place === "panel" && outcome.task.id === panelShown?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id } : null;
 
   return (
     <>
@@ -129,7 +155,7 @@ export default function RecordTasks({
             <ActionTask
               key={task.id}
               task={task}
-              completed={Boolean(task.completedAt)}
+              completed={Boolean(task.completedAt) || done.has(task.id)}
               dueBadge
               now={now}
               viewer={viewer}
@@ -143,9 +169,8 @@ export default function RecordTasks({
               onOpen={onOpen}
               canLink={canChangeTaskAs(viewer, task) && !task.completedAt}
               here={place}
-              outcome={outcome?.id === task.id ? outcome : null}
-              onSkip={onSkip}
-              onSaveOutcome={onSaveOutcome}
+              outcome={outcome?.place === "row" && outcome.task.id === task.id ? { focus: outcome.focus, saving: concluding.saving === task.id } : null}
+              outcomeHandlers={outcomeHandlers}
             />
           ))}
         </ul>
@@ -154,13 +179,15 @@ export default function RecordTasks({
         task={panelTask ?? kept}
         open={Boolean(panelTask)}
         onOpenChange={(open) => {
-          if (!open) setPanelId(null);
+          if (!open) closePanel();
         }}
         viewer={viewer}
         members={team}
         tagged={tagged && tagged.id === (panelTask ?? kept)?.id ? tagged.people : []}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}
+        outcome={panelOutcome}
+        outcomeHandlers={outcomeHandlers}
       />
     </>
   );

@@ -299,7 +299,8 @@ for (const [device, viewport] of [
     await shot("task-call");
     await row.getByRole("button", { name: "Email", exact: true }).tap();
     await page.waitForTimeout(1500);
-    check(`${device} Email opens compose to the contact`, await visible(page.getByText(/sweep-.*@example\.com/).first()));
+    const card = page.getByRole("dialog", { name: "New email" }).filter({ hasText: /Sweep Caller/ });
+    check(`${device} Email opens a compose card to the contact`, await visible(card));
     await shot("task-email");
     await page.goto(`${base}/tasks`);
     await page.waitForTimeout(1500);
@@ -307,6 +308,7 @@ for (const [device, viewport] of [
     await page.waitForTimeout(800);
     const outcome = row.getByRole("group", { name: "Done with an outcome" });
     check(`${device} Done on a linked task offers an outcome`, await visible(outcome));
+    check(`${device} Done takes effect at once with Undo`, await visible(page.getByText("Task done.")));
     check(`${device} the outcome starts as a call`, (await outcome.getByRole("button", { name: "Call" }).getAttribute("aria-pressed").catch(() => null)) === "true");
     const save = outcome.getByRole("button", { name: "Save" });
     const saveBox = await save.boundingBox().catch(() => null);
@@ -402,9 +404,11 @@ for (const width of [1100, 1280, 1440]) {
     await page.waitForTimeout(700);
     const outcome = row.getByRole("group", { name: "Done with an outcome" });
     check(`${device} E on a linked task offers an outcome`, await outcome.isVisible().catch(() => false));
-    await page.keyboard.press("e");
+    check(`${device} E puts the caret in the note`, await outcome.getByRole("textbox", { name: "What happened" }).evaluate((field) => field === document.activeElement).catch(() => false));
+    check(`${device} E takes effect at once with Undo`, await page.getByText("Task done.").first().isVisible().catch(() => false));
+    await page.keyboard.press("Escape");
     await page.waitForTimeout(700);
-    check(`${device} E again skips it and leaves the task done`, (await row.count()) === 0 && (await page.getByText("Task done.").first().isVisible().catch(() => false)));
+    check(`${device} Esc with nothing typed leaves the task done`, (await row.count()) === 0);
     await page.keyboard.press("z");
     await page.waitForTimeout(900);
     check(`${device} Z brings it back`, (await row.count()) === 1);

@@ -9,13 +9,12 @@ import { ClickUpBadge } from "@/components/crm/clickup";
 import Button from "@/components/_ui/button";
 import { TaskAct } from "@/components/crm/task-actions";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
-import TaskOutcomeForm from "@/components/crm/task-outcome";
+import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskTitle from "@/components/crm/task-title";
 import type { Viewer } from "@/components/crm/viewer";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
-import type { TaskOutcome } from "@/lib/crm/task-act";
 import { splitDescription } from "@/lib/crm/task-description";
 import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
 import { taskDueState } from "@/lib/crm/task-views";
@@ -154,8 +153,7 @@ function ActionTask({
   keyboard = false,
   here,
   outcome = null,
-  onSkip,
-  onSaveOutcome,
+  outcomeHandlers,
 }: {
   task: Task;
   completed: boolean;
@@ -178,13 +176,12 @@ function ActionTask({
   canLink?: boolean;
   keyboard?: boolean;
   here?: TitleHere;
-  outcome?: { focus: boolean } | null;
-  onSkip?: (task: Task) => void;
-  onSaveOutcome?: (task: Task, outcome: TaskOutcome) => Promise<string | null>;
+  outcome?: { focus: boolean; saving: boolean } | null;
+  outcomeHandlers?: OutcomeHandlers;
 }) {
   const complete = canComplete && onComplete ? () => onComplete(task) : undefined;
   const swipeDone = canComplete && onComplete ? () => onComplete(task, "swipe") : undefined;
-  const concluding = Boolean(outcome && expanded && onSkip && onSaveOutcome);
+  const concluding = Boolean(outcome && expanded && outcomeHandlers);
   const remind = canComplete && onRemind ? () => onRemind(task) : undefined;
   const open = () => onOpen(task);
   const assigning: TaskAssigning | undefined = onAssign
@@ -320,7 +317,7 @@ function ActionTask({
                 aria-expanded
                 data-row-open={keyboard && !concluding ? "" : undefined}
                 data-row-key={keyboard && !concluding ? "space" : undefined}
-                onClick={concluding ? () => onSkip?.(task) : toggle}
+                onClick={concluding ? () => outcomeHandlers?.leave(task) : toggle}
                 className="-mt-0.5 max-sm:size-11"
               >
                 <ChevronDownIcon aria-hidden className="size-3.5 rotate-180" />
@@ -390,15 +387,18 @@ function ActionTask({
           }}
         >
           <div className="min-h-0 overflow-hidden" inert={!expanded}>
-            {expansion.mounted && concluding && onSkip && onSaveOutcome && (
+            {expansion.mounted && concluding && outcomeHandlers && (
               <div className="flex flex-col gap-3 pt-1 pr-3 pb-3 pl-3 @xl:pl-[46px]">
                 <TaskOutcomeForm
                   key={task.id}
                   task={task}
                   focusNote={outcome?.focus ?? false}
+                  saving={outcome?.saving ?? false}
                   keyboard={keyboard}
-                  onSkip={() => onSkip(task)}
-                  onSave={(value) => onSaveOutcome(task, value)}
+                  onSkip={() => outcomeHandlers.skip(task)}
+                  onSave={(value) => outcomeHandlers.save(task, value)}
+                  onLeave={() => outcomeHandlers.leave(task)}
+                  onRegister={outcomeHandlers.register}
                 />
               </div>
             )}

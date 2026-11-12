@@ -202,31 +202,42 @@ export function useTaskDone(tasks: Task[]) {
   );
 
   const complete = useCallback(
-    (task: Task) => {
+    (task: Task, options: { hold?: boolean } = {}) => {
       if (entries.current.has(task.id)) return;
       withdrawn.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));
       setMessage(null);
       const toast = composer.showToast({ message: "Task done.", action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
-      const timer = window.setTimeout(() => commit(task.id), TASK_UNDO_MS);
+      const timer = options.hold ? 0 : window.setTimeout(() => commit(task.id), TASK_UNDO_MS);
       entries.current.set(task.id, { toast, timer, until: Date.now() + TASK_UNDO_MS, sent: false });
     },
     [commit, composer, undo],
   );
 
-  const completeWith = useCallback(
-    async (task: Task, run: () => Promise<Outcome & { message?: string }>) => {
-      if (entries.current.has(task.id)) return null;
-      setMessage(null);
-      const result = await run().catch((): Outcome & { message?: string } => ({ error: "Couldn't save. Try again." }));
-      if (result.error) return result.error;
-      setDone((current) => new Set(current).add(task.id));
-      setAwaiting((current) => new Set(current).add(task.id));
-      composer.showToast({ message: result.message ?? "Task done." });
-      router.refresh();
-      return null;
+  const release = useCallback(
+    (id: string) => {
+      const entry = entries.current.get(id);
+      if (!entry || entry.sent) return;
+      window.clearTimeout(entry.timer);
+      entry.timer = window.setTimeout(() => commit(id), Math.max(0, entry.until - Date.now()));
     },
-    [composer, router],
+    [commit],
+  );
+
+  const settle = useCallback(
+    (id: string, message: string) => {
+      const entry = entries.current.get(id);
+      if (entry) {
+        composer.dismissToast(entry.toast);
+        expire(id);
+      }
+      withdrawn.current.delete(id);
+      setDone((current) => new Set(current).add(id));
+      setAwaiting((current) => new Set(current).add(id));
+      composer.showToast({ message });
+      router.refresh();
+    },
+    [composer, expire, router],
   );
 
   const undoLast = useCallback(() => {
@@ -262,5 +273,5 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
-  return { done, message, setMessage, complete, completeWith, undo, undoLast, remind };
+  return { done, message, setMessage, complete, release, settle, undo, undoLast, remind };
 }

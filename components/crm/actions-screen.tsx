@@ -13,7 +13,7 @@ import type { AssignableMember } from "@/components/crm/assignee-picker";
 import TaskPad from "@/components/crm/task-pad";
 import TaskPanel from "@/components/crm/task-panel";
 import { canChangeTaskAs } from "@/components/crm/task-fields";
-import { finePointer, hasOutcome, useTaskOutcome } from "@/components/crm/task-outcome";
+import { finePointer, hasOutcome, useTaskOutcome, type OutcomeHandlers, type OutcomePlace } from "@/components/crm/task-outcome";
 import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
@@ -25,7 +25,6 @@ import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { TASK_PARAM } from "@/lib/chat/discussions";
 import { companyHref } from "@/lib/crm/hrefs";
 import { groupTasksByDue, tasksHref } from "@/lib/crm/task-views";
-import type { TaskOutcome } from "@/lib/crm/task-act";
 import type { Company, Task, TaskView } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
@@ -216,7 +215,7 @@ export default function ActionsScreen({
       </div>
     ) : undefined;
   const colleagues = useMemo(() => members.map((member) => ({ id: member.id, name: member.name })), [members]);
-  const { done, message, setMessage, complete: markDone, completeWith, undoLast, remind } = useTaskDone(allTasks);
+  const { done, message, setMessage, complete: markDone, release, settle, undoLast, remind } = useTaskDone(allTasks);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selected, setSelected] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -283,33 +282,19 @@ export default function ActionsScreen({
   const [notFound, setNotFound] = useState(false);
   if (missing && !notFound) setNotFound(true);
 
-  const concluding = useTaskOutcome({ finish, completeWith });
-  const outcome = concluding.outcome;
-
-  function complete(task: Task, via?: "swipe" | "key") {
-    if (done.has(task.id)) return;
-    if (outcome?.id === task.id) {
-      concluding.skip(task);
-      return;
-    }
-    if (outcome) concluding.skip(allTasks.find((item) => item.id === outcome.id) ?? task);
-    if (via !== "swipe" && view !== "completed" && hasOutcome(task)) {
-      concluding.start(task, via !== "key" && finePointer());
-      setExpandedId(task.id);
-      return;
-    }
-    finish(task);
+  function rowOf(id: string) {
+    return listRef.current?.querySelector<HTMLElement>(`[data-task-id="${id}"]`) ?? null;
   }
 
-  function finish(task: Task) {
-    if (done.has(task.id)) return;
-    const row = listRef.current?.querySelector<HTMLElement>(`[data-task-id="${task.id}"]`);
+  function followingRow(id: string) {
     const rows = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])];
-    const index = row ? rows.indexOf(row) : -1;
-    const following = index >= 0 ? (rows[index + 1] ?? rows[index - 1] ?? null) : null;
-    const wasActive = row?.dataset.kbActive === "true";
-    setExpandedId((current) => (current === task.id ? null : current));
-    markDone(task);
+    const index = rows.findIndex((row) => row.dataset.taskId === id);
+    return index >= 0 ? (rows[index + 1] ?? rows[index - 1] ?? null) : null;
+  }
+
+  function moveOn(id: string, wasActive: boolean) {
+    const following = followingRow(id);
+    setExpandedId((current) => (current === id ? null : current));
     if (!wasActive) return;
     window.requestAnimationFrame(() => {
       if (following) activateRow(following);
@@ -317,17 +302,61 @@ export default function ActionsScreen({
     });
   }
 
-  function completeFromPanel(task: Task) {
+  function concluded(task: Task, place: OutcomePlace) {
+    if (place === "panel") {
+      afterPanelDone(task);
+      return;
+    }
+    const row = rowOf(task.id);
+    moveOn(task.id, Boolean(row && (row.dataset.kbActive === "true" || row.contains(document.activeElement))));
+  }
+
+  const concluding = useTaskOutcome({ done, complete: markDone, release, settle, onClosed: concluded });
+  const outcome = concluding.outcome;
+
+  function complete(task: Task, via?: "swipe" | "key") {
+    if (concluding.saving) return;
+    if (outcome?.task.id === task.id) {
+      concluding.leave(task);
+      return;
+    }
     if (done.has(task.id)) return;
-    const rows = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])];
-    const index = rows.findIndex((row) => row.dataset.taskId === task.id);
-    const following = index >= 0 ? (rows[index + 1] ?? rows[index - 1] ?? null) : null;
-    setExpandedId((current) => (current === task.id ? null : current));
+    if (via !== "swipe" && view !== "completed" && hasOutcome(task)) {
+      concluding.start(task, via === "key" || finePointer(), "row");
+      setExpandedId(task.id);
+      return;
+    }
+    if (outcome) concluding.leave(outcome.task, true);
+    finish(task);
+  }
+
+  function finish(task: Task) {
+    if (done.has(task.id)) return;
+    const row = rowOf(task.id);
+    const wasActive = row?.dataset.kbActive === "true";
     markDone(task);
+    moveOn(task.id, wasActive);
+  }
+
+  function completeFromPanel(task: Task) {
+    if (concluding.saving || done.has(task.id)) return;
+    if (hasOutcome(task)) {
+      setExpandedId((current) => (current === task.id ? null : current));
+      concluding.start(task, finePointer(), "panel");
+      return;
+    }
+    if (outcome) concluding.leave(outcome.task, true);
+    markDone(task);
+    afterPanelDone(task);
+  }
+
+  function afterPanelDone(task: Task) {
+    const following = followingRow(task.id);
+    setExpandedId((current) => (current === task.id ? null : current));
     cancelFollow();
     const next = following?.dataset.taskId;
-    if (panelModal || !following || !next) {
-      closePanel();
+    if (panelModal || !following || !next || panelId !== task.id) {
+      if (panelId === task.id) closePanel();
       return;
     }
     activeRow()?.removeAttribute("data-kb-active");
@@ -353,7 +382,7 @@ export default function ActionsScreen({
   }
 
   const canChange = (task: Task) => canChangeTaskAs(viewer, task);
-  const shownTasks = view === "completed" ? allTasks : allTasks.filter((task) => !done.has(task.id));
+  const shownTasks = view === "completed" ? allTasks : allTasks.filter((task) => !done.has(task.id) || (outcome?.place === "row" && outcome.task.id === task.id));
   const entries =
     view === "all"
       ? groupTasksByDue(shownTasks, now).flatMap((group) => [
@@ -378,9 +407,8 @@ export default function ActionsScreen({
   }
 
   function leaveOutcome(next: string | null) {
-    if (!outcome || outcome.id === next) return;
-    const left = allTasks.find((item) => item.id === outcome.id);
-    if (left) concluding.skip(left);
+    if (!outcome || outcome.place !== "row" || outcome.task.id === next) return;
+    concluding.leave(outcome.task, true);
   }
 
   function toggle(task: Task) {
@@ -393,20 +421,30 @@ export default function ActionsScreen({
     setExpandedId(next);
   }
 
-  const latest = useRef({ toggle, complete, completeFromPanel, remind, openPanel, assign, skip: concluding.skip, save: concluding.save });
+  const latest = useRef({ toggle, complete, completeFromPanel, remind, openPanel, assign, concluding });
   useEffect(() => {
-    latest.current = { toggle, complete, completeFromPanel, remind, openPanel, assign, skip: concluding.skip, save: concluding.save };
+    latest.current = { toggle, complete, completeFromPanel, remind, openPanel, assign, concluding };
   });
   const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
   const onComplete = useCallback((task: Task, via?: "swipe") => latest.current.complete(task, via), []);
-  const onSkip = useCallback((task: Task) => latest.current.skip(task), []);
-  const onSaveOutcome = useCallback((task: Task, value: TaskOutcome) => latest.current.save(task, value), []);
+  const outcomeHandlers = useMemo<OutcomeHandlers>(
+    () => ({
+      skip: (task) => latest.current.concluding.skip(task),
+      save: (task, value) => latest.current.concluding.save(task, value),
+      leave: (task, quiet) => latest.current.concluding.leave(task, quiet),
+      register: (id, reader) => latest.current.concluding.register(id, reader),
+    }),
+    [],
+  );
   const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
   const onOpen = useCallback((task: Task) => latest.current.openPanel(task.id), []);
   const onAssign = useCallback((task: Task, ownerId: string) => void latest.current.assign(task.id, ownerId), []);
   const onPanelComplete = useCallback((task: Task) => latest.current.completeFromPanel(task), []);
 
   useEffect(() => () => window.clearTimeout(follow.current), []);
+  useEffect(() => {
+    if (outcome?.place === "panel" && outcome.task.id !== panelId) latest.current.concluding.leave(outcome.task, true);
+  }, [outcome, panelId]);
   function followRow(row: HTMLElement) {
     const id = row.dataset.taskId;
     if (!id) return;
@@ -442,12 +480,9 @@ export default function ActionsScreen({
   useShortcut("task-collapse", () => {
     if (!expandedId || inPanel()) return false;
     cancelFollow();
-    if (outcome?.id === expandedId) {
-      const concluded = allTasks.find((item) => item.id === expandedId);
-      if (concluded) {
-        concluding.skip(concluded);
-        return;
-      }
+    if (outcome?.place === "row" && outcome.task.id === expandedId) {
+      concluding.leave(outcome.task);
+      return;
     }
     const row = listRef.current?.querySelector<HTMLElement>(`[data-task-id="${expandedId}"]`);
     setExpandedId(null);
@@ -592,9 +627,8 @@ export default function ActionsScreen({
                 colleagues={colleagues}
                 canLink={canChange(entry.task)}
                 keyboard
-                outcome={outcome?.id === entry.task.id ? outcome : null}
-                onSkip={onSkip}
-                onSaveOutcome={onSaveOutcome}
+                outcome={outcome?.place === "row" && outcome.task.id === entry.task.id ? { focus: outcome.focus, saving: concluding.saving === entry.task.id } : null}
+                outcomeHandlers={outcomeHandlers}
               />
             ),
           )}
@@ -616,6 +650,8 @@ export default function ActionsScreen({
         modal={panelModal}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}
+        outcome={outcome?.place === "panel" && outcome.task.id === (panelTask ?? kept)?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id } : null}
+        outcomeHandlers={outcomeHandlers}
       />
     </section>
   );

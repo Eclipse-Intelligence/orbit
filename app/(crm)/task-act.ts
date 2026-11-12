@@ -14,7 +14,6 @@ import type { UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 const SIGN_IN = "Sign in again.";
-const LINK_KINDS = new Set(["contact", "company", "opportunity"]);
 
 function refresh() {
   revalidatePath(TASKS_PATH);
@@ -62,9 +61,9 @@ export async function taskInviteSetupAction(): Promise<{ setup?: InviteSetup; er
 export async function relinkTaskAction(id: string, change: LinkChange): Promise<{ ok?: boolean; error?: string }> {
   const user = await getUserActor();
   if (!user) return { error: SIGN_IN };
-  if (typeof id !== "string" || !isUuid(id) || !change || !LINK_KINDS.has(change.kind)) return { error: "Couldn't link the task. Try again." };
+  if (typeof id !== "string" || !isUuid(id) || !change || typeof change !== "object") return { error: "Couldn't link the task. Try again." };
   try {
-    await relinkTask(user, id, { kind: change.kind, id: typeof change.id === "string" ? change.id : null }, { operation: "link_task", source: "web" });
+    await relinkTask(user, id, { companyId: change.companyId, contactId: change.contactId, opportunityId: change.opportunityId }, { operation: "link_task", source: "web" });
     pushLater(user, [id]);
     refresh();
     return { ok: true };

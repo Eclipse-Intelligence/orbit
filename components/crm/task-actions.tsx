@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { useEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -20,7 +20,6 @@ import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
 import type { InviteSetup } from "@/lib/crm/invites";
 import type { LinkChange, TaskContext, TaskPerson } from "@/lib/crm/task-act";
 import { taskKind, type TaskKind } from "@/lib/crm/task-kind";
-import type { PadOption } from "@/lib/crm/task-pad";
 import type { TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 import { threadHref } from "@/lib/mail/view";
@@ -89,10 +88,15 @@ function useTaskContext(task: Task) {
       cancelled = true;
     };
   }, [key, task.id]);
-  return { context: state?.context ?? null, error: state?.error ?? null, loading: !state };
+  const fresh = state?.key === key ? state : null;
+  return { context: fresh?.context ?? null, error: fresh?.error ?? null, loading: !fresh };
 }
 
-function CallLink({ phone, label, primary, name, iconOnly }: { phone: string; label: string; primary: boolean; name: string; iconOnly?: boolean }) {
+export function callable(phone: string | null | undefined): phone is string {
+  return Boolean(phone && /\d/.test(phone));
+}
+
+function CallLink({ phone, label, spoken, primary, iconOnly }: { phone: string; label: string; spoken: string; primary: boolean; iconOnly?: boolean }) {
   const teams = teamsCallUrl(phone);
   const tel = `tel:${normalizePhone(phone) ?? phone.replace(/[^\d+]/g, "")}`;
   const variant = primary ? "primary" : "secondary";
@@ -102,7 +106,7 @@ function CallLink({ phone, label, primary, name, iconOnly }: { phone: string; la
       <a
         href={teams ?? tel}
         title={teams ? `${label} in Teams` : label}
-        aria-label={iconOnly ? `${label === "Call" ? `Call ${name}` : label}${teams ? " in Teams" : ""}` : undefined}
+        aria-label={teams ? `${spoken} in Teams` : spoken}
         className={cn(shape, "[@media(pointer:coarse)]:hidden")}
       >
         <PhoneIcon aria-hidden className="size-3.5" />
@@ -113,7 +117,7 @@ function CallLink({ phone, label, primary, name, iconOnly }: { phone: string; la
           </>
         )}
       </a>
-      <a href={tel} aria-label={iconOnly ? (label === "Call" ? `Call ${name}` : label) : undefined} className={cn(shape, "hidden [@media(pointer:coarse)]:inline-flex")}>
+      <a href={tel} aria-label={spoken} className={cn(shape, "hidden [@media(pointer:coarse)]:inline-flex")}>
         <PhoneIcon aria-hidden className="size-3.5" />
         {!iconOnly && label}
       </a>
@@ -141,7 +145,7 @@ function ContactActions({ task, context, kind }: Actions) {
   const [error, setError] = useState<string | null>(null);
   const name = task.contactName ?? "";
   const first = firstNameOf(task);
-  const phone = task.contactPhone;
+  const phone = callable(task.contactPhone) ? task.contactPhone : null;
   const email = task.contactEmail;
   const thread = context?.thread ?? null;
   const booking = context?.bookingUrl ?? null;
@@ -184,7 +188,7 @@ function ContactActions({ task, context, kind }: Actions) {
     void navigator.clipboard
       .writeText(text)
       .then(() => composer.showToast({ message }))
-      .catch(() => composer.showToast({ message: "Couldn't copy.", tone: "alert" }));
+      .catch(() => composer.showToast({ message: "Couldn't copy. Try again.", tone: "alert" }));
   }
 
   const prefill: InvitePrefill = { guests: email ? [{ email, name: name || null, contactId: task.contactId, company: task.companyName }] : [] };
@@ -197,7 +201,7 @@ function ContactActions({ task, context, kind }: Actions) {
     </Button>
   );
   const callButton = (primary: boolean, iconOnly = false) =>
-    phone ? <CallLink key="call" phone={phone} label="Call" primary={primary} name={first} iconOnly={iconOnly} /> : null;
+    phone ? <CallLink key="call" phone={phone} label="Call" spoken={`Call ${first}`} primary={primary} iconOnly={iconOnly} /> : null;
   const emailButton = (primary: boolean) =>
     email ? (
       <Button key="email" variant={primary ? "primary" : "secondary"} size="md" onClick={() => compose()} className={ACTION}>
@@ -213,15 +217,13 @@ function ContactActions({ task, context, kind }: Actions) {
   ) : null;
   const templateButton = (compact: boolean) =>
     email ? (
-      <UseTemplateButton key="template" compact={compact} onPick={(template) => compose(template)} className={compact ? ICON_ACTION : cn("h-[30px] px-3 text-[14px]", ACTION)} />
+      <UseTemplateButton key="template" compact={compact} shortcut={false} onPick={(template) => compose(template)} className={compact ? ICON_ACTION : cn("h-[30px] px-3 text-[14px]", ACTION)} />
     ) : null;
-  const inviteButton = (primary: boolean) => (
-    <span key="invite" title={email ? undefined : "Add an email address to invite"} className="inline-flex">
-      <Button variant={primary ? "primary" : "secondary"} size="md" disabled={!email || inviting} aria-busy={inviting || undefined} onClick={() => void openInvite()} className={ACTION}>
-        <CalendarIcon aria-hidden className="size-3.5" />
-        Invite
-      </Button>
-    </span>
+  const inviteButton = (
+    <Button key="invite" variant="primary" size="md" disabled={inviting} aria-busy={inviting || undefined} onClick={() => void openInvite()} className={ACTION}>
+      <CalendarIcon aria-hidden className="size-3.5" />
+      Invite
+    </Button>
   );
   const bookingButton = booking ? <CopyButton key="booking" text={booking} label="Copy booking link" ariaLabel="Copy booking link" className={cn("h-[30px] px-3 text-[14px]", ACTION)} /> : null;
 
@@ -239,7 +241,7 @@ function ContactActions({ task, context, kind }: Actions) {
     if (email) more.push({ key: "invite", label: "Invite", icon: CalendarIcon, run: () => void openInvite() });
     if (booking) more.push({ key: "booking", label: "Copy booking link", icon: CalendarIcon, run: () => copy(booking, "Booking link copied.") });
   } else {
-    buttons.push(email ? inviteButton(true) : findButton, bookingButton, emailButton(false));
+    buttons.push(email ? inviteButton : findButton, bookingButton, emailButton(false));
     if (phone) buttons.push(callButton(false, true));
     if (phone) more.push({ key: "copy", label: "Copy number", icon: PhoneIcon, run: () => copy(phone, "Number copied.") });
     if (thread) more.push({ key: "reply", label: "Reply on thread", icon: ReplyIcon, run: () => router.push(threadHref(thread.key, "reply")) });
@@ -359,7 +361,7 @@ function PersonRow({ person, busy, canLink, onLink }: { person: TaskPerson; busy
           aria-busy={busy === person.id || undefined}
           aria-label={`Link ${person.name}`}
           onClick={() => onLink(person)}
-          className="[@media(pointer:coarse)]:h-11"
+          className="[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11"
         >
           {busy === person.id ? "Linking…" : "Link"}
         </Button>
@@ -368,7 +370,7 @@ function PersonRow({ person, busy, canLink, onLink }: { person: TaskPerson; busy
   );
 }
 
-function CompanyStrip({ task, context, kind, canChange, here }: Actions & { canChange: boolean; here?: TitleHere }) {
+function CompanyStrip({ task, context, kind, canChange, here, onLinked }: Actions & { canChange: boolean; here?: TitleHere; onLinked: () => void }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -379,12 +381,13 @@ function CompanyStrip({ task, context, kind, canChange, here }: Actions & { canC
     if (busy) return;
     setBusy(person.id);
     setError(null);
-    const result = await relinkTaskAction(task.id, { kind: "contact", id: person.id }).catch(() => ({ error: "Couldn't link the task. Try again." }));
+    const result = await relinkTaskAction(task.id, { contactId: person.id }).catch(() => ({ error: "Couldn't link the task. Try again." }));
     setBusy(null);
     if (result.error) {
       setError(result.error);
       return;
     }
+    onLinked();
     router.refresh();
   }
 
@@ -404,7 +407,7 @@ function CompanyStrip({ task, context, kind, canChange, here }: Actions & { canC
             {canChange ? (kind === "call" ? "No person linked. Pick who to ring; it links the task." : "No person linked. Pick one; it links the task.") : "No person linked."}
           </span>
         </div>
-        {task.companyPhone && <CallLink phone={task.companyPhone} label="Call switchboard" primary={false} name={company} />}
+        {callable(task.companyPhone) && <CallLink phone={task.companyPhone} label="Call switchboard" spoken={`Call ${company}'s switchboard`} primary={false} />}
       </div>
       {context && people.length === 0 && <p className="caption-style text-subtle border-line-subtle border-t px-0.5 pt-2">No people at {company} yet.</p>}
       {people.length > 0 && (
@@ -480,7 +483,7 @@ function ContextLine({ task, context, here }: { task: Task; context: TaskContext
   } else if (context.lastEmail) {
     parts.push(
       <span key="email" className="min-w-0">
-        Your last email{" "}
+        Last email{" "}
         <b className="text-soft font-medium">
           &ldquo;{context.lastEmail.subject?.trim() || "No subject"}&rdquo;, {shortDate(context.lastEmail.at)}
         </b>
@@ -498,13 +501,20 @@ function ContextLine({ task, context, here }: { task: Task; context: TaskContext
 export function TaskAct({ task, here, canChange }: { task: Task; here?: TitleHere; canChange: boolean }) {
   const { context, error, loading } = useTaskContext(task);
   const kind = taskKind(task.title);
+  const box = useRef<HTMLDivElement>(null);
+  const linkedHere = useRef(false);
+  useEffect(() => {
+    if (!task.contactId || !linkedHere.current) return;
+    linkedHere.current = false;
+    box.current?.querySelector<HTMLElement>("section a[href], section button")?.focus();
+  }, [task.contactId]);
   if (!task.contactId && !task.companyId && !task.opportunityId) return null;
   return (
-    <div data-task-act="" className="flex flex-col gap-2.5">
+    <div ref={box} data-task-act="" className="flex flex-col gap-2.5">
       {task.contactId ? (
         <ContactStrip task={task} context={context} kind={kind} here={here} />
       ) : task.companyId ? (
-        <CompanyStrip task={task} context={context} kind={kind} canChange={canChange && !task.completedAt} here={here} />
+        <CompanyStrip task={task} context={context} kind={kind} canChange={canChange && !task.completedAt} here={here} onLinked={() => (linkedHere.current = true)} />
       ) : null}
       {context && <ContextLine task={task} context={context} here={here} />}
       {loading && (
@@ -524,6 +534,7 @@ export function TaskAct({ task, here, canChange }: { task: Task; here?: TitleHer
 
 export function EditLinks({ task }: { task: Task }) {
   const router = useRouter();
+  const group = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -540,22 +551,54 @@ export function EditLinks({ task }: { task: Task }) {
     router.refresh();
   }
 
-  const pick = (kind: LinkChange["kind"]) => (option: PadOption | null) => void change({ kind, id: option?.id ?? null });
+  function refocus(slot: string) {
+    window.requestAnimationFrame(() => group.current?.querySelector<HTMLElement>(`[data-link-slot="${slot}"] button`)?.focus());
+  }
+
   const record = (id: string | null, name: string | null) => (id && name ? { id, name } : null);
   return (
-    <div role="group" aria-label="Edit links" aria-busy={busy || undefined} className="flex flex-wrap items-center gap-1.5">
-      <SearchChip kind="contact" icon={UserIcon} label="Person" value={record(task.contactId, task.contactName)} companyId={null} variant="card" onPick={pick("contact")} onClosed={() => undefined} />
-      <SearchChip kind="company" icon={BuildingIcon} label="Company" value={record(task.companyId, task.companyName)} companyId={null} variant="card" onPick={pick("company")} onClosed={() => undefined} />
-      <SearchChip
-        kind="opportunity"
-        icon={OpportunityIcon}
-        label="Opportunity"
-        value={record(task.opportunityId, task.opportunityName)}
-        companyId={null}
-        variant="card"
-        onPick={pick("opportunity")}
-        onClosed={() => undefined}
-      />
+    <div ref={group} role="group" aria-label="Edit links" aria-busy={busy || undefined} className="flex flex-wrap items-center gap-1.5">
+      <span data-link-slot="contact" className="inline-flex">
+        <SearchChip
+          kind="contact"
+          icon={UserIcon}
+          label="Person"
+          value={record(task.contactId, task.contactName)}
+          companyId={task.companyId}
+          variant="card"
+          onPick={(option) => void change(option ? { contactId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { contactId: null })}
+          onClosed={() => refocus("contact")}
+        />
+      </span>
+      <span data-link-slot="company" className="inline-flex">
+        <SearchChip
+          kind="company"
+          icon={BuildingIcon}
+          label="Company"
+          value={record(task.companyId, task.companyName)}
+          companyId={null}
+          variant="card"
+          onPick={(option) => void change({ companyId: option?.id ?? null })}
+          onClosed={() => refocus("company")}
+        />
+      </span>
+      <span data-link-slot="opportunity" className="inline-flex">
+        <SearchChip
+          kind="opportunity"
+          icon={OpportunityIcon}
+          label="Opportunity"
+          value={record(task.opportunityId, task.opportunityName)}
+          companyId={null}
+          variant="card"
+          onPick={(option) => void change(option ? { opportunityId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { opportunityId: null })}
+          onClosed={() => refocus("opportunity")}
+        />
+      </span>
+      {busy && (
+        <span role="status" className="caption-style text-subtle">
+          Saving…
+        </span>
+      )}
       {error && (
         <p role="alert" className="caption-style text-danger basis-full">
           {error}
