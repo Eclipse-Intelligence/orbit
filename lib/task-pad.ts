@@ -1,6 +1,6 @@
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
 
-export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" };
+export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" | "ask" };
 
 type PadParse = {
   title: string;
@@ -264,7 +264,7 @@ export function stripMention(text: string, caret: number) {
   return { start: at, end: caret, query };
 }
 
-export function nameMarks(text: string, names: string[]): PadMark[] {
+export function nameMarks(text: string, names: string[], kind: "record" | "ask" = "record"): PadMark[] {
   const marks: PadMark[] = [];
   for (const name of names) {
     const clean = name.trim();
@@ -272,7 +272,7 @@ export function nameMarks(text: string, names: string[]): PadMark[] {
     const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])(${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?=$|[^\\p{L}\\p{N}])`, "giu");
     for (const match of text.matchAll(pattern)) {
       const start = (match.index ?? 0) + match[1].length;
-      marks.push({ start, end: start + match[2].length, kind: "record" });
+      marks.push({ start, end: start + match[2].length, kind });
     }
   }
   return marks;
@@ -286,4 +286,42 @@ export function mergeMarks(marks: PadMark[]) {
     result.push(mark);
   }
   return result;
+}
+
+type ConfirmInput = {
+  contact: { name: string; company: { name: string } | null } | null;
+  contactTitle: string | null;
+  company: { name: string } | null;
+  companyDomain: string | null;
+  matchedBy: "full" | "name" | null;
+  word: string | null;
+};
+
+export function padConfirmLine(found: ConfirmInput) {
+  const only = found.word ? ` is the only ${found.word}` : "";
+  if (found.contact) {
+    const company = found.contact.company?.name || null;
+    const title = found.contactTitle?.trim() || null;
+    const role = title ? (company ? `${title} at ${company}` : title) : null;
+    const lead = role ? `${found.contact.name}, ${role}` : company ? `${found.contact.name} at ${company}` : found.contact.name;
+    if (found.matchedBy !== "name" || !only) return lead;
+    return role ? `${lead},${only}` : `${lead}${only}`;
+  }
+  if (!found.company) return null;
+  const lead = found.companyDomain ? `${found.company.name} (${found.companyDomain})` : found.company.name;
+  return `${lead}${only}`;
+}
+
+const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+
+export function reminderClock(due: string, minutes: number) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(due);
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  const at = new Date(Date.UTC(year, month - 1, day, hour, minute) - minutes * 60_000);
+  const clock = `${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}`;
+  if (at.getUTCFullYear() === year && at.getUTCMonth() === month - 1 && at.getUTCDate() === day) return clock;
+  const parts = SHORT_DAY.formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("weekday")} ${part("day")} ${part("month")}, ${clock}`;
 }

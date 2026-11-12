@@ -41,6 +41,7 @@ import {
   type QuickAddRecord,
 } from "@/lib/crm/quick-add";
 import { useComposer } from "@/components/mail/compose-dock";
+import { useKeyboardLift } from "@/hooks/use-keyboard-lift";
 import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
@@ -151,6 +152,25 @@ export function useScreenState() {
   }, []);
 
   return { covered, lift, tucked };
+}
+
+function SheetGrab() {
+  const grab = useRef<HTMLDivElement>(null);
+  useKeyboardLift(grab);
+  return <div ref={grab} aria-hidden className="mx-auto mt-2 mb-0.5 h-[5px] w-9 rounded-full bg-white/18 md:hidden" />;
+}
+
+function TaskSheet({ children }: { children: ReactNode }) {
+  return (
+    <DialogContent
+      closeButton={false}
+      aria-describedby={undefined}
+      className="top-[14vh] max-w-[664px] translate-y-0 rounded-2xl max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-w-none max-md:translate-x-0 max-md:rounded-t-[20px] max-md:rounded-b-none max-md:border-x-0 max-md:border-b-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:data-[keyboard]:pb-0 max-md:data-[state=closed]:slide-out-to-bottom max-md:data-[state=closed]:zoom-out-100 max-md:data-[state=open]:slide-in-from-bottom max-md:data-[state=open]:zoom-in-100"
+    >
+      <SheetGrab />
+      {children}
+    </DialogContent>
+  );
 }
 
 export default function QuickAdd({ viewerId }: { viewerId: string }) {
@@ -315,12 +335,17 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
         </DropdownMenu>
       </div>
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-[440px]" aria-describedby={undefined}>
-          {kind === "task" && <QuickTaskForm key={opening} {...formProps} />}
-          {kind === "contact" && <QuickContactForm key={opening} {...formProps} />}
-          {kind === "company" && <QuickCompanyForm key={opening} {...formProps} />}
-          {kind === "opportunity" && <QuickOpportunityForm key={opening} {...formProps} />}
-        </DialogContent>
+        {kind === "task" ? (
+          <TaskSheet>
+            <QuickTaskForm key={opening} {...formProps} />
+          </TaskSheet>
+        ) : (
+          <DialogContent className="max-w-[440px]" aria-describedby={undefined}>
+            {kind === "contact" && <QuickContactForm key={opening} {...formProps} />}
+            {kind === "company" && <QuickCompanyForm key={opening} {...formProps} />}
+            {kind === "opportunity" && <QuickOpportunityForm key={opening} {...formProps} />}
+          </DialogContent>
+        )}
       </Dialog>
     </>
   );

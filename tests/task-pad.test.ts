@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
-import { detectPadRecords } from "@/lib/crm/task-pad";
+import { createOpportunity } from "@/lib/crm/opportunities";
+import { scopesForRole } from "@/lib/crm/scopes";
+import { detectPadRecords, searchPadRecords } from "@/lib/crm/task-pad";
+import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
-import { getPool } from "@/lib/db/pool";
-import { mergeMarks, nameMarks, parseTaskText, stripMention } from "@/lib/task-pad";
+import { getAdminPool, getPool } from "@/lib/db/pool";
+import { mergeMarks, nameMarks, padConfirmLine, parseTaskText, reminderClock, stripMention } from "@/lib/task-pad";
 import { createUser, resetDatabase } from "./helpers";
 
 const FRIDAY_10AM = new Date("2026-10-16T09:00:00Z");
@@ -126,6 +129,26 @@ describe("task pad parser", () => {
     assert.equal(result.unsure, true);
   });
 
+  it("words the confirmation line for what the card will link", () => {
+    const base = { contactTitle: null, company: null, companyDomain: null, matchedBy: null, word: null };
+    const jane = { name: "Jane Cooper", company: { name: "Northwind" } };
+    assert.equal(
+      padConfirmLine({ ...base, contact: jane, contactTitle: "Head of Operations", matchedBy: "name", word: "Jane" }),
+      "Jane Cooper, Head of Operations at Northwind, is the only Jane",
+    );
+    assert.equal(padConfirmLine({ ...base, contact: jane, matchedBy: "name", word: "Jane" }), "Jane Cooper at Northwind is the only Jane");
+    assert.equal(padConfirmLine({ ...base, contact: { name: "Jane Cooper", company: null }, matchedBy: "full" }), "Jane Cooper");
+    assert.equal(padConfirmLine({ ...base, contact: null, company: { name: "Zoom" }, companyDomain: "zoom.us", word: "Zoom" }), "Zoom (zoom.us) is the only Zoom");
+    assert.equal(padConfirmLine({ ...base, contact: null }), null);
+  });
+
+  it("shows when a reminder goes off", () => {
+    assert.equal(reminderClock("2026-11-16T15:00", 60), "14:00");
+    assert.equal(reminderClock("2026-11-16T15:00", 0), "15:00");
+    assert.equal(reminderClock("2026-11-16T09:00", 1440), "Sun 15 Nov, 09:00");
+    assert.equal(reminderClock("soon", 5), null);
+  });
+
   it("finds an @ mention at the caret", () => {
     assert.deepEqual(stripMention("Call @Ac", 8), { start: 5, end: 8, query: "Ac" });
     assert.equal(stripMention("email me@acme.com", 17), null);
@@ -135,14 +158,34 @@ describe("task pad parser", () => {
 
 describe("task pad record detection", () => {
   let owner: UserActor;
+  let acme: string;
+  let halden: string;
+  let priya: string;
+
+  async function join(email: string, name: string) {
+    const user = await createUser(email, name);
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, user.userId]);
+    return { ...user, workspaceId: owner.workspaceId, role: "member" as const, scopes: scopesForRole("member") };
+  }
 
   before(async () => {
     await resetDatabase();
     owner = await createUser("pad@orbit.test", "Mark Ridgeon");
-    const acme = (await createCompany(owner, { name: "Acme", domain: "acme-pad.test" })).body.company.id;
+    acme = (await createCompany(owner, { name: "Acme", domain: "acme-pad.test" })).body.company.id;
     await createCompany(owner, { name: "Ace", domain: "ace-pad.test" });
+    await createCompany(owner, { name: "Monday", domain: "monday-pad.test" });
+    halden = (await createCompany(owner, { name: "Halden Group", domain: "halden-pad.test" })).body.company.id;
     await createContact(owner, { companyId: acme, firstName: "Jane", lastName: "Doe", email: "jane@acme-pad.test" });
     await createContact(owner, { firstName: "Jane", lastName: "Smith", email: "jane@smith-pad.test" });
+    priya = (await createContact(owner, { companyId: acme, firstName: "Priya", lastName: "Shah", jobTitle: "Head of Operations", email: "priya@acme-pad.test" })).body.contact.id;
+    await createContact(owner, { companyId: halden, firstName: "Sam", lastName: "Whitfield", jobTitle: "Operations Director", email: "sam@halden-pad.test" });
+    await createContact(owner, { firstName: "Sam", lastName: "Reid", email: "sam@reid-pad.test" });
+    await createContact(owner, { firstName: "Sam", lastName: "Okafor", email: "sam@okafor-pad.test" });
+    await createContact(owner, { firstName: "Lena", lastName: "Fox", email: "lena@fox-pad.test" });
+    await join("sam@team-pad.test", "Sam Okafor");
+    await join("lena@team-pad.test", "Lena Brandt");
+    await createOpportunity(owner, { companyId: acme, name: "Acme renewal 2027" });
+    await createOpportunity(owner, { companyId: halden, name: "Halden pilot" });
   });
 
   after(async () => {
@@ -160,5 +203,58 @@ describe("task pad record detection", () => {
     const found = await detectPadRecords(owner, "Find a place to meet Jane");
     assert.equal(found.company, null);
     assert.equal(found.contact, null);
+  });
+
+  it("proposes the only contact with a first name, with their company and title, and skips dates", async () => {
+    const found = await detectPadRecords(owner, "Call Priya Monday 3pm");
+    assert.equal(found.contact?.id, priya);
+    assert.equal(found.matchedBy, "name");
+    assert.equal(found.word, "Priya");
+    assert.equal(found.contactTitle, "Head of Operations");
+    assert.equal(found.company?.id, acme);
+    assert.equal(found.ask, null);
+    assert.equal(padConfirmLine(found), "Priya Shah, Head of Operations at Acme, is the only Priya");
+    assert.equal((await detectPadRecords(owner, "call priya about pricing")).contact, null);
+  });
+
+  it("narrows a shared first name to the company named, and otherwise asks", async () => {
+    const atAcme = await detectPadRecords(owner, "Call Jane at Acme");
+    assert.equal(atAcme.contact?.name, "Jane Doe");
+    const unsure = await detectPadRecords(owner, "Call Jane tomorrow");
+    assert.equal(unsure.contact, null);
+    assert.equal(unsure.ask?.word, "Jane");
+    assert.deepEqual(unsure.ask?.candidates.map((candidate) => candidate.name).sort(), ["Jane Doe", "Jane Smith"]);
+  });
+
+  it("never offers a teammate as a contact and asks when a first name is also a teammate's", async () => {
+    const sam = await detectPadRecords(owner, "Call Sam about the pilot tomorrow");
+    assert.equal(sam.contact, null);
+    assert.equal(sam.ask?.word, "Sam");
+    assert.deepEqual(sam.ask?.candidates.map((candidate) => candidate.name).sort(), ["Sam Reid", "Sam Whitfield"]);
+    assert.equal(sam.ask?.candidates.find((candidate) => candidate.name === "Sam Whitfield")?.detail, "Operations Director · Halden Group");
+    const lena = await detectPadRecords(owner, "Ask Lena for the slides");
+    assert.equal(lena.contact, null);
+    assert.deepEqual(lena.ask?.candidates.map((candidate) => candidate.name), ["Lena Fox"]);
+    const named = await detectPadRecords(owner, "Ask Sam Okafor about the pilot");
+    assert.equal(named.contact, null);
+    assert.equal(named.ask, null);
+  });
+
+  it("still never links a first name when a task is saved without links", async () => {
+    const task = (await createTask(owner, { title: "Call Priya Monday" })).body.task;
+    assert.deepEqual([task.contactId, task.companyId], [null, null]);
+  });
+
+  it("searches people, companies and opportunities to link by hand", async () => {
+    const people = await searchPadRecords(owner, "contact", "Sam");
+    assert.deepEqual(people.map((person) => person.name).sort(), ["Sam Reid", "Sam Whitfield"]);
+    const companies = await searchPadRecords(owner, "company", "hald");
+    assert.deepEqual(companies.map((company) => company.name), ["Halden Group"]);
+    const all = await searchPadRecords(owner, "opportunity", "");
+    assert.equal(all.length, 2);
+    const atHalden = await searchPadRecords(owner, "opportunity", "", halden);
+    assert.deepEqual(atHalden.map((opportunity) => [opportunity.name, opportunity.company?.id]), [["Halden pilot", halden]]);
+    const atAcme = await searchPadRecords(owner, "contact", "", acme);
+    assert.deepEqual(atAcme.map((person) => person.name).sort(), ["Jane Doe", "Priya Shah"]);
   });
 });

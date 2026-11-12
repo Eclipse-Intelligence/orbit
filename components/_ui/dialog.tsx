@@ -38,8 +38,9 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  closeButton = true,
   ...props
-}: ComponentProps<typeof DialogPrimitive.Content>) {
+}: ComponentProps<typeof DialogPrimitive.Content> & { closeButton?: boolean }) {
   return (
     <DialogPrimitive.Portal>
       <DialogOverlay />
@@ -54,16 +55,18 @@ function DialogContent({
         <ScrollArea viewportClassName="max-h-[calc(100dvh-2rem)]">
           {children}
         </ScrollArea>
-        <DialogPrimitive.Close asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="absolute top-4 right-4"
-            aria-label="Close"
-          >
-            <XIcon className="size-4" />
-          </Button>
-        </DialogPrimitive.Close>
+        {closeButton && (
+          <DialogPrimitive.Close asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="absolute top-4 right-4"
+              aria-label="Close"
+            >
+              <XIcon className="size-4" />
+            </Button>
+          </DialogPrimitive.Close>
+        )}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );

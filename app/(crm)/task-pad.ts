@@ -6,14 +6,31 @@ import { actionError } from "@/lib/companies";
 import { createTaskWithClickUp } from "@/lib/crm/clickup";
 import { isUuid } from "@/lib/crm/mutate";
 import { isReminderMinutes } from "@/lib/crm/reminder-options";
-import { detectPadRecords, parsePadWithAi, type PadAiParse, type PadDetection } from "@/lib/crm/task-pad";
+import {
+  detectPadRecords,
+  NO_PAD_DETECTION,
+  parsePadWithAi,
+  searchPadRecords,
+  type PadAiParse,
+  type PadDetection,
+  type PadOption,
+  type PadSearchKind,
+} from "@/lib/crm/task-pad";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 export async function detectTaskRecordsAction(text: string): Promise<PadDetection> {
   const user = await getUserActor();
-  if (!user || typeof text !== "string") return { company: null, contact: null, opportunity: null };
+  if (!user || typeof text !== "string") return NO_PAD_DETECTION;
   return detectPadRecords(user, text);
+}
+
+const SEARCH_KINDS: PadSearchKind[] = ["contact", "company", "opportunity"];
+
+export async function searchTaskLinksAction(kind: PadSearchKind, query: string, companyId: string | null = null): Promise<PadOption[]> {
+  const user = await getUserActor();
+  if (!user || !SEARCH_KINDS.includes(kind) || typeof query !== "string") return [];
+  return searchPadRecords(user, kind, query, typeof companyId === "string" && isUuid(companyId) ? companyId : null);
 }
 
 export async function parseTaskWithAiAction(text: string): Promise<PadAiParse | null> {
