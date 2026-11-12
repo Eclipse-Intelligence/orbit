@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { scopesForRole } from "@/lib/crm/scopes";
+import { completeTasksFromBeacon } from "@/lib/crm/task-beacon";
 import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { groupTasksByDue, taskGroupKind } from "@/lib/crm/task-views";
 import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, reopenTask } from "@/lib/crm/tasks";
@@ -106,6 +107,51 @@ describe("task list", () => {
       taskGroupKind(dueAt, now, "Europe/London"),
     );
     assert.deepEqual(kinds, ["overdue", "today", "today", "upcoming"]);
+  });
+
+  it("completes pending tasks from the page-hide beacon only for the signed-in person, once", async () => {
+    const beacon = (ids: string[], origin = "http://orbit.test") =>
+      new Request("http://orbit.test/api/tasks/complete", { method: "POST", headers: { origin, "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ ids }) });
+    const completions = async (id: string) =>
+      (await sql<{ count: number }>("select count(*)::int as count from crm.audit_events where entity_id = $1 and event_type = 'task.completed'", [id]))[0].count;
+    const task = (await createTask(mark, { title: "Ring Halden back", ownerId: sam.userId })).body.task;
+
+    const signedOut = await completeTasksFromBeacon(beacon([task.id]), null);
+    assert.equal(signedOut.status, 401);
+    const elsewhere = await completeTasksFromBeacon(beacon([task.id], "https://evil.test"), sam);
+    assert.equal(elsewhere.status, 403);
+    assert.equal((await completeTasksFromBeacon(beacon([]), sam)).status, 400);
+    assert.equal((await getTask(sam, task.id)).completedAt, null);
+
+    const hidden = await completeTasksFromBeacon(beacon([task.id]), priya);
+    assert.deepEqual(hidden.body, { completed: [], failed: [task.id] });
+    const outside = await completeTasksFromBeacon(beacon([task.id]), olly);
+    assert.deepEqual(outside.body, { completed: [], failed: [task.id] });
+    assert.equal((await getTask(sam, task.id)).completedAt, null);
+
+    const first = await completeTasksFromBeacon(beacon([task.id, task.id.toUpperCase(), "not-an-id"]), sam);
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.completed, [task.id]);
+    const completedAt = (await getTask(sam, task.id)).completedAt;
+    assert.ok(completedAt);
+    await completeTasksFromBeacon(beacon([task.id]), sam);
+    await completeTask(sam, task.id, { provenance: { operation: "complete_task", source: "web" } });
+    assert.equal(await completions(task.id), 1);
+    assert.equal((await getTask(sam, task.id)).completedAt, completedAt);
+    const [event] = await sql<{ source: string; operation: string; actor_user_id: string }>(
+      "select source, operation, actor_user_id from crm.audit_events where entity_id = $1 and event_type = 'task.completed'",
+      [task.id],
+    );
+    assert.deepEqual(event, { source: "web", operation: "complete_task", actor_user_id: sam.userId });
+    const updates = await sql("select 1 from crm.audit_events where entity_id = $1 and event_type = 'task.updated'", [task.id]);
+    assert.equal(updates.length, 0);
+  });
+
+  it("completes a task only once when two completions race", async () => {
+    const task = (await createTask(mark, { title: "Send the signed order form" })).body.task;
+    await Promise.all([completeTask(mark, task.id), completeTask(mark, task.id), completeTask(mark, task.id)]);
+    const events = await sql("select 1 from crm.audit_events where entity_id = $1 and event_type in ('task.completed', 'task.updated')", [task.id]);
+    assert.equal(events.length, 1);
   });
 
   it("groups the All view under Overdue, Today, Upcoming and No date", () => {

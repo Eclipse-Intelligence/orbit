@@ -2,6 +2,7 @@ import { TASK_VIEWS, type TaskView } from "@/lib/crm/types";
 import { appTimeZone, dayWindow } from "@/lib/time";
 
 export const TASKS_PATH = "/tasks";
+export const TASK_BEACON_PATH = "/api/tasks/complete";
 const LEGACY_TASKS_PATH = "/actions";
 export const DEFAULT_TASK_VIEW: TaskView = "all";
 

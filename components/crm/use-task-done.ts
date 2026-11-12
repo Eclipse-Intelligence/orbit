@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useComposer } from "@/components/mail/compose-dock";
 import { completeTaskAction, remindTaskAction } from "@/app/(crm)/records";
+import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
 import { onWorkingDay, taskRemindChoices } from "@/lib/crm/task-snooze";
 import type { Task } from "@/lib/crm/types";
 import { laterDetail } from "@/lib/mail/later";
@@ -67,16 +68,45 @@ export function useTaskDone(tasks: Task[]) {
     for (const id of [...pending.current.keys()]) commit(id);
   }, [commit]);
 
-  const latestFlush = useRef(flush);
+  const beacon = useCallback(() => {
+    const ids = [...pending.current.keys()];
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      const entry = pending.current.get(id);
+      if (entry) {
+        window.clearTimeout(entry.timer);
+        composer.dismissToast(entry.toast);
+      }
+      pending.current.delete(id);
+    }
+    const body = JSON.stringify({ ids });
+    let queued = false;
+    try {
+      queued = navigator.sendBeacon?.(TASK_BEACON_PATH, new Blob([body], { type: "text/plain;charset=UTF-8" })) ?? false;
+    } catch {
+      queued = false;
+    }
+    if (!queued) {
+      void fetch(TASK_BEACON_PATH, { method: "POST", body, keepalive: true, credentials: "same-origin", headers: { "content-type": "text/plain;charset=UTF-8" } }).catch(() => undefined);
+    }
+    setAwaiting((current) => new Set([...current, ...ids]));
+  }, [composer]);
+
+  const latest = useRef({ flush, beacon });
   useEffect(() => {
-    latestFlush.current = flush;
+    latest.current = { flush, beacon };
   });
   useEffect(() => {
-    const send = () => latestFlush.current();
-    window.addEventListener("pagehide", send);
+    const leave = () => latest.current.beacon();
+    const hidden = () => {
+      if (document.visibilityState === "hidden") latest.current.beacon();
+    };
+    window.addEventListener("pagehide", leave);
+    document.addEventListener("visibilitychange", hidden);
     return () => {
-      window.removeEventListener("pagehide", send);
-      send();
+      window.removeEventListener("pagehide", leave);
+      document.removeEventListener("visibilitychange", hidden);
+      latest.current.flush();
     };
   }, []);
 
