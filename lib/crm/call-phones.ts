@@ -12,6 +12,9 @@ const COMMON_WORD_NAMES = new Set([
   "will", "may", "june", "april", "august", "mark", "grant", "rob", "bill", "sue", "pat", "rich", "frank", "hope",
   "joy", "faith", "grace", "art", "dawn", "rose", "summer", "chase", "drew", "jack", "ray", "glen", "dean", "chip",
   "sunny", "max", "guy", "gene", "lee", "reed", "chuck", "carol", "rocky", "crystal", "ruby", "amber", "holly",
+  "jan", "don", "nick", "josh", "penny", "sandy", "robin", "miles", "olive", "ivy", "iris", "daisy", "lily", "heather",
+  "cliff", "dale", "eve", "autumn", "christian", "victoria", "charlotte", "florence", "georgia", "jordan", "chelsea",
+  "paris", "austin", "sydney", "kent", "devon", "preston", "lincoln", "jean", "sterling", "hunter", "forrest", "wade",
 ]);
 
 export type PhoneLookup = { title: string | null | undefined; text: string | null | undefined };
@@ -52,7 +55,7 @@ function tail(number: string) {
 function capitalisedWords(text: string) {
   const words = new Set<string>();
   for (const word of text.match(WORD) ?? []) {
-    if (word[0] !== word[0].toLowerCase()) words.add(foldName(word));
+    if (word[0] !== word[0].toLowerCase()) words.add(foldName(word.replace(/['’]s$/u, "")));
   }
   return words;
 }
@@ -89,9 +92,17 @@ function offered(rows: ContactRow[]) {
   return { match: null, suggestions: rows.slice(0, MAX_SUGGESTIONS).map(asSuggestion) };
 }
 
+function unique(rows: ContactRow[]) {
+  return rows.filter((row, index) => rows.findIndex((other) => other.id === row.id) === index);
+}
+
 function decide(direct: ContactRow[], boards: CompanyRow[], staff: ContactRow[], text: string, excluded: Set<string>) {
-  const pool = [...direct, ...staff.filter((row) => !direct.some((other) => other.id === row.id))];
+  const isDirect = (row: ContactRow) => direct.some((other) => other.id === row.id);
+  const atBoard = (row: ContactRow) => boards.some((board) => board.id === row.company_id);
+  const colleagues = staff.filter((row) => !isDirect(row) && !atBoard(row) && direct.some((other) => other.company_id === row.company_id));
+  const pool = unique([...direct, ...staff.filter(atBoard), ...colleagues]);
   const named = namedIn(pool, text, excluded);
+  if (named.some((row) => colleagues.includes(row))) return offered(unique([...named, ...direct]));
   if (named.length === 1) return chosen(named[0]);
   if (named.length > 1) return offered(named);
   if (direct.length === 1) return chosen(direct[0]);
@@ -142,7 +153,10 @@ export async function matchPhonesInDb(
      order by created_at, id`,
     [workspaceIds, tails],
   );
-  const staff = companies.rows.length === 0
+  const staffCompanies = [
+    ...new Set([...companies.rows.map((row) => row.id), ...contacts.rows.map((row) => row.company_id).filter((id): id is string => Boolean(id))]),
+  ];
+  const staff = staffCompanies.length === 0
     ? []
     : (
         await db.query<ContactRow>(
@@ -151,7 +165,7 @@ export async function matchPhonesInDb(
            join crm.companies co on co.id = c.company_id
            where c.company_id = any($1::uuid[]) and c.archived_at is null
            order by c.created_at, c.id`,
-          [companies.rows.map((row) => row.id)],
+          [staffCompanies],
         )
       ).rows;
   return lookups.map((lookup, index) => {
@@ -162,7 +176,7 @@ export async function matchPhonesInDb(
     for (const workspaceId of workspaceIds) {
       const direct = contacts.rows.filter((row) => row.workspace_id === workspaceId && wanted.has(normalizePhone(row.phone) ?? ""));
       const boards = companies.rows.filter((row) => row.workspace_id === workspaceId && wanted.has(normalizePhone(row.phone) ?? ""));
-      const people = staff.filter((row) => boards.some((board) => board.id === row.company_id));
+      const people = staff.filter((row) => row.workspace_id === workspaceId);
       const decision = decide(direct, boards, people, text, excluded);
       if (decision) results.push({ workspaceId, ...decision });
     }

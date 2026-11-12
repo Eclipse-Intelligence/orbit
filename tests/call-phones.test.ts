@@ -185,6 +185,28 @@ describe("matching Granola phone calls by number", () => {
     assert.equal(item.suggestedBy, null);
   });
 
+  it("suggests rather than files when the summary names a colleague of the contact holding the number", async () => {
+    const lodge = await createCompany(mark, { name: "Lodge", domain: "lodge.test" });
+    const companyId = lodge.body.company.id;
+    const anya = await createContact(mark, { firstName: "Anya", lastName: "Lodge", email: "anya@lodge.test", companyId, phone: "020 7946 0909" });
+    const peter = await createContact(mark, { firstName: "Peter", lastName: "Lodge", email: "peter@lodge.test", companyId });
+    const call = phoneNote("not_phone_lodge01", mark, "Phone call with +442079460909", "Call Summary\n- Reached Peter via a gatekeeper");
+    assert.equal(await fileGranolaNote(mark, call), "unfiled");
+    const row = await imported(call.id);
+    const item = (await listToFile(mark)).unfiled.find((entry) => entry.id === row.id)!;
+    assert.equal(item.suggestedBy, "phone");
+    assert.deepEqual(item.suggestions.map((entry) => entry.contactId), [peter.body.contact.id, anya.body.contact.id]);
+  });
+
+  it("reads a possessive as a name but never a month", async () => {
+    const companyId = await companyWithPhone("Calendar Co", "calendarco.test", "020 7946 1010");
+    const paula = await createContact(mark, { firstName: "Paula", lastName: "Grey", email: "paula@calendarco.test", companyId });
+    await createContact(mark, { firstName: "Jan", lastName: "Stone", email: "jan@calendarco.test", companyId });
+    const call = phoneNote("not_phone_cal01", mark, "Phone call with +442079461010", "Call Summary\n- Paula's keen to see pricing, try again in Jan");
+    assert.equal(await fileGranolaNote(mark, call), "filed");
+    assert.equal((await imported(call.id)).contact_id, paula.body.contact.id);
+  });
+
   it("leaves a call to an unknown number in To file with nothing suggested", async () => {
     const call = phoneNote("not_phone_none01", mark, "Phone call with +447700900999", "Call Summary\n- Spoke to Paul");
     assert.equal(await fileGranolaNote(mark, call), "unfiled");

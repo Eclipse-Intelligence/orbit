@@ -16,6 +16,7 @@ import {
   importConflict,
   importPlaceholder,
   importSettled,
+  internalAddresses,
   knownImportsFor,
   lockImportKey,
   memberActor,
@@ -286,7 +287,8 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       added += 1;
     }
     if (added > 0) route = await routeCallInDb(db, owner, open, participants, routing);
-    const attendeeless = participants.every((person) => !person.email || own.has(canonicalEmail(person.email) ?? ""));
+    const internal = await internalAddresses(db, owner.workspaceId, [...own]);
+    const attendeeless = participants.every((person) => !person.email || internal.isInternal(person.email));
     const phones = route.targets.length === 0 && attendeeless
       ? (
           await matchPhonesInDb(
