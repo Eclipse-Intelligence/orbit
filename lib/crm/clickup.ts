@@ -40,7 +40,7 @@ import {
   type ClickUpTeam,
   type ClickUpUser,
 } from "@/lib/clickup";
-import { appTimeZone, zonedParts, zonedTimeToDate } from "@/lib/time";
+import { appTimeZone, dayKeyIn, zonedParts, zonedTimeToDate } from "@/lib/time";
 import { directTaskSql } from "@/lib/crm/task-access";
 
 const SYNC_GAP_MS = 5 * 60 * 1000;
@@ -710,10 +710,31 @@ export async function findClickUpLink(db: Db, workspaceId: string, task: ClickUp
   return null;
 }
 
+function dueUnchanged(due: Fields, snap: Snapshot) {
+  if (snap.dueAt === undefined) return false;
+  if (snap.dueHasTime === undefined) {
+    if (same("dueAt", due.dueAt, snap.dueAt)) return true;
+    return Boolean(due.dueAt && snap.dueAt && dayKeyIn(new Date(due.dueAt)) === dayKeyIn(new Date(snap.dueAt)));
+  }
+  return sameDue(due, snap);
+}
+
 function mergeFields(local: Fields, remote: Fields, snap: Snapshot, localTime: number, changedAt: number) {
   const write: TaskWrite = {};
   const next: Snapshot = {};
   for (const key of KEYS) {
+    if (key === "dueAt") {
+      if (same(key, remote.dueAt, local.dueAt) && remote.dueHasTime === local.dueHasTime) {
+        Object.assign(next, { dueAt: remote.dueAt, dueHasTime: remote.dueHasTime });
+        continue;
+      }
+      if (dueUnchanged(remote, snap)) continue;
+      if (!dueUnchanged(local, snap) && localTime > changedAt) continue;
+      write.dueAt = remote.dueAt;
+      write.dueHasTime = remote.dueHasTime;
+      Object.assign(next, { dueAt: remote.dueAt, dueHasTime: remote.dueHasTime });
+      continue;
+    }
     if (same(key, remote[key], local[key])) {
       Object.assign(next, { [key]: remote[key] });
       continue;
@@ -724,11 +745,6 @@ function mergeFields(local: Fields, remote: Fields, snap: Snapshot, localTime: n
     if (!remoteChanged) continue;
     if (localChanged && localTime > changedAt) continue;
     if (key === "title") write.title = remote.title;
-    if (key === "dueAt") {
-      write.dueAt = remote.dueAt;
-      write.dueHasTime = remote.dueHasTime;
-      next.dueHasTime = remote.dueHasTime;
-    }
     if (key === "done") write.completed = remote.done;
     Object.assign(next, { [key]: remote[key] });
   }

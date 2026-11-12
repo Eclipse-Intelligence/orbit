@@ -10,6 +10,9 @@ begin
     alter table crm.tasks add column if not exists scheduled_by text;
     alter table crm.tasks disable trigger tasks_set_updated_at;
     update crm.tasks
+    set remind_minutes = null
+    where due_at is null and remind_minutes is not null;
+    update crm.tasks
     set due_has_time = true, scheduled_by = 'person'
     where due_at is not null and remind_minutes is not null;
     update crm.tasks t
@@ -50,3 +53,5 @@ alter table crm.tasks drop constraint if exists tasks_timing_check;
 alter table crm.tasks
   add constraint tasks_timing_check
   check ((due_has_time and due_at is not null) or (not due_has_time and scheduled_by is null));
+
+reset lock_timeout;

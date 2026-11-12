@@ -4,8 +4,8 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { dayKey, dayKeyAt } from "@/lib/crm/task-due";
-import { dayStartIso } from "@/lib/crm/task-time";
-import { getTask } from "@/lib/crm/tasks";
+import { clockLabel, dayStartIso } from "@/lib/crm/task-time";
+import { getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { deferralHint, deferralOptions, resolveDeferral } from "@/lib/mail/deferral-dates";
@@ -227,6 +227,15 @@ describe("not now replies", () => {
     assert.equal(movedTask.dueHasTime, false);
     assert.equal((await getThread(owner, thread)).deferral?.at, later.toISOString());
     await assert.rejects(moveDeferral(owner, reminder.id, new Date(Date.now() - 60_000).toISOString()), /at least a minute from now/);
+
+    await updateTask(owner, reminder.task_id, { dueAt: `${dayKeyAt(later)}T15:45`, remindMinutes: 30 });
+    const further = new Date(later.getTime() + 7 * 86_400_000);
+    await moveDeferral(owner, reminder.id, further.toISOString());
+    const timed = await getTask(owner, reminder.task_id);
+    assert.equal(timed.dueDate, dayKeyAt(further));
+    assert.equal(timed.dueHasTime, true);
+    assert.equal(clockLabel(timed.dueAt!), "15:45");
+    assert.equal(timed.remindMinutes, 30);
   });
 
   it("asks for a gentle check-in when the day comes", async () => {

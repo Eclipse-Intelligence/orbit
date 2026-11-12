@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { after, before, describe, it, mock } from "node:test";
 import { createContact } from "@/lib/crm/contacts";
 import { ingestLead } from "@/lib/crm/leads";
+import { exportTasksCsv } from "@/lib/crm/spreadsheet";
 import { dayStartIso } from "@/lib/crm/task-time";
 import { createTask, getTask, listDueReminders, listTasks, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
@@ -166,6 +167,25 @@ describe("date-only and timed tasks", () => {
     assert.equal(dayOnly.scheduledBy, null);
   });
 
+  it("leaves the placement alone when an update doesn't change the due time", async () => {
+    const task = (await createTask(mark, { title: "Planned and kept", dueAt: "2026-12-02T10:15", scheduledBy: "planner" })).body.task;
+    const same = (await updateTask(mark, task.id, { dueAt: "2026-12-02T10:15", title: "Planned and kept, renamed" })).body.task;
+    assert.equal(same.scheduledBy, "planner");
+    const events = await sql<{ changes: { fields?: string[] } }>("select changes from crm.audit_events where entity_id = $1 and event_type = 'task.updated'", [task.id]);
+    assert.deepEqual(events.map((event) => event.changes.fields), [["title"]]);
+  });
+
+  it("exports the day, the time and the duration", async () => {
+    await createTask(mark, { title: "Exported timed", dueAt: "2026-12-08T09:45", durationMinutes: 45 });
+    await createTask(mark, { title: "Exported day", dueDate: "2026-12-08" });
+    const exported = await exportTasksCsv(mark);
+    assert.deepEqual(exported.rows[0], ["Title", "Company", "Due", "Due time", "Duration", "Priority", "Completed"]);
+    const timed = exported.rows.find((row) => row[0] === "Exported timed");
+    const day = exported.rows.find((row) => row[0] === "Exported day");
+    assert.deepEqual(timed?.slice(2, 5), ["2026-12-08", "09:45", "45"]);
+    assert.deepEqual(day?.slice(2, 5), ["2026-12-08", "", "15"]);
+  });
+
   it("undoes Remove the time, bringing back the time and the reminder", async () => {
     const task = (await createTask(mark, { title: "Undo the removal", dueAt: "2026-12-03T15:00", remindMinutes: 30 })).body.task;
     await updateTask(mark, task.id, { dueDate: "2026-12-03" });
@@ -180,20 +200,29 @@ describe("date-only and timed tasks", () => {
 });
 
 describe("routes that set a day only", () => {
-  it("makes lead tasks date only, even when sent with a time", async () => {
-    const lead = await ingestLead(mark, { contact: { firstName: "Lena", email: "lena@lead.test" }, task: { title: "Call Lena", dueAt: "2026-12-04T15:30" } });
-    assert.equal(lead.body.task?.dueDate, "2026-12-04");
-    assert.equal(lead.body.task?.dueHasTime, false);
-    assert.equal(lead.body.task?.dueAt, dayStartIso("2026-12-04"));
+  it("keeps a lead task with a time timed with its reminder, and drops the reminder from a day-only one", async () => {
+    const timed = await ingestLead(mark, { contact: { firstName: "Lena", email: "lena@lead.test" }, task: { title: "Call Lena", dueAt: "2026-12-04T15:30", remindMinutes: 15 } });
+    assert.equal(timed.body.task?.dueHasTime, true);
+    assert.equal(timed.body.task?.dueAt, "2026-12-04T15:30:00.000Z");
+    assert.equal(timed.body.task?.remindMinutes, 15);
+    const bare = await ingestLead(mark, { contact: { firstName: "Leo", email: "leo@lead.test" }, task: { title: "Call Leo", dueAt: "2026-12-04", remindMinutes: 15 } });
+    assert.equal(bare.body.task?.dueDate, "2026-12-04");
+    assert.equal(bare.body.task?.dueHasTime, false);
+    assert.equal(bare.body.task?.remindMinutes, null);
+    const day = await ingestLead(mark, { contact: { firstName: "Lou", email: "lou@lead.test" }, task: { title: "Call Lou", dueDate: "2026-12-05", remindMinutes: 60 } });
+    assert.equal(day.body.task?.dueAt, dayStartIso("2026-12-05"));
+    assert.equal(day.body.task?.remindMinutes, null);
+    await assert.rejects(ingestLead(mark, { contact: { firstName: "Lia", email: "lia@lead.test" }, task: { title: "Call Lia", dueDate: "2026-02-30" } }), /task\.dueDate: enter a real calendar date/);
   });
 
-  it("makes extension tasks date only, and keeps an older extension's reminder timed", async () => {
+  it("makes extension tasks date only and ignores an older panel's reminder", async () => {
     const contact = (await createContact(mark, { firstName: "Ezra", email: "ezra@ext.test" })).body.contact;
     const plain = await addTask(mark, { title: "Send Ezra the deck", due: "2026-12-07", contactId: contact.id });
     assert.equal(plain.task.dueDate, "2026-12-07");
     assert.equal(plain.task.dueHasTime, false);
     const reminded = await addTask(mark, { title: "Ring Ezra", due: "2026-12-07", remindMinutes: 60, contactId: contact.id });
-    assert.equal(reminded.task.dueHasTime, true);
-    assert.equal((await getTask(mark, reminded.task.id)).remindMinutes, 60);
+    assert.equal(reminded.task.dueHasTime, false);
+    assert.equal((await getTask(mark, reminded.task.id)).remindMinutes, null);
   });
+
 });

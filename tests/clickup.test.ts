@@ -648,6 +648,50 @@ describe("clickup sync", () => {
     assert.equal(remote.name, "Newest Orbit title");
   });
 
+  it("leaves a migrated date-only task alone on a ClickUp edit, and pulls a change between timed and date only", async () => {
+    const remote = remoteTask(fake, {
+      id: "migrated",
+      listId: RELATIONSHIPS,
+      name: "Send the deck",
+      orbit: "jane@acme.com",
+      due_date: String(Date.UTC(2026, 6, 1, 8, 0)),
+      due_date_time: true,
+    });
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const imported = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(imported?.due_has_time, true);
+    await getAdminPool().query(
+      `update crm.tasks set due_at = '2026-06-30T23:00:00Z', due_has_time = false, scheduled_by = null,
+         clickup_sync = (clickup_sync - 'dueHasTime') || '{"dueAt": "2026-06-30T23:00:00.000Z"}'::jsonb
+       where id = $1`,
+      [imported!.id],
+    );
+    remote.name = "Send the deck to Jane";
+    remote.date_updated = String(Date.now() + 2_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const edited = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(edited?.title, "Send the deck to Jane");
+    assert.equal(edited?.due_at?.toISOString(), "2026-06-30T23:00:00.000Z");
+    assert.equal(edited?.due_has_time, false);
+    assert.equal(puts(fake, "migrated").length, 0);
+
+    remote.due_date = String(Date.UTC(2026, 6, 2, 13, 0));
+    remote.due_date_time = true;
+    remote.date_updated = String(Date.now() + 4_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const timed = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(timed?.due_at?.toISOString(), "2026-07-02T13:00:00.000Z");
+    assert.equal(timed?.due_has_time, true);
+
+    remote.due_date_time = false;
+    remote.date_updated = String(Date.now() + 6_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const dayOnly = await importedTask(owner.workspaceId, "migrated");
+    assert.equal(dayOnly?.due_at?.toISOString(), "2026-07-01T23:00:00.000Z");
+    assert.equal(dayOnly?.due_has_time, false);
+    assert.equal(puts(fake, "migrated").length, 0);
+  });
+
   it("archives the Orbit task when the ClickUp task is deleted", async () => {
     const linked = await importedTask(owner.workspaceId, "bydomain");
     fake.tasks.delete("bydomain");

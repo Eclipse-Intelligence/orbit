@@ -221,6 +221,7 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
       { path: "task.title", label: "Title", group: "Task" },
       { path: "task.completedAt", label: "Completed", group: "Task" },
       { path: "task.dueDate", label: "Due day", group: "Task" },
+      { path: "task.dueHasTime", label: "Has a due time", group: "Task" },
       { path: "task.durationMinutes", label: "Duration", group: "Task" },
     );
   }

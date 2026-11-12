@@ -4,7 +4,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { PATCH as restUpdateTask } from "@/app/api/v1/tasks/[id]/route";
 import { POST as restCreateTask } from "@/app/api/v1/tasks/route";
-import { describeAction, runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { pageContext, readPageInput } from "@/lib/assistant/page-context";
+import { describeAction, runTool, taskTimingRefusal, toolDefinitions } from "@/lib/assistant/tools";
+import { createTask } from "@/lib/crm/tasks";
 import { SCOPES } from "@/lib/crm/scopes";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -202,5 +204,31 @@ describe("task due day or time in the assistant", () => {
     assert.equal(row?.durationMinutes, 45);
     const both = (await runTool(owner, "update_task", { taskId: created.task.id, dueDate: "2027-02-03", dueAt: "2027-02-03T10:00" })) as { error?: string };
     assert.match(both.error ?? "", /not both/);
+  });
+
+  it("refuses a reminder without a time and both due fields before a card is shown", async () => {
+    assert.deepEqual(taskTimingRefusal("create_task", { title: "Call", dueDate: "2027-02-02", remindMinutes: 15 }), { error: "Pick a time for the reminder.", field: "remindMinutes" });
+    assert.deepEqual(taskTimingRefusal("create_task", { title: "Call", dueAt: "2027-02-02", remindMinutes: 15 }), { error: "Pick a time for the reminder.", field: "remindMinutes" });
+    assert.deepEqual(taskTimingRefusal("create_task", { title: "Call", remindMinutes: 15 }), { error: "Pick a time for the reminder.", field: "remindMinutes" });
+    assert.equal(taskTimingRefusal("create_task", { title: "Call", dueAt: "2027-02-02T10:00", remindMinutes: 15 }), null);
+    assert.equal(taskTimingRefusal("update_task", { taskId: "x", remindMinutes: 15 }), null);
+    assert.equal(taskTimingRefusal("update_task", { taskId: "x", dueDate: "2027-02-02", dueAt: "2027-02-02T10:00" })?.field, "dueDate");
+    const refused = (await runTool(owner, "create_task", { title: "Remind me", dueDate: "2027-02-02", remindMinutes: 15, sendToClickUp: false })) as { error?: string; field?: string };
+    assert.equal(refused.error, "Pick a time for the reminder.");
+    assert.equal(refused.field, "remindMinutes");
+  });
+
+  it("names the due day and whether it has a time in Capture and the page context", async () => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date());
+    const dayTask = (await createTask(owner, { title: "Send the signed order form", dueDate: today, ownerId: owner.userId })).body.task;
+    const capture = (await runTool(owner, "get_capture", {})) as { tasks: { id: string; dueDate: string | null; dueHasTime: boolean }[] };
+    const shown = capture.tasks.find((item) => item.id === dayTask.id);
+    assert.equal(shown?.dueDate, today);
+    assert.equal(shown?.dueHasTime, false);
+    const dayText = await pageContext(owner, readPageInput({ path: "/capture", focus: { kind: "capture", id: `task:${dayTask.id}` } }));
+    assert.match(dayText, new RegExp(`dueDate ${today}, date only`));
+    const timedTask = (await createTask(owner, { title: "Ring Ashby Freight", dueAt: "2027-01-12T14:30", ownerId: owner.userId })).body.task;
+    const timedText = await pageContext(owner, readPageInput({ path: "/capture", focus: { kind: "capture", id: `task:${timedTask.id}` } }));
+    assert.match(timedText, /due Tue 12 Jan 14:30 \(dueDate 2027-01-12, timed\)/);
   });
 });

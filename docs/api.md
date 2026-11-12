@@ -210,7 +210,7 @@ In the app, an unlinked task's panel offers Link a person: contacts whose first 
 
 ## Leads
 
-`POST /api/v1/leads` accepts any of `company`, `contact`, `note`, `activity`, `opportunity`, and `task`. Company and contact use the upsert rules. The note becomes a research activity when `activity` is omitted. The opportunity and task attach to the company and contact from the same request. The response is one object with `company`, `contact`, `activity`, `opportunity`, `task`, and the created/matched flags. The whole request is one transaction.
+`POST /api/v1/leads` accepts any of `company`, `contact`, `note`, `activity`, `opportunity`, and `task`. The lead's `task` takes `dueDate` or `dueAt` like a task: a `dueAt` with a time stays timed and keeps its `remindMinutes`; a `dueDate`, or a bare date in `dueAt`, is date only and any reminder is dropped rather than refusing the lead. Company and contact use the upsert rules. The note becomes a research activity when `activity` is omitted. The opportunity and task attach to the company and contact from the same request. The response is one object with `company`, `contact`, `activity`, `opportunity`, `task`, and the created/matched flags. The whole request is one transaction.
 
 ## Context
 

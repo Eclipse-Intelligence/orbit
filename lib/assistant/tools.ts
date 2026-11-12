@@ -93,7 +93,7 @@ import { MOVE_LIMIT, moveRecordsToWorkspace, moveTargetNamed, previewMoveToWorks
 import { createContactAndFile, fileImport, getConversationImport, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
-import { durationLabel } from "@/lib/crm/task-time";
+import { durationLabel, taskDueDay } from "@/lib/crm/task-time";
 import { chatConversation, chatPersonId, listChat, postChat, readChat } from "@/lib/chat/tools";
 import { CHAT_PAGE_MAX, CHAT_PAGE_SIZE } from "@/lib/chat/types";
 import { getConversation as getChatConversation, listChatPeople, listThread as listChatThread } from "@/lib/crm/chat";
@@ -150,7 +150,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
-import { appTimeZone, dateTimeInputValue, parseDateTime, zonedParts } from "@/lib/time";
+import { appTimeZone, dateTimeInputValue, parseDateTime, readDateTime, zonedParts } from "@/lib/time";
 import {
   LINEAR_PRIORITIES,
   LinearError,
@@ -488,10 +488,29 @@ function londonMidnight() {
   return parseDateTime(`${wall.year}-${pad(wall.month)}-${pad(wall.day)}T00:00`) ?? new Date();
 }
 
+const TASK_TIMING_TOOLS = new Set(["create_task", "update_task"]);
+
+function hasTime(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return false;
+  const reading = readDateTime(value);
+  return !reading.ok || !reading.dateOnly;
+}
+
+export function taskTimingRefusal(name: string, args: Args): { error: string; field: string } | null {
+  if (!TASK_TIMING_TOOLS.has(name)) return null;
+  const date = typeof args.dueDate === "string" && args.dueDate.trim() !== "";
+  const at = typeof args.dueAt === "string" && args.dueAt.trim() !== "";
+  if (date && at) return { error: "Send dueDate for a day or dueAt for a time, not both.", field: "dueDate" };
+  if (typeof args.remindMinutes !== "number") return null;
+  const timed = at && hasTime(args.dueAt);
+  if (timed) return null;
+  if (date || at || name === "create_task") return { error: "Pick a time for the reminder.", field: "remindMinutes" };
+  return null;
+}
+
 function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null } {
-  if (args.dueDate !== undefined && args.dueAt !== undefined && args.dueDate !== null && args.dueAt !== null) {
-    throw new CrmError("invalid_input", "Send dueDate for a day or dueAt for a time, not both.", 400, { field: "dueDate" });
-  }
+  const refused = taskTimingRefusal("create_task", { dueDate: args.dueDate, dueAt: args.dueAt });
+  if (refused) throw new CrmError("invalid_input", refused.error, 400, { field: refused.field });
   if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null };
   if (args.dueDate !== undefined) return { dueDate: nullableStr(args.dueDate) ?? null };
   if (args.dueAt !== undefined) return { dueAt: null };
@@ -2305,7 +2324,7 @@ const TOOL_LIST: AssistantTool[] = [
           workingDaysWaiting: item.waitingDays,
           replyReady: item.ready,
         })),
-        tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, dueHasTime: item.dueHasTime, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
+        tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, dueDate: taskDueDay(item.dueAt), dueHasTime: item.dueHasTime, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
         toFile: {
           emails: unknown.emails
             .filter((item) => !sensitiveCategory(item.stored))
@@ -3334,7 +3353,7 @@ const TOOL_LIST: AssistantTool[] = [
           description: nullableStr(args.description),
           ...taskDueArgs(args),
           ...(typeof args.durationMinutes === "number" ? { durationMinutes: args.durationMinutes } : {}),
-          remindMinutes: str(args.dueAt) && typeof args.remindMinutes === "number" ? args.remindMinutes : null,
+          ...(typeof args.remindMinutes === "number" ? { remindMinutes: args.remindMinutes } : {}),
           priority: oneOf(args.priority, ["low", "normal", "high"] as const) ?? "normal",
           ...taskLinkArgs(args),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
@@ -6265,6 +6284,8 @@ export async function runTool(
   let scope: { targets: UserActor[]; all: boolean } | null = null;
   try {
     if (write) {
+      const timing = taskTimingRefusal(tool.name, resolved.args);
+      if (timing) return timing;
       const refusal = await crossWorkspaceRefusal(actor, tool.name, resolved.args);
       if (refusal) return { error: refusal, field: "workspace" };
     } else if (WORKSPACE_READ_TOOLS.has(tool.name)) {

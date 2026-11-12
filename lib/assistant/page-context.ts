@@ -1,3 +1,4 @@
+import { taskDueDay } from "@/lib/crm/task-time";
 import { parseThreadKey } from "@/lib/mail/threads";
 import { parseDocsRoute } from "@/lib/docs/routes";
 import { withActor } from "@/lib/crm/context";
@@ -263,7 +264,9 @@ async function task(db: Db, actor: UserActor, id: string) {
   const row = result.rows[0];
   if (!row) return null;
   const due = londonWhen(row.due_at, row.due_has_time);
-  return `task ${quoted(row.title, "Untitled task")} [task id ${id}]${row.completed_at ? ", done" : due ? `, due ${due}` : ""}`;
+  const dueDate = taskDueDay(row.due_at ? new Date(row.due_at).toISOString() : null);
+  const timing = due && dueDate ? `, due ${due} (dueDate ${dueDate}, ${row.due_has_time ? "timed" : "date only, due any time that day"})` : "";
+  return `task ${quoted(row.title, "Untitled task")} [task id ${id}]${row.completed_at ? ", done" : timing}`;
 }
 
 async function captureItem(db: Db, actor: UserActor, value: string) {

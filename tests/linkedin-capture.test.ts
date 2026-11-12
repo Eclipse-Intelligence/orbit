@@ -39,7 +39,8 @@ import {
 } from "@/lib/extension/pairing";
 import { browserRows } from "@/lib/extension/settings";
 import { safeNextPath } from "@/lib/auth/next-path";
-import { dueFrom, messageKey, messageKeys } from "@/lib/extension/capture";
+import { dueDayKey, messageKey, messageKeys } from "@/lib/extension/capture";
+import { dayStartIso } from "@/lib/crm/task-time";
 import { dueLabel } from "@/lib/extension/records";
 import {
   dateRangeIn,
@@ -586,11 +587,12 @@ describe("LinkedIn capture records", () => {
     const tasks = await listTasks(mark, { contactId: contact.id });
     assert.equal(tasks.data[0].ownerId, mark.userId);
     assert.equal(tasks.data[0].companyId, company.id);
-    assert.equal(tasks.data[0].remindMinutes, 60);
-    assert.equal(tasks.data[0].dueAt, dueFrom("tomorrow"));
+    assert.equal(tasks.data[0].remindMinutes, null, "an older panel's reminder is ignored");
+    assert.equal(tasks.data[0].dueDate, dueDayKey("tomorrow"));
+    assert.equal(tasks.data[0].dueHasTime, false);
     const badTask = await call(taskRoute, "/api/extension/task", { token, workspace: mark.workspaceId, body: { title: "x", due: "2026-02-30", remindMinutes: null, contactId: contact.id } });
     assert.equal(badTask.status, 400);
-    assert.match(dueFrom("2026-11-20") ?? "", /^2026-11-20T09:00:00.000Z$/);
+    assert.equal(dueDayKey("2026-11-20"), "2026-11-20");
 
     const note = await call<{ activityId: string }>(noteRoute, "/api/extension/note", {
       token,
@@ -657,7 +659,7 @@ describe("LinkedIn capture records", () => {
     const person = inLookup(lookup.data, mark.workspaceId).person!;
     assert.equal(person.lastContact?.kind, "LinkedIn");
     assert.equal(person.tasks[0].title, "Send pricing for both clients");
-    assert.equal(person.tasks[0].dueLabel, dueLabel(dueFrom("tomorrow")!));
+    assert.equal(person.tasks[0].dueLabel, dueLabel(dayStartIso(dueDayKey("tomorrow")!)));
   });
 
   it("can't see tasks it isn't allowed to and can't write to another person's records in other workspaces", async () => {
@@ -1027,16 +1029,16 @@ describe("LinkedIn capture fixes", () => {
     assert.deepEqual(check.data.messages.map((item) => Boolean(item.loggedAt)), [true, true, true, false]);
   });
 
-  it("dates quick task choices so they aren't overdue straight away", () => {
-    assert.equal(dueFrom("today", new Date("2026-11-06T10:00:00Z")), "2026-11-06T17:30:00.000Z");
-    assert.equal(dueFrom("today", new Date("2026-11-06T17:00:00Z")), "2026-11-06T18:00:00.000Z");
-    assert.equal(dueFrom("tomorrow", new Date("2026-11-06T10:00:00Z")), "2026-11-09T09:00:00.000Z");
-    assert.equal(dueFrom("tomorrow", new Date("2026-11-04T10:00:00Z")), "2026-11-05T09:00:00.000Z");
-    assert.equal(dueFrom("tomorrow", new Date("2026-08-28T10:00:00Z")), "2026-09-01T08:00:00.000Z");
-    assert.equal(dueFrom("next_week", new Date("2026-11-06T10:00:00Z")), "2026-11-09T09:00:00.000Z");
-    assert.equal(dueFrom("next_week", new Date("2026-11-09T10:00:00Z")), "2026-11-16T09:00:00.000Z");
-    assert.equal(dueFrom("2026-11-06", new Date("2026-11-06T12:00:00Z")), "2026-11-06T17:30:00.000Z");
-    assert.equal(dueFrom("2026-11-20", new Date("2026-11-06T12:00:00Z")), "2026-11-20T09:00:00.000Z");
+  it("gives quick task choices a day without a time", () => {
+    assert.equal(dueDayKey("today", new Date("2026-11-06T10:00:00Z")), "2026-11-06");
+    assert.equal(dueDayKey("today", new Date("2026-11-06T23:30:00Z")), "2026-11-06");
+    assert.equal(dueDayKey("tomorrow", new Date("2026-11-06T10:00:00Z")), "2026-11-09");
+    assert.equal(dueDayKey("tomorrow", new Date("2026-11-04T10:00:00Z")), "2026-11-05");
+    assert.equal(dueDayKey("tomorrow", new Date("2026-08-28T10:00:00Z")), "2026-09-01");
+    assert.equal(dueDayKey("next_week", new Date("2026-11-06T10:00:00Z")), "2026-11-09");
+    assert.equal(dueDayKey("next_week", new Date("2026-11-09T10:00:00Z")), "2026-11-16");
+    assert.equal(dueDayKey("2026-11-20", new Date("2026-11-06T12:00:00Z")), "2026-11-20");
+    assert.equal(dueDayKey(null), null);
   });
 
   it("calls an approved code expired once its window has passed", async () => {

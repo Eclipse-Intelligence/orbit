@@ -249,6 +249,13 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   return next;
 }
 
+function sameDue(write: PreparedTask, current: TaskRow) {
+  const before = iso(current.due_at);
+  const after = write.dueAt ?? null;
+  const instant = before === null || after === null ? before === after : new Date(before).getTime() === new Date(after).getTime();
+  return instant && Boolean(write.dueHasTime) === Boolean(current.due_has_time && current.due_at);
+}
+
 function settleReminder(write: PreparedTask, current: { dueHasTime: boolean; remindMinutes?: number | null }) {
   const timed = write.dueHasTime ?? current.dueHasTime;
   if (timed) return;
@@ -438,6 +445,11 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
+  if (write.dueAt !== undefined && sameDue(write, current)) {
+    delete write.dueAt;
+    delete write.dueHasTime;
+    delete write.scheduledBy;
+  }
   settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
   const links = await resolveLinks(
     db,

@@ -166,7 +166,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         opportunityValue: z.number().nullable().optional(),
         opportunityCurrency: z.string().nullable().optional(),
         taskTitle: z.string().optional(),
-        taskDueAt: z.string().nullable().optional().describe("The task's due day as YYYY-MM-DD, or a date and time only when the person gave one."),
+        taskDueDate: z.string().nullable().optional().describe("The task's due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
+        taskDueAt: z.string().nullable().optional().describe("The task's due date and time, only when the person gave a time. A bare date is read as date only. Send taskDueDate or taskDueAt, not both."),
         ...provenanceFields,
       },
     },
@@ -213,7 +214,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
                 }
               : undefined,
             task: args.taskTitle
-              ? { title: args.taskTitle, dueAt: args.taskDueAt }
+              ? { title: args.taskTitle, dueAt: args.taskDueAt, dueDate: args.taskDueDate }
               : undefined,
           },
           { provenance: provenance(args, "ingest_lead") },

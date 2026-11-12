@@ -524,18 +524,6 @@ export async function diff(actor: UserActor, body: Input): Promise<DiffResponse>
   return result;
 }
 
-export function dueFrom(value: unknown, now = new Date()) {
-  const key = dueDayKey(value, now);
-  if (!key) return null;
-  const timeZone = appTimeZone();
-  const today = dayKeyAt(now, timeZone);
-  if (key === today) {
-    const endOfDay = wallClockAt(today, 17, 30, timeZone);
-    return new Date(Math.max(endOfDay, now.getTime() + 60 * 60_000)).toISOString();
-  }
-  return new Date(wallClockAt(key, 9, 0, timeZone)).toISOString();
-}
-
 export function dueDayKey(value: unknown, now = new Date()) {
   if (value === null || value === undefined || value === "") return null;
   const timeZone = appTimeZone();
@@ -578,16 +566,12 @@ export async function addTask(actor: UserActor, body: Input): Promise<TaskRespon
   const title = text(body.title, 200);
   if (!title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   const dueDate = dueDayKey(body.due);
-  const remind = body.remindMinutes === null || body.remindMinutes === undefined ? null : body.remindMinutes;
-  if (remind !== null && !isReminderMinutes(remind)) throw new CrmError("invalid_input", "Choose a reminder from the list.", 400, { field: "remindMinutes" });
-  if (remind !== null && !dueDate) throw new CrmError("invalid_input", "Choose when it's due to set a reminder.", 400, { field: "remindMinutes" });
-  const due = remind !== null ? { dueAt: dueFrom(body.due) } : { dueDate };
   return withActor(actor, async (db) => {
     const links = await linkedRecords(db, actor, body);
     const task = await createTaskInDb(
       db,
       actor,
-      { title, ...due, remindMinutes: remind, ownerId: actor.userId, contactId: links.contactId, companyId: links.companyId },
+      { title, dueDate, ownerId: actor.userId, contactId: links.contactId, companyId: links.companyId },
       provenance("create_task", links.contact?.linkedinUrl ?? null),
     );
     return {
