@@ -7,6 +7,7 @@ import { createContact } from "@/lib/crm/contacts";
 import { listTasks } from "@/lib/crm/tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
+import { encryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { resetLinearCache } from "@/lib/linear";
 import { connectLinear } from "@/lib/crm/linear-connection";
@@ -19,6 +20,7 @@ import {
   decideApproval,
   discardUntouchedWorkflow,
   getRunSteps,
+  getWorkflow,
   listApprovals,
   listNotifications,
   listRuns,
@@ -424,5 +426,54 @@ describe("workflows", () => {
     assert.match(run.error ?? "", /send_email_1: This run has no contact to work on/);
     assert.ok((await listNotifications(owner)).some((item) => item.title === "Email the contact failed"));
     await assert.rejects(setWorkflowStatus(owner, (await createWorkflow(owner, {})).id, "active"), /Connect the trigger to a step/);
+  });
+
+  it("sends the email from the address chosen in the step", async () => {
+    await getAdminPool().query(
+      `insert into crm.calendar_accounts (workspace_id, user_id, provider, email, status, refresh_token, access_token, access_token_expires_at, can_send)
+       values ($1, $2, 'microsoft', 'mark@ridgeon-flows.test', 'connected', $3, $4, $5, true)`,
+      [owner.workspaceId, owner.userId, encryptSecret("ridgeon-refresh"), encryptSecret("ridgeon-access"), new Date(Date.now() + 3_600_000).toISOString()],
+    );
+    const sent: { url: string; auth: string; to: string }[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      sent.push({ url: String(input), auth: new Headers(init?.headers).get("authorization") ?? "", to: body.message?.toRecipients?.[0]?.emailAddress?.address ?? "" });
+      return new Response(null, { status: 202 });
+    };
+    const flow = async (name: string, from: string) => {
+      const workflow = await createWorkflow(owner, { name });
+      await saveWorkflow(owner, workflow.id, {
+        definition: {
+          version: 2,
+          trigger: { type: "manual", object: "contact" },
+          triggerPosition: { x: 0, y: 0 },
+          nodes: [{ id: "send_email_1", type: "send_email", config: { subject: "Hi", body: "Hello {{contact.firstName}}", from }, position: { x: 300, y: 0 } }],
+          edges: [{ source: "trigger", handle: "out", target: "send_email_1" }],
+        },
+      });
+      await setWorkflowStatus(owner, workflow.id, "active");
+      return workflow.id;
+    };
+
+    const ridgeon = await flow("From Ridgeon", "Mark@Ridgeon-Flows.test");
+    const started = await startRun(owner, ridgeon, { test: false, record: { type: "contact", id: contactId }, fetchImpl });
+    assert.equal(started.status, "succeeded");
+    assert.deepEqual(sent, [{ url: "https://graph.microsoft.com/v1.0/me/sendMail", auth: "Bearer ridgeon-access", to: "jane@acme-flows.test" }]);
+    const step = (await getRunSteps(owner, started.runId)).steps.find((item) => item.stepId === "send_email_1")!;
+    assert.equal((step.output as { from?: string }).from, "mark@ridgeon-flows.test");
+    const emails = await listActivities(owner, { contactId, type: "email" });
+    assert.equal((emails.data[0].metadata as { from?: string }).from, "mark@ridgeon-flows.test");
+
+    await setWorkflowTemplate(owner, ridgeon, true);
+    const copy = await createWorkflow(member, { template: ridgeon });
+    assert.equal(copy.definition.nodes[0].config.from, "");
+    assert.equal((await getWorkflow(member, ridgeon)).definition.nodes[0].config.from, "");
+
+    sent.length = 0;
+    const gone = await flow("From nowhere", "old@gone-flows.test");
+    const failed = await startRun(owner, gone, { test: false, record: { type: "contact", id: contactId }, fetchImpl });
+    assert.equal(failed.status, "failed");
+    assert.match((await getRunSteps(owner, failed.runId)).run.error ?? "", /Couldn't send from old@gone-flows\.test: Orbit can't send from it any more/);
+    assert.deepEqual(sent, []);
   });
 });

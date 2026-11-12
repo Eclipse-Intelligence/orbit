@@ -27,6 +27,7 @@ export type BuilderOptions = {
   products: { id: string; name: string; priceGbp: number | null; priceUsd: number | null }[];
   aiFields?: { id: string; label: string }[];
   chatRooms?: { id: string; name: string }[];
+  senders?: { email: string; primary: boolean }[];
 };
 
 export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {
@@ -569,10 +570,29 @@ export default function StepConfig({
         </div>
       );
     }
-    case "send_email":
+    case "send_email": {
+      const senders = options.senders ?? [];
+      const from = str(c.from).trim();
+      const primary = senders.find((sender) => sender.primary);
+      const chosen = from && primary && from.toLowerCase() === primary.email.toLowerCase() ? "" : from;
+      const listed = !chosen || senders.some((sender) => sender.email.toLowerCase() === chosen.toLowerCase());
+      const choosable = senders.length > 1 || !listed;
       return (
         <div className="flex flex-col gap-3">
-          <p className="caption-style text-subtle">Sends to the run&apos;s contact from your Outlook.</p>
+          <p className="caption-style text-subtle">{choosable ? "Sends to the run's contact." : "Sends to the run's contact from your Outlook."}</p>
+          {choosable && (
+            <Select id={`${step.id}-from`} label="From" value={chosen} onChange={(value) => update({ ...c, from: value })} className="sm:w-72">
+              <option value="">{primary ? primary.email : "Main mailbox"}</option>
+              {!listed && <option value={chosen}>{chosen} (can&apos;t send)</option>}
+              {senders
+                .filter((sender) => !sender.primary)
+                .map((sender) => (
+                  <option key={sender.email} value={sender.email}>
+                    {sender.email}
+                  </option>
+                ))}
+            </Select>
+          )}
           {field("subject", "Subject")}
           {field("body", "Email", { rows: 6 })}
           <label className="caption-style text-subtle flex items-start gap-2">
@@ -581,6 +601,7 @@ export default function StepConfig({
           </label>
         </div>
       );
+    }
     case "find_records": {
       const object = str(c.object) === "company" ? "company" : "contact";
       const chosen = Array.isArray(c.lifecycles) ? (c.lifecycles as string[]) : [];

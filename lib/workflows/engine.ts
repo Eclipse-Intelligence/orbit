@@ -14,7 +14,7 @@ import { getContact, updateContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
-import { sendContactEmail } from "@/lib/crm/inbox";
+import { listSenders, sendContactEmail } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, getOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -1014,8 +1014,9 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const subject = render(config.subject, ctx.vars).replace(/\s+/g, " ").trim();
       const body = workflowEmailBody(config, ctx.vars, ctx.actor);
       if (!subject || !body) throw new CrmError("invalid_input", "The email needs a subject and a body.", 400);
-      const sent = await sendContactEmail(ctx.actor, contactId, { subject, body, provenance: provenance(ctx, step) }, ctx.fetchImpl);
-      return { kind: "next", output: { subject, warning: sent.warning, automated: config.automated === true } };
+      const from = await emailSender(ctx.actor, str(config.from));
+      const sent = await sendContactEmail(ctx.actor, contactId, { subject, body, from: from?.id ?? null, provenance: provenance(ctx, step) }, ctx.fetchImpl);
+      return { kind: "next", output: { subject, ...(from ? { from: from.email } : {}), warning: sent.warning, automated: config.automated === true } };
     }
     case "find_records": {
       const records = await findRecords(ctx.actor, ctx.run.workflow_id, readFindConfig(config, ctx.actor.userId), { mark: !ctx.run.test });
@@ -1076,6 +1077,14 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     default:
       throw new CrmError("invalid_input", "This step type isn't supported.", 400);
   }
+}
+
+async function emailSender(actor: UserActor, wanted: string) {
+  const address = wanted.trim().toLowerCase();
+  if (!address) return null;
+  const sender = (await listSenders(actor)).find((item) => item.email.toLowerCase() === address);
+  if (!sender) throw new CrmError("invalid_input", `Couldn't send from ${wanted.trim()}: Orbit can't send from it any more. Choose another address in this step.`, 400, { field: "from" });
+  return sender;
 }
 
 export function automatedNote(actor: Pick<UserActor, "workspaceName" | "fullName" | "email">) {
