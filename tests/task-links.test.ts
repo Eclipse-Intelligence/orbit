@@ -138,6 +138,18 @@ describe("linking tasks on creation", () => {
     assert.deepEqual(links(both), { companyId: acme, contactId: null, opportunityId: null });
   });
 
+  it("applies the longest name before uniqueness, and never matches part of a hyphenated name", async () => {
+    const north = (await createCompany(mark, { name: "Northgate", domain: "northgate-links.test" })).body.company.id;
+    const south = (await createCompany(mark, { name: "Southgate", domain: "southgate-links.test" })).body.company.id;
+    await createOpportunity(mark, { companyId: north, name: "Jane Doe renewal" });
+    await createOpportunity(mark, { companyId: south, name: "Jane Doe renewal" });
+    const shared = (await createTask(mark, { title: "Price the Jane Doe renewal" })).body.task;
+    assert.deepEqual(links(shared), { companyId: null, contactId: null, opportunityId: null });
+    await createContact(mark, { firstName: "Anna", lastName: "Smith", email: "anna@links.test" });
+    const hyphen = (await createTask(mark, { title: "Call Anna Smith-Jones" })).body.task;
+    assert.deepEqual(links(hyphen), { companyId: null, contactId: null, opportunityId: null });
+  });
+
   it("never fails to create a task because of what it detected", async () => {
     const old = (await createCompany(mark, { name: "Oldfield Mills", domain: "oldfield-links.test" })).body.company.id;
     const nora = (await createContact(mark, { companyId: old, firstName: "Nora", lastName: "Vance", email: "nora@oldfield-links.test" })).body.contact.id;
@@ -307,6 +319,13 @@ describe("Link a person and the backfill", () => {
     const { candidates, reason } = await taskLinkCandidates(mark, task.id);
     assert.deepEqual(candidates.map((candidate) => candidate.name).sort(), ["Oliver Grant", "Oliver Shah"]);
     assert.equal(reason, "Oliver matches 2 contacts, so nothing was linked.");
+    await sql(
+      `insert into crm.contacts (workspace_id, first_name, last_name, owner_id, created_by_user_id)
+       select $1, 'Quinn', 'Many' || n, $2, $2 from generate_series(1, 45) n`,
+      [mark.workspaceId, mark.userId],
+    );
+    const many = (await createTask(mark, { title: "Ask Quinn about the brief" })).body.task;
+    assert.equal((await taskLinkCandidates(mark, many.id)).reason, "Quinn matches 45 contacts, so nothing was linked.");
     assert.equal(candidates.find((candidate) => candidate.name === "Oliver Grant")?.detail, "Halden Group");
     const teammate = (await createTask(mark, { title: "Ask Sam about the deck" })).body.task;
     assert.deepEqual((await taskLinkCandidates(mark, teammate.id)).candidates, []);
@@ -349,10 +368,15 @@ describe("Link a person and the backfill", () => {
     const unlinked = (await createTask(owner, { title: "Call Lucy Hart again" })).body.task.id;
     await updateTask(owner, unlinked, { contactId: null, companyId: null });
     const fromWorkflow = (await createTask(owner, { title: "Workflow Lucy Hart", contactId: null }, { provenance: { operation: "workflow_create_task", source: "workflow" } })).body.task.id;
+    const reopened = (await createTask(owner, { title: "Reopened Lucy Hart", completed: true })).body.task.id;
+    await updateTask(owner, reopened, { completed: false, contactId: null, companyId: null });
+    const reopenEvent = await sql<{ event_type: string }>("select event_type from crm.audit_events where entity_id = $1 and event_type <> 'task.created'", [reopened]);
+    assert.deepEqual(reopenEvent.map((row) => row.event_type), ["task.reopened"]);
     const later = await backfillTaskLinks(owner);
     assert.equal(later.linked, 0);
     assert.equal((await getTask(owner, unlinked)).contactId, null);
     assert.equal((await getTask(owner, fromWorkflow)).contactId, null);
+    assert.equal((await getTask(owner, reopened)).contactId, null);
     const events = await sql<{ count: string }>("select count(*) from crm.workflow_events where entity_id = any($1::uuid[]) and event_type = 'task.updated'", [Object.values(ids)]);
     assert.equal(Number(events[0].count), 0);
   });
@@ -369,10 +393,23 @@ describe("Show more", () => {
     const first = await getDueActions(owner, "all", { mine: true });
     assert.equal(first.tasks.length, 100);
     assert.equal(first.total, 130);
-    const second = await getDueActions(owner, "all", { mine: true, offset: 100 });
-    assert.equal(second.tasks.length, 30);
+    const second = await getDueActions(owner, "all", { mine: true, pages: 2 });
+    assert.equal(second.tasks.length, 130);
     assert.equal(second.total, 130);
-    assert.equal(new Set([...first.tasks, ...second.tasks].map((task) => task.id)).size, 130);
+    assert.equal(new Set(second.tasks.map((task) => task.id)).size, 130);
+    assert.deepEqual(second.tasks.slice(0, 100).map((task) => task.id), first.tasks.map((task) => task.id));
+    const done = second.tasks[120];
+    await sql("update crm.tasks set completed_at = now() where id = $1", [done.id]);
+    await sql(
+      `insert into crm.tasks (workspace_id, title, owner_id, created_by_user_id, due_at)
+       values ($1, 'Paged task urgent', $2, $2, now() - interval '1 day')`,
+      [owner.workspaceId, owner.userId],
+    );
+    const refreshed = await getDueActions(owner, "all", { mine: true, pages: 2 });
+    assert.equal(refreshed.tasks.length, 130);
+    assert.equal(refreshed.tasks[0].title, "Paged task urgent");
+    assert.ok(!refreshed.tasks.some((task) => task.id === done.id));
+    assert.equal(new Set(refreshed.tasks.map((task) => task.id)).size, 130);
 
     await sql(
       `insert into crm.companies (workspace_id, name, normalized_name, domain, owner_id, created_by_user_id)
@@ -382,11 +419,11 @@ describe("Show more", () => {
     const none = await getDueActions(owner, "none");
     assert.equal(none.companies.length, 100);
     assert.equal(none.total, 105);
-    const rest = await getDueActions(owner, "none", { offset: 100 });
-    assert.equal(rest.companies.length, 5);
+    const rest = await getDueActions(owner, "none", { pages: 2 });
+    assert.equal(rest.companies.length, 105);
     assert.equal(rest.total, 105);
-    assert.equal(new Set([...none.companies, ...rest.companies].map((company) => company.id)).size, 105);
-    assert.equal((await getDueActions(owner, "none", { offset: 200 })).total, 105);
+    assert.equal(new Set(rest.companies.map((company) => company.id)).size, 105);
+    assert.equal((await getDueActions(owner, "none", { pages: 999 })).companies.length, 105);
   });
 });
 
@@ -417,8 +454,8 @@ describe("names in the title", () => {
     assert.equal(segments.map((segment) => segment.text).join(""), task.title);
   });
 
-  it("never links a first name followed by a surname, or one two colleagues share", () => {
-    const named = taskTitleSegments({ ...task, title: "Ask Raj Patel and Sam Brown" }, [{ id: "u1", name: "Sam Okafor" }]);
+  it("never links a colleague's first name followed by a surname or shared with another colleague, and keeps the linked person's", () => {
+    const named = taskTitleSegments({ ...task, title: "Ask Sam Brown about the deck" }, [{ id: "u1", name: "Sam Okafor" }]);
     assert.deepEqual(named.filter((segment) => segment.target).map((segment) => segment.text), []);
     const dated = taskTitleSegments({ ...task, title: "Call Raj Monday" }, []);
     assert.deepEqual(dated.filter((segment) => segment.target).map((segment) => segment.text), ["Raj"]);
@@ -427,6 +464,12 @@ describe("names in the title", () => {
       { id: "u3", name: "Sam Lee" },
     ]);
     assert.deepEqual(shared.filter((segment) => segment.target).map((segment) => segment.text), []);
+    const own = taskTitleSegments({ ...task, title: "Email Raj Northwind proposal" }, []);
+    assert.deepEqual(own.filter((segment) => segment.target).map((segment) => segment.text), ["Raj"]);
+    const hyphen = taskTitleSegments({ ...task, title: "Ask Raj-Kumar about Halden Group-wide pricing" }, []);
+    assert.deepEqual(hyphen.filter((segment) => segment.target).map((segment) => segment.text), []);
+    const here = taskTitleSegments({ ...task, title: "Email Raj about Halden Group" }, [], null, { kind: "contact", id: "p1" });
+    assert.deepEqual(here.filter((segment) => segment.target).map((segment) => segment.text), ["Halden Group"]);
   });
 
   it("never links the viewer, and prefers the linked person over a colleague with the same first name", () => {

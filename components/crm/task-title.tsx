@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useId, type MouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { openDmAction } from "@/app/(crm)/chat/actions";
 import { refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatLocationHref } from "@/lib/chat/routes";
-import { taskTitleSegments, type TitleColleague } from "@/lib/crm/task-title";
+import { taskTitleSegments, type TitleColleague, type TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { useColleagueMessage } from "@/stores/colleague-message-store";
@@ -29,17 +30,20 @@ function MessageAlert({ source }: { source: string }) {
     const timer = window.setTimeout(dismiss, 6000);
     return () => window.clearTimeout(timer);
   }, [error, dismiss]);
-  if (!error) return null;
-  return (
+  if (!error || typeof document === "undefined") return null;
+  return createPortal(
     <span
       role="alert"
+      onClick={stop}
+      onPointerDown={stop}
       className="bg-card border-line-strong text-danger caption-style pointer-events-auto fixed bottom-24 left-1/2 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-xl border px-3 py-2 whitespace-normal shadow-lg"
     >
       {error}
       <Button variant="ghost" size="sm" onClick={dismiss} className="text-soft max-md:h-11">
         Dismiss
       </Button>
-    </span>
+    </span>,
+    document.body,
   );
 }
 
@@ -101,6 +105,7 @@ export default function TaskTitle({
   task,
   colleagues = [],
   viewerId = null,
+  here = null,
 }: {
   task: Pick<
     Task,
@@ -108,8 +113,9 @@ export default function TaskTitle({
   >;
   colleagues?: TitleColleague[];
   viewerId?: string | null;
+  here?: TitleHere | null;
 }) {
-  return taskTitleSegments(task, colleagues, viewerId).map((segment, index) => {
+  return taskTitleSegments(task, colleagues, viewerId, here).map((segment, index) => {
     const target = segment.target;
     if (!target) return <span key={index}>{segment.text}</span>;
     if (target.kind === "colleague") {

@@ -78,9 +78,17 @@ export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<
       .filter((company) => !members.has(folded(company.name)) && mentionsName(title, company.name))
       .slice(0, 4)
       .map((company) => ({ kind: "company" as const, id: company.id, name: company.name, detail: company.domain }));
-    const shared = words
-      .map((word) => ({ word, count: named.filter((contact) => contact.first === word || contact.last === word).length }))
-      .find((entry) => entry.count > 1);
+    const partial = [...new Set(named.filter((contact) => !contact.full).flatMap((contact) => [contact.first, contact.last]).filter((word): word is string => Boolean(word) && words.includes(word as string)))];
+    const counts = partial.length
+      ? await db.query<{ word: string; count: number }>(
+          `select word, count(c.id)::int as count
+           from unnest($2::text[]) as word
+           join crm.contacts c on c.workspace_id = $1 and c.archived_at is null and (lower(trim(c.first_name)) = word or lower(trim(c.last_name)) = word)
+           group by word order by min(array_position($2::text[], word))`,
+          [actor.workspaceId, partial.sort((left, right) => words.indexOf(left) - words.indexOf(right))],
+        )
+      : { rows: [] };
+    const shared = counts.rows.find((entry) => entry.count > 1);
     const reason = shared ? `${displayWord(title, shared.word)} matches ${shared.count} contacts, so nothing was linked.` : null;
     return { candidates: [...people, ...places], reason };
   });
@@ -133,7 +141,7 @@ export async function backfillTaskLinks(actor: UserActor, options: { dryRun?: bo
              where e.workspace_id = t.workspace_id and e.entity_type = 'task' and e.entity_id = t.id
                and (
                  (e.event_type = 'task.created' and e.source = 'workflow')
-                 or (e.event_type = 'task.updated' and coalesce(e.changes -> 'fields', '[]'::jsonb) ?| $4::text[])
+                 or (jsonb_typeof(e.changes -> 'fields') = 'array' and (e.changes -> 'fields') ?| $4::text[])
                )
            )
          order by t.id limit $3`,

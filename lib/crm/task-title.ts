@@ -76,15 +76,19 @@ function startsUpper(value: string) {
   return first !== first.toLocaleLowerCase("en-GB");
 }
 
-export function taskTitleSegments(task: TitleTask, colleagues: TitleColleague[] = [], viewerId: string | null = null): TitleSegment[] {
+export type TitleHere = { kind: "contact" | "company" | "opportunity"; id: string };
+
+export function taskTitleSegments(task: TitleTask, colleagues: TitleColleague[] = [], viewerId: string | null = null, here: TitleHere | null = null): TitleSegment[] {
   const title = task.title;
   const hits: { start: number; end: number; target: TitleTarget; rank: number }[] = [];
   for (const term of termsFor(task, colleagues, viewerId)) {
-    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])(${escape(term.text)})(?=$|[^\\p{L}\\p{N}])`, "giu");
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}-])(${escape(term.text)})(?=$|[^\\p{L}\\p{N}-])`, "giu");
     for (const match of title.matchAll(pattern)) {
       const start = (match.index ?? 0) + match[1].length;
       const text = match[2];
-      if (term.partial && (!startsUpper(text) || surnameFollows(title.slice(start + text.length)))) continue;
+      if (term.partial && !startsUpper(text)) continue;
+      if (term.partial && term.target.kind === "colleague" && surnameFollows(title.slice(start + text.length))) continue;
+      if (here && term.target.kind === here.kind && term.target.id === here.id) continue;
       hits.push({ start, end: start + text.length, target: term.target, rank: term.rank });
     }
   }

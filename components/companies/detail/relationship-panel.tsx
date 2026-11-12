@@ -121,7 +121,7 @@ export default function RelationshipPanel({
           <ul className="flex flex-col gap-3">
             {context.tasks.map((task) => (
               <li key={task.id} className="flex flex-col gap-1">
-                <span className="text-[14px] leading-5"><TaskTitle task={task} colleagues={members} viewerId={viewerId ?? null} /></span>
+                <span className="text-[14px] leading-5"><TaskTitle task={task} colleagues={members} viewerId={viewerId ?? null} here={{ kind: "company", id: companyId }} /></span>
                 <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
                   {task.dueAt && `Due ${formatWhen(task.dueAt)}`}
                   <ClickUpBadge task={task} />

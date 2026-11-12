@@ -140,6 +140,7 @@ export default function TaskPad({
   const startContact = (): Override<PadRecord | null> => (initialContact ? { set: true, value: initialContact } : unset());
   const [company, setCompany] = useState<Override<PadRecord | null>>(startCompany);
   const [contact, setContact] = useState<Override<PadRecord | null>>(startContact);
+  const [opportunity, setOpportunity] = useState<Override<PadRecord | null>>(unset);
   const [list, setList] = useState<Override<string | null>>(unset);
   const [owner, setOwner] = useState<string | null>(viewerId);
   const [busy, setBusy] = useState(false);
@@ -157,7 +158,9 @@ export default function TaskPad({
   const seen = text.trim().length >= 3 ? (detected?.value ?? null) : null;
   const finalContact = contact.set ? contact.value : (seen?.contact ?? null);
   const finalCompany = fixedCompany ?? (company.set ? company.value : (seen?.company ?? seen?.contact?.company ?? null));
-  const pending = !fixedCompany && !contact.set && !company.set && detected?.text !== text;
+  const spotted = seen?.opportunity && (!finalCompany || finalCompany.id === seen.opportunity.companyId) ? seen.opportunity : null;
+  const finalOpportunity = opportunity.set ? opportunity.value : spotted;
+  const pending = !fixedCompany && !contact.set && !company.set && !opportunity.set && detected?.text !== text;
   const finalList = clickup ? (list.set ? list.value : clickup.listId) : null;
   const assignable = Boolean(viewerId) && members.length > 1;
   const assignee = members.find((member) => member.id === owner) ?? null;
@@ -274,6 +277,7 @@ export default function TaskPad({
     setReminder(unset());
     setCompany(startCompany());
     setContact(startContact());
+    setOpportunity(unset());
     setList(unset());
     setOwner(viewerId);
   }
@@ -288,6 +292,7 @@ export default function TaskPad({
     setReminder(unset());
     setCompany(startCompany());
     setContact(startContact());
+    setOpportunity(unset());
     setList(unset());
     setOwner(viewerId);
   }
@@ -306,7 +311,7 @@ export default function TaskPad({
         : {
             companyId: finalCompany?.id ?? null,
             contactId: finalContact?.id ?? null,
-            opportunityId: null,
+            opportunityId: finalOpportunity?.id ?? null,
           }),
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
@@ -351,7 +356,7 @@ export default function TaskPad({
   }
 
   const showChips = text.trim() !== "" || Boolean(initialContact || initialCompany);
-  const names = [finalContact?.name, finalCompany?.name].filter((name): name is string => Boolean(name));
+  const names = [finalContact?.name, finalCompany?.name, finalOpportunity?.name].filter((name): name is string => Boolean(name));
   const marks = mergeMarks([...parsed.marks, ...nameMarks(text, names)]);
   const pieces: { text: string; kind: PadMark["kind"] | null }[] = [];
   let cursor = 0;
@@ -478,6 +483,7 @@ export default function TaskPad({
           {!fixedCompany && finalCompany && (
             <RecordChip label={finalCompany.name} onRemove={() => setCompany({ set: true, value: null })} />
           )}
+          {finalOpportunity && <RecordChip label={finalOpportunity.name} onRemove={() => setOpportunity({ set: true, value: null })} />}
           {assignable && viewerId && (
             <AssigneePicker
               members={members}

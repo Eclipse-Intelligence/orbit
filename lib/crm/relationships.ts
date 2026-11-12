@@ -1,4 +1,3 @@
-import type { Db } from "@/lib/db/pool";
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { withActor } from "@/lib/crm/context";
 import { readCompaniesInDb, readCompanyInDb } from "@/lib/crm/companies";
@@ -185,12 +184,12 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean; ta
 }
 
 export const PAGE_SIZE = 100;
-export const MAX_OFFSET = 10_000;
+export const MAX_PAGES = 20;
 
 export async function getDueActions(
   actor: Actor,
   view: TaskView = "today",
-  options: { mine?: boolean; tagged?: boolean; offset?: number } = {},
+  options: { mine?: boolean; tagged?: boolean; pages?: number } = {},
 ): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
@@ -198,7 +197,7 @@ export async function getDueActions(
       field: "view",
     });
   }
-  const offset = Math.min(MAX_OFFSET, Math.max(0, Math.floor(options.offset ?? 0)));
+  const limit = PAGE_SIZE * Math.min(MAX_PAGES, Math.max(1, Math.floor(options.pages ?? 1)));
   if (view === "none") {
     return withActor(actor, async (db) => {
       const listed = await db.query<{ id: string; total: number }>(
@@ -215,10 +214,10 @@ export async function getDueActions(
                and ${directTaskSql("t")}
            )
          order by c.updated_at desc, c.id
-         limit $2 offset $3`,
-        [actor.workspaceId, PAGE_SIZE, offset],
+         limit $2`,
+        [actor.workspaceId, limit],
       );
-      const total = listed.rows[0]?.total ?? (offset > 0 ? await countWithoutTasks(db, actor) : 0);
+      const total = listed.rows[0]?.total ?? 0;
       const companies = await readCompaniesInDb(db, actor.workspaceId, listed.rows.map((row) => row.id));
       const relationships = await relationshipsInDb(db, actor.workspaceId, "company", companies.map((company) => company.id));
       return {
@@ -229,20 +228,6 @@ export async function getDueActions(
       };
     });
   }
-  const listed = await listTasks(actor, { view, limit: PAGE_SIZE, offset, mine: options.mine, tagged: options.tagged });
+  const listed = await listTasks(actor, { view, limit, mine: options.mine, tagged: options.tagged }, { maxLimit: PAGE_SIZE * MAX_PAGES });
   return { view, tasks: listed.data, companies: [], total: listed.total };
-}
-
-async function countWithoutTasks(db: Db, actor: Actor) {
-  const counted = await db.query<{ total: number }>(
-    `select count(*)::int as total
-     from crm.companies c
-     where c.workspace_id = $1 and c.archived_at is null
-       and not exists (
-         select 1 from crm.tasks t
-         where t.company_id = c.id and t.archived_at is null and t.completed_at is null and ${directTaskSql("t")}
-       )`,
-    [actor.workspaceId],
-  );
-  return counted.rows[0]?.total ?? 0;
 }

@@ -14,7 +14,7 @@ import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, completeTaskAction } from "@/app/(crm)/records";
-import { moreTasksAction, type MoreTasks } from "@/app/(crm)/tasks/actions";
+import { taskWindowAction, type TaskWindow } from "@/app/(crm)/tasks/actions";
 import { relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { TASK_PARAM } from "@/lib/chat/discussions";
@@ -22,7 +22,12 @@ import { companyHref } from "@/lib/crm/hrefs";
 import { tasksHref } from "@/lib/crm/task-views";
 import type { Company, Task, TaskView } from "@/lib/crm/types";
 
-const MORE_CAP = 10_000;
+const MAX_WINDOW_PAGES = 20;
+
+function unique<T extends { id: string }>(items: T[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)));
+}
 
 const VIEWS: { id: TaskView; label: string }[] = [
   { id: "all", label: "All" },
@@ -79,29 +84,44 @@ export default function ActionsScreen({
   const views = who === "tagged" ? VIEWS.filter((item) => item.id !== "none") : VIEWS;
   const router = useRouter();
   const pageKey = `${view}|${who}`;
-  const [loaded, setLoaded] = useState<{ key: string; pages: MoreTasks[] }>({ key: pageKey, pages: [] });
+  const [windowed, setWindowed] = useState<{ key: string; data: TaskWindow } | null>(null);
   const [loading, startLoading] = useTransition();
   const [moreError, setMoreError] = useState<string | null>(null);
-  const extra = loaded.key === pageKey ? loaded.pages : [];
-  const baseIds = new Set(tasks.map((task) => task.id));
-  const allTasks = [...tasks, ...extra.flatMap((page) => page.tasks).filter((task) => !baseIds.has(task.id))];
-  const baseCompanies = new Set(companies.map((company) => company.id));
-  const allCompanies = [...companies, ...extra.flatMap((page) => page.companies).filter((company) => !baseCompanies.has(company.id))];
-  const allTagged = Object.assign({}, ...extra.map((page) => page.tagged), tagged) as Record<string, string[]>;
-  const allDiscussions = Object.assign({}, ...extra.map((page) => page.discussions), discussions) as Record<string, number>;
-  const fetched = (view === "none" ? companies.length : tasks.length) + extra.reduce((sum, page) => sum + (view === "none" ? page.companies.length : page.tasks.length), 0);
-  const latestTotal = extra.length > 0 ? extra[extra.length - 1].total : total;
+  const current = windowed && windowed.key === pageKey && windowed.data.pages > 1 ? windowed.data : null;
+  const allTasks = unique(current ? current.tasks : tasks);
+  const allCompanies = unique(current ? current.companies : companies);
+  const allTagged = current ? { ...tagged, ...current.tagged } : tagged;
+  const allDiscussions = current ? { ...discussions, ...current.discussions } : discussions;
+  const pages = current?.pages ?? 1;
+  const latestTotal = current?.total ?? total;
   const shown = view === "none" ? allCompanies.length : allTasks.length;
-  const canLoadMore = fetched < latestTotal && fetched < MORE_CAP;
+  const canLoadMore = shown < latestTotal && pages < MAX_WINDOW_PAGES;
+  const freshness = useRef({ tasks, companies });
+  useEffect(() => {
+    if (freshness.current.tasks === tasks && freshness.current.companies === companies) return;
+    freshness.current = { tasks, companies };
+    if (!current) return;
+    let cancelled = false;
+    const key = pageKey;
+    void taskWindowAction({ view, who, pages: current.pages })
+      .then((result) => {
+        if (!cancelled && !("error" in result)) setWindowed({ key, data: result });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [tasks, companies, current, pageKey, view, who]);
   function loadMore() {
     setMoreError(null);
+    const key = pageKey;
     startLoading(async () => {
-      const result = await moreTasksAction({ view, who, offset: fetched }).catch(() => ({ error: "Couldn't load more. Try again." }));
+      const result = await taskWindowAction({ view, who, pages: pages + 1 }).catch(() => ({ error: "Couldn't load more. Try again." }));
       if ("error" in result) {
         setMoreError(result.error);
         return;
       }
-      setLoaded((current) => ({ key: pageKey, pages: [...(current.key === pageKey ? current.pages : []), result] }));
+      setWindowed({ key, data: result });
     });
   }
   const more =

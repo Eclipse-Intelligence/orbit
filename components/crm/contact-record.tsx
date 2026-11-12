@@ -380,7 +380,7 @@ export default function ContactRecord({
                   {tasks.map((task) => (
                     <li key={task.id} className="flex flex-col gap-1">
                       <span className="text-[14px] leading-5">
-                        <TaskTitle task={task} />
+                        <TaskTitle task={task} here={{ kind: "contact", id: contact.id }} />
                       </span>
                       <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
                         {task.dueAt && `Due ${formatWhen(task.dueAt)}`}

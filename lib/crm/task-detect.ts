@@ -21,20 +21,25 @@ function escape(value: string) {
 }
 
 export function mentionsName(text: string, name: string, options: { exact?: boolean } = {}) {
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escape(name)}($|[^\\p{L}\\p{N}])`, options.exact ? "u" : "iu").test(text);
+  return new RegExp(`(^|[^\\p{L}\\p{N}-])${escape(name)}($|[^\\p{L}\\p{N}-])`, options.exact ? "u" : "iu").test(text);
 }
 
 export function folded(value: string) {
   return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-GB");
 }
 
-function uniqueNamed<T extends { name: string }>(rows: T[], text: string, skip: Set<string>) {
-  const hits = rows.filter((row) => {
+type Named = { name: string };
+
+function mentioned<T extends Named>(rows: T[], text: string, skip: Set<string>) {
+  return rows.filter((row) => {
     const name = row.name.trim();
     return name.length >= MIN_NAME && !skip.has(folded(name)) && mentionsName(text, name, { exact: true });
   });
-  const widest = hits.filter((row) => !hits.some((other) => other.name.length > row.name.length && mentionsName(other.name, row.name.trim())));
-  const names = new Set(widest.map((row) => folded(row.name)));
+}
+
+function unique<T extends Named>(rows: T[], hits: T[], longest: Named[]) {
+  const kept = hits.filter((row) => !longest.some((other) => other.name.trim().length > row.name.trim().length && mentionsName(other.name, row.name.trim())));
+  const names = new Set(kept.map((row) => folded(row.name)));
   if (names.size !== 1) return null;
   const [name] = names;
   const owners = rows.filter((row) => folded(row.name) === name);
@@ -50,10 +55,6 @@ export async function memberNames(db: Db, workspaceId: string) {
     [workspaceId],
   );
   return new Set(result.rows.flatMap((row) => (row.name ? [folded(row.name)] : [])));
-}
-
-function inside(name: string, others: (string | null)[]) {
-  return others.some((other) => other !== null && other.length > name.length && mentionsName(other, name));
 }
 
 export async function detectTaskRecordsInDb(db: Db, workspaceId: string, text: string): Promise<DetectedTaskLinks> {
@@ -86,17 +87,17 @@ export async function detectTaskRecordsInDb(db: Db, workspaceId: string, text: s
      order by char_length(o.name) desc limit ${SCAN_LIMIT}`,
     [workspaceId, clean, MIN_NAME],
   );
-  let contactRow = uniqueNamed(contacts.rows, clean, members);
-  let companyRow = uniqueNamed(companies.rows, clean, members);
-  let opportunityRow = uniqueNamed(
+  const contactHits = mentioned(contacts.rows, clean, members);
+  const companyHits = mentioned(companies.rows, clean, members);
+  const opportunityHits = mentioned(
     opportunities.rows.filter((row) => /\s/.test(row.name.trim())),
     clean,
     members,
   );
-  const names = [contactRow?.name ?? null, companyRow?.name ?? null, opportunityRow?.name ?? null];
-  if (contactRow && inside(contactRow.name, names)) contactRow = null;
-  if (companyRow && inside(companyRow.name, names)) companyRow = null;
-  if (opportunityRow && inside(opportunityRow.name, names)) opportunityRow = null;
+  const everything: Named[] = [...contactHits, ...companyHits, ...opportunityHits];
+  let contactRow = unique(contacts.rows, contactHits, everything);
+  const companyRow = unique(companies.rows, companyHits, everything);
+  const opportunityRow = unique(opportunities.rows, opportunityHits, everything);
   if (contactRow && companyRow && contactRow.company_id && contactRow.company_id !== companyRow.id) contactRow = null;
   const company = companyRow
     ? { id: companyRow.id, name: companyRow.name }

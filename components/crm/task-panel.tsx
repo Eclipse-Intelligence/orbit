@@ -179,13 +179,21 @@ function CandidateRow({ candidate, busy, onLink }: { candidate: LinkCandidate; b
   );
 }
 
-function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string; onLinked: () => void }) {
+const SEARCH_FAILED = "Couldn't search. Try again.";
+
+function LinkPerson({ taskId, title, open, onLinked }: { taskId: string; title: string; open: boolean; onLinked: () => void }) {
   const searchId = useId();
   const [found, setFound] = useState<{ candidates: LinkCandidate[]; reason: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ query: string; items: LinkCandidate[] } | null>(null);
+  const shownFor = `${taskId}|${title}|${open}`;
+  const [seenFor, setSeenFor] = useState(shownFor);
+  if (seenFor !== shownFor) {
+    setSeenFor(shownFor);
+    setBusy(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -211,6 +219,7 @@ function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string
       void Promise.all([searchContactsToFileAction(text), searchCompaniesAction(text)])
         .then(([people, companies]) => {
           if (cancelled) return;
+          setError((current) => (current === SEARCH_FAILED ? null : current));
           setResults({
             query: text,
             items: [
@@ -224,7 +233,7 @@ function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string
             ],
           });
         })
-        .catch(() => !cancelled && setError("Couldn't search. Try again."));
+        .catch(() => !cancelled && setError(SEARCH_FAILED));
     }, 200);
     return () => {
       cancelled = true;
@@ -250,7 +259,8 @@ function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string
   const candidates = found?.candidates ?? [];
   const withCompanies = candidates.some((candidate) => candidate.kind === "company");
   const heading = withCompanies ? "Link a person or company" : "Link a person";
-  const searched = results && results.query === query.trim() ? results.items : null;
+  const offered = new Set(candidates.map((candidate) => `${candidate.kind}:${candidate.id}`));
+  const searched = results && results.query === query.trim() ? results.items.filter((item) => !offered.has(`${item.kind}:${item.id}`)) : null;
   return (
     <section aria-label={heading} className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 pb-1">
@@ -289,7 +299,7 @@ function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string
   );
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: PanelProps) {
+function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose, open }: PanelProps & { open: boolean }) {
   const router = useRouter();
   const id = useId();
   const discussion = useDiscussion(
@@ -494,7 +504,11 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                           onClick={() => setEditingTitle(title.length)}
                           className="pointer-events-none absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
                         />
-                        <h2 onClick={(event) => setEditingTitle(caretAt(event.currentTarget, event.clientX, event.clientY) ?? title.length)} className="relative cursor-text leading-[1.3] break-words">
+                        <h2
+                          onClick={(event) => {
+                            if (window.getSelection()?.toString()) return;
+                            setEditingTitle(caretAt(event.currentTarget, event.clientX, event.clientY) ?? title.length);
+                          }} className="relative cursor-text leading-[1.3] break-words">
                           <TaskTitle task={{ ...task, title }} colleagues={colleagues} viewerId={viewer.id} />
                         </h2>
                       </div>
@@ -523,7 +537,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                       />
                     )}
                   </div>
-                  {unlinked && canChange && !done && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
+                  {unlinked && canChange && !done && <LinkPerson taskId={task.id} title={task.title} open={open} onLinked={() => router.refresh()} />}
                   {readOnly && isTagged && (
                     <p role="note" className="caption-style text-soft flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2.5">
                       <UsersIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-blue-text)" />
@@ -711,7 +725,7 @@ export default function TaskPanel({
 }) {
   return (
     <Sheet open={open && Boolean(task)} onOpenChange={onOpenChange}>
-      {task && <TaskPanelBody key={task.id} task={task} onClose={() => onOpenChange(false)} {...rest} />}
+      {task && <TaskPanelBody key={task.id} task={task} open={open} onClose={() => onOpenChange(false)} {...rest} />}
     </Sheet>
   );
 }

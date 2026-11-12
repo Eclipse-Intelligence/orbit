@@ -199,7 +199,7 @@ export default function ActionTask({
                 size="none"
                 onClick={onOpen}
                 aria-haspopup="dialog"
-                className="shrink-0 gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset max-sm:min-h-8"
+                className="shrink-0 gap-1 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 ring-1 ring-white/10 ring-inset max-sm:min-h-11"
               >
                 <LinkIcon aria-hidden className="size-3" />
                 Link a person
