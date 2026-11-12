@@ -27,7 +27,7 @@ import { recordHref } from "@/lib/docs/routes";
 import { appTimeZone, dateTimeInputValue } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
-import LinkIcon from "@/public/assets/images/_common/link.svg";
+import LinkIcon from "@/public/assets/images/settings/link.svg";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import ContactIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
@@ -133,7 +133,7 @@ type PanelProps = {
   onClose: () => void;
 };
 
-function LinkPerson({ taskId, onLinked }: { taskId: string; onLinked: () => void }) {
+function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string; onLinked: () => void }) {
   const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -150,7 +150,7 @@ function LinkPerson({ taskId, onLinked }: { taskId: string; onLinked: () => void
     return () => {
       cancelled = true;
     };
-  }, [taskId]);
+  }, [taskId, title]);
 
   async function link(candidate: LinkCandidate) {
     if (busy) return;
@@ -440,7 +440,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], onClose }: 
                       />
                     )}
                   </div>
-                  {unlinked && canChange && !done && <LinkPerson taskId={task.id} onLinked={() => router.refresh()} />}
+                  {unlinked && canChange && !done && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
                   {readOnly && isTagged && (
                     <p role="note" className="caption-style text-soft flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2.5">
                       <UsersIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-blue-text)" />

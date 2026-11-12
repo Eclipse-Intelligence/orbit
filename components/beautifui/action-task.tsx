@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import ContactIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
-import LinkIcon from "@/public/assets/images/_common/link.svg";
+import LinkIcon from "@/public/assets/images/settings/link.svg";
 
 export type TaskAssigning = {
   members: AssignableMember[];
