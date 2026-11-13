@@ -121,7 +121,11 @@ export function taskWhenLabel(task: Pick<Task, "dueAt" | "dueHasTime">, now: num
   return [day, time].filter(Boolean).join(" ") || null;
 }
 
-export function TaskDropZone({ day, active, bar = false }: { day: string | null; active: boolean; bar?: boolean }) {
+export function dropZoneNote(day: string, inOutlook: boolean) {
+  return inOutlook ? `Stays on ${day}, off the calendar and out of Outlook.` : `Stays on ${day}, off the calendar.`;
+}
+
+export function TaskDropZone({ day, active, bar = false, inOutlook = false }: { day: string | null; active: boolean; bar?: boolean; inOutlook?: boolean }) {
   const tone = active
     ? "border-violet border-solid bg-[color-mix(in_srgb,var(--violet)_14%,transparent)]"
     : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_6%,transparent)]";
@@ -131,7 +135,7 @@ export function TaskDropZone({ day, active, bar = false }: { day: string | null;
         <span aria-hidden className="w-14 shrink-0 px-1 text-center text-[11px] leading-[13px] font-medium">
           Remove the time
         </span>
-        <span className="sr-only">Keep the day, remove the time.{day ? ` Stays on ${day}, off the calendar.` : ""}</span>
+        <span className="sr-only">Keep the day, remove the time.{day ? ` ${dropZoneNote(day, inOutlook)}` : ""}</span>
       </div>
     );
   }
@@ -145,7 +149,7 @@ export function TaskDropZone({ day, active, bar = false }: { day: string | null;
       )}
     >
       <span className="ui-style font-medium">Keep the day, remove the time</span>
-      {day && <span className="caption-style text-soft">Stays on {day}, off the calendar.</span>}
+      {day && <span className="caption-style text-soft">{dropZoneNote(day, inOutlook)}</span>}
     </div>
   );
 }

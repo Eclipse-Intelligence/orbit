@@ -535,7 +535,7 @@ export default function CalendarScreen({
           large={large}
           onToggle={() => toggleSection("tasks")}
         />
-        {droppingBack && !large && <TaskDropZone day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} />}
+        {droppingBack && !large && <TaskDropZone day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} inOutlook={droppingBack.task.inOutlook} />}
         {sections.tasks && (
           <CalendarTaskList
             id={`calendar-tasks-${suffix}`}
@@ -713,7 +713,7 @@ export default function CalendarScreen({
           <div className="relative hidden min-h-0 min-w-0 flex-1 md:flex">
             {droppingBack && (
               <div data-task-drop="" className={cn("pointer-events-none absolute inset-x-0 top-0 z-30 h-11", panelOpen && "lg:hidden")}>
-                <TaskDropZone bar day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} />
+                <TaskDropZone bar day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} inOutlook={droppingBack.task.inOutlook} />
               </div>
             )}
             <CalendarGrid
