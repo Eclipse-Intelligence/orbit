@@ -58,7 +58,7 @@ Status: settled with Mark (2026-11-12), written from a review of the calendar co
 - **Reminders** apply to timed tasks only and follow the block when it moves (the browser poll keys on `dueAt` already, `components/crm/task-reminders.tsx:65`; Tasks Phase 6's push marker must reset on a move). Setting a reminder on a date-only task asks for a time.
 - **Kind** comes from the shared title-based helper Tasks Phase 3 adds (`lib/crm/task-kind.ts`): call, email, meeting or other.
 - **Which tasks show on a person's calendar:** open, timed tasks they own, from every workspace they're in (read per workspace through `withActor`, since the calendar is personal). Unassigned tasks show in the task list and become theirs when dragged on. Tasks they created, are tagged in or see as an admin never appear. The workspace is named on a block only for people in more than one workspace. Done tasks show greyed for the rest of that day.
-- **Placed-by marker:** `scheduled_by text check (scheduled_by in ('person','planner'))`, null when date only. Dragging, Schedule, a time typed or picked, and a moved Outlook block write `person`; Plan's Apply and an approved assistant or MCP plan write `planner`. A person's block is never moved by Plan.
+- **Placed-by marker:** `scheduled_by text check (scheduled_by in ('person','planner'))`, null when date only. Dragging, Schedule, a time typed or picked, and a moved Outlook block write `person`; Plan's Apply and an approved assistant or MCP plan write `planner`, except that a proposal dragged in the preview writes `person`, and a person's block moved with Overdue's Move stays `person`. A person's block is never moved by Plan, except when it is overdue and the person presses Move (or an agent names the new day).
 
 ### On the Calendar page
 - **Left menu:** two sections. **Calendars** (today's list) collapses by default, remembered per browser. **Tasks** lists open tasks the person owns or that are unassigned, grouped Overdue, Today, This week, Later, No date, each with its kind icon, linked person and duration. Phones and tablets get it in the same drawer.
@@ -74,7 +74,7 @@ Status: settled with Mark (2026-11-12), written from a review of the calendar co
 - **What Plan may change** (decision 4):
   - A date-only task in the window gets a time **on its own day**. If that day is full it goes under Couldn't fit.
   - A task with no date gets a day and a time anywhere in the window.
-  - A timed task is already on the calendar and is left alone. **Replan my blocks** moves blocks Plan placed earlier, but only to another time on the same day. Blocks a person placed never move.
+  - A timed task is already on the calendar and is left alone. **Replan my blocks** moves blocks Plan placed earlier, but only to another time on the same day, and only when the old time no longer works or the block can join a run. Blocks a person placed never move, except through Overdue's Move.
   - **Overdue** tasks, timed or date only, stay where they are until Mark acts (decision 5). The preview lists them under Overdue with a suggested slot today, or the next free day if today is full, each with Move or Leave, plus Move all.
   - **Couldn't fit** offers Next free day and Outside hours (both change only with Mark's click) or Leave.
 - **How blocks are placed** (a deterministic packer in `lib/crm/plan-tasks.ts`, tested without a model):
