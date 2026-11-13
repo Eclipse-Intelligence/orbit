@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { scopesForRole, type Scope } from "@/lib/crm/scopes";
 import { generateAgentToken } from "@/lib/crm/tokens";
@@ -21,7 +22,7 @@ export async function resetDatabase() {
     .filter((file) => file.endsWith(".sql"))
     .sort();
   for (const file of migrations) {
-    await admin.query(readFileSync(`supabase/migrations/${file}`, "utf8"));
+    await applyMigrationSql(admin, readFileSync(`supabase/migrations/${file}`, "utf8"));
   }
   const password = decodeURIComponent(new URL(process.env.DATABASE_URL!).password);
   const statement = await admin.query<{ sql: string }>(

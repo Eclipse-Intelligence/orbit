@@ -22,6 +22,7 @@ async function main() {
 const { getAdminPool } = await import("@/lib/db/pool");
 const { generateAgentToken } = await import("@/lib/crm/tokens");
 const { normalizeCompanyName } = await import("@/lib/crm/normalize");
+const { applyMigrationSql } = await import("@/lib/db/migration-sql");
 
 const admin = getAdminPool();
 
@@ -39,7 +40,7 @@ async function hostedAuth() {
 }
 
 async function applySql(path: string) {
-  await admin.query(readFileSync(path, "utf8"));
+  await applyMigrationSql(admin, readFileSync(path, "utf8"));
 }
 
 const hosted = await hostedAuth();
