@@ -11,6 +11,7 @@ import { addCalendarFeed } from "@/lib/crm/calendar-feeds";
 import { createContactFromEvent, setCalendarForCrm, setCalendarVisible } from "@/lib/crm/calendars";
 import { cancelInvite, createInvite, rescheduleInvite, respondToInvite, type InviteInput } from "@/lib/crm/invites";
 import type { UserActor } from "@/lib/crm/types";
+import { resetLearnedTimes } from "@/lib/crm/schedule-preferences";
 import { saveWorkingHours } from "@/lib/crm/working-hours";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { SETTINGS_PATHS, SETTINGS_ROOT } from "@/lib/settings-nav";
@@ -68,6 +69,18 @@ export async function saveWorkingHoursAction(hours: unknown): Promise<CalendarAc
   }
   revalidatePath(SETTINGS_PATHS.calendars);
   revalidatePath("/calendar");
+  return { ok: true };
+}
+
+export async function resetLearnedTimesAction(): Promise<CalendarActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in again." };
+  try {
+    await resetLearnedTimes(user);
+  } catch (error) {
+    return error instanceof CrmError ? actionError(error) : { error: "Couldn't reset your learned times. Try again." };
+  }
+  revalidatePath(SETTINGS_PATHS.calendars);
   return { ok: true };
 }
 

@@ -396,10 +396,11 @@ describe("Plan's packer", () => {
 
   it("words the reason honestly", () => {
     assert.equal(planReason([]), null);
-    assert.equal(planReason([{ group: "other", suggested: false }]), null);
-    assert.equal(planReason([{ group: "email", suggested: false }]), "Emails after lunch by default.");
+    const entry = (group: "call" | "email" | "other", at: string) => ({ group, suggested: false, at, durationMinutes: 15 });
+    assert.equal(planReason([entry("other", "2026-11-13T14:00:00Z")], undefined, LONDON), null);
+    assert.equal(planReason([entry("email", "2026-11-13T13:00:00Z")], undefined, LONDON), "Emails after lunch by default.");
     assert.equal(
-      planReason([{ group: "call", suggested: false }], { call: { from: 600, to: 720, learned: true }, email: null, other: null }),
+      planReason([entry("call", "2026-11-13T10:30:00Z")], { call: { from: 600, to: 720, learned: true }, email: null, other: null }, LONDON),
       "Calls in the morning, as you usually do.",
     );
   });

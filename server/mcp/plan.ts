@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import { buildPlan, pushScheduled, scheduleTasks } from "@/lib/crm/plan-schedule";
 import type { UserActor } from "@/lib/crm/types";
+import { agentSource } from "@/lib/crm/validation";
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -59,7 +60,7 @@ export function registerPlanTools(server: McpServer, actor: UserActor) {
       run(async () => {
         const scheduled = await scheduleTasks(actor, args.schedule, {
           mode: "agent",
-          provenance: { operation: "schedule_tasks", source: args.provenanceSource, sourceUrl: args.provenanceUrl },
+          provenance: { operation: "schedule_tasks", source: agentSource(args.provenanceSource), sourceUrl: args.provenanceUrl },
         });
         await pushScheduled(scheduled);
         return { tasks: scheduled.map((item) => item.task) };

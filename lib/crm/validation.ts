@@ -28,6 +28,10 @@ import {
 
 const nullableText = z.string().nullable().optional();
 
+export function agentSource(source: string | null | undefined) {
+  return source?.trim().toLowerCase() === "web" ? null : source;
+}
+
 const LEADING_DATE = /^\s*(\d{4}-\d{2}-\d{2})(?![\d])/;
 
 export function hasImpossibleDate(value: string) {
@@ -71,7 +75,7 @@ const companyWriteSchema = z
 
 const provenanceSchema = z
   .object({
-    source: nullableText,
+    source: nullableText.transform(agentSource),
     sourceUrl: nullableText,
   })
   .strict();

@@ -4,6 +4,7 @@ import { DEFAULT_TASK_DURATION, clockLabel, isTaskDuration, taskDueDay } from "@
 import type { Task } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { isBlockOverdue } from "@/lib/task-blocks";
+import { reasonPhrase, slotScore } from "@/lib/learned-times";
 import { appTimeZone } from "@/lib/time";
 import {
   DEFAULT_START_MINUTES,
@@ -38,7 +39,7 @@ const NOT_BLOCKING = new Set(["free", "workingelsewhere"]);
 const GROUP_RANK: Record<PlanGroup, number> = { call: 0, email: 1, other: 2 };
 const PRIORITY_RANK: Record<string, number> = { high: 0, normal: 1, low: 2 };
 
-export type PlanPreference = { from: number; to: number; learned: boolean };
+export type PlanPreference = { from: number; to: number; learned: boolean; slots?: number[] | null };
 export type PlanPreferences = Record<PlanGroup, PlanPreference | null>;
 
 export const DEFAULT_PLAN_PREFERENCES: PlanPreferences = {
@@ -211,25 +212,46 @@ function iso(ms: number) {
   return new Date(ms).toISOString();
 }
 
-export function planReason(placed: Pick<PlanEntry, "group" | "suggested">[], preferences: PlanPreferences = DEFAULT_PLAN_PREFERENCES) {
+const REASON_NOUNS: Record<PlanGroup, string> = { call: "Calls", email: "Emails", other: "Other tasks" };
+const DEFAULT_PHRASES: Record<"call" | "email", string> = { call: "late morning", email: "after lunch" };
+
+export function preferenceScore(preference: PlanPreference | null, start: number, minutes: number, timeZone = appTimeZone()) {
+  if (!preference) return 0;
+  if (preference.slots && preference.slots.length > 0) return slotScore(preference.slots, start, minutes, timeZone);
+  const wall = wallMinutes(start, timeZone);
+  const latest = Math.max(preference.from, preference.to - minutes);
+  if (wall < preference.from) return preference.from - wall;
+  if (wall > latest) return wall - latest;
+  return 0;
+}
+
+function joinPhrases(parts: string[]) {
+  const lowered = parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1)));
+  return lowered.length > 1 ? `${lowered.slice(0, -1).join(", ")} and ${lowered[lowered.length - 1]}` : lowered[0];
+}
+
+export function planReason(
+  placed: Pick<PlanEntry, "group" | "suggested" | "at" | "durationMinutes">[],
+  preferences: PlanPreferences = DEFAULT_PLAN_PREFERENCES,
+  timeZone = appTimeZone(),
+) {
   const sentences: string[] = [];
   const defaults: string[] = [];
   const learned: string[] = [];
-  const phrase = (group: "call" | "email", preference: PlanPreference) => {
-    const noun = group === "call" ? "Calls" : "Emails";
-    if (!preference.learned) return `${noun} ${group === "call" ? "late morning" : "after lunch"}`;
-    return `${noun} ${preference.from < 12 * 60 ? "in the morning" : "in the afternoon"}`;
-  };
-  for (const group of ["call", "email"] as const) {
+  for (const group of ["call", "email", "other"] as const) {
     const preference = preferences[group];
-    if (!preference || !placed.some((entry) => entry.group === group)) continue;
-    (preference.learned ? learned : defaults).push(phrase(group, preference));
+    const entries = placed.filter((entry) => entry.group === group);
+    if (!preference || entries.length === 0) continue;
+    if (!preference.learned) {
+      if (group !== "other") defaults.push(`${REASON_NOUNS[group]} ${DEFAULT_PHRASES[group]}`);
+      continue;
+    }
+    const fits = entries.filter((entry) => preferenceScore(preference, Date.parse(entry.at), entry.durationMinutes, timeZone) === 0).length;
+    if (fits === 0 || fits * 2 < entries.length) continue;
+    learned.push(`${REASON_NOUNS[group]} ${reasonPhrase((preference.from + preference.to) / 2)}`);
   }
-  if (learned.length > 0) sentences.push(`${learned.join(". ")}, as you usually do.`);
-  if (defaults.length > 0) {
-    const joined = defaults.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1))).join(" and ");
-    sentences.push(`${joined} by default.`);
-  }
+  if (learned.length > 0) sentences.push(`${joinPhrases(learned)}, as you usually do.`);
+  if (defaults.length > 0) sentences.push(`${joinPhrases(defaults)} by default.`);
   if (placed.some((entry) => entry.suggested)) sentences.push("Durations in purple are suggested.");
   return sentences.length > 0 ? sentences.join(" ") : null;
 }
@@ -353,15 +375,6 @@ export function packPlan(input: PackInput): PlanProposal {
         interval.start >= run.end + RUN_BREAK_MINUTES * MINUTE,
     );
 
-  const distance = (start: number, minutes: number, preference: PlanPreference | null) => {
-    if (!preference) return 0;
-    const wall = wallMinutes(start, timeZone);
-    const latest = Math.max(preference.from, preference.to - minutes);
-    if (wall < preference.from) return preference.from - wall;
-    if (wall > latest) return wall - latest;
-    return 0;
-  };
-
   const searchWindow = (from: number, to: number, minutes: number, accept: (interval: Interval) => boolean, score?: (start: number) => number) => {
     const length = minutes * MINUTE;
     let best: number | null = null;
@@ -387,7 +400,7 @@ export function packPlan(input: PackInput): PlanProposal {
       window.close,
       minutes,
       (interval) => !guardRuns || runClear(day, group, interval, null),
-      (start) => distance(start, minutes, preferences[group]),
+      (start) => preferenceScore(preferences[group], start, minutes, timeZone),
     );
   };
 
@@ -635,7 +648,7 @@ export function packPlan(input: PackInput): PlanProposal {
     placed,
     overdue,
     unplaced,
-    reason: planReason(placed, preferences),
+    reason: planReason(placed, preferences, timeZone),
     ordering,
     replan,
   };
