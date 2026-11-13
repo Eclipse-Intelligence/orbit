@@ -19,8 +19,10 @@ import {
 } from "@/lib/learned-times";
 import { appTimeZone } from "@/lib/time";
 import { clockText } from "@/lib/working-hours";
+import { readWorkingHoursInDb } from "@/lib/crm/working-hours";
 
 export const LEARNED_CACHE_MS = 10 * 60_000;
+export const LEARNING_BUDGET_MS = 3000;
 export const PLACED_OPERATIONS = ["update_task", "drag_task", "create_task"] as const;
 
 const DAY_MS = 86_400_000;
@@ -37,7 +39,7 @@ type AuditRow = {
   title: string | null;
   completed_at: Date | null;
 };
-type MeetingRow = { starts_at: Date };
+type MeetingRow = { starts_at: Date; subject: string | null; contact_ids: string[] };
 
 export type LearnedTimes = { kinds: LearnedKindView[]; resetAt: string | null };
 export type LearningActors = { actors: UserActor[]; complete: boolean };
@@ -120,7 +122,7 @@ export async function collectSpreadInDb(db: Db, userId: string, workspaceIds: st
     }
   }
   const meetings = await db.query<MeetingRow>(
-    `select distinct on (coalesce(e.ical_uid, e.id::text)) e.starts_at
+    `select distinct on (coalesce(e.ical_uid, e.id::text)) e.starts_at, e.subject, e.contact_ids
      from crm.calendar_events e
      left join crm.calendar_accounts a on a.id = e.account_id
      left join crm.mailbox_connections c on c.id = e.connection_id
@@ -140,7 +142,13 @@ export async function collectSpreadInDb(db: Db, userId: string, workspaceIds: st
      limit ${SIGNAL_LIMIT}`,
     [userId, since.toISOString(), new Date(now).toISOString()],
   );
-  for (const row of meetings.rows) addSignal(spread, "call", "booked", row.starts_at, timeZone);
+  const series = new Set<string>();
+  for (const row of meetings.rows) {
+    const key = [(row.subject ?? "").trim().toLowerCase(), wallMinutes(row.starts_at, timeZone), [...(row.contact_ids ?? [])].sort().join(",")].join("|");
+    if (series.has(key)) continue;
+    series.add(key);
+    addSignal(spread, "call", "booked", row.starts_at, timeZone);
+  }
   return spread;
 }
 
@@ -180,6 +188,22 @@ export async function learnedSpreadInDb(
   return spread;
 }
 
+export async function withinLearningBudget<T>(db: Db, work: () => Promise<T>, fallback: () => T): Promise<T> {
+  const previous = (await db.query<{ value: string }>("select current_setting('statement_timeout') as value")).rows[0]?.value ?? "0";
+  await db.query("savepoint learned_times");
+  try {
+    await db.query(`set local statement_timeout = ${LEARNING_BUDGET_MS}`);
+    const result = await work();
+    await db.query("release savepoint learned_times");
+    await db.query("select set_config('statement_timeout', $1, true)", [previous]);
+    return result;
+  } catch (error) {
+    console.error("Learning times failed", error);
+    await db.query("rollback to savepoint learned_times");
+    return fallback();
+  }
+}
+
 export async function planPreferencesInDb(
   db: Db,
   actor: UserActor,
@@ -187,16 +211,11 @@ export async function planPreferencesInDb(
   now = Date.now(),
   options: { store?: boolean } = {},
 ): Promise<PlanPreferences> {
-  await db.query("savepoint learned_times");
-  try {
-    const preferences = preferencesFromSpread(await learnedSpreadInDb(db, actor, actors, now, { store: options.store }));
-    await db.query("release savepoint learned_times");
-    return preferences;
-  } catch (error) {
-    console.error("Learning times failed", error);
-    await db.query("rollback to savepoint learned_times");
-    return DEFAULT_PLAN_PREFERENCES;
-  }
+  return withinLearningBudget(
+    db,
+    async () => preferencesFromSpread(await learnedSpreadInDb(db, actor, actors, now, { store: options.store })),
+    () => DEFAULT_PLAN_PREFERENCES,
+  );
 }
 
 export type PreferredTime = { learned: boolean; periods: { from: string; to: string }[] } | null;
@@ -216,10 +235,17 @@ export async function getPreferredTimes(actor: UserActor, now = Date.now()): Pro
 export async function getLearnedTimes(actor: UserActor, now = Date.now()): Promise<LearnedTimes> {
   const { actors, complete } = await learningActors(actor);
   return withActor(actor, async (db) => {
-    const spread = await learnedSpreadInDb(db, actor, actors, now, { fresh: true, store: complete });
-    const row = await preferenceRow(db, actor.userId);
+    const hours = await readWorkingHoursInDb(db, actor.userId);
+    const working = hours.filter((day) => day.works);
+    const span = working.length > 0 ? { from: Math.min(...working.map((day) => day.start)), to: Math.max(...working.map((day) => day.end)) } : null;
+    const spread = await withinLearningBudget(
+      db,
+      () => learnedSpreadInDb(db, actor, actors, now, { fresh: true, store: complete }),
+      () => emptySpread(),
+    );
+    const row = await preferenceRow(db, actor.userId).catch(() => undefined);
     return {
-      kinds: LEARNED_KINDS.map((kind) => learnedView(kind, spread[kind])),
+      kinds: LEARNED_KINDS.map((kind) => learnedView(kind, spread[kind], span)),
       resetAt: row?.reset_at ? new Date(row.reset_at).toISOString() : null,
     };
   });

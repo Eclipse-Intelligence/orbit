@@ -36,6 +36,7 @@ import {
 } from "@/lib/crm/types";
 import { isReminderMinutes, REMINDER_LOOKAHEAD_MS } from "@/lib/crm/reminder-options";
 import { directTaskSql } from "@/lib/crm/task-access";
+import { wallMinutes } from "@/lib/calendar-view";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { dayWindow, readDateTime } from "@/lib/time";
@@ -572,7 +573,19 @@ export async function updateTaskInDb(
 ) {
   const current = await readTask(db, id);
   if (!current) throw notFound("task");
-  return applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
+  return applyTask(db, actor, current, preparedUpdate(current, input), provenance);
+}
+
+function preparedUpdate(current: TaskRow, input: TaskWrite) {
+  const write = prepareTask(input, "patch");
+  if (input.scheduledBy === undefined && write.scheduledBy === "person" && keepsPlannersTime(current, write.dueAt)) write.scheduledBy = "planner";
+  return write;
+}
+
+export function keepsPlannersTime(current: Pick<TaskRow, "due_at" | "due_has_time" | "scheduled_by">, dueAt: string | null | undefined) {
+  const before = iso(current.due_at);
+  if (!dueAt || !before || !current.due_has_time || current.scheduled_by !== "planner") return false;
+  return taskDueDay(before) !== taskDueDay(dueAt) && wallMinutes(before) === wallMinutes(dueAt);
 }
 
 export type TaskPlacement = { at: string; durationMinutes: number; dateOnly?: undefined } | { dateOnly: true };
@@ -596,7 +609,7 @@ function placementWrite(current: TaskRow, actor: UserActor, placement: TaskPlace
   const sameTime = Boolean(current.due_has_time && before && new Date(before).getTime() === Date.parse(placement.at));
   if (!sameTime || current.scheduled_by !== "person") {
     write.dueAt = placement.at;
-    write.scheduledBy = "person";
+    write.scheduledBy = keepsPlannersTime(current, placement.at) ? "planner" : "person";
   }
   if (placement.durationMinutes !== current.duration_minutes) write.durationMinutes = placement.durationMinutes;
   if (!current.owner_id) write.ownerId = actor.userId;
@@ -804,7 +817,7 @@ export async function updateTask(
       if (input.completed !== undefined) await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
       const current = await readTask(db, id);
       if (!current) throw notFound("task");
-      const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
+      const updated = await applyTask(db, actor, current, preparedUpdate(current, input), provenance);
       return { task: updated.task };
     }),
   );

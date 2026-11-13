@@ -13,8 +13,8 @@ import {
   signalCount,
   slotAt,
   learnedPeriods,
+  periodLabel,
   periodScore,
-  slotWeights,
   type LearnedSpread,
 } from "@/lib/learned-times";
 
@@ -164,7 +164,7 @@ describe("Learned times", () => {
     assert.equal(learnedView("other", spread.other).label, "Any time");
     assert.equal(learnedView("other", emptySpread().other).week.flat().every((value) => value === 0), true);
     assert.equal(Math.max(...learnedView("other", spread.other).week.flat()), 0.4, "a kind still learning shows faintly");
-    assert.equal(slotWeights(spread.call).length, 7 * 48);
+    assert.deepEqual(calls.week[1], calls.week[3], "the strip shows the week-wide periods Plan uses, the same each day");
   });
 });
 
@@ -244,10 +244,42 @@ describe("Learned periods", () => {
     const undated = { ...task("Call Jane Cooper", "2026-11-13"), dueAt: null };
     const learned = pack([undated], afternoonCalls(), { now: later });
     assert.equal(learned.placed[0]?.at, "2026-11-13T14:30:00.000Z", "tomorrow's learned time beats the rest of today");
-    const full = ["2026-11-12", "2026-11-13", "2026-11-16"].map((day) => meeting(`${day}T14:00:00Z`, `${day}T17:00:00Z`));
+    const twoBusy = ["2026-11-13", "2026-11-16"].map((day) => meeting(`${day}T14:00:00Z`, `${day}T17:00:00Z`));
+    assert.equal(
+      pack([undated], afternoonCalls(), { now: later, meetings: twoBusy }).placed[0]?.at,
+      "2026-11-17T14:30:00.000Z",
+      "today's learned time has passed, so it isn't one of the 3 days",
+    );
+    const full = ["2026-11-13", "2026-11-16", "2026-11-17"].map((day) => meeting(`${day}T14:00:00Z`, `${day}T17:00:00Z`));
     const fallback = pack([undated], afternoonCalls(), { now: later, meetings: full });
-    assert.equal(fallback.placed[0]?.at, "2026-11-12T17:05:00.000Z", "no learned time free, so the earliest day with room");
+    assert.equal(fallback.placed[0]?.at, "2026-11-12T16:00:00.000Z", "no learned time free, so the earliest day with room");
     const defaults = pack([undated], emptySpread(), { now: later });
     assert.equal(defaults.placed[0]?.at, "2026-11-12T16:00:00.000Z", "defaults keep the earliest day with room");
+  });
+});
+
+describe("Broad learned periods", () => {
+  const evenly = () => {
+    const spread = emptySpread();
+    for (let half = 18; half < 34; half += 1) {
+      for (let index = 0; index < 2; index += 1) addSignal(spread, "call", "placed", new Date(Date.parse("2026-11-10T00:00:00Z") + half * 30 * 60_000).toISOString(), LONDON);
+    }
+    return spread;
+  };
+
+  it("labels a long period by its range, or Any time when it covers working hours", () => {
+    const spread = evenly();
+    assert.deepEqual(learnedPeriods(spread.call), [{ from: 540, to: 1020 }]);
+    assert.equal(learnedView("call", spread.call, { from: 540, to: 1050 }).label, "Any time");
+    assert.equal(learnedView("call", spread.call).label, "09:00 to 17:00");
+    assert.equal(periodLabel({ from: 600, to: 840 }, { from: 540, to: 1050 }), "10:00 to 14:00");
+    assert.equal(periodLabel({ from: 630, to: 720 }, { from: 540, to: 1050 }), "Late morning");
+  });
+
+  it("drops the reason line when the blocks span more than two parts of the day", () => {
+    const calls = Array.from({ length: 24 }, (_, index) => task(`Call client ${index}`, "2026-11-13"));
+    const plan = packPlan({ tasks: calls, meetings: [], viewerId: ME, now: Date.parse("2026-11-12T06:00:00Z"), timeZone: LONDON, preferences: preferencesFromSpread(evenly()) });
+    assert.equal(plan.placed.length, 24);
+    assert.equal(plan.reason, null);
   });
 });

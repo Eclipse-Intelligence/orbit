@@ -252,6 +252,7 @@ export function planReason(
       .filter((start, index) => preferenceScore(preference, start, entries[index].durationMinutes, timeZone) === 0);
     if (fits.length === 0 || fits.length * 2 < entries.length) continue;
     const phrases = [...new Set(fits.map((start) => wallMinutes(start, timeZone)).sort((left, right) => left - right).map(reasonPhrase))];
+    if (phrases.length > 2) continue;
     learned.push(`${REASON_NOUNS[group]} ${phrases.join(" or ")}`);
   }
   if (learned.length > 0) sentences.push(`${joinPhrases(learned)}, as you usually do.`);
@@ -599,11 +600,21 @@ export function packPlan(input: PackInput): PlanProposal {
   }
 
   const missedUndated: Item[] = [];
-  const learnedDays = days.filter((day) => workingWindow(day, hours, timeZone)).slice(0, LEARNED_UNDATED_DAYS);
+  const learnedAhead = (day: string, item: Item) => {
+    const window = workingWindow(day, hours, timeZone);
+    const periods = preferences[item.group]?.periods ?? [];
+    if (!window) return false;
+    return periods.some((period) => {
+      const start = Math.max(wallAt(day, period.from, timeZone), window.open, floor);
+      const end = Math.min(wallAt(day, period.to, timeZone), window.close);
+      return end - start >= item.minutes * MINUTE;
+    });
+  };
+  const learnedDays = (item: Item) => days.filter((day) => learnedAhead(day, item)).slice(0, LEARNED_UNDATED_DAYS);
   const pendingUndated = [...undated];
   for (const item of undated) {
     pendingUndated.splice(pendingUndated.indexOf(item), 1);
-    if (preferences[item.group]?.learned && learnedDays.some((day) => placeOn(item, day, pendingUndated, true))) continue;
+    if (preferences[item.group]?.learned && learnedDays(item).some((day) => placeOn(item, day, pendingUndated, true))) continue;
     const joined = item.group !== "other" && days.some((day) => extendRun(item, day));
     if (joined) continue;
     if (!days.some((day) => placeOn(item, day, pendingUndated))) missedUndated.push(item);

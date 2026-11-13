@@ -9,13 +9,13 @@ import { PATCH as restUpdateTask } from "@/app/api/v1/tasks/[id]/route";
 import { POST as restCompleteTask } from "@/app/api/v1/tasks/[id]/complete/route";
 import { buildPlan, readPlanContextInDb, scheduleTasks } from "@/lib/crm/plan-schedule";
 import { DEFAULT_PLAN_PREFERENCES } from "@/lib/crm/plan-tasks";
-import { getLearnedTimes, getPreferredTimes, learnedSpreadInDb, resetLearnedTimes } from "@/lib/crm/schedule-preferences";
+import { getLearnedTimes, getPreferredTimes, learnedSpreadInDb, resetLearnedTimes, withinLearningBudget } from "@/lib/crm/schedule-preferences";
 import type { Db } from "@/lib/db/pool";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { wallInstant } from "@/lib/crm/task-time";
-import { completeTask, createTask, placeTask, reopenTask, updateTask } from "@/lib/crm/tasks";
+import { completeTask, createTask, getTask, placeTask, reopenTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
-import { addWorkingDays, dayKeyAt } from "@/lib/crm/working-days";
+import { addWorkingDays, dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { createWorkspace, workspaceActors } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -181,13 +181,17 @@ describe("Learned times", () => {
     await event("Declined", yesterday, { contactIds: [contact.id], response: "declined" });
     await event("Long ago", new Date(Date.now() - 100 * DAY_MS).toISOString(), { contactIds: [contact.id] });
     for (const back of [7, 14, 21]) await event("Weekly Kestrel", new Date(Date.now() - back * DAY_MS).toISOString(), { contactIds: [contact.id], icalUid: "weekly-kestrel" });
+    for (const back of [7, 14, 21]) {
+      const startsAt = at(shiftDay(today, -back), 9, 15);
+      await event(back === 14 ? " monday KESTREL " : "Monday Kestrel", startsAt, { contactIds: [contact.id], icalUid: `monday-kestrel-${back}` });
+    }
     await event("Not yet", new Date(Date.now() + 200 * DAY_MS).toISOString(), { contactIds: [contact.id] });
     const ticked = (await createTask(mark, { title: "Tidy the Brightwell notes", dueDate: workday(1) })).body.task;
     await completeTask(mark, ticked.id, web("complete_task"));
     const assistantDone = (await createTask(mark, { title: "Tidy the Halden notes", dueDate: workday(1) })).body.task;
     await completeTask(mark, assistantDone.id, { provenance: { operation: "complete_task", source: "assistant" } });
     const learned = await spread();
-    assert.equal(learned.call.booked, 3, "meetings Mark organised with contacts, in the past 90 days, a series once");
+    assert.equal(learned.call.booked, 4, "meetings Mark organised with contacts, in the past 90 days, a series once whether or not it shares one ical_uid");
     assert.equal(learned.other.ticked, 1, "only ticks on the web");
     assert.equal(learned.other.slots.reduce((total, value) => total + value, 0), 1, "a tick weighs least");
   });
@@ -196,7 +200,7 @@ describe("Learned times", () => {
     const later = await spread(Date.now() + 91 * DAY_MS);
     assert.deepEqual([later.call.placed, later.call.booked, later.email.placed, later.other.ticked], [0, 0, 0, 0], "nothing older than 90 days counts");
     const views = await getLearnedTimes(mark);
-    assert.equal(views.kinds.find((view) => view.kind === "call")?.caption, "Not enough yet (7 of about 10). Late morning until then.");
+    assert.equal(views.kinds.find((view) => view.kind === "call")?.caption, "Not enough yet (8 of about 10). Late morning until then.");
     await resetLearnedTimes(mark);
     const reset = await spread();
     assert.deepEqual([reset.call.placed, reset.call.booked, reset.email.placed, reset.other.ticked], [0, 0, 0, 0]);
@@ -290,6 +294,36 @@ describe("Learned times, guarded", () => {
     await scheduleTasks(mark, [{ taskId: other.id, at: at(day, 13, 30) }], { mode: "plan", provenance: { operation: "plan_tasks", source: "web" } });
     await updateTask(mark, other.id, { dueAt: at(day, 16) }, web("update_task"));
     assert.equal((await spread()).email.placed, 1, "a new time is the person's");
+  });
+
+  it("keeps Plan's block Plan's through day-only edits and drags, so its time never teaches", async () => {
+    const day = workday(6);
+    const planned = (await createTask(mark, { title: "Email Halden the terms", dueDate: day })).body.task;
+    await scheduleTasks(mark, [{ taskId: planned.id, at: at(day, 10) }], { mode: "plan", provenance: { operation: "plan_tasks", source: "web" } });
+    await updateTask(mark, planned.id, { dueAt: at(workday(7), 10) }, web("update_task"));
+    await updateTask(mark, planned.id, { dueAt: at(workday(8), 10) }, web("update_task"));
+    assert.equal((await getTask(mark, planned.id)).scheduledBy, "planner");
+    const dragged = (await createTask(mark, { title: "Email Kestrel the deck", dueDate: day })).body.task;
+    await scheduleTasks(mark, [{ taskId: dragged.id, at: at(day, 10, 30) }], { mode: "plan", provenance: { operation: "plan_tasks", source: "web" } });
+    await placeTask(mark, dragged.id, { at: at(workday(7), 10, 30), durationMinutes: 15 }, web("drag_task"));
+    await placeTask(mark, dragged.id, { at: at(workday(8), 10, 30), durationMinutes: 15 }, web("drag_task"));
+    assert.equal((await getTask(mark, dragged.id)).scheduledBy, "planner");
+    const before = (await spread()).email.placed;
+    await placeTask(mark, dragged.id, { at: at(workday(8), 16), durationMinutes: 15 }, web("drag_task"));
+    assert.equal((await getTask(mark, dragged.id)).scheduledBy, "person", "a new time is the person's");
+    assert.equal((await spread()).email.placed, before + 1);
+  });
+
+  it("gives learning about 3 seconds, then the defaults, and puts the statement timeout back", async () => {
+    const outcome = await withActor(mark, async (db) => {
+      const initial = (await db.query<{ value: string }>("select current_setting('statement_timeout') as value")).rows[0].value;
+      const timed = await withinLearningBudget(db, async () => (await db.query("select pg_sleep(4)"), "learned"), () => "defaults");
+      const setting = (await db.query<{ value: string }>("select current_setting('statement_timeout') as value")).rows[0].value;
+      const quick = await withinLearningBudget(db, async () => "learned", () => "defaults");
+      const after = (await db.query<{ value: string }>("select current_setting('statement_timeout') as value")).rows[0].value;
+      return { timed, quick, restored: setting === initial && after === initial };
+    });
+    assert.deepEqual(outcome, { timed: "defaults", quick: "learned", restored: true });
   });
 
   it("drops a web source claimed over REST or MCP, and personal-token ticks don't teach", async () => {

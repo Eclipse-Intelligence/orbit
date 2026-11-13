@@ -14,7 +14,8 @@ export const MAX_PERIODS = 3;
 export const SIGNAL_WEIGHTS: Record<LearnedSignal, number> = { placed: 4, booked: 2, ticked: 1 };
 
 const SMOOTHING = [0.25, 0.6, 1, 0.6, 0.25];
-const DAY_EMPHASIS = 2.5;
+const BROAD_MINUTES = 180;
+const ANY_TIME_SHARE = 0.85;
 
 export type KindSpread = { slots: number[]; placed: number; booked: number; ticked: number };
 export type LearnedSpread = Record<LearnedKind, KindSpread>;
@@ -76,19 +77,6 @@ function smooth(values: number[]) {
   });
 }
 
-export function slotWeights(spread: KindSpread): number[] {
-  const days = Array.from({ length: 7 }, (_, day) => spread.slots.slice(day * HALF_HOURS, (day + 1) * HALF_HOURS));
-  const tod = smooth(Array.from({ length: HALF_HOURS }, (_, half) => days.reduce((total, day) => total + (day[half] ?? 0), 0)));
-  const weights: number[] = [];
-  for (const day of days) {
-    const own = smooth(day);
-    const blended = tod.map((value, half) => value + DAY_EMPHASIS * own[half]);
-    const peak = Math.max(...blended);
-    weights.push(...blended.map((value) => (peak > 0 ? Math.round((value / peak) * 1000) / 1000 : 0)));
-  }
-  return weights;
-}
-
 export function dayProfile(spread: KindSpread) {
   const totals = Array.from({ length: HALF_HOURS }, (_, half) => {
     let total = 0;
@@ -145,10 +133,26 @@ export function timeOfDayLabel(minutes: number) {
   return "Evening";
 }
 
-export function periodsLabel(periods: LearnedPeriod[]) {
-  const labels = [...new Set(periods.map((period) => timeOfDayLabel((period.from + period.to) / 2)))];
+export type LabelSpan = { from: number; to: number };
+
+function clock(minutes: number) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+export function periodLabel(period: LearnedPeriod, span: LabelSpan | null = null) {
+  if (span && span.to > span.from) {
+    const covered = Math.max(0, Math.min(period.to, span.to) - Math.max(period.from, span.from));
+    if (covered >= (span.to - span.from) * ANY_TIME_SHARE) return "Any time";
+  }
+  if (period.to - period.from > BROAD_MINUTES) return `${clock(period.from)} to ${clock(period.to)}`;
+  return timeOfDayLabel((period.from + period.to) / 2);
+}
+
+export function periodsLabel(periods: LearnedPeriod[], span: LabelSpan | null = null) {
+  const labels = [...new Set(periods.map((period) => periodLabel(period, span)))];
+  if (labels.includes("Any time")) return "Any time";
   if (labels.length === 0) return null;
-  const lowered = labels.map((label, index) => (index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1)));
+  const lowered = labels.map((label, index) => (index === 0 || /^\d/.test(label) ? label : label.charAt(0).toLowerCase() + label.slice(1)));
   return lowered.length > 1 ? `${lowered.slice(0, -1).join(", ")} and ${lowered[lowered.length - 1]}` : lowered[0];
 }
 
@@ -185,18 +189,20 @@ export function learnedCaption(kind: LearnedKind, spread: KindSpread) {
   return `Learned from ${listed}.`;
 }
 
-export function learnedView(kind: LearnedKind, spread: KindSpread): LearnedKindView {
+export function learnedView(kind: LearnedKind, spread: KindSpread, span: LabelSpan | null = null): LearnedKindView {
   const learned = isLearned(spread);
   const periods = learned ? learnedPeriods(spread) : [];
   const strength = learned ? 1 : Math.min(1, (spread.placed + spread.booked + spread.ticked / 2) / LEARN_THRESHOLD);
-  const weights = slotWeights(spread).map((weight) => Math.round(weight * strength * 1000) / 1000);
+  const row = dayProfile(spread)
+    .slice(STRIP_FROM, STRIP_TO)
+    .map((weight) => Math.round(weight * strength * 1000) / 1000);
   return {
     kind,
     learned,
-    label: periodsLabel(periods) ?? DEFAULT_LABELS[kind],
+    label: periodsLabel(periods, span) ?? DEFAULT_LABELS[kind],
     periods,
     caption: learnedCaption(kind, spread),
-    week: STRIP_DAYS.map((day) => weights.slice(day * HALF_HOURS + STRIP_FROM, day * HALF_HOURS + STRIP_TO)),
+    week: STRIP_DAYS.map(() => [...row]),
   };
 }
 
