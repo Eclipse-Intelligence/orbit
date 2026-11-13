@@ -310,6 +310,23 @@ const check = (name, ok, detail = "") => {
   if (!ok) problems.push(name);
 };
 
+async function resetLearned(page, device) {
+  if (!page.url().includes("/settings/calendars")) {
+    await goto(page, `${base}/settings/calendars`);
+    await page.waitForTimeout(1200);
+  }
+  const learned = page.getByRole("region", { name: "Learned times" });
+  const reset = learned.getByRole("button", { name: "Reset" });
+  await reset.scrollIntoViewIfNeeded().catch(() => undefined);
+  await reset.focus().catch(() => undefined);
+  await page.keyboard.down("Enter");
+  await page.waitForTimeout(1100);
+  await page.keyboard.up("Enter");
+  await page.waitForTimeout(1500);
+  const captions = (await learned.textContent().catch(() => "")) ?? "";
+  check(`${device} holding Reset starts every kind from scratch`, (captions.match(/Not enough yet \(0 of about 10\)/g) ?? []).length === 3, captions.slice(0, 160));
+}
+
 for (const [device, viewport] of [
   ["iphone", { width: 390, height: 844 }],
   ["ipad", { width: 820, height: 1180 }],
@@ -710,16 +727,7 @@ for (const [device, viewport] of [
   check(`${device} learned times Reset`, await visible(learned.getByRole("button", { name: "Reset" })));
   check(`${device} learned times no overflow`, await noHorizontalScroll());
   await shot("learned-times");
-  if (device === "ipad") {
-    const reset = learned.getByRole("button", { name: "Reset" });
-    await reset.focus().catch(() => undefined);
-    await page.keyboard.down("Enter");
-    await page.waitForTimeout(1100);
-    await page.keyboard.up("Enter");
-    await page.waitForTimeout(1500);
-    const captions = (await learned.textContent().catch(() => "")) ?? "";
-    check(`${device} holding Reset starts every kind from scratch`, (captions.match(/Not enough yet \(0 of about 10\)/g) ?? []).length === 3, captions.slice(0, 160));
-  }
+  await resetLearned(page, device);
   await goto(page, `${base}/calendar`);
   await page.waitForTimeout(800);
   const block = await seedBlock(page, device);
@@ -1065,6 +1073,7 @@ for (const width of [1100, 1280, 1440]) {
     const block = await seedBlock(page, "desk");
     if (block) {
       try {
+        await resetLearned(page, device);
         await goto(page, `${base}/calendar?date=${block.day}&view=week`);
         await page.waitForTimeout(1500);
         const menu = page.getByRole("complementary", { name: "Calendars and tasks" });
