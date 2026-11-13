@@ -370,8 +370,13 @@ export async function syncTaskBlocks(
     for (const [userId, items] of groups) {
       let access: Access = "orbit_only";
       if (userId) {
-        const actor = await actingActor(userId, items[0].row.workspace_id).catch(() => null);
-        access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
+        try {
+          const actor = await actingActor(userId, items[0].row.workspace_id);
+          access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
+        } catch (error) {
+          console.error("Opening Outlook for task blocks failed", error);
+          access = "retry";
+        }
       }
       for (const { row, plan } of items) {
         if (deadline - Date.now() < RESERVE_MS) {
