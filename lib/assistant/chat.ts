@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, startingSettings, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
-import { pageContext, readPageInput } from "@/lib/assistant/page-context";
+import { pageContext, readPageInput, taggedTaskIds } from "@/lib/assistant/page-context";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { approvalNote, systemPrompt, turnContext } from "@/lib/assistant/prompt";
 import { messageFence, turnFence, withoutMarkers } from "@/lib/assistant/untrusted";
@@ -1371,7 +1371,7 @@ export async function sendMessage(
   if (input.steer && input.conversationId && !options.headless) {
     const conversation = await withActor(actor, (db) => readConversation(db, actor, input.conversationId!));
     emit({ type: "conversation", conversation: summary(conversation) });
-    const page = await readPage(actor, input.page);
+    const page = await readPage(actor, input.page, message);
     const stopped = await stoppedTurn(actor, conversation);
     const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page, steering: stopped ? null : "waiting" });
     emit({ type: "user", message: display(user) });
@@ -1402,7 +1402,7 @@ export async function sendMessage(
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   await settleStuckActions(actor, conversation.id, rows);
   if (!input.keepPending) await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
-  const page = await readPage(actor, input.page);
+  const page = await readPage(actor, input.page, message);
   if (!options.headless) {
     const earlier = (await takeWaiting(actor, conversation.id, null)) ?? [];
     if (earlier.length > 0) emit({ type: "steered", ids: earlier });
@@ -1413,8 +1413,8 @@ export async function sendMessage(
   emit({ type: "done" });
 }
 
-async function readPage(actor: UserActor, page: unknown) {
-  return pageContext(actor, readPageInput(page)).catch((error) => {
+async function readPage(actor: UserActor, page: unknown, message: string) {
+  return pageContext(actor, readPageInput(page), { taggedTaskIds: taggedTaskIds(message) }).catch((error) => {
     console.error("Couldn't read the page context", error instanceof Error ? error.message : error);
     return "";
   });

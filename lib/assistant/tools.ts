@@ -152,6 +152,7 @@ import {
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import { workspaceActors } from "@/lib/crm/workspaces";
+import { taskDetail } from "@/lib/crm/task-detail";
 import type { Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { appTimeZone, dateTimeInputValue, parseDateTime, readDateTime, zonedParts } from "@/lib/time";
@@ -1966,10 +1967,11 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_tasks",
     label: "Checking tasks",
     description:
-      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact and ClickUp link and sync status.",
+      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, and the user's own last email with them and the email thread it came from. Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
     parameters: {
       type: "object",
       properties: {
+        taskId: { type: "string", description: "One task's id. Returns just that task with its full picture; the other parameters are ignored." },
         mine: { type: "boolean", description: "Only the user's own tasks: assigned to them or unassigned. Use for \"my tasks\"." },
         view: {
           type: "string",
@@ -1984,6 +1986,11 @@ const TOOL_LIST: AssistantTool[] = [
       },
     },
     run: async (actor, args) => {
+      const taskId = optionalStr(args.taskId);
+      if (taskId) {
+        const found = await taskDetail(actor, taskId, { anyWorkspace: true });
+        return { ...found, task: withTask(found.task) };
+      }
       const result = await listTasks(actor, {
         mine: args.mine === true,
         view: oneOf(args.view, TASK_VIEWS) ?? "all",

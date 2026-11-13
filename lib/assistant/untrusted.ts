@@ -60,6 +60,7 @@ const NAME_KEYS = new Set([
   "name",
   "names",
   "fromName",
+  "fromNames",
   "senderName",
   "displayName",
   "firstName",

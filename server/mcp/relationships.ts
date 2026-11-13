@@ -10,6 +10,7 @@ import {
   updateOpportunity,
 } from "@/lib/crm/opportunities";
 import { findStaleRelationships, getCompanyContext, getDueActions } from "@/lib/crm/relationships";
+import { taskDetail } from "@/lib/crm/task-detail";
 import { completeTask, createTask } from "@/lib/crm/tasks";
 import {
   ACTIVITY_TYPES,
@@ -425,6 +426,18 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         });
         return result.body;
       }),
+  );
+
+  server.registerTool(
+    "get_next_action",
+    {
+      description:
+        actor.type === "user"
+          ? "One task with its full picture in one call: the task (detail without mail links), workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, and in mail the person's own last email with them and the email thread the task came from. Use it instead of looking up the contact, opportunity and mail one by one."
+          : "One task with its full picture in one call: the task (detail without mail links), workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, and the last activity. mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
+      inputSchema: { id: z.uuid() },
+    },
+    async (args) => run(() => taskDetail(actor, args.id)),
   );
 
   server.registerTool(
