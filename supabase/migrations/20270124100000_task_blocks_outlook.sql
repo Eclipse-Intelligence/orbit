@@ -76,6 +76,8 @@ alter table crm.task_outlook_queue add column if not exists attempts integer not
 alter table crm.task_outlook_queue add column if not exists retry_at timestamptz;
 alter table crm.task_outlook_queue add column if not exists refused boolean not null default false;
 
+alter table crm.integration_state add column if not exists task_blocks_write boolean;
+
 alter table crm.task_outlook_queue enable row level security;
 alter table crm.task_outlook_queue force row level security;
 revoke all on crm.task_outlook_queue from public, anon, authenticated, crm_agent;
@@ -224,7 +226,8 @@ as $$
   where id = p_task_id and calendar_event_ref is distinct from p_ref;
 $$;
 
-create or replace function private.defer_task_block(p_task_id uuid, p_refused boolean)
+drop function if exists private.defer_task_block(uuid, boolean);
+create or replace function private.defer_task_block(p_task_id uuid, p_pending_at timestamptz, p_refused boolean)
 returns void
 language sql
 security definer
@@ -232,13 +235,37 @@ set search_path = ''
 as $$
   update crm.task_outlook_queue
   set claimed_at = null,
-      attempts = attempts + 1,
-      refused = p_refused,
+      attempts = case when pending_at = p_pending_at then attempts + 1 else attempts end,
+      refused = case when pending_at = p_pending_at then p_refused else refused end,
       retry_at = case
+        when pending_at <> p_pending_at then retry_at
         when p_refused then 'infinity'::timestamptz
         else clock_timestamp() + least(interval '6 hours', interval '1 minute' * power(2, least(attempts, 12)))
       end
   where task_id = p_task_id;
+$$;
+
+create or replace function private.note_task_blocks_write(p_connection_id uuid, p_write boolean)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_before boolean;
+begin
+  select s.task_blocks_write into v_before
+  from crm.integration_state s
+  where s.connection_id = p_connection_id and s.source = 'calendar'
+  for update;
+  if not found then
+    return p_write;
+  end if;
+  update crm.integration_state
+  set task_blocks_write = p_write
+  where connection_id = p_connection_id and source = 'calendar' and task_blocks_write is distinct from p_write;
+  return p_write and v_before is distinct from true;
+end;
 $$;
 
 create or replace function private.release_task_block(p_task_id uuid)
@@ -250,7 +277,8 @@ as $$
   update crm.task_outlook_queue set claimed_at = null where task_id = p_task_id;
 $$;
 
-create or replace function private.queue_task_blocks(p_user_id uuid, p_now timestamptz)
+drop function if exists private.queue_task_blocks(uuid, timestamptz);
+create or replace function private.queue_task_blocks(p_user_id uuid, p_now timestamptz, p_fresh boolean)
 returns integer
 language sql
 security definer
@@ -289,8 +317,8 @@ as $$
     insert into crm.task_outlook_queue (task_id)
     select id from wanted
     on conflict (task_id) do update
-    set retry_at = null, attempts = 0
-    where not crm.task_outlook_queue.refused
+    set retry_at = null, attempts = 0, refused = false
+    where p_fresh
     returning 1
   )
   select count(*)::integer from added
@@ -305,6 +333,81 @@ set search_path = ''
 as $$
   select q.task_id from crm.task_outlook_queue q where q.task_id = any(p_task_ids) and not q.refused
 $$;
+
+create or replace function private.team_remove(p_workspace uuid, p_actor uuid, p_user uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_role text := private.team_role(p_workspace, p_actor);
+  target_role text := private.team_role(p_workspace, p_user);
+  next_home uuid;
+begin
+  if coalesce(actor_role, '') not in ('owner', 'admin') then
+    raise exception 'Only the owner or an admin can remove people.' using errcode = '42501';
+  end if;
+  if target_role is null then
+    raise exception 'They are not in this workspace.' using errcode = '22023';
+  end if;
+  if target_role = 'owner' then
+    raise exception 'The owner can''t be removed.' using errcode = '42501';
+  end if;
+  if p_user = p_actor then
+    raise exception 'You can''t remove yourself.' using errcode = '42501';
+  end if;
+  if target_role = 'admin' and actor_role <> 'owner' then
+    raise exception 'Only the owner can remove an admin.' using errcode = '42501';
+  end if;
+  select m.workspace_id into next_home
+  from crm.workspace_members m
+  where m.user_id = p_user and m.workspace_id <> p_workspace
+  order by m.created_at, m.workspace_id
+  limit 1;
+  update crm.companies set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.contacts set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.opportunities set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.tasks
+    set owner_id = p_actor,
+        due_at = case
+          when due_has_time and due_at is not null
+          then date_trunc('day', due_at at time zone 'Europe/London') at time zone 'Europe/London'
+          else due_at
+        end,
+        scheduled_by = case when due_has_time then null else scheduled_by end,
+        remind_minutes = case when due_has_time then null else remind_minutes end,
+        due_has_time = false
+    where workspace_id = p_workspace and owner_id = p_user;
+  update crm.documents set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  if next_home is not null then
+    perform private.move_personal_rows(p_user, p_workspace, next_home);
+  else
+    update crm.mailbox_connections
+      set status = 'disconnected', refresh_token = null, access_token = null, access_token_expires_at = null
+      where workspace_id = p_workspace and user_id = p_user;
+    update crm.calendar_accounts
+      set status = 'disconnected', refresh_token = null, access_token = null, access_token_expires_at = null
+      where workspace_id = p_workspace and user_id = p_user;
+    delete from crm.ai_accounts where workspace_id = p_workspace and user_id = p_user;
+    update crm.ai_companions set revoked_at = now()
+      where workspace_id = p_workspace and user_id = p_user and revoked_at is null;
+  end if;
+  delete from crm.granola_keys where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.readwise_keys where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.recall_keys where workspace_id = p_workspace and user_id = p_user;
+  update crm.personal_tokens set revoked_at = now()
+    where workspace_id = p_workspace and user_id = p_user and revoked_at is null;
+  update crm.agent_mail_messages
+    set status = 'failed', status_reason = 'They left the workspace.', advancing_until = null
+    where workspace_id = p_workspace and user_id = p_user and status in ('received', 'working') and replied_at is null;
+  delete from crm.agent_mail_threads where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.workspace_members where workspace_id = p_workspace and user_id = p_user;
+end;
+$$;
+
+revoke all on function private.team_remove(uuid, uuid, uuid) from public;
+grant execute on function private.team_remove(uuid, uuid, uuid) to crm_app;
 
 create or replace function private.booking_busy(p_user_id uuid, p_from timestamptz, p_to timestamptz)
 returns table (starts_at timestamptz, ends_at timestamptz)
@@ -353,17 +456,19 @@ $$;
 revoke all on function private.claim_task_blocks(uuid[], uuid, integer) from public;
 revoke all on function private.settle_task_block(uuid, timestamptz, text, boolean, boolean) from public;
 revoke all on function private.link_task_block(uuid, text) from public;
-revoke all on function private.defer_task_block(uuid, boolean) from public;
+revoke all on function private.defer_task_block(uuid, timestamptz, boolean) from public;
 revoke all on function private.release_task_block(uuid) from public;
-revoke all on function private.queue_task_blocks(uuid, timestamptz) from public;
+revoke all on function private.note_task_blocks_write(uuid, boolean) from public;
+revoke all on function private.queue_task_blocks(uuid, timestamptz, boolean) from public;
 revoke all on function private.task_blocks_pending(uuid[]) from public;
 revoke all on function private.booking_busy(uuid, timestamptz, timestamptz) from public;
 grant execute on function private.claim_task_blocks(uuid[], uuid, integer) to crm_app;
 grant execute on function private.settle_task_block(uuid, timestamptz, text, boolean, boolean) to crm_app;
 grant execute on function private.link_task_block(uuid, text) to crm_app;
-grant execute on function private.defer_task_block(uuid, boolean) to crm_app;
+grant execute on function private.defer_task_block(uuid, timestamptz, boolean) to crm_app;
 grant execute on function private.release_task_block(uuid) to crm_app;
-grant execute on function private.queue_task_blocks(uuid, timestamptz) to crm_app;
+grant execute on function private.note_task_blocks_write(uuid, boolean) to crm_app;
+grant execute on function private.queue_task_blocks(uuid, timestamptz, boolean) to crm_app;
 grant execute on function private.task_blocks_pending(uuid[]) to crm_app;
 grant execute on function private.booking_busy(uuid, timestamptz, timestamptz) to crm_app;
 

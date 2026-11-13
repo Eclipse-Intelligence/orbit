@@ -171,7 +171,7 @@ async function openOutlook(actor: UserActor, fetchImpl: typeof fetch): Promise<A
   }
 }
 
-type Failure = "orbit_only" | "gone" | "refused" | "throttled" | "retry";
+type Failure = "orbit_only" | "gone" | "refused" | "denied" | "throttled" | "retry";
 
 function graphFailure(error: unknown): Failure {
   if (error instanceof CalendarWriteScopeError) return "orbit_only";
@@ -179,7 +179,8 @@ function graphFailure(error: unknown): Failure {
     if (error.status === 404) return "gone";
     if (error.status === 401) return "orbit_only";
     if (error.status === 429) return "throttled";
-    if (error.status === 403 || error.status === 400) return "refused";
+    if (error.status === 400) return "refused";
+    if (error.status === 403) return "denied";
   }
   return "retry";
 }
@@ -195,7 +196,7 @@ async function settle(row: BlockRow, ref: string | null | undefined, options: { 
 }
 
 async function defer(row: BlockRow, refused = false) {
-  await query("select private.defer_task_block($1, $2)", [row.task_id, refused]).catch((error) => console.error("Deferring a task block failed", error));
+  await query("select private.defer_task_block($1, $2, $3)", [row.task_id, row.pending_at, refused]).catch((error) => console.error("Deferring a task block failed", error));
 }
 
 async function release(row: BlockRow) {
@@ -437,13 +438,27 @@ export async function syncTaskBlocks(
   return result;
 }
 
-export async function queueOwnTaskBlocks(userId: string, now = Date.now()) {
-  const result = await query<{ added: number }>("select private.queue_task_blocks($1, $2) as added", [userId, new Date(now).toISOString()]);
+export async function queueOwnTaskBlocks(userId: string, now = Date.now(), fresh = false) {
+  const result = await query<{ added: number }>("select private.queue_task_blocks($1, $2, $3) as added", [userId, new Date(now).toISOString(), fresh]);
   return result.rows[0]?.added ?? 0;
 }
 
-export async function flushTaskBlocks(actor: UserActor, scope: string | null, options: { fetchImpl?: typeof fetch; deadline?: number; now?: number } = {}) {
-  if (grantsCalendarWrite(scope) === true) await queueOwnTaskBlocks(actor.userId, options.now);
+export async function noteTaskBlocksWrite(connectionId: string, write: boolean) {
+  const result = await query<{ fresh: boolean }>("select private.note_task_blocks_write($1, $2) as fresh", [connectionId, write]);
+  return Boolean(result.rows[0]?.fresh);
+}
+
+export async function flushTaskBlocks(
+  actor: UserActor,
+  connectionId: string,
+  scope: string | null,
+  options: { fetchImpl?: typeof fetch; deadline?: number; now?: number } = {},
+) {
+  const writes = grantsCalendarWrite(scope);
+  if (writes !== null) {
+    const fresh = await noteTaskBlocksWrite(connectionId, writes);
+    if (writes) await queueOwnTaskBlocks(actor.userId, options.now, fresh);
+  }
   return syncTaskBlocks({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now });
 }
 

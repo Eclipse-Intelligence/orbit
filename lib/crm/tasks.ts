@@ -287,6 +287,15 @@ function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { owne
   return ownerChanges || write.dueAt !== undefined;
 }
 
+export const OWNER_SETS_LENGTH = "Only the owner can change the length of a timed task.";
+
+function resizesSomeoneElsesBlock(actor: Actor, write: PreparedTask, current: TaskRow) {
+  if (write.durationMinutes === undefined || write.durationMinutes === current.duration_minutes) return false;
+  const owner = write.ownerId !== undefined ? (write.ownerId ?? null) : current.owner_id;
+  if (!owner || (actor.type === "user" && actor.userId === owner)) return false;
+  return write.dueHasTime ?? Boolean(current.due_has_time && current.due_at);
+}
+
 function keepDayOnly(write: PreparedTask, current: { dueAt: string | null; dueHasTime: boolean }) {
   const timed = write.dueHasTime ?? current.dueHasTime;
   const dueAt = write.dueAt === undefined ? current.dueAt : write.dueAt;
@@ -481,14 +490,18 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
+  const restoresTime = Boolean(options.restoring && write.dueAt !== undefined);
   if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule)) {
     delete write.dueAt;
     delete write.dueHasTime;
     if (!options.claimSchedule || write.scheduledBy === (current.scheduled_by ?? null)) delete write.scheduledBy;
   }
   const timed = Boolean(current.due_has_time && current.due_at);
-  if (!options.restoring && setsSomeoneElsesTime(actor, write, { ownerId: current.owner_id, timed })) {
+  if (!restoresTime && setsSomeoneElsesTime(actor, write, { ownerId: current.owner_id, timed })) {
     keepDayOnly(write, { dueAt: iso(current.due_at), dueHasTime: timed });
+  }
+  if (!restoresTime && resizesSomeoneElsesBlock(actor, write, current)) {
+    throw new CrmError("forbidden", OWNER_SETS_LENGTH, 403, { field: "durationMinutes" });
   }
   settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
   const links = await resolveLinks(

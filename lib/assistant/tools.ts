@@ -1044,7 +1044,7 @@ const TASK_FIELDS = {
   description: { type: "string", description: "Extra detail, or null to clear it." },
   dueDate: { type: "string", description: "Due day only, as YYYY-MM-DD in London time, or null to clear. Use this unless the user gave a time." },
   dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear. Only when the user gave a time; it puts the task on their calendar. A time on a task someone else owns is saved as date only. Send dueDate or dueAt, not both." },
-  durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15." },
+  durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15. Only the owner can change it on a timed task." },
   remindMinutes: {
     type: "integer",
     enum: REMINDER_OPTIONS.map((option) => option.minutes),

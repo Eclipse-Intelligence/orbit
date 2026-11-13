@@ -381,7 +381,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         description: z.string().nullable().optional(),
         dueDate: z.string().nullable().optional().describe("Due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
         dueAt: z.string().nullable().optional().describe("Due date and time, such as 2026-11-14T14:30 (London time) or an ISO instant. Only when the person gave a time. A bare date means date only. A time on a task owned by someone else (anyone, for an agent token) is saved as date only. Send dueDate or dueAt, not both."),
-        durationMinutes: z.number().int().min(5).max(480).optional().describe("How long the task takes in minutes, 5 to 480. New tasks take 15."),
+        durationMinutes: z.number().int().min(5).max(480).optional().describe("How long the task takes in minutes, 5 to 480. New tasks take 15. Only the owner can change it on a timed task."),
         priority: z.enum(TASK_PRIORITIES).optional(),
         ownerId: z.uuid().nullable().optional(),
         companyId: z.uuid().nullable().optional(),

@@ -796,7 +796,7 @@ async function flushBlocks(actor: UserActor, connectionId: string, scope: string
   try {
     const { flushTaskBlocks } = await import("@/lib/crm/task-outlook");
     const granted = scope ?? (await withActor(actor, (db) => readGrantedScopes(db, connectionId)));
-    await flushTaskBlocks(actor, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS });
+    await flushTaskBlocks(actor, connectionId, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS });
   } catch (error) {
     console.error("Outlook task blocks failed", error);
   }
