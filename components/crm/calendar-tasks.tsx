@@ -121,20 +121,21 @@ export function taskWhenLabel(task: Pick<Task, "dueAt" | "dueHasTime">, now: num
   return [day, time].filter(Boolean).join(" ") || null;
 }
 
-export function TaskDropZone({ day, active }: { day: string | null; active: boolean }) {
+export function TaskDropZone({ day, active, bar = false }: { day: string | null; active: boolean; bar?: boolean }) {
   return (
     <div
       data-task-drop-zone=""
       role="status"
       className={cn(
-        "mx-1 mt-1 mb-1.5 flex flex-col gap-0.5 rounded-[10px] border border-dashed px-3 py-2.5",
+        "flex border border-dashed",
+        bar ? "h-full items-center gap-2 overflow-hidden rounded-none px-4" : "mx-1 mt-1 mb-1.5 flex-col gap-0.5 rounded-[10px] px-3 py-2.5",
         active
           ? "border-violet border-solid bg-[color-mix(in_srgb,var(--violet)_14%,transparent)]"
           : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_8%,transparent)]",
       )}
     >
-      <span className="ui-style font-medium">Keep the day, remove the time</span>
-      {day && <span className="caption-style text-soft">Stays on {day}, off the calendar.</span>}
+      <span className="ui-style shrink-0 font-medium">Keep the day, remove the time</span>
+      {day && <span className={cn("caption-style text-soft", bar && "truncate")}>Stays on {day}, off the calendar.</span>}
     </div>
   );
 }

@@ -16,6 +16,7 @@ import {
   blockDuration,
   DRAG_STEP_MINUTES,
   edgeScrollSpeed,
+  moveInstant,
   placementFor,
   pointerInstant,
   resizedDuration,
@@ -27,7 +28,8 @@ import {
 
 const GRID_QUERY = "(min-width: 768px)";
 const DRAGGING_CLASSES = ["select-none", "cursor-grabbing"];
-const LIST_ARM_PX = 12;
+const MOVE_ARM_PX = 12;
+const RESIZE_ARM_PX = 8;
 
 export type TaskDrag = {
   task: Task;
@@ -167,15 +169,17 @@ export function useTaskDrag({
       pickup: Pickup,
       options: { carry?: boolean } = {},
     ) => {
-      if (busy.current || event.ctrlKey) return;
+      if (busy.current) return;
       if (event.pointerType === "mouse" && event.button !== 0) return;
-      const startX = event.clientX;
-      const startY = event.clientY;
-      let x = startX;
-      let y = startY;
+      let x = event.clientX;
+      let y = event.clientY;
+      let activeX = x;
+      let activeY = y;
       let frame = 0;
       let active = false;
-      let armed = pickup.source !== "list";
+      let armed = false;
+      let leftDropZone = false;
+      let fresh = false;
       const origin = (
         (event.currentTarget.closest(
           '[role="dialog"]',
@@ -217,11 +221,17 @@ export function useTaskDrag({
         const column = columnAt(gridColumns(scroller), x);
         const day = column?.dataset.day;
         if (!column || !day) return null;
+        const minutes = snapStart(
+          minuteIn(column, y) - pickup.grab,
+          pickup.durationMinutes,
+        );
         return {
           day,
-          minutes: snapStart(
-            minuteIn(column, y) - pickup.grab,
-            pickup.durationMinutes,
+          minutes,
+          at: moveInstant(
+            pickup.source === "block" ? pickup.task.dueAt : null,
+            day,
+            minutes,
           ),
           durationMinutes: pickup.durationMinutes,
         };
@@ -237,18 +247,20 @@ export function useTaskDrag({
 
       function arm() {
         if (armed) return;
-        if (
-          Math.hypot(x - startX, y - startY) < LIST_ARM_PX &&
-          inside(origin, x, y)
-        )
-          return;
+        const travelled = Math.hypot(x - activeX, y - activeY);
+        const far =
+          travelled >= (pickup.mode === "resize" ? RESIZE_ARM_PX : MOVE_ARM_PX);
+        const away = pickup.source === "list" && !inside(origin, x, y);
+        if (!far && !away) return;
         armed = true;
         if (options.carry) latest.current.onCarry?.();
       }
 
       function update(scrolling: -1 | 0 | 1) {
         arm();
-        const overList = pickup.mode === "move" && overDropZone(x, y);
+        const inZone = pickup.mode === "move" && overDropZone(x, y);
+        if (armed && !inZone) leftDropZone = true;
+        const overList = inZone && leftDropZone;
         const next: TaskDrag = {
           task: pickup.task,
           source: pickup.source,
@@ -279,15 +291,19 @@ export function useTaskDrag({
 
       function end(result: GestureResult) {
         window.cancelAnimationFrame(frame);
-        if (active && result === "drop") update(0);
-        setPress(null);
-        const final = live.current;
-        live.current = null;
-        active = false;
-        busy.current = false;
-        cancel.current = null;
-        document.body.classList.remove(...DRAGGING_CLASSES);
-        setDrag(null);
+        let final: TaskDrag | null = null;
+        try {
+          if (active && result === "drop") update(0);
+          final = live.current;
+        } finally {
+          live.current = null;
+          active = false;
+          busy.current = false;
+          cancel.current = null;
+          document.body.classList.remove(...DRAGGING_CLASSES);
+          setPress(null);
+          setDrag(null);
+        }
         if (result !== "drop" || !final || !armed) return;
         swallowNextClick();
         if (final.overList) {
@@ -310,25 +326,26 @@ export function useTaskDrag({
         {
           start() {
             active = true;
+            fresh = true;
             setPress(null);
             if (!touch) document.body.classList.add(...DRAGGING_CLASSES);
-            update(0);
             frame = window.requestAnimationFrame(tick);
           },
           move(clientX, clientY) {
             x = clientX;
             y = clientY;
-            if (active) update(live.current?.scrolling ?? 0);
+            if (!active) return;
+            if (fresh) {
+              fresh = false;
+              activeX = x;
+              activeY = y;
+            }
+            update(live.current?.scrolling ?? 0);
           },
           end,
         },
         { touchTarget: event.target },
       );
-      if (!stop) {
-        busy.current = false;
-        setPress(null);
-        return;
-      }
       cancel.current = stop;
     },
     [],

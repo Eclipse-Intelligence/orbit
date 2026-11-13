@@ -580,8 +580,8 @@ export default function CalendarScreen({
           )}
           <div className="relative hidden min-h-0 min-w-0 flex-1 md:flex">
             {droppingBack && (
-              <div data-task-drop="" className={cn("bg-background shadow-overlay absolute top-2 left-16 z-30 w-56 rounded-[12px]", panelOpen && "lg:hidden")}>
-                <TaskDropZone day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} />
+              <div data-task-drop="" className={cn("bg-background absolute inset-x-0 top-0 z-30 h-11", panelOpen && "lg:hidden")}>
+                <TaskDropZone bar day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} />
               </div>
             )}
             <CalendarGrid

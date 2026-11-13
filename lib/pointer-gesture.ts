@@ -4,7 +4,7 @@ const TOUCH_SLOP = 8;
 
 export type GestureResult = "tap" | "drop" | "cancel";
 
-type GestureStart = { pointerType: string; pointerId: number; clientX: number; clientY: number; ctrlKey?: boolean };
+type GestureStart = { pointerType: string; pointerId: number; clientX: number; clientY: number };
 
 type GestureHandlers = {
   start: () => void;
@@ -14,9 +14,8 @@ type GestureHandlers = {
 
 type GestureOptions = { touchTarget?: EventTarget | null };
 
-export function startPointerGesture(event: GestureStart, handlers: GestureHandlers, options: GestureOptions = {}): (() => void) | null {
+export function startPointerGesture(event: GestureStart, handlers: GestureHandlers, options: GestureOptions = {}): () => void {
   const touch = event.pointerType === "touch";
-  if (!touch && event.ctrlKey) return null;
   const touchTarget = touch ? (options.touchTarget ?? null) : null;
   let seen: Event | null = null;
   const startX = event.clientX;
@@ -91,6 +90,10 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     menu.preventDefault();
   }
 
+  function onMenu() {
+    finish("cancel");
+  }
+
   function finish(result: GestureResult) {
     if (done) return;
     done = true;
@@ -102,6 +105,7 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     window.removeEventListener("touchend", onTouchEnd);
     window.removeEventListener("touchcancel", onTouchCancel);
     window.removeEventListener("contextmenu", blockMenu);
+    window.removeEventListener("contextmenu", onMenu);
     touchTarget?.removeEventListener("touchmove", onTouchMove as EventListener);
     touchTarget?.removeEventListener("touchend", onTouchEnd as EventListener);
     touchTarget?.removeEventListener("touchcancel", onTouchCancel);
@@ -120,6 +124,7 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
   } else {
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("contextmenu", onMenu);
   }
   return () => finish("cancel");
 }

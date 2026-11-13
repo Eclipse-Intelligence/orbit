@@ -66,12 +66,30 @@ describe("pointer gestures", () => {
     assert.deepEqual(seen, ["start", "end:cancel"]);
   });
 
-  it("ignores a ctrl-click, which opens the context menu on a Mac", () => {
+  it("cancels when a context menu opens, as a ctrl-click does on a Mac", () => {
     const { seen, handlers } = record();
-    assert.equal(startPointerGesture({ ...mouseDown, ctrlKey: true }, handlers), null);
+    startPointerGesture(mouseDown, handlers);
+    fake.dispatchEvent(new Event("contextmenu"));
     fake.dispatchEvent(pointer("pointermove", { clientX: 40, clientY: 10 }));
     fake.dispatchEvent(pointer("pointerup", {}));
-    assert.deepEqual(seen, []);
+    assert.deepEqual(seen, ["end:cancel"]);
+  });
+
+  it("cancels when no button is held even before it starts", () => {
+    const { seen, handlers } = record();
+    startPointerGesture(mouseDown, handlers);
+    fake.dispatchEvent(pointer("pointermove", { clientX: 11, clientY: 10, buttons: 0 }));
+    fake.dispatchEvent(pointer("pointermove", { clientX: 40, clientY: 10 }));
+    fake.dispatchEvent(pointer("pointerup", {}));
+    assert.deepEqual(seen, ["end:cancel"]);
+  });
+
+  it("treats a pen like a mouse", () => {
+    const { seen, handlers } = record();
+    startPointerGesture({ ...mouseDown, pointerType: "pen" }, handlers);
+    fake.dispatchEvent(pointer("pointermove", { clientX: 30, clientY: 10 }));
+    fake.dispatchEvent(pointer("pointerup", {}));
+    assert.deepEqual(seen, ["start", "end:drop"]);
   });
 
   it("can be cancelled by its caller, once", () => {
@@ -96,6 +114,12 @@ describe("pointer gestures", () => {
     fake.dispatchEvent(move);
     assert.equal(moves.filter(([x]) => x === 60).length, 1);
     target.dispatchEvent(Object.assign(new Event("touchend"), { touches: [] }));
+    assert.deepEqual(seen, ["start", "end:drop"]);
+    const count = moves.length;
+    target.dispatchEvent(Object.assign(new Event("touchmove", { cancelable: true }), { touches: [{ clientX: 90, clientY: 90 }] }));
+    target.dispatchEvent(Object.assign(new Event("touchend"), { touches: [] }));
+    fake.dispatchEvent(Object.assign(new Event("touchend"), { touches: [] }));
+    assert.equal(moves.length, count);
     assert.deepEqual(seen, ["start", "end:drop"]);
   });
 });

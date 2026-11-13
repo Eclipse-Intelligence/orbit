@@ -86,8 +86,8 @@ async function seedBlock(page, device) {
   }
   if (mine) await api(`/tasks/${mine.id}`, { method: "DELETE" });
   if (!mine?.ownerId) return null;
-  const add = async (title, dueAt) => {
-    const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title, dueAt, durationMinutes: 30, ownerId: mine.ownerId }) });
+  const add = async (title, dueAt, durationMinutes = 30) => {
+    const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title, dueAt, durationMinutes, ownerId: mine.ownerId }) });
     return created?.ok ? (await created.json()).task.id : null;
   };
   const day = londonDay(1);
@@ -97,12 +97,15 @@ async function seedBlock(page, device) {
   const overdueId = await add(`Sweep overdue ${stamp}`, `${overdueDay}T10:00`);
   const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title: `Sweep plain ${stamp}`, ownerId: mine.ownerId, companyId: null, contactId: null, opportunityId: null }) });
   const plainId = created?.ok ? (await created.json()).task.id : null;
-  const ids = [id, overdueId, plainId].filter(Boolean);
-  if (!id || !overdueId || !plainId) {
+  const earlyId = await add(`Sweep early ${stamp}`, `${day}T08:00`, 15);
+  const stacked = [];
+  for (const time of ["09:00", "09:15", "09:30"]) stacked.push(await add(`Sweep stacked ${time} ${stamp}`, `${day}T${time}`, 15));
+  const ids = [id, overdueId, plainId, earlyId, ...stacked].filter(Boolean);
+  if (!id || !overdueId || !plainId || !earlyId || stacked.some((item) => !item)) {
     await dropTasks(ids);
     return null;
   }
-  return { id, title, day, overdueId, overdueDay, plainId, ids };
+  return { id, title, day, overdueId, overdueDay, plainId, earlyId, stacked, ids };
 }
 
 async function dropTasks(ids) {
@@ -204,6 +207,22 @@ async function touchDrag(page, selector, to, options = {}) {
       { selector, to, holdMs: options.holdMs ?? 450, fromTop: options.fromTop ?? false, quick: options.quick ?? false },
     )
     .catch((error) => ({ error: String(error).slice(0, 120) }));
+}
+
+async function stackedHits(page, ids) {
+  return page.evaluate((ids) => {
+    const owner = (x, y) => document.elementFromPoint(x, y)?.closest("[data-task-block]")?.getAttribute("data-task-block") ?? null;
+    const wrong = [];
+    for (const id of ids) {
+      const box = [...document.querySelectorAll(`[data-task-block="${id}"]`)].find((node) => node.getBoundingClientRect().width > 0)?.getBoundingClientRect();
+      if (!box) return { wrong: [`${id} missing`] };
+      for (const x of [box.left + 30, box.left + box.width / 2, box.right - 6])
+        for (const y of [box.top + 2, box.top + box.height / 2, box.bottom - 2]) if (owner(x, y) !== id) wrong.push(`${id.slice(0, 4)}@${Math.round(x)},${Math.round(y)}=${owner(x, y)?.slice(0, 4)}`);
+    }
+    const last = [...document.querySelectorAll(`[data-task-block="${ids.at(-1)}"]`)].find((node) => node.getBoundingClientRect().width > 0).getBoundingClientRect();
+    for (const x of [last.left + 30, last.right - 6]) for (const below of [3, 8, 13]) if (owner(x, last.bottom + below)) wrong.push(`below ${below}px`);
+    return { wrong };
+  }, ids);
 }
 
 async function focusedTaskId(page) {
@@ -809,6 +828,45 @@ for (const [device, viewport] of [
         const dropped = await readTask(block.plainId);
         check(synthetic("the carried task lands at its time"), Boolean(dropped?.dueHasTime && dropped.dueDate === block.day && londonClock(dropped.dueAt) === "15:00" && dropped.scheduledBy === "person"), timing(dropped));
         check(synthetic("the carried task shows as a block"), await visible(page.locator(`[data-task-block="${block.plainId}"]`).filter({ visible: true })));
+        await goto(page, `${base}/calendar?date=${block.day}&view=day`);
+        await page.waitForTimeout(1500);
+        const hits = await stackedHits(page, block.stacked);
+        check(`${device} back-to-back blocks each own their whole area, and nothing reaches below the last`, hits.wrong.length === 0, hits.wrong.slice(0, 4).join(" "));
+        const middle = await page.locator(`[data-task-block="${block.stacked[1]}"]`).filter({ visible: true }).boundingBox();
+        await page.touchscreen.tap(middle.x + middle.width - 6, middle.y + middle.height / 2);
+        await page.waitForTimeout(900);
+        const tapped = page.getByRole("dialog", { name: "Task" });
+        check(`${device} tapping the corner of the middle back-to-back block opens that block`, ((await tapped.textContent().catch(() => "")) ?? "").includes("Sweep stacked 09:15"));
+        if (await visible(tapped)) {
+          await tapped.getByRole("button", { name: "Close" }).tap();
+          await page.waitForTimeout(600);
+        }
+        const stackedBefore = await Promise.all(block.stacked.map((id) => readTask(id).then(timing)));
+        const corner = await touchDrag(page, `[data-task-block="${block.stacked[1]}"] [data-task-resize]`, null, { holdMs: 300 });
+        await page.waitForTimeout(900);
+        const stackedAfter = await Promise.all(block.stacked.map((id) => readTask(id).then(timing)));
+        check(synthetic("holding the middle block's corner and letting go changes nothing"), Boolean(corner && !corner.error) && stackedAfter.join() === stackedBefore.join(), `${JSON.stringify(corner)} ${stackedAfter.join(", ")}`);
+        if (await visible(page.getByRole("dialog", { name: "Task" }))) {
+          await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+          await page.waitForTimeout(600);
+        }
+        await goto(page, `${base}/calendar?date=${block.day}&view=day`);
+        await page.waitForTimeout(1500);
+        const earlyBefore = timing(await readTask(block.earlyId));
+        const scrollBefore = await page.evaluate(() => [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0)?.scrollTop ?? -1);
+        const early = await touchDrag(page, `[data-task-block="${block.earlyId}"] button[data-task-id]`, null, { holdMs: 600 });
+        await page.waitForTimeout(900);
+        const scrollAfter = await page.evaluate(() => [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0)?.scrollTop ?? -1);
+        const earlyAfter = timing(await readTask(block.earlyId));
+        check(
+          synthetic("holding a block at the top edge, under the drop zone, and letting go changes nothing and doesn't scroll"),
+          Boolean(early && !early.error) && earlyAfter === earlyBefore && scrollAfter === scrollBefore,
+          `${earlyAfter}, scroll ${scrollBefore} to ${scrollAfter}`,
+        );
+        if (await visible(page.getByRole("dialog", { name: "Task" }))) {
+          await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+          await page.waitForTimeout(600);
+        }
         const scrolled = await page.evaluate(async () => {
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
           const scroller = [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0);
@@ -1046,6 +1104,28 @@ for (const width of [1100, 1280, 1440]) {
         const unplaced = await readTask(block.id);
         check(`${device} a block dropped on the list is date only on the same day`, Boolean(unplaced && !unplaced.dueHasTime && unplaced.dueDate === block.day && unplaced.scheduledBy === null), timing(unplaced));
         check(`${device} the block leaves the grid`, !(await card.isVisible().catch(() => false)));
+        await page.getByRole("button", { name: /^Hide calendars and tasks/ }).click();
+        await page.waitForTimeout(500);
+        const early = page.locator(`[data-task-block="${block.earlyId}"]`).filter({ visible: true });
+        const earlyBox = await early.boundingBox();
+        const earlyBefore = timing(await readTask(block.earlyId));
+        const scrollOf = () => page.evaluate(() => [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0)?.scrollTop ?? -1);
+        const scrollBefore = await scrollOf();
+        if (earlyBox) {
+          const spot = { x: earlyBox.x + earlyBox.width / 2, y: earlyBox.y + earlyBox.height / 2 };
+          await page.mouse.move(spot.x, spot.y);
+          await page.mouse.down();
+          await page.mouse.move(spot.x + 3, spot.y - 4);
+          await page.waitForTimeout(400);
+          await page.mouse.up();
+          await page.waitForTimeout(1200);
+        }
+        const earlyAfter = timing(await readTask(block.earlyId));
+        check(`${device} a wobbly click on a block at the top edge, with the menu hidden, changes nothing and doesn't scroll`, Boolean(earlyBox) && earlyAfter === earlyBefore && (await scrollOf()) === scrollBefore, `${earlyAfter}, scroll ${scrollBefore} to ${await scrollOf()}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(500);
+        await page.getByRole("button", { name: /^Show calendars and tasks/ }).click();
+        await page.waitForTimeout(400);
       } finally {
         await dropTasks(block.ids);
       }

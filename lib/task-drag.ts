@@ -1,4 +1,9 @@
-import { dateKey, DAY_MINUTES, shiftDateKey } from "@/lib/calendar-view";
+import {
+  dateKey,
+  DAY_MINUTES,
+  shiftDateKey,
+  wallMinutes,
+} from "@/lib/calendar-view";
 import {
   clockLabel,
   dayStartIso,
@@ -45,6 +50,21 @@ export function snapStart(minutes: number, durationMinutes: number) {
     0,
     Math.floor(latest / DRAG_STEP_MINUTES) * DRAG_STEP_MINUTES,
   );
+}
+
+export function moveInstant(
+  dueAt: string | null,
+  day: string,
+  minutes: number,
+  timeZone = appTimeZone(),
+) {
+  if (
+    dueAt &&
+    dateKey(dueAt, timeZone) === day &&
+    wallMinutes(dueAt, timeZone) === minutes
+  )
+    return dueAt;
+  return slotInstant(day, minutes, timeZone);
 }
 
 export function resizeLimits(

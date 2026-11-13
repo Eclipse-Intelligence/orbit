@@ -20,7 +20,6 @@ export type TaskBlockDrag = {
   onResize: (event: ReactPointerEvent<HTMLElement>, block: TaskBlock) => void;
 };
 
-
 function clashing(block: TaskBlock) {
   return Boolean(block.clash) && !block.done && !block.overdue;
 }
@@ -175,12 +174,12 @@ export function GridTaskBlock({
           className={cn(
             "absolute right-0 bottom-0 z-[2] flex h-1.5 cursor-ns-resize items-end justify-center pb-0.5",
             edged ? "left-6" : "left-5",
-            "[@media(pointer:coarse)]:-bottom-3.5 [@media(pointer:coarse)]:h-[18px] [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:pb-0",
+            "[@media(pointer:coarse)]:left-auto [@media(pointer:coarse)]:h-full [@media(pointer:coarse)]:max-h-7 [@media(pointer:coarse)]:w-8 [@media(pointer:coarse)]:justify-end [@media(pointer:coarse)]:rounded-br-md [@media(pointer:coarse)]:pr-1 [@media(pointer:coarse)]:pb-[3px]",
           )}
         >
           <span
             className={cn(
-              "bg-violet ease-power2-out h-1 w-[22px] rounded-full opacity-0 transition-opacity duration-150 group-hover/block:opacity-100 [@media(pointer:coarse)]:opacity-60",
+              "bg-violet ease-power2-out h-1 w-[22px] rounded-full opacity-0 transition-opacity duration-150 group-hover/block:opacity-100 [@media(pointer:coarse)]:w-3 [@media(pointer:coarse)]:opacity-70",
               resizing && "opacity-100",
             )}
           />

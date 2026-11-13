@@ -9,6 +9,7 @@ import { actorForTask, createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import {
   edgeScrollSpeed,
+  moveInstant,
   placedTask,
   placementFor,
   placementLanded,
@@ -118,6 +119,17 @@ describe("dragging on the grid", () => {
     assert.deepEqual(placementFor({ day: "2026-10-25", minutes: 90, durationMinutes: 30, at: second }), { at: second, durationMinutes: 30 });
     assert.equal(slotRange({ minutes: 90, durationMinutes: 30, at: second }), "01:30 to 02:00");
     assert.equal(samePlace(task({ dueAt: second, dueHasTime: true, durationMinutes: 30 }), { day: "2026-10-25", minutes: 90, durationMinutes: 30, at: second }), true);
+  });
+
+  it("moves on clock-change days to the instant the label shows, and keeps a block's own instant on its own slot", () => {
+    const second = "2026-10-25T01:30:00.000Z";
+    assert.equal(moveInstant(second, "2026-10-25", 90), second);
+    assert.equal(moveInstant("2026-10-25T00:30:00.000Z", "2026-10-25", 90), "2026-10-25T00:30:00.000Z");
+    assert.equal(moveInstant(null, "2026-10-25", 90), "2026-10-25T00:30:00.000Z");
+    const gap = moveInstant(null, "2027-03-28", 60);
+    assert.equal(gap, "2027-03-28T01:00:00.000Z");
+    assert.equal(slotRange({ minutes: 60, durationMinutes: 45, at: gap }), "02:00 to 02:45");
+    assert.deepEqual(placementFor({ day: "2027-03-28", minutes: 60, durationMinutes: 45, at: gap }), { at: gap, durationMinutes: 45 });
   });
 
   it("turns a slot into London wall time, in summer and winter", () => {
