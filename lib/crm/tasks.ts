@@ -623,6 +623,28 @@ export async function placeTask(
   });
 }
 
+export async function scheduleTaskInDb(
+  db: Db,
+  actor: UserActor,
+  id: string,
+  slot: { at: string; durationMinutes: number | null; byHand?: boolean },
+  provenance: Provenance,
+  refuse: (task: Task) => string | null,
+): Promise<{ task: Task; changed: boolean }> {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(id)) throw notFound("task");
+  await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
+  const current = await readTask(db, id);
+  if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
+  if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+  const refusal = refuse(mapTask(current));
+  if (refusal) throw new CrmError("invalid_input", refusal, 400, { field: "schedule" });
+  const placedByPerson = Boolean(current.due_has_time && current.due_at && current.scheduled_by === "person");
+  const write: TaskWrite = { dueAt: slot.at, scheduledBy: slot.byHand || placedByPerson ? "person" : "planner" };
+  if (slot.durationMinutes && slot.durationMinutes !== current.duration_minutes) write.durationMinutes = slot.durationMinutes;
+  return applyTask(db, actor, current, prepareTask(write, "patch"), provenance, { claimSchedule: true });
+}
+
 export function mineFilter(actor: Actor, values: unknown[], alias = "t") {
   if (actor.type !== "user") return null;
   values.push(actor.userId);
@@ -945,8 +967,12 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
 }
 
 export async function listPlannerTasks(actor: UserActor, now = Date.now()): Promise<Task[]> {
+  return withActor(actor, (db) => listPlannerTasksInDb(db, actor, now));
+}
+
+export async function listPlannerTasksInDb(db: Db, actor: UserActor, now = Date.now()): Promise<Task[]> {
   assertScope(actor.scopes, "crm:read");
-  return withActor(actor, async (db) => {
+  {
     const values: unknown[] = [actor.workspaceId, dayWindow(new Date(now)).start.toISOString(), actor.userId];
     const mine = mineFilter(actor, values)!;
     const result = await db.query<TaskRow>(
@@ -961,7 +987,7 @@ export async function listPlannerTasks(actor: UserActor, now = Date.now()): Prom
       values,
     );
     return result.rows.map(mapTask);
-  });
+  }
 }
 
 export async function listTaskParticipants(actor: UserActor, taskIds: string[]): Promise<Record<string, string[]>> {

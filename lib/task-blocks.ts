@@ -29,6 +29,8 @@ export type TaskBlock = {
   done: boolean;
   overdue: boolean;
   clash: string | null;
+  proposed?: boolean;
+  suggested?: boolean;
 };
 
 export type TaskListGroupKind = "overdue" | "today" | "week" | "later" | "none";
@@ -77,7 +79,7 @@ export function showsAsBlock(task: Task, viewerId: string, now: number, timeZone
   return new Date(task.completedAt).getTime() >= startOfDay(new Date(now), timeZone).getTime();
 }
 
-function clashWith(start: number, end: number, meetings: ClashCandidate[]) {
+export function clashWith(start: number, end: number, meetings: ClashCandidate[]) {
   for (const meeting of meetings) {
     if (!isBusyMeeting(meeting)) continue;
     const from = new Date(meeting.startsAt).getTime();

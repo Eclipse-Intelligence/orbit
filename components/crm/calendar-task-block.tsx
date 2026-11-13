@@ -2,6 +2,7 @@
 
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { formatTime } from "@/components/crm/calendar-event-details";
+import TaskKindIcon from "@/components/crm/task-kind-icon";
 import { durationLabel } from "@/lib/crm/task-time";
 import type { TaskBlock } from "@/lib/task-blocks";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,8 @@ function clashing(block: TaskBlock) {
 }
 
 function tone(block: TaskBlock) {
+  if (block.proposed)
+    return "bg-[color-mix(in_srgb,var(--violet)_7%,transparent)] outline-1 outline-offset-[-1px] outline-dashed outline-[color-mix(in_srgb,var(--violet)_70%,transparent)]";
   if (block.done) return "bg-white/[0.035] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]";
   if (block.overdue)
     return "bg-[color-mix(in_srgb,var(--danger)_11%,#1b1b1b)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--danger)_40%,transparent)]";
@@ -37,7 +40,7 @@ export function taskBlockLabel(block: TaskBlock) {
   return [
     block.title,
     `${formatTime(block.startsAt)} to ${formatTime(block.endsAt)}`,
-    "task",
+    block.proposed ? "proposed by Plan" : "task",
     block.done ? "done" : null,
     block.overdue ? "overdue" : null,
     block.clash ? `clashes with ${block.clash}` : null,
@@ -77,6 +80,16 @@ function DoneCircle({ block, onOpen, onComplete, size }: TaskBlockHandlers & { b
 }
 
 function Detail({ block }: { block: TaskBlock }) {
+  if (block.proposed) {
+    return (
+      <>
+        {block.clash && <span className="text-(--tag-amber-text)">Clashes with {block.clash} · </span>}
+        <span className={cn("tabular-nums", block.suggested && "text-violet")}>
+          {[block.clash ? null : block.person, block.workspaceName, durationLabel(block.durationMinutes)].filter(Boolean).join(" · ")}
+        </span>
+      </>
+    );
+  }
   const parts: ReactNode[] = clashing(block)
     ? [<span key="clash" className="text-(--tag-amber-text)">Clashes with {block.clash}</span>]
     : [block.overdue ? <span key="overdue" className="text-danger font-medium">Overdue</span> : null, block.person, block.workspaceName];
@@ -126,6 +139,7 @@ export function GridTaskBlock({
       )}
       style={style}
       data-task-block={block.task.id}
+      data-task-proposed={block.proposed ? "" : undefined}
       data-task-lifted={lifted ? "" : undefined}
       onPointerDown={movable && drag ? (event) => drag.onPickUp(event, block) : undefined}
     >
@@ -160,11 +174,15 @@ export function GridTaskBlock({
         ) : block.overdue ? (
           <span className="text-danger shrink-0 text-[11px] leading-[18px] font-medium">Overdue</span>
         ) : (
-          <span className={cn("shrink-0 text-[11px] leading-[18px] tabular-nums", block.done ? "text-faint" : "text-soft")}>{durationLabel(block.durationMinutes)}</span>
+          <span className={cn("shrink-0 text-[11px] leading-[18px] tabular-nums", block.done ? "text-faint" : block.suggested ? "text-violet" : "text-soft")}>{durationLabel(block.durationMinutes)}</span>
         )}
       </button>
       <span className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}>
-        <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="sm" />
+        {block.proposed ? (
+          <TaskKindIcon title={block.title} className="text-violet size-3" />
+        ) : (
+          <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="sm" />
+        )}
       </span>
       {movable && drag && resizable && (
         <span

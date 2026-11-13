@@ -31,6 +31,8 @@ import SectionHeader from "@/components/crm/section-header";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import type { Viewer } from "@/components/crm/viewer";
 import { setCalendarVisibleAction } from "@/app/(crm)/calendar/actions";
+import { applyPlanAction, planAction } from "@/app/(crm)/calendar/plan-actions";
+import PlanPanel, { type PlanPanelHandlers } from "@/components/crm/calendar-plan";
 import { placeTaskAction } from "@/app/(crm)/records";
 import {
   mergeDuplicateEvents,
@@ -47,14 +49,35 @@ import type { Task } from "@/lib/crm/types";
 import { LONG_PRESS_MS } from "@/lib/pointer-gesture";
 import { taskBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { placedTask, placementLanded, slotDateLabel, type DropPlacement } from "@/lib/task-drag";
+import {
+  applyPayload,
+  carryOver,
+  chooseMiss,
+  handPlaced,
+  dragEntry,
+  leaveOverdue,
+  moveAllOverdue,
+  moveOverdue,
+  previewBlocks,
+  previewRuns,
+  previewTask,
+  removeEntry,
+  startPreview,
+  undoMiss,
+  undoOverdue,
+  type PlanPreview,
+} from "@/lib/plan-preview";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
+import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 
 const MOVE_FAILED = "Couldn't move the task. Try again.";
+const PLAN_FAILED = "Couldn't plan your tasks. Try again.";
+const APPLY_FAILED = "Couldn't put the tasks on your calendar. Try again.";
 
 type Placed = Record<string, { task: Task; seq: number; saved: boolean }>;
 
@@ -332,7 +355,88 @@ export default function CalendarScreen({
   const placeSeq = useRef(0);
   const latestPlace = useRef(new Map<string, number>());
   const tasks = useMemo(() => planner.tasks.map((task) => placed[task.id]?.task ?? task), [planner.tasks, placed]);
+  const [preview, setPreview] = useState<PlanPreview | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [replan, setReplan] = useState(false);
+  const planSeq = useRef(0);
+  const runPlan = (nextReplan: boolean) => {
+    const seq = (planSeq.current += 1);
+    setPlanning(true);
+    setPlanLoading(true);
+    setPlanError(null);
+    setReplan(nextReplan);
+    void planAction({ replan: nextReplan, ordering: preview?.proposal.ordering ?? null, keep: handPlaced(preview) })
+      .catch(() => ({ error: PLAN_FAILED }))
+      .then((result) => {
+        if (planSeq.current !== seq) return;
+        setPlanLoading(false);
+        if ("error" in result) {
+          setPlanError(result.error || PLAN_FAILED);
+          setReplan(preview?.proposal.replan ?? false);
+          return;
+        }
+        setPreview((current) => (current ? carryOver(current, result.plan) : startPreview(result.plan)));
+      });
+  };
+  const cancelPlan = () => {
+    planSeq.current += 1;
+    setPlanning(false);
+    setPlanLoading(false);
+    setPreview(null);
+    setPlanError(null);
+    setReplan(false);
+  };
+  const applyPlan = () => {
+    if (!preview || applying) return;
+    const seq = (planSeq.current += 1);
+    const applied = preview;
+    setApplying(true);
+    setPlanError(null);
+    void applyPlanAction(applyPayload(applied))
+      .catch(() => ({ error: APPLY_FAILED }))
+      .then((result) => {
+        setApplying(false);
+        if (planSeq.current !== seq) return;
+        if (result.error) {
+          setPlanError(result.error);
+          return;
+        }
+        const byId = new Map(tasks.map((task) => [task.id, task]));
+        setPlaced((current) => {
+          const next = { ...current };
+          for (const entry of applied.entries) {
+            const task = byId.get(entry.taskId);
+            if (task) next[task.id] = { task: previewTask(task, entry), seq: (placeSeq.current += 1), saved: true };
+          }
+          return next;
+        });
+        cancelPlan();
+        router.refresh();
+      });
+  };
+  const planHandlers: PlanPanelHandlers = {
+    onRemove: (taskId) => setPreview((current) => (current ? removeEntry(current, taskId) : current)),
+    onMoveOverdue: (taskId) => setPreview((current) => (current ? moveOverdue(current, taskId) : current)),
+    onMoveAll: () => setPreview((current) => (current ? moveAllOverdue(current) : current)),
+    onLeaveOverdue: (taskId) => setPreview((current) => (current ? leaveOverdue(current, taskId) : current)),
+    onUndoOverdue: (taskId) => setPreview((current) => (current ? undoOverdue(current, taskId) : current)),
+    onMiss: (taskId, choice) => setPreview((current) => (current ? chooseMiss(current, taskId, choice) : current)),
+    onUndoMiss: (taskId) => setPreview((current) => (current ? undoMiss(current, taskId) : current)),
+    onReplan: (value) => runPlan(value),
+    onCancel: cancelPlan,
+    onApply: applyPlan,
+  };
   const place = (task: Task, placement: DropPlacement) => {
+    if (preview?.entries.some((entry) => entry.taskId === task.id)) {
+      const own = planner.tasks.find((item) => item.id === task.id) ?? task;
+      setPreview((current) =>
+        !current ? current : placement.dateOnly === true ? removeEntry(current, task.id) : dragEntry(current, own, placement.at, placement.durationMinutes),
+      );
+      return;
+    }
     const seq = (placeSeq.current += 1);
     latestPlace.current.set(task.id, seq);
     setError(null);
@@ -361,9 +465,10 @@ export default function CalendarScreen({
     onCarry: () => setDrawerOpen(false),
     onOpen: (task, from) => openTask(task, from),
   });
-  const blockDrag: TaskBlockDrag | undefined = gridDrag ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
+  const blockDrag: TaskBlockDrag | undefined = gridDrag && !planning ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
+  const proposalDrag: TaskBlockDrag | undefined = gridDrag && !planLoading && !applying ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const heldFromList = drag?.source === "list" ? drag.task.id : null;
-  const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed ? drag : null;
+  const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed && !planning ? drag : null;
   const { done, complete: markDone } = useTaskDone(tasks);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [keptTask, setKeptTask] = useState<Task | null>(null);
@@ -373,7 +478,21 @@ export default function CalendarScreen({
   if (openTaskId && !panelTask) setOpenTaskId(null);
   const shownTask = panelTask ?? keptTask;
   const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
-  const blocks = taskBlocks(tasks, { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done });
+  const proposedIds = new Set(preview?.entries.map((entry) => entry.taskId) ?? []);
+  const blocks = taskBlocks(
+    tasks.filter((task) => !proposedIds.has(task.id)),
+    { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done },
+  );
+  const proposals =
+    preview && planning
+      ? previewBlocks(preview, tasks, {
+          workspaces: planner.workspaces,
+          meetings: shown,
+          blocks: blocks.filter((block) => !block.done).map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
+        })
+      : [];
+  const clashes = Object.fromEntries(proposals.flatMap((block) => (block.clash ? [[block.task.id, block.clash]] : [])));
+  const runs = preview && planning ? previewRuns(preview.entries) : [];
   const [opener, setOpener] = useState<HTMLElement | null>(null);
   const openTask = (task: Task, from: HTMLElement | null) => {
     setDrawerOpen(false);
@@ -540,10 +659,22 @@ export default function CalendarScreen({
           </span>
           <span className="md:hidden">{dayLabel(date)}</span>
         </h2>
+        <Button
+          variant="secondary"
+          size="sm"
+          className={cn("ml-auto hidden md:inline-flex", planning && "bg-muted")}
+          aria-pressed={planning}
+          title="Plan your tasks for today and the next 14 days"
+          disabled={applying}
+          onClick={() => (planning ? cancelPlan() : runPlan(false))}
+        >
+          <SparkleIcon aria-hidden className="size-3" />
+          Plan
+        </Button>
         <span
           role="group"
           aria-label="View"
-          className="bg-secondary ml-auto hidden items-center gap-0.5 rounded-full p-0.5 shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4)] md:inline-flex"
+          className="bg-secondary hidden items-center gap-0.5 rounded-full p-0.5 shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4)] md:inline-flex"
         >
           {(["day", "week"] as const).map((option) => (
             <Button
@@ -569,7 +700,7 @@ export default function CalendarScreen({
       )}
       <NoticeContext.Provider value={setNotice}>
         <KeyboardList className="flex min-h-0 flex-1">
-          {panelOpen && (
+          {panelOpen && !planning && (
             <aside
               id="calendar-panel"
               aria-label="Calendars and tasks"
@@ -596,9 +727,34 @@ export default function CalendarScreen({
               taskHandlers={taskHandlers}
               drag={drag}
               blockDrag={blockDrag}
+              proposals={proposals}
+              proposalDrag={proposalDrag}
+              runs={runs}
             />
           </div>
-          <div className="flex min-h-0 min-w-0 flex-1 md:hidden">
+          {planning && (
+            <PlanPanel
+              preview={preview}
+              today={today}
+              loading={planLoading}
+              applying={applying}
+              replan={planLoading ? replan : (preview?.proposal.replan ?? replan)}
+              error={planError}
+              clashes={clashes}
+              handlers={planHandlers}
+            />
+          )}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col md:hidden">
+            {planning && (
+              <div className="border-border caption-style text-subtle flex items-center gap-3 border-b px-4 py-2.5">
+                <span role="status" className="min-w-0 flex-1">
+                  Plan needs a wider screen.
+                </span>
+                <Button variant="secondary" size="sm" className="hit" disabled={applying} onClick={cancelPlan}>
+                  Cancel
+                </Button>
+              </div>
+            )}
             <CalendarAgenda
               date={date}
               today={today}

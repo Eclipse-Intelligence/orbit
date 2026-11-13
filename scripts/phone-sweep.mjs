@@ -688,6 +688,18 @@ for (const [device, viewport] of [
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));
   await shot("calendar");
+  if (device === "iphone") check(`${device} has no Plan`, !(await page.getByRole("button", { name: "Plan", exact: true }).isVisible().catch(() => false)));
+  await goto(page, `${base}/settings/calendars`);
+  await page.waitForTimeout(1200);
+  const hoursList = page.getByRole("list", { name: "Working hours" });
+  await hoursList.waitFor({ timeout: 10_000 }).catch(() => undefined);
+  const workingDays = await hoursList.getByRole("switch", { checked: true }).count().catch(() => 0);
+  const starts = await hoursList.getByRole("combobox", { name: / start$/ }).evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().left))).catch(() => []);
+  check(`${device} working hours list every working day evenly`, starts.length > 0 && starts.length === workingDays && new Set(starts).size === 1, JSON.stringify(starts));
+  check(`${device} working hours no overflow`, await noHorizontalScroll());
+  await shot("working-hours");
+  await goto(page, `${base}/calendar`);
+  await page.waitForTimeout(800);
   const block = await seedBlock(page, device);
   if (block) {
     try {
@@ -912,6 +924,25 @@ for (const [device, viewport] of [
         });
         check(synthetic("dragging to the grid's bottom edge scrolls it"), Boolean(scrolled && scrolled.after > scrolled.before && scrolled.edge), JSON.stringify(scrolled));
       }
+      if (device === "ipad") {
+        await goto(page, `${base}/calendar`);
+        await page.waitForTimeout(1200);
+        const planButton = page.getByRole("button", { name: "Plan", exact: true });
+        check(`${device} shows Plan next to Day and Week`, await planButton.isVisible().catch(() => false));
+        await planButton.tap({ timeout: 5_000 }).catch(() => undefined);
+        const planPanel = page.getByRole("complementary", { name: "Plan" });
+        await planPanel.getByText(/^Placed/).first().waitFor({ timeout: 25_000 }).catch(() => undefined);
+        check(`${device} Plan opens its preview`, await planPanel.isVisible().catch(() => false));
+        const firstEntry = await planPanel.locator("[data-plan-entry]").first().getAttribute("data-plan-entry").catch(() => null);
+        check(`${device} Plan proposes a block`, Boolean(firstEntry));
+        if (firstEntry) await page.locator(`[data-task-proposed][data-task-block="${firstEntry}"]`).first().scrollIntoViewIfNeeded().catch(() => undefined);
+        check(`${device} the proposal shows on the grid`, Boolean(firstEntry) && (await page.locator(`[data-task-proposed][data-task-block="${firstEntry}"]`).filter({ visible: true }).first().isVisible().catch(() => false)));
+        check(`${device} Plan preview no overflow`, await noHorizontalScroll());
+        await shot("calendar-plan");
+        await planPanel.getByRole("button", { name: "Cancel", exact: true }).tap({ timeout: 5_000 }).catch(() => undefined);
+        await page.waitForTimeout(500);
+        check(`${device} Cancel closes the plan`, !(await planPanel.isVisible().catch(() => false)) && (await page.locator("[data-task-proposed]").count()) === 0);
+      }
     } finally {
       await dropTasks(block.ids);
     }
@@ -1030,6 +1061,36 @@ for (const width of [1100, 1280, 1440]) {
         await page.keyboard.press("Escape");
         await page.waitForTimeout(600);
         check(`${device} Esc returns focus to the block`, (await focusedTaskId(page)) === block.id);
+        await page.getByRole("button", { name: "Plan", exact: true }).click({ timeout: 5_000 }).catch(() => undefined);
+        const planPanel = page.getByRole("complementary", { name: "Plan" });
+        await planPanel.getByText(/^Placed/).first().waitFor({ timeout: 25_000 }).catch(() => undefined);
+        check(`${device} Plan replaces the left menu with its preview`, (await planPanel.isVisible().catch(() => false)) && !(await menu.isVisible().catch(() => false)));
+        const proposedPlain = planPanel.locator(`[data-plan-entry="${block.plainId}"]`);
+        check(`${device} Plan proposes the task with no date`, await proposedPlain.isVisible().catch(() => false));
+        check(`${device} proposals show dashed on the grid`, await page.locator(`[data-task-proposed][data-task-block="${block.plainId}"]`).filter({ visible: true }).first().isVisible().catch(() => false));
+        check(`${device} Plan leaves a block placed by hand alone`, (await planPanel.locator(`[data-plan-entry="${block.id}"]`).count()) === 0 && (await card.isVisible().catch(() => false)));
+        const overdueCard = planPanel.locator(`[data-plan-overdue="${block.overdueId}"]`);
+        check(
+          `${device} Plan lists the overdue task with Move and Leave`,
+          (await overdueCard.getByRole("button", { name: "Move", exact: true }).isVisible().catch(() => false)) && (await overdueCard.getByRole("button", { name: "Leave", exact: true }).isVisible().catch(() => false)),
+        );
+        await overdueCard.getByRole("button", { name: "Leave", exact: true }).click({ timeout: 5_000 }).catch(() => undefined);
+        check(`${device} Leave offers Undo`, await overdueCard.getByRole("button", { name: "Undo", exact: true }).isVisible().catch(() => false));
+        await overdueCard.getByRole("button", { name: "Undo", exact: true }).click({ timeout: 5_000 }).catch(() => undefined);
+        check(`${device} Plan preview no overflow`, await page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1));
+        const apply = planPanel.getByRole("button", { name: "Apply", exact: true });
+        const applyBox = await apply.boundingBox();
+        const applyHit = applyBox ? await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("button")?.textContent ?? "", { x: applyBox.x + applyBox.width / 2, y: applyBox.y + applyBox.height / 2 }) : "";
+        check(`${device} Apply isn't covered by quick add or Ask Orbit`, applyHit.includes("Apply"), applyHit);
+        await page.screenshot({ path: path.join(out, `desktop-${width}-plan.png`) });
+        const before = (await planPanel.locator("[data-plan-entry]").count());
+        await proposedPlain.getByRole("button", { name: /^Remove .* from the plan$/ }).click({ timeout: 5_000 }).catch(() => undefined);
+        await page.waitForTimeout(300);
+        check(`${device} a proposal can be removed`, (await planPanel.locator("[data-plan-entry]").count()) === before - 1);
+        await planPanel.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: 5_000 }).catch(() => undefined);
+        await page.waitForTimeout(500);
+        check(`${device} Cancel discards the preview`, !(await planPanel.isVisible().catch(() => false)) && (await page.locator("[data-task-proposed]").filter({ visible: true }).count()) === 0 && (await menu.isVisible().catch(() => false)));
+        check(`${device} the preview wrote nothing`, (await readTask(block.plainId))?.dueAt === null);
         await page.getByRole("button", { name: /^Hide calendars and tasks/ }).click();
         await page.waitForTimeout(400);
         check(`${device} the toolbar button hides the menu`, !(await menu.isVisible().catch(() => false)));
