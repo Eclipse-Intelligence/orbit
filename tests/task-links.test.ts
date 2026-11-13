@@ -3,7 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { POST as restCreateTask } from "@/app/api/v1/tasks/route";
-import { runTool } from "@/lib/assistant/tools";
+import { describeAction, runTool } from "@/lib/assistant/tools";
 import { acceptActionItem, summariseCall } from "@/lib/crm/call-insights";
 import { createActivity } from "@/lib/crm/activities";
 import { createCompany } from "@/lib/crm/companies";
@@ -225,6 +225,45 @@ describe("linking tasks on creation", () => {
     assert.deepEqual(links(deal.task), { companyId: halden, contactId: null, opportunityId: renewal });
     const contact = (await runTool(mark, "create_task", { title: "Call Jane Doe", contactId: raj, sendToClickUp: false })) as { task: Task };
     assert.deepEqual(links(contact.task), { companyId: halden, contactId: raj, opportunityId: null });
+  });
+
+  it("relinks through the assistant's update_task: an id replaces, null takes off and a link left out stays", async () => {
+    const made = (await runTool(mark, "create_task", { title: "Send the order form", contactId: jane, sendToClickUp: false })) as { task: Task };
+    const id = made.task.id;
+    assert.deepEqual(links(made.task), { companyId: acme, contactId: jane, opportunityId: null });
+    const update = async (args: Record<string, unknown>) => ((await runTool(mark, "update_task", { taskId: id, ...args })) as { task: Task }).task;
+    assert.deepEqual(links(await update({ contactId: raj, companyId: halden })), { companyId: halden, contactId: raj, opportunityId: null });
+    assert.deepEqual(links(await update({ opportunityId: renewal })), { companyId: halden, contactId: raj, opportunityId: renewal });
+    assert.deepEqual(links(await update({ title: "Send Raj the order form" })), { companyId: halden, contactId: raj, opportunityId: renewal });
+    assert.deepEqual(links(await update({ contactId: null })), { companyId: halden, contactId: null, opportunityId: renewal });
+    assert.deepEqual(links(await update({ opportunityId: null, contactId: "" })), { companyId: halden, contactId: null, opportunityId: null });
+    assert.match(String(((await runTool(mark, "update_task", { taskId: id, contactId: jane })) as { error?: string }).error), /That contact belongs to a different company\./);
+    assert.deepEqual(links(await update({ contactId: jane, companyId: acme, completed: true })), { companyId: acme, contactId: jane, opportunityId: null });
+    assert.ok((await getTask(mark, id)).completedAt);
+    const events = await sql<{ changes: Record<string, unknown>; operation: string }>(
+      "select changes, operation from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at",
+      [id],
+    );
+    assert.ok(events.some((event) => event.operation === "update_task" && JSON.stringify(event.changes).includes(raj)));
+
+    const card = describeAction("update_task", { taskId: id, contactId: raj, companyId: halden, opportunityId: null }, new Map([[id, "Send Raj the order form"], [raj, "Raj Mehta"], [halden, "Halden Group"]]));
+    assert.deepEqual(card.lines, ["Person: Raj Mehta", "Company: Halden Group", "Opportunity: none"]);
+    assert.deepEqual(describeAction("update_task", { taskId: id, title: "Send it" }, new Map()).lines, ["Title: Send it"]);
+  });
+
+  it("keeps the time blocking rules when the assistant relinks a teammate's timed task", async () => {
+    const theirs = (await createTask(mark, { title: "Walk Sam through the rollout", dueAt: "2027-01-12T14:30", ownerId: sam.userId, companyId: null, contactId: null, opportunityId: null })).body.task;
+    assert.equal(theirs.dueHasTime, false);
+    const own = (await createTask(sam, { title: "Plan the Halden rollout", dueAt: "2027-01-12T14:30", ownerId: sam.userId, companyId: null, contactId: null, opportunityId: null })).body.task;
+    assert.equal(own.dueHasTime, true);
+    const relinked = ((await runTool(mark, "update_task", { taskId: own.id, contactId: raj, dueAt: "2027-01-13T09:00" })) as { task: Task }).task;
+    assert.deepEqual(links(relinked), { companyId: halden, contactId: raj, opportunityId: null });
+    assert.equal(relinked.dueHasTime, false);
+    assert.equal(relinked.dueDate, "2027-01-13");
+    const timed = (await updateTask(sam, own.id, { dueAt: "2027-01-13T09:00" })).body.task;
+    assert.equal(timed.dueHasTime, true);
+    assert.match(String(((await runTool(mark, "update_task", { taskId: own.id, durationMinutes: 45, opportunityId: renewal })) as { error?: string }).error), /Only the owner can change the length of a timed task\./);
+    assert.equal((await getTask(sam, own.id)).opportunityId, null);
   });
 
   it("links workflow tasks unless the step says none, and defaults to the run's contact", async () => {

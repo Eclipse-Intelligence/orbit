@@ -244,6 +244,12 @@ export async function runOnce(task: EvalTask, settings: RunSettings): Promise<Ru
   return oneWorldAtATime(() => runInWorld(task, settings));
 }
 
+export function pageFor(task: EvalTask, world: World) {
+  if (!task.page) return undefined;
+  const { path, search, focus } = task.page;
+  return { path: fill(path, world), search: search ?? "", selection: null, focus: focus ? { kind: focus.kind, id: world.id(focus.id) } : null };
+}
+
 async function runInWorld(task: EvalTask, settings: RunSettings): Promise<RunResult> {
   const started = Date.now();
   const context = newContext({ model: settings.gateway, judge: settings.judge, passthrough: settings.passthrough ?? realFetch });
@@ -258,7 +264,7 @@ async function runInWorld(task: EvalTask, settings: RunSettings): Promise<RunRes
     try {
       await sendMessage(
         world.actor,
-        { conversationId, message, model: settings.model, reasoning: settings.reasoning, webSearch: task.webSearch === true },
+        { conversationId, message, model: settings.model, reasoning: settings.reasoning, webSearch: task.webSearch === true, page: pageFor(task, world) },
         (event) => {
           if (event.type === "conversation") opened = event.conversation.id;
           if (event.type === "error") error = event.message;

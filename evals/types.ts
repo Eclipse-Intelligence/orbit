@@ -220,6 +220,8 @@ export type Fixture = {
 
 export type EarlierTurn = { role: "user" | "assistant"; content: string };
 
+export type PageSeed = { path: string; search?: string; focus?: { kind: "task" | "calendar_event" | "capture"; id: string } };
+
 export type EvalTask = {
   id: string;
   suite: Suite;
@@ -229,6 +231,7 @@ export type EvalTask = {
   webSearch?: boolean;
   fixture: Fixture;
   earlier?: EarlierTurn[];
+  page?: PageSeed;
   message: string;
   checks: Check[];
 };

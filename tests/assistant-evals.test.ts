@@ -8,7 +8,7 @@ import { installClock } from "@/evals/clock";
 import { evalDatabase } from "@/evals/guard";
 import { judgePrompt } from "@/evals/judge";
 import { gatewayPath, installOutside, usageFrom, type GatewayCall, type GatewayHandler } from "@/evals/outside";
-import { costOf, failureDetails, failures, runOnce, runSuite, stalePending, summaryTable, usableModel, type RunSettings } from "@/evals/run";
+import { costOf, failureDetails, failures, pageFor, runOnce, runSuite, stalePending, summaryTable, usableModel, type RunSettings } from "@/evals/run";
 import { ALL_TASKS, selectTasks } from "@/evals/tasks";
 import { CORE_CATEGORIES, SECURITY_CATEGORIES, type EvalTask, type Transcript, type World } from "@/evals/types";
 import { buildWorld, fill, londonDay } from "@/evals/world";
@@ -78,11 +78,11 @@ after(async () => {
 });
 
 describe("assistant evaluation tasks", () => {
-  it("defines 30 to 50 core tasks and a security suite, covering every job", () => {
+  it("defines 30 to 60 core tasks and a security suite, covering every job", () => {
     const ids = ALL_TASKS.map((item) => item.id);
     assert.equal(new Set(ids).size, ids.length);
     const core = ALL_TASKS.filter((item) => item.suite === "core");
-    assert.ok(core.length >= 30 && core.length <= 50, `${core.length} core tasks`);
+    assert.ok(core.length >= 30 && core.length <= 60, `${core.length} core tasks`);
     for (const category of CORE_CATEGORIES) assert.ok(core.some((item) => item.category === category), category);
     for (const category of SECURITY_CATEGORIES) assert.ok(ALL_TASKS.some((item) => item.suite === "security" && item.category === category), category);
     for (const item of ALL_TASKS) {
@@ -110,6 +110,7 @@ describe("assistant evaluation tasks", () => {
     for (const item of ALL_TASKS) {
       const world = await buildWorld(item.fixture, { workspace: item.workspace });
       assert.ok(!fill(item.message, world).includes("{{"), item.id);
+      if (item.page) assert.doesNotThrow(() => pageFor(item, world), item.id);
       for (const turn of item.earlier ?? []) fill(turn.content, world);
       for (const entry of item.checks) {
         if (entry.kind !== "check") continue;
@@ -331,6 +332,93 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
       settings(scripted([({ world }) => ({ calls: [{ name: "create_task", args: { title: "Call Wren Ashdown", contactId: world.id("contact:Wren Ashdown"), dueDate: londonDay({ weekday: 5 }) } }] })])),
     );
     assert.deepEqual(failed(wrong), ["proposes create_task"]);
+  });
+
+  it("shows the open task and passes a call outcome proposed as three cards in one turn", async () => {
+    const outcome = (next: Record<string, unknown>, complete = true): Step => ({ world }) => ({
+      content: "I'll log the call, close the task and set the next one.",
+      calls: [
+        { name: "log_activity", args: { type: "call", contactId: world.id("contact:Ansel Pike"), companyId: world.id("company:Copperleaf Digital"), title: "Call with Ansel", body: "He wants the proposal Friday." } },
+        ...(complete ? [{ name: "update_task", args: { taskId: world.id("task:Chase Ansel if he's gone quiet"), completed: true } }] : []),
+        { name: "create_task", args: { title: "Send Ansel the proposal", contactId: world.id("contact:Ansel Pike"), companyId: world.id("company:Copperleaf Digital"), ...next } },
+      ],
+    });
+    let seen = "";
+    let guide = "";
+    const result = await runOnce(
+      byId("write-call-outcome-on-open-task"),
+      settings(
+        scripted([
+          ({ body }) => {
+            seen = JSON.stringify(body.messages);
+            return { calls: [{ name: "guide", args: { topic: "tasks" } }] };
+          },
+          (call) => {
+            guide = JSON.stringify(call.body.messages);
+            return outcome({ dueDate: londonDay({ weekday: 5 }) })(call);
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(seen, /Task they have open: task \\"Chase Ansel if he's gone quiet\\" \[task id [0-9a-f-]{36}\]/);
+    assert.match(seen, /Task is about: person \\"Ansel Pike\\" \[person id [0-9a-f-]{36}\], job title \\"Founder\\", email \\"[^"\\]+\\"; company \\"Copperleaf Digital\\"/);
+    assert.match(seen, /Last activity with them: /);
+    assert.match(guide, /propose three cards in the same turn/);
+    assert.deepEqual(result.cards.map((item) => item.name), ["log_activity", "update_task", "create_task"]);
+    assert.deepEqual(result.cards[1].title, "Complete task: Chase Ansel if he's gone quiet");
+
+    const timed = await runOnce(byId("write-call-outcome-on-open-task"), settings(scripted([outcome({ dueAt: `${londonDay({ weekday: 5 })}T10:00` })])));
+    assert.deepEqual(failed(timed), ["proposes create_task"]);
+    const open = await runOnce(byId("write-call-outcome-on-open-task"), settings(scripted([outcome({ dueDate: londonDay({ weekday: 5 }) }, false)])));
+    assert.deepEqual(failed(open), ["proposes update_task"]);
+  });
+
+  it("finds the named person's open task for a call outcome without a page", async () => {
+    const result = await runOnce(
+      byId("write-call-outcome-named"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "search_records", args: { query: "Cyril Dunmore" } }] }),
+          ({ world }) => ({ calls: [{ name: "list_tasks", args: { contactId: world.id("contact:Cyril Dunmore") } }] }),
+          ({ world }) => ({
+            calls: [
+              { name: "log_activity", args: { type: "call", contactId: world.id("contact:Cyril Dunmore"), title: "Call with Cyril", body: "Keen, wants a proposal by Friday." } },
+              { name: "update_task", args: { taskId: world.id("task:Chase Sagebrook intro"), completed: true } },
+              { name: "create_task", args: { title: "Send Cyril the proposal", contactId: world.id("contact:Cyril Dunmore"), dueDate: londonDay({ weekday: 4 }) } },
+            ],
+          }),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    const note = await runOnce(
+      byId("write-call-outcome-named"),
+      settings(
+        scripted([
+          ({ world }) => ({
+            calls: [
+              { name: "log_activity", args: { type: "note", contactId: world.id("contact:Cyril Dunmore"), body: "Keen, wants a proposal by Friday." } },
+              { name: "update_task", args: { taskId: world.id("task:Chase Sagebrook intro"), completed: true } },
+              { name: "create_task", args: { title: "Send Cyril the proposal", contactId: world.id("contact:Cyril Dunmore"), dueDate: londonDay({ weekday: 5 }) } },
+            ],
+          }),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(note), ["proposes log_activity"]);
+  });
+
+  it("relinks a task with update_task and shows the new links on the card", async () => {
+    const relink = (args: (world: World) => Record<string, unknown>): Step => ({ world }) => ({ calls: [{ name: "update_task", args: { taskId: world.id("task:Send Quillfeather proposal"), ...args(world) } }] });
+    const result = await runOnce(
+      byId("write-relink-task-to-person-and-deal"),
+      settings(scripted([relink((world) => ({ contactId: world.id("contact:Felix Arden"), opportunityId: world.id("deal:Quillfeather content pilot") }))])),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.deepEqual(result.cards.map((item) => [item.title, item.lines]), [["Update task: Send Quillfeather proposal", ["Person: Felix Arden", "Opportunity: Quillfeather content pilot"]]]);
+    const half = await runOnce(byId("write-relink-task-to-person-and-deal"), settings(scripted([relink((world) => ({ contactId: world.id("contact:Felix Okoro") }))])));
+    assert.deepEqual(failed(half), ["proposes update_task"]);
   });
 
   it("reads team Chat without a card and posts to a room only through one", async () => {
