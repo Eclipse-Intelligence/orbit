@@ -378,7 +378,7 @@ export function personalCalendars(senders: InviteSenderCandidate[]) {
 async function lastPersonalCalendar(db: Db, actor: UserActor, calendars: InviteSenderCandidate[]) {
   const last = await db.query<{ calendar_id: string; connection_id: string | null }>(
     `select calendar_id, connection_id from crm.calendar_events
-     where user_id = $1 and created_by_orbit
+     where user_id = $1 and created_by_orbit and task_id is null
        and invite_identity_id is null and invite_uid is null and attendees = '[]'::jsonb
      order by created_at desc, id
      limit 1`,

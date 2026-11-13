@@ -38,6 +38,7 @@ import { isReminderMinutes, REMINDER_LOOKAHEAD_MS } from "@/lib/crm/reminder-opt
 import { directTaskSql } from "@/lib/crm/task-access";
 import { wallMinutes } from "@/lib/calendar-view";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
+import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { dayWindow, readDateTime } from "@/lib/time";
 
@@ -79,6 +80,7 @@ const TASK_SQL = `
     t.clickup_list_id,
     t.clickup_url,
     t.clickup_error,
+    t.calendar_event_ref,
     t.created_at,
     t.updated_at
   from crm.tasks t
@@ -121,6 +123,7 @@ type TaskRow = {
   clickup_list_id: string | null;
   clickup_url: string | null;
   clickup_error: string | null;
+  calendar_event_ref: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -177,6 +180,7 @@ function mapTask(row: TaskRow): Task {
     clickupListId: row.clickup_list_id,
     clickupUrl: row.clickup_url,
     clickupError: row.clickup_error,
+    inOutlook: Boolean(row.calendar_event_ref),
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
   };
@@ -273,6 +277,23 @@ function settleReminder(write: PreparedTask, current: { dueHasTime: boolean; rem
     throw new CrmError("invalid_input", "Pick a time for the reminder.", 400, { field: "remindMinutes" });
   }
   if (write.remindMinutes === undefined && current.remindMinutes !== null && current.remindMinutes !== undefined) write.remindMinutes = null;
+}
+
+function handsTimeToSomeoneElse(actor: Actor, nextOwner: string | null | undefined, previousOwner: string | null) {
+  if (!nextOwner || nextOwner === previousOwner) return false;
+  return actor.type !== "user" || actor.userId !== nextOwner;
+}
+
+function keepDayOnly(write: PreparedTask, current: { dueAt: string | null; dueHasTime: boolean }) {
+  const timed = write.dueHasTime ?? current.dueHasTime;
+  const dueAt = write.dueAt === undefined ? current.dueAt : write.dueAt;
+  if (!timed || !dueAt) return;
+  const day = taskDueDay(dueAt);
+  if (!day) return;
+  write.dueAt = dayStartIso(day);
+  write.dueHasTime = false;
+  write.scheduledBy = null;
+  write.remindMinutes = null;
 }
 
 function actorName(actor: Actor) {
@@ -372,8 +393,9 @@ export async function createTaskInDb(
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
-  settleReminder(write, { dueHasTime: false });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
+  if (handsTimeToSomeoneElse(actor, write.ownerId, null)) keepDayOnly(write, { dueAt: null, dueHasTime: false });
+  settleReminder(write, { dueHasTime: false });
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   let detectedLinks = Object.keys(options.detectedLinks ?? {});
   let detecting = false;
@@ -423,6 +445,7 @@ export async function createTaskInDb(
     );
     const saved = await readTask(db, inserted.rows[0].id);
     if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
+    queueTaskBlock(db, saved.id);
     const task = mapTask(saved);
     await recordAudit(db, actor, "task.created", "task", task.id, provenance, {
       after: task,
@@ -455,6 +478,9 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
+  if (!options.restoring && handsTimeToSomeoneElse(actor, write.ownerId, current.owner_id)) {
+    keepDayOnly(write, { dueAt: iso(current.due_at), dueHasTime: Boolean(current.due_has_time && current.due_at) });
+  }
   if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule)) {
     delete write.dueAt;
     delete write.dueHasTime;
@@ -519,6 +545,7 @@ async function applyTask(
     constraintError(error, "duplicate_task", "A matching task already exists.");
   }
   if (updated === 0) throw cannotChange(write);
+  queueTaskBlock(db, current.id);
   const saved = await readTask(db, current.id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
@@ -889,6 +916,7 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
   if (current.archived_at) return { task: mapTask(current) };
   const archived = await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
   if ((archived.rowCount ?? 0) === 0) throw cannotChange();
+  queueTaskBlock(db, id);
   const saved = await readTask(db, id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
@@ -905,6 +933,7 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   if (!current.archived_at) return { task: mapTask(current) };
   const restored = await db.query("update crm.tasks set archived_at = null where id = $1", [id]);
   if ((restored.rowCount ?? 0) === 0) throw cannotChange();
+  queueTaskBlock(db, id);
   const saved = await readTask(db, id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);

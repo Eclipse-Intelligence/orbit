@@ -371,7 +371,7 @@ function sourceToken(actor: UserActor, source: GraphSource, fetchImpl: typeof fe
   return writableSourceToken(actor, source, fetchImpl, writeFailure);
 }
 
-async function ensureDefaultCalendar(db: Db, actor: UserActor, connectionId: string) {
+export async function ensureDefaultCalendar(db: Db, actor: UserActor, connectionId: string) {
   const found = await db.query<{ id: string }>(
     `select id from crm.calendars
      where connection_id = $1 and is_default
@@ -974,7 +974,10 @@ type OrganisedRow = {
   invite_uid: string | null;
   invite_sequence: number;
   invite_notes: string | null;
+  task_id: string | null;
 };
+
+export const TASK_BLOCK_EVENT = "This is a task's block. Move or complete the task instead.";
 
 export const MEETING_GONE = "This meeting no longer exists in Outlook, so Orbit has taken it off your calendar.";
 
@@ -998,7 +1001,7 @@ async function readOwnEvent(actor: UserActor, eventId: string, verb: EventVerb) 
       `select e.id, e.calendar_id, c.provider_calendar_id, e.invite_hold_missing, e.provider_event_id, e.connection_id, e.account_id,
               e.subject, e.starts_at, e.ends_at, e.is_all_day, e.location,
               e.organizer, e.attendees, e.contact_ids, e.is_cancelled, e.created_by_orbit, e.response_status, e.show_as,
-              e.invite_identity_id, e.invite_uid, e.invite_sequence, e.invite_notes
+              e.invite_identity_id, e.invite_uid, e.invite_sequence, e.invite_notes, e.task_id
        from crm.calendar_events e
        left join crm.calendars c on c.id = e.calendar_id
        where e.id = $1 and e.user_id = $2`,
@@ -1060,6 +1063,7 @@ async function organisedEvent(actor: UserActor, eventId: string, verb: "cancel" 
   const found = await readOwnEvent(actor, eventId, verb);
   const row = found.event;
   if (!row) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  if (row.task_id) throw new CrmError("invalid_input", TASK_BLOCK_EVENT, 400);
   if (row.is_cancelled) {
     throw new CrmError("conflict", verb === "cancel" ? "This meeting is already cancelled." : "This meeting is cancelled.", 409);
   }

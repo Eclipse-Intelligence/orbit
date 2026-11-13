@@ -44,7 +44,7 @@ export async function calendarAlerts(actor: UserActor, options: { now?: number; 
               e.ical_uid, e.provider_event_id
        from crm.calendar_events e
        left join crm.calendar_event_links l on l.event_id = e.id
-       where e.user_id = $1 and not e.is_cancelled and not e.is_all_day
+       where e.user_id = $1 and not e.is_cancelled and not e.is_all_day and e.task_id is null
          and e.starts_at > $2::timestamptz - interval '2 minutes'
          and e.starts_at <= $2::timestamptz + make_interval(mins => $3)
        order by e.starts_at

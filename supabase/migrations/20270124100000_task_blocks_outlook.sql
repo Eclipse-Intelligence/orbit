@@ -22,28 +22,6 @@ alter table crm.task_outlook_queue enable row level security;
 alter table crm.task_outlook_queue force row level security;
 revoke all on crm.task_outlook_queue from anon, authenticated, crm_agent;
 
-create or replace function private.task_outlook_shape()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  if new.owner_id is not null
-    and new.due_has_time
-    and new.due_at is not null
-    and new.owner_id is distinct from private.session_user_id()
-    and (tg_op = 'INSERT' or new.owner_id is distinct from old.owner_id)
-  then
-    new.due_at := date_trunc('day', new.due_at at time zone 'Europe/London') at time zone 'Europe/London';
-    new.due_has_time := false;
-    new.scheduled_by := null;
-    new.remind_minutes := null;
-  end if;
-  return new;
-end;
-$$;
-
 create or replace function private.task_outlook_enqueue()
 returns trigger
 language plpgsql
@@ -81,13 +59,7 @@ begin
 end;
 $$;
 
-revoke all on function private.task_outlook_shape() from public;
 revoke all on function private.task_outlook_enqueue() from public;
-
-drop trigger if exists tasks_outlook_shape on crm.tasks;
-create trigger tasks_outlook_shape
-  before insert or update on crm.tasks
-  for each row execute function private.task_outlook_shape();
 
 drop trigger if exists tasks_outlook_enqueue on crm.tasks;
 create trigger tasks_outlook_enqueue
@@ -197,6 +169,16 @@ as $$
   select count(*)::integer from added
 $$;
 
+create or replace function private.task_blocks_pending(p_task_ids uuid[])
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select q.task_id from crm.task_outlook_queue q where q.task_id = any(p_task_ids)
+$$;
+
 create or replace function private.booking_busy(p_user_id uuid, p_from timestamptz, p_to timestamptz)
 returns table (starts_at timestamptz, ends_at timestamptz)
 language plpgsql
@@ -245,11 +227,13 @@ revoke all on function private.claim_task_blocks(uuid[], uuid, integer) from pub
 revoke all on function private.settle_task_block(uuid, timestamptz, text, boolean) from public;
 revoke all on function private.release_task_block(uuid) from public;
 revoke all on function private.queue_task_blocks(uuid, timestamptz) from public;
+revoke all on function private.task_blocks_pending(uuid[]) from public;
 revoke all on function private.booking_busy(uuid, timestamptz, timestamptz) from public;
 grant execute on function private.claim_task_blocks(uuid[], uuid, integer) to crm_app;
 grant execute on function private.settle_task_block(uuid, timestamptz, text, boolean) to crm_app;
 grant execute on function private.release_task_block(uuid) to crm_app;
 grant execute on function private.queue_task_blocks(uuid, timestamptz) to crm_app;
+grant execute on function private.task_blocks_pending(uuid[]) to crm_app;
 grant execute on function private.booking_busy(uuid, timestamptz, timestamptz) to crm_app;
 
 reset lock_timeout;
@@ -261,3 +245,7 @@ create unique index concurrently if not exists calendar_events_task_key
 create index concurrently if not exists tasks_owner_timed_idx
   on crm.tasks (owner_id, due_at)
   where due_has_time and completed_at is null and archived_at is null;
+
+create index concurrently if not exists tasks_calendar_event_ref_idx
+  on crm.tasks (calendar_event_ref)
+  where calendar_event_ref is not null;

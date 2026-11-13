@@ -98,6 +98,7 @@ function task(id: string, title: string, overrides: Partial<Task> = {}): Task {
     clickupListId: null,
     clickupUrl: null,
     clickupError: null,
+    inOutlook: false,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

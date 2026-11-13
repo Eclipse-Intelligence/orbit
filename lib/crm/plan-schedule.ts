@@ -79,7 +79,7 @@ export async function readPlanContextInDb(
   const rows = await db.query<MeetingRow>(
     `select subject, starts_at, ends_at, is_all_day, show_as, response_status
      from crm.calendar_events
-     where user_id = $1 and not is_cancelled
+     where user_id = $1 and not is_cancelled and task_id is null
        and (
          (starts_at < $3 and ends_at > $2)
          or exists (select 1 from unnest($4::timestamptz[], $5::timestamptz[]) as cover(starts, ends) where starts_at < cover.ends and ends_at > cover.starts)

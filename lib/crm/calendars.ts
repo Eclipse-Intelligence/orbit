@@ -251,6 +251,7 @@ type ItemRow = {
   invite_identity_id: string | null;
   invite_uid: string | null;
   contact_ids: string[] | null;
+  task_id: string | null;
 };
 
 function readResponse(value: unknown, email: string) {
@@ -287,7 +288,7 @@ export async function listCalendarItems(
               (e.online_meeting_url is null and l.join_url is not null) as join_from_description,
               e.organizer, e.attendees,
               e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
-              e.invite_identity_id, e.invite_uid, e.contact_ids,
+              e.invite_identity_id, e.invite_uid, e.contact_ids, e.task_id,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
@@ -306,6 +307,7 @@ export async function listCalendarItems(
        ) g on true
        where e.user_id = $1
          and not e.is_cancelled
+         and e.task_id is null
          and e.starts_at < $3
          and (e.ends_at > $2 or e.starts_at >= $2)
        order by e.starts_at, e.ends_at desc, e.id

@@ -194,6 +194,7 @@ export function readPeople(value: unknown) {
 }
 
 export type PersonalEventRow = {
+  task_id: string | null;
   created_by_orbit: boolean;
   invite_identity_id: string | null;
   invite_uid: string | null;
@@ -203,6 +204,7 @@ export type PersonalEventRow = {
 
 export function isPersonalEvent(row: PersonalEventRow, own: Set<string>) {
   return (
+    !row.task_id &&
     row.created_by_orbit &&
     !row.invite_identity_id &&
     !row.invite_uid &&
@@ -229,6 +231,7 @@ async function saveEvents(
   source: SyncSource,
   calendarId: string,
   events: CalendarEvent[],
+  fetchStartedAt: number,
 ) {
   let saved = 0;
   for (let index = 0; index < events.length; index += SAVE_BATCH) {
@@ -265,9 +268,9 @@ async function saveEvents(
        )
        on conflict (calendar_id, provider_event_id) do update set
          ical_uid = excluded.ical_uid,
-         subject = excluded.subject,
-         starts_at = excluded.starts_at,
-         ends_at = excluded.ends_at,
+         subject = case when crm.calendar_events.block_written_at >= $7 then crm.calendar_events.subject else excluded.subject end,
+         starts_at = case when crm.calendar_events.block_written_at >= $7 then crm.calendar_events.starts_at else excluded.starts_at end,
+         ends_at = case when crm.calendar_events.block_written_at >= $7 then crm.calendar_events.ends_at else excluded.ends_at end,
          is_all_day = excluded.is_all_day,
          is_cancelled = excluded.is_cancelled,
          location = excluded.location,
@@ -285,12 +288,27 @@ async function saveEvents(
         source.kind === "account" ? source.id : null,
         actor.userId,
         JSON.stringify(batch),
+        new Date(fetchStartedAt).toISOString(),
       ],
     );
     saved += result.rowCount ?? 0;
     await saveEventExtras(db, calendarId, events.slice(index, index + SAVE_BATCH));
   }
+  if (events.length > 0) await linkTaskBlocks(db, actor, calendarId, events.map((event) => event.providerEventId));
   return saved;
+}
+
+async function linkTaskBlocks(db: Db, actor: UserActor, calendarId: string, providerEventIds: string[]) {
+  await db.query(
+    `update crm.calendar_events e
+     set task_id = t.id, block_written_at = coalesce(e.block_written_at, clock_timestamp())
+     from crm.tasks t
+     where e.calendar_id = $1 and e.user_id = $2 and e.task_id is null
+       and e.provider_event_id = any($3::text[])
+       and t.calendar_event_ref = e.provider_event_id and t.owner_id = $2
+       and not exists (select 1 from crm.calendar_events x where x.task_id = t.id)`,
+    [calendarId, actor.userId, providerEventIds],
+  );
 }
 
 export async function saveEventExtras(
@@ -331,7 +349,7 @@ async function removeEvents(db: Db, calendarId: string, keep: string[] | null, w
   if (keep) {
     await db.query(
       `update crm.calendar_events set invite_hold_missing = true
-       where calendar_id = $1 and provider_event_id <> all($2::text[])
+       where calendar_id = $1 and provider_event_id <> all($2::text[]) and task_id is null
          and (invite_identity_id is not null or invite_uid is not null)
          and not invite_hold_missing and not (created_by_orbit and starts_at >= $3)`,
       [calendarId, keep, window.end.toISOString()],
@@ -340,12 +358,12 @@ async function removeEvents(db: Db, calendarId: string, keep: string[] | null, w
   const result = keep
     ? await db.query(
         `delete from crm.calendar_events
-         where calendar_id = $1 and provider_event_id <> all($2::text[])
+         where calendar_id = $1 and provider_event_id <> all($2::text[]) and task_id is null
            and invite_identity_id is null and invite_uid is null
            and not (created_by_orbit and starts_at >= $3)`,
         [calendarId, keep, window.end.toISOString()],
       )
-    : await db.query("delete from crm.calendar_events where calendar_id = $1 and ends_at <= $2", [
+    : await db.query("delete from crm.calendar_events where calendar_id = $1 and ends_at <= $2 and task_id is null", [
         calendarId,
         window.start.toISOString(),
       ]);
@@ -442,9 +460,10 @@ async function saveCalendarEvents(
   fetched: CalendarFetch,
   window: { start: Date; end: Date },
   now: number,
+  fetchStartedAt: number,
 ) {
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`calendar:${calendar.id}`]);
-  const saved = await saveEvents(db, actor, source, calendar.id, fetched.events);
+  const saved = await saveEvents(db, actor, source, calendar.id, fetched.events, fetchStartedAt);
   const removed = await removeEvents(
     db,
     calendar.id,
@@ -524,7 +543,7 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
      set contact_ids = '{}', company_ids = '{}'
      from crm.calendars c
      where c.id = e.calendar_id and not c.use_for_crm and not (e.created_by_orbit and e.connection_id is null)
-       and e.user_id = $1 ${filter}
+       and e.user_id = $1 and e.task_id is null ${filter}
        and (cardinality(e.contact_ids) > 0 or cardinality(e.company_ids) > 0)`,
     values,
   );
@@ -539,7 +558,7 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
     `select e.id, e.workspace_id, e.organizer, e.attendees, e.contact_ids, e.company_ids
      from crm.calendar_events e
      join crm.calendars c on c.id = e.calendar_id and (c.use_for_crm or (e.created_by_orbit and e.connection_id is null))
-     where e.user_id = $1 ${filter}`,
+     where e.user_id = $1 and e.task_id is null ${filter}`,
     values,
   );
   if (events.rows.length === 0) return 0;
@@ -718,12 +737,14 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
     });
     if (!listed.complete) outcome.complete = false;
     const targets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed));
+    if (source.kind === "connection") await flushBlocks(actor, source.id, token.scope ?? null, context);
     for (const calendar of targets) {
       if (context.deadline - Date.now() < CALENDAR_RESERVE_MS) {
         outcome.complete = false;
         break;
       }
       try {
+        const fetchStartedAt = Date.now();
         const fetched = await fetchCalendarView(token.accessToken, window, {
           fetchImpl: context.fetchImpl,
           deadline: context.deadline,
@@ -731,12 +752,13 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
           ownLink: context.ownLink,
         });
         const saved = await withActor(actor, (db) =>
-          saveCalendarEvents(db, actor, source, calendar, fetched, window, context.now),
+          saveCalendarEvents(db, actor, source, calendar, fetched, window, context.now, fetchStartedAt),
         );
         outcome.saved += saved.saved;
         outcome.removed += saved.removed;
         outcome.calendars += 1;
         if (!fetched.complete) outcome.complete = false;
+        if (source.kind === "connection") await readBackBlocks(actor, calendar.id, fetched, window, fetchStartedAt, context);
       } catch (error) {
         if (error instanceof CalendarScopeError) {
           await withActor(actor, (db) => markCalendarError(db, calendar.id, CALENDAR_NO_ACCESS));
@@ -760,6 +782,41 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
     const message = microsoftErrorText(error, SYNC_FAILED);
     await finishSource(actor, source, { error: message, scopeMissing: false });
     return { ...outcome, complete: false, error: message };
+  }
+}
+
+async function flushBlocks(actor: UserActor, connectionId: string, scope: string | null, context: SyncContext) {
+  try {
+    const { flushTaskBlocks } = await import("@/lib/crm/task-outlook");
+    const granted = scope ?? (await withActor(actor, (db) => readGrantedScopes(db, connectionId)));
+    await flushTaskBlocks(actor, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS });
+  } catch (error) {
+    console.error("Outlook task blocks failed", error);
+  }
+}
+
+async function readBackBlocks(
+  actor: UserActor,
+  calendarId: string,
+  fetched: CalendarFetch,
+  window: { start: Date; end: Date },
+  fetchStartedAt: number,
+  context: SyncContext,
+) {
+  try {
+    const { readBackTaskBlocks } = await import("@/lib/crm/task-outlook");
+    const { pushClickUpTask } = await import("@/lib/crm/clickup");
+    await readBackTaskBlocks(actor, {
+      calendarId,
+      events: fetched.events,
+      complete: fetched.complete,
+      window,
+      fetchStartedAt,
+      fetchImpl: context.fetchImpl,
+      pushClickUp: (owner, taskId) => pushClickUpTask(owner, taskId),
+    });
+  } catch (error) {
+    console.error("Reading task blocks back from Outlook failed", error);
   }
 }
 
@@ -837,6 +894,7 @@ async function syncFeedSource(actor: UserActor, source: SyncSource, context: Syn
           { events: parsed.events, complete: parsed.complete, pages: 1 },
           window,
           context.now,
+          Date.now(),
         ),
       );
       outcome.saved += saved.saved;
@@ -1079,7 +1137,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       `select e.ical_uid, e.subject, e.starts_at, e.organizer, e.attendees
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
-       where e.user_id = $1 and not e.is_cancelled
+       where e.user_id = $1 and not e.is_cancelled and e.task_id is null
        order by e.starts_at desc`,
       [actor.userId],
     );
