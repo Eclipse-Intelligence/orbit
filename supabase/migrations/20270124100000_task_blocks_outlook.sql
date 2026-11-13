@@ -78,7 +78,7 @@ returns table (
   completed_at timestamptz,
   archived_at timestamptz,
   calendar_event_ref text,
-  pending_at timestamptz,
+  pending_at text,
   event_id uuid,
   event_user_id uuid,
   provider_event_id text,
@@ -112,7 +112,7 @@ as $$
     returning q.task_id, q.pending_at
   )
   select t.id, t.workspace_id, t.title, t.due_at, t.due_has_time, t.duration_minutes, t.owner_id,
-         t.completed_at, t.archived_at, t.calendar_event_ref, c.pending_at,
+         t.completed_at, t.archived_at, t.calendar_event_ref, c.pending_at::text,
          e.id, e.user_id, e.provider_event_id, e.starts_at, e.ends_at, e.subject
   from claimed c
   join crm.tasks t on t.id = c.task_id
@@ -120,7 +120,7 @@ as $$
   order by c.pending_at
 $$;
 
-create or replace function private.settle_task_block(p_task_id uuid, p_pending_at timestamptz, p_ref text, p_set_ref boolean)
+create or replace function private.settle_task_block(p_task_id uuid, p_pending_at text, p_ref text, p_set_ref boolean)
 returns void
 language sql
 security definer
@@ -130,7 +130,7 @@ as $$
   set calendar_event_ref = p_ref
   where id = p_task_id and p_set_ref and calendar_event_ref is distinct from p_ref;
   delete from crm.task_outlook_queue
-  where task_id = p_task_id and pending_at = p_pending_at;
+  where task_id = p_task_id and pending_at = p_pending_at::timestamptz;
   update crm.task_outlook_queue
   set claimed_at = null
   where task_id = p_task_id;
@@ -224,13 +224,13 @@ end;
 $$;
 
 revoke all on function private.claim_task_blocks(uuid[], uuid, integer) from public;
-revoke all on function private.settle_task_block(uuid, timestamptz, text, boolean) from public;
+revoke all on function private.settle_task_block(uuid, text, text, boolean) from public;
 revoke all on function private.release_task_block(uuid) from public;
 revoke all on function private.queue_task_blocks(uuid, timestamptz) from public;
 revoke all on function private.task_blocks_pending(uuid[]) from public;
 revoke all on function private.booking_busy(uuid, timestamptz, timestamptz) from public;
 grant execute on function private.claim_task_blocks(uuid[], uuid, integer) to crm_app;
-grant execute on function private.settle_task_block(uuid, timestamptz, text, boolean) to crm_app;
+grant execute on function private.settle_task_block(uuid, text, text, boolean) to crm_app;
 grant execute on function private.release_task_block(uuid) to crm_app;
 grant execute on function private.queue_task_blocks(uuid, timestamptz) to crm_app;
 grant execute on function private.task_blocks_pending(uuid[]) to crm_app;

@@ -47,7 +47,7 @@ export type BlockRow = {
   completed_at: Date | string | null;
   archived_at: Date | string | null;
   calendar_event_ref: string | null;
-  pending_at: Date | string;
+  pending_at: string;
   event_id: string | null;
   event_user_id: string | null;
   provider_event_id: string | null;
@@ -100,8 +100,8 @@ export function planBlock(row: BlockRow, now: number): BlockPlan {
   return { kind: "write", userId: row.owner_id, start: new Date(start), end: new Date(end), create: false };
 }
 
-export function blockTransactionId(taskId: string, pendingAt: Date | string) {
-  const hex = createHash("sha256").update(`${taskId}|${new Date(pendingAt).toISOString()}`).digest("hex");
+export function blockTransactionId(taskId: string, pendingAt: string) {
+  const hex = createHash("sha256").update(`${taskId}|${pendingAt}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
@@ -180,7 +180,7 @@ function graphFailure(error: unknown): "orbit_only" | "gone" | "refused" | "retr
 async function settle(row: BlockRow, ref: string | null | undefined, options: { requeue?: boolean } = {}) {
   await query("select private.settle_task_block($1, $2, $3, $4)", [
     row.task_id,
-    options.requeue ? null : new Date(row.pending_at).toISOString(),
+    options.requeue ? null : row.pending_at,
     ref ?? null,
     ref !== undefined,
   ]);
