@@ -452,6 +452,8 @@ for (const [device, viewport] of [
     const call = row.locator('a:visible[href^="tel:"], a:visible[href^="msteams:"]').first();
     const callHref = (await call.getAttribute("href").catch(() => null)) ?? "";
     check(`${device} Call rings from the phone`, callHref.startsWith("tel:"), callHref);
+    await call.evaluate((link) => link.scrollIntoView({ block: "center" })).catch(() => undefined);
+    await page.waitForTimeout(300);
     const callArea = await tapArea(call);
     check(`${device} Call is easy to tap`, Boolean(callArea && callArea.height >= 43 && callArea.owns), callArea ? `${Math.round(callArea.height)}px${callArea.owns ? "" : ", covered"}` : "missing");
     check(`${device} Call leads on a call task`, ((await call.getAttribute("class").catch(() => "")) ?? "").includes("bg-primary"));
