@@ -1054,6 +1054,10 @@ for (const width of [1100, 1280, 1440]) {
         check(`${device} Plan leaves a block placed by hand alone`, (await planPanel.locator(`[data-plan-entry="${block.id}"]`).count()) === 0 && (await card.isVisible().catch(() => false)));
         check(`${device} Plan lists the overdue task with Move and Leave`, await planPanel.locator(`[data-plan-overdue="${block.overdueId}"]`).getByRole("button", { name: "Leave" }).isVisible().catch(() => false));
         check(`${device} Plan preview no overflow`, await page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1));
+        const apply = planPanel.getByRole("button", { name: "Apply", exact: true });
+        const applyBox = await apply.boundingBox();
+        const applyHit = applyBox ? await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("button")?.textContent ?? "", { x: applyBox.x + applyBox.width / 2, y: applyBox.y + applyBox.height / 2 }) : "";
+        check(`${device} Apply isn't covered by quick add or Ask Orbit`, applyHit.includes("Apply"), applyHit);
         await page.screenshot({ path: path.join(out, `desktop-${width}-plan.png`) });
         const before = (await planPanel.locator("[data-plan-entry]").count());
         await proposedPlain.getByRole("button", { name: /^Remove .* from the plan$/ }).click().catch(() => undefined);

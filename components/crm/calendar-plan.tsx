@@ -120,6 +120,7 @@ export default function PlanPanel({
     <aside
       aria-label="Plan"
       data-plan-panel=""
+      data-quick-add-hide=""
       data-task-drop=""
       className="border-border bg-background hidden w-[320px] shrink-0 flex-col border-l md:flex lg:w-[372px]"
     >
