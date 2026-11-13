@@ -698,6 +698,18 @@ for (const [device, viewport] of [
   check(`${device} working hours list every working day evenly`, starts.length > 0 && starts.length === workingDays && new Set(starts).size === 1, JSON.stringify(starts));
   check(`${device} working hours no overflow`, await noHorizontalScroll());
   await shot("working-hours");
+  const learned = page.getByRole("region", { name: "Learned times" });
+  await learned.scrollIntoViewIfNeeded().catch(() => undefined);
+  const strips = learned.getByRole("img");
+  check(`${device} learned times shows calls, emails and other`, (await learned.getByRole("listitem").count().catch(() => 0)) === 3 && (await strips.count().catch(() => 0)) === 3);
+  const cells = await strips
+    .first()
+    .evaluate((strip) => [...strip.querySelectorAll("span[title]")].map((cell) => cell.getBoundingClientRect()).map((box) => ({ width: Math.round(box.width), height: Math.round(box.height) })))
+    .catch(() => []);
+  check(`${device} learned times strip shows 5 days of 20 half hours`, cells.length === 100 && cells.every((cell) => cell.width >= 6 && cell.height >= 10), JSON.stringify(cells[0] ?? null));
+  check(`${device} learned times Reset`, await visible(learned.getByRole("button", { name: "Reset" })));
+  check(`${device} learned times no overflow`, await noHorizontalScroll());
+  await shot("learned-times");
   await goto(page, `${base}/calendar`);
   await page.waitForTimeout(800);
   const block = await seedBlock(page, device);
