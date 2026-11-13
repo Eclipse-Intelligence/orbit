@@ -186,7 +186,6 @@ async function touchDrag(page, selector, to, options = {}) {
         await sleep(120);
         const ring = Boolean(document.querySelector(".animate-press-fill"));
         await sleep(holdMs);
-        const drawerOpen = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].some((node) => (node.textContent ?? "").includes("Choose which calendars"));
         const target = to ?? { x: from.x, y: from.y };
         for (let step = 1; step <= 12; step += 1) {
           fire("touchmove", from.x + ((target.x - from.x) * step) / 12, from.y + ((target.y - from.y) * step) / 12);
@@ -195,9 +194,12 @@ async function touchDrag(page, selector, to, options = {}) {
         await sleep(200);
         const label = document.querySelector("[data-drop-label]")?.textContent ?? "";
         const lifted = Boolean(document.querySelector("[data-task-lifted-card]"));
+        const drawerOpen = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].some((node) => (node.textContent ?? "").includes("Choose which calendars"));
         fire("touchend", target.x, target.y);
+        const clicked = element.isConnected;
+        if (clicked) element.click();
         await sleep(300);
-        return { ring, drawerOpen, label, lifted };
+        return { ring, drawerOpen, label, lifted, clicked };
       },
       { selector, to, holdMs: options.holdMs ?? 450, fromTop: options.fromTop ?? false, quick: options.quick ?? false },
     )
@@ -767,29 +769,46 @@ for (const [device, viewport] of [
       await page.keyboard.press("Escape");
       await page.waitForTimeout(400);
       if (device === "ipad") {
+        console.log(`note ${device} the drag checks below use synthetic touch events, not a real iPad; check on an iPad before relying on them`);
+        const synthetic = (name) => `${device} synthetic touch: ${name}`;
         await goto(page, `${base}/calendar?date=${block.day}&view=day`);
         await page.waitForTimeout(1500);
         const target = await gridPoint(page, block.day, 12 * 60 + 8);
         const lifted = await touchDrag(page, `[data-task-block="${block.id}"] button[data-task-id]`, target, { fromTop: true });
-        check(`${device} holding a block fills the ring, then lifts it`, Boolean(lifted?.ring && lifted.lifted), JSON.stringify(lifted));
-        check(`${device} the slot label shows the new time`, (lifted?.label ?? "").includes("12:00 to 12:30"), lifted?.label);
+        check(synthetic("holding a block fills the ring, then lifts it"), Boolean(lifted && !lifted.error && lifted.ring && lifted.lifted), JSON.stringify(lifted));
+        check(synthetic("the slot label shows the new time"), (lifted?.label ?? "").includes("12:00 to 12:30"), lifted?.label);
         await page.waitForTimeout(1200);
         const moved = await readTask(block.id);
-        check(`${device} long-press drag moves the block`, Boolean(moved?.dueHasTime && londonClock(moved.dueAt) === "12:00" && moved.durationMinutes === 30 && moved.scheduledBy === "person"), timing(moved));
-        check(`${device} dropping a block doesn't open the task`, !(await visible(page.getByRole("dialog", { name: "Task" }))));
+        check(synthetic("long-press drag moves the block"), Boolean(moved?.dueHasTime && londonClock(moved.dueAt) === "12:00" && moved.durationMinutes === 30 && moved.scheduledBy === "person"), timing(moved));
+        check(synthetic("the click after a drop doesn't open the task"), Boolean(lifted?.clicked) && !(await visible(page.getByRole("dialog", { name: "Task" }))), lifted?.clicked ? "" : "no click sent");
         await shot("calendar-long-press-drop");
         const quick = await touchDrag(page, `[data-task-block="${block.id}"] button[data-task-id]`, null, { quick: true });
         await page.waitForTimeout(600);
-        check(`${device} a quick touch on a block doesn't lift it`, Boolean(quick && !quick.lifted && londonClock((await readTask(block.id))?.dueAt) === "12:00"), JSON.stringify(quick));
+        check(synthetic("a quick touch on a block doesn't lift it"), Boolean(quick && !quick.error && !quick.lifted && londonClock((await readTask(block.id))?.dueAt) === "12:00"), JSON.stringify(quick));
         await page.getByRole("button", { name: "Calendars and tasks" }).tap();
         await page.waitForTimeout(700);
+        const before = await readTask(block.plainId);
+        const held = await touchDrag(page, `[role="dialog"] [data-task-id="${block.plainId}"]`, null);
+        await page.waitForTimeout(900);
+        const after = await readTask(block.plainId);
+        check(
+          synthetic("holding a task in the drawer and letting go saves nothing and keeps the drawer"),
+          Boolean(held && !held.error && held.drawerOpen && timing(after) === timing(before)),
+          `${JSON.stringify(held)} ${timing(after)}`,
+        );
+        if (await visible(page.getByRole("dialog", { name: "Task" }))) {
+          await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+          await page.waitForTimeout(600);
+          await page.getByRole("button", { name: "Calendars and tasks" }).tap();
+          await page.waitForTimeout(700);
+        }
         const toGrid = await gridPoint(page, block.day, 15 * 60 + 8);
         const carried = await touchDrag(page, `[role="dialog"] [data-task-id="${block.plainId}"]`, toGrid);
         await page.waitForTimeout(1200);
-        check(`${device} holding a task in the drawer closes the drawer and carries it onto the grid`, Boolean(carried && !carried.error && !carried.drawerOpen && carried.lifted), JSON.stringify(carried));
+        check(synthetic("moving a held task out of the drawer closes it and carries the task onto the grid"), Boolean(carried && !carried.error && !carried.drawerOpen && carried.lifted), JSON.stringify(carried));
         const dropped = await readTask(block.plainId);
-        check(`${device} the carried task lands at its time`, Boolean(dropped?.dueHasTime && dropped.dueDate === block.day && londonClock(dropped.dueAt) === "15:00" && dropped.scheduledBy === "person"), timing(dropped));
-        check(`${device} the carried task shows as a block`, await visible(page.locator(`[data-task-block="${block.plainId}"]`).filter({ visible: true })));
+        check(synthetic("the carried task lands at its time"), Boolean(dropped?.dueHasTime && dropped.dueDate === block.day && londonClock(dropped.dueAt) === "15:00" && dropped.scheduledBy === "person"), timing(dropped));
+        check(synthetic("the carried task shows as a block"), await visible(page.locator(`[data-task-block="${block.plainId}"]`).filter({ visible: true })));
         const scrolled = await page.evaluate(async () => {
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
           const scroller = [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0);
@@ -829,7 +848,7 @@ for (const [device, viewport] of [
           fire("touchend", x, area.top - 40);
           return { before, after, edge };
         });
-        check(`${device} dragging to the grid's bottom edge scrolls it`, Boolean(scrolled && scrolled.after > scrolled.before && scrolled.edge), JSON.stringify(scrolled));
+        check(synthetic("dragging to the grid's bottom edge scrolls it"), Boolean(scrolled && scrolled.after > scrolled.before && scrolled.edge), JSON.stringify(scrolled));
       }
     } finally {
       await dropTasks(block.ids);
@@ -978,8 +997,10 @@ for (const width of [1100, 1280, 1440]) {
         await page.waitForTimeout(1500);
         const listed = await readTask(block.plainId);
         check(`${device} the drop gives the task its day, time and duration, placed by you`, Boolean(listed?.dueHasTime && listed.dueDate === block.day && londonClock(listed.dueAt) === "14:00" && listed.durationMinutes === 15 && listed.scheduledBy === "person"), timing(listed));
-        const from = await gridPoint(page, block.day, 10 * 60 + 8);
-        const to = await gridPoint(page, block.day, 11 * 60 + 8);
+        const hourDown = (await gridPoint(page, block.day, 11 * 60)).y - (await gridPoint(page, block.day, 10 * 60)).y;
+        const blockBox = await card.boundingBox();
+        const from = { x: blockBox.x + blockBox.width / 2, y: blockBox.y + 8 };
+        const to = { x: from.x, y: from.y + hourDown };
         const moving = await mouseDrag(page, from, to, async () => ({
           ghost: await card.getAttribute("data-task-lifted").then((value) => value !== null).catch(() => false),
           label: (await page.locator("[data-drop-label]").textContent().catch(() => "")) ?? "",
@@ -1002,12 +1023,19 @@ for (const width of [1100, 1280, 1440]) {
         await page.waitForTimeout(1500);
         const resized = await readTask(block.id);
         check(`${device} resizing changes the duration in 15 minute steps`, resized?.durationMinutes === 60 && londonClock(resized.dueAt) === "11:00", timing(resized));
+        await card.hover();
+        await card.locator("[data-task-resize]").click();
+        await page.waitForTimeout(900);
+        const handlePanel = page.getByRole("dialog", { name: "Task" });
+        check(`${device} clicking the resize handle opens the task`, await handlePanel.isVisible().catch(() => false));
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(600);
         const cardBox = await card.boundingBox();
         const menuBox = await menu.boundingBox();
         const back =
           cardBox && menuBox
             ? await mouseDrag(page, { x: cardBox.x + 30, y: cardBox.y + 10 }, { x: menuBox.x + menuBox.width / 2, y: menuBox.y + Math.min(240, menuBox.height / 2) }, async () => {
-                const zone = page.locator("[data-task-drop-zone]");
+                const zone = page.locator("[data-task-drop-zone]").filter({ visible: true }).first();
                 const seen = { zone: await zone.isVisible().catch(() => false), text: (await zone.textContent().catch(() => "")) ?? "" };
                 await page.screenshot({ path: path.join(out, `desktop-${width}-drop-on-list.png`) });
                 return seen;

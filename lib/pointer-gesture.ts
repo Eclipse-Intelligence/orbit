@@ -4,7 +4,7 @@ const TOUCH_SLOP = 8;
 
 export type GestureResult = "tap" | "drop" | "cancel";
 
-type GestureStart = { pointerType: string; pointerId: number; clientX: number; clientY: number };
+type GestureStart = { pointerType: string; pointerId: number; clientX: number; clientY: number; ctrlKey?: boolean };
 
 type GestureHandlers = {
   start: () => void;
@@ -14,8 +14,9 @@ type GestureHandlers = {
 
 type GestureOptions = { touchTarget?: EventTarget | null };
 
-export function startPointerGesture(event: GestureStart, handlers: GestureHandlers, options: GestureOptions = {}) {
+export function startPointerGesture(event: GestureStart, handlers: GestureHandlers, options: GestureOptions = {}): (() => void) | null {
   const touch = event.pointerType === "touch";
+  if (!touch && event.ctrlKey) return null;
   const touchTarget = touch ? (options.touchTarget ?? null) : null;
   let seen: Event | null = null;
   const startX = event.clientX;
@@ -50,7 +51,12 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
   }
 
   function onPointerMove(move: PointerEvent) {
-    if (move.pointerId === event.pointerId) track(move.clientX, move.clientY);
+    if (move.pointerId !== event.pointerId) return;
+    if (move.buttons === 0) {
+      finish("cancel");
+      return;
+    }
+    track(move.clientX, move.clientY);
   }
 
   function onPointerUp(up: PointerEvent) {
@@ -111,8 +117,9 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     touchTarget?.addEventListener("touchmove", onTouchMove as EventListener, { passive: false });
     touchTarget?.addEventListener("touchend", onTouchEnd as EventListener);
     touchTarget?.addEventListener("touchcancel", onTouchCancel);
-    return;
+  } else {
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
   }
-  window.addEventListener("pointermove", onPointerMove);
-  window.addEventListener("pointerup", onPointerUp);
+  return () => finish("cancel");
 }

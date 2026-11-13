@@ -21,16 +21,13 @@ import CalendarEventDetails, {
 } from "@/components/crm/calendar-event-details";
 import {
   allDayKeys,
+  dateKey,
   DAY_MINUTES,
   daySpan,
   packColumns,
   wallMinutes,
 } from "@/lib/calendar-view";
-import {
-  GridTaskBlock,
-  type TaskBlockDrag,
-  type TaskBlockHandlers,
-} from "@/components/crm/calendar-task-block";
+import { GridTaskBlock, type TaskBlockDrag, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import type { TaskDrag } from "@/hooks/use-task-drag";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
@@ -86,26 +83,13 @@ function hourLabel(hour: number) {
 }
 
 const SLOT_LABEL_PX = 30;
+const MINUTE_MS = 60_000;
 
-function DropSlot({
-  slot,
-  mode,
-  perMinute,
-  last,
-}: {
-  slot: GridSlot;
-  mode: TaskDrag["mode"];
-  perMinute: number;
-  last: boolean;
-}) {
+function DropSlot({ slot, mode, perMinute, last }: { slot: GridSlot; mode: TaskDrag["mode"]; perMinute: number; last: boolean }) {
   const top = slot.minutes * perMinute + 1;
   const height = slot.durationMinutes * perMinute - 2;
-  const labelTop =
-    mode === "resize"
-      ? top + height + 4
-      : top - SLOT_LABEL_PX >= 0
-        ? top - SLOT_LABEL_PX
-        : top + height + 4;
+  const below = top + height + 4;
+  const labelTop = mode === "resize" ? below : top - SLOT_LABEL_PX >= 0 ? top - SLOT_LABEL_PX : below;
   return (
     <>
       {mode === "move" && (
@@ -134,14 +118,36 @@ function DropSlot({
             <span>
               {slotDayLabel(slot.day)} {slotRange(slot)}
             </span>
-            <span className="text-subtle font-normal">
-              · {durationLabel(slot.durationMinutes)}
-            </span>
+            <span className="text-subtle font-normal">· {durationLabel(slot.durationMinutes)}</span>
           </>
         )}
       </span>
     </>
   );
+}
+
+function EdgeScroll({ direction }: { direction: -1 | 1 }) {
+  return (
+    <div aria-hidden className={cn("pointer-events-none sticky z-[15] h-0", direction > 0 ? "bottom-0" : "top-0")} data-drag-edge={direction > 0 ? "bottom" : "top"}>
+      <div
+        className={cn(
+          "absolute inset-x-0 flex h-11 items-center justify-center gap-1.5 text-[#cfc8ff]",
+          direction > 0
+            ? "bottom-0 bg-linear-to-t from-[color-mix(in_srgb,var(--violet)_26%,transparent)] to-transparent"
+            : "top-0 bg-linear-to-b from-[color-mix(in_srgb,var(--violet)_26%,transparent)] to-transparent",
+        )}
+      >
+        <ChevronDownIcon className={cn("size-3", direction < 0 && "rotate-180")} />
+        <ChevronDownIcon className={cn("size-3", direction < 0 && "rotate-180")} />
+      </div>
+    </div>
+  );
+}
+
+function resizedBlock(block: TaskBlock, drag: TaskDrag | null) {
+  if (drag?.mode !== "resize" || drag.task.id !== block.task.id || !drag.slot) return block;
+  const endsAt = new Date(new Date(block.startsAt).getTime() + drag.slot.durationMinutes * MINUTE_MS).toISOString();
+  return { ...block, durationMinutes: drag.slot.durationMinutes, endsAt };
 }
 
 function EventBlock({
@@ -286,16 +292,14 @@ export default function CalendarGrid({
     string,
     { item: CalendarItem; top: number; bottom: number }[]
   >();
-  const tasked = new Map<
-    string,
-    { block: TaskBlock; top: number; bottom: number }[]
-  >();
+  const tasked = new Map<string, { block: TaskBlock; top: number; bottom: number }[]>();
   for (const key of days) {
     allDay.set(key, []);
     timed.set(key, []);
     tasked.set(key, []);
   }
-  for (const block of taskHandlers ? blocks : []) {
+  for (const shownBlock of taskHandlers ? blocks : []) {
+    const block = resizedBlock(shownBlock, drag);
     for (const key of days) {
       const span = daySpan(block.startsAt, block.endsAt, key);
       if (span) tasked.get(key)!.push({ block, ...span });
@@ -378,140 +382,147 @@ export default function CalendarGrid({
           </>
         )}
       </div>
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        {drag?.scrolling ? (
-          <div
-            aria-hidden
-            data-drag-edge={drag.scrolling > 0 ? "bottom" : "top"}
-            className={cn(
-              "pointer-events-none absolute inset-x-0 z-[15] flex h-11 items-center justify-center gap-1.5 text-[#cfc8ff]",
-              drag.scrolling > 0
-                ? "bottom-0 bg-linear-to-t from-[color-mix(in_srgb,var(--violet)_26%,transparent)] to-transparent"
-                : "top-0 bg-linear-to-b from-[color-mix(in_srgb,var(--violet)_26%,transparent)] to-transparent",
-            )}
-          >
-            <ChevronDownIcon
-              className={cn("size-3", drag.scrolling < 0 && "rotate-180")}
-            />
-            <ChevronDownIcon
-              className={cn("size-3", drag.scrolling < 0 && "rotate-180")}
-            />
-          </div>
-        ) : null}
+      <div
+        ref={scroller}
+        className="min-h-0 flex-1 overflow-y-auto pb-20 outline-none [scrollbar-gutter:stable]"
+        tabIndex={-1}
+        data-calendar-scroller=""
+      >
+        {drag?.scrolling === -1 && <EdgeScroll direction={-1} />}
         <div
-          ref={scroller}
-          className="min-h-0 flex-1 overflow-y-auto pb-20 outline-none [scrollbar-gutter:stable]"
-          tabIndex={-1}
-          data-calendar-scroller=""
+          className="relative grid"
+          style={{ ...columns, height: DAY_MINUTES * perMinute }}
         >
-          <div
-            className="relative grid"
-            style={{ ...columns, height: DAY_MINUTES * perMinute }}
-          >
-            <div className="relative">
-              {HOURS.map((hour) =>
-                hour === 0 ? null : (
-                  <span
+          <div className="relative">
+            {HOURS.map((hour) =>
+              hour === 0 ? null : (
+                <span
+                  key={hour}
+                  className="caption-style text-subtle absolute right-2 -translate-y-1/2 tabular-nums"
+                  style={{ top: hour * hourHeight }}
+                >
+                  {hourLabel(hour)}
+                </span>
+              ),
+            )}
+          </div>
+          {days.map((key) => {
+            const entries = timed.get(key) ?? [];
+            const taskEntries = tasked.get(key) ?? [];
+            const slots = packColumns(
+              [
+                ...entries.map((entry) => ({
+                  id: entry.item.id,
+                  top: entry.top,
+                  bottom: Math.max(entry.bottom, entry.top + MIN_MINUTES),
+                })),
+                ...taskEntries.map((entry) => ({
+                  id: entry.block.id,
+                  top: entry.top,
+                  bottom: Math.max(entry.bottom, entry.top + MIN_TASK_MINUTES),
+                })),
+              ],
+              0,
+            );
+            return (
+              <div
+                key={key}
+                className={cn(
+                  "border-border relative border-l",
+                  onSlot && "cursor-copy",
+                )}
+                data-day={key}
+                onPointerDownCapture={() => {
+                  dismissing.current = openPopovers.current > 0;
+                }}
+                onClick={
+                  onSlot
+                    ? (event) => {
+                        if (
+                          dismissing.current ||
+                          (event.target as HTMLElement).closest(
+                            "button, a, [data-task-block]",
+                          )
+                        )
+                          return;
+                        const box = event.currentTarget.getBoundingClientRect();
+                        onSlot(
+                          key,
+                          snapTime((event.clientY - box.top) / perMinute),
+                        );
+                      }
+                    : undefined
+                }
+              >
+                {HOURS.map((hour) => (
+                  <div
                     key={hour}
-                    className="caption-style text-subtle absolute right-2 -translate-y-1/2 tabular-nums"
+                    aria-hidden
+                    className="absolute inset-x-0"
                     style={{ top: hour * hourHeight }}
                   >
-                    {hourLabel(hour)}
-                  </span>
-                ),
-              )}
-            </div>
-            {days.map((key) => {
-              const entries = timed.get(key) ?? [];
-              const taskEntries = tasked.get(key) ?? [];
-              const slots = packColumns(
-                [
-                  ...entries.map((entry) => ({
-                    id: entry.item.id,
-                    top: entry.top,
-                    bottom: Math.max(entry.bottom, entry.top + MIN_MINUTES),
-                  })),
-                  ...taskEntries.map((entry) => ({
-                    id: entry.block.id,
-                    top: entry.top,
-                    bottom: Math.max(
-                      entry.bottom,
-                      entry.top + MIN_TASK_MINUTES,
-                    ),
-                  })),
-                ],
-                0,
-              );
-              return (
-                <div
-                  key={key}
-                  className={cn(
-                    "border-border relative border-l",
-                    onSlot && "cursor-copy",
-                  )}
-                  data-day={key}
-                  onPointerDownCapture={() => {
-                    dismissing.current = openPopovers.current > 0;
-                  }}
-                  onClick={
-                    onSlot
-                      ? (event) => {
-                          if (
-                            dismissing.current ||
-                            (event.target as HTMLElement).closest(
-                              "button, a, [data-task-block]",
-                            )
-                          )
-                            return;
-                          const box =
-                            event.currentTarget.getBoundingClientRect();
-                          onSlot(
-                            key,
-                            snapTime((event.clientY - box.top) / perMinute),
-                          );
-                        }
-                      : undefined
-                  }
-                >
-                  {HOURS.map((hour) => (
                     <div
-                      key={hour}
-                      aria-hidden
-                      className="absolute inset-x-0"
-                      style={{ top: hour * hourHeight }}
-                    >
-                      <div
-                        className={cn(
-                          "border-border border-t",
-                          hour === 0 && "border-transparent",
-                        )}
-                      />
-                      <div
-                        className="border-border/60 border-t border-dashed"
-                        style={{ marginTop: hourHeight / 2 - 1 }}
-                      />
-                    </div>
-                  ))}
-                  {entries.map((entry) => {
-                    const slot = slots.get(entry.item.id) ?? {
+                      className={cn(
+                        "border-border border-t",
+                        hour === 0 && "border-transparent",
+                      )}
+                    />
+                    <div
+                      className="border-border/60 border-t border-dashed"
+                      style={{ marginTop: hourHeight / 2 - 1 }}
+                    />
+                  </div>
+                ))}
+                {entries.map((entry) => {
+                  const slot = slots.get(entry.item.id) ?? {
+                    column: 0,
+                    columns: 1,
+                  };
+                  const minutes = Math.max(
+                    entry.bottom - entry.top,
+                    MIN_MINUTES,
+                  );
+                  const height = minutes * perMinute - 2;
+                  return (
+                    <EventBlock
+                      key={entry.item.id}
+                      item={entry.item}
+                      calendar={calendars.get(entry.item.calendarId) ?? null}
+                      others={entry.item.alsoIn.flatMap(
+                        (id) => calendars.get(id) ?? [],
+                      )}
+                      compact={height < COMPACT_BELOW_PX}
+                      onOpenChange={trackPopover}
+                      style={{
+                        top: entry.top * perMinute + 1,
+                        height,
+                        left: `calc(${(slot.column / slot.columns) * 100}% + 2px)`,
+                        width: `calc(${100 / slot.columns}% - 4px)`,
+                      }}
+                    />
+                  );
+                })}
+                {taskHandlers &&
+                  taskEntries.map((entry) => {
+                    const slot = slots.get(entry.block.id) ?? {
                       column: 0,
                       columns: 1,
                     };
-                    const minutes = Math.max(
-                      entry.bottom - entry.top,
-                      MIN_MINUTES,
-                    );
-                    const height = minutes * perMinute - 2;
+                    const height =
+                      Math.max(entry.bottom - entry.top, MIN_TASK_MINUTES) *
+                        perMinute -
+                      2;
                     return (
-                      <EventBlock
-                        key={entry.item.id}
-                        item={entry.item}
-                        calendar={calendars.get(entry.item.calendarId) ?? null}
-                        others={entry.item.alsoIn.flatMap(
-                          (id) => calendars.get(id) ?? [],
-                        )}
-                        compact={height < COMPACT_BELOW_PX}
-                        onOpenChange={trackPopover}
+                      <GridTaskBlock
+                        key={entry.block.id}
+                        block={entry.block}
+                        height={height}
+                        onOpen={taskHandlers.onOpen}
+                        onComplete={taskHandlers.onComplete}
+                        drag={blockDrag}
+                        lifted={drag?.mode === "move" && drag.task.id === entry.block.task.id}
+                        resizing={drag?.mode === "resize" && drag.task.id === entry.block.task.id}
+                        resizable={dateKey(new Date(entry.block.endsAt).getTime() - 1) === key}
                         style={{
                           top: entry.top * perMinute + 1,
                           height,
@@ -521,80 +532,25 @@ export default function CalendarGrid({
                       />
                     );
                   })}
-                  {taskHandlers &&
-                    taskEntries.map((entry) => {
-                      const slot = slots.get(entry.block.id) ?? {
-                        column: 0,
-                        columns: 1,
-                      };
-                      const resizing =
-                        drag?.mode === "resize" &&
-                        drag.task.id === entry.block.task.id &&
-                        drag.slot?.day === key
-                          ? drag.slot
-                          : null;
-                      const height =
-                        (resizing
-                          ? resizing.durationMinutes
-                          : Math.max(
-                              entry.bottom - entry.top,
-                              MIN_TASK_MINUTES,
-                            )) *
-                          perMinute -
-                        2;
-                      return (
-                        <GridTaskBlock
-                          key={entry.block.id}
-                          block={
-                            resizing
-                              ? {
-                                  ...entry.block,
-                                  durationMinutes: resizing.durationMinutes,
-                                }
-                              : entry.block
-                          }
-                          height={height}
-                          onOpen={taskHandlers.onOpen}
-                          onComplete={taskHandlers.onComplete}
-                          drag={blockDrag}
-                          lifted={
-                            drag?.mode === "move" &&
-                            drag.task.id === entry.block.task.id
-                          }
-                          resizing={Boolean(resizing)}
-                          style={{
-                            top: entry.top * perMinute + 1,
-                            height,
-                            left: `calc(${(slot.column / slot.columns) * 100}% + 2px)`,
-                            width: `calc(${100 / slot.columns}% - 4px)`,
-                          }}
-                        />
-                      );
-                    })}
-                  {drag?.slot?.day === key && (
-                    <DropSlot
-                      slot={drag.slot}
-                      mode={drag.mode}
-                      perMinute={perMinute}
-                      last={days.length > 1 && key === days[days.length - 1]}
-                    />
-                  )}
-                  {key === today && (
-                    <div
-                      aria-hidden
-                      className="pointer-events-none absolute inset-x-0 z-10 flex items-center"
-                      style={{ top: nowMinutes * perMinute }}
-                      data-now-line=""
-                    >
-                      <span className="bg-danger -ml-1 size-2 rounded-full" />
-                      <span className="bg-danger h-px flex-1" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                {drag?.slot?.day === key && (
+                  <DropSlot slot={drag.slot} mode={drag.mode} perMinute={perMinute} last={days.length > 1 && key === days[days.length - 1]} />
+                )}
+                {key === today && (
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute inset-x-0 z-10 flex items-center"
+                    style={{ top: nowMinutes * perMinute }}
+                    data-now-line=""
+                  >
+                    <span className="bg-danger -ml-1 size-2 rounded-full" />
+                    <span className="bg-danger h-px flex-1" />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
+        {drag?.scrolling === 1 && <EdgeScroll direction={1} />}
       </div>
     </div>
   );

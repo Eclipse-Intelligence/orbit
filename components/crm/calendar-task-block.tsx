@@ -20,7 +20,6 @@ export type TaskBlockDrag = {
   onResize: (event: ReactPointerEvent<HTMLElement>, block: TaskBlock) => void;
 };
 
-const RESIZE_ON_TOUCH_PX = 40;
 
 function clashing(block: TaskBlock) {
   return Boolean(block.clash) && !block.done && !block.overdue;
@@ -104,7 +103,16 @@ export function GridTaskBlock({
   drag,
   lifted,
   resizing,
-}: TaskBlockHandlers & { block: TaskBlock; style: CSSProperties; height: number; drag?: TaskBlockDrag; lifted?: boolean; resizing?: boolean }) {
+  resizable = true,
+}: TaskBlockHandlers & {
+  block: TaskBlock;
+  style: CSSProperties;
+  height: number;
+  drag?: TaskBlockDrag;
+  lifted?: boolean;
+  resizing?: boolean;
+  resizable?: boolean;
+}) {
   const two = height >= TWO_LINES_PX;
   const edged = clashing(block);
   const movable = Boolean(drag) && !block.done;
@@ -158,14 +166,16 @@ export function GridTaskBlock({
       <span className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}>
         <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="sm" />
       </span>
-      {movable && drag && (
+      {movable && drag && resizable && (
         <span
           aria-hidden
           data-task-resize=""
           onPointerDown={(event) => drag.onResize(event, block)}
+          onClick={(event) => onOpen(block, event.currentTarget.parentElement?.querySelector<HTMLElement>("button[data-task-id]") ?? null)}
           className={cn(
-            "absolute inset-x-0 bottom-0 z-[2] flex h-1.5 cursor-ns-resize items-end justify-center pb-0.5 [@media(pointer:coarse)]:h-2.5",
-            height < RESIZE_ON_TOUCH_PX && "[@media(pointer:coarse)]:hidden",
+            "absolute right-0 bottom-0 z-[2] flex h-1.5 cursor-ns-resize items-end justify-center pb-0.5",
+            edged ? "left-6" : "left-5",
+            "[@media(pointer:coarse)]:-bottom-3.5 [@media(pointer:coarse)]:h-[18px] [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:pb-0",
           )}
         >
           <span

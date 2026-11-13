@@ -17,8 +17,9 @@ import {
   DRAG_STEP_MINUTES,
   edgeScrollSpeed,
   placementFor,
+  pointerInstant,
+  resizedDuration,
   samePlace,
-  snapDuration,
   snapStart,
   type DropPlacement,
   type GridSlot,
@@ -26,6 +27,7 @@ import {
 
 const GRID_QUERY = "(min-width: 768px)";
 const DRAGGING_CLASSES = ["select-none", "cursor-grabbing"];
+const LIST_ARM_PX = 12;
 
 export type TaskDrag = {
   task: Task;
@@ -50,6 +52,10 @@ type Pickup = {
   day: string | null;
   start: number;
 };
+
+function inside(box: DOMRect, x: number, y: number) {
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
 
 function subscribeGrid(onChange: () => void) {
   const list = window.matchMedia(GRID_QUERY);
@@ -123,8 +129,10 @@ function swallowNextClick() {
   function stop() {
     window.clearTimeout(timer);
     window.removeEventListener("click", swallow, true);
+    window.removeEventListener("pointerdown", stop, true);
   }
   window.addEventListener("click", swallow, true);
+  window.addEventListener("pointerdown", stop, true);
 }
 
 export function useTaskDrag({
@@ -137,12 +145,17 @@ export function useTaskDrag({
   const [drag, setDrag] = useState<TaskDrag | null>(null);
   const [press, setPress] = useState<TaskPress | null>(null);
   const live = useRef<TaskDrag | null>(null);
+  const busy = useRef(false);
+  const cancel = useRef<(() => void) | null>(null);
   const latest = useRef({ onPlace, onCarry });
   useEffect(() => {
     latest.current = { onPlace, onCarry };
   });
   useEffect(
     () => () => {
+      latest.current = { onPlace: () => undefined, onCarry: undefined };
+      cancel.current?.();
+      cancel.current = null;
       document.body.classList.remove(...DRAGGING_CLASSES);
     },
     [],
@@ -154,14 +167,45 @@ export function useTaskDrag({
       pickup: Pickup,
       options: { carry?: boolean } = {},
     ) => {
-      if (live.current || (event.pointerType === "mouse" && event.button !== 0))
-        return;
-      let x = event.clientX;
-      let y = event.clientY;
+      if (busy.current || event.ctrlKey) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      const startX = event.clientX;
+      const startY = event.clientY;
+      let x = startX;
+      let y = startY;
       let frame = 0;
       let active = false;
+      let armed = pickup.source !== "list";
+      const origin = (
+        (event.currentTarget.closest(
+          '[role="dialog"]',
+        ) as HTMLElement | null) ?? event.currentTarget
+      ).getBoundingClientRect();
       const touch = event.pointerType === "touch";
-      if (touch) setPress({ x, y });
+
+      function resizeSlot(): GridSlot | null {
+        const scroller = gridScroller();
+        const startAt = pickup.task.dueAt;
+        if (!scroller || !startAt || !pickup.day) return null;
+        const columns = gridColumns(scroller);
+        const column =
+          columnAt(columns, x) ??
+          columns.find((item) => item.dataset.day === pickup.day) ??
+          null;
+        const day = column?.dataset.day;
+        if (!column || !day) return live.current?.slot ?? null;
+        const pointerAt = pointerInstant(day, minuteIn(column, y));
+        return {
+          day: pickup.day,
+          minutes: pickup.start,
+          at: startAt,
+          durationMinutes: resizedDuration(
+            startAt,
+            pointerAt,
+            pickup.durationMinutes,
+          ),
+        };
+      }
 
       function slotAt(): GridSlot | null {
         const scroller = gridScroller();
@@ -169,19 +213,8 @@ export function useTaskDrag({
         const area = scroller.getBoundingClientRect();
         if (y < area.top || y > area.bottom || x < area.left || x > area.right)
           return pickup.mode === "resize" ? (live.current?.slot ?? null) : null;
-        const columns = gridColumns(scroller);
-        if (pickup.mode === "resize") {
-          const column = columns.find(
-            (item) => item.dataset.day === pickup.day,
-          );
-          if (!column || !pickup.day) return null;
-          return {
-            day: pickup.day,
-            minutes: pickup.start,
-            durationMinutes: snapDuration(pickup.start, minuteIn(column, y)),
-          };
-        }
-        const column = columnAt(columns, x);
+        if (pickup.mode === "resize") return resizeSlot();
+        const column = columnAt(gridColumns(scroller), x);
         const day = column?.dataset.day;
         if (!column || !day) return null;
         return {
@@ -202,7 +235,19 @@ export function useTaskDrag({
         return edgeScrollSpeed(y, area.top, area.bottom);
       }
 
+      function arm() {
+        if (armed) return;
+        if (
+          Math.hypot(x - startX, y - startY) < LIST_ARM_PX &&
+          inside(origin, x, y)
+        )
+          return;
+        armed = true;
+        if (options.carry) latest.current.onCarry?.();
+      }
+
       function update(scrolling: -1 | 0 | 1) {
+        arm();
         const overList = pickup.mode === "move" && overDropZone(x, y);
         const next: TaskDrag = {
           task: pickup.task,
@@ -211,7 +256,7 @@ export function useTaskDrag({
           durationMinutes: pickup.durationMinutes,
           x,
           y,
-          slot: overList ? null : slotAt(),
+          slot: overList || !armed ? null : slotAt(),
           overList,
           scrolling,
         };
@@ -221,7 +266,7 @@ export function useTaskDrag({
 
       function tick() {
         if (!active) return;
-        const speed = scrollSpeed();
+        const speed = armed && !live.current?.overList ? scrollSpeed() : 0;
         const scroller = gridScroller();
         if (speed !== 0 && scroller) {
           const before = scroller.scrollTop;
@@ -234,13 +279,16 @@ export function useTaskDrag({
 
       function end(result: GestureResult) {
         window.cancelAnimationFrame(frame);
+        if (active && result === "drop") update(0);
         setPress(null);
         const final = live.current;
         live.current = null;
         active = false;
+        busy.current = false;
+        cancel.current = null;
         document.body.classList.remove(...DRAGGING_CLASSES);
         setDrag(null);
-        if (result !== "drop" || !final) return;
+        if (result !== "drop" || !final || !armed) return;
         swallowNextClick();
         if (final.overList) {
           if (
@@ -255,14 +303,15 @@ export function useTaskDrag({
         latest.current.onPlace(pickup.task, placementFor(final.slot));
       }
 
-      startPointerGesture(
+      busy.current = true;
+      if (touch) setPress({ x, y });
+      const stop = startPointerGesture(
         event,
         {
           start() {
             active = true;
             setPress(null);
             if (!touch) document.body.classList.add(...DRAGGING_CLASSES);
-            if (options.carry) latest.current.onCarry?.();
             update(0);
             frame = window.requestAnimationFrame(tick);
           },
@@ -275,6 +324,12 @@ export function useTaskDrag({
         },
         { touchTarget: event.target },
       );
+      if (!stop) {
+        busy.current = false;
+        setPress(null);
+        return;
+      }
+      cancel.current = stop;
     },
     [],
   );
@@ -307,7 +362,9 @@ export function useTaskDrag({
     (event: ReactPointerEvent<HTMLElement>, block: TaskBlock) => {
       if (
         block.done ||
-        (event.target as HTMLElement).closest("[data-task-circle]")
+        (event.target as HTMLElement).closest(
+          "[data-task-circle], [data-task-resize]",
+        )
       )
         return;
       const day = dateKey(block.startsAt);
@@ -333,7 +390,7 @@ export function useTaskDrag({
 
   const resizeBlock = useCallback(
     (event: ReactPointerEvent<HTMLElement>, block: TaskBlock) => {
-      if (block.done) return;
+      if (block.done || !block.task.dueAt) return;
       event.stopPropagation();
       begin(event, {
         task: block.task,
@@ -341,8 +398,8 @@ export function useTaskDrag({
         mode: "resize",
         durationMinutes: blockDuration(block.durationMinutes),
         grab: 0,
-        day: dateKey(block.startsAt),
-        start: wallMinutes(block.startsAt),
+        day: dateKey(block.task.dueAt),
+        start: wallMinutes(block.task.dueAt),
       });
     },
     [begin],

@@ -330,9 +330,11 @@ export default function CalendarScreen({
     if (Object.keys(kept).length !== Object.keys(placed).length) setPlaced(kept);
   }
   const placeSeq = useRef(0);
+  const latestPlace = useRef(new Map<string, number>());
   const tasks = useMemo(() => planner.tasks.map((task) => placed[task.id]?.task ?? task), [planner.tasks, placed]);
   const place = (task: Task, placement: DropPlacement) => {
     const seq = (placeSeq.current += 1);
+    latestPlace.current.set(task.id, seq);
     setError(null);
     setPlaced((current) => ({ ...current, [task.id]: { task: placedTask(task, placement, viewer.id), seq, saved: false } }));
     void placeTaskAction(task.id, placement)
@@ -343,6 +345,7 @@ export default function CalendarScreen({
           router.refresh();
           return;
         }
+        if (latestPlace.current.get(task.id) !== seq) return;
         setPlaced((current) => {
           if (current[task.id]?.seq !== seq) return current;
           const rest = { ...current };
@@ -575,7 +578,12 @@ export default function CalendarScreen({
               {menu(false)}
             </aside>
           )}
-          <div className="hidden min-h-0 min-w-0 flex-1 md:flex">
+          <div className="relative hidden min-h-0 min-w-0 flex-1 md:flex">
+            {droppingBack && (
+              <div data-task-drop="" className={cn("bg-background shadow-overlay absolute top-2 left-16 z-30 w-56 rounded-[12px]", panelOpen && "lg:hidden")}>
+                <TaskDropZone day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} />
+              </div>
+            )}
             <CalendarGrid
               days={days}
               today={today}

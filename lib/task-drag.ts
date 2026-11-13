@@ -1,5 +1,6 @@
-import { DAY_MINUTES } from "@/lib/calendar-view";
+import { dateKey, DAY_MINUTES, shiftDateKey } from "@/lib/calendar-view";
 import {
+  clockLabel,
   dayStartIso,
   DEFAULT_TASK_DURATION,
   MAX_TASK_DURATION,
@@ -12,14 +13,17 @@ import { appTimeZone } from "@/lib/time";
 export const DRAG_STEP_MINUTES = 15;
 export const DRAG_MIN_DURATION = DRAG_STEP_MINUTES;
 
+const MINUTE_MS = 60_000;
+
 export type GridSlot = {
   day: string;
   minutes: number;
   durationMinutes: number;
+  at?: string;
 };
 
 export type DropPlacement =
-  | { at: string; durationMinutes: number }
+  | { at: string; durationMinutes: number; dateOnly?: undefined }
   | { dateOnly: true };
 
 function clamp(value: number, low: number, high: number) {
@@ -43,12 +47,44 @@ export function snapStart(minutes: number, durationMinutes: number) {
   );
 }
 
-export function snapDuration(startMinutes: number, endMinutes: number) {
-  const room = Math.max(DRAG_MIN_DURATION, DAY_MINUTES - startMinutes);
-  const snapped =
-    Math.round((endMinutes - startMinutes) / DRAG_STEP_MINUTES) *
-    DRAG_STEP_MINUTES;
-  return clamp(snapped, DRAG_MIN_DURATION, Math.min(MAX_TASK_DURATION, room));
+export function resizeLimits(
+  startAt: string,
+  currentMinutes: number,
+  timeZone = appTimeZone(),
+) {
+  const start = new Date(startAt).getTime();
+  const midnight = new Date(
+    dayStartIso(shiftDateKey(dateKey(start, timeZone), 1), timeZone),
+  ).getTime();
+  const room = Math.floor((midnight - start) / MINUTE_MS);
+  const most = Math.min(
+    MAX_TASK_DURATION,
+    Math.max(room, blockDuration(currentMinutes)),
+  );
+  return { least: Math.min(DRAG_MIN_DURATION, most), most };
+}
+
+export function resizedDuration(
+  startAt: string,
+  pointerAt: number,
+  currentMinutes: number,
+  timeZone = appTimeZone(),
+) {
+  const { least, most } = resizeLimits(startAt, currentMinutes, timeZone);
+  const minutes = (pointerAt - new Date(startAt).getTime()) / MINUTE_MS;
+  const snapped = Math.round(minutes / DRAG_STEP_MINUTES) * DRAG_STEP_MINUTES;
+  return clamp(snapped, least, most);
+}
+
+export function pointerInstant(
+  day: string,
+  minutes: number,
+  timeZone = appTimeZone(),
+) {
+  const whole = clamp(Math.floor(minutes), 0, DAY_MINUTES);
+  if (whole >= DAY_MINUTES)
+    return new Date(dayStartIso(shiftDateKey(day, 1), timeZone)).getTime();
+  return wallInstant(day, Math.floor(whole / 60), whole % 60, timeZone);
 }
 
 export function slotInstant(
@@ -66,7 +102,16 @@ function clock(minutes: number) {
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
-export function slotRange(slot: Pick<GridSlot, "minutes" | "durationMinutes">) {
+export function slotRange(
+  slot: Pick<GridSlot, "minutes" | "durationMinutes" | "at">,
+  timeZone = appTimeZone(),
+) {
+  if (slot.at) {
+    const end = new Date(
+      new Date(slot.at).getTime() + slot.durationMinutes * MINUTE_MS,
+    ).toISOString();
+    return `${clockLabel(slot.at, timeZone)} to ${clockLabel(end, timeZone)}`;
+  }
   return `${clock(slot.minutes)} to ${clock(slot.minutes + slot.durationMinutes)}`;
 }
 
@@ -94,9 +139,9 @@ export function samePlace(
   timeZone = appTimeZone(),
 ) {
   if (!task.dueHasTime || !task.dueAt) return false;
+  const at = slot.at ?? slotInstant(slot.day, slot.minutes, timeZone);
   return (
-    new Date(task.dueAt).getTime() ===
-      new Date(slotInstant(slot.day, slot.minutes, timeZone)).getTime() &&
+    new Date(task.dueAt).getTime() === new Date(at).getTime() &&
     blockDuration(task.durationMinutes) === slot.durationMinutes
   );
 }
@@ -106,7 +151,7 @@ export function placementFor(
   timeZone = appTimeZone(),
 ): DropPlacement {
   return {
-    at: slotInstant(slot.day, slot.minutes, timeZone),
+    at: slot.at ?? slotInstant(slot.day, slot.minutes, timeZone),
     durationMinutes: slot.durationMinutes,
   };
 }
@@ -117,7 +162,7 @@ export function placedTask(
   viewerId: string,
   timeZone = appTimeZone(),
 ): Task {
-  if ("dateOnly" in placement) {
+  if (placement.dateOnly === true) {
     const day = taskDueDay(task.dueAt, timeZone);
     if (!day) return task;
     return {

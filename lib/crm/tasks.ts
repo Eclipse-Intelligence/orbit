@@ -575,25 +575,40 @@ export async function updateTaskInDb(
   return applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
 }
 
-export type TaskPlacement = { at: string; durationMinutes: number } | { dateOnly: true };
+export type TaskPlacement = { at: string; durationMinutes: number; dateOnly?: undefined } | { dateOnly: true };
 
 export const TASK_PLACE_FAILED = "Couldn't move the task. Try again.";
 
 function placementWrite(current: TaskRow, actor: UserActor, placement: TaskPlacement): TaskWrite {
-  if ("dateOnly" in placement) {
+  if (placement.dateOnly === true) {
     const day = taskDueDay(iso(current.due_at));
     if (!day) throw new CrmError("invalid_input", "This task has no day to keep. Give it a date first.", 400, { field: "dueDate" });
-    return { dueDate: day };
+    return current.due_has_time ? { dueDate: day } : {};
   }
   if (typeof placement.at !== "string" || !/T\d{2}:\d{2}/.test(placement.at) || Number.isNaN(Date.parse(placement.at))) {
     throw new CrmError("invalid_input", TASK_PLACE_FAILED, 400, { field: "dueAt" });
   }
-  const write: TaskWrite = { dueAt: placement.at, durationMinutes: placement.durationMinutes, scheduledBy: "person" };
+  if (!isTaskDuration(placement.durationMinutes)) {
+    throw new CrmError("invalid_input", `Choose a duration between ${MIN_TASK_DURATION} and ${MAX_TASK_DURATION} minutes.`, 400, { field: "durationMinutes" });
+  }
+  const write: TaskWrite = {};
+  const before = iso(current.due_at);
+  const sameTime = Boolean(current.due_has_time && before && new Date(before).getTime() === Date.parse(placement.at));
+  if (!sameTime || current.scheduled_by !== "person") {
+    write.dueAt = placement.at;
+    write.scheduledBy = "person";
+  }
+  if (placement.durationMinutes !== current.duration_minutes) write.durationMinutes = placement.durationMinutes;
   if (!current.owner_id) write.ownerId = actor.userId;
   return write;
 }
 
-export async function placeTask(actor: UserActor, id: string, placement: TaskPlacement, options: MutationOptions = {}) {
+export async function placeTask(
+  actor: UserActor,
+  id: string,
+  placement: TaskPlacement,
+  options: MutationOptions = {},
+): Promise<{ task: Task; changed: boolean }> {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(id) || !placement || typeof placement !== "object") throw notFound("task");
   const provenance = options.provenance ?? { operation: "drag_task", source: "web" };
@@ -601,10 +616,10 @@ export async function placeTask(actor: UserActor, id: string, placement: TaskPla
     const current = await readTask(db, id);
     if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
     if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
-    const write = prepareTask(placementWrite(current, actor, placement), "patch");
-    const timed = !("dateOnly" in placement);
-    const updated = await applyTask(db, actor, current, write, provenance, { claimSchedule: timed });
-    return updated.task;
+    if (current.completed_at) throw new CrmError("invalid_input", "This task is done. Reopen it to move it.", 400);
+    const input = placementWrite(current, actor, placement);
+    if (Object.keys(input).length === 0) return { task: mapTask(current), changed: false };
+    return applyTask(db, actor, current, prepareTask(input, "patch"), provenance, { claimSchedule: placement.dateOnly !== true });
   });
 }
 

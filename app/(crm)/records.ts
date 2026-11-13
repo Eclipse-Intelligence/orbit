@@ -342,9 +342,10 @@ export async function placeTaskAction(id: string, placement: TaskPlacement): Pro
   if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || !placement || typeof placement !== "object") return { error: TASK_PLACE_FAILED };
   const write: TaskPlacement =
-    "dateOnly" in placement ? { dateOnly: true } : { at: String(placement.at), durationMinutes: Number(placement.durationMinutes) };
+    placement.dateOnly === true ? { dateOnly: true } : { at: String(placement.at), durationMinutes: Number(placement.durationMinutes) };
   try {
-    await placeTask(user, id, write, { provenance: { operation: "drag_task", source: "web" } });
+    const placed = await placeTask(user, id, write, { provenance: { operation: "drag_task", source: "web" } });
+    if (!placed.changed) return { ok: true };
     pushLater(user, id);
     refresh();
     revalidatePath("/calendar");
