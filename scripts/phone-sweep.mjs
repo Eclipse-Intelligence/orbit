@@ -591,7 +591,11 @@ for (const [device, viewport] of [
 
     const rowAsk = row.getByRole("button", { name: "Ask Orbit", exact: true });
     if (device === "iphone") check(`${device} the open row leaves Ask Orbit to the panel`, !(await visible(rowAsk)));
-    else check(`${device} the open row has Ask Orbit`, await visible(rowAsk));
+    else {
+      check(`${device} the open row has Ask Orbit`, await visible(rowAsk));
+      const rowAskArea = await tapArea(rowAsk);
+      check(`${device} the open row's Ask Orbit is easy to tap`, Boolean(rowAskArea && rowAskArea.height >= 43 && rowAskArea.owns), rowAskArea ? `${Math.round(rowAskArea.height)}px${rowAskArea.owns ? "" : ", covered"}` : "missing");
+    }
     await row.getByRole("button", { name: "Open", exact: true }).tap();
     await page.waitForTimeout(800);
     const panelAsk = panel.getByRole("button", { name: "Ask Orbit", exact: true });
@@ -602,13 +606,17 @@ for (const [device, viewport] of [
     await page.waitForTimeout(1000);
     const taskAssistant = page.locator('section[aria-label="Orbit assistant"]');
     check(`${device} Ask Orbit on a task opens the assistant`, (await visible(taskAssistant)) && !(await visible(panel)));
+    check(
+      `${device} Ask Orbit on a task puts the caret in the message box`,
+      await page.evaluate(() => {
+        const active = document.activeElement;
+        return Boolean(active && active.tagName === "TEXTAREA" && active.closest('section[aria-label="Orbit assistant"]'));
+      }),
+    );
     await shot("task-ask-orbit");
-    await page
-      .getByRole("button", { name: /Minimise|Close assistant|Hide/i })
-      .first()
-      .tap()
-      .catch(() => page.keyboard.press("Escape"));
+    await taskAssistant.getByRole("button", { name: "Minimise", exact: true }).tap();
     await page.waitForTimeout(600);
+    check(`${device} the assistant closes after Ask Orbit on a task`, !(await visible(taskAssistant)));
 
     if (sweepTask?.companyId) {
       await goto(page, `${base}/companies/${sweepTask.companyId}`);
@@ -1071,7 +1079,7 @@ for (const width of [1100, 1280, 1440]) {
   const fab = page.getByRole("button", { name: "Quick add", exact: true });
   const fabBox = (await fab.isVisible()) ? await fab.boundingBox() : null;
   check(`${device} quick add stays usable beside the panel`, Boolean(panelBox && fabBox && fabBox.x + fabBox.width <= panelBox.x));
-  const pill = page.locator("button[aria-keyshortcuts=\"o\"]").filter({ hasText: /^(Ask Orbit|Continue your chat)/ });
+  const pill = page.locator('button[aria-keyshortcuts="o"]');
   const pillBox = (await pill.isVisible()) ? await pill.boundingBox() : null;
   const clear = (box) => !box || !panelBox || box.x + box.width <= panelBox.x;
   const apart = (box) => !box || !fabBox || box.x + box.width <= fabBox.x || box.y + box.height <= fabBox.y;
