@@ -141,11 +141,23 @@ describe("daily notes format", () => {
   it("appends timed entries and reads them back", () => {
     let content = appendDailyEntry("", "08:42", "Slept badly. Coffee first.");
     content = appendDailyEntry(content, "16:48", "- [ ] Send Lena the dates\n- [x] Reply to Dana");
-    assert.equal(content, "08:42 Slept badly. Coffee first.\n\n16:48 - [ ] Send Lena the dates\n- [x] Reply to Dana");
+    assert.equal(content, "08:42 Slept badly. Coffee first.\n\n16:48\n- [ ] Send Lena the dates\n- [x] Reply to Dana");
     assert.deepEqual(parseDailyEntries(content), [
       { time: "08:42", text: "Slept badly. Coffee first." },
       { time: "16:48", text: "- [ ] Send Lena the dates\n- [x] Reply to Dana" },
     ]);
+  });
+
+  it("puts the time on its own line when an entry starts with block markdown", () => {
+    const reflection = "## Evening reflection\n### How I felt\n- Pretty easy day today.";
+    assert.equal(appendDailyEntry("", "17:15", reflection), `17:15\n${reflection}`);
+    for (const start of ["# Title", "###", "- item", "* item", "+ item", "1. first", "2) second", "- [ ] task", "> quoted", "```js", "~~~", "| a | b |", "---", "* * *"]) {
+      assert.equal(appendDailyEntry("", "09:00", start), `09:00\n${start}`, start);
+    }
+    for (const plain of ["Called Acme", "#partners note", "#tag", "-not a list", "**Bold** start", "@[Acme](company:5a8f2c10-6b1e-4c39-9d0a-0c1a2b3c4d01) rang"]) {
+      assert.equal(appendDailyEntry("", "09:00", plain), `09:00 ${plain}`, plain);
+    }
+    assert.deepEqual(parseDailyEntries(`17:15\n${reflection}`), [{ time: "17:15", text: reflection }]);
   });
 
   it("uses the London date", () => {

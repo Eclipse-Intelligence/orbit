@@ -883,7 +883,7 @@ Docs (the UI name; tables are `pages` because `crm.documents` holds proposals) a
 
 **Search.** `searchDocs` ranks exact, prefix and substring title matches, trigram similarity (`similarity` and `word_similarity`, through whichever schema `pg_trgm` lives in) and a prefix `tsquery` over the search column, with a `ts_headline` snippet for body matches.
 
-**Daily notes.** One `daily` page per person per London date (`appTimeZone()`), titled with the ISO date, created on first open or append. `appendToDailyNote` adds `HH:MM text` entries separated by a blank line (`lib/docs/daily.ts` parses them), optionally with a line of the day's meetings from `listCalendarItems`.
+**Daily notes.** One `daily` page per person per London date (`appTimeZone()`), titled with the ISO date, created on first open or append. `appendToDailyNote` and the jot line add `HH:MM text` entries separated by a blank line (`timedEntry` in `lib/docs/markdown.ts` puts the time on its own line when the entry starts with a heading, list, quote, code fence, table or rule, so that markdown still renders, and the editor shows an older `HH:MM ## heading` line as a heading) (`lib/docs/daily.ts` parses them), optionally with a line of the day's meetings from `listCalendarItems`.
 
 **Leaving.** `private.team_remove` is unchanged: a removed member's docs stay owned by them and, if private, visible to nobody (their shared docs stay shared). `private.docs_reassign` lets an owner or admin take over a former member's notes and folders (`takeOverFormerMemberDocs`); daily notes are never reassigned.
 
