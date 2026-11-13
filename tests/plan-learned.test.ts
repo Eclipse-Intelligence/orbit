@@ -155,6 +155,7 @@ describe("Learned times", () => {
     assert.equal(learnedView("email", spread.email).label, "After lunch");
     assert.equal(learnedView("other", spread.other).label, "Any time");
     assert.equal(learnedView("other", emptySpread().other).week.flat().every((value) => value === 0), true);
+    assert.equal(Math.max(...learnedView("other", spread.other).week.flat()), 0.4, "a kind still learning shows faintly");
     assert.equal(slotWeights(spread.call).length, 7 * 48);
   });
 });

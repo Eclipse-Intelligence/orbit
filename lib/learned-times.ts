@@ -165,7 +165,8 @@ export function learnedCaption(kind: LearnedKind, spread: KindSpread) {
 export function learnedView(kind: LearnedKind, spread: KindSpread): LearnedKindView {
   const learned = isLearned(spread);
   const window = learned ? learnedWindow(spread) : null;
-  const weights = slotWeights(spread);
+  const strength = learned ? 1 : Math.min(1, (spread.placed + spread.booked + spread.ticked / 2) / LEARN_THRESHOLD);
+  const weights = slotWeights(spread).map((weight) => Math.round(weight * strength * 1000) / 1000);
   return {
     kind,
     learned,
