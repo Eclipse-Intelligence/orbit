@@ -310,6 +310,23 @@ const check = (name, ok, detail = "") => {
   if (!ok) problems.push(name);
 };
 
+async function resetLearned(page, device) {
+  if (!page.url().includes("/settings/calendars")) {
+    await goto(page, `${base}/settings/calendars`);
+    await page.waitForTimeout(1200);
+  }
+  const learned = page.getByRole("region", { name: "Learned times" });
+  const reset = learned.getByRole("button", { name: "Reset" });
+  await reset.scrollIntoViewIfNeeded().catch(() => undefined);
+  await reset.focus().catch(() => undefined);
+  await page.keyboard.down("Enter");
+  await page.waitForTimeout(1100);
+  await page.keyboard.up("Enter");
+  await page.waitForTimeout(1500);
+  const captions = (await learned.textContent().catch(() => "")) ?? "";
+  check(`${device} holding Reset starts every kind from scratch`, (captions.match(/Not enough yet \(0 of about 10\)/g) ?? []).length === 3, captions.slice(0, 160));
+}
+
 for (const [device, viewport] of [
   ["iphone", { width: 390, height: 844 }],
   ["ipad", { width: 820, height: 1180 }],
@@ -698,6 +715,19 @@ for (const [device, viewport] of [
   check(`${device} working hours list every working day evenly`, starts.length > 0 && starts.length === workingDays && new Set(starts).size === 1, JSON.stringify(starts));
   check(`${device} working hours no overflow`, await noHorizontalScroll());
   await shot("working-hours");
+  const learned = page.getByRole("region", { name: "Learned times" });
+  await learned.scrollIntoViewIfNeeded().catch(() => undefined);
+  const strips = learned.getByRole("img");
+  check(`${device} learned times shows calls, emails and other`, (await learned.getByRole("listitem").count().catch(() => 0)) === 3 && (await strips.count().catch(() => 0)) === 3);
+  const cells = await strips
+    .first()
+    .evaluate((strip) => [...strip.querySelectorAll("span[title]")].map((cell) => cell.getBoundingClientRect()).map((box) => ({ width: Math.round(box.width), height: Math.round(box.height) })))
+    .catch(() => []);
+  check(`${device} learned times strip shows 5 days of 20 half hours`, cells.length === 100 && cells.every((cell) => cell.width >= 6 && cell.height >= 10), JSON.stringify(cells[0] ?? null));
+  check(`${device} learned times Reset`, await visible(learned.getByRole("button", { name: "Reset" })));
+  check(`${device} learned times no overflow`, await noHorizontalScroll());
+  await shot("learned-times");
+  await resetLearned(page, device);
   await goto(page, `${base}/calendar`);
   await page.waitForTimeout(800);
   const block = await seedBlock(page, device);
@@ -1043,6 +1073,7 @@ for (const width of [1100, 1280, 1440]) {
     const block = await seedBlock(page, "desk");
     if (block) {
       try {
+        await resetLearned(page, device);
         await goto(page, `${base}/calendar?date=${block.day}&view=week`);
         await page.waitForTimeout(1500);
         const menu = page.getByRole("complementary", { name: "Calendars and tasks" });

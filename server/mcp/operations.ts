@@ -12,6 +12,7 @@ import { savePipelineStages } from "@/lib/crm/pipeline";
 import { archiveTask, updateTask } from "@/lib/crm/tasks";
 import { WEBHOOK_EVENTS, createWebhook, listWebhookDeliveries } from "@/lib/crm/webhooks";
 import { OPPORTUNITY_STATUSES, TASK_PRIORITIES, type Actor } from "@/lib/crm/types";
+import { agentSource } from "@/lib/crm/validation";
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -36,7 +37,7 @@ const provenanceFields = {
 };
 
 function provenance(args: { provenanceSource?: string | null; provenanceUrl?: string | null }, operation: string) {
-  return { operation, source: args.provenanceSource, sourceUrl: args.provenanceUrl };
+  return { operation, source: agentSource(args.provenanceSource), sourceUrl: args.provenanceUrl };
 }
 
 export function registerOperationTools(server: McpServer, actor: Actor) {

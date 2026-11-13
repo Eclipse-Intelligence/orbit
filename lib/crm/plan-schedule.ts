@@ -19,6 +19,7 @@ import {
   type PlanTask,
   type ScheduleEntry,
 } from "@/lib/crm/plan-tasks";
+import { learningActors, planPreferencesInDb } from "@/lib/crm/schedule-preferences";
 import { isBlockOverdue } from "@/lib/task-blocks";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, localInstant, taskDueDay } from "@/lib/crm/task-time";
 import { listPlannerTasksInDb, scheduleTaskInDb } from "@/lib/crm/tasks";
@@ -56,14 +57,9 @@ export type PlanContext = {
   preferences: PlanPreferences;
 };
 
-export async function planPreferences(actor: UserActor): Promise<PlanPreferences> {
-  void actor;
-  return DEFAULT_PLAN_PREFERENCES;
-}
-
-export async function readPlanContext(actor: UserActor, now = Date.now()): Promise<PlanContext> {
-  const actors = await workspaceActors(actor).catch(() => [actor]);
-  return withActor(actor, (db) => readPlanContextInDb(db, actor, actors, now));
+export async function readPlanContext(actor: UserActor, now = Date.now(), options: { store?: boolean } = {}): Promise<PlanContext> {
+  const { actors, complete } = await learningActors(actor);
+  return withActor(actor, (db) => readPlanContextInDb(db, actor, actors, now, [], { store: complete && options.store !== false }));
 }
 
 export async function readPlanContextInDb(
@@ -72,6 +68,7 @@ export async function readPlanContextInDb(
   actors: UserActor[],
   now = Date.now(),
   covers: { start: number; end: number }[] = [],
+  learn: false | { store: boolean } = { store: true },
 ): Promise<PlanContext> {
   const today = dayKeyAt(new Date(now));
   const from = dayStartIso(shiftDay(today, -1));
@@ -105,7 +102,7 @@ export async function readPlanContextInDb(
       showAs: row.show_as,
       myResponse: row.response_status,
     })),
-    preferences: await planPreferences(actor),
+    preferences: learn ? await planPreferencesInDb(db, actor, actors, now, learn) : DEFAULT_PLAN_PREFERENCES,
   };
 }
 
@@ -168,10 +165,10 @@ export async function orderWithAi(
 
 export async function buildPlan(
   actor: UserActor,
-  options: { now?: number; replan?: boolean; ordering?: unknown; ai?: boolean; fetchImpl?: typeof fetch; keep?: PlanKeep[] } = {},
+  options: { now?: number; replan?: boolean; ordering?: unknown; ai?: boolean; fetchImpl?: typeof fetch; keep?: PlanKeep[]; store?: boolean } = {},
 ): Promise<PlanProposal> {
   const now = options.now ?? Date.now();
-  const context = await readPlanContext(actor, now);
+  const context = await readPlanContext(actor, now, { store: options.store });
   const open = context.tasks.filter((task) => !task.completedAt && !task.archivedAt);
   const given = Array.isArray(options.ordering) ? settleOrdering(open, options.ordering as PlanOrderItem[]) : null;
   const ordering = given ?? (options.ai === false ? null : await orderWithAi(open, { now, fetchImpl: options.fetchImpl }));
@@ -240,7 +237,7 @@ export async function scheduleTasks(
   return withActor(actor, async (db) => {
     await db.query("select pg_advisory_xact_lock(hashtext($1))", [`plan:${actor.userId}`]);
     await db.query("select 1 from crm.tasks where id = any($1::uuid[]) order by id for update", [[...entries.map((entry) => entry.taskId)].sort()]);
-    const context = options.mode === "agent" ? await readPlanContextInDb(db, actor, actors, now, covers) : null;
+    const context = options.mode === "agent" ? await readPlanContextInDb(db, actor, actors, now, covers, false) : null;
     const known = new Map((context?.tasks ?? []).map((task) => [task.id, task]));
     const batch = entries.map((entry) => ({
       ...entry,

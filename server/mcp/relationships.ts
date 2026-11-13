@@ -20,6 +20,7 @@ import {
   type CompanyWrite,
   type ContactWrite,
 } from "@/lib/crm/types";
+import { agentSource } from "@/lib/crm/validation";
 
 function toolResult(value: unknown) {
   return {
@@ -52,7 +53,7 @@ const provenanceFields = {
 function provenance(args: { provenanceSource?: string | null; provenanceUrl?: string | null }, operation: string) {
   return {
     operation,
-    source: args.provenanceSource,
+    source: agentSource(args.provenanceSource),
     sourceUrl: args.provenanceUrl,
   };
 }
