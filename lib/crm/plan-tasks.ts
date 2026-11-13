@@ -267,12 +267,19 @@ export function packPlan(input: PackInput): PlanProposal {
   const keeps = new Map<string, PlanKeep>();
   for (const item of Array.isArray(input.keep) ? input.keep : []) {
     const start = Date.parse(item?.at);
-    if (!item || typeof item.taskId !== "string" || Number.isNaN(start) || !isTaskDuration(item.durationMinutes)) continue;
-    keeps.set(item.taskId, item);
+    if (!item || typeof item.taskId !== "string" || Number.isNaN(start) || !isTaskDuration(item.durationMinutes) || start + MINUTE < now) continue;
+    keeps.set(item.taskId, { taskId: item.taskId, at: iso(start), durationMinutes: item.durationMinutes, moveDay: typeof item.moveDay === "string" ? item.moveDay : null });
   }
+  const keepFor = (item: Item, sameDayOnly = false) => {
+    const keep = keeps.get(item.task.id);
+    if (!keep) return null;
+    const day = taskDueDay(keep.at, timeZone);
+    if (item.day && day !== item.day && (sameDayOnly || keep.moveDay !== day)) return null;
+    return keep;
+  };
   const keptItems: { item: Item; keep: PlanKeep }[] = [];
   const keepOr = (item: Item, bucket: Item[]) => {
-    const keep = keeps.get(item.task.id);
+    const keep = keepFor(item);
     if (keep) keptItems.push({ item: { ...item, minutes: keep.durationMinutes, day: taskDueDay(keep.at, timeZone) }, keep });
     else bucket.push(item);
   };
@@ -293,7 +300,7 @@ export function packPlan(input: PackInput): PlanProposal {
       const own = isTaskDuration(task.durationMinutes) ? task.durationMinutes : DEFAULT_TASK_DURATION;
       const original = { start, end: start + own * MINUTE };
       if (replan && task.scheduledBy === "planner" && start > now && day && day <= last) {
-        const keep = keeps.get(task.id);
+        const keep = keepFor({ ...base, day }, true);
         if (keep) keptItems.push({ item: { ...base, minutes: keep.durationMinutes, day: taskDueDay(keep.at, timeZone) }, keep });
         else replanned.push({ ...base, day, original });
         continue;
@@ -517,24 +524,45 @@ export function packPlan(input: PackInput): PlanProposal {
     const keep = keeps.get(item.task.id);
     if (!keep) continue;
     const start = Date.parse(keep.at);
-    taken.push({ start, end: start + keep.durationMinutes * MINUTE });
+    const interval = { start, end: start + keep.durationMinutes * MINUTE };
+    taken.push(interval);
+    seedRun(item.group, taskDueDay(keep.at, timeZone)!, interval);
     keptOverdue.set(item.task.id, iso(start));
   }
 
-  const stays = (item: Item & { original: Interval }) => {
+  const stillWorks = (item: Item & { original: Interval }) => {
     const window = workingWindow(item.day!, hours, timeZone);
-    return Boolean(window && item.original.start >= window.open && item.original.end <= window.close && free(item.original));
+    const others = held.filter((interval) => interval !== item.original);
+    return Boolean(
+      window &&
+        item.original.start >= window.open &&
+        item.original.end <= window.close &&
+        item.original.start >= floor &&
+        !busy.some((interval) => overlaps(interval, item.original)) &&
+        !taken.some((interval) => overlaps(interval, item.original)) &&
+        !others.some((interval) => overlaps(interval, item.original)),
+    );
   };
-  for (const item of replanned) {
+  const staying = replanned.filter(stillWorks);
+  const moving = replanned.filter((item) => !staying.includes(item));
+  for (const item of staying) {
     held.splice(held.indexOf(item.original), 1);
-    const ours = runs.filter((run) => run.day === item.day && run.group === item.group && item.group !== "other");
-    const grouped = ours.some((run) => run.end === item.original.start || run.start === item.original.end);
-    if (stays(item) && (grouped || ours.length === 0 || !extendRun(item, item.day!))) {
-      busy.push(item.original);
-      seedRun(item.group, item.day!, item.original);
-      continue;
-    }
-    if (placed.some((entry) => entry.taskId === item.task.id)) continue;
+    busy.push(item.original);
+  }
+  for (const item of [...staying].sort((left, right) => left.original.start - right.original.start)) seedRun(item.group, item.day!, item.original);
+  for (const item of staying) {
+    if (item.group === "other") continue;
+    const own = runs.find((run) => run.day === item.day && run.group === item.group && run.start === item.original.start && run.end === item.original.end);
+    const others = runs.filter((run) => run !== own && run.day === item.day && run.group === item.group);
+    if (!own || others.length === 0) continue;
+    runs.splice(runs.indexOf(own), 1);
+    busy.splice(busy.indexOf(item.original), 1);
+    if (extendRun(item, item.day!)) continue;
+    busy.push(item.original);
+    runs.push(own);
+  }
+  for (const item of moving) {
+    held.splice(held.indexOf(item.original), 1);
     if (placeOn(item, item.day!, [])) continue;
     busy.push(item.original);
     seedRun(item.group, item.day!, item.original);

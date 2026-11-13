@@ -19,14 +19,14 @@ import {
   type PlanTask,
   type ScheduleEntry,
 } from "@/lib/crm/plan-tasks";
-import { readPlannerTasks } from "@/lib/crm/task-blocks";
 import { isBlockOverdue } from "@/lib/task-blocks";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, localInstant, taskDueDay } from "@/lib/crm/task-time";
-import { scheduleTaskInDb } from "@/lib/crm/tasks";
+import { listPlannerTasksInDb, scheduleTaskInDb } from "@/lib/crm/tasks";
 import type { Provenance, Task, UserActor } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { readWorkingHoursInDb } from "@/lib/crm/working-hours";
-import { actorsForTasks } from "@/lib/crm/workspaces";
+import { actorsForTasks, workspaceActors } from "@/lib/crm/workspaces";
+import type { Db } from "@/lib/db/pool";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { completeJson } from "@/lib/llm";
 import type { WorkingHours } from "@/lib/working-hours";
@@ -61,48 +61,51 @@ export async function planPreferences(actor: UserActor): Promise<PlanPreferences
   return DEFAULT_PLAN_PREFERENCES;
 }
 
-export async function readPlanContext(actor: UserActor, now = Date.now(), covers: { start: number; end: number }[] = []): Promise<PlanContext> {
+export async function readPlanContext(actor: UserActor, now = Date.now()): Promise<PlanContext> {
+  const actors = await workspaceActors(actor).catch(() => [actor]);
+  return withActor(actor, (db) => readPlanContextInDb(db, actor, actors, now));
+}
+
+export async function readPlanContextInDb(
+  db: Db,
+  actor: UserActor,
+  actors: UserActor[],
+  now = Date.now(),
+  covers: { start: number; end: number }[] = [],
+): Promise<PlanContext> {
   const today = dayKeyAt(new Date(now));
   const from = dayStartIso(shiftDay(today, -1));
   const to = dayStartIso(shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 2));
   const coverFrom = covers.map((cover) => new Date(cover.start - DAY_MS).toISOString());
   const coverTo = covers.map((cover) => new Date(cover.end + DAY_MS).toISOString());
-  const [planner, personal, preferences] = await Promise.all([
-    readPlannerTasks(actor, now),
-    withActor(actor, async (db) => {
-      const hours = await readWorkingHoursInDb(db, actor.userId);
-      const rows = await db.query<MeetingRow>(
-        `select subject, starts_at, ends_at, is_all_day, show_as, response_status
-         from crm.calendar_events
-         where user_id = $1 and not is_cancelled
-           and (
-             (starts_at < $3 and ends_at > $2)
-             or exists (select 1 from unnest($4::timestamptz[], $5::timestamptz[]) as cover(starts, ends) where starts_at < cover.ends and ends_at > cover.starts)
-           )
-         order by starts_at
-         limit 5000`,
-        [actor.userId, from, to, coverFrom, coverTo],
-      );
-      return {
-        hours,
-        meetings: rows.rows.map((row) => ({
-          subject: row.subject,
-          startsAt: new Date(row.starts_at).toISOString(),
-          endsAt: new Date(row.ends_at).toISOString(),
-          isAllDay: row.is_all_day,
-          showAs: row.show_as,
-          myResponse: row.response_status,
-        })),
-      };
-    }),
-    planPreferences(actor),
-  ]);
+  const hours = await readWorkingHoursInDb(db, actor.userId);
+  const rows = await db.query<MeetingRow>(
+    `select subject, starts_at, ends_at, is_all_day, show_as, response_status
+     from crm.calendar_events
+     where user_id = $1 and not is_cancelled
+       and (
+         (starts_at < $3 and ends_at > $2)
+         or exists (select 1 from unnest($4::timestamptz[], $5::timestamptz[]) as cover(starts, ends) where starts_at < cover.ends and ends_at > cover.starts)
+       )
+     order by starts_at
+     limit 5000`,
+    [actor.userId, from, to, coverFrom, coverTo],
+  );
+  const tasks: Task[] = [];
+  for (const target of actors) tasks.push(...(await listPlannerTasksInDb(db, target, now)));
   return {
     now,
-    tasks: planner.read.flatMap((entry) => entry.tasks).filter((task) => task.ownerId === actor.userId),
-    hours: personal.hours,
-    meetings: personal.meetings,
-    preferences,
+    tasks: tasks.filter((task) => task.ownerId === actor.userId),
+    hours,
+    meetings: rows.rows.map((row) => ({
+      subject: row.subject,
+      startsAt: new Date(row.starts_at).toISOString(),
+      endsAt: new Date(row.ends_at).toISOString(),
+      isAllDay: row.is_all_day,
+      showAs: row.show_as,
+      myResponse: row.response_status,
+    })),
+    preferences: await planPreferences(actor),
   };
 }
 
@@ -231,11 +234,13 @@ export async function scheduleTasks(
   const now = options.now ?? Date.now();
   if (entries.some((entry) => Date.parse(entry.at) > now + SCHEDULE_AHEAD_DAYS * DAY_MS)) throw entryError("Schedule blocks within the next year.");
   const members = await actorsForTasks(actor, entries.map((entry) => entry.taskId));
+  const actors = options.mode === "agent" ? await workspaceActors(actor).catch(() => [actor]) : [];
   const covers = entries.map((entry) => ({ start: Date.parse(entry.at), end: Date.parse(entry.at) + 480 * 60_000 }));
   const byHand = options.mode === "plan";
   return withActor(actor, async (db) => {
+    await db.query("select pg_advisory_xact_lock(hashtext($1))", [`plan:${actor.userId}`]);
     await db.query("select 1 from crm.tasks where id = any($1::uuid[]) order by id for update", [[...entries.map((entry) => entry.taskId)].sort()]);
-    const context = options.mode === "agent" ? await readPlanContext(actor, now, covers) : null;
+    const context = options.mode === "agent" ? await readPlanContextInDb(db, actor, actors, now, covers) : null;
     const known = new Map((context?.tasks ?? []).map((task) => [task.id, task]));
     const batch = entries.map((entry) => ({
       ...entry,

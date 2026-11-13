@@ -967,8 +967,12 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
 }
 
 export async function listPlannerTasks(actor: UserActor, now = Date.now()): Promise<Task[]> {
+  return withActor(actor, (db) => listPlannerTasksInDb(db, actor, now));
+}
+
+export async function listPlannerTasksInDb(db: Db, actor: UserActor, now = Date.now()): Promise<Task[]> {
   assertScope(actor.scopes, "crm:read");
-  return withActor(actor, async (db) => {
+  {
     const values: unknown[] = [actor.workspaceId, dayWindow(new Date(now)).start.toISOString(), actor.userId];
     const mine = mineFilter(actor, values)!;
     const result = await db.query<TaskRow>(
@@ -983,7 +987,7 @@ export async function listPlannerTasks(actor: UserActor, now = Date.now()): Prom
       values,
     );
     return result.rows.map(mapTask);
-  });
+  }
 }
 
 export async function listTaskParticipants(actor: UserActor, taskIds: string[]): Promise<Record<string, string[]>> {

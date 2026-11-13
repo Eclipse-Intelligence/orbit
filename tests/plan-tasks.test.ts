@@ -289,6 +289,40 @@ describe("Plan's packer", () => {
     assert.ok(!plan.placed.some((entry) => entry.taskId === person.id), "a block the person placed can't be kept into the plan");
   });
 
+  it("never lets a moved planner block push a run past 90 minutes", () => {
+    const day = "2026-11-16";
+    const long = task("Call long moved", { dueAt: `${day}T15:00:00.000Z`, dueHasTime: true, scheduledBy: "planner", durationMinutes: 60 });
+    const stays = task("Call stays", { dueAt: `${day}T11:00:00.000Z`, dueHasTime: true, scheduledBy: "planner", durationMinutes: 45 });
+    const plan = pack([long, stays], [meeting(`${day}T14:30:00Z`, `${day}T16:30:00Z`)], { replan: true, ordering: [{ id: long.id, group: "call", minutes: null }, { id: stays.id, group: "call", minutes: null }] });
+    const moved = plan.placed.find((entry) => entry.taskId === long.id);
+    assert.ok(moved, "the long call has to move");
+    assert.ok(!plan.placed.some((entry) => entry.taskId === stays.id), "the other block keeps its time");
+    const start = Date.parse(moved.at);
+    const stayStart = Date.parse(`${day}T11:00:00Z`);
+    const stayEnd = stayStart + 45 * 60_000;
+    assert.ok(start >= stayEnd + 15 * 60_000 || start + 60 * 60_000 + 15 * 60_000 <= stayStart, `no 105 minute run (${moved.at})`);
+  });
+
+  it("drops kept slots that are in the past or move a dated task's day without naming it", () => {
+    const day = "2026-11-16";
+    const dated = task("Call Ann", onDay(day));
+    const named = task("Call Ben", onDay(day));
+    const old = task("Call Cat", onDay("2026-11-12"));
+    const plan = pack([dated, named, old], [], {
+      keep: [
+        { taskId: dated.id, at: "2026-11-17T10:00:00.000Z", durationMinutes: 15 },
+        { taskId: named.id, at: "2026-11-17T10:00:00.000Z", durationMinutes: 15, moveDay: "2026-11-17" },
+        { taskId: old.id, at: "2026-11-12T09:00:00.000Z", durationMinutes: 15 },
+        { taskId: "nope", at: "2026-11-17T12:00:00.000Z", durationMinutes: 15, moveDay: 7 as unknown as string },
+      ],
+    });
+    const at = (id: string) => plan.placed.find((entry) => entry.taskId === id);
+    assert.equal(at(dated.id)?.at.slice(0, 10), day, "an unnamed day change is ignored");
+    assert.equal(at(named.id)?.at, "2026-11-17T10:00:00.000Z");
+    assert.equal(at(named.id)?.moveDay, "2026-11-17");
+    assert.notEqual(at(old.id)?.at, "2026-11-12T09:00:00.000Z", "a kept slot in the past is replanned");
+  });
+
   it("counts calls already on the calendar towards a run", () => {
     const day = "2026-11-16";
     const first = Date.parse(`${day}T10:30:00Z`);

@@ -236,6 +236,33 @@ describe("Plan and schedule", () => {
     );
   });
 
+  it("runs concurrent agent schedules with a two connection pool, and never lets them overlap", async () => {
+    const day = workday(14);
+    const tasks = await Promise.all(
+      ["Email One", "Email Two", "Email Three", "Email Four"].map(async (title) => (await createTask(mark, { title, dueDate: day })).body.task),
+    );
+    await getPool().end();
+    process.env.VERCEL = "1";
+    try {
+      const results = await Promise.allSettled(
+        tasks.map((task, index) => scheduleTasks(mark, [{ taskId: task.id, at: local(day, 9 + index) }], { mode: "agent", provenance: { operation: "schedule_tasks" } })),
+      );
+      assert.deepEqual(results.map((result) => result.status), ["fulfilled", "fulfilled", "fulfilled", "fulfilled"], JSON.stringify(results.map((result) => (result.status === "rejected" ? String(result.reason) : "ok"))));
+      const c = (await createTask(mark, { title: "Call C", dueDate: day })).body.task;
+      const a = (await createTask(mark, { title: "Call A", dueDate: day })).body.task;
+      const race = await Promise.allSettled([
+        scheduleTasks(mark, [{ taskId: c.id, at: local(day, 15), durationMinutes: 30 }], { mode: "agent", provenance: { operation: "schedule_tasks" } }),
+        scheduleTasks(mark, [{ taskId: a.id, at: local(day, 15, 5), durationMinutes: 30 }], { mode: "agent", provenance: { operation: "schedule_tasks" } }),
+      ]);
+      assert.deepEqual(race.map((result) => result.status).sort(), ["fulfilled", "rejected"], "one waits for the other and then sees the clash");
+      const rejected = race.find((result) => result.status === "rejected") as PromiseRejectedResult;
+      assert.match(String((rejected.reason as Error).message), /clashes with “Call [AC]”/);
+    } finally {
+      await getPool().end();
+      delete process.env.VERCEL;
+    }
+  });
+
   it("checks an agent's slot against meetings however far ahead it is", async () => {
     const far = addWorkingDays(today, 60);
     await meeting("Quarterly review", at(far, 10), at(far, 12));
