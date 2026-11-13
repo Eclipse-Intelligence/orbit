@@ -79,7 +79,7 @@ export default function ThreadPanel({
           </h3>
           {place && <span className="caption-style text-subtle truncate max-md:hidden">{place}</span>}
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="Close thread" title="Close (Esc)" onClick={onClose} className="ml-auto max-md:hidden">
+        <Button variant="ghost" size="icon-sm" aria-label="Close thread" title="Close (Esc)" onClick={onClose} className="hit ml-auto max-md:hidden">
           <XIcon aria-hidden className="size-4" />
         </Button>
         <span aria-hidden className="size-11 shrink-0 md:hidden" />
@@ -89,7 +89,7 @@ export default function ThreadPanel({
           <p role="alert" className="text-danger">
             {timeline.error}
           </p>
-          <Button variant="secondary" size="sm" onClick={() => loadThread(rootId, "latest")}>
+          <Button variant="secondary" size="sm" className="hit" onClick={() => loadThread(rootId, "latest")}>
             Try again
           </Button>
         </div>

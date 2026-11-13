@@ -637,6 +637,8 @@ for (const [device, viewport] of [
     check(`${device} Done takes effect at once with Undo`, await visible(page.getByText("Task done.")));
     check(`${device} the outcome starts as a call`, (await outcome.getByRole("button", { name: "Call" }).getAttribute("aria-pressed").catch(() => null)) === "true");
     const save = outcome.getByRole("button", { name: "Save" });
+    await save.evaluate((button) => button.scrollIntoView({ block: "center" })).catch(() => undefined);
+    await page.waitForTimeout(300);
     const saveArea = await tapArea(save);
     check(`${device} Save is easy to tap`, Boolean(saveArea && saveArea.height >= 43 && saveArea.owns), saveArea ? `${Math.round(saveArea.height)}px${saveArea.owns ? "" : ", covered"}` : "missing");
     check(`${device} outcome no overflow`, await noHorizontalScroll());

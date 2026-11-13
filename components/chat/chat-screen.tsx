@@ -449,10 +449,10 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
               <ChatIcon aria-hidden className="text-faint size-5" />
               <p className="text-subtle">Pick a conversation, or start one.</p>
               <div className="flex gap-2">
-                <Button variant="secondary" size="sm" onClick={() => setNewRoom(true)}>
+                <Button variant="secondary" size="sm" className="hit" onClick={() => setNewRoom(true)}>
                   New room
                 </Button>
-                <Button variant="secondary" size="sm" onClick={() => setNewMessage(true)}>
+                <Button variant="secondary" size="sm" className="hit" onClick={() => setNewMessage(true)}>
                   New message
                 </Button>
               </div>
@@ -507,7 +507,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
             className="bg-popover border-line-strong shadow-overlay ui-style fixed bottom-[calc(env(safe-area-inset-bottom)+5.5rem)] left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-xl border py-2 pr-2 pl-3.5"
           >
             <span className="min-w-0">{notice}</span>
-            <Button variant="ghost" size="sm" onClick={() => setNotice(null)} className="max-md:h-11">
+            <Button variant="ghost" size="sm" onClick={() => setNotice(null)} className="hit max-md:h-11">
               Dismiss
             </Button>
           </div>

@@ -27,11 +27,11 @@ function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean })
       className={cn("rounded-2xl pt-3 pb-2", unread ? "bg-surface-raised" : "bg-surface-panel")}
       aria-label={`Thread in ${card.conversation.kind === "dm" ? card.conversation.name : `#${card.conversation.name}`}`}
     >
-      <div className="flex items-center gap-2 px-4 pb-1.5 max-md:px-3">
+      <div className="flex items-center gap-2 px-4 pb-1.5 max-md:px-3 md:pointer-coarse:pb-3.5">
         <button
           type="button"
           onClick={open}
-          className="ui-style flex min-w-0 items-center gap-2 rounded-md font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
+          className="ui-style hit flex min-w-0 items-center gap-2 rounded-md font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
         >
           {card.conversation.kind === "dm" ? (
             <>
@@ -59,7 +59,7 @@ function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean })
       {expanded && (
         <>
           {card.earlier > 0 && (
-            <Button variant="link" size="none" onClick={open} className="ui-style text-subtle mt-0.5 mb-1 ml-14 font-normal max-md:ml-[50px] max-md:min-h-11">
+            <Button variant="link" size="none" onClick={open} className="ui-style hit text-subtle mt-0.5 mb-1 ml-14 font-normal max-md:ml-[50px] max-md:min-h-11 md:pointer-coarse:mt-2 md:pointer-coarse:mb-3.5">
               {card.earlier === 1 ? "1 earlier reply" : `${card.earlier} earlier replies`}
             </Button>
           )}
@@ -153,7 +153,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
             <p role="alert" className="text-danger">
               {error}
             </p>
-            <Button variant="secondary" size="sm" onClick={reload} className="max-md:h-11">
+            <Button variant="secondary" size="sm" onClick={reload} className="hit max-md:h-11">
               Try again
             </Button>
           </div>
@@ -171,7 +171,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
         )}
         {cards?.map((card) => <Card key={card.root.id} card={card} open={expanded.has(card.root.id)} />)}
         {next && (
-          <Button variant="secondary" size="sm" onClick={more} disabled={loadingMore} className="self-center max-md:h-11">
+          <Button variant="secondary" size="sm" onClick={more} disabled={loadingMore} className="hit self-center max-md:h-11">
             {loadingMore ? "Loading…" : "Show more"}
           </Button>
         )}
