@@ -710,6 +710,16 @@ for (const [device, viewport] of [
   check(`${device} learned times Reset`, await visible(learned.getByRole("button", { name: "Reset" })));
   check(`${device} learned times no overflow`, await noHorizontalScroll());
   await shot("learned-times");
+  if (device === "ipad") {
+    const reset = learned.getByRole("button", { name: "Reset" });
+    await reset.focus().catch(() => undefined);
+    await page.keyboard.down("Enter");
+    await page.waitForTimeout(1100);
+    await page.keyboard.up("Enter");
+    await page.waitForTimeout(1500);
+    const captions = (await learned.textContent().catch(() => "")) ?? "";
+    check(`${device} holding Reset starts every kind from scratch`, (captions.match(/Not enough yet \(0 of about 10\)/g) ?? []).length === 3, captions.slice(0, 160));
+  }
   await goto(page, `${base}/calendar`);
   await page.waitForTimeout(800);
   const block = await seedBlock(page, device);
