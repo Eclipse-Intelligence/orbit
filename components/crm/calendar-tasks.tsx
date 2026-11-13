@@ -6,7 +6,7 @@ import TaskKindIcon from "@/components/crm/task-kind-icon";
 import { dateKey, shiftDateKey, weekStartKey } from "@/lib/calendar-view";
 import { clockLabel, durationLabel } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
-import { groupTaskList, isBlockOverdue, taskPerson, type PlannerWorkspace } from "@/lib/task-blocks";
+import { dropZoneNote, groupTaskList, isBlockOverdue, taskPerson, type PlannerWorkspace } from "@/lib/task-blocks";
 import { appTimeZone } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -119,10 +119,6 @@ export function taskWhenLabel(task: Pick<Task, "dueAt" | "dueHasTime">, now: num
   const day = dayLabel(task.dueAt, now, timeZone);
   const time = task.dueHasTime ? clockLabel(task.dueAt, timeZone) : null;
   return [day, time].filter(Boolean).join(" ") || null;
-}
-
-export function dropZoneNote(day: string, inOutlook: boolean) {
-  return inOutlook ? `Stays on ${day}, off the calendar and out of Outlook.` : `Stays on ${day}, off the calendar.`;
 }
 
 export function TaskDropZone({ day, active, bar = false, inOutlook = false }: { day: string | null; active: boolean; bar?: boolean; inOutlook?: boolean }) {

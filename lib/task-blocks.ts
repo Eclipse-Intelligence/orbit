@@ -161,3 +161,7 @@ export function groupTaskList<T extends Pick<Task, "dueAt" | "dueHasTime" | "dur
     return items?.length ? [{ kind, label: TASK_LIST_LABELS[kind], tasks: [...items].sort(order) }] : [];
   });
 }
+
+export function dropZoneNote(day: string, inOutlook: boolean) {
+  return inOutlook ? `Stays on ${day}, off the calendar and out of Outlook.` : `Stays on ${day}, off the calendar.`;
+}

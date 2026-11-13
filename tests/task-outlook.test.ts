@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { calendarAlerts } from "@/lib/calendar-alerts";
 import { isPersonalEvent, storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
-import { listCalendarItems } from "@/lib/crm/calendars";
+import { listCalendarGroups, listCalendarItems } from "@/lib/crm/calendars";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { saveMailbox } from "@/lib/crm/inbox";
@@ -25,6 +25,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { refreshTimes, offerTimes } from "@/lib/mail/scheduling";
 import { TASK_BLOCK_NOTE, taskBlockDraft, taskBlockPatch, type GraphEvent } from "@/lib/microsoft/calendar";
+import { dropZoneNote } from "@/lib/task-blocks";
 import { createUser, resetDatabase } from "./helpers";
 
 const WRITE_SCOPES = "https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Mail.Read offline_access";
@@ -268,6 +269,11 @@ describe("task block event shape", () => {
     assert.equal(first, blockTransactionId("t1", "2026-11-13 09:00:00.123456+00"));
     assert.notEqual(first, blockTransactionId("t1", "2026-11-13 09:00:00.123457+00"));
     assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it("says the event goes from Outlook only when the block is there", () => {
+    assert.equal(dropZoneNote("Fri 13 Nov", true), "Stays on Fri 13 Nov, off the calendar and out of Outlook.");
+    assert.equal(dropZoneNote("Fri 13 Nov", false), "Stays on Fri 13 Nov, off the calendar.");
   });
 
   it("reads Outlook durations inside the task limits", () => {
@@ -520,6 +526,8 @@ describe("Outlook lifecycle", () => {
     assert.equal(await queued(task.id), null);
     assert.equal(await ref(task.id), null);
     assert.equal(await withActor(mark, (db) => taskBlocksReach(db, mark)), "orbit");
+    const [primary] = await listCalendarGroups(mark);
+    assert.equal(primary.taskBlocks, "orbit");
 
     const loose = await createUser(`loose${seq}@outlook-blocks.test`, "No Mailbox");
     const looseTask = await timed(loose, "Call Sam", Date.now() + 2 * DAY);
@@ -534,6 +542,7 @@ describe("Outlook lifecycle", () => {
     await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
     await withActor(mark, (db) => storeGrantedScopes(db, mark, connection, WRITE_SCOPES));
     assert.equal(await withActor(mark, (db) => taskBlocksReach(db, mark)), "outlook");
+    assert.equal((await listCalendarGroups(mark))[0].taskBlocks, "outlook");
     await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
     assert.equal(await ref(task.id), "block-1");
   });
