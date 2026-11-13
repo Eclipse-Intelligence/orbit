@@ -15,13 +15,15 @@ import {
   blockTransactionId,
   CALENDAR_SYNC,
   outlookMinutes,
+  noteTaskBlocksWrite,
   planBlock,
   queueOwnTaskBlocks,
   syncTaskBlocks,
   taskBlocksReach,
   type BlockRow,
 } from "@/lib/crm/task-outlook";
-import { archiveTask, completeTask, createTask, getTask, placeTask, reopenTask, updateTask } from "@/lib/crm/tasks";
+import { archiveTask, completeTask, createTask, getTask, OWNER_SETS_LENGTH, placeTask, reopenTask, updateTask } from "@/lib/crm/tasks";
+import { undoAuditEvent } from "@/lib/crm/undo";
 import type { UserActor } from "@/lib/crm/types";
 import { applyMigrationSql, migrationBatches } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -572,6 +574,126 @@ describe("Outlook lifecycle", () => {
     assert.equal(unowned.ownerId, null);
     const later = await updateTask(agent.actor, own.body.task.id, { dueAt: minuteAt(Date.now() + 4 * DAY) });
     assert.equal(later.body.task.dueHasTime, false);
+  });
+
+  it("never hands a colleague a time through undoing an owner change", async () => {
+    const colleague = await createUser(`undo${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, colleague.userId);
+    const priya: UserActor = { ...colleague, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member" };
+    const day = new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10);
+    const lastEvent = async (taskId: string, field: string) =>
+      (
+        await admin().query<{ id: string }>(
+          "select id from crm.audit_events where entity_id = $1 and changes -> 'fields' ? $2 order by created_at desc limit 1",
+          [taskId, field],
+        )
+      ).rows[0].id;
+
+    const taken = (await createTask(priya, { title: "Priya's call", dueDate: day })).body.task;
+    await updateTask(mark, taken.id, { ownerId: mark.userId });
+    await updateTask(mark, taken.id, { dueAt: `${day}T14:00` });
+    await undoAuditEvent(mark, await lastEvent(taken.id, "ownerId"), { operation: "undo", source: "web" });
+    const back = await getTask(mark, taken.id);
+    assert.equal(back.ownerId, priya.userId);
+    assert.equal(back.dueHasTime, false);
+    assert.equal(back.dueDate, day);
+
+    const loose = (await createTask(priya, { title: "Priya's email", dueDate: day })).body.task;
+    await updateTask(mark, loose.id, { ownerId: null });
+    await updateTask(mark, loose.id, { dueAt: `${day}T15:00` });
+    assert.equal((await getTask(mark, loose.id)).dueHasTime, true);
+    await undoAuditEvent(mark, await lastEvent(loose.id, "ownerId"), { operation: "undo", source: "web" });
+    const restored = await getTask(mark, loose.id);
+    assert.equal(restored.ownerId, priya.userId);
+    assert.equal(restored.dueHasTime, false);
+
+    const mine = await timed(mark, "Call Ben", Date.now() + 2 * DAY);
+    await updateTask(mark, mine.id, { ownerId: priya.userId });
+    await undoAuditEvent(mark, await lastEvent(mine.id, "ownerId"), { operation: "undo", source: "web" });
+    const handedBack = await getTask(mark, mine.id);
+    assert.equal(handedBack.ownerId, mark.userId);
+    assert.equal(handedBack.dueHasTime, true);
+    assert.equal(handedBack.dueAt, mine.dueAt);
+  });
+
+  it("only lets the owner change the length of a timed task", async () => {
+    const colleague = await createUser(`length${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, colleague.userId);
+    const priya: UserActor = { ...colleague, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member" };
+    const hers = (await createTask(priya, { title: "Priya's call", dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
+    assert.equal(hers.dueHasTime, true);
+    const refused = (error: unknown) => error instanceof CrmError && error.message === OWNER_SETS_LENGTH;
+    await assert.rejects(updateTask(mark, hers.id, { durationMinutes: 45 }), refused);
+    await assert.rejects(placeTask(mark, hers.id, { at: hers.dueAt!, durationMinutes: 45 }), refused);
+    const agent = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
+    await assert.rejects(updateTask(agent.actor, hers.id, { durationMinutes: 60 }), refused);
+    assert.equal((await updateTask(priya, hers.id, { durationMinutes: 45 })).body.task.durationMinutes, 45);
+    const dated = (await createTask(priya, { title: "Priya's day", dueDate: new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10) })).body.task;
+    assert.equal((await updateTask(mark, dated.id, { durationMinutes: 30 })).body.task.durationMinutes, 30);
+  });
+
+  it("hands a removed member's timed tasks to the remover date only", async () => {
+    const colleague = await createUser(`removed${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, colleague.userId);
+    const priya: UserActor = { ...colleague, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member" };
+    const hers = (await createTask(priya, { title: "Priya's call", dueAt: minuteAt(Date.now() + 2 * DAY), remindMinutes: 10 })).body.task;
+    await getPool().query("select private.team_remove($1, $2, $3)", [mark.workspaceId, mark.userId, priya.userId]);
+    const moved = await getTask(mark, hers.id);
+    assert.equal(moved.ownerId, mark.userId);
+    assert.equal(moved.dueHasTime, false);
+    assert.equal(moved.dueDate, hers.dueDate);
+    assert.equal(moved.remindMinutes, null);
+    assert.equal(moved.scheduledBy, null);
+  });
+
+  it("never parks or backs off a newer change because an older attempt failed", async () => {
+    await connect(mark);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    const claimed = await getPool().query<{ pending_at: string }>("select pending_at from private.claim_task_blocks($1::uuid[], null, 5)", [[task.id]]);
+    await updateTask(mark, task.id, { title: "Call Jane again" });
+    await getPool().query("select private.defer_task_block($1, $2, true)", [task.id, claimed.rows[0].pending_at]);
+    const row = await admin().query<{ refused: boolean; attempts: number; retry_at: Date | null; claimed_at: Date | null }>(
+      "select refused, attempts, retry_at, claimed_at from crm.task_outlook_queue where task_id = $1",
+      [task.id],
+    );
+    assert.deepEqual(row.rows[0], { refused: false, attempts: 0, retry_at: null, claimed_at: null });
+  });
+
+  it("backs off on a 403 create, and lets parked creates go again when write access is newly confirmed", async () => {
+    const connection = await connect(mark);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    outlook.failCreateWith = 403;
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    let row = await admin().query<{ refused: boolean; attempts: number }>("select refused, attempts from crm.task_outlook_queue where task_id = $1", [task.id]);
+    assert.deepEqual(row.rows[0], { refused: false, attempts: 1 });
+    await queueOwnTaskBlocks(mark.userId);
+    row = await admin().query("select refused, attempts from crm.task_outlook_queue where task_id = $1", [task.id]);
+    assert.deepEqual(row.rows[0], { refused: false, attempts: 1 });
+
+    await admin().query("update crm.task_outlook_queue set retry_at = null where task_id = $1", [task.id]);
+    outlook.failCreateWith = 400;
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    row = await admin().query("select refused, attempts from crm.task_outlook_queue where task_id = $1", [task.id]);
+    assert.equal(row.rows[0].refused, true);
+    outlook.failCreateWith = null;
+    assert.equal(await noteTaskBlocksWrite(connection, true), true);
+    assert.equal(await noteTaskBlocksWrite(connection, true), false);
+    await noteTaskBlocksWrite(connection, false);
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.equal(await ref(task.id), "block-1");
+  });
+
+  it("keeps a mailbox's back-off across syncs while access stays the same", async () => {
+    const connection = await connect(mark);
+    await noteTaskBlocksWrite(connection, true);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    outlook.failCreate = 2;
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    const before = await admin().query<{ retry_at: Date; attempts: number }>("select retry_at, attempts from crm.task_outlook_queue where task_id = $1", [task.id]);
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    const after = await admin().query<{ retry_at: Date; attempts: number }>("select retry_at, attempts from crm.task_outlook_queue where task_id = $1", [task.id]);
+    assert.deepEqual(after.rows[0], before.rows[0]);
+    assert.equal(await ref(task.id), null);
   });
 
   it("keeps a move made while Outlook refuses it, so the next sync doesn't revert it", async () => {
