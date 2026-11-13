@@ -113,6 +113,19 @@ describe("live preview", () => {
     assert.ok(!plan(text).some((item) => item.type === "widget" && item.widget.kind === "entry"));
   });
 
+  it("shows a heading written after an entry time as a heading", () => {
+    const text = "17:15 ## Evening reflection\n### How I felt";
+    const items = plan(text, [], { daily: true });
+    assert.ok(items.some((item) => item.type === "line" && item.from === 0 && item.className === "note-h note-h2"));
+    assert.deepEqual(slices(text, items, "hide"), ["## "]);
+    assert.ok(items.some((item) => item.type === "widget" && item.widget.kind === "entry" && item.widget.time === "17:15"));
+    assert.ok(slices(text, plan(text, [1], { daily: true }), "mark").includes("## "));
+    assert.ok(!plan("17:15 #partners call", [], { daily: true }).some((item) => item.type === "line" && item.className.startsWith("note-h")));
+    const lines = staticLines(text, { daily: true });
+    assert.ok(lines[0].className.includes("note-entry") && lines[0].className.includes("note-h2"));
+    assert.ok(lines[0].segments.some((segment) => "text" in segment && segment.text === "Evening reflection"));
+  });
+
   it("renders the same lines for the first paint", () => {
     const lines = staticLines(`## Plan\n\n- [ ] Ship ${MENTION}`);
     assert.equal(lines.length, 3);

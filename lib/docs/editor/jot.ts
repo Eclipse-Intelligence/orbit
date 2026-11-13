@@ -4,6 +4,7 @@ import { EditorView, keymap, placeholder, type KeyBinding } from "@codemirror/vi
 import { livePreview } from "@/lib/docs/editor/preview";
 import { detectTrigger, type ActiveTrigger, type PickerKey } from "@/lib/docs/editor/setup";
 import { docsLanguage } from "@/lib/docs/editor/syntax";
+import { timedEntry } from "@/lib/docs/markdown";
 
 export type JotHandlers = {
   resolve: (target: string) => boolean;
@@ -35,9 +36,8 @@ export function jotLabelAttributes(label: string) {
 }
 
 export function entryBlock(text: string, stamp: string) {
-  const clean = text.trim();
-  if (!clean) return null;
-  return /^([-*+]|\d+[.)])\s/.test(clean) ? `${stamp}\n${clean}` : `${stamp} ${clean}`;
+  if (!text.trim()) return null;
+  return timedEntry(stamp, text);
 }
 
 export function clearJot(view: EditorView) {

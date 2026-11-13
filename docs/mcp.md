@@ -194,7 +194,7 @@ Docs are Markdown notes in nested folders (see `docs/architecture.md`, Docs). Re
 | `list_doc_versions` | Saved versions, newest first, with who made each (a person, the Orbit assistant or an agent), why and a summary. | `id`, `limit` (up to 500) | `docs:read` | No | Both |
 | `restore_doc_version` | Restores a version as a new version, keeping the current text as a version first. | `id`, `version_id`, `provenanceUrl` | `docs:write` | Yes | Both |
 | `get_daily_note` | The person's daily note for a day (today by default), created on first open, with the day's meetings when `meetings` is true. With `list` true, the days that have notes and how many entries each has. | `date` (YYYY-MM-DD, `today`, `yesterday`), `meetings`, `list`, `from`, `to` | `docs:read` | Creates an empty note | Personal |
-| `append_daily_note` | Adds an entry starting with the London time, like `09:15 Call with Priya`, optionally with a line of the day's meetings. | `text`, `date`, `meetings` | `docs:write` | Yes (private; not audited) | Personal |
+| `append_daily_note` | Adds an entry starting with the London time, like `09:15 Call with Priya` (on its own line when the text starts with a heading, list, quote or other block markdown), optionally with a line of the day's meetings. | `text`, `date`, `meetings` | `docs:write` | Yes (private; not audited) | Personal |
 
 ### Mail (personal tokens only)
 

@@ -1,4 +1,5 @@
 import { appTimeZone, zonedParts } from "@/lib/time";
+import { timedEntry } from "@/lib/docs/markdown";
 import type { DailyEntry } from "@/lib/docs/types";
 
 const ENTRY_LINE = /^((?:[01]\d|2[0-3]):[0-5]\d)(?: (.*))?$/;
@@ -33,7 +34,7 @@ export function shiftDate(date: string, days: number) {
 }
 
 export function formatDailyEntry(time: string, text: string) {
-  return `${time} ${text.replace(/\r\n?/g, "\n").trim()}`;
+  return timedEntry(time, text);
 }
 
 export function appendDailyEntry(content: string, time: string, text: string) {
@@ -49,5 +50,5 @@ export function parseDailyEntries(content: string): DailyEntry[] {
     if (match) entries.push({ time: match[1], text: match[2] ?? "" });
     else if (entries.length > 0) entries[entries.length - 1].text += `\n${line}`;
   }
-  return entries.map((entry) => ({ time: entry.time, text: entry.text.replace(/\s+$/, "") }));
+  return entries.map((entry) => ({ time: entry.time, text: entry.text.replace(/^\n+/, "").replace(/\s+$/, "") }));
 }

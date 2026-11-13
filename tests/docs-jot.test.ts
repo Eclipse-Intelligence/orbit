@@ -16,6 +16,9 @@ describe("Daily jot line", () => {
     assert.equal(entryBlock("- one\n- two", "09:15"), "09:15\n- one\n- two");
     assert.equal(entryBlock("1. first", "09:15"), "09:15\n1. first");
     assert.equal(entryBlock("   ", "09:15"), null);
+    assert.equal(entryBlock("## Evening reflection\n- Easy day", "17:15"), "17:15\n## Evening reflection\n- Easy day");
+    assert.equal(entryBlock("> Worth keeping", "09:15"), "09:15\n> Worth keeping");
+    assert.equal(entryBlock("#partners call", "09:15"), "09:15 #partners call");
   });
 
   it("opens the same pickers as the main editor", () => {
