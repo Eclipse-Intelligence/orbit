@@ -99,7 +99,7 @@ function HookRow({
         <ChevronIcon aria-hidden className={cn("text-subtle size-3 shrink-0 transition-transform duration-150 ease-power3-out", expanded && "rotate-90")} />
       </button>
       {expanded && (
-        <div id={panel} className="flex flex-col gap-2 px-3.5 pb-3.5">
+        <div id={panel} className="flex flex-col gap-2 px-3.5 pb-3.5 md:pointer-coarse:pt-2">
           <div className="flex items-center gap-2">
             <code className={cn(FIELD, "h-8 truncate max-md:h-11")} title={url}>
               {url}
@@ -118,7 +118,7 @@ function HookRow({
               </span>
             </div>
           )}
-          <div className="mt-0.5 flex flex-wrap items-center gap-1">
+          <div className="mt-0.5 flex flex-wrap items-center gap-1 md:pointer-coarse:gap-y-3.5">
             <Button variant="ghost" size="sm" disabled={busy} onClick={onPause} aria-label={`${paused ? "Resume" : "Pause"} ${hook.name}`} className="hit max-md:h-11">
               {paused ? "Resume" : "Pause"}
             </Button>

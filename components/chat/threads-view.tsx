@@ -59,7 +59,7 @@ function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean })
       {expanded && (
         <>
           {card.earlier > 0 && (
-            <Button variant="link" size="none" onClick={open} className="ui-style hit text-subtle mt-0.5 mb-1 ml-14 md:pointer-coarse:mt-2 md:pointer-coarse:mb-3.5 font-normal max-md:ml-[50px] max-md:min-h-11">
+            <Button variant="link" size="none" onClick={open} className="ui-style hit text-subtle mt-0.5 mb-1 ml-14 font-normal max-md:ml-[50px] max-md:min-h-11 md:pointer-coarse:mt-2 md:pointer-coarse:mb-3.5">
               {card.earlier === 1 ? "1 earlier reply" : `${card.earlier} earlier replies`}
             </Button>
           )}

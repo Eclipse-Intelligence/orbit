@@ -98,7 +98,7 @@ export function DiscussionMessages({
   return (
     <div role="log" aria-label={label} aria-live="polite" className={cn("-mx-5 flex flex-col max-md:-mx-3.5", className)}>
       {timeline?.hasOlder && (
-        <Button variant="ghost" size="sm" onClick={loadOlder} className="hit mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11">
+        <Button variant="ghost" size="sm" onClick={loadOlder} className="hit mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11 md:pointer-coarse:my-2">
           Show earlier
         </Button>
       )}
@@ -186,7 +186,7 @@ export function DiscussionThread({ discussion, backLabel }: { discussion: Discus
 
   if (!threadId) return null;
   return (
-    <section aria-labelledby={`discussion-thread-${threadId}`} className="flex flex-col gap-2">
+    <section aria-labelledby={`discussion-thread-${threadId}`} className="flex flex-col gap-2 md:pointer-coarse:pt-2">
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="sm" onClick={closeThread} aria-label={`Back to ${backLabel}`} className="hit -ml-2 gap-1 pr-2.5 pl-1.5 max-md:h-11">
           <ChevronLeftIcon aria-hidden className="size-3.5" />
@@ -218,7 +218,7 @@ export function DiscussionThread({ discussion, backLabel }: { discussion: Discus
             <span aria-hidden className="bg-line-subtle h-px flex-1" />
           </div>
           {timeline?.hasOlder && (
-            <Button variant="ghost" size="sm" onClick={() => loadThread(threadId, "older")} className="hit mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11">
+            <Button variant="ghost" size="sm" onClick={() => loadThread(threadId, "older")} className="hit mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11 md:pointer-coarse:mb-2">
               Show earlier
             </Button>
           )}

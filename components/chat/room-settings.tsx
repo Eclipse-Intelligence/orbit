@@ -214,7 +214,7 @@ export default function RoomSettings({
                 </Button>
               </div>
               {addOpen && (
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2 md:pointer-coarse:gap-3">
                   <label htmlFor={ids.people} className="sr-only">
                     People to add
                   </label>
@@ -245,7 +245,7 @@ export default function RoomSettings({
                   const role = roles[member.id];
                   const notes = [you ? "You" : null, member.id === room.createdBy ? "Created the room" : null, role ? ROLE_LABELS[role] : null].filter(Boolean).join(" · ");
                   return (
-                    <li key={member.id} className="flex items-center gap-2.5 py-1.5">
+                    <li key={member.id} className="flex items-center gap-2.5 py-1.5 md:pointer-coarse:min-h-11">
                       <ChatAvatar person={{ id: member.id, name: member.name }} size="lg" />
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
                         <span className="ui-style truncate">{member.name}</span>

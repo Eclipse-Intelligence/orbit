@@ -260,7 +260,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           <button
             type="button"
             onClick={() => openThread(message.conversationId, message.id)}
-            className="hover:bg-surface-raised hit -ml-1.5 mt-1 inline-flex md:pointer-coarse:mt-1.5 md:pointer-coarse:mb-0.5 min-h-7 items-center gap-2 self-start rounded-lg py-0.5 pr-2 pl-1.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
+            className="hover:bg-surface-raised hit -ml-1.5 mt-1 inline-flex min-h-7 items-center gap-2 self-start rounded-lg py-0.5 pr-2 pl-1.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11 md:pointer-coarse:mt-1.5 md:pointer-coarse:mb-0.5"
           >
             <AvatarStack people={message.replyAuthors} size="xs" />
             <span className="font-medium text-violet">
