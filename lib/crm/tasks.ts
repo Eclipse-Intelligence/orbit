@@ -639,7 +639,8 @@ export async function scheduleTaskInDb(
   if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
   const refusal = refuse(mapTask(current));
   if (refusal) throw new CrmError("invalid_input", refusal, 400, { field: "schedule" });
-  const write: TaskWrite = { dueAt: slot.at, scheduledBy: slot.byHand ? "person" : "planner" };
+  const placedByPerson = Boolean(current.due_has_time && current.due_at && current.scheduled_by === "person");
+  const write: TaskWrite = { dueAt: slot.at, scheduledBy: slot.byHand || placedByPerson ? "person" : "planner" };
   if (slot.durationMinutes && slot.durationMinutes !== current.duration_minutes) write.durationMinutes = slot.durationMinutes;
   return applyTask(db, actor, current, prepareTask(write, "patch"), provenance, { claimSchedule: true });
 }

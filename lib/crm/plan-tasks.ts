@@ -121,7 +121,10 @@ export type PackInput = {
   ordering?: PlanOrderItem[] | null;
   preferences?: PlanPreferences;
   days?: number;
+  keep?: PlanKeep[] | null;
 };
+
+export type PlanKeep = { taskId: string; at: string; durationMinutes: number; moveDay?: string | null };
 
 type Interval = { start: number; end: number };
 type Run = { group: PlanGroup; day: string; start: number; end: number; count: number; minutes: number };
@@ -261,11 +264,23 @@ export function packPlan(input: PackInput): PlanProposal {
   const overdueItems: Item[] = [];
   const replanned: (Item & { original: Interval })[] = [];
   const fixed: { group: PlanGroup; day: string; interval: Interval }[] = [];
+  const keeps = new Map<string, PlanKeep>();
+  for (const item of Array.isArray(input.keep) ? input.keep : []) {
+    const start = Date.parse(item?.at);
+    if (!item || typeof item.taskId !== "string" || Number.isNaN(start) || !isTaskDuration(item.durationMinutes)) continue;
+    keeps.set(item.taskId, item);
+  }
+  const keptItems: { item: Item; keep: PlanKeep }[] = [];
+  const keepOr = (item: Item, bucket: Item[]) => {
+    const keep = keeps.get(item.task.id);
+    if (keep) keptItems.push({ item: { ...item, minutes: keep.durationMinutes, day: taskDueDay(keep.at, timeZone) }, keep });
+    else bucket.push(item);
+  };
   for (const order of ordering) {
     const task = byId.get(order.id)!;
     const base = itemFor(task, order);
     if (!task.dueAt) {
-      undated.push({ ...base, day: null });
+      keepOr({ ...base, day: null }, undated);
       continue;
     }
     if (isBlockOverdue(task, now, timeZone)) {
@@ -278,14 +293,16 @@ export function packPlan(input: PackInput): PlanProposal {
       const own = isTaskDuration(task.durationMinutes) ? task.durationMinutes : DEFAULT_TASK_DURATION;
       const original = { start, end: start + own * MINUTE };
       if (replan && task.scheduledBy === "planner" && start > now && day && day <= last) {
-        replanned.push({ ...base, day, original });
+        const keep = keeps.get(task.id);
+        if (keep) keptItems.push({ item: { ...base, minutes: keep.durationMinutes, day: taskDueDay(keep.at, timeZone) }, keep });
+        else replanned.push({ ...base, day, original });
         continue;
       }
       busy.push(original);
       if (day) fixed.push({ group: base.group, day, interval: original });
       continue;
     }
-    if (day && day >= today && day <= last) dated.push({ ...base, day });
+    if (day && day >= today && day <= last) keepOr({ ...base, day }, dated);
   }
 
   const taken: Interval[] = [];
@@ -319,11 +336,12 @@ export function packPlan(input: PackInput): PlanProposal {
     return Boolean(window && interval.start >= window.open && interval.end <= window.close);
   };
 
-  const runClear = (day: string, interval: Interval, except: Run | null) =>
+  const runClear = (day: string, group: PlanGroup, interval: Interval, except: Run | null) =>
     runs.every(
       (run) =>
         run === except ||
         run.day !== day ||
+        run.group !== group ||
         interval.end + RUN_BREAK_MINUTES * MINUTE <= run.start ||
         interval.start >= run.end + RUN_BREAK_MINUTES * MINUTE,
     );
@@ -361,7 +379,7 @@ export function packPlan(input: PackInput): PlanProposal {
       window.open,
       window.close,
       minutes,
-      (interval) => !guardRuns || runClear(day, interval, null),
+      (interval) => !guardRuns || runClear(day, group, interval, null),
       (start) => distance(start, minutes, preferences[group]),
     );
   };
@@ -389,7 +407,7 @@ export function packPlan(input: PackInput): PlanProposal {
       for (const start of [run.end, run.start - item.minutes * MINUTE]) {
         const interval = { start, end: start + item.minutes * MINUTE };
         const whole = { start: Math.min(run.start, interval.start), end: Math.max(run.end, interval.end) };
-        if (!insideHours(day, interval) || !free(interval) || !runClear(day, whole, run)) continue;
+        if (!insideHours(day, interval) || !free(interval) || !runClear(day, item.group, whole, run)) continue;
         commit(item, start);
         run.start = whole.start;
         run.end = whole.end;
@@ -479,8 +497,44 @@ export function packPlan(input: PackInput): PlanProposal {
     });
   };
 
+  for (const { item, keep } of keptItems) {
+    const start = Date.parse(keep.at);
+    taken.push({ start, end: start + keep.durationMinutes * MINUTE });
+    placed.push({
+      taskId: item.task.id,
+      workspaceId: item.task.workspaceId,
+      title: item.task.title,
+      group: item.group,
+      at: iso(start),
+      durationMinutes: keep.durationMinutes,
+      suggested: false,
+      moveDay: keep.moveDay ?? null,
+    });
+    if (item.day) seedRun(item.group, item.day, { start, end: start + keep.durationMinutes * MINUTE });
+  }
+  const keptOverdue = new Map<string, string>();
+  for (const item of overdueItems) {
+    const keep = keeps.get(item.task.id);
+    if (!keep) continue;
+    const start = Date.parse(keep.at);
+    taken.push({ start, end: start + keep.durationMinutes * MINUTE });
+    keptOverdue.set(item.task.id, iso(start));
+  }
+
+  const stays = (item: Item & { original: Interval }) => {
+    const window = workingWindow(item.day!, hours, timeZone);
+    return Boolean(window && item.original.start >= window.open && item.original.end <= window.close && free(item.original));
+  };
   for (const item of replanned) {
     held.splice(held.indexOf(item.original), 1);
+    const ours = runs.filter((run) => run.day === item.day && run.group === item.group && item.group !== "other");
+    const grouped = ours.some((run) => run.end === item.original.start || run.start === item.original.end);
+    if (stays(item) && (grouped || ours.length === 0 || !extendRun(item, item.day!))) {
+      busy.push(item.original);
+      seedRun(item.group, item.day!, item.original);
+      continue;
+    }
+    if (placed.some((entry) => entry.taskId === item.task.id)) continue;
     if (placeOn(item, item.day!, [])) continue;
     busy.push(item.original);
     seedRun(item.group, item.day!, item.original);
@@ -503,6 +557,20 @@ export function packPlan(input: PackInput): PlanProposal {
   }
 
   const overdue: PlanOverdue[] = overdueItems.map((item) => {
+    const kept = keptOverdue.get(item.task.id);
+    if (kept) {
+      return {
+        taskId: item.task.id,
+        workspaceId: item.task.workspaceId,
+        title: item.task.title,
+        group: item.group,
+        dueAt: item.task.dueAt!,
+        dueHasTime: item.task.dueHasTime,
+        at: kept,
+        durationMinutes: keeps.get(item.task.id)!.durationMinutes,
+        suggested: false,
+      };
+    }
     let start = findSlot(today, item.minutes, item.group, false);
     let day: string | null = today;
     for (let guard = 0; start === null && guard < LOOK_BEYOND_DAYS; guard += 1) {

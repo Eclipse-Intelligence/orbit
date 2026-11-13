@@ -7,7 +7,7 @@ import {
   carryOver,
   chooseMiss,
   dragEntry,
-  editCount,
+  handPlaced,
   leaveOverdue,
   moveAllOverdue,
   moveOverdue,
@@ -160,7 +160,7 @@ describe("Plan preview", () => {
     preview = removeEntry(preview, ids.c);
     preview = moveOverdue(preview, ids.o, LONDON);
     preview = chooseMiss(preview, ids.m, "outside", LONDON);
-    assert.equal(editCount(preview), 4);
+    assert.deepEqual(handPlaced(preview), [{ taskId: ids.a, at: "2026-11-16T11:30:00.000Z", durationMinutes: 15, moveDay: null }]);
     const again = carryOver(preview, { ...proposal(), replan: true }, LONDON);
     assert.equal(again.proposal.replan, true);
     assert.deepEqual(
@@ -173,6 +173,55 @@ describe("Plan preview", () => {
       ].sort((left, right) => left[1].localeCompare(right[1])),
     );
     assert.deepEqual(again.removed, [ids.c]);
+  });
+
+  it("carries edits over to a different proposal, dropping drags for tasks no longer in it and keeping removals", () => {
+    let preview = dragEntry(startPreview(proposal()), { id: ids.a, dueAt: "2026-11-16T00:00:00.000Z", dueHasTime: false }, "2026-11-16T11:00:00.000Z", 15, LONDON);
+    preview = dragEntry(preview, { id: ids.b, dueAt: "2026-11-16T00:00:00.000Z", dueHasTime: false }, "2026-11-16T12:00:00.000Z", 15, LONDON);
+    preview = removeEntry(preview, ids.c);
+    const different: PlanProposal = {
+      ...proposal(),
+      placed: [
+        { taskId: ids.a, workspaceId: "ws", title: "Call Ann", group: "call", at: "2026-11-16T11:00:00.000Z", durationMinutes: 15, suggested: false, moveDay: null },
+        { taskId: ids.c, workspaceId: "ws", title: "Draft terms", group: "other", at: "2026-11-16T15:00:00.000Z", durationMinutes: 15, suggested: false, moveDay: null },
+      ],
+      replan: true,
+    };
+    const first = carryOver(preview, different, LONDON);
+    assert.deepEqual(first.entries.map((entry) => [entry.taskId, entry.at, entry.byHand ?? false]), [[ids.a, "2026-11-16T11:00:00.000Z", true]], "Ben's drag goes with Ben, and Draft terms stays removed");
+    const back = carryOver(first, { ...proposal(), replan: false }, LONDON);
+    assert.deepEqual(back.removed, [ids.c], "removals survive a second toggle");
+    assert.ok(!back.entries.some((entry) => entry.taskId === ids.c));
+    const done = carryOver(first, { ...proposal(), placed: proposal().placed.filter((entry) => entry.taskId !== ids.a) }, LONDON);
+    assert.ok(!done.entries.some((entry) => entry.taskId === ids.a), "a task gone from the plan, for example completed, isn't applied");
+  });
+
+  it("sends a chosen Couldn't fit time in the payload", () => {
+    const outside = chooseMiss(startPreview(proposal()), ids.m, "outside", LONDON);
+    assert.deepEqual(applyPayload(outside).find((entry) => entry.taskId === ids.m), { taskId: ids.m, at: "2026-11-16T17:30:00.000Z", durationMinutes: 120 });
+    const next = chooseMiss(startPreview(proposal()), ids.m, "next", LONDON);
+    assert.deepEqual(applyPayload(next).find((entry) => entry.taskId === ids.m), { taskId: ids.m, at: "2026-11-17T09:00:00.000Z", durationMinutes: 120, moveDay: "2026-11-17" });
+  });
+
+  it("flags a proposal over another proposal or a real block, but not over free, declined, all-day or touching events", () => {
+    const tasks = [task(ids.a, "Call Ann"), task(ids.b, "Call Ben"), task(ids.c, "Draft terms")];
+    const overlapping = dragEntry(startPreview(proposal()), { id: ids.c, dueAt: "2026-11-16T00:00:00.000Z", dueHasTime: false }, "2026-11-16T10:35:00.000Z", 15, LONDON);
+    const clashes = previewBlocks(overlapping, tasks, {}).map((block) => [block.task.id, block.clash]);
+    assert.deepEqual(clashes, [
+      [ids.a, "Draft terms"],
+      [ids.c, "Call Ann"],
+      [ids.b, "Draft terms"],
+    ]);
+    const real = previewBlocks(startPreview(proposal()), tasks, { blocks: [{ title: "Email Oliver", startsAt: "2026-11-16T14:05:00.000Z", endsAt: "2026-11-16T14:20:00.000Z" }] });
+    assert.equal(real.find((block) => block.task.id === ids.c)?.clash, "Email Oliver");
+    const quiet = [
+      { subject: "Free", startsAt: "2026-11-16T10:30:00.000Z", endsAt: "2026-11-16T11:00:00.000Z", isAllDay: false, showAs: "free" },
+      { subject: "Declined", startsAt: "2026-11-16T10:30:00.000Z", endsAt: "2026-11-16T11:00:00.000Z", isAllDay: false, showAs: "busy", myResponse: "declined" },
+      { subject: "All day", startsAt: "2026-11-16T00:00:00.000Z", endsAt: "2026-11-17T00:00:00.000Z", isAllDay: true, showAs: "busy" },
+      { subject: "Touching", startsAt: "2026-11-16T10:00:00.000Z", endsAt: "2026-11-16T10:30:00.000Z", isAllDay: false, showAs: "busy" },
+      { subject: "After", startsAt: "2026-11-16T14:15:00.000Z", endsAt: "2026-11-16T15:00:00.000Z", isAllDay: false, showAs: "busy" },
+    ];
+    assert.deepEqual(previewBlocks(startPreview(proposal()), tasks, { meetings: quiet }).map((block) => block.clash), [null, null, null]);
   });
 
   it("shows a clash for proposals, dragged ones included, against the meetings loaded now", () => {

@@ -53,6 +53,7 @@ import {
   applyPayload,
   carryOver,
   chooseMiss,
+  handPlaced,
   dragEntry,
   leaveOverdue,
   moveAllOverdue,
@@ -367,7 +368,7 @@ export default function CalendarScreen({
     setPlanLoading(true);
     setPlanError(null);
     setReplan(nextReplan);
-    void planAction({ replan: nextReplan, ordering: preview?.proposal.ordering ?? null })
+    void planAction({ replan: nextReplan, ordering: preview?.proposal.ordering ?? null, keep: handPlaced(preview) })
       .catch(() => ({ error: PLAN_FAILED }))
       .then((result) => {
         if (planSeq.current !== seq) return;
@@ -465,7 +466,7 @@ export default function CalendarScreen({
     onOpen: (task, from) => openTask(task, from),
   });
   const blockDrag: TaskBlockDrag | undefined = gridDrag && !planning ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
-  const proposalDrag: TaskBlockDrag | undefined = gridDrag ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
+  const proposalDrag: TaskBlockDrag | undefined = gridDrag && !planLoading && !applying ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const heldFromList = drag?.source === "list" ? drag.task.id : null;
   const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed && !planning ? drag : null;
   const { done, complete: markDone } = useTaskDone(tasks);
@@ -482,7 +483,14 @@ export default function CalendarScreen({
     tasks.filter((task) => !proposedIds.has(task.id)),
     { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done },
   );
-  const proposals = preview && planning ? previewBlocks(preview, tasks, { workspaces: planner.workspaces, meetings: shown }) : [];
+  const proposals =
+    preview && planning
+      ? previewBlocks(preview, tasks, {
+          workspaces: planner.workspaces,
+          meetings: shown,
+          blocks: blocks.filter((block) => !block.done).map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
+        })
+      : [];
   const clashes = Object.fromEntries(proposals.flatMap((block) => (block.clash ? [[block.task.id, block.clash]] : [])));
   const runs = preview && planning ? previewRuns(preview.entries) : [];
   const [opener, setOpener] = useState<HTMLElement | null>(null);
@@ -738,9 +746,11 @@ export default function CalendarScreen({
           )}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col md:hidden">
             {planning && (
-              <div role="status" className="border-border caption-style text-subtle flex items-center gap-3 border-b px-4 py-2.5">
-                <span className="min-w-0 flex-1">Plan needs a wider screen.</span>
-                <Button variant="secondary" size="sm" className="hit" onClick={cancelPlan}>
+              <div className="border-border caption-style text-subtle flex items-center gap-3 border-b px-4 py-2.5">
+                <span role="status" className="min-w-0 flex-1">
+                  Plan needs a wider screen.
+                </span>
+                <Button variant="secondary" size="sm" className="hit" disabled={applying} onClick={cancelPlan}>
                   Cancel
                 </Button>
               </div>

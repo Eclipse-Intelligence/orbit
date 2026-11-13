@@ -11,6 +11,7 @@ import {
   planGroup,
   scheduleRefusal,
   settleOrdering,
+  type PlanKeep,
   type PlanMeeting,
   type PlanOrderItem,
   type PlanPreferences,
@@ -31,6 +32,9 @@ import { completeJson } from "@/lib/llm";
 import type { WorkingHours } from "@/lib/working-hours";
 
 export const PLAN_AI_DEADLINE_MS = 20_000;
+export const SCHEDULE_AHEAD_DAYS = 366;
+
+const DAY_MS = 86_400_000;
 export const SCHEDULE_FAILED = "Couldn't put the tasks on your calendar. Try again.";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -57,10 +61,12 @@ export async function planPreferences(actor: UserActor): Promise<PlanPreferences
   return DEFAULT_PLAN_PREFERENCES;
 }
 
-export async function readPlanContext(actor: UserActor, now = Date.now(), cover: { start: number; end: number } | null = null): Promise<PlanContext> {
+export async function readPlanContext(actor: UserActor, now = Date.now(), covers: { start: number; end: number }[] = []): Promise<PlanContext> {
   const today = dayKeyAt(new Date(now));
-  const from = new Date(Math.min(Date.parse(dayStartIso(shiftDay(today, -1))), cover ? cover.start - 86_400_000 : Number.POSITIVE_INFINITY)).toISOString();
-  const to = new Date(Math.max(Date.parse(dayStartIso(shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 2))), cover ? cover.end + 86_400_000 : 0)).toISOString();
+  const from = dayStartIso(shiftDay(today, -1));
+  const to = dayStartIso(shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 2));
+  const coverFrom = covers.map((cover) => new Date(cover.start - DAY_MS).toISOString());
+  const coverTo = covers.map((cover) => new Date(cover.end + DAY_MS).toISOString());
   const [planner, personal, preferences] = await Promise.all([
     readPlannerTasks(actor, now),
     withActor(actor, async (db) => {
@@ -68,10 +74,14 @@ export async function readPlanContext(actor: UserActor, now = Date.now(), cover:
       const rows = await db.query<MeetingRow>(
         `select subject, starts_at, ends_at, is_all_day, show_as, response_status
          from crm.calendar_events
-         where user_id = $1 and not is_cancelled and starts_at < $3 and ends_at > $2
+         where user_id = $1 and not is_cancelled
+           and (
+             (starts_at < $3 and ends_at > $2)
+             or exists (select 1 from unnest($4::timestamptz[], $5::timestamptz[]) as cover(starts, ends) where starts_at < cover.ends and ends_at > cover.starts)
+           )
          order by starts_at
          limit 5000`,
-        [actor.userId, from, to],
+        [actor.userId, from, to, coverFrom, coverTo],
       );
       return {
         hours,
@@ -155,7 +165,7 @@ export async function orderWithAi(
 
 export async function buildPlan(
   actor: UserActor,
-  options: { now?: number; replan?: boolean; ordering?: unknown; ai?: boolean; fetchImpl?: typeof fetch } = {},
+  options: { now?: number; replan?: boolean; ordering?: unknown; ai?: boolean; fetchImpl?: typeof fetch; keep?: PlanKeep[] } = {},
 ): Promise<PlanProposal> {
   const now = options.now ?? Date.now();
   const context = await readPlanContext(actor, now);
@@ -171,6 +181,7 @@ export async function buildPlan(
     replan: options.replan === true,
     ordering,
     preferences: context.preferences,
+    keep: options.keep ?? null,
   });
 }
 
@@ -186,8 +197,9 @@ export function readScheduleEntries(raw: unknown): ScheduleEntry[] {
     if (!value || typeof value !== "object") throw entryError("Each block needs a taskId and an at time.");
     const item = value as Record<string, unknown>;
     if (typeof item.taskId !== "string" || !isUuid(item.taskId)) throw entryError("Each block needs a taskId.");
-    if (seen.has(item.taskId)) throw entryError("Each task can appear only once.");
-    seen.add(item.taskId);
+    const taskId = item.taskId.toLowerCase();
+    if (seen.has(taskId)) throw entryError("Each task can appear only once.");
+    seen.add(taskId);
     const text = typeof item.at === "string" ? item.at.trim() : "";
     const at = /T\d{2}:\d{2}/.test(text) ? localInstant(text) : "";
     if (!at || Number.isNaN(Date.parse(at))) throw entryError("Give each block a start as YYYY-MM-DDTHH:mm in London time.");
@@ -199,7 +211,7 @@ export function readScheduleEntries(raw: unknown): ScheduleEntry[] {
     }
     if (item.byHand !== undefined && typeof item.byHand !== "boolean") throw entryError("byHand is true or false.");
     return {
-      taskId: item.taskId,
+      taskId,
       at: new Date(at).toISOString(),
       durationMinutes: typeof item.durationMinutes === "number" ? item.durationMinutes : 0,
       moveDay: typeof item.moveDay === "string" ? item.moveDay : null,
@@ -217,18 +229,18 @@ export async function scheduleTasks(
 ): Promise<ScheduledTask[]> {
   const entries = readScheduleEntries(raw);
   const now = options.now ?? Date.now();
+  if (entries.some((entry) => Date.parse(entry.at) > now + SCHEDULE_AHEAD_DAYS * DAY_MS)) throw entryError("Schedule blocks within the next year.");
   const members = await actorsForTasks(actor, entries.map((entry) => entry.taskId));
-  const starts = entries.map((entry) => Date.parse(entry.at));
-  const cover = { start: Math.min(...starts), end: Math.max(...starts) + 480 * 60_000 };
-  const context = options.mode === "agent" ? await readPlanContext(actor, now, cover) : null;
+  const covers = entries.map((entry) => ({ start: Date.parse(entry.at), end: Date.parse(entry.at) + 480 * 60_000 }));
   const byHand = options.mode === "plan";
-  const known = new Map((context?.tasks ?? []).map((task) => [task.id, task]));
-  const batch = entries.map((entry) => ({
-    ...entry,
-    durationMinutes: entry.durationMinutes || known.get(entry.taskId)?.durationMinutes || DEFAULT_TASK_DURATION,
-  }));
   return withActor(actor, async (db) => {
     await db.query("select 1 from crm.tasks where id = any($1::uuid[]) order by id for update", [[...entries.map((entry) => entry.taskId)].sort()]);
+    const context = options.mode === "agent" ? await readPlanContext(actor, now, covers) : null;
+    const known = new Map((context?.tasks ?? []).map((task) => [task.id, task]));
+    const batch = entries.map((entry) => ({
+      ...entry,
+      durationMinutes: entry.durationMinutes || known.get(entry.taskId)?.durationMinutes || DEFAULT_TASK_DURATION,
+    }));
     const done: ScheduledTask[] = [];
     for (const [index, entry] of entries.entries()) {
       const member = members[index];

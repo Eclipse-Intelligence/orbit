@@ -179,9 +179,17 @@ describe("Plan's packer", () => {
     const mine = task("Email Oliver Grant", { dueAt: "2026-11-16T13:00:00.000Z", dueHasTime: true, scheduledBy: "person" });
     const kept = pack([planned, mine]);
     assert.deepEqual(kept.placed, [], "without Replan my blocks nothing timed moves");
-    const moved = pack([planned, mine], [], { replan: true });
-    assert.deepEqual(moved.placed.map((entry) => [entry.taskId, entry.at]), [[planned.id, "2026-11-16T13:15:00.000Z"]]);
+    const stayed = pack([planned], [], { replan: true });
+    assert.deepEqual(stayed.placed, [], "a planner block stays when its time is still good");
+    const grouped = pack([planned, mine], [], { replan: true });
+    assert.deepEqual(grouped.placed.map((entry) => [entry.taskId, entry.at]), [[planned.id, "2026-11-16T13:15:00.000Z"]], "it moves to join the email placed by hand");
+    const moved = pack([planned, mine], [meeting("2026-11-16T15:45:00Z", "2026-11-16T16:30:00Z")], { replan: true });
+    assert.equal(moved.placed.length, 1);
+    assert.equal(moved.placed[0].taskId, planned.id);
+    assert.equal(moved.placed[0].at.slice(0, 10), "2026-11-16", "it must move, and stays on its day");
     assert.ok(!moved.placed.some((entry) => entry.taskId === mine.id));
+    const near = task("Email Ned", { dueAt: "2026-11-16T12:10:00.000Z", dueHasTime: true, scheduledBy: "planner" });
+    assert.deepEqual(pack([near], [], { replan: true }).placed, [], "12:10 isn't moved to 12:05 for nothing");
     const past = task("Call Ben Archer", { dueAt: "2026-11-12T10:00:00.000Z", dueHasTime: true, scheduledBy: "planner", durationMinutes: 15 });
     const replanned = pack([past], [], { replan: true });
     assert.deepEqual(replanned.placed, []);
@@ -192,7 +200,7 @@ describe("Plan's packer", () => {
     const planned = task("Call Jane Cooper", { dueAt: "2026-11-16T10:30:00.000Z", dueHasTime: true, scheduledBy: "planner" });
     const dated = task("Call Emma Lowe", onDay("2026-11-16"));
     const plan = pack([planned, dated], [], { replan: true });
-    assert.deepEqual(times(plan, [planned.id, dated.id]).sort(), ["2026-11-16T10:30:00.000Z", "2026-11-16T10:45:00.000Z"], "back to back in the slot the block had");
+    assert.deepEqual(times(plan, [planned.id, dated.id]), [null, "2026-11-16T10:45:00.000Z"], "the block keeps its good time and the new call follows it");
     const without = pack([planned, dated]);
     assert.equal(times(without, [dated.id])[0], "2026-11-16T10:45:00.000Z", "without replanning the block still counts as busy");
   });
@@ -252,6 +260,33 @@ describe("Plan's packer", () => {
       const timed = new Set(tasks.filter((item) => item.dueHasTime).map((item) => item.id));
       assert.ok(!plan.unplaced.some((item) => timed.has(item.taskId)), "timed blocks never go under Couldn't fit");
     }
+  });
+
+  it("only keeps a break between runs of the same kind, so an email can follow a call run", () => {
+    const day = "2026-11-16";
+    const calls = Array.from({ length: 6 }, (_, index) =>
+      task(`Call client ${index}`, { dueAt: new Date(Date.parse(`${day}T12:00:00Z`) + index * 15 * 60_000).toISOString(), dueHasTime: true, scheduledBy: "person" }),
+    );
+    const email = task("Email Raj", onDay(day));
+    const plan = pack([...calls, email], [meeting(`${day}T09:00:00Z`, `${day}T12:00:00Z`), meeting(`${day}T13:45:00Z`, `${day}T17:30:00Z`)]);
+    assert.equal(plan.placed[0].at, `${day}T13:30:00.000Z`);
+  });
+
+  it("keeps blocks placed by hand in the preview as they are and plans around them", () => {
+    const day = "2026-11-16";
+    const dragged = task("Call Ann", onDay(day));
+    const other = task("Call Ben", onDay(day));
+    const person = task("Email Oliver", { dueAt: `${day}T15:00:00.000Z`, dueHasTime: true, scheduledBy: "person" });
+    const plan = pack([dragged, other, person], [], {
+      keep: [
+        { taskId: dragged.id, at: `${day}T10:30:00.000Z`, durationMinutes: 30 },
+        { taskId: person.id, at: `${day}T11:00:00.000Z`, durationMinutes: 15 },
+      ],
+    });
+    assert.deepEqual(plan.placed.find((entry) => entry.taskId === dragged.id)?.at, `${day}T10:30:00.000Z`);
+    const ben = Date.parse(plan.placed.find((entry) => entry.taskId === other.id)!.at);
+    assert.ok(ben >= Date.parse(`${day}T11:00:00Z`) || ben + 15 * 60_000 <= Date.parse(`${day}T10:30:00Z`), "nothing lands on a kept block");
+    assert.ok(!plan.placed.some((entry) => entry.taskId === person.id), "a block the person placed can't be kept into the plan");
   });
 
   it("counts calls already on the calendar towards a run", () => {

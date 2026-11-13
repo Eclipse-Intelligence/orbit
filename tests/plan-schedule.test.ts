@@ -197,7 +197,7 @@ describe("Plan and schedule", () => {
     assert.equal(bob.scheduledBy, "person");
     const [moved] = await scheduleTasks(mark, [{ taskId: bob.id, at: at(day, 15), moveDay: day }], { mode: "plan", provenance: { operation: "plan_tasks", source: "web" } });
     assert.equal(moved.task.dueAt, at(day, 15));
-    assert.equal(moved.task.scheduledBy, "planner");
+    assert.equal(moved.task.scheduledBy, "person", "a block Mark placed stays his after an overdue move");
     const sue = (await createTask(mark, { title: "Call Sue", dueAt: local(yesterday, 11) })).body.task;
     const agentRun = (blocks: unknown) => scheduleTasks(mark, blocks, { mode: "agent", provenance: { operation: "schedule_tasks" } });
     assert.match(await failure(() => agentRun([{ taskId: sue.id, at: local(day, 15, 30) }])), /You placed “Call Sue” yourself/);
@@ -221,6 +221,19 @@ describe("Plan and schedule", () => {
     const agentTask = (await createTask(mark, { title: "Email Max", dueDate: day })).body.task;
     const [agentDone] = await scheduleTasks(mark, [{ taskId: agentTask.id, at: local(day, 13, 30), byHand: true }], { mode: "agent", provenance: { operation: "schedule_tasks" } });
     assert.equal(agentDone.task.scheduledBy, "planner", "an agent can't claim a block was placed by hand");
+  });
+
+  it("catches a repeated task whatever its case, and refuses a block more than a year ahead", async () => {
+    const day = workday(13);
+    const task = (await createTask(mark, { title: "Email Pat", dueDate: day })).body.task;
+    assert.match(
+      await failure(() => scheduleTasks(mark, [{ taskId: task.id, at: at(day, 13) }, { taskId: task.id.toUpperCase(), at: at(day, 14) }], { mode: "plan", provenance: { operation: "plan_tasks" } })),
+      /only once/,
+    );
+    assert.match(
+      await failure(() => scheduleTasks(mark, [{ taskId: task.id, at: at(shiftDay(today, 400), 10) }], { mode: "agent", provenance: { operation: "schedule_tasks" } })),
+      /within the next year/,
+    );
   });
 
   it("checks an agent's slot against meetings however far ahead it is", async () => {

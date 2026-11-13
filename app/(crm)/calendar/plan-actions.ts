@@ -7,7 +7,7 @@ import { clickupToken } from "@/lib/clickup";
 import { actionError } from "@/lib/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { buildPlan, pushScheduled, SCHEDULE_FAILED, scheduleTasks, type ScheduledTask } from "@/lib/crm/plan-schedule";
-import type { PlanOrderItem, PlanProposal } from "@/lib/crm/plan-tasks";
+import type { PlanKeep, PlanOrderItem, PlanProposal } from "@/lib/crm/plan-tasks";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
@@ -23,11 +23,17 @@ function pushLater(scheduled: ScheduledTask[]) {
   }
 }
 
-export async function planAction(input: { replan?: boolean; ordering?: PlanOrderItem[] | null } = {}): Promise<{ plan: PlanProposal } | { error: string }> {
+export async function planAction(
+  input: { replan?: boolean; ordering?: PlanOrderItem[] | null; keep?: PlanKeep[] | null } = {},
+): Promise<{ plan: PlanProposal } | { error: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
-    const plan = await buildPlan(user, { replan: input.replan === true, ordering: Array.isArray(input.ordering) ? input.ordering : undefined });
+    const plan = await buildPlan(user, {
+      replan: input.replan === true,
+      ordering: Array.isArray(input.ordering) ? input.ordering : undefined,
+      keep: Array.isArray(input.keep) ? input.keep.slice(0, 100) : undefined,
+    });
     return { plan };
   } catch (error) {
     console.error("Plan failed", error);
