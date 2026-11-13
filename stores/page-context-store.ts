@@ -40,9 +40,35 @@ export function focusOnPage(kind: PageFocusKind, id: string, options: { pinned?:
   setFocus({ kind, id, path, closedAt: null, ...(options.pinned || (same && focus?.pinned) ? { pinned: true } : {}) });
 }
 
+const holders = new Map<string, number>();
+
+const holderKey = (kind: PageFocusKind, id: string) => `${kind}:${id}`;
+
+export function holdPageFocus(kind: PageFocusKind, id: string) {
+  const key = holderKey(kind, id);
+  holders.set(key, (holders.get(key) ?? 0) + 1);
+  focusOnPage(kind, id);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const left = (holders.get(key) ?? 1) - 1;
+    if (left > 0) {
+      holders.set(key, left);
+      return;
+    }
+    holders.delete(key);
+    releasePageFocus(kind, id);
+  };
+}
+
+export function focusTaskForAsk(id: string, options: { closesPanel: boolean }) {
+  focusOnPage("task", id, options.closesPanel ? { pinned: true } : {});
+}
+
 export function releasePageFocus(kind: PageFocusKind, id: string, options: { now?: boolean } = {}) {
   const { focus, setFocus } = usePageContextStore.getState();
-  if (!focus || focus.kind !== kind || focus.id !== id) return;
+  if (!focus || focus.kind !== kind || focus.id !== id || holders.has(holderKey(kind, id))) return;
   if (focus.pinned) setFocus({ ...focus, closedAt: Date.now() });
   else setFocus(options.now ? null : { ...focus, closedAt: Date.now() });
 }
@@ -56,8 +82,7 @@ export function unpinPageFocus() {
 export function usePageFocus(kind: PageFocusKind, id: string, active = true) {
   useEffect(() => {
     if (!active) return;
-    focusOnPage(kind, id);
-    return () => releasePageFocus(kind, id);
+    return holdPageFocus(kind, id);
   }, [kind, id, active]);
 }
 

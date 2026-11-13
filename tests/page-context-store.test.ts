@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { FOCUS_GRACE_MS, focusOnPage, pageSnapshot, releasePageFocus, unpinPageFocus, usePageContextStore } from "@/stores/page-context-store";
+import { FOCUS_GRACE_MS, focusOnPage, focusTaskForAsk, holdPageFocus, pageSnapshot, releasePageFocus, unpinPageFocus, usePageContextStore } from "@/stores/page-context-store";
 
 const place = { pathname: "/tasks", search: "" };
 let now = 1_000_000;
@@ -80,6 +80,56 @@ describe("the page focus a message is sent with", () => {
     focusOnPage("task", "a");
     assert.equal(usePageContextStore.getState().focus?.pinned, undefined);
     releasePageFocus("task", "a");
+    later(FOCUS_GRACE_MS + 1);
+    assert.equal(sent(), null);
+  });
+
+  it("keeps a task open in its row after the panel showing it closes", () => {
+    const row = holdPageFocus("task", "a");
+    const panel = holdPageFocus("task", "a");
+    panel();
+    panel();
+    later(10 * 60_000);
+    assert.deepEqual(sent(), { kind: "task", id: "a" });
+    assert.equal(usePageContextStore.getState().focus?.closedAt, null);
+    releasePageFocus("task", "a");
+    assert.equal(usePageContextStore.getState().focus?.closedAt, null);
+    row();
+    later(FOCUS_GRACE_MS - 1);
+    assert.deepEqual(sent(), { kind: "task", id: "a" });
+    later(2);
+    assert.equal(sent(), null);
+  });
+
+  it("gives the minute from whichever closes last, row or panel", () => {
+    const panel = holdPageFocus("task", "a");
+    const row = holdPageFocus("task", "a");
+    row();
+    later(10 * 60_000);
+    assert.deepEqual(sent(), { kind: "task", id: "a" });
+    panel();
+    later(FOCUS_GRACE_MS + 1);
+    assert.equal(sent(), null);
+    const again = holdPageFocus("task", "a");
+    later(10 * 60_000);
+    assert.deepEqual(sent(), { kind: "task", id: "a" });
+    again();
+  });
+
+  it("pins the task for Ask Orbit only when the panel closes for the assistant", () => {
+    const beside = holdPageFocus("task", "a");
+    focusTaskForAsk("a", { closesPanel: false });
+    assert.equal(usePageContextStore.getState().focus?.pinned, undefined);
+    beside();
+    later(FOCUS_GRACE_MS + 1);
+    assert.equal(sent(), null);
+
+    const modal = holdPageFocus("task", "b");
+    focusTaskForAsk("b", { closesPanel: true });
+    modal();
+    later(10 * 60_000);
+    assert.deepEqual(sent(), { kind: "task", id: "b" });
+    unpinPageFocus();
     later(FOCUS_GRACE_MS + 1);
     assert.equal(sent(), null);
   });

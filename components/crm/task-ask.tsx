@@ -4,14 +4,14 @@ import Button from "@/components/_ui/button";
 import { askOrbit } from "@/components/assistant/ask-orbit";
 import { useComposer } from "@/components/mail/compose-dock";
 import { cn } from "@/lib/utils";
-import { focusOnPage } from "@/stores/page-context-store";
+import { focusTaskForAsk } from "@/stores/page-context-store";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 
 export default function TaskAskButton({ taskId, variant, className, onAsk }: { taskId: string; variant: "secondary" | "ghost"; className?: string; onAsk?: () => void }) {
   const composer = useComposer();
 
   function ask() {
-    focusOnPage("task", taskId, { pinned: true });
+    focusTaskForAsk(taskId, { closesPanel: Boolean(onAsk) });
     if (!askOrbit("")) {
       composer.showToast({ message: "Ask Orbit isn't available here.", tone: "alert" });
       return;
