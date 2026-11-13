@@ -394,7 +394,6 @@ export async function createTaskInDb(
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
-  if (handsTimeToSomeoneElse(actor, write.ownerId, null)) keepDayOnly(write, { dueAt: null, dueHasTime: false });
   settleReminder(write, { dueHasTime: false });
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   let detectedLinks = Object.keys(options.detectedLinks ?? {});

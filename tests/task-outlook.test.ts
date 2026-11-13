@@ -481,8 +481,7 @@ describe("Outlook lifecycle", () => {
     assert.equal(audit.rows[0].changes.after.dueHasTime, false);
 
     const forPriya = await timed(mark, "Call Oliver", Date.now() + 2 * DAY, 30, { ownerId: priya.userId });
-    assert.equal(forPriya.dueHasTime, false);
-    assert.equal(await queued(forPriya.id), null);
+    assert.equal(forPriya.dueHasTime, true);
 
     const mine = await timed(mark, "Call Ben", Date.now() + 2 * DAY);
     await updateTask(priya, mine.id, { ownerId: priya.userId }).catch(() => null);
