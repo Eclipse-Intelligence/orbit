@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread, holdEscape } from "@/components/chat/discussion";
@@ -100,7 +100,7 @@ function focusedElement() {
   return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -121,6 +121,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
   const creator = named(task.createdByUserId);
   const [doneHere, setDoneHere] = useState(false);
   const [opener] = useState(focusedElement);
+  const asking = useRef(false);
   const done = completed || doneHere || Boolean(task.completedAt);
   const [busy, setBusy] = useState(false);
   const [removed, setRemoved] = useState<string[]>([]);
@@ -226,6 +227,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         flush();
+        if (asking.current) return;
         returnFocus(task.id, returnTo, opener);
       }}
       onOpenAutoFocus={(event) => {
@@ -247,7 +249,19 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
             </div>
             <SheetDescription className="sr-only">{task.title}</SheetDescription>
             <div className="flex shrink-0 items-center gap-2">
-              <TaskAskButton taskId={task.id} variant="secondary" />
+              <TaskAskButton
+                taskId={task.id}
+                variant="secondary"
+                onAsk={
+                  modal
+                    ? () => {
+                        asking.current = true;
+                        flush();
+                        onClose();
+                      }
+                    : undefined
+                }
+              />
               <SheetCloseButton label="Close" className="hit" />
             </div>
           </SheetHeader>
@@ -351,7 +365,7 @@ export default function TaskPanel({
   }
   return (
     <Sheet open={open && Boolean(task)} onOpenChange={onOpenChange} modal={modal}>
-      {task && <TaskPanelBody key={task.id} task={task} instant={instant} onClose={() => onOpenChange(false)} {...rest} />}
+      {task && <TaskPanelBody key={task.id} task={task} instant={instant} modal={modal} onClose={() => onOpenChange(false)} {...rest} />}
     </Sheet>
   );
 }
