@@ -418,6 +418,45 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(failed(wrong), ["proposes update_task", "leaves the open task about Ansel alone"]);
   });
 
+  it("gives a tagged task's full detail to the model and passes a call outcome that completes it over the open task", async () => {
+    const outcome = (taskKey: string, contact: string): Step => ({ world }) => ({
+      calls: [
+        { name: "log_activity", args: { type: "call", contactId: world.id(contact), title: "Call with Cyril", body: "He wants the proposal Friday." } },
+        { name: "update_task", args: { taskId: world.id(taskKey), completed: true } },
+        { name: "create_task", args: { title: "Send Cyril the proposal", contactId: world.id(contact), dueDate: londonDay({ weekday: 5 }) } },
+      ],
+    });
+    let seen = "";
+    let guide = "";
+    const result = await runOnce(
+      byId("write-call-outcome-tagged-task"),
+      settings(
+        scripted([
+          ({ body }) => {
+            seen = JSON.stringify(body.messages);
+            return { calls: [{ name: "guide", args: { topic: "tasks" } }] };
+          },
+          (call) => {
+            guide = JSON.stringify(call.body.messages);
+            return outcome("task:Chase Sagebrook intro", "contact:Cyril Dunmore")(call);
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(seen, /Spoke to him about Chase Sagebrook intro \[task id [0-9a-f-]{36}\]/);
+    assert.match(seen, /Task they tagged: task \\"Chase Sagebrook intro\\" \[task id [0-9a-f-]{36}\]/);
+    assert.match(seen, /Task is about: person \\"Cyril Dunmore\\" \[person id [0-9a-f-]{36}\][^;]*; company \\"Sagebrook Experts\\"/);
+    assert.match(seen, /Task they have open: task \\"Chase Ansel if he's gone quiet\\"/);
+    assert.match(seen, /A tagged task comes with its full picture/);
+    assert.match(guide, /A task the message tags \(\W+Task they tagged\W+in the page_context block\) is the task it is about, with the full picture already there, and it wins over a task they have open/);
+    assert.deepEqual(result.cards.map((item) => item.name), ["log_activity", "update_task", "create_task"]);
+    assert.deepEqual(result.cards[1].title, "Complete task: Chase Sagebrook intro");
+
+    const wrong = await runOnce(byId("write-call-outcome-tagged-task"), settings(scripted([outcome("task:Chase Ansel if he's gone quiet", "contact:Ansel Pike")])));
+    assert.deepEqual(failed(wrong), ["proposes log_activity", "proposes update_task", "proposes create_task", "leaves the open task about Ansel alone", "logs nothing on Ansel"]);
+  });
+
   it("keeps the next task with the teammate who owned the open task", async () => {
     const outcome = (owner: boolean): Step => ({ world, body }) => {
       assert.match(JSON.stringify(body.messages), /assigned to the teammate \\"Tamsin Holt\\"/);

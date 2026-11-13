@@ -124,6 +124,19 @@ describe("agent docs", () => {
     assert.deepEqual(stale, [], `docs/mcp.md lists tools that no longer exist: ${stale.join(", ")}`);
   });
 
+  it("tells every token that get_next_action gives a task's full picture in one call, and documents where", async () => {
+    for (const token of [await mcpTools(person), await mcpTools(agent([...SCOPES]))]) {
+      assert.ok(token.names.includes("get_next_action"));
+      assert.match(token.instructions, /get_next_action gives one task's full picture in one call/);
+    }
+    assert.match(readDoc("mcp.md"), /^\| `get_next_action` \| One task with its full picture in one call[^\n]*\| `id` \| `crm:read` \| No \| Both \|$/m);
+    assert.match(readDoc("api.md"), /### Task detail\n\n`detail` on `GET \/api\/v1\/tasks\/:id` \(and MCP `get_next_action`\) is the task's full picture in one call/);
+    assert.match(readDoc("assistant.md"), /\| `list_tasks` \|[^\n]*With `taskId` it returns that one task's full picture/);
+    const listTasks = ASSISTANT_TOOLS.find((tool) => tool.name === "list_tasks")!;
+    assert.match(listTasks.description, /With taskId it returns that one task with its full picture in one call/);
+    assert.ok("taskId" in ((listTasks.parameters as { properties: Record<string, unknown> }).properties));
+  });
+
   it("gives mail, Chat and Reader tools only to personal tokens, and says so in the instructions", async () => {
     const personal = await mcpTools(person);
     const workspace = await mcpTools(agent([...SCOPES]));

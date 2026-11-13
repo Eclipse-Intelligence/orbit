@@ -289,6 +289,22 @@ export const CORE_TASKS: EvalTask[] = [
     ],
   }),
   task({
+    id: "write-call-outcome-tagged-task",
+    suite: "core",
+    category: "multi_step",
+    origin: "Tagged tasks: a call outcome that tags a task completes that task with its full detail already in the turn, even with another task open.",
+    page: { path: "/tasks", focus: { kind: "task", id: "task:Chase Ansel if he's gone quiet" } },
+    message: "Spoke to him about {{task:Chase Sagebrook intro}}, he wants the proposal Friday.",
+    checks: [
+      card("log_activity", arg.all(arg.equals("type", "call"), arg.is("contactId", "contact:Cyril Dunmore"))),
+      card("update_task", arg.all(arg.is("taskId", "task:Chase Sagebrook intro"), arg.equals("completed", true))),
+      card("create_task", arg.all(arg.is("contactId", "contact:Cyril Dunmore"), dueOn("dueDate", { weekday: 5 }, { weekday: 4 }), (args) => args.dueAt === undefined || args.dueAt === null)),
+      noCard("update_task", arg.is("taskId", "task:Chase Ansel if he's gone quiet"), "leaves the open task about Ansel alone"),
+      noCard(["log_activity", "create_task"], arg.is("contactId", "contact:Ansel Pike"), "logs nothing on Ansel"),
+      exactlyCards(["log_activity", "update_task", "create_task"]),
+    ],
+  }),
+  task({
     id: "write-call-outcome-teammate-task",
     suite: "core",
     category: "multi_step",
