@@ -82,9 +82,12 @@ function DoneCircle({ block, onOpen, onComplete, size }: TaskBlockHandlers & { b
 function Detail({ block }: { block: TaskBlock }) {
   if (block.proposed) {
     return (
-      <span className={cn("tabular-nums", block.suggested && "text-violet")}>
-        {[block.person, block.workspaceName, durationLabel(block.durationMinutes)].filter(Boolean).join(" · ")}
-      </span>
+      <>
+        {block.clash && <span className="text-(--tag-amber-text)">Clashes with {block.clash} · </span>}
+        <span className={cn("tabular-nums", block.suggested && "text-violet")}>
+          {[block.clash ? null : block.person, block.workspaceName, durationLabel(block.durationMinutes)].filter(Boolean).join(" · ")}
+        </span>
+      </>
     );
   }
   const parts: ReactNode[] = clashing(block)

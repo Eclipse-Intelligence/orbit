@@ -22,17 +22,39 @@ const ENDS = STARTS.map((minutes) => minutes + WORKING_HOURS_STEP);
 
 export default function WorkingHoursSettings({ hours }: { hours: WorkingHours }) {
   const [days, setDays] = useState(hours);
+  const [saving, setSaving] = useState(false);
   const [source, setSource] = useState(hours);
   if (source !== hours) {
     setSource(hours);
-    setDays(hours);
+    if (!saving) setDays(hours);
   }
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const saving = useRef(0);
+  const queued = useRef<WorkingHours | null>(null);
+  const running = useRef(false);
+  const confirmed = useRef(hours);
+
+  async function flush() {
+    running.current = true;
+    setSaving(true);
+    while (queued.current) {
+      const next = queued.current;
+      queued.current = null;
+      const result = await saveWorkingHoursAction(next).catch(() => ({ error: SAVE_FAILED }));
+      if (result.error) {
+        queued.current = null;
+        setDays(confirmed.current);
+        setError(result.error);
+        break;
+      }
+      confirmed.current = next;
+      if (!queued.current) setStatus("Saved");
+    }
+    running.current = false;
+    setSaving(false);
+  }
 
   function change(weekday: number, patch: Partial<WorkingDay>) {
-    const previous = days;
     const current = days[weekday];
     const next = { ...current, ...patch };
     if (patch.start !== undefined && next.end <= next.start) next.end = Math.min(DAY_LENGTH_MINUTES, next.start + 60);
@@ -41,18 +63,8 @@ export default function WorkingHoursSettings({ hours }: { hours: WorkingHours })
     setDays(updated);
     setError(null);
     setStatus(null);
-    const seq = (saving.current += 1);
-    void saveWorkingHoursAction(updated)
-      .catch(() => ({ error: SAVE_FAILED }))
-      .then((result) => {
-        if (saving.current !== seq) return;
-        if (result.error) {
-          setDays(previous);
-          setError(result.error);
-          return;
-        }
-        setStatus("Saved");
-      });
+    queued.current = updated;
+    if (!running.current) void flush();
   }
 
   return (
@@ -62,11 +74,11 @@ export default function WorkingHoursSettings({ hours }: { hours: WorkingHours })
           const day = days[weekday];
           const name = WEEKDAY_NAMES[weekday];
           return (
-            <li key={weekday} className="flex min-h-12 flex-wrap items-center gap-3 px-3 py-2">
+            <li key={weekday} className="flex min-h-12 flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
               <Switch className="hit" checked={day.works} label={`Work on ${name}`} onChange={(works) => change(weekday, { works })} />
               <span className={cn("w-10 text-[14px] leading-none", !day.works && "text-subtle")}>{name.slice(0, 3)}</span>
               {day.works ? (
-                <span className="flex items-center gap-2">
+                <span className="flex items-center gap-2 max-[430px]:basis-full max-[430px]:pl-12">
                   <NativeSelect
                     aria-label={`${name} start`}
                     value={day.start}

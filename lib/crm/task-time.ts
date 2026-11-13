@@ -97,8 +97,10 @@ export function nextFreeStart(now: number, durationMinutes: number, busy: { star
   return cursor + length <= window.close ? cursor : null;
 }
 
-function morning(key: string, label: string, id: string, timeZone: string, hours: WorkingHours): ScheduleChoice {
-  const at = new Date(wallAt(key, workingDay(hours, key).start, timeZone)).toISOString();
+function morning(key: string, name: string, id: string, timeZone: string, hours: WorkingHours): ScheduleChoice {
+  const start = workingDay(hours, key).start;
+  const at = new Date(wallAt(key, start, timeZone)).toISOString();
+  const label = start < 12 * 60 ? `${name} morning` : `${name} at ${clockLabel(at, timeZone)}`;
   return { id, label, detail: `${dayName(key)} ${clockLabel(at, timeZone)}`, at };
 }
 
@@ -116,9 +118,9 @@ export function scheduleChoices(
   }
   const next = nextWorkableDay(today, hours);
   if (!next) return choices;
-  choices.push(morning(next, next === shiftDay(today, 1) ? "Tomorrow morning" : `${dayName(next, true)} morning`, "tomorrow", timeZone, hours));
+  choices.push(morning(next, next === shiftDay(today, 1) ? "Tomorrow" : dayName(next, true), "tomorrow", timeZone, hours));
   const monday = firstWorkableDay(shiftDay(today, (8 - weekday(today)) % 7 || 7), hours);
-  if (monday && monday !== next) choices.push(morning(monday, `${dayName(monday, true)} morning`, "monday", timeZone, hours));
+  if (monday && monday !== next) choices.push(morning(monday, dayName(monday, true), "monday", timeZone, hours));
   return choices;
 }
 
@@ -137,12 +139,12 @@ export function wallInstant(key: string, hour: number, minute: number, timeZone 
   return sameWall(earlier, hour, minute, key, timeZone) ? earlier : at;
 }
 
-const LOCAL = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/;
+const LOCAL = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/;
 
 export function localInstant(value: string, timeZone = appTimeZone()) {
   const match = LOCAL.exec(value);
   if (!match) return value;
-  return new Date(wallInstant(match[1], Number(match[2]), Number(match[3]), timeZone)).toISOString();
+  return new Date(wallInstant(match[1], Number(match[2]), Number(match[3]), timeZone) + Number(match[4] ?? 0) * 1000).toISOString();
 }
 
 function reminderFits(day: string, minutes: number, leadMinutes: number, now: number, timeZone: string) {

@@ -51,6 +51,7 @@ import { taskBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { placedTask, placementLanded, slotDateLabel, type DropPlacement } from "@/lib/task-drag";
 import {
   applyPayload,
+  carryOver,
   chooseMiss,
   dragEntry,
   leaveOverdue,
@@ -373,9 +374,10 @@ export default function CalendarScreen({
         setPlanLoading(false);
         if ("error" in result) {
           setPlanError(result.error || PLAN_FAILED);
+          setReplan(preview?.proposal.replan ?? false);
           return;
         }
-        setPreview(startPreview(result.plan));
+        setPreview((current) => (current ? carryOver(current, result.plan) : startPreview(result.plan)));
       });
   };
   const cancelPlan = () => {
@@ -480,7 +482,8 @@ export default function CalendarScreen({
     tasks.filter((task) => !proposedIds.has(task.id)),
     { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done },
   );
-  const proposals = preview && planning ? previewBlocks(preview, tasks, { workspaces: planner.workspaces }) : [];
+  const proposals = preview && planning ? previewBlocks(preview, tasks, { workspaces: planner.workspaces, meetings: shown }) : [];
+  const clashes = Object.fromEntries(proposals.flatMap((block) => (block.clash ? [[block.task.id, block.clash]] : [])));
   const runs = preview && planning ? previewRuns(preview.entries) : [];
   const [opener, setOpener] = useState<HTMLElement | null>(null);
   const openTask = (task: Task, from: HTMLElement | null) => {
@@ -654,6 +657,7 @@ export default function CalendarScreen({
           className={cn("ml-auto hidden md:inline-flex", planning && "bg-muted")}
           aria-pressed={planning}
           title="Plan your tasks for today and the next 14 days"
+          disabled={applying}
           onClick={() => (planning ? cancelPlan() : runPlan(false))}
         >
           <SparkleIcon aria-hidden className="size-3" />
@@ -726,12 +730,21 @@ export default function CalendarScreen({
               today={today}
               loading={planLoading}
               applying={applying}
-              replan={replan}
+              replan={planLoading ? replan : (preview?.proposal.replan ?? replan)}
               error={planError}
+              clashes={clashes}
               handlers={planHandlers}
             />
           )}
-          <div className="flex min-h-0 min-w-0 flex-1 md:hidden">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col md:hidden">
+            {planning && (
+              <div role="status" className="border-border caption-style text-subtle flex items-center gap-3 border-b px-4 py-2.5">
+                <span className="min-w-0 flex-1">Plan needs a wider screen.</span>
+                <Button variant="secondary" size="sm" className="hit" onClick={cancelPlan}>
+                  Cancel
+                </Button>
+              </div>
+            )}
             <CalendarAgenda
               date={date}
               today={today}

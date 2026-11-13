@@ -2,14 +2,14 @@ import { dateKey } from "@/lib/calendar-view";
 import { RUN_MAX_MINUTES, RUN_MAX_TASKS, type PlanEntry, type PlanGroup, type PlanMiss, type PlanOverdue, type PlanProposal } from "@/lib/crm/plan-tasks";
 import { clockLabel, durationLabel, taskDueDay } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
-import { taskBlockId, taskPerson, type TaskBlock } from "@/lib/task-blocks";
+import { clashWith, taskBlockId, taskPerson, type ClashCandidate, type TaskBlock } from "@/lib/task-blocks";
 import { appTimeZone } from "@/lib/time";
 
 const MINUTE = 60_000;
 
 export type PreviewSource = "placed" | "overdue" | "unplaced";
 
-export type PreviewEntry = PlanEntry & { source: PreviewSource };
+export type PreviewEntry = PlanEntry & { source: PreviewSource; byHand?: boolean };
 
 export type OverdueChoice = "move" | "leave";
 export type MissChoice = "next" | "outside" | "leave";
@@ -19,6 +19,7 @@ export type PlanPreview = {
   entries: PreviewEntry[];
   overdue: Record<string, OverdueChoice>;
   unplaced: Record<string, MissChoice>;
+  removed: string[];
 };
 
 export type PreviewRun = { id: string; day: string; group: PlanGroup; startsAt: string; endsAt: string; count: number; minutes: number };
@@ -29,7 +30,28 @@ export function startPreview(proposal: PlanProposal): PlanPreview {
     entries: proposal.placed.map((entry) => ({ ...entry, source: "placed" as const })),
     overdue: {},
     unplaced: {},
+    removed: [],
   };
+}
+
+export function carryOver(previous: PlanPreview, proposal: PlanProposal, timeZone = appTimeZone()): PlanPreview {
+  let next = startPreview(proposal);
+  for (const taskId of previous.removed) next = removeEntry(next, taskId);
+  for (const [taskId, choice] of Object.entries(previous.overdue)) {
+    next = choice === "move" ? moveOverdue(next, taskId, timeZone) : leaveOverdue(next, taskId);
+  }
+  for (const [taskId, choice] of Object.entries(previous.unplaced)) next = chooseMiss(next, taskId, choice, timeZone);
+  for (const entry of previous.entries) {
+    if (!entry.byHand) continue;
+    const kept = next.entries.find((item) => item.taskId === entry.taskId);
+    const rest = without(next.entries, entry.taskId);
+    next = { ...next, entries: sorted([...rest, { ...(kept ?? entry), at: entry.at, durationMinutes: entry.durationMinutes, suggested: entry.suggested, moveDay: entry.moveDay, byHand: true }]) };
+  }
+  return next;
+}
+
+export function editCount(preview: PlanPreview) {
+  return preview.removed.length + Object.keys(preview.overdue).length + Object.keys(preview.unplaced).length + preview.entries.filter((entry) => entry.byHand).length;
 }
 
 function sorted(entries: PreviewEntry[]) {
@@ -64,7 +86,7 @@ export function moveOverdue(preview: PlanPreview, taskId: string, timeZone = app
 
 export function moveAllOverdue(preview: PlanPreview, timeZone = appTimeZone()): PlanPreview {
   return preview.proposal.overdue.reduce(
-    (current, item) => (current.overdue[item.taskId] === "leave" || !item.at ? current : moveOverdue(current, item.taskId, timeZone)),
+    (current, item) => (current.overdue[item.taskId] || !item.at ? current : moveOverdue(current, item.taskId, timeZone)),
     preview,
   );
 }
@@ -112,7 +134,7 @@ export function removeEntry(preview: PlanPreview, taskId: string): PlanPreview {
   if (!entry) return preview;
   if (entry.source === "overdue") return undoOverdue(preview, taskId);
   if (entry.source === "unplaced") return undoMiss(preview, taskId);
-  return { ...preview, entries: without(preview.entries, taskId) };
+  return { ...preview, entries: without(preview.entries, taskId), removed: [...preview.removed, taskId] };
 }
 
 export function dragEntry(
@@ -131,7 +153,8 @@ export function dragEntry(
     at,
     durationMinutes,
     suggested: entry.suggested && durationMinutes === entry.durationMinutes,
-    moveDay: own && day !== own ? day : null,
+    moveDay: own && day !== own ? day : entry.source === "overdue" ? day : null,
+    byHand: true,
   };
   return { ...preview, entries: sorted([...without(preview.entries, task.id), moved]) };
 }
@@ -142,6 +165,7 @@ export function applyPayload(preview: PlanPreview) {
     at: entry.at,
     durationMinutes: entry.durationMinutes,
     ...(entry.moveDay ? { moveDay: entry.moveDay } : {}),
+    ...(entry.byHand ? { byHand: true } : {}),
   }));
 }
 
@@ -198,8 +222,9 @@ export function previewTask(task: Task, entry: Pick<PlanEntry, "at" | "durationM
 export function previewBlocks(
   preview: PlanPreview,
   tasks: Task[],
-  options: { workspaces?: { id: string; name: string }[] } = {},
+  options: { workspaces?: { id: string; name: string }[]; meetings?: ClashCandidate[] } = {},
 ): TaskBlock[] {
+  const meetings = [...(options.meetings ?? [])].sort((left, right) => left.startsAt.localeCompare(right.startsAt));
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const names = (options.workspaces ?? []).length > 1 ? new Map(options.workspaces!.map((item) => [item.id, item.name])) : null;
   return preview.entries.flatMap((entry) => {
@@ -217,7 +242,7 @@ export function previewBlocks(
         workspaceName: names?.get(task.workspaceId) ?? null,
         done: false,
         overdue: false,
-        clash: null,
+        clash: clashWith(new Date(entry.at).getTime(), new Date(entryEnd(entry)).getTime(), meetings),
         proposed: true,
         suggested: entry.suggested,
       },

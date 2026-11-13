@@ -259,6 +259,8 @@ export function packPlan(input: PackInput): PlanProposal {
   const dated: Item[] = [];
   const undated: Item[] = [];
   const overdueItems: Item[] = [];
+  const replanned: (Item & { original: Interval })[] = [];
+  const fixed: { group: PlanGroup; day: string; interval: Interval }[] = [];
   for (const order of ordering) {
     const task = byId.get(order.id)!;
     const base = itemFor(task, order);
@@ -273,24 +275,44 @@ export function packPlan(input: PackInput): PlanProposal {
     const day = taskDueDay(task.dueAt, timeZone);
     if (task.dueHasTime) {
       const start = new Date(task.dueAt).getTime();
+      const own = isTaskDuration(task.durationMinutes) ? task.durationMinutes : DEFAULT_TASK_DURATION;
+      const original = { start, end: start + own * MINUTE };
       if (replan && task.scheduledBy === "planner" && start > now && day && day <= last) {
-        dated.push({ ...base, day });
+        replanned.push({ ...base, day, original });
         continue;
       }
-      const own = isTaskDuration(task.durationMinutes) ? task.durationMinutes : DEFAULT_TASK_DURATION;
-      busy.push({ start, end: start + own * MINUTE });
+      busy.push(original);
+      if (day) fixed.push({ group: base.group, day, interval: original });
       continue;
     }
     if (day && day >= today && day <= last) dated.push({ ...base, day });
   }
 
   const taken: Interval[] = [];
+  const held: Interval[] = replanned.map((item) => item.original);
   const runs: Run[] = [];
+  const seedRun = (group: PlanGroup, day: string, interval: Interval) => {
+    if (group === "other") return;
+    const minutes = Math.round((interval.end - interval.start) / MINUTE);
+    const joined = runs.find((run) => run.group === group && run.day === day && (run.end === interval.start || run.start === interval.end));
+    if (joined) {
+      joined.start = Math.min(joined.start, interval.start);
+      joined.end = Math.max(joined.end, interval.end);
+      joined.count += 1;
+      joined.minutes += minutes;
+      return;
+    }
+    runs.push({ group, day, start: interval.start, end: interval.end, count: 1, minutes });
+  };
+  for (const block of [...fixed].sort((left, right) => left.interval.start - right.interval.start)) seedRun(block.group, block.day, block.interval);
   const placed: PlanEntry[] = [];
   const unplaced: PlanMiss[] = [];
 
   const free = (interval: Interval) =>
-    interval.start >= floor && !busy.some((item) => overlaps(item, interval)) && !taken.some((item) => overlaps(item, interval));
+    interval.start >= floor &&
+    !busy.some((item) => overlaps(item, interval)) &&
+    !taken.some((item) => overlaps(item, interval)) &&
+    !held.some((item) => overlaps(item, interval));
 
   const insideHours = (day: string, interval: Interval) => {
     const window = workingWindow(day, hours, timeZone);
@@ -457,6 +479,13 @@ export function packPlan(input: PackInput): PlanProposal {
     });
   };
 
+  for (const item of replanned) {
+    held.splice(held.indexOf(item.original), 1);
+    if (placeOn(item, item.day!, [])) continue;
+    busy.push(item.original);
+    seedRun(item.group, item.day!, item.original);
+  }
+
   const missedDated: Item[] = [];
   const pendingDated = [...dated];
   for (const item of dated) {
@@ -516,7 +545,7 @@ export function packPlan(input: PackInput): PlanProposal {
   };
 }
 
-export type ScheduleEntry = { taskId: string; at: string; durationMinutes: number; moveDay: string | null };
+export type ScheduleEntry = { taskId: string; at: string; durationMinutes: number; moveDay: string | null; byHand?: boolean };
 
 export type ScheduleCheck = {
   viewerId: string;
@@ -538,13 +567,14 @@ export function scheduleRefusal(task: PlanTask, entry: ScheduleEntry, check: Sch
   const name = quoted(task.title);
   if (task.ownerId !== check.viewerId) return `${name} isn't yours. Only your own tasks go on your calendar.`;
   if (task.completedAt) return `${name} is done. Reopen it to move it.`;
-  if (task.dueHasTime && task.dueAt && task.scheduledBy !== "planner") return `You placed ${name} yourself, so it stays where it is.`;
   const start = new Date(entry.at).getTime();
   const end = start + entry.durationMinutes * MINUTE;
-  if (start < check.now - MINUTE) return `${name} would start in the past. Plan again.`;
   const day = dayKeyAt(new Date(start), timeZone);
   const own = taskDueDay(task.dueAt, timeZone);
   const overdue = isBlockOverdue(task, check.now, timeZone);
+  const movingOverdue = overdue && entry.moveDay === day;
+  if (task.dueHasTime && task.dueAt && task.scheduledBy !== "planner" && !movingOverdue) return `You placed ${name} yourself, so it stays where it is.`;
+  if (start < check.now - MINUTE) return `${name} would start in the past. Plan again.`;
   if (own && own !== day) {
     const named = entry.moveDay === day;
     if (!named || (check.mode === "agent" && !overdue)) {

@@ -522,7 +522,7 @@ export default function CalendarGrid({
                         className="pointer-events-none absolute inset-x-0.5 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_4%,transparent)]"
                         style={{ top, height }}
                       >
-                        <span className="absolute -top-2 right-1.5 z-[2] h-4 rounded-full bg-[#241f45] px-1.5 text-[10.5px] leading-4 font-medium whitespace-nowrap text-[#cfc8ff] tabular-nums">
+                        <span className="absolute -top-2 right-1.5 z-[2] h-4 rounded-full bg-[color-mix(in_srgb,var(--violet)_28%,var(--background))] px-1.5 text-[10.5px] leading-4 font-medium whitespace-nowrap text-foreground tabular-nums">
                           {runLabel(run)}
                         </span>
                       </div>

@@ -3438,6 +3438,7 @@ const TOOL_LIST: AssistantTool[] = [
         schedule: {
           type: "array",
           description: "Blocks to put on the user's calendar in one go, instead of taskId. Each is placed by Plan, not by hand.",
+          maxItems: 100,
           items: {
             type: "object",
             properties: {
@@ -3451,9 +3452,9 @@ const TOOL_LIST: AssistantTool[] = [
         },
       },
     },
-    details: async (actor, args) => (Array.isArray(args.schedule) ? scheduleDetails(actor, args.schedule) : {}),
+    details: async (actor, args) => (args.schedule !== undefined && args.schedule !== null ? scheduleDetails(actor, args.schedule) : {}),
     describe: (args, name) => {
-      if (Array.isArray(args.schedule)) return describeSchedule(args.schedule, name);
+      if (args.schedule !== undefined && args.schedule !== null) return describeSchedule(args.schedule, name);
       return {
         title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
         lines: [

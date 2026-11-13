@@ -25,7 +25,7 @@ function pushLater(scheduled: ScheduledTask[]) {
 
 export async function planAction(input: { replan?: boolean; ordering?: PlanOrderItem[] | null } = {}): Promise<{ plan: PlanProposal } | { error: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Your session ended. Sign in again." };
+  if (!user) return { error: "Sign in again." };
   try {
     const plan = await buildPlan(user, { replan: input.replan === true, ordering: Array.isArray(input.ordering) ? input.ordering : undefined });
     return { plan };
@@ -37,7 +37,7 @@ export async function planAction(input: { replan?: boolean; ordering?: PlanOrder
 
 export async function applyPlanAction(entries: unknown): Promise<{ ok?: true; count?: number; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Your session ended. Sign in again." };
+  if (!user) return { error: "Sign in again." };
   try {
     const scheduled = await scheduleTasks(user, entries, { mode: "plan", provenance: { operation: "plan_tasks", source: "web" } });
     pushLater(scheduled);

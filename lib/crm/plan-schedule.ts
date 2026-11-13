@@ -19,12 +19,13 @@ import {
   type ScheduleEntry,
 } from "@/lib/crm/plan-tasks";
 import { readPlannerTasks } from "@/lib/crm/task-blocks";
+import { isBlockOverdue } from "@/lib/task-blocks";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, localInstant, taskDueDay } from "@/lib/crm/task-time";
 import { scheduleTaskInDb } from "@/lib/crm/tasks";
 import type { Provenance, Task, UserActor } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { readWorkingHoursInDb } from "@/lib/crm/working-hours";
-import { actorForTask } from "@/lib/crm/workspaces";
+import { actorsForTasks } from "@/lib/crm/workspaces";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { completeJson } from "@/lib/llm";
 import type { WorkingHours } from "@/lib/working-hours";
@@ -56,10 +57,10 @@ export async function planPreferences(actor: UserActor): Promise<PlanPreferences
   return DEFAULT_PLAN_PREFERENCES;
 }
 
-export async function readPlanContext(actor: UserActor, now = Date.now()): Promise<PlanContext> {
+export async function readPlanContext(actor: UserActor, now = Date.now(), cover: { start: number; end: number } | null = null): Promise<PlanContext> {
   const today = dayKeyAt(new Date(now));
-  const from = dayStartIso(shiftDay(today, -1));
-  const to = dayStartIso(shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 2));
+  const from = new Date(Math.min(Date.parse(dayStartIso(shiftDay(today, -1))), cover ? cover.start - 86_400_000 : Number.POSITIVE_INFINITY)).toISOString();
+  const to = new Date(Math.max(Date.parse(dayStartIso(shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 2))), cover ? cover.end + 86_400_000 : 0)).toISOString();
   const [planner, personal, preferences] = await Promise.all([
     readPlannerTasks(actor, now),
     withActor(actor, async (db) => {
@@ -122,7 +123,7 @@ function describeTask(task: PlanTask & Partial<Pick<Task, "contactName" | "compa
     person: task.contactName ?? null,
     company: task.companyName ?? null,
     due: task.dueAt ? (task.dueHasTime ? task.dueAt : taskDueDay(task.dueAt)) : null,
-    overdue: Boolean(task.dueAt && new Date(task.dueAt).getTime() < now),
+    overdue: isBlockOverdue(task, now),
     priority: task.priority,
     durationMinutes: task.durationMinutes,
     group: planGroup(task.title),
@@ -196,11 +197,13 @@ export function readScheduleEntries(raw: unknown): ScheduleEntry[] {
     if (item.moveDay !== undefined && item.moveDay !== null && (typeof item.moveDay !== "string" || !DAY.test(item.moveDay))) {
       throw entryError("moveDay takes a day, such as 2026-11-16.");
     }
+    if (item.byHand !== undefined && typeof item.byHand !== "boolean") throw entryError("byHand is true or false.");
     return {
       taskId: item.taskId,
       at: new Date(at).toISOString(),
       durationMinutes: typeof item.durationMinutes === "number" ? item.durationMinutes : 0,
       moveDay: typeof item.moveDay === "string" ? item.moveDay : null,
+      byHand: item.byHand === true,
     };
   });
 }
@@ -214,14 +217,18 @@ export async function scheduleTasks(
 ): Promise<ScheduledTask[]> {
   const entries = readScheduleEntries(raw);
   const now = options.now ?? Date.now();
-  const members = await Promise.all(entries.map((entry) => actorForTask(actor, entry.taskId)));
-  const context = options.mode === "agent" ? await readPlanContext(actor, now) : null;
+  const members = await actorsForTasks(actor, entries.map((entry) => entry.taskId));
+  const starts = entries.map((entry) => Date.parse(entry.at));
+  const cover = { start: Math.min(...starts), end: Math.max(...starts) + 480 * 60_000 };
+  const context = options.mode === "agent" ? await readPlanContext(actor, now, cover) : null;
+  const byHand = options.mode === "plan";
   const known = new Map((context?.tasks ?? []).map((task) => [task.id, task]));
   const batch = entries.map((entry) => ({
     ...entry,
     durationMinutes: entry.durationMinutes || known.get(entry.taskId)?.durationMinutes || DEFAULT_TASK_DURATION,
   }));
   return withActor(actor, async (db) => {
+    await db.query("select 1 from crm.tasks where id = any($1::uuid[]) order by id for update", [[...entries.map((entry) => entry.taskId)].sort()]);
     const done: ScheduledTask[] = [];
     for (const [index, entry] of entries.entries()) {
       const member = members[index];
@@ -229,7 +236,7 @@ export async function scheduleTasks(
         db,
         member,
         entry.taskId,
-        { at: entry.at, durationMinutes: entry.durationMinutes || null },
+        { at: entry.at, durationMinutes: entry.durationMinutes || null, byHand: byHand && entry.byHand === true },
         options.provenance,
         (task) => {
           const settled = { ...entry, durationMinutes: entry.durationMinutes || task.durationMinutes || DEFAULT_TASK_DURATION };

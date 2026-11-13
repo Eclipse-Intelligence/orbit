@@ -10,7 +10,7 @@ import {
   type PlanMeeting,
   type PlanTask,
 } from "@/lib/crm/plan-tasks";
-import { dayStartIso, nextFreeStart, scheduleChoices } from "@/lib/crm/task-time";
+import { dayStartIso, localInstant, nextFreeStart, scheduleChoices } from "@/lib/crm/task-time";
 import { DEFAULT_WORKING_HOURS, offDayReason, readWorkingHours, type WorkingHours } from "@/lib/working-hours";
 
 const LONDON = "Europe/London";
@@ -197,6 +197,82 @@ describe("Plan's packer", () => {
     assert.equal(times(without, [dated.id])[0], "2026-11-16T10:45:00.000Z", "without replanning the block still counts as busy");
   });
 
+  it("keeps a replanned block where it is when it can't move, so nothing lands on it", () => {
+    const day = "2026-11-16";
+    const keptCall = task("Call Jane Cooper", { dueAt: `${day}T10:30:00.000Z`, dueHasTime: true, scheduledBy: "planner" });
+    const keptOther = task("Draft the board pack", { dueAt: `${day}T14:00:00.000Z`, dueHasTime: true, scheduledBy: "planner", durationMinutes: 60 });
+    const dated = task("Tidy the notes", onDay(day));
+    const meetings = [
+      meeting(`${day}T09:00:00Z`, `${day}T10:30:00Z`),
+      meeting(`${day}T10:45:00Z`, `${day}T14:00:00Z`),
+      meeting(`${day}T15:00:00Z`, `${day}T17:30:00Z`),
+    ];
+    const plan = pack([keptCall, keptOther, dated], meetings, { replan: true });
+    assert.deepEqual(plan.placed, []);
+    assert.deepEqual(plan.unplaced.map((item) => item.taskId), [dated.id], "a block that can't move isn't listed as Couldn't fit");
+    const outside = Date.parse(plan.unplaced[0].outside!);
+    assert.ok(outside >= Date.parse(`${day}T17:30:00Z`) || outside + 15 * 60_000 <= Date.parse(`${day}T09:00:00Z`));
+  });
+
+  it("never double-books, whatever the mix of tasks, meetings and replanned blocks", () => {
+    let seed = 42;
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const titles = ["Call Ann", "Email Raj", "Book a demo with Lee", "Draft terms", "Send the deck", "Ring Bob"];
+    const pick = <T,>(items: T[]) => items[Math.floor(random() * items.length)];
+    const days = Array.from({ length: 6 }, (_, index) => `2026-11-${String(13 + index).padStart(2, "0")}`);
+    const at = (day: string) => `${day}T${String(9 + Math.floor(random() * 8)).padStart(2, "0")}:${pick(["00", "15", "30", "45"])}:00.000Z`;
+    const span = (start: string, minutes: number) => ({ start: Date.parse(start), end: Date.parse(start) + minutes * 60_000 });
+    for (let round = 0; round < 300; round += 1) {
+      const tasks: PlanTask[] = [];
+      for (let index = 0; index < 18; index += 1) {
+        const kind = random();
+        const minutes = pick([15, 15, 30, 45, 60, 90]);
+        if (kind < 0.3) tasks.push(task(pick(titles), { dueAt: at(pick(days)), dueHasTime: true, scheduledBy: random() < 0.6 ? "planner" : "person", durationMinutes: minutes }));
+        else if (kind < 0.7) tasks.push(task(pick(titles), onDay(pick(days), { durationMinutes: minutes })));
+        else tasks.push(task(pick(titles), { durationMinutes: minutes }));
+      }
+      const meetings = Array.from({ length: 10 }, () => {
+        const start = Date.parse(at(pick(days)));
+        return meeting(new Date(start).toISOString(), new Date(start + pick([30, 60, 90]) * 60_000).toISOString());
+      });
+      const plan = pack(tasks, meetings, { replan: random() < 0.7 });
+      const moved = new Set(plan.placed.map((entry) => entry.taskId));
+      const kept = tasks.filter((item) => item.dueHasTime && !moved.has(item.id)).map((item) => span(item.dueAt!, item.durationMinutes));
+      const ours = [
+        ...plan.placed.map((entry) => span(entry.at, entry.durationMinutes)),
+        ...plan.overdue.flatMap((item) => (item.at ? [span(item.at, item.durationMinutes)] : [])),
+        ...plan.unplaced.flatMap((item) => [item.nextFree, item.outside].flatMap((value) => (value ? [span(value, item.durationMinutes)] : []))),
+      ];
+      const busy = meetings.map((item) => ({ start: Date.parse(item.startsAt), end: Date.parse(item.endsAt) }));
+      ours.forEach((one, index) => {
+        for (const other of [...ours.slice(index + 1), ...kept, ...busy]) {
+          assert.ok(!(one.start < other.end && other.start < one.end), `round ${round}: ${new Date(one.start).toISOString()} overlaps ${new Date(other.start).toISOString()}`);
+        }
+      });
+      const timed = new Set(tasks.filter((item) => item.dueHasTime).map((item) => item.id));
+      assert.ok(!plan.unplaced.some((item) => timed.has(item.taskId)), "timed blocks never go under Couldn't fit");
+    }
+  });
+
+  it("counts calls already on the calendar towards a run", () => {
+    const day = "2026-11-16";
+    const first = Date.parse(`${day}T10:30:00Z`);
+    const placed = Array.from({ length: 6 }, (_, index) =>
+      task(`Call client ${index}`, { dueAt: new Date(first + index * 15 * 60_000).toISOString(), dueHasTime: true, scheduledBy: "person" }),
+    );
+    const more = Array.from({ length: 7 }, (_, index) => task(`Call prospect ${index}`, onDay(day)));
+    const plan = pack([...placed, ...more]);
+    const fixedEnd = first + 90 * 60_000;
+    assert.equal(plan.placed.length, 7);
+    assert.ok(
+      plan.placed.every((entry) => {
+        const start = Date.parse(entry.at);
+        return start >= fixedEnd + 15 * 60_000 || start + 30 * 60_000 <= first;
+      }),
+      "a break around the six calls already there",
+    );
+  });
+
   it("lists a dated task under Couldn't fit when its day is full, with the next free day and a time outside hours", () => {
     const big = task("Draft the Halden rollout plan", onDay("2026-11-16", { durationMinutes: 120 }));
     const meetings = [meeting("2026-11-16T09:00:00Z", "2026-11-16T10:30:00Z"), meeting("2026-11-16T11:30:00Z", "2026-11-16T13:00:00Z"), meeting("2026-11-16T14:00:00Z", "2026-11-16T16:00:00Z")];
@@ -277,6 +353,13 @@ describe("Schedule rules", () => {
     assert.equal(scheduleRefusal(undated, entry("2026-11-18T14:00:00Z"), { ...base, mode: "agent" }), null);
   });
 
+  it("lets an overdue block the person placed move when the new day is named", () => {
+    const yesterday = task("Call Bob", { dueAt: "2026-11-11T10:00:00Z", dueHasTime: true, scheduledBy: "person" });
+    assert.equal(scheduleRefusal(yesterday, entry("2026-11-12T15:00:00Z", { moveDay: "2026-11-12" }), { ...base, mode: "plan" }), null);
+    assert.equal(scheduleRefusal(yesterday, entry("2026-11-12T15:00:00Z", { moveDay: "2026-11-12" }), { ...base, mode: "agent" }), null);
+    assert.match(scheduleRefusal(yesterday, entry("2026-11-12T15:00:00Z"), { ...base, mode: "agent" })!, /You placed “Call Bob” yourself/);
+  });
+
   it("refuses a person's block, someone else's task, the past, time outside working hours and clashes", () => {
     const placed = task("Email Oliver", { dueAt: "2026-11-16T13:00:00Z", dueHasTime: true, scheduledBy: "person" });
     assert.match(scheduleRefusal(placed, entry("2026-11-16T14:00:00Z"), { ...base, mode: "plan" })!, /You placed “Email Oliver” yourself/);
@@ -308,6 +391,14 @@ describe("Working hours", () => {
     assert.equal(offDayReason("2026-11-14", DEFAULT_WORKING_HOURS), "outside your working days");
     const saturdays = DEFAULT_WORKING_HOURS.map((day, index) => (index === 6 ? { ...day, works: true } : day));
     assert.equal(offDayReason("2026-11-14", saturdays), null);
+  });
+
+  it("only calls a choice morning when it starts before noon, and reads seconds in London time", () => {
+    const afternoons = DEFAULT_WORKING_HOURS.map((day) => ({ ...day, start: 13 * 60, end: 18 * 60 }));
+    const choices = scheduleChoices({ durationMinutes: 15, now: Date.parse("2026-11-11T19:00:00Z"), hours: afternoons }, LONDON);
+    assert.deepEqual(choices.map((choice) => choice.label), ["Tomorrow at 13:00", "Monday at 13:00"]);
+    assert.equal(localInstant("2026-11-16T10:30:15", LONDON), "2026-11-16T10:30:15.000Z");
+    assert.equal(localInstant("2026-07-16T10:30:00", LONDON), "2026-07-16T09:30:00.000Z");
   });
 
   it("drives Schedule's next free slot and morning choices", () => {

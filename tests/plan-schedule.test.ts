@@ -190,6 +190,49 @@ describe("Plan and schedule", () => {
     assert.deepEqual(await audits(fine.id), []);
   });
 
+  it("moves an overdue block the person placed when Move names the new day, from the preview and from an agent", async () => {
+    const yesterday = shiftDay(today, -1);
+    const day = workday(11);
+    const bob = (await createTask(mark, { title: "Call Bob", dueAt: local(yesterday, 10) })).body.task;
+    assert.equal(bob.scheduledBy, "person");
+    const [moved] = await scheduleTasks(mark, [{ taskId: bob.id, at: at(day, 15), moveDay: day }], { mode: "plan", provenance: { operation: "plan_tasks", source: "web" } });
+    assert.equal(moved.task.dueAt, at(day, 15));
+    assert.equal(moved.task.scheduledBy, "planner");
+    const sue = (await createTask(mark, { title: "Call Sue", dueAt: local(yesterday, 11) })).body.task;
+    const agentRun = (blocks: unknown) => scheduleTasks(mark, blocks, { mode: "agent", provenance: { operation: "schedule_tasks" } });
+    assert.match(await failure(() => agentRun([{ taskId: sue.id, at: local(day, 15, 30) }])), /You placed “Call Sue” yourself/);
+    const [agentMoved] = await agentRun([{ taskId: sue.id, at: `${local(day, 15, 30)}:00`, moveDay: day }]);
+    assert.equal(agentMoved.task.dueAt, at(day, 15, 30), "seconds in London time are read as London time");
+  });
+
+  it("writes a proposal dragged in the preview as placed by the person, and the rest as placed by Plan", async () => {
+    const day = workday(12);
+    const dragged = (await createTask(mark, { title: "Email Kim", dueDate: day })).body.task;
+    const left = (await createTask(mark, { title: "Email Lou", dueDate: day })).body.task;
+    const done = await scheduleTasks(
+      mark,
+      [
+        { taskId: dragged.id, at: at(day, 13), byHand: true },
+        { taskId: left.id, at: at(day, 13, 15) },
+      ],
+      { mode: "plan", provenance: { operation: "plan_tasks", source: "web" } },
+    );
+    assert.deepEqual(done.map((item) => item.task.scheduledBy), ["person", "planner"]);
+    const agentTask = (await createTask(mark, { title: "Email Max", dueDate: day })).body.task;
+    const [agentDone] = await scheduleTasks(mark, [{ taskId: agentTask.id, at: local(day, 13, 30), byHand: true }], { mode: "agent", provenance: { operation: "schedule_tasks" } });
+    assert.equal(agentDone.task.scheduledBy, "planner", "an agent can't claim a block was placed by hand");
+  });
+
+  it("checks an agent's slot against meetings however far ahead it is", async () => {
+    const far = addWorkingDays(today, 60);
+    await meeting("Quarterly review", at(far, 10), at(far, 12));
+    const task = (await createTask(mark, { title: "Write the review", dueDate: far })).body.task;
+    assert.match(
+      await failure(() => scheduleTasks(mark, [{ taskId: task.id, at: local(far, 11) }], { mode: "agent", provenance: { operation: "schedule_tasks" } })),
+      /clashes with Quarterly review/,
+    );
+  });
+
   it("fails closed for a task in a workspace the person isn't in", async () => {
     const samTask = (await createTask(sam, { title: "Sam's call", dueDate: workday(2) })).body.task;
     const mine = (await createTask(mark, { title: "Mine", dueDate: workday(2) })).body.task;
