@@ -101,7 +101,7 @@ export const EMAIL_POLICY: Record<string, EmailRule> = {
 
   file_conversation: "auto",
   create_task: "auto",
-  update_task: "auto",
+  update_task: (args) => Array.isArray(args.schedule),
   log_activity: "auto",
   update_activity: "auto",
   create_company: "auto",

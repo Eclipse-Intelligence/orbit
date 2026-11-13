@@ -623,6 +623,27 @@ export async function placeTask(
   });
 }
 
+export async function scheduleTaskInDb(
+  db: Db,
+  actor: UserActor,
+  id: string,
+  slot: { at: string; durationMinutes: number | null },
+  provenance: Provenance,
+  refuse: (task: Task) => string | null,
+): Promise<{ task: Task; changed: boolean }> {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(id)) throw notFound("task");
+  await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
+  const current = await readTask(db, id);
+  if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
+  if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+  const refusal = refuse(mapTask(current));
+  if (refusal) throw new CrmError("invalid_input", refusal, 400, { field: "schedule" });
+  const write: TaskWrite = { dueAt: slot.at, scheduledBy: "planner" };
+  if (slot.durationMinutes && slot.durationMinutes !== current.duration_minutes) write.durationMinutes = slot.durationMinutes;
+  return applyTask(db, actor, current, prepareTask(write, "patch"), provenance, { claimSchedule: true });
+}
+
 export function mineFilter(actor: Actor, values: unknown[], alias = "t") {
   if (actor.type !== "user") return null;
   values.push(actor.userId);

@@ -29,6 +29,8 @@ export type TaskBlock = {
   done: boolean;
   overdue: boolean;
   clash: string | null;
+  proposed?: boolean;
+  suggested?: boolean;
 };
 
 export type TaskListGroupKind = "overdue" | "today" | "week" | "later" | "none";

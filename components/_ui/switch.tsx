@@ -8,12 +8,14 @@ export default function Switch({
   label,
   id,
   disabled = false,
+  className,
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
   label: string;
   id?: string;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
     <button
@@ -27,6 +29,7 @@ export default function Switch({
       className={cn(
         "focus-visible:ring-ring/60 relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-power3-out outline-none focus-visible:ring-2 disabled:cursor-default disabled:opacity-60",
         checked ? "bg-primary" : "bg-muted shadow-[inset_0px_0px_0px_1px_rgba(255,255,255,0.08)]",
+        className,
       )}
     >
       <span

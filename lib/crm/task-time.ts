@@ -1,5 +1,6 @@
-import { addWorkingDays, dayKeyAt, nextWorkingDay, nonWorkingReason, shiftDay, wallClockAt, weekday } from "@/lib/crm/working-days";
+import { dayKeyAt, shiftDay, wallClockAt, weekday } from "@/lib/crm/working-days";
 import { appTimeZone, startOfDay, zonedParts } from "@/lib/time";
+import { DEFAULT_WORKING_HOURS, firstWorkableDay, nextWorkableDay, wallAt, workingDay, workingWindow, type WorkingHours } from "@/lib/working-hours";
 
 export const DEFAULT_TASK_DURATION = 15;
 export const MIN_TASK_DURATION = 5;
@@ -7,7 +8,6 @@ export const MAX_TASK_DURATION = 480;
 export const DURATION_CHOICES = [5, 10, 15, 30, 45, 60] as const;
 export const SCHEDULE_STEP_MINUTES = 15;
 export const MORNING = { hour: 9, minute: 0 };
-export const DAY_CLOSE = { hour: 17, minute: 30 };
 
 type Timing = { dueAt: string | null; dueHasTime?: boolean | null };
 
@@ -82,42 +82,43 @@ export function durationWords(minutes: number) {
   return parts.join(" ") || "0 minutes";
 }
 
-export function nextFreeStart(now: number, durationMinutes: number, busy: { start: number; end: number }[], timeZone = appTimeZone()) {
+export function nextFreeStart(now: number, durationMinutes: number, busy: { start: number; end: number }[], timeZone = appTimeZone(), hours: WorkingHours = DEFAULT_WORKING_HOURS) {
   const today = dayKeyAt(new Date(now), timeZone);
-  if (nonWorkingReason(today)) return null;
-  const open = wallClockAt(today, MORNING.hour, MORNING.minute, timeZone);
-  const close = wallClockAt(today, DAY_CLOSE.hour, DAY_CLOSE.minute, timeZone);
+  const window = workingWindow(today, hours, timeZone);
+  if (!window) return null;
   const step = SCHEDULE_STEP_MINUTES * 60_000;
   const length = durationMinutes * 60_000;
-  let cursor = Math.ceil(Math.max(now, open) / step) * step;
+  let cursor = Math.ceil(Math.max(now, window.open) / step) * step;
   for (const block of [...busy].sort((left, right) => left.start - right.start)) {
     if (block.end <= cursor) continue;
     if (block.start >= cursor + length) break;
     cursor = Math.ceil(block.end / step) * step;
   }
-  return cursor + length <= close ? cursor : null;
+  return cursor + length <= window.close ? cursor : null;
 }
 
-function morning(key: string, label: string, id: string, timeZone: string): ScheduleChoice {
-  const at = new Date(wallClockAt(key, MORNING.hour, MORNING.minute, timeZone)).toISOString();
+function morning(key: string, label: string, id: string, timeZone: string, hours: WorkingHours): ScheduleChoice {
+  const at = new Date(wallAt(key, workingDay(hours, key).start, timeZone)).toISOString();
   return { id, label, detail: `${dayName(key)} ${clockLabel(at, timeZone)}`, at };
 }
 
 export function scheduleChoices(
-  input: { durationMinutes: number; now: number; busy?: { start: number; end: number }[] },
+  input: { durationMinutes: number; now: number; busy?: { start: number; end: number }[]; hours?: WorkingHours },
   timeZone = appTimeZone(),
 ): ScheduleChoice[] {
+  const hours = input.hours ?? DEFAULT_WORKING_HOURS;
   const today = dayKeyAt(new Date(input.now), timeZone);
   const choices: ScheduleChoice[] = [];
-  const free = nextFreeStart(input.now, input.durationMinutes, input.busy ?? [], timeZone);
+  const free = nextFreeStart(input.now, input.durationMinutes, input.busy ?? [], timeZone, hours);
   if (free !== null) {
     const at = new Date(free).toISOString();
     choices.push({ id: "next-free", label: `Next free ${durationWords(input.durationMinutes)}`, detail: clockLabel(at, timeZone), at });
   }
-  const next = addWorkingDays(today, 1);
-  choices.push(morning(next, next === shiftDay(today, 1) ? "Tomorrow morning" : `${dayName(next, true)} morning`, "tomorrow", timeZone));
-  const monday = nextWorkingDay(shiftDay(today, (8 - weekday(today)) % 7 || 7));
-  if (monday !== next) choices.push(morning(monday, `${dayName(monday, true)} morning`, "monday", timeZone));
+  const next = nextWorkableDay(today, hours);
+  if (!next) return choices;
+  choices.push(morning(next, next === shiftDay(today, 1) ? "Tomorrow morning" : `${dayName(next, true)} morning`, "tomorrow", timeZone, hours));
+  const monday = firstWorkableDay(shiftDay(today, (8 - weekday(today)) % 7 || 7), hours);
+  if (monday && monday !== next) choices.push(morning(monday, `${dayName(monday, true)} morning`, "monday", timeZone, hours));
   return choices;
 }
 

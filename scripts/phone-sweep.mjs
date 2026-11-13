@@ -688,6 +688,20 @@ for (const [device, viewport] of [
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));
   await shot("calendar");
+  const planButton = page.getByRole("button", { name: "Plan", exact: true });
+  if (device === "iphone") check(`${device} has no Plan`, !(await planButton.isVisible().catch(() => false)));
+  else {
+    check(`${device} shows Plan next to Day and Week`, await planButton.isVisible().catch(() => false));
+    await planButton.tap();
+    const planPanel = page.getByRole("complementary", { name: "Plan" });
+    await page.waitForTimeout(2500);
+    check(`${device} Plan opens its preview`, await planPanel.isVisible().catch(() => false));
+    check(`${device} Plan preview no overflow`, await noHorizontalScroll());
+    await shot("calendar-plan");
+    await planPanel.getByRole("button", { name: "Cancel", exact: true }).tap();
+    await page.waitForTimeout(500);
+    check(`${device} Cancel closes the plan`, !(await planPanel.isVisible().catch(() => false)) && (await page.locator("[data-task-proposed]").count()) === 0);
+  }
   const block = await seedBlock(page, device);
   if (block) {
     try {
@@ -1030,6 +1044,25 @@ for (const width of [1100, 1280, 1440]) {
         await page.keyboard.press("Escape");
         await page.waitForTimeout(600);
         check(`${device} Esc returns focus to the block`, (await focusedTaskId(page)) === block.id);
+        await page.getByRole("button", { name: "Plan", exact: true }).click();
+        const planPanel = page.getByRole("complementary", { name: "Plan" });
+        await planPanel.getByRole("heading", { name: /^Placed/ }).waitFor({ timeout: 25_000 }).catch(() => undefined);
+        check(`${device} Plan replaces the left menu with its preview`, (await planPanel.isVisible().catch(() => false)) && !(await menu.isVisible().catch(() => false)));
+        const proposedPlain = planPanel.locator(`[data-plan-entry="${block.plainId}"]`);
+        check(`${device} Plan proposes the task with no date`, await proposedPlain.isVisible().catch(() => false));
+        check(`${device} proposals show dashed on the grid`, (await page.locator("[data-task-proposed]").count()) > 0);
+        check(`${device} Plan leaves a block placed by hand alone`, (await planPanel.locator(`[data-plan-entry="${block.id}"]`).count()) === 0 && (await card.isVisible().catch(() => false)));
+        check(`${device} Plan lists the overdue task with Move and Leave`, await planPanel.locator(`[data-plan-overdue="${block.overdueId}"]`).getByRole("button", { name: "Leave" }).isVisible().catch(() => false));
+        check(`${device} Plan preview no overflow`, await page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1));
+        await page.screenshot({ path: path.join(out, `desktop-${width}-plan.png`) });
+        const before = (await planPanel.locator("[data-plan-entry]").count());
+        await proposedPlain.getByRole("button", { name: /^Remove .* from the plan$/ }).click().catch(() => undefined);
+        await page.waitForTimeout(300);
+        check(`${device} a proposal can be removed`, (await planPanel.locator("[data-plan-entry]").count()) === before - 1);
+        await planPanel.getByRole("button", { name: "Cancel", exact: true }).click();
+        await page.waitForTimeout(500);
+        check(`${device} Cancel discards the preview`, !(await planPanel.isVisible().catch(() => false)) && (await page.locator("[data-task-proposed]").count()) === 0 && (await menu.isVisible().catch(() => false)));
+        check(`${device} the preview wrote nothing`, (await readTask(block.plainId))?.dueAt === null);
         await page.getByRole("button", { name: /^Hide calendars and tasks/ }).click();
         await page.waitForTimeout(400);
         check(`${device} the toolbar button hides the menu`, !(await menu.isVisible().catch(() => false)));

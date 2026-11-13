@@ -14,7 +14,6 @@ import {
   isTaskDuration,
   MAX_TASK_DURATION,
   MIN_TASK_DURATION,
-  nextFreeStart,
   pickTimeFor,
   reminderBlock,
   reminderBlockText,
@@ -170,26 +169,33 @@ type ScheduleTask = { id: string; title: string; dueAt: string | null; dueHasTim
 
 type FreeState = { kind: "loading" } | { kind: "slot"; choice: ScheduleChoice } | { kind: "none" } | { kind: "outside" } | { kind: "error" };
 
-function useNextFree(open: boolean, durationMinutes: number, now: number): FreeState {
-  const [fetched, setFetched] = useState<{ key: string; state: FreeState } | null>(null);
+type ScheduleState = { free: FreeState; fixed: ScheduleChoice[] | null };
+
+function useNextFree(open: boolean, durationMinutes: number, now: number): ScheduleState {
+  const [fetched, setFetched] = useState<{ key: string; state: ScheduleState } | null>(null);
   const key = `${durationMinutes}|${now}`;
-  const possible = nextFreeStart(now, durationMinutes, []) !== null;
   useEffect(() => {
-    if (!open || !possible) return;
+    if (!open) return;
     let cancelled = false;
     void nextFreeAction(durationMinutes)
       .catch(() => ({ error: CALENDAR_ERROR }))
       .then((result) => {
         if (cancelled) return;
-        if ("error" in result) setFetched({ key, state: { kind: "error" } });
-        else setFetched({ key, state: result.free ? { kind: "slot", choice: result.free } : { kind: "none" } });
+        if ("error" in result) setFetched({ key, state: { free: { kind: "error" }, fixed: null } });
+        else
+          setFetched({
+            key,
+            state: {
+              free: result.outside ? { kind: "outside" } : result.free ? { kind: "slot", choice: result.free } : { kind: "none" },
+              fixed: result.fixed,
+            },
+          });
       });
     return () => {
       cancelled = true;
     };
-  }, [open, possible, durationMinutes, key]);
-  if (!possible) return { kind: "outside" };
-  if (!fetched || fetched.key !== key) return { kind: "loading" };
+  }, [open, durationMinutes, key]);
+  if (!fetched || fetched.key !== key) return { free: { kind: "loading" }, fixed: null };
   return fetched.state;
 }
 
@@ -339,8 +345,9 @@ export function ScheduleMenu({
   const [open, setOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const free = useNextFree(open, task.durationMinutes, now);
-  const fixed = scheduleChoices({ durationMinutes: task.durationMinutes, now }).filter((choice) => choice.id !== "next-free");
+  const schedule = useNextFree(open, task.durationMinutes, now);
+  const free = schedule.free;
+  const fixed = schedule.fixed ?? scheduleChoices({ durationMinutes: task.durationMinutes, now }).filter((choice) => choice.id !== "next-free");
 
   useEffect(() => {
     const listen = (event: Event) => {

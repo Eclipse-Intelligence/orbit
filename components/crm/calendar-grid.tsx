@@ -32,6 +32,7 @@ import type { TaskDrag } from "@/hooks/use-task-drag";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
 import { durationLabel } from "@/lib/crm/task-time";
+import { runLabel, type PreviewRun } from "@/lib/plan-preview";
 import type { TaskBlock } from "@/lib/task-blocks";
 import { slotDayLabel, slotRange, type GridSlot } from "@/lib/task-drag";
 import { cn } from "@/lib/utils";
@@ -241,6 +242,9 @@ export default function CalendarGrid({
   taskHandlers,
   drag = null,
   blockDrag,
+  proposals = [],
+  proposalDrag,
+  runs = [],
 }: {
   days: string[];
   today: string;
@@ -252,6 +256,9 @@ export default function CalendarGrid({
   taskHandlers?: TaskBlockHandlers;
   drag?: TaskDrag | null;
   blockDrag?: TaskBlockDrag;
+  proposals?: TaskBlock[];
+  proposalDrag?: TaskBlockDrag;
+  runs?: PreviewRun[];
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
@@ -298,7 +305,7 @@ export default function CalendarGrid({
     timed.set(key, []);
     tasked.set(key, []);
   }
-  for (const shownBlock of taskHandlers ? blocks : []) {
+  for (const shownBlock of taskHandlers ? [...blocks, ...proposals] : []) {
     const block = resizedBlock(shownBlock, drag);
     for (const key of days) {
       const span = daySpan(block.startsAt, block.endsAt, key);
@@ -502,6 +509,25 @@ export default function CalendarGrid({
                     />
                   );
                 })}
+                {runs
+                  .filter((run) => run.day === key)
+                  .map((run) => {
+                    const top = wallMinutes(run.startsAt) * perMinute - 3;
+                    const height = ((new Date(run.endsAt).getTime() - new Date(run.startsAt).getTime()) / MINUTE_MS) * perMinute + 4;
+                    return (
+                      <div
+                        key={run.id}
+                        aria-hidden
+                        data-plan-run=""
+                        className="pointer-events-none absolute inset-x-0.5 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_4%,transparent)]"
+                        style={{ top, height }}
+                      >
+                        <span className="absolute -top-2 right-1.5 z-[2] h-4 rounded-full bg-[#241f45] px-1.5 text-[10.5px] leading-4 font-medium whitespace-nowrap text-[#cfc8ff] tabular-nums">
+                          {runLabel(run)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 {taskHandlers &&
                   taskEntries.map((entry) => {
                     const slot = slots.get(entry.block.id) ?? {
@@ -519,7 +545,7 @@ export default function CalendarGrid({
                         height={height}
                         onOpen={taskHandlers.onOpen}
                         onComplete={taskHandlers.onComplete}
-                        drag={blockDrag}
+                        drag={entry.block.proposed ? proposalDrag : blockDrag}
                         lifted={drag?.mode === "move" && drag.task.id === entry.block.task.id}
                         resizing={drag?.mode === "resize" && drag.task.id === entry.block.task.id}
                         resizable={dateKey(new Date(entry.block.endsAt).getTime() - 1) === key}

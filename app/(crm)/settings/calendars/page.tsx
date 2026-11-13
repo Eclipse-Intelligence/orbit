@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 import CalendarsSettings from "@/components/crm/calendars-settings";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { getUserActor } from "@/lib/auth/user";
+import WorkingHoursSettings from "@/components/crm/working-hours-settings";
 import { listCalendarGroups } from "@/lib/crm/calendars";
+import { getWorkingHours } from "@/lib/crm/working-hours";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -14,9 +16,10 @@ export default async function CalendarSettingsPage({
 }) {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [resolved, groups] = await Promise.all([
+  const [resolved, groups, hours] = await Promise.all([
     searchParams,
     listCalendarGroups(user),
+    getWorkingHours(user),
   ]);
   return (
     <SettingsPage title="Calendars">
@@ -34,6 +37,7 @@ export default async function CalendarSettingsPage({
             : null
         }
       />
+      <WorkingHoursSettings hours={hours} />
     </SettingsPage>
   );
 }
