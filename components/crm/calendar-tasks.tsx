@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import TaskKindIcon from "@/components/crm/task-kind-icon";
 import { dateKey, shiftDateKey, weekStartKey } from "@/lib/calendar-view";
@@ -121,6 +121,35 @@ export function taskWhenLabel(task: Pick<Task, "dueAt" | "dueHasTime">, now: num
   return [day, time].filter(Boolean).join(" ") || null;
 }
 
+export function TaskDropZone({ day, active, bar = false }: { day: string | null; active: boolean; bar?: boolean }) {
+  const tone = active
+    ? "border-violet border-solid bg-[color-mix(in_srgb,var(--violet)_14%,transparent)]"
+    : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_6%,transparent)]";
+  if (bar) {
+    return (
+      <div data-task-drop-zone="" role="status" className={cn("pointer-events-none flex h-full items-center border border-dashed", tone)}>
+        <span aria-hidden className="w-14 shrink-0 px-1 text-center text-[11px] leading-[13px] font-medium">
+          Remove the time
+        </span>
+        <span className="sr-only">Keep the day, remove the time.{day ? ` Stays on ${day}, off the calendar.` : ""}</span>
+      </div>
+    );
+  }
+  return (
+    <div
+      data-task-drop-zone=""
+      role="status"
+      className={cn(
+        "mx-1 mt-1 mb-1.5 flex flex-col gap-0.5 rounded-[10px] border border-dashed px-3 py-2.5",
+        active ? tone : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_8%,transparent)]",
+      )}
+    >
+      <span className="ui-style font-medium">Keep the day, remove the time</span>
+      {day && <span className="caption-style text-soft">Stays on {day}, off the calendar.</span>}
+    </div>
+  );
+}
+
 export function CalendarTaskList({
   id,
   tasks,
@@ -129,6 +158,8 @@ export function CalendarTaskList({
   workspaces,
   hidden,
   onOpen,
+  onPickUp,
+  held,
 }: {
   id: string;
   tasks: Task[];
@@ -137,6 +168,8 @@ export function CalendarTaskList({
   workspaces: PlannerWorkspace[];
   hidden: ReadonlySet<string>;
   onOpen: (task: Task, opener: HTMLElement | null) => void;
+  onPickUp?: (event: ReactPointerEvent<HTMLElement>, task: Task) => void;
+  held?: string | null;
 }) {
   const names = workspaces.length > 1 ? new Map(workspaces.map((item) => [item.id, item.name])) : null;
   const groups = groupTaskList(
@@ -179,8 +212,14 @@ export function CalendarTaskList({
                     size="none"
                     data-task-id={task.id}
                     data-calendar-task=""
+                    data-task-held={held === task.id ? "" : undefined}
                     onClick={(event) => onOpen(task, event.currentTarget)}
-                    className="hover:bg-surface-hover gap-2 px-2 py-1.5 [@media(pointer:coarse)]:min-h-11"
+                    onPointerDown={onPickUp ? (event) => onPickUp(event, task) : undefined}
+                    className={cn(
+                      "hover:bg-surface-hover gap-2 px-2 py-1.5 [@media(pointer:coarse)]:min-h-11",
+                      onPickUp && "cursor-grab touch-manipulation select-none [-webkit-touch-callout:none]",
+                      held === task.id && "outline-line-strong bg-transparent opacity-40 outline-1 outline-offset-[-1px] outline-dashed hover:bg-transparent",
+                    )}
                   >
                     <TaskKindIcon title={task.title} className={cn("mt-[3px] size-3.5 shrink-0", onGrid ? "text-violet" : "text-subtle")} />
                     <span className="flex min-w-0 flex-1 flex-col">

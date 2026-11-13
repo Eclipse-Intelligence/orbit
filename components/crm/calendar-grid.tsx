@@ -21,16 +21,21 @@ import CalendarEventDetails, {
 } from "@/components/crm/calendar-event-details";
 import {
   allDayKeys,
+  dateKey,
   DAY_MINUTES,
   daySpan,
   packColumns,
   wallMinutes,
 } from "@/lib/calendar-view";
-import { GridTaskBlock, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import { GridTaskBlock, type TaskBlockDrag, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import type { TaskDrag } from "@/hooks/use-task-drag";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
+import { durationLabel } from "@/lib/crm/task-time";
 import type { TaskBlock } from "@/lib/task-blocks";
+import { slotDayLabel, slotRange, type GridSlot } from "@/lib/task-drag";
 import { cn } from "@/lib/utils";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
 const MIN_HOUR_HEIGHT = 64;
 const MAX_HOUR_HEIGHT = 120;
@@ -75,6 +80,74 @@ function dayHeading(key: string) {
 
 function hourLabel(hour: number) {
   return `${String(hour).padStart(2, "0")}:00`;
+}
+
+const SLOT_LABEL_PX = 30;
+const MINUTE_MS = 60_000;
+
+function DropSlot({ slot, mode, perMinute, last }: { slot: GridSlot; mode: TaskDrag["mode"]; perMinute: number; last: boolean }) {
+  const top = slot.minutes * perMinute + 1;
+  const height = slot.durationMinutes * perMinute - 2;
+  const below = top + height + 4;
+  const labelTop = mode === "resize" ? below : top - SLOT_LABEL_PX >= 0 ? top - SLOT_LABEL_PX : below;
+  return (
+    <>
+      {mode === "move" && (
+        <div
+          aria-hidden
+          data-drop-slot=""
+          className="border-violet pointer-events-none absolute right-[3px] left-0.5 z-[4] rounded-md border-[1.5px] bg-[color-mix(in_srgb,var(--violet)_12%,transparent)]"
+          style={{ top, height }}
+        />
+      )}
+      <span
+        data-drop-label=""
+        className={cn(
+          "bg-popover border-line-strong shadow-overlay pointer-events-none absolute z-[25] inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium whitespace-nowrap tabular-nums",
+          last ? "right-1" : "left-1",
+        )}
+        style={{ top: labelTop }}
+      >
+        {mode === "resize" ? (
+          <>
+            {durationLabel(slot.durationMinutes)}
+            <span className="text-subtle font-normal">· {slotRange(slot)}</span>
+          </>
+        ) : (
+          <>
+            <span>
+              {slotDayLabel(slot.day)} {slotRange(slot)}
+            </span>
+            <span className="text-subtle font-normal">· {durationLabel(slot.durationMinutes)}</span>
+          </>
+        )}
+      </span>
+    </>
+  );
+}
+
+function EdgeScroll({ direction }: { direction: -1 | 1 }) {
+  return (
+    <div aria-hidden className={cn("pointer-events-none sticky z-[15] h-0", direction > 0 ? "bottom-0" : "top-0")} data-drag-edge={direction > 0 ? "bottom" : "top"}>
+      <div
+        className={cn(
+          "absolute inset-x-0 flex h-11 items-center justify-center gap-1.5 text-[#cfc8ff]",
+          direction > 0
+            ? "bottom-0 bg-linear-to-t from-[color-mix(in_srgb,var(--violet)_26%,transparent)] to-transparent"
+            : "top-0 bg-linear-to-b from-[color-mix(in_srgb,var(--violet)_26%,transparent)] to-transparent",
+        )}
+      >
+        <ChevronDownIcon className={cn("size-3", direction < 0 && "rotate-180")} />
+        <ChevronDownIcon className={cn("size-3", direction < 0 && "rotate-180")} />
+      </div>
+    </div>
+  );
+}
+
+function resizedBlock(block: TaskBlock, drag: TaskDrag | null) {
+  if (drag?.mode !== "resize" || drag.task.id !== block.task.id || !drag.slot) return block;
+  const endsAt = new Date(new Date(block.startsAt).getTime() + drag.slot.durationMinutes * MINUTE_MS).toISOString();
+  return { ...block, durationMinutes: drag.slot.durationMinutes, endsAt };
 }
 
 function EventBlock({
@@ -166,6 +239,8 @@ export default function CalendarGrid({
   onSlot,
   blocks = [],
   taskHandlers,
+  drag = null,
+  blockDrag,
 }: {
   days: string[];
   today: string;
@@ -175,6 +250,8 @@ export default function CalendarGrid({
   onSlot?: (day: string, time: string) => void;
   blocks?: TaskBlock[];
   taskHandlers?: TaskBlockHandlers;
+  drag?: TaskDrag | null;
+  blockDrag?: TaskBlockDrag;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
@@ -221,7 +298,8 @@ export default function CalendarGrid({
     timed.set(key, []);
     tasked.set(key, []);
   }
-  for (const block of taskHandlers ? blocks : []) {
+  for (const shownBlock of taskHandlers ? blocks : []) {
+    const block = resizedBlock(shownBlock, drag);
     for (const key of days) {
       const span = daySpan(block.startsAt, block.endsAt, key);
       if (span) tasked.get(key)!.push({ block, ...span });
@@ -310,6 +388,7 @@ export default function CalendarGrid({
         tabIndex={-1}
         data-calendar-scroller=""
       >
+        {drag?.scrolling === -1 && <EdgeScroll direction={-1} />}
         <div
           className="relative grid"
           style={{ ...columns, height: DAY_MINUTES * perMinute }}
@@ -440,6 +519,10 @@ export default function CalendarGrid({
                         height={height}
                         onOpen={taskHandlers.onOpen}
                         onComplete={taskHandlers.onComplete}
+                        drag={blockDrag}
+                        lifted={drag?.mode === "move" && drag.task.id === entry.block.task.id}
+                        resizing={drag?.mode === "resize" && drag.task.id === entry.block.task.id}
+                        resizable={dateKey(new Date(entry.block.endsAt).getTime() - 1) === key}
                         style={{
                           top: entry.top * perMinute + 1,
                           height,
@@ -449,6 +532,9 @@ export default function CalendarGrid({
                       />
                     );
                   })}
+                {drag?.slot?.day === key && (
+                  <DropSlot slot={drag.slot} mode={drag.mode} perMinute={perMinute} last={days.length > 1 && key === days[days.length - 1]} />
+                )}
                 {key === today && (
                   <div
                     aria-hidden
@@ -464,6 +550,7 @@ export default function CalendarGrid({
             );
           })}
         </div>
+        {drag?.scrolling === 1 && <EdgeScroll direction={1} />}
       </div>
     </div>
   );

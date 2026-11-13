@@ -1,4 +1,4 @@
-const LONG_PRESS_MS = 350;
+export const LONG_PRESS_MS = 350;
 const MOUSE_SLOP = 4;
 const TOUCH_SLOP = 8;
 
@@ -12,8 +12,12 @@ type GestureHandlers = {
   end: (result: GestureResult) => void;
 };
 
-export function startPointerGesture(event: GestureStart, handlers: GestureHandlers) {
+type GestureOptions = { touchTarget?: EventTarget | null };
+
+export function startPointerGesture(event: GestureStart, handlers: GestureHandlers, options: GestureOptions = {}): () => void {
   const touch = event.pointerType === "touch";
+  const touchTarget = touch ? (options.touchTarget ?? null) : null;
+  let seen: Event | null = null;
   const startX = event.clientX;
   const startY = event.clientY;
   let x = startX;
@@ -46,7 +50,12 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
   }
 
   function onPointerMove(move: PointerEvent) {
-    if (move.pointerId === event.pointerId) track(move.clientX, move.clientY);
+    if (move.pointerId !== event.pointerId) return;
+    if (move.buttons === 0) {
+      finish("cancel");
+      return;
+    }
+    track(move.clientX, move.clientY);
   }
 
   function onPointerUp(up: PointerEvent) {
@@ -59,12 +68,16 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
   }
 
   function onTouchMove(move: TouchEvent) {
+    if (move === seen) return;
+    seen = move;
     const point = move.touches[0];
     if (active && move.cancelable) move.preventDefault();
     if (point) track(point.clientX, point.clientY);
   }
 
   function onTouchEnd(end: TouchEvent) {
+    if (end === seen) return;
+    seen = end;
     if (end.touches.length > 0) return;
     finish(active ? "drop" : "tap");
   }
@@ -75,6 +88,10 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
 
   function blockMenu(menu: Event) {
     menu.preventDefault();
+  }
+
+  function onMenu() {
+    finish("cancel");
   }
 
   function finish(result: GestureResult) {
@@ -88,6 +105,10 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     window.removeEventListener("touchend", onTouchEnd);
     window.removeEventListener("touchcancel", onTouchCancel);
     window.removeEventListener("contextmenu", blockMenu);
+    window.removeEventListener("contextmenu", onMenu);
+    touchTarget?.removeEventListener("touchmove", onTouchMove as EventListener);
+    touchTarget?.removeEventListener("touchend", onTouchEnd as EventListener);
+    touchTarget?.removeEventListener("touchcancel", onTouchCancel);
     handlers.end(result);
   }
 
@@ -97,8 +118,13 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     window.addEventListener("touchend", onTouchEnd);
     window.addEventListener("touchcancel", onTouchCancel);
     window.addEventListener("contextmenu", blockMenu);
-    return;
+    touchTarget?.addEventListener("touchmove", onTouchMove as EventListener, { passive: false });
+    touchTarget?.addEventListener("touchend", onTouchEnd as EventListener);
+    touchTarget?.addEventListener("touchcancel", onTouchCancel);
+  } else {
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("contextmenu", onMenu);
   }
-  window.addEventListener("pointermove", onPointerMove);
-  window.addEventListener("pointerup", onPointerUp);
+  return () => finish("cancel");
 }

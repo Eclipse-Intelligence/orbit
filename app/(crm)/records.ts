@@ -14,6 +14,7 @@ import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
 import { createContact, findContactsToLink, getContact, updateContact } from "@/lib/crm/contacts";
 import { mergeContacts } from "@/lib/crm/merge";
+import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
@@ -21,7 +22,7 @@ import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/tas
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 
-import { completeTask, getTask, listDueReminders, reopenTask, updateTask, type DueReminder } from "@/lib/crm/tasks";
+import { completeTask, getTask, listDueReminders, placeTask, reopenTask, TASK_PLACE_FAILED, updateTask, type DueReminder, type TaskPlacement } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -333,6 +334,24 @@ export async function remindTaskAction(id: string, at: string): Promise<RecordAc
     return { ok: true };
   } catch (error) {
     return actionError(error);
+  }
+}
+
+export async function placeTaskAction(id: string, placement: TaskPlacement): Promise<RecordActionState> {
+  const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
+  if (!isUuid(id) || !placement || typeof placement !== "object") return { error: TASK_PLACE_FAILED };
+  const write: TaskPlacement =
+    placement.dateOnly === true ? { dateOnly: true } : { at: String(placement.at), durationMinutes: Number(placement.durationMinutes) };
+  try {
+    const placed = await placeTask(user, id, write, { provenance: { operation: "drag_task", source: "web" } });
+    if (!placed.changed) return { ok: true };
+    pushLater(user, id);
+    refresh();
+    revalidatePath("/calendar");
+    return { ok: true };
+  } catch (error) {
+    return error instanceof CrmError ? actionError(error) : { error: TASK_PLACE_FAILED };
   }
 }
 
