@@ -39,7 +39,8 @@ export type PlanPanelHandlers = {
 const GROUP = "ui-style flex items-center gap-1.5 px-2 pt-4 pb-1.5 font-medium";
 const CARD = "border-border flex flex-col gap-2 rounded-lg border px-2.5 py-2";
 const SMALL = "hit h-6 px-2.5 py-0 [@media(pointer:coarse)]:min-w-11";
-const ACTIONS = "flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-x-2.5 [@media(pointer:coarse)]:gap-y-5";
+const ACTIONS = "flex flex-wrap items-center gap-x-1.5 gap-y-2 [@media(pointer:coarse)]:gap-y-5";
+const BUTTONS = "ml-auto flex flex-wrap items-center justify-end gap-1.5 [@media(pointer:coarse)]:gap-x-2.5 [@media(pointer:coarse)]:gap-y-5";
 
 function EntryRow({ entry, clash, onRemove }: { entry: PreviewEntry; clash: string | null; onRemove: (taskId: string) => void }) {
   return (
@@ -202,23 +203,24 @@ export default function PlanPanel({
                               <span className="caption-style text-soft tabular-nums">{item.at ? whenLabel(item.at, today) : "No free time"}</span>
                             </>
                           )}
-                          <span className="flex-1" />
-                          {choice ? (
-                            <Button variant="ghost" size="sm" className={SMALL} onClick={() => handlers.onUndoOverdue(item.taskId)}>
-                              Undo
-                            </Button>
-                          ) : (
-                            <>
-                              {item.at && (
-                                <Button variant="secondary" size="sm" className={SMALL} onClick={() => handlers.onMoveOverdue(item.taskId)}>
-                                  Move
-                                </Button>
-                              )}
-                              <Button variant="ghost" size="sm" className={SMALL} onClick={() => handlers.onLeaveOverdue(item.taskId)}>
-                                Leave
+                          <span className={BUTTONS}>
+                            {choice ? (
+                              <Button variant="ghost" size="sm" className={SMALL} onClick={() => handlers.onUndoOverdue(item.taskId)}>
+                                Undo
                               </Button>
-                            </>
-                          )}
+                            ) : (
+                              <>
+                                {item.at && (
+                                  <Button variant="secondary" size="sm" className={SMALL} onClick={() => handlers.onMoveOverdue(item.taskId)}>
+                                    Move
+                                  </Button>
+                                )}
+                                <Button variant="ghost" size="sm" className={SMALL} onClick={() => handlers.onLeaveOverdue(item.taskId)}>
+                                  Leave
+                                </Button>
+                              </>
+                            )}
+                          </span>
                         </div>
                       </li>
                     );

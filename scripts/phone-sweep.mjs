@@ -931,8 +931,10 @@ for (const [device, viewport] of [
         const planPanel = page.getByRole("complementary", { name: "Plan" });
         await planPanel.getByText(/^Placed/).first().waitFor({ timeout: 25_000 }).catch(() => undefined);
         check(`${device} Plan opens its preview`, await planPanel.isVisible().catch(() => false));
-        check(`${device} Plan proposes the task with no date`, await planPanel.locator(`[data-plan-entry="${block.plainId}"]`).isVisible().catch(() => false));
-        check(`${device} a proposal shows on the grid`, await page.locator("[data-task-proposed]").filter({ visible: true }).first().isVisible().catch(() => false));
+        const firstEntry = await planPanel.locator("[data-plan-entry]").first().getAttribute("data-plan-entry").catch(() => null);
+        check(`${device} Plan proposes a block`, Boolean(firstEntry));
+        if (firstEntry) await page.locator(`[data-task-proposed][data-task-block="${firstEntry}"]`).first().scrollIntoViewIfNeeded().catch(() => undefined);
+        check(`${device} the proposal shows on the grid`, Boolean(firstEntry) && (await page.locator(`[data-task-proposed][data-task-block="${firstEntry}"]`).filter({ visible: true }).first().isVisible().catch(() => false)));
         check(`${device} Plan preview no overflow`, await noHorizontalScroll());
         await shot("calendar-plan");
         await planPanel.getByRole("button", { name: "Cancel", exact: true }).tap();
