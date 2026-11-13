@@ -562,9 +562,10 @@ export function taskBlockDraft(input: { title: string; start: Date; end: Date; t
   };
 }
 
-export function taskBlockPatch(input: { title: string; start: Date; end: Date; timeZone: string }) {
+export function taskBlockPatch(input: { title: string; start: Date; end: Date; timeZone: string; link: string | null }) {
   return {
     subject: input.title,
+    body: { contentType: "HTML" as const, content: taskBlockBodyHtml(input.link) },
     ...graphDateTimes(input.start, input.end, input.timeZone),
     showAs: "busy",
     sensitivity: "private",
@@ -750,6 +751,16 @@ export async function patchGraphEvent(
   const response = await graphWrite(eventUrl(eventId), accessToken, patch, fetchImpl, true, "PATCH");
   if (!response.ok) throw await writeError(response, "move");
   return (await response.json().catch(() => ({}))) as GraphEvent;
+}
+
+export async function graphEventGone(accessToken: string, eventId: string, fetchImpl: typeof fetch = fetch) {
+  const response = await fetchImpl(`${eventUrl(eventId)}?$select=id`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+  });
+  if (response.status === 404) return true;
+  if (response.ok) return false;
+  throw await writeError(response, "move");
 }
 
 export type InviteResponse = "accept" | "tentativelyAccept" | "decline";

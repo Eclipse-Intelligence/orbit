@@ -36,6 +36,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 - One file per change: `supabase/migrations/YYYYMMDDHHMMSS_name.sql`. Write it so it can run twice (`if not exists`, `drop policy if exists`, `create or replace`).
 - Enable and force row-level security on every new table, and grant only what the app needs.
+- Put `create index concurrently` (or `create unique index concurrently`) at the start of a line, as one statement ending in `;` with no other `;` inside, after `reset lock_timeout;`. `applyMigrationSql` (`lib/db/migration-sql.ts`, used by tests and `db:setup`) runs each such statement on its own and everything else in batches around them; it does not look inside comments, strings or `do` blocks.
 - Apply it to the hosted project before deploying code that depends on it, then record it: `begin; set local role crm_admin; insert into private.schema_migrations (filename) values ('...'); commit;`.
 - `npm run db:setup` applies new migrations locally. Tests rebuild their database from every migration.
 

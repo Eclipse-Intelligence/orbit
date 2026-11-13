@@ -170,7 +170,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
         lastSyncedAt: iso(state.rows[0]?.last_synced_at ?? null),
         lastError: state.rows[0]?.last_error ?? null,
         removes: null,
-        taskBlocks: connected && microsoftConfigured() ? (writes === false ? "orbit" : "outlook") : null,
+        taskBlocks: writes === true ? "outlook" : writes === false ? "orbit" : null,
         calendars: calendars.rows.filter((row) => row.connection_id === stored.id).map(mapCalendar),
       });
     }

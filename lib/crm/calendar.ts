@@ -1,4 +1,4 @@
-import type { Db } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 import {
   claimAccount,
   finishAccount,
@@ -33,6 +33,7 @@ import {
   CalendarScopeError,
   fetchCalendars,
   fetchCalendarView,
+  graphEventGone,
   paletteColor,
   type CalendarEvent,
   type CalendarFetch,
@@ -51,6 +52,7 @@ const DAY_MS = 86_400_000;
 const CALENDAR_BACK_MS = 30 * DAY_MS;
 const CALENDAR_AHEAD_MS = 60 * DAY_MS;
 const SYNC_GAP_MS = 5 * 60 * 1000;
+export const BLOCK_WRITE_MARGIN_MS = 2 * 60 * 1000;
 const SYNC_BUDGET_MS = 45_000;
 const CALENDAR_RESERVE_MS = 5_000;
 const FEED_REFRESH_MS = 6 * 60 * 60 * 1000;
@@ -288,7 +290,7 @@ async function saveEvents(
         source.kind === "account" ? source.id : null,
         actor.userId,
         JSON.stringify(batch),
-        new Date(fetchStartedAt).toISOString(),
+        new Date(fetchStartedAt - BLOCK_WRITE_MARGIN_MS).toISOString(),
       ],
     );
     saved += result.rowCount ?? 0;
@@ -744,7 +746,7 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
         break;
       }
       try {
-        const fetchStartedAt = Date.now();
+        const fetchStartedAt = await databaseNow();
         const fetched = await fetchCalendarView(token.accessToken, window, {
           fetchImpl: context.fetchImpl,
           deadline: context.deadline,
@@ -758,7 +760,7 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
         outcome.removed += saved.removed;
         outcome.calendars += 1;
         if (!fetched.complete) outcome.complete = false;
-        if (source.kind === "connection") await readBackBlocks(actor, calendar.id, fetched, window, fetchStartedAt, context);
+        if (source.kind === "connection") await readBackBlocks(actor, calendar.id, fetched, window, fetchStartedAt, token.accessToken, context);
       } catch (error) {
         if (error instanceof CalendarScopeError) {
           await withActor(actor, (db) => markCalendarError(db, calendar.id, CALENDAR_NO_ACCESS));
@@ -785,6 +787,11 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
   }
 }
 
+async function databaseNow() {
+  const result = await query<{ now: Date }>("select clock_timestamp() as now");
+  return new Date(result.rows[0].now).getTime();
+}
+
 async function flushBlocks(actor: UserActor, connectionId: string, scope: string | null, context: SyncContext) {
   try {
     const { flushTaskBlocks } = await import("@/lib/crm/task-outlook");
@@ -801,6 +808,7 @@ async function readBackBlocks(
   fetched: CalendarFetch,
   window: { start: Date; end: Date },
   fetchStartedAt: number,
+  accessToken: string,
   context: SyncContext,
 ) {
   try {
@@ -813,6 +821,7 @@ async function readBackBlocks(
       window,
       fetchStartedAt,
       fetchImpl: context.fetchImpl,
+      isGone: (providerEventId) => graphEventGone(accessToken, providerEventId, context.fetchImpl).catch(() => false),
       pushClickUp: (owner, taskId) => pushClickUpTask(owner, taskId),
     });
   } catch (error) {

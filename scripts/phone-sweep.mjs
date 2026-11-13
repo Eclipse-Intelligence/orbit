@@ -87,8 +87,9 @@ async function seedBlock(page, device) {
   if (mine) await api(`/tasks/${mine.id}`, { method: "DELETE" });
   if (!mine?.ownerId) return null;
   const add = async (title, dueAt, durationMinutes = 30) => {
-    const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title, dueAt, durationMinutes, ownerId: mine.ownerId }) });
-    return created?.ok ? (await created.json()).task.id : null;
+    const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title, dueAt, durationMinutes }) });
+    const id = created?.ok ? (await created.json()).task.id : null;
+    return id && (await ownTimedTask(id, mine.ownerId)) ? id : null;
   };
   const day = londonDay(1);
   const title = `Sweep block ${stamp}`;
@@ -106,6 +107,20 @@ async function seedBlock(page, device) {
     return null;
   }
   return { id, title, day, overdueId, overdueDay, plainId, earlyId, stacked, ids };
+}
+
+let adminDb = null;
+async function ownTimedTask(id, ownerId) {
+  if (!env.DATABASE_ADMIN_URL) {
+    console.log("set DATABASE_ADMIN_URL to seed timed blocks: an agent can't set a time on someone's task");
+    return false;
+  }
+  if (!adminDb) {
+    const { default: pg } = await import("pg");
+    adminDb = new pg.Pool({ connectionString: env.DATABASE_ADMIN_URL, max: 1 });
+  }
+  const updated = await adminDb.query("update crm.tasks set owner_id = $2 where id = $1 and due_has_time", [id, ownerId]);
+  return updated.rowCount === 1;
 }
 
 async function dropTasks(ids) {
@@ -1311,4 +1326,5 @@ for (const id of sweepContacts) await api(`/contacts/${id}`, { method: "DELETE" 
 check("the browser stayed on this machine", blocked.size === 0, [...blocked].join(", "));
 console.log(problems.length ? `\n${problems.length} problems. Screenshots are in ${out}` : `\nall checks passed. Screenshots are in ${out}`);
 await browser.close();
+await adminDb?.end();
 process.exit(problems.length ? 1 : 0);

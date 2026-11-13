@@ -15,6 +15,7 @@ import {
   CALENDAR_SYNC,
   outlookMinutes,
   planBlock,
+  queueOwnTaskBlocks,
   syncTaskBlocks,
   taskBlocksReach,
   type BlockRow,
@@ -26,7 +27,7 @@ import { savePushSubscription, type PushSender } from "@/lib/push";
 import { refreshTimes, offerTimes } from "@/lib/mail/scheduling";
 import { TASK_BLOCK_NOTE, taskBlockDraft, taskBlockPatch, type GraphEvent } from "@/lib/microsoft/calendar";
 import { dropZoneNote } from "@/lib/task-blocks";
-import { createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const WRITE_SCOPES = "https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Mail.Read offline_access";
 const READ_SCOPES = "https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Mail.Read offline_access";
@@ -62,6 +63,9 @@ class FakeOutlook {
   created = 0;
   failCreate = 0;
   failPatchWith: number | null = null;
+  failCreateWith: number | null = null;
+  failDeleteWith: number | null = null;
+  hidden = new Set<string>();
   nextLink: string | null = null;
   scope = WRITE_SCOPES;
 
@@ -85,6 +89,7 @@ class FakeOutlook {
         this.failCreate -= 1;
         return json({ error: { code: "ServiceUnavailable", message: "Busy" } }, 503);
       }
+      if (this.failCreateWith) return json({ error: { code: "Nope", message: "Nope" } }, this.failCreateWith);
       const existing = [...this.events.entries()].find(([, event]) => event.transactionId && event.transactionId === body?.transactionId);
       if (existing) return json(this.graphEvent(existing[0]), 201);
       this.created += 1;
@@ -101,8 +106,13 @@ class FakeOutlook {
       this.events.set(id, { ...event, subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end) });
       return json(this.graphEvent(id));
     }
+    if (one && method === "GET") {
+      const id = decodeURIComponent(one[1]);
+      return this.events.has(id) ? json({ id }) : json({ error: { code: "ErrorItemNotFound", message: "Not found" } }, 404);
+    }
     if (one && method === "DELETE") {
       const id = decodeURIComponent(one[1]);
+      if (this.failDeleteWith) return json({ error: { code: "Nope", message: "Nope" } }, this.failDeleteWith);
       if (!this.events.delete(id)) return json({ error: { code: "ErrorItemNotFound", message: "Not found" } }, 404);
       return json(null, 204);
     }
@@ -112,7 +122,7 @@ class FakeOutlook {
     if (parsed.pathname.endsWith("/calendarView")) {
       const from = Date.parse(parsed.searchParams.get("startDateTime")!);
       const to = Date.parse(parsed.searchParams.get("endDateTime")!);
-      const inside = [...this.events.entries()].filter(([, event]) => Date.parse(event.start) < to && Date.parse(event.end) > from);
+      const inside = [...this.events.entries()].filter(([id, event]) => !this.hidden.has(id) && Date.parse(event.start) < to && Date.parse(event.end) > from);
       return json({ value: inside.map(([id]) => this.graphEvent(id)), ...(this.nextLink ? { "@odata.nextLink": this.nextLink } : {}) });
     }
     return json({ error: { code: "NotFound", message: `Unexpected ${method} ${url}` } }, 404);
@@ -229,12 +239,14 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
     archived_at: null,
     calendar_event_ref: null,
     pending_at: "2026-11-13 09:00:00.123456+00",
+    attempts: 0,
     event_id: null,
     event_user_id: null,
     provider_event_id: null,
     event_starts_at: null,
     event_ends_at: null,
     event_subject: null,
+    event_workspace_id: null,
     ...overrides,
   };
 }
@@ -258,7 +270,8 @@ describe("task block event shape", () => {
     assert.equal("contact_ids" in draft, false);
     assert.match(draft.body.content, new RegExp(`^<p>${TASK_BLOCK_NOTE} <a href="https://orbit.example/open\\?workspace=w&amp;to=%2Ftasks%3Ftask%3Dt">Open the task</a></p>$`));
     assert.deepEqual(draft.start, { dateTime: "2026-11-20T10:00:00", timeZone: "GMT Standard Time" });
-    const patch = taskBlockPatch({ title: "Call Jane", start: new Date("2026-11-20T10:00:00.000Z"), end: new Date("2026-11-20T11:00:00.000Z"), timeZone: "Europe/London" });
+    const patch = taskBlockPatch({ title: "Call Jane", start: new Date("2026-11-20T10:00:00.000Z"), end: new Date("2026-11-20T11:00:00.000Z"), timeZone: "Europe/London", link: null });
+    assert.equal(patch.body.content, `<p>${TASK_BLOCK_NOTE}</p>`);
     assert.equal(patch.sensitivity, "private");
     assert.equal(patch.isReminderOn, false);
     assert.deepEqual(patch.end, { dateTime: "2026-11-20T11:00:00", timeZone: "GMT Standard Time" });
@@ -481,7 +494,8 @@ describe("Outlook lifecycle", () => {
     assert.equal(audit.rows[0].changes.after.dueHasTime, false);
 
     const forPriya = await timed(mark, "Call Oliver", Date.now() + 2 * DAY, 30, { ownerId: priya.userId });
-    assert.equal(forPriya.dueHasTime, true);
+    assert.equal(forPriya.dueHasTime, false);
+    assert.equal(await queued(forPriya.id), null);
 
     const mine = await timed(mark, "Call Ben", Date.now() + 2 * DAY);
     await updateTask(priya, mine.id, { ownerId: priya.userId }).catch(() => null);
@@ -494,15 +508,21 @@ describe("Outlook lifecycle", () => {
     const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
     outlook.failCreate = 2;
     const failed = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
-    assert.equal(failed.retry, 1);
+    assert.equal(failed.deferred, 1);
     assert.equal(outlook.events.size, 0);
-    assert.ok((await queued(task.id))?.claimed_at);
+    const waiting = await admin().query<{ attempts: number; retry_at: Date; claimed_at: Date | null }>(
+      "select attempts, retry_at, claimed_at from crm.task_outlook_queue where task_id = $1",
+      [task.id],
+    );
+    assert.equal(waiting.rows[0].attempts, 1);
+    assert.equal(waiting.rows[0].claimed_at, null);
+    assert.ok(waiting.rows[0].retry_at.getTime() > Date.now());
     const firstTx = outlook.calls.find((call) => call.method === "POST" && call.body?.transactionId)!.body!.transactionId;
 
-    const leased = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
-    assert.equal(leased.created + leased.retry, 0);
+    const backedOff = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(backedOff.created + backedOff.deferred, 0);
 
-    await admin().query("update crm.task_outlook_queue set claimed_at = now() - interval '3 minutes' where task_id = $1", [task.id]);
+    await admin().query("update crm.task_outlook_queue set retry_at = now() - interval '1 second' where task_id = $1", [task.id]);
     outlook.reset();
     const [one, two] = await Promise.all([
       syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch }),
@@ -516,6 +536,154 @@ describe("Outlook lifecycle", () => {
     assert.equal(await queued(task.id), null);
   });
 
+  it("only writes a time the owner set, and agents never set one on an owned task", async () => {
+    await connect(mark);
+    const setter = await createUser(`setter${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, setter.userId, "admin");
+    const priya: UserActor = { ...setter, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "admin" };
+    const hers = (await createTask(priya, { title: "Priya's call", dueDate: new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10) })).body.task;
+    const set = await updateTask(mark, hers.id, { dueAt: minuteAt(Date.now() + 2 * DAY) });
+    assert.equal(set.body.task.dueHasTime, false);
+    const reassigned = await timed(mark, "Call Ben", Date.now() + 2 * DAY);
+    const handed = await updateTask(mark, reassigned.id, { ownerId: priya.userId, dueAt: minuteAt(Date.now() + 3 * DAY) });
+    assert.equal(handed.body.task.dueHasTime, false);
+    const own = await updateTask(priya, hers.id, { dueAt: minuteAt(Date.now() + 2 * DAY) });
+    assert.equal(own.body.task.dueHasTime, true);
+    const agent = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
+    const owned = (await createTask(agent.actor, { title: "Agent call", dueAt: minuteAt(Date.now() + 2 * DAY), ownerId: mark.userId })).body.task;
+    assert.equal(owned.dueHasTime, false);
+    const unowned = (await createTask(agent.actor, { title: "Agent loose call", dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
+    assert.equal(unowned.dueHasTime, true);
+    assert.equal(unowned.ownerId, null);
+    const later = await updateTask(agent.actor, own.body.task.id, { dueAt: minuteAt(Date.now() + 4 * DAY) });
+    assert.equal(later.body.task.dueHasTime, false);
+  });
+
+  it("keeps a move made while Outlook refuses it, so the next sync doesn't revert it", async () => {
+    await connect(mark);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    await admin().query("update crm.calendar_events set block_written_at = now() - interval '5 minutes' where task_id = $1", [task.id]);
+    const moved = minuteAt(Date.now() + 3 * DAY);
+    await placeTask(mark, task.id, { at: moved, durationMinutes: 30 });
+    outlook.failPatchWith = 403;
+    const refused = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(refused.deferred, 1);
+    assert.ok(await queued(task.id));
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.equal((await getTask(mark, task.id)).dueAt, moved);
+    outlook.failPatchWith = null;
+    await admin().query("update crm.task_outlook_queue set retry_at = null where task_id = $1", [task.id]);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.events.get("block-1")!.start, moved);
+    assert.equal(await queued(task.id), null);
+  });
+
+  it("keeps trying to remove an event Outlook refused to delete, and booking doesn't count it meanwhile", async () => {
+    await connect(mark);
+    await admin().query("insert into crm.booking_pages (workspace_id, user_id, slug, enabled) values ($1, $2, $3, true)", [mark.workspaceId, mark.userId, `refused-${seq}`]);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    await placeTask(mark, task.id, { dateOnly: true });
+    outlook.failDeleteWith = 403;
+    const refused = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(refused.deferred, 1);
+    assert.ok(await queued(task.id));
+    assert.equal(outlook.events.size, 1);
+    const busy = await admin().query("select * from private.booking_busy($1, now(), now() + interval '10 days')", [mark.userId]);
+    assert.equal(busy.rowCount, 0);
+    outlook.failDeleteWith = null;
+    await admin().query("update crm.task_outlook_queue set retry_at = null where task_id = $1", [task.id]);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.events.size, 0);
+    assert.equal(await ref(task.id), null);
+  });
+
+  it("requeues blocks that drifted from their task when write access is back", async () => {
+    await connect(mark);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    await admin().query("update crm.tasks set due_at = due_at + interval '1 hour' where id = $1", [task.id]);
+    await admin().query("delete from crm.task_outlook_queue where task_id = $1", [task.id]);
+    assert.equal(await queueOwnTaskBlocks(mark.userId), 1);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.events.get("block-1")!.start, (await getTask(mark, task.id)).dueAt);
+    assert.equal(await queueOwnTaskBlocks(mark.userId), 0);
+  });
+
+  it("keeps the event id even when saving the event row fails, so a retry never duplicates it", async () => {
+    await connect(mark);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await admin().query(`create or replace function public.refuse_block_rows() returns trigger language plpgsql as $$ begin raise exception 'no rows'; end; $$`);
+    await admin().query("create trigger refuse_block_rows before insert on crm.calendar_events for each row when (new.task_id is not null) execute function public.refuse_block_rows()");
+    try {
+      const failed = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+      assert.equal(failed.deferred, 1);
+    } finally {
+      await admin().query("drop trigger refuse_block_rows on crm.calendar_events");
+    }
+    assert.equal(await ref(task.id), "block-1");
+    await admin().query("update crm.task_outlook_queue set retry_at = null where task_id = $1", [task.id]);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.created, 1);
+    assert.equal((await blockRow(task.id))?.provider_event_id, "block-1");
+  });
+
+  it("stops a mailbox's batch on throttling and parks refused creates until the task changes", async () => {
+    await connect(mark);
+    const first = await timed(mark, "Call one", Date.now() + 2 * DAY);
+    const second = await timed(mark, "Call two", Date.now() + 2 * DAY + HOUR);
+    outlook.failCreateWith = 429;
+    const throttled = await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(throttled.throttled, 2);
+    assert.equal(outlook.calls.filter((call) => call.method === "POST" && new URL(call.url).hostname === "graph.microsoft.com").length, 1);
+
+    await admin().query("update crm.task_outlook_queue set retry_at = null");
+    outlook.failCreateWith = 400;
+    outlook.reset();
+    await syncTaskBlocks({ taskIds: [first.id], fetchImpl: outlook.fetch });
+    const parked = await admin().query<{ refused: boolean; retry_at: Date }>("select refused, retry_at from crm.task_outlook_queue where task_id = $1", [first.id]);
+    assert.equal(parked.rows[0].refused, true);
+    await queueOwnTaskBlocks(mark.userId);
+    outlook.reset();
+    await syncTaskBlocks({ taskIds: [first.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.graphCalls().length, 0);
+    outlook.failCreateWith = null;
+    await updateTask(mark, first.id, { title: "Call one again" });
+    await syncTaskBlocks({ taskIds: [first.id, second.id], fetchImpl: outlook.fetch });
+    assert.equal(await ref(first.id) !== null, true);
+  });
+
+  it("hands a block over when the old owner's Outlook can't be reached", async () => {
+    await connect(mark);
+    const taker = await createUser(`taker${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, taker.userId, "admin");
+    const priya: UserActor = { ...taker, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "admin" };
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    await admin().query("update crm.mailbox_connections set status = 'disconnected', refresh_token = null where user_id = $1", [mark.userId]);
+    const taken = await updateTask(priya, task.id, { ownerId: priya.userId });
+    assert.equal(taken.body.task.dueHasTime, true);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(await ref(task.id), null);
+    assert.equal(await blockRow(task.id), null);
+    assert.equal(await queued(task.id), null);
+  });
+
+  it("points the Outlook link at the task's new workspace when it moves", async () => {
+    await connect(mark);
+    const ridgeon = await createUser(`moved${seq}@outlook-blocks.test`, "Ridgeon owner");
+    await addMember(ridgeon.workspaceId, mark.userId, "admin");
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    outlook.reset();
+    await admin().query("update crm.tasks set workspace_id = $2 where id = $1", [task.id, ridgeon.workspaceId]);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    const [patch] = outlook.graphCalls();
+    assert.equal(patch.method, "PATCH");
+    assert.match(String((patch.body!.body as { content: string }).content), new RegExp(`workspace=${ridgeon.workspaceId}`));
+  });
+
   it("keeps blocks in Orbit only without write access", async () => {
     await connect(mark, READ_SCOPES);
     const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
@@ -525,6 +693,9 @@ describe("Outlook lifecycle", () => {
     assert.equal(await queued(task.id), null);
     assert.equal(await ref(task.id), null);
     assert.equal(await withActor(mark, (db) => taskBlocksReach(db, mark)), "orbit");
+    await admin().query("update crm.integration_state set granted_scopes = null where user_id = $1", [mark.userId]);
+    assert.equal((await listCalendarGroups(mark))[0].taskBlocks, null);
+    await admin().query("update crm.integration_state set granted_scopes = $2 where user_id = $1", [mark.userId, READ_SCOPES]);
     const [primary] = await listCalendarGroups(mark);
     assert.equal(primary.taskBlocks, "orbit");
 
@@ -565,7 +736,7 @@ describe("reading blocks back from Outlook", () => {
     await connect(mark);
     const task = await timed(mark, title, at, duration);
     await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
-    await admin().query("update crm.calendar_events set block_written_at = now() - interval '1 minute' where task_id = $1", [task.id]);
+    await admin().query("update crm.calendar_events set block_written_at = now() - interval '5 minutes' where task_id = $1", [task.id]);
     outlook.reset();
     return task;
   }
@@ -628,7 +799,7 @@ describe("reading blocks back from Outlook", () => {
 
     const near = await timed(mark, "Call near", Date.now() + 2 * DAY);
     await syncTaskBlocks({ taskIds: [near.id], fetchImpl: outlook.fetch });
-    await admin().query("update crm.calendar_events set block_written_at = now() - interval '1 minute' where task_id = $1", [near.id]);
+    await admin().query("update crm.calendar_events set block_written_at = now() - interval '5 minutes' where task_id = $1", [near.id]);
     outlook.events.clear();
     outlook.nextLink = "https://elsewhere.example/next";
     await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
@@ -660,11 +831,58 @@ describe("reading blocks back from Outlook", () => {
 
   it("leaves a pending change alone, so Orbit's newer time wins", async () => {
     const task = await linked("Call Jane", Date.now() + 2 * DAY);
+    const before = outlook.events.get("block-1")!.start;
     await admin().query("update crm.tasks set due_at = due_at + interval '1 hour' where id = $1", [task.id]);
     const wanted = (await getTask(mark, task.id)).dueAt;
+    outlook.failPatchWith = 503;
     await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.ok(await queued(task.id));
+    assert.equal(outlook.events.get("block-1")!.start, before);
     assert.equal((await getTask(mark, task.id)).dueAt, wanted);
+    outlook.failPatchWith = null;
+    await admin().query("update crm.task_outlook_queue set retry_at = null where task_id = $1", [task.id]);
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
     assert.equal(outlook.events.get("block-1")!.start, wanted);
+    assert.equal((await getTask(mark, task.id)).dueAt, wanted);
+  });
+
+  it("only counts a block as deleted when Outlook says it is gone", async () => {
+    const task = await linked("Call Jane", Date.now() + 2 * DAY);
+    outlook.hidden.add("block-1");
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.equal((await getTask(mark, task.id)).dueHasTime, true);
+    assert.ok(await blockRow(task.id));
+    assert.ok(outlook.calls.some((call) => call.method === "GET" && /\/me\/events\/block-1\?/.test(call.url)));
+  });
+
+  it("needs the block written at least two minutes before the fetch, by the database clock", async () => {
+    const recent = await linked("Call recent", Date.now() + 2 * DAY);
+    await admin().query("update crm.calendar_events set block_written_at = now() - interval '90 seconds' where task_id = $1", [recent.id]);
+    outlook.events.clear();
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.equal((await getTask(mark, recent.id)).dueHasTime, true);
+    await admin().query("update crm.calendar_events set block_written_at = now() - interval '150 seconds' where task_id = $1", [recent.id]);
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.equal((await getTask(mark, recent.id)).dueHasTime, false);
+  });
+
+  it("refuses to link an event to someone else's task", async () => {
+    const task = await linked("Call Jane", Date.now() + 2 * DAY);
+    const priya = await createUser(`guard${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, priya.userId);
+    const hers = (await createTask(priya, { title: "Priya's own" })).body.task;
+    const event = await blockRow(task.id);
+    await assert.rejects(queryAsUser(mark.userId, "update crm.calendar_events set task_id = $2 where id = $1", [event!.id, hers.id]));
+    const calendar = await admin().query<{ id: string; connection_id: string }>("select id, connection_id from crm.calendars where user_id = $1 limit 1", [mark.userId]);
+    await assert.rejects(
+      queryAsUser(
+        mark.userId,
+        `insert into crm.calendar_events (workspace_id, calendar_id, connection_id, user_id, provider_event_id, starts_at, ends_at, task_id)
+         values ($1, $2, $3, $4, 'stolen', now(), now(), $5)`,
+        [mark.workspaceId, calendar.rows[0].id, calendar.rows[0].connection_id, mark.userId, hers.id],
+      ),
+    );
+    await queryAsUser(mark.userId, "update crm.calendar_events set show_as = 'busy' where id = $1", [event!.id]);
   });
 
   it("skips the task when its owner has left that workspace", async () => {
@@ -674,7 +892,7 @@ describe("reading blocks back from Outlook", () => {
     const there: UserActor = { ...mark, workspaceId: ridgeon.workspaceId, workspaceName: "Ridgeon", role: "member" };
     const task = await timed(there, "Call Ridgeon lead", Date.now() + 2 * DAY);
     await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
-    await admin().query("update crm.calendar_events set block_written_at = now() - interval '1 minute' where task_id = $1", [task.id]);
+    await admin().query("update crm.calendar_events set block_written_at = now() - interval '5 minutes' where task_id = $1", [task.id]);
     const before = await getTask(ridgeon, task.id);
     await admin().query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [ridgeon.workspaceId, mark.userId]);
     outlook.events.clear();
@@ -693,7 +911,7 @@ describe("reading blocks back from Outlook", () => {
     const there: UserActor = { ...mark, workspaceId: ridgeon.workspaceId, workspaceName: "Ridgeon", role: "member" };
     const task = await timed(there, "Call Ridgeon lead", Date.now() + 2 * DAY);
     await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
-    await admin().query("update crm.calendar_events set block_written_at = now() - interval '1 minute' where task_id = $1", [task.id]);
+    await admin().query("update crm.calendar_events set block_written_at = now() - interval '5 minutes' where task_id = $1", [task.id]);
     const moved = minuteAt(Date.now() + 5 * DAY);
     outlook.events.set("block-1", { subject: "Call Ridgeon lead", start: moved, end: new Date(Date.parse(moved) + 30 * MINUTE).toISOString() });
     await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });

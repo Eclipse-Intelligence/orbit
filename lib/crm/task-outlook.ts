@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { taskPanelHref } from "@/lib/chat/discussions";
-import { readGrantedScopes } from "@/lib/crm/calendar";
+import { BLOCK_WRITE_MARGIN_MS, readGrantedScopes } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { readStored } from "@/lib/crm/inbox";
@@ -33,6 +33,7 @@ const RUN_ROUNDS = 4;
 const RESERVE_MS = 4_000;
 const MIN_MINUTES = 5;
 const MAX_MINUTES = 480;
+export const CREATE_ATTEMPTS = 8;
 
 export const CALENDAR_SYNC: Provenance = { operation: "calendar_sync", source: "microsoft" };
 
@@ -48,12 +49,14 @@ export type BlockRow = {
   archived_at: Date | string | null;
   calendar_event_ref: string | null;
   pending_at: string;
+  attempts: number;
   event_id: string | null;
   event_user_id: string | null;
   provider_event_id: string | null;
   event_starts_at: Date | string | null;
   event_ends_at: Date | string | null;
   event_subject: string | null;
+  event_workspace_id: string | null;
 };
 
 export type BlockPlan =
@@ -62,7 +65,7 @@ export type BlockPlan =
   | { kind: "remove"; userId: string; requeue: boolean }
   | { kind: "write"; userId: string; start: Date; end: Date; create: boolean };
 
-export type BlockOutcome = "created" | "updated" | "removed" | "unchanged" | "retry" | "orbit_only";
+export type BlockOutcome = "created" | "updated" | "removed" | "unchanged" | "deferred" | "throttled" | "orbit_only";
 
 export type BlockRun = Record<BlockOutcome, number>;
 
@@ -113,12 +116,12 @@ export function taskBlockLink(taskId: string, workspaceId: string) {
 type Outlook = { token: MicrosoftToken; connectionId: string; email: string; actor: UserActor };
 type Access = Outlook | "orbit_only" | "retry";
 
-async function actingActor(userId: string, preferredWorkspace: string): Promise<UserActor | null> {
+async function actingActor(userId: string, workspaceId: string): Promise<UserActor | null> {
   const memberships = await query<{ workspace_id: string; workspace_name: string; role: WorkspaceRole }>(
     "select workspace_id, workspace_name, role from private.memberships_for($1)",
     [userId],
   );
-  const row = memberships.rows.find((item) => item.workspace_id === preferredWorkspace) ?? memberships.rows[0];
+  const row = memberships.rows.find((item) => item.workspace_id === workspaceId);
   if (!row) return null;
   const base: UserActor = {
     type: "user",
@@ -146,7 +149,8 @@ async function mainSource(db: Db, actor: UserActor): Promise<GraphSource | null>
 export async function taskBlocksReach(db: Db, actor: UserActor): Promise<"outlook" | "orbit" | null> {
   const source = await mainSource(db, actor);
   if (!source) return null;
-  return grantsCalendarWrite(source.scopes) === false ? "orbit" : "outlook";
+  const writes = grantsCalendarWrite(source.scopes);
+  return writes === true ? "outlook" : writes === false ? "orbit" : null;
 }
 
 function stopped(error: unknown) {
@@ -167,33 +171,35 @@ async function openOutlook(actor: UserActor, fetchImpl: typeof fetch): Promise<A
   }
 }
 
-function graphFailure(error: unknown): "orbit_only" | "gone" | "refused" | "retry" {
+type Failure = "orbit_only" | "gone" | "refused" | "throttled" | "retry";
+
+function graphFailure(error: unknown): Failure {
   if (error instanceof CalendarWriteScopeError) return "orbit_only";
   if (error instanceof CalendarWriteError) {
     if (error.status === 404) return "gone";
-    if (error.status === 401 || error.status === 403) return "orbit_only";
-    if (error.status === 400) return "refused";
+    if (error.status === 401) return "orbit_only";
+    if (error.status === 429) return "throttled";
+    if (error.status === 403 || error.status === 400) return "refused";
   }
   return "retry";
 }
 
-async function settle(row: BlockRow, ref: string | null | undefined, options: { requeue?: boolean } = {}) {
-  await query("select private.settle_task_block($1, $2, $3, $4)", [
+async function settle(row: BlockRow, ref: string | null | undefined, options: { requeue?: boolean; dropEvent?: boolean } = {}) {
+  await query("select private.settle_task_block($1, $2, $3, $4, $5)", [
     row.task_id,
     options.requeue ? null : row.pending_at,
     ref ?? null,
     ref !== undefined,
+    Boolean(options.dropEvent),
   ]);
+}
+
+async function defer(row: BlockRow, refused = false) {
+  await query("select private.defer_task_block($1, $2)", [row.task_id, refused]).catch((error) => console.error("Deferring a task block failed", error));
 }
 
 async function release(row: BlockRow) {
   await query("select private.release_task_block($1)", [row.task_id]).catch((error) => console.error("Releasing a task block failed", error));
-}
-
-async function forgetEvent(outlook: Pick<Outlook, "actor">, row: BlockRow) {
-  await withActor(outlook.actor, (db) =>
-    db.query("delete from crm.calendar_events where task_id = $1 and user_id = $2", [row.task_id, outlook.actor.userId]),
-  );
 }
 
 async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: string, window: { start: Date; end: Date }) {
@@ -207,15 +213,17 @@ async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: stri
     await db.query(
       `insert into crm.calendar_events (
          workspace_id, calendar_id, connection_id, user_id, provider_event_id, subject, starts_at, ends_at,
-         is_all_day, is_cancelled, organizer, attendees, show_as, response_status, created_by_orbit, task_id, block_written_at
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, false, false, $9::jsonb, '[]'::jsonb, 'busy', 'organizer', true, $10, clock_timestamp())
+         is_all_day, is_cancelled, organizer, attendees, show_as, response_status, created_by_orbit, task_id, block_written_at,
+         block_workspace_id
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, false, false, $9::jsonb, '[]'::jsonb, 'busy', 'organizer', true, $10, clock_timestamp(), $11)
        on conflict (calendar_id, provider_event_id) do update set
          subject = excluded.subject,
          starts_at = excluded.starts_at,
          ends_at = excluded.ends_at,
          is_cancelled = false,
          task_id = excluded.task_id,
-         block_written_at = excluded.block_written_at`,
+         block_written_at = excluded.block_written_at,
+         block_workspace_id = excluded.block_workspace_id`,
       [
         outlook.actor.workspaceId,
         calendarId,
@@ -227,6 +235,7 @@ async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: stri
         window.end.toISOString(),
         JSON.stringify({ name: outlook.actor.fullName, email: outlook.email }),
         row.task_id,
+        row.workspace_id,
       ],
     );
   });
@@ -237,8 +246,15 @@ function sameWrite(row: BlockRow, plan: Extract<BlockPlan, { kind: "write" }>) {
     row.event_id !== null &&
     time(row.event_starts_at) === plan.start.getTime() &&
     time(row.event_ends_at) === plan.end.getTime() &&
-    row.event_subject === row.title
+    row.event_subject === row.title &&
+    row.event_workspace_id === row.workspace_id
   );
+}
+
+function failed(failure: Failure): BlockOutcome {
+  if (failure === "throttled") return "throttled";
+  if (failure === "orbit_only") return "orbit_only";
+  return "deferred";
 }
 
 async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockPlan, { kind: "write" }>, fetchImpl: typeof fetch): Promise<BlockOutcome> {
@@ -258,15 +274,19 @@ async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockP
     );
   } catch (error) {
     const failure = graphFailure(error);
-    if (failure === "retry") return "retry";
-    await settle(row, null);
-    return failure === "orbit_only" ? "orbit_only" : "unchanged";
+    if (failure === "orbit_only") {
+      await settle(row, null);
+      return "orbit_only";
+    }
+    await defer(row, failure === "refused" || row.attempts + 1 >= CREATE_ATTEMPTS);
+    return failed(failure);
   }
   const id = created.id?.trim();
   if (!id || id.length > 400) {
-    await settle(row, null);
-    return "unchanged";
+    await defer(row, true);
+    return "deferred";
   }
+  await query("select private.link_task_block($1, $2)", [row.task_id, id]);
   await storeEvent(outlook, row, id, plan);
   await settle(row, id);
   return "created";
@@ -283,22 +303,21 @@ async function writeBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockPl
     await patchGraphEvent(
       outlook.token.accessToken,
       ref,
-      taskBlockPatch({ title: row.title, start: plan.start, end: plan.end, timeZone: appTimeZone() }),
+      taskBlockPatch({ title: row.title, start: plan.start, end: plan.end, timeZone: appTimeZone(), link: taskBlockLink(row.task_id, row.workspace_id) }),
       fetchImpl,
     );
   } catch (error) {
     const failure = graphFailure(error);
-    if (failure === "retry") return "retry";
     if (failure === "gone") {
-      await forgetEvent(outlook, row);
       if (row.completed_at) {
-        await settle(row, null);
+        await settle(row, null, { dropEvent: true });
         return "removed";
       }
+      await query("select private.settle_task_block($1, null, null, true, true)", [row.task_id]);
       return createBlock(outlook, { ...row, calendar_event_ref: null, provider_event_id: null, event_id: null }, { ...plan, create: true }, fetchImpl);
     }
-    await settle(row, ref);
-    return failure === "orbit_only" ? "orbit_only" : "unchanged";
+    await defer(row);
+    return failed(failure);
   }
   await storeEvent(outlook, row, ref, plan);
   await settle(row, ref);
@@ -311,15 +330,19 @@ async function removeBlock(outlook: Outlook, row: BlockRow, requeue: boolean, fe
     await deleteGraphEvent(outlook.token.accessToken, ref, fetchImpl);
   } catch (error) {
     const failure = graphFailure(error);
-    if (failure === "retry") return "retry";
-    if (failure !== "gone") {
-      await settle(row, ref);
-      return failure === "orbit_only" ? "orbit_only" : "unchanged";
-    }
+    if (failure !== "gone") return unreachable(row, requeue, failure);
   }
-  await forgetEvent(outlook, row);
-  await settle(row, null, { requeue });
+  await settle(row, null, { requeue, dropEvent: true });
   return "removed";
+}
+
+async function unreachable(row: BlockRow, requeue: boolean, failure: Failure): Promise<BlockOutcome> {
+  if (requeue && failure !== "throttled" && failure !== "retry") {
+    await settle(row, null, { requeue: true, dropEvent: true });
+    return "orbit_only";
+  }
+  await defer(row);
+  return failed(failure);
 }
 
 async function runRow(row: BlockRow, plan: BlockPlan, access: Access, fetchImpl: typeof fetch): Promise<BlockOutcome> {
@@ -328,20 +351,26 @@ async function runRow(row: BlockRow, plan: BlockPlan, access: Access, fetchImpl:
     return "unchanged";
   }
   if (plan.kind === "forget") {
-    await settle(row, null);
+    await settle(row, null, { dropEvent: true });
     return "unchanged";
   }
-  if (access === "retry") return "retry";
+  if (access === "retry") {
+    await defer(row);
+    return "deferred";
+  }
   if (access === "orbit_only") {
-    await settle(row, plan.kind === "write" && plan.create ? null : undefined);
-    return "orbit_only";
+    if (plan.kind === "write" && (plan.create || !blockRef(row))) {
+      await settle(row, null);
+      return "orbit_only";
+    }
+    return unreachable(row, plan.kind === "remove" && plan.requeue, "orbit_only");
   }
   if (plan.kind === "remove") return removeBlock(access, row, plan.requeue, fetchImpl);
   return writeBlock(access, row, plan, fetchImpl);
 }
 
 function emptyRun(): BlockRun {
-  return { created: 0, updated: 0, removed: 0, unchanged: 0, retry: 0, orbit_only: 0 };
+  return { created: 0, updated: 0, removed: 0, unchanged: 0, deferred: 0, throttled: 0, orbit_only: 0 };
 }
 
 export async function syncTaskBlocks(
@@ -378,9 +407,15 @@ export async function syncTaskBlocks(
           access = "retry";
         }
       }
+      let throttled = false;
       for (const { row, plan } of items) {
         if (deadline - Date.now() < RESERVE_MS) {
           await release(row);
+          continue;
+        }
+        if (throttled) {
+          await defer(row);
+          result.throttled += 1;
           continue;
         }
         let outcome: BlockOutcome;
@@ -388,9 +423,11 @@ export async function syncTaskBlocks(
           outcome = await runRow(row, plan, access, fetchImpl);
         } catch (error) {
           console.error("Outlook task block failed", error);
-          outcome = "retry";
+          await defer(row);
+          outcome = "deferred";
         }
-        if (plan.kind === "remove" && plan.requeue && outcome === "removed") requeued = true;
+        if (outcome === "throttled") throttled = true;
+        if (plan.kind === "remove" && plan.requeue && (outcome === "removed" || outcome === "orbit_only")) requeued = true;
         result[outcome] += 1;
       }
     }
@@ -430,6 +467,10 @@ export function outlookMinutes(start: string, end: string) {
   return Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, minutes));
 }
 
+export function writtenBeforeFetch(written: number | null, fetchStartedAt: number) {
+  return written !== null && written < fetchStartedAt - BLOCK_WRITE_MARGIN_MS;
+}
+
 export async function readBackTaskBlocks(
   actor: UserActor,
   input: {
@@ -439,6 +480,7 @@ export async function readBackTaskBlocks(
     window: { start: Date; end: Date };
     fetchStartedAt: number;
     fetchImpl?: typeof fetch;
+    isGone: (providerEventId: string) => Promise<boolean>;
     pushClickUp?: (actor: UserActor, taskId: string) => Promise<unknown>;
   },
 ) {
@@ -466,12 +508,12 @@ export async function readBackTaskBlocks(
     const member = members.find((item) => item.workspaceId === row.workspace_id);
     if (!member) continue;
     const written = time(row.block_written_at);
+    if (!writtenBeforeFetch(written, input.fetchStartedAt)) continue;
     const open = !row.completed_at && !row.archived_at && row.due_has_time && row.due_at !== null;
     const event = fetched.get(row.provider_event_id);
     try {
       if (event) {
         if (!open || event.isAllDay || event.isCancelled) continue;
-        if (written !== null && written >= input.fetchStartedAt) continue;
         const minutes = outlookMinutes(event.startsAt, event.endsAt);
         if (time(row.due_at) === new Date(event.startsAt).getTime() && minutes === row.duration_minutes) continue;
         await withActor(member, (db) =>
@@ -483,7 +525,7 @@ export async function readBackTaskBlocks(
       if (!input.complete) continue;
       const startsAt = new Date(row.starts_at).getTime();
       if (startsAt < input.window.start.getTime() || startsAt >= input.window.end.getTime()) continue;
-      if (written === null || written >= input.fetchStartedAt) continue;
+      if (!(await input.isGone(row.provider_event_id))) continue;
       await withActor(member, async (db) => {
         if (open) {
           const day = taskDueDay(new Date(row.due_at!).toISOString());

@@ -279,9 +279,12 @@ function settleReminder(write: PreparedTask, current: { dueHasTime: boolean; rem
   if (write.remindMinutes === undefined && current.remindMinutes !== null && current.remindMinutes !== undefined) write.remindMinutes = null;
 }
 
-function handsTimeToSomeoneElse(actor: Actor, nextOwner: string | null | undefined, previousOwner: string | null) {
-  if (!nextOwner || nextOwner === previousOwner) return false;
-  return actor.type !== "user" || actor.userId !== nextOwner;
+function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { ownerId: string | null; timed: boolean } | null) {
+  const owner = write.ownerId !== undefined ? (write.ownerId ?? null) : (current?.ownerId ?? null);
+  if (!owner || (actor.type === "user" && actor.userId === owner)) return false;
+  if (!(write.dueHasTime ?? current?.timed ?? false)) return false;
+  const ownerChanges = write.ownerId !== undefined && (write.ownerId ?? null) !== (current?.ownerId ?? null);
+  return ownerChanges || write.dueAt !== undefined;
 }
 
 function keepDayOnly(write: PreparedTask, current: { dueAt: string | null; dueHasTime: boolean }) {
@@ -394,6 +397,7 @@ export async function createTaskInDb(
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
+  if (setsSomeoneElsesTime(actor, write, null)) keepDayOnly(write, { dueAt: null, dueHasTime: false });
   settleReminder(write, { dueHasTime: false });
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   let detectedLinks = Object.keys(options.detectedLinks ?? {});
@@ -477,13 +481,14 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
-  if (!options.restoring && handsTimeToSomeoneElse(actor, write.ownerId, current.owner_id)) {
-    keepDayOnly(write, { dueAt: iso(current.due_at), dueHasTime: Boolean(current.due_has_time && current.due_at) });
-  }
   if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule)) {
     delete write.dueAt;
     delete write.dueHasTime;
     if (!options.claimSchedule || write.scheduledBy === (current.scheduled_by ?? null)) delete write.scheduledBy;
+  }
+  const timed = Boolean(current.due_has_time && current.due_at);
+  if (!options.restoring && setsSomeoneElsesTime(actor, write, { ownerId: current.owner_id, timed })) {
+    keepDayOnly(write, { dueAt: iso(current.due_at), dueHasTime: timed });
   }
   settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
   const links = await resolveLinks(

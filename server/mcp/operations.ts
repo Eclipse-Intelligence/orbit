@@ -132,7 +132,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         title: z.string().optional(),
         description: z.string().nullable().optional(),
         dueDate: z.string().nullable().optional().describe("Due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
-        dueAt: z.string().nullable().optional().describe("Due date and time, such as 2026-11-14T14:30 (London time) or an ISO instant. Only when the person gave a time. A bare date means date only. Send dueDate or dueAt, not both."),
+        dueAt: z.string().nullable().optional().describe("Due date and time, such as 2026-11-14T14:30 (London time) or an ISO instant. Only when the person gave a time. A bare date means date only. A time on a task owned by someone else (anyone, for an agent token) is saved as date only. Send dueDate or dueAt, not both."),
         durationMinutes: z.number().int().min(5).max(480).optional().describe("How long the task takes in minutes, 5 to 480. New tasks take 15."),
         priority: z.enum(TASK_PRIORITIES).optional(),
         ownerId: z.uuid().nullable().optional(),
