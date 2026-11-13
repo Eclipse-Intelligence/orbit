@@ -382,17 +382,18 @@ async function writePreparation(actor: UserActor, material: Material, options: {
   return material.kind === "draft" ? writeDraft(actor, material, context, options) : writeBrief(actor, material, context, options);
 }
 
-async function storePreparation(actor: UserActor, material: Material, content: CallBrief | PreparedEmail, automatic: boolean): Promise<TaskPreparation> {
+async function storePreparation(actor: UserActor, material: Material, content: CallBrief | PreparedEmail, checkedAt: Date | null): Promise<TaskPreparation> {
+  const automatic = checkedAt !== null;
   const fingerprint = basisFingerprint(material.basis);
   const stored = await withActor(actor, async (db) => {
     const result = await db.query<{ prepared_at: Date }>(
       `insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, content, basis, fingerprint, automatic, failures, error, prepared_at, checked_at)
-       values ($1, $2, $3, $4, 'ready', $5::jsonb, $6::jsonb, $7, $8, 0, null, now(), now())
+       values ($1, $2, $3, $4, 'ready', $5::jsonb, $6::jsonb, $7, $8, 0, null, now(), coalesce($9::timestamptz, now()))
        on conflict (task_id, user_id) do update set
          workspace_id = excluded.workspace_id, kind = excluded.kind, state = 'ready', content = excluded.content, basis = excluded.basis,
-         fingerprint = excluded.fingerprint, automatic = excluded.automatic, failures = 0, error = null, prepared_at = now(), checked_at = now()
+         fingerprint = excluded.fingerprint, automatic = excluded.automatic, failures = 0, error = null, prepared_at = now(), checked_at = excluded.checked_at
        returning prepared_at`,
-      [material.task.id, actor.userId, actor.workspaceId, material.kind, JSON.stringify(content), JSON.stringify(material.basis), fingerprint, automatic],
+      [material.task.id, actor.userId, actor.workspaceId, material.kind, JSON.stringify(content), JSON.stringify(material.basis), fingerprint, automatic, checkedAt?.toISOString() ?? null],
     );
     return result.rows[0];
   });
@@ -428,7 +429,7 @@ export async function prepareTask(actor: UserActor, taskId: string, options: { d
     return gatherInDb(db, actor, task, preparationKind(task.title)!, detail, preparationBasis(detail));
   });
   const content = await writePreparation(actor, material, { deadline: options.deadline ?? Date.now() + ON_DEMAND_MS, fetchImpl: options.fetchImpl });
-  return storePreparation(actor, material, content, false);
+  return storePreparation(actor, material, content, null);
 }
 
 async function dueToday(db: Db, actor: UserActor, window: { start: Date; end: Date }, retryBefore: Date) {
@@ -450,27 +451,27 @@ async function dueToday(db: Db, actor: UserActor, window: { start: Date; end: Da
   return result.rows.filter((row) => preparationKind(row.title) !== null).map((row) => row.id);
 }
 
-async function noteFailure(actor: UserActor, material: Material, error: unknown, dayStart: Date) {
+async function noteFailure(actor: UserActor, material: Material, error: unknown, dayStart: Date, checkedAt: Date) {
   const message = (error instanceof Error ? error.message : "Preparing failed.").slice(0, 500);
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, automatic, failures, error, checked_at)
-       values ($1, $2, $3, $4, 'failed', true, 1, $5, now())
+       values ($1, $2, $3, $4, 'failed', true, 1, $5, $7)
        on conflict (task_id, user_id) do update set
          failures = case when crm.task_preparations.checked_at < $6 then 1 else crm.task_preparations.failures + 1 end,
-         error = excluded.error, checked_at = now()`,
-      [material.task.id, actor.userId, actor.workspaceId, material.kind, message, dayStart.toISOString()],
+         error = excluded.error, checked_at = excluded.checked_at`,
+      [material.task.id, actor.userId, actor.workspaceId, material.kind, message, dayStart.toISOString(), checkedAt.toISOString()],
     ),
   );
 }
 
-async function morningMaterial(actor: UserActor, taskId: string) {
+async function morningMaterial(actor: UserActor, taskId: string, checkedAt: Date) {
   return withActor(actor, async (db) => {
     const task = await readTaskInDb(db, taskId);
     if (!task || task.workspaceId !== actor.workspaceId || task.ownerId !== actor.userId || cannotPrepare(task)) return null;
     const detail = await taskDetailInDb(db, actor, task);
     if (detail.preparation && !detail.preparation.stale && detail.preparation.kind === preparationKind(task.title)) {
-      await db.query("update crm.task_preparations set checked_at = now() where task_id = $1 and user_id = $2", [task.id, actor.userId]);
+      await db.query("update crm.task_preparations set checked_at = $3 where task_id = $1 and user_id = $2", [task.id, actor.userId, checkedAt.toISOString()]);
       return "fresh" as const;
     }
     return gatherInDb(db, actor, task, preparationKind(task.title)!, detail, preparationBasis(detail));
@@ -495,7 +496,7 @@ export async function prepareTasksDueToday(
     const ids = await withActor(target, (db) => dueToday(db, target, window, retryBefore));
     for (const id of ids) {
       if (options.deadline - Date.now() < STEP_MS) return report;
-      const material = await morningMaterial(target, id);
+      const material = await morningMaterial(target, id, now);
       if (!material) continue;
       if (material === "fresh") {
         report.fresh += 1;
@@ -503,12 +504,12 @@ export async function prepareTasksDueToday(
       }
       try {
         const content = await writePreparation(target, material, { deadline: options.deadline, fetchImpl: options.fetchImpl });
-        await storePreparation(target, material, content, true);
+        await storePreparation(target, material, content, now);
         report.prepared += 1;
       } catch (error) {
         report.failed += 1;
         console.error("Preparing a task failed", error instanceof Error ? error.message : error);
-        await noteFailure(target, material, error, window.start).catch(() => undefined);
+        await noteFailure(target, material, error, window.start, now).catch(() => undefined);
         return report;
       }
     }
