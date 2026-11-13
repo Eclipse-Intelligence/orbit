@@ -9,6 +9,7 @@ import { ClickUpBadge } from "@/components/crm/clickup";
 import Button from "@/components/_ui/button";
 import { TaskAct } from "@/components/crm/task-actions";
 import TaskAskButton from "@/components/crm/task-ask";
+import { TaskPrepare } from "@/components/crm/task-prepare";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskTitle from "@/components/crm/task-title";
@@ -417,19 +418,24 @@ function ActionTask({
               <div className="flex flex-col gap-3 pt-1 pr-3 pb-3 pl-3 @xl:pl-[46px]">
                 <TaskAct task={task} here={here} canChange={canChange} />
                 <TaskFields details={details} viewer={viewer} members={members} tagged={tagged} layout="row" done={completed} />
-                <div className="flex items-center gap-2 max-sm:pt-1">
-                  <TaskAskButton taskId={task.id} variant="ghost" className="max-sm:hidden" />
-                  <span className="flex-1 max-sm:hidden" />
-                  <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="hit max-sm:flex-1">
-                    Open
-                  </Button>
-                  {complete && !completed && (
-                    <Button variant="secondary" size="md" onClick={complete} shortcut={keyboard ? ["E"] : undefined} className="hit max-sm:flex-1">
-                      <CheckIcon aria-hidden className="size-3.5" />
-                      Done
-                    </Button>
+                <TaskPrepare task={task}>
+                  {(prepare) => (
+                    <div className="flex items-center gap-2 max-sm:pt-1">
+                      <TaskAskButton taskId={task.id} variant="ghost" className="max-sm:hidden" />
+                      {prepare}
+                      <span className="flex-1 max-sm:hidden" />
+                      <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="hit max-sm:flex-1">
+                        Open
+                      </Button>
+                      {complete && !completed && (
+                        <Button variant="secondary" size="md" onClick={complete} shortcut={keyboard ? ["E"] : undefined} className="hit max-sm:flex-1">
+                          <CheckIcon aria-hidden className="size-3.5" />
+                          Done
+                        </Button>
+                      )}
+                    </div>
                   )}
-                </div>
+                </TaskPrepare>
               </div>
             )}
           </div>

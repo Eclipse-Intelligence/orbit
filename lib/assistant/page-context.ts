@@ -3,6 +3,7 @@ import { parseDocsRoute } from "@/lib/docs/routes";
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import { taskDetailOrNull, threadSummaryInDb, type TaskDetail, type TaskThread } from "@/lib/crm/task-detail";
+import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { mentionsIn } from "@/lib/mentions";
 import type { UserActor } from "@/lib/crm/types";
 import { isLeadSource } from "@/lib/assistant/web-gate";
@@ -338,7 +339,36 @@ export function taskDetailLines(found: TaskDetail, lead: string): Lines {
     lines.push(`The user's last email with them: subject ${quoted(found.mail.lastEmail.subject, "(no subject)")}${when ? `, ${when}` : ""}`);
   }
   if (found.mail?.thread) lines.push(`The task came from the user's ${threadLine(found.mail.thread)}`);
+  const preparation = preparationLine(found.preparation);
+  if (preparation) lines.push(preparation);
   return lines;
+}
+
+function listed(values: string[]) {
+  return values.map((value) => text(value)).filter(Boolean).join("; ");
+}
+
+function preparationLine(preparation: TaskPreparation | null) {
+  if (!preparation) return "";
+  const when = londonWhen(preparation.preparedAt);
+  const state = `${when ? `prepared ${when}, ` : ""}${preparation.stale ? "out of date, since the task or its records changed after it was made" : "up to date"}, only the user sees it`;
+  if (preparation.brief) {
+    const brief = preparation.brief;
+    const parts = [
+      detail("who", brief.who),
+      detail("last contact", brief.lastContact),
+      detail("stage", brief.stage),
+      brief.openPoints.length ? `open from the last call: ${listed(brief.openPoints)}` : "",
+      brief.talkingPoints.length ? `talking points: ${listed(brief.talkingPoints)}` : "",
+    ].filter(Boolean);
+    return `The user's own preparation for it, a call brief (${state}): ${parts.join(", ")}`;
+  }
+  if (preparation.draft) {
+    const draft = preparation.draft;
+    const parts = [detail("to", draft.to.map((person) => person.address).join(", ")), detail("subject", draft.subject), detail("body", draft.body)].filter(Boolean);
+    return `The user's own preparation for it, an email draft not sent (${state}): ${parts.join(", ")}`;
+  }
+  return "";
 }
 
 async function captureItem(db: Db, actor: UserActor, value: string) {

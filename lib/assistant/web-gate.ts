@@ -57,7 +57,7 @@ function ownChatPost(content: string) {
   }
 }
 
-const TASK_OUTSIDE = /\\?"(?:lastEmail|thread|lastActivity)\\?"\s*:\s*\{/;
+const TASK_OUTSIDE = /\\?"(?:lastEmail|thread|lastActivity|preparation)\\?"\s*:\s*\{/;
 
 export function outsideRead(name: string, content: string) {
   if (name === "team_chat" && ownChatPost(content)) return hasOutsideRecord(content);
@@ -94,7 +94,7 @@ const FORWARDED_START = "[Forwarded material starts.";
 const FORWARDED_END = "[Forwarded material ends.]";
 const FIRST_PARTY_FIELD = /^(domain|website|url|linkedin(url)?|x(url)?|twitter(url)?|homepage)$/i;
 const PAGE_OUTSIDE_LINE =
-  /^(?:Open: email thread |Event they last opened:|Capture item they last selected: (?:waiting for a reply|email from someone|sent email nobody|email reminder|suggested follow-up email|unfiled )|The user's last email with them: |The task came from the user's email thread |Last activity with them: |From a lead form: )/m;
+  /^(?:Open: email thread |Event they last opened:|Capture item they last selected: (?:waiting for a reply|email from someone|sent email nobody|email reminder|suggested follow-up email|unfiled )|The user's last email with them: |The task came from the user's email thread |Last activity with them: |From a lead form: |The user's own preparation for it, )/m;
 const PAGE_DOMAIN = /(?:^|, )domain "([^"\\]+)"/gm;
 
 function text(value: unknown) {

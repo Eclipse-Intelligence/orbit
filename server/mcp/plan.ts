@@ -2,6 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import { buildPlan, pushScheduled, scheduleTasks } from "@/lib/crm/plan-schedule";
+import { prepareAllowed, prepareTask } from "@/lib/crm/task-prepare";
+import { actorForTask } from "@/lib/crm/workspaces";
 import type { UserActor } from "@/lib/crm/types";
 import { agentSource } from "@/lib/crm/validation";
 
@@ -64,6 +66,23 @@ export function registerPlanTools(server: McpServer, actor: UserActor) {
         });
         await pushScheduled(scheduled);
         return { tasks: scheduled.map((item) => item.task) };
+      }),
+  );
+}
+
+export function registerPrepareTool(server: McpServer, actor: UserActor) {
+  server.registerTool(
+    "prepare_next_action",
+    {
+      description:
+        "Prepare one of the person's call, meeting or email tasks, as Prepare does in the app: a call brief (who they are, last contact, opportunity stage, open points from the last call, talking points) or an email draft in their voice. It is built from the task, the shared records and the person's own email, stored for them alone, and replaces their earlier preparation of that task. Nothing is sent: a draft opens in compose in the app. get_next_action then returns it as preparation. Only prepare when the person asks.",
+      inputSchema: { id: z.uuid() },
+    },
+    async (args) =>
+      run(async () => {
+        const home = await actorForTask(actor, args.id);
+        if (!(await prepareAllowed(home))) throw new CrmError("rate_limited", "Too many requests. Try again in a few minutes.", 429);
+        return { preparation: await prepareTask(home, args.id) };
       }),
   );
 }
