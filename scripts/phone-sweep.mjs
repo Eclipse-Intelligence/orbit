@@ -804,7 +804,7 @@ for (const [device, viewport] of [
       page.on("request", watch);
       await card.getByRole("button", { name: "Open in compose" }).tap();
       await page.waitForTimeout(1800);
-      const compose = page.getByRole("dialog", { name: "New email" }).filter({ hasText: /Sweep prepared draft|Here is the case study/ });
+      const compose = page.getByRole("dialog", { name: "Sweep prepared draft" });
       check(`${device} Open in compose opens the draft in a compose card`, await visible(compose));
       await shot("task-prepared-compose");
       await page.waitForTimeout(1200);
