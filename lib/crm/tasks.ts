@@ -490,7 +490,7 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
-  const restoresTime = Boolean(options.restoring && write.dueAt !== undefined);
+  const restoresTime = Boolean(options.restoring && write.dueAt !== undefined && write.ownerId !== undefined);
   if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule)) {
     delete write.dueAt;
     delete write.dueHasTime;

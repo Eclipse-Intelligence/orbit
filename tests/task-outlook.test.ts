@@ -616,6 +616,59 @@ describe("Outlook lifecycle", () => {
     assert.equal(handedBack.dueAt, mine.dueAt);
   });
 
+  it("never hands a colleague a time by undoing an older time change after a hand-over", async () => {
+    await connect(mark);
+    const colleague = await createUser(`older${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, colleague.userId);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await placeTask(mark, task.id, { dateOnly: true });
+    const dateOnlyEvent = (
+      await admin().query<{ id: string }>(
+        "select id from crm.audit_events where entity_id = $1 and changes -> 'fields' ? 'dueHasTime' order by created_at desc limit 1",
+        [task.id],
+      )
+    ).rows[0].id;
+    await updateTask(mark, task.id, { ownerId: colleague.userId });
+    await undoAuditEvent(mark, dateOnlyEvent, { operation: "undo", source: "web" });
+    const after = await getTask(mark, task.id);
+    assert.equal(after.ownerId, colleague.userId);
+    assert.equal(after.dueHasTime, false);
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.events.size, 0);
+  });
+
+  it("takes a removed member's block out of their Outlook through their other workspace", async () => {
+    const colleague = await createUser(`gone${seq}@outlook-blocks.test`, "Priya");
+    await addMember(mark.workspaceId, colleague.userId);
+    await connect(colleague);
+    const priya: UserActor = { ...colleague, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member" };
+    const hers = (await createTask(priya, { title: "Priya's call", dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
+    await syncTaskBlocks({ taskIds: [hers.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.events.size, 1);
+    await getPool().query("select private.team_remove($1, $2, $3)", [mark.workspaceId, mark.userId, colleague.userId]);
+    outlook.reset();
+    await syncTaskBlocks({ taskIds: [hers.id], fetchImpl: outlook.fetch });
+    assert.equal(outlook.graphCalls()[0]?.method, "DELETE");
+    assert.equal(outlook.events.size, 0);
+    assert.equal(await ref(hers.id), null);
+  });
+
+  it("keeps retrying a create that failed many times, every six hours, rather than parking it", async () => {
+    await connect(mark);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    await admin().query("update crm.task_outlook_queue set attempts = 12 where task_id = $1", [task.id]);
+    outlook.failCreate = 2;
+    await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    const row = await admin().query<{ refused: boolean; attempts: number; retry_at: Date }>(
+      "select refused, attempts, retry_at from crm.task_outlook_queue where task_id = $1",
+      [task.id],
+    );
+    assert.equal(row.rows[0].refused, false);
+    assert.equal(row.rows[0].attempts, 13);
+    const wait = row.rows[0].retry_at.getTime() - Date.now();
+    assert.ok(wait > 5.9 * HOUR && wait <= 6 * HOUR, String(wait));
+  });
+
   it("only lets the owner change the length of a timed task", async () => {
     const colleague = await createUser(`length${seq}@outlook-blocks.test`, "Priya");
     await addMember(mark.workspaceId, colleague.userId);

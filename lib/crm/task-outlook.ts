@@ -33,7 +33,6 @@ const RUN_ROUNDS = 4;
 const RESERVE_MS = 4_000;
 const MIN_MINUTES = 5;
 const MAX_MINUTES = 480;
-export const CREATE_ATTEMPTS = 8;
 
 export const CALENDAR_SYNC: Provenance = { operation: "calendar_sync", source: "microsoft" };
 
@@ -116,12 +115,12 @@ export function taskBlockLink(taskId: string, workspaceId: string) {
 type Outlook = { token: MicrosoftToken; connectionId: string; email: string; actor: UserActor };
 type Access = Outlook | "orbit_only" | "retry";
 
-async function actingActor(userId: string, workspaceId: string): Promise<UserActor | null> {
+async function actingActor(userId: string, workspaceId: string, anyWorkspace = false): Promise<UserActor | null> {
   const memberships = await query<{ workspace_id: string; workspace_name: string; role: WorkspaceRole }>(
     "select workspace_id, workspace_name, role from private.memberships_for($1)",
     [userId],
   );
-  const row = memberships.rows.find((item) => item.workspace_id === workspaceId);
+  const row = memberships.rows.find((item) => item.workspace_id === workspaceId) ?? (anyWorkspace ? memberships.rows[0] : undefined);
   if (!row) return null;
   const base: UserActor = {
     type: "user",
@@ -279,7 +278,7 @@ async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockP
       await settle(row, null);
       return "orbit_only";
     }
-    await defer(row, failure === "refused" || row.attempts + 1 >= CREATE_ATTEMPTS);
+    await defer(row, failure === "refused");
     return failed(failure);
   }
   const id = created.id?.trim();
@@ -393,15 +392,16 @@ export async function syncTaskBlocks(
     const groups = new Map<string, { row: BlockRow; plan: BlockPlan }[]>();
     for (const row of claimed.rows) {
       const plan = planBlock(row, now);
-      const key = plan.kind === "write" || plan.kind === "remove" ? plan.userId : "";
+      const key = plan.kind === "write" || plan.kind === "remove" ? `${plan.kind}:${plan.userId}` : "";
       groups.set(key, [...(groups.get(key) ?? []), { row, plan }]);
     }
     let requeued = false;
-    for (const [userId, items] of groups) {
+    for (const [key, items] of groups) {
       let access: Access = "orbit_only";
-      if (userId) {
+      if (key) {
+        const [kind, userId] = key.split(":");
         try {
-          const actor = await actingActor(userId, items[0].row.workspace_id);
+          const actor = await actingActor(userId, items[0].row.workspace_id, kind === "remove");
           access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
         } catch (error) {
           console.error("Opening Outlook for task blocks failed", error);
