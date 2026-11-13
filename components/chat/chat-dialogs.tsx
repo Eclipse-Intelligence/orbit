@@ -139,11 +139,11 @@ export function NewRoomDialog({ open, onOpenChange, onCreated }: { open: boolean
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="ghost" size="md" className="max-md:h-11">
+              <Button variant="ghost" size="md" className="hit max-md:h-11">
                 Cancel
               </Button>
             </DialogClose>
-            <Button type="submit" variant="primary" size="md" disabled={!name.trim() || saving} data-shortcut-submit className="max-md:h-11">
+            <Button type="submit" variant="primary" size="md" disabled={!name.trim() || saving} data-shortcut-submit className="hit max-md:h-11">
               {saving ? "Creating…" : "Create room"}
             </Button>
           </DialogFooter>

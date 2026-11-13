@@ -89,7 +89,7 @@ export function DiscussionMessages({
         <p role="alert" className="caption-style text-danger">
           {error}
         </p>
-        <Button variant="secondary" size="sm" onClick={reload} className="max-md:h-11">
+        <Button variant="secondary" size="sm" onClick={reload} className="hit max-md:h-11">
           Try again
         </Button>
       </div>
@@ -98,7 +98,7 @@ export function DiscussionMessages({
   return (
     <div role="log" aria-label={label} aria-live="polite" className={cn("-mx-5 flex flex-col max-md:-mx-3.5", className)}>
       {timeline?.hasOlder && (
-        <Button variant="ghost" size="sm" onClick={loadOlder} className="mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11">
+        <Button variant="ghost" size="sm" onClick={loadOlder} className="hit mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11">
           Show earlier
         </Button>
       )}
@@ -188,7 +188,7 @@ export function DiscussionThread({ discussion, backLabel }: { discussion: Discus
   return (
     <section aria-labelledby={`discussion-thread-${threadId}`} className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={closeThread} aria-label={`Back to ${backLabel}`} className="-ml-2 gap-1 pr-2.5 pl-1.5 max-md:h-11">
+        <Button variant="ghost" size="sm" onClick={closeThread} aria-label={`Back to ${backLabel}`} className="hit -ml-2 gap-1 pr-2.5 pl-1.5 max-md:h-11">
           <ChevronLeftIcon aria-hidden className="size-3.5" />
           {backLabel}
         </Button>
@@ -201,7 +201,7 @@ export function DiscussionThread({ discussion, backLabel }: { discussion: Discus
           <p role="alert" className="caption-style text-danger">
             {timeline.error}
           </p>
-          <Button variant="secondary" size="sm" onClick={() => loadThread(threadId, "latest")} className="max-md:h-11">
+          <Button variant="secondary" size="sm" onClick={() => loadThread(threadId, "latest")} className="hit max-md:h-11">
             Try again
           </Button>
         </div>
@@ -218,7 +218,7 @@ export function DiscussionThread({ discussion, backLabel }: { discussion: Discus
             <span aria-hidden className="bg-line-subtle h-px flex-1" />
           </div>
           {timeline?.hasOlder && (
-            <Button variant="ghost" size="sm" onClick={() => loadThread(threadId, "older")} className="mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11">
+            <Button variant="ghost" size="sm" onClick={() => loadThread(threadId, "older")} className="hit mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11">
               Show earlier
             </Button>
           )}
@@ -234,7 +234,7 @@ export function DiscussionNotice({ discussion }: { discussion: Discussion }) {
   return (
     <div role="alert" className="ui-style bg-popover border-line-strong flex items-center gap-3 rounded-xl border py-2 pr-2 pl-3.5">
       <span className="min-w-0 flex-1">{discussion.notice}</span>
-      <Button variant="ghost" size="sm" onClick={discussion.dismissNotice} className="max-md:h-11">
+      <Button variant="ghost" size="sm" onClick={discussion.dismissNotice} className="hit max-md:h-11">
         Dismiss
       </Button>
     </div>

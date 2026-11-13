@@ -85,7 +85,7 @@ export default function PeopleField({
   return (
     <div className="flex flex-col gap-1.5">
       <div
-        className="border-line-strong bg-secondary focus-within:border-ring focus-within:ring-ring/25 flex min-h-9 w-full flex-wrap items-center gap-1 rounded-lg border px-1.5 py-1 focus-within:ring-2"
+        className="border-line-strong bg-secondary focus-within:border-ring focus-within:ring-ring/25 flex min-h-9 w-full flex-wrap items-center gap-1 rounded-lg md:pointer-coarse:gap-x-2 md:pointer-coarse:gap-y-4 border px-1.5 py-1 focus-within:ring-2"
         onClick={() => input.current?.focus()}
       >
         {selected.map((person) => (
@@ -99,7 +99,7 @@ export default function PeopleField({
                 event.stopPropagation();
                 onChange(selected.filter((item) => item.id !== person.id));
               }}
-              className="text-subtle hover:text-foreground flex size-5 items-center justify-center rounded-full outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring/60 max-md:size-11"
+              className="text-subtle hover:text-foreground hit flex size-5 items-center justify-center rounded-full outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring/60 max-md:size-11"
             >
               <XIcon aria-hidden className="size-3" />
             </button>

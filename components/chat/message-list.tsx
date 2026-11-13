@@ -258,7 +258,7 @@ export default function MessageList({
           variant="secondary"
           size="none"
           onClick={jump}
-          className="bg-popover border-line-strong shadow-overlay absolute bottom-3 left-1/2 h-8 -translate-x-1/2 gap-1.5 border px-3.5 text-[13px] max-md:h-11"
+          className="bg-popover border-line-strong shadow-overlay hit absolute bottom-3 left-1/2 h-8 -translate-x-1/2 gap-1.5 border px-3.5 text-[13px] max-md:h-11"
         >
           <ChevronDownIcon aria-hidden className="size-3" />
           {unseen ? "New messages" : "Jump to latest"}

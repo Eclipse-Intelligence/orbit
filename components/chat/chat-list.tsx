@@ -61,7 +61,7 @@ function Item({ view, active, unread, children }: { view: ChatView; active: bool
 
 function Heading({ id, label, action }: { id: string; label: string; action: ReactNode }) {
   return (
-    <div className="flex items-center justify-between px-2 pt-3.5 pb-1.5">
+    <div className="flex items-center justify-between px-2 pt-3.5 pb-1.5 md:pointer-coarse:pb-2.5">
       <span id={id} className="eyebrow-style text-subtle">
         {label}
       </span>
@@ -133,7 +133,7 @@ export default function ChatList({
           id="chat-rooms"
           label="Rooms"
           action={
-            <Button variant="ghost" size="icon-sm" aria-label="New room" title="New room" onClick={onNewRoom} className="max-md:size-11">
+            <Button variant="ghost" size="icon-sm" aria-label="New room" title="New room" onClick={onNewRoom} className="hit max-md:size-11">
               <PlusIcon aria-hidden className="size-3" />
             </Button>
           }
@@ -153,7 +153,7 @@ export default function ChatList({
           id="chat-dms"
           label="Direct messages"
           action={
-            <Button variant="ghost" size="icon-sm" aria-label="New message" title="New message" onClick={onNewMessage} className="max-md:size-11">
+            <Button variant="ghost" size="icon-sm" aria-label="New message" title="New message" onClick={onNewMessage} className="hit max-md:size-11">
               <PlusIcon aria-hidden className="size-3" />
             </Button>
           }

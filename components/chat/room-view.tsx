@@ -135,7 +135,7 @@ export default function RoomView({
         <>
           <AvatarStack people={shownMembers} size="lg" />
           <p className="text-soft">Start of {title}. Only members can see it.</p>
-          <Button variant="secondary" size="sm" onClick={onAddPeople} className="max-md:h-11">
+          <Button variant="secondary" size="sm" onClick={onAddPeople} className="hit max-md:h-11">
             <PlusIcon aria-hidden className="size-3" />
             Add people
           </Button>
@@ -169,7 +169,7 @@ export default function RoomView({
             </span>
           )}
           {!dm && info && (
-            <Button variant="ghost" size="icon" aria-label="Room settings" title="Room settings" onClick={onSettings} className="max-md:size-11">
+            <Button variant="ghost" size="icon" aria-label="Room settings" title="Room settings" onClick={onSettings} className="hit max-md:size-11">
               <SlidersIcon aria-hidden className="size-3.5" />
             </Button>
           )}
@@ -181,7 +181,7 @@ export default function RoomView({
           <p role="alert" className="text-danger">
             {roomError}
           </p>
-          <Button variant="secondary" size="sm" onClick={back}>
+          <Button variant="secondary" size="sm" onClick={back} className="hit">
             Back to Chat
           </Button>
         </div>
@@ -190,7 +190,7 @@ export default function RoomView({
           <p role="alert" className="text-danger">
             {timeline.error}
           </p>
-          <Button variant="secondary" size="sm" onClick={() => loadMessages(conversationId, "latest")}>
+          <Button variant="secondary" size="sm" className="hit" onClick={() => loadMessages(conversationId, "latest")}>
             Try again
           </Button>
         </div>

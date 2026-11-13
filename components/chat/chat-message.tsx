@@ -90,10 +90,10 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
       <div className="flex items-center gap-2">
         <span className="caption-style text-subtle max-sm:hidden">Enter to save, Esc to cancel</span>
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={done} className="max-md:h-11">
+        <Button variant="ghost" size="sm" onClick={done} className="hit max-md:h-11">
           Cancel
         </Button>
-        <Button variant="primary" size="sm" disabled={!value.trim() || saving} onClick={() => void save()} className="max-md:h-11">
+        <Button variant="primary" size="sm" disabled={!value.trim() || saving} onClick={() => void save()} className="hit max-md:h-11">
           Save
         </Button>
       </div>
@@ -248,10 +248,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         )}
         {message.editedAt && !deleted && !isEditing && <span className="caption-style text-faint">Edited</span>}
         {error && (
-          <div role="alert" className="caption-style text-danger flex flex-wrap items-center gap-1.5">
+          <div role="alert" className="caption-style text-danger flex flex-wrap items-center gap-1.5 md:pointer-coarse:my-2">
             <AlertIcon aria-hidden className="size-3" />
             {error === SEND_FAILED ? "Couldn't send." : error}
-            <Button variant="link" size="none" className="caption-style min-h-6 max-md:min-h-11" onClick={() => retry(message)}>
+            <Button variant="link" size="none" className="caption-style hit min-h-6 max-md:min-h-11" onClick={() => retry(message)}>
               Try again
             </Button>
           </div>
@@ -260,7 +260,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           <button
             type="button"
             onClick={() => openThread(message.conversationId, message.id)}
-            className="hover:bg-surface-raised -ml-1.5 mt-1 inline-flex min-h-7 items-center gap-2 self-start rounded-lg py-0.5 pr-2 pl-1.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
+            className="hover:bg-surface-raised hit -ml-1.5 mt-1 inline-flex md:pointer-coarse:mt-1.5 md:pointer-coarse:mb-0.5 min-h-7 items-center gap-2 self-start rounded-lg py-0.5 pr-2 pl-1.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
           >
             <AvatarStack people={message.replyAuthors} size="xs" />
             <span className="font-medium text-violet">

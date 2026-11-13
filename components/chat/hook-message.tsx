@@ -40,7 +40,7 @@ export function HookCardBody({ card, body, className }: { card: ChatHookCard; bo
           target="_blank"
           rel="noopener noreferrer nofollow"
           title={card.url}
-          className="ui-style text-foreground hover:bg-surface-hover border-line-strong mt-1 inline-flex min-h-7 max-w-full items-center gap-1.5 self-start rounded-lg border px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
+          className="ui-style text-foreground hover:bg-surface-hover hit border-line-strong mt-1 inline-flex min-h-7 max-w-full items-center gap-1.5 self-start rounded-lg border px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
         >
           <ExternalIcon aria-hidden className="size-3 shrink-0" />
           <span className="truncate">Open {host(card.url)}</span>

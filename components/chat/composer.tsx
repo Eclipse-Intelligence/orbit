@@ -157,7 +157,7 @@ export default function Composer({
           disabled={!value.trim() || disabled || over}
           onMouseDown={(event) => event.preventDefault()}
           onClick={send}
-          className={cn("max-md:size-11", compact && "pointer-coarse:size-11")}
+          className={cn("hit max-md:size-11", compact && "pointer-coarse:size-11")}
         >
           <ArrowUpIcon aria-hidden className="size-3.5" />
         </Button>

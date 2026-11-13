@@ -175,7 +175,7 @@ export default function RoomSettings({
           <SheetHeader className="max-md:pt-[env(safe-area-inset-top)] max-md:h-auto max-md:min-h-14">
             <SheetTitle className="h3-style truncate">#{conversation.name}</SheetTitle>
             <SheetDescription className="sr-only">Room settings</SheetDescription>
-            <SheetCloseButton label="Close" className="max-md:size-11" />
+            <SheetCloseButton label="Close" className="hit max-md:size-11" />
           </SheetHeader>
           <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain px-6 pt-5 pb-6 max-md:px-4">
             <div className="flex flex-col gap-2">
@@ -208,7 +208,7 @@ export default function RoomSettings({
                   Members
                 </h3>
                 <span className="caption-style text-subtle mr-2 tabular-nums">{room.members.length}</span>
-                <Button variant="secondary" size="sm" onClick={() => setAddOpen((value) => !value)} aria-expanded={addOpen} className="max-md:h-11">
+                <Button variant="secondary" size="sm" onClick={() => setAddOpen((value) => !value)} aria-expanded={addOpen} className="hit max-md:h-11">
                   <PlusIcon aria-hidden className="size-3" />
                   Add people
                 </Button>
@@ -225,10 +225,10 @@ export default function RoomSettings({
                     </span>
                   )}
                   <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => setAddOpen(false)} className="max-md:h-11">
+                    <Button variant="ghost" size="sm" onClick={() => setAddOpen(false)} className="hit max-md:h-11">
                       Cancel
                     </Button>
-                    <Button variant="primary" size="sm" disabled={picked.length === 0 || busy} onClick={add} className="max-md:h-11">
+                    <Button variant="primary" size="sm" disabled={picked.length === 0 || busy} onClick={add} className="hit max-md:h-11">
                       Add
                     </Button>
                   </div>
@@ -252,7 +252,7 @@ export default function RoomSettings({
                         {(notes || member.email) && <span className="caption-style text-subtle truncate">{notes || member.email}</span>}
                       </span>
                       {!you && (
-                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => remove(member.id)} aria-label={`Remove ${member.name}`} className="max-md:h-11">
+                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => remove(member.id)} aria-label={`Remove ${member.name}`} className="hit max-md:h-11">
                           Remove
                         </Button>
                       )}
@@ -272,7 +272,7 @@ export default function RoomSettings({
             {status ?? ""}
           </p>
           <SheetFooter className="max-md:px-4">
-            <Button variant="ghost" size="md" className="text-danger hover:text-danger max-md:h-11" onClick={() => setLeaving(true)}>
+            <Button variant="ghost" size="md" className="hit text-danger hover:text-danger max-md:h-11" onClick={() => setLeaving(true)}>
               Leave room
             </Button>
             <span className="flex items-center gap-3">
@@ -281,7 +281,7 @@ export default function RoomSettings({
                   {status}
                 </span>
               )}
-              <Button type="submit" variant="primary" size="md" disabled={!changed || !name.trim() || busy} data-shortcut-submit className="max-md:h-11">
+              <Button type="submit" variant="primary" size="md" disabled={!changed || !name.trim() || busy} data-shortcut-submit className="hit max-md:h-11">
                 Save
               </Button>
             </span>

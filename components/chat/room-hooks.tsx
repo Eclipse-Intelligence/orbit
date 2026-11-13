@@ -104,14 +104,14 @@ function HookRow({
             <code className={cn(FIELD, "h-8 truncate max-md:h-11")} title={url}>
               {url}
             </code>
-            <CopyButton text={url} label="Copy URL" className="max-md:h-11" />
+            <CopyButton text={url} label="Copy URL" className="hit max-md:h-11" />
           </div>
           {secret && (
             <div className="flex flex-col gap-2 rounded-xl border border-(--tag-amber-border) bg-(--tag-amber-bg) p-3">
               <span className="ui-style font-medium text-(--tag-amber-text)">Secret</span>
               <div className="flex items-center gap-2">
                 <code className={cn(FIELD, "min-h-8 bg-black/25 py-1.5 leading-[18px] break-all")}>{secret}</code>
-                <CopyButton text={secret} label="Copy secret" className="max-md:h-11" />
+                <CopyButton text={secret} label="Copy secret" className="hit max-md:h-11" />
               </div>
               <span className="caption-style text-soft">
                 Copy it now. It won&apos;t be shown again. Senders use <code className="font-mono">Authorization: Bearer</code> with this secret.
@@ -119,10 +119,10 @@ function HookRow({
             </div>
           )}
           <div className="mt-0.5 flex flex-wrap items-center gap-1">
-            <Button variant="ghost" size="sm" disabled={busy} onClick={onPause} aria-label={`${paused ? "Resume" : "Pause"} ${hook.name}`} className="max-md:h-11">
+            <Button variant="ghost" size="sm" disabled={busy} onClick={onPause} aria-label={`${paused ? "Resume" : "Pause"} ${hook.name}`} className="hit max-md:h-11">
               {paused ? "Resume" : "Pause"}
             </Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setRotating(true)} aria-label={`Rotate secret for ${hook.name}`} className="max-md:h-11">
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setRotating(true)} aria-label={`Rotate secret for ${hook.name}`} className="hit max-md:h-11">
               Rotate secret
             </Button>
             <HoldButton onConfirm={onDelete} disabled={busy} className="ml-auto max-md:h-11">
@@ -272,7 +272,7 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
         <h3 id={ids.heading} className="flex-1">
           Incoming webhooks
         </h3>
-        <Button variant="secondary" size="sm" onClick={() => setAdding((value) => !value)} aria-expanded={adding} className="max-md:h-11">
+        <Button variant="secondary" size="sm" onClick={() => setAdding((value) => !value)} aria-expanded={adding} className="hit max-md:h-11">
           <PlusIcon aria-hidden className="size-3" />
           Add incoming webhook
         </Button>
@@ -298,10 +298,10 @@ export default function RoomHooks({ open, roomId, roomName, secrets }: { open: b
             className="max-md:h-11"
           />
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setAdding(false)} className="max-md:h-11">
+            <Button variant="ghost" size="sm" onClick={() => setAdding(false)} className="hit max-md:h-11">
               Cancel
             </Button>
-            <Button variant="primary" size="sm" disabled={!name.trim() || busy} onClick={add} className="max-md:h-11">
+            <Button variant="primary" size="sm" disabled={!name.trim() || busy} onClick={add} className="hit max-md:h-11">
               Add
             </Button>
           </div>
