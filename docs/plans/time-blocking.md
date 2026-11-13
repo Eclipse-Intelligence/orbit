@@ -85,13 +85,14 @@ Status: settled with Mark (2026-11-12), written from a review of the calendar co
 - **Working hours:** a personal section in Settings › Calendars, "you, everywhere", defaulting to 09:00 to 17:30 Monday to Friday. Only Plan and Schedule read them. `task-due.ts` keeps its fixed hours, and booking pages keep their own.
 
 ### Learned times (decision 3)
-- Each person's preferred time of day per kind (call, email, other) is learned from what they do, over the last 90 days:
-  - **Strongest:** tasks they gave a time by hand, dragged or moved (audit events with `actor_user_id` and the operations `update_task` from the web, drag and Schedule; never Plan's Apply or `calendar_sync`, so Plan doesn't teach itself).
-  - **Medium:** when they book meetings and calls with contacts (`calendar_events` with `contact_ids`).
-  - **Weak:** when they complete tasks of that kind (`completed_at`), weighted low because ticking happens in batches.
-- One indexed audit query per workspace per Plan run builds a spread over the week's half-hours. A personal table `crm.schedule_preferences` (user-keyed, RLS to that user) caches it and holds the Reset time, after which signals count again from scratch.
+- Each person's preferred time of day per kind (call, email, other) is learned from what they do with their own tasks, over the last 90 days:
+  - **Strongest:** tasks they gave a time by hand: created with a time, dragged or moved (audit events with `actor_user_id` and the web operations `create_task`, `update_task` (task fields and Schedule) and `drag_task`; never Plan's Apply, `calendar_sync`, agents, MCP or the assistant, so Plan doesn't teach itself; a change to one of Plan's blocks counts only when its time of day changed).
+  - **Medium:** meetings they organised with contacts (`calendar_events` with `contact_ids`), a series once.
+  - **Weak:** tasks of that kind they tick off on the web (`completed_at`), weighted low because ticking happens in batches; a tick counts as half a signal.
+- One indexed audit query per workspace per Plan run builds a spread over the week's half-hours, and from it up to three learned periods per kind, the same on every working day. A personal table `crm.schedule_preferences` (user-keyed, RLS to that user) caches it and holds the Reset time, after which signals count again from scratch.
 - Until there are about ten signals for a kind, defaults apply: calls late morning, emails after lunch.
-- The preview explains where it helps ("Calls in the morning, as you usually do"). Settings › Calendars shows what has been learned, with Reset.
+- An undated task takes the earliest learned time in the next 3 working days, or else the earliest day with room.
+- The preview explains where it helps ("Calls in the morning, as you usually do"), only when the blocks sit in learned times. Settings › Calendars shows what has been learned, with Reset.
 
 ### Outlook (decision 1)
 - Blocks go to the person's main Outlook calendar through a new `taskBlockDraft`: Busy, `sensitivity: private`, reminder off (Orbit sends task reminders), titled with the task title, no `contact_ids`, so a Use for CRM calendar never shows it to teammates.
