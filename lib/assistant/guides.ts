@@ -1,9 +1,10 @@
-export const GUIDE_TOPICS = ["changes", "cold_email", "proposals", "eclipse", "linear", "docs", "reader", "recall", "workflows"] as const;
+export const GUIDE_TOPICS = ["changes", "tasks", "cold_email", "proposals", "eclipse", "linear", "docs", "reader", "recall", "workflows"] as const;
 
 export type GuideTopic = (typeof GUIDE_TOPICS)[number];
 
 export const GUIDE_SUMMARIES: Record<GuideTopic, string> = {
   changes: "before undoing or correcting a change, fixing a relationship label or an activity, filing a conversation, merging duplicates, archiving, restructuring board stages or changing meetings",
+  tasks: "before logging what happened on a call or task (\"spoke to Jane, she wants the proposal Friday\"), completing a task with what comes next, or changing who a task is about",
   cold_email: "before any first email to a prospect who doesn't know the user (it also returns the workspace's playbook, outreach brief and proof list)",
   proposals: "before creating, tailoring, sending, revising or withdrawing a proposal or NDA, or building a proposal template",
   eclipse: "once before your first Eclipse call in a conversation, and when outreach should use this brand's Eclipse articles",
@@ -84,6 +85,17 @@ You can set up and change everything the user can in Orbit. Boards: create them,
 When you find duplicate companies or people (for example a change-of-company workflow created a company or person that already exists), propose merge_companies or merge_contacts. Always name which record is kept and which is archived, and keep the one with more history unless the user says otherwise.
 
 Undo, merges, archiving, relationship labels, activities and contact details are in find_tools records, boards and stages in find_tools pipeline, Capture and filing in find_tools mail, and moving, cancelling or answering meetings in find_tools calendar (list_calendar_events is always loaded).`;
+
+export const TASKS_GUIDE = `# Tasks and call outcomes
+When the user tells you what happened on a call, meeting or task and what comes next ("spoke to Jane, she wants the proposal Friday"), propose three cards in the same turn, without asking first:
+1. log_activity for what happened, on the person and their company: type call for a call, note for anything else (email only for an email outside Orbit), a short title, and what was said in the body, in the user's words. This is the note Done with an outcome puts on their timeline.
+2. update_task with completed true for the open task it settles. When a page_context block shows the task they have open, that is the one. Otherwise find it with list_tasks for that person. If no open task fits, leave this card out and say so.
+3. create_task for the next step, titled as the thing to do ("Send Jane the proposal"), with the same contactId, companyId and opportunityId as the task it follows. Give it dueDate for the day they named. Send dueAt only when the user gave a time. When the task it follows belongs to a teammate, pass their ownerId, as Done does.
+Leave out a card the user gave nothing for: no next step means no create_task, and never invent one. Say in one line what the three cards do.
+
+To change who a task is about, propose update_task with contactId, companyId or opportunityId. null takes a link off, and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company. Find the record with search_records first, and never link a teammate as a contact.
+
+A time on a task someone else owns is saved as date only, and only the owner changes a timed task's length. list_tasks, create_task, update_task and log_activity are always loaded.`;
 
 export const WORKFLOWS_RULES = `# Workflows
 Workflows: build them from a template or from scratch (read this guide before writing a definition), edit them, turn them on or off, share them, test them, run them on a record and answer their approvals. Keep workflows to the nodes the job needs, test one before turning it on when you can, and leave it off unless the user asks for it on. delete_workflow archives rather than erases. The workflow tools are in find_tools workflows.

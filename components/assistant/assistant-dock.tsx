@@ -747,10 +747,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   useEffect(() => {
     function ask(event: Event) {
       const text = (event as CustomEvent<AskOrbitDetail>).detail?.text;
-      if (typeof text !== "string" || !text.trim()) return;
+      if (typeof text !== "string") return;
       event.preventDefault();
       setHistoryOpen(false);
-      setDraft((current) => (current.includes(text) ? current : current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
+      if (text.trim()) setDraft((current) => (current.includes(text) ? current : current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
       setOpen(true);
       window.requestAnimationFrame(() => {
         const node = input.current;

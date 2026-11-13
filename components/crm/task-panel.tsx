@@ -9,6 +9,7 @@ import { useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { activateRow } from "@/components/shortcuts/keyboard-list";
 import { TaskAct } from "@/components/crm/task-actions";
+import TaskAskButton from "@/components/crm/task-ask";
 import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
@@ -18,6 +19,7 @@ import { completeTaskAction } from "@/app/(crm)/records";
 import { untagTaskAction } from "@/app/(crm)/discussions";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
+import { usePageFocus } from "@/stores/page-context-store";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 
@@ -112,6 +114,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
   );
   const canChange = canChangeTaskAs(viewer, task);
   const details = useTaskDetails(task, canChange);
+  usePageFocus("task", task.id);
   const team = members.length > 1;
   const named = (person: string | null) => (person ? (members.find((member) => member.id === person) ?? null) : null);
   const owner = named(task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
@@ -243,7 +246,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
               <span className="caption-style text-subtle truncate">{created}</span>
             </div>
             <SheetDescription className="sr-only">{task.title}</SheetDescription>
-            <SheetCloseButton label="Close" className="hit" />
+            <div className="flex shrink-0 items-center gap-2">
+              <TaskAskButton taskId={task.id} variant="secondary" />
+              <SheetCloseButton label="Close" className="hit" />
+            </div>
           </SheetHeader>
           <div data-chat-room-pane className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-5 pb-4 max-md:px-3.5">

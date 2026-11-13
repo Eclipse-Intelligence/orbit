@@ -3,13 +3,16 @@ import { parseThreadKey } from "@/lib/mail/threads";
 import { parseDocsRoute } from "@/lib/docs/routes";
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
+import { taskContextInDb } from "@/lib/crm/task-act";
+import { splitDescription } from "@/lib/crm/task-description";
+import { readTaskInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { isLeadSource } from "@/lib/assistant/web-gate";
 import type { Db } from "@/lib/db/pool";
 
 export const PAGE_SELECTION_KINDS = ["companies", "contacts"] as const;
 export type PageSelectionKind = (typeof PAGE_SELECTION_KINDS)[number];
-export const PAGE_FOCUS_KINDS = ["calendar_event", "capture"] as const;
+export const PAGE_FOCUS_KINDS = ["calendar_event", "capture", "task"] as const;
 export type PageFocusKind = (typeof PAGE_FOCUS_KINDS)[number];
 
 export type PageInput = {
@@ -122,6 +125,7 @@ function segments(path: string) {
 type Lines = string[];
 
 const MISSING = "isn't in this workspace, or you can't see it";
+const TASK_PAGES = new Set(["tasks", "companies", "contacts", "opportunities", "calendar"]);
 
 async function company(db: Db, actor: UserActor, id: string) {
   const result = await db.query<{ name: string; domain: string | null; source: string | null }>(
@@ -267,6 +271,81 @@ async function task(db: Db, actor: UserActor, id: string) {
   const dueDate = taskDueDay(row.due_at ? new Date(row.due_at).toISOString() : null);
   const timing = due && dueDate ? `, due ${due} (dueDate ${dueDate}, ${row.due_has_time ? "timed" : "date only, due any time that day"})` : "";
   return `task ${quoted(row.title, "Untitled task")} [task id ${id}]${row.completed_at ? ", done" : timing}`;
+}
+
+function text(value: string | null | undefined) {
+  const cleaned = (value ?? "").replace(/[\u0000-\u001f\u007f[\]<>]/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned ? JSON.stringify(cleaned) : null;
+}
+
+function detail(label: string, value: string | null | undefined) {
+  const shown = text(value);
+  return shown ? `${label} ${shown}` : "";
+}
+
+async function openTask(db: Db, actor: UserActor, id: string): Promise<Lines> {
+  if (!isUuid(id)) return [];
+  const found = await readTaskInDb(db, id);
+  if (!found || found.workspaceId !== actor.workspaceId || found.archivedAt) return [];
+  const facts = await taskContextInDb(db, actor, found);
+  const due = londonWhen(found.dueAt, found.dueHasTime);
+  const owner = !found.ownerId
+    ? "assigned to no one"
+    : found.ownerId === actor.userId
+      ? "assigned to the user"
+      : `assigned to the teammate ${quoted(found.ownerName, "Former member")} [teammate id ${found.ownerId}], so a time on it is saved as date only`;
+  const state = found.completedAt
+    ? "done"
+    : due && found.dueDate
+      ? `due ${due} (dueDate ${found.dueDate}, ${found.dueHasTime ? `timed, ${found.durationMinutes} minutes` : "date only, due any time that day"})`
+      : "no due date";
+  const lines: Lines = [
+    `Task they have open: task ${quoted(found.title, "Untitled task")} [task id ${found.id}], ${state}, ${owner}${found.priority !== "normal" ? `, priority ${found.priority}` : ""}`,
+  ];
+  const description = text(splitDescription(found.description).text);
+  if (description) lines.push(`Task detail: ${description}`);
+  const about: string[] = [];
+  if (found.contactId) {
+    const parts = [detail("job title", found.contactJobTitle), detail("phone", found.contactPhone), detail("email", found.contactEmail)].filter(Boolean);
+    about.push(`person ${quoted(found.contactName, "Unnamed person")} [person id ${found.contactId}]${parts.length ? `, ${parts.join(", ")}` : ""}`);
+  }
+  if (found.companyId) {
+    const phone = detail("phone", found.companyPhone);
+    about.push(`company ${quoted(found.companyName, "Unnamed company")} [company id ${found.companyId}]${phone ? `, ${phone}` : ""}`);
+  }
+  const deal = facts.opportunity;
+  if (deal) {
+    const parts = [
+      deal.stage ? `stage ${quoted(deal.stage, "")}` : "",
+      deal.status !== "open" ? `status ${quoted(deal.status, "")}` : "",
+      deal.value ? `value ${quoted(`${deal.value} ${deal.currency}`, "")}` : "",
+    ].filter(Boolean);
+    const named = `opportunity ${quoted(deal.name, "Unnamed opportunity")} [opportunity id ${deal.id}]${parts.length ? `, ${parts.join(", ")}` : ""}`;
+    about.push(found.opportunityId === deal.id ? named : `no opportunity linked, but their open ${named}`);
+  }
+  lines.push(about.length > 0 ? `Task is about: ${about.join("; ")}` : "Task is about: nobody yet, no person, company or opportunity is linked");
+  if (facts.people.length > 0) {
+    lines.push(
+      "People at that company (the task has no person linked):",
+      ...facts.people.map((person) => {
+        const parts = [detail("job title", person.jobTitle), detail("phone", person.phone), detail("email", person.email)].filter(Boolean);
+        return `- ${quoted(person.name, "Unnamed person")} [person id ${person.id}]${parts.length ? `, ${parts.join(", ")}` : ""}`;
+      }),
+    );
+  }
+  if (facts.lastActivity) {
+    const when = londonWhen(facts.lastActivity.occurredAt);
+    lines.push(`Last activity with them: ${word(facts.lastActivity.type) ?? "activity"} ${quoted(facts.lastActivity.title, "(no title)")}${when ? `, ${when}` : ""}`);
+  }
+  if (facts.lastEmail) {
+    const when = londonWhen(facts.lastEmail.at);
+    lines.push(`The user's last email with them: subject ${quoted(facts.lastEmail.subject, "(no subject)")}${when ? `, ${when}` : ""}`);
+  }
+  if (facts.thread) {
+    const thread = await mailThread(db, actor, facts.thread.key);
+    if (thread) lines.push(`The task came from the user's ${thread}`);
+  }
+  return lines;
 }
 
 async function captureItem(db: Db, actor: UserActor, value: string) {
@@ -415,6 +494,7 @@ async function pageLines(db: Db, actor: UserActor, input: PageInput): Promise<Li
     const found = await captureItem(db, actor, input.focus.id);
     if (found) lines.push(`Capture item they last selected: ${found}`);
   }
+  if (input.focus?.kind === "task" && TASK_PAGES.has(first)) lines.push(...(await openTask(db, actor, input.focus.id)));
   if (input.selection && (parts.length === 0 || (first === "contacts" && !second))) lines.push(...(await selectionLines(db, actor, input.selection)));
   return lines;
 }

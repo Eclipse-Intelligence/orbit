@@ -43,11 +43,12 @@ export function releasePageFocus(kind: PageFocusKind, id: string, options: { now
   setFocus(options.now ? null : { ...focus, closedAt: Date.now() });
 }
 
-export function usePageFocus(kind: PageFocusKind, id: string) {
+export function usePageFocus(kind: PageFocusKind, id: string, active = true) {
   useEffect(() => {
+    if (!active) return;
     focusOnPage(kind, id);
     return () => releasePageFocus(kind, id);
-  }, [kind, id]);
+  }, [kind, id, active]);
 }
 
 export function useReleaseFocusOnUnmount(kind: PageFocusKind, id: string) {
