@@ -12,6 +12,8 @@ import {
   LEARN_THRESHOLD,
   signalCount,
   slotAt,
+  learnedPeriods,
+  periodScore,
   slotWeights,
   type LearnedSpread,
 } from "@/lib/learned-times";
@@ -42,11 +44,17 @@ function meeting(startsAt: string, endsAt: string): PlanMeeting {
   return { subject: "Halden weekly", startsAt, endsAt, isAllDay: false, showAs: "busy", myResponse: null };
 }
 
-function afternoonCalls(count = 12): LearnedSpread {
-  const spread = emptySpread();
-  const days = ["2026-11-03", "2026-11-04", "2026-11-05"];
-  for (let index = 0; index < count; index += 1) addSignal(spread, "call", "placed", `${days[index % 3]}T15:00:00Z`, LONDON);
+function callsAt(times: Record<string, number>, spread = emptySpread()): LearnedSpread {
+  for (const [at, count] of Object.entries(times)) for (let index = 0; index < count; index += 1) addSignal(spread, "call", "placed", at, LONDON);
   return spread;
+}
+
+function afternoonCalls(count = 12): LearnedSpread {
+  return callsAt({ "2026-11-03T15:00:00Z": Math.ceil(count / 3), "2026-11-04T15:00:00Z": Math.ceil(count / 3), "2026-11-05T15:00:00Z": count - 2 * Math.ceil(count / 3) });
+}
+
+function datedTask(title: string, day: string, extra: Partial<PlanTask> = {}): PlanTask {
+  return { ...task(title, day), ...extra };
 }
 
 describe("Learned times", () => {
@@ -95,7 +103,7 @@ describe("Learned times", () => {
     const fallback = packPlan({ tasks: [call], meetings: [], viewerId: ME, now, timeZone: LONDON });
     assert.equal(fallback.placed[0]?.at, "2026-11-13T10:30:00.000Z", "late morning without learning");
     const busy = packPlan({ tasks: [call], meetings: [meeting("2026-11-13T14:30:00Z", "2026-11-13T16:30:00Z")], viewerId: ME, now, timeZone: LONDON, preferences });
-    assert.equal(busy.placed[0]?.at, "2026-11-13T14:00:00.000Z", "the nearest free time to the learned afternoon");
+    assert.equal(busy.placed[0]?.at, "2026-11-13T14:15:00.000Z", "the nearest free time to the learned afternoon");
     const email = task("Email Raj the numbers", "2026-11-13");
     assert.equal(
       packPlan({ tasks: [email], meetings: [], viewerId: ME, now, timeZone: LONDON, preferences }).placed[0]?.at,
@@ -110,7 +118,7 @@ describe("Learned times", () => {
     const calls = [task("Call Jane Cooper", "2026-11-13"), task("Ring Daniel Shaw", "2026-11-13")];
     const email = task("Email Raj the numbers", "2026-11-13");
     const plan = packPlan({ tasks: [...calls, email], meetings: [], viewerId: ME, now, timeZone: LONDON, preferences });
-    assert.equal(plan.reason, "Calls in the afternoon, as you usually do. Emails after lunch by default.");
+    assert.equal(plan.reason, "Calls after lunch, as you usually do. Emails after lunch by default.");
     const crowded = packPlan({
       tasks: calls,
       meetings: [meeting("2026-11-13T13:30:00Z", "2026-11-13T16:30:00Z")],
@@ -157,5 +165,89 @@ describe("Learned times", () => {
     assert.equal(learnedView("other", emptySpread().other).week.flat().every((value) => value === 0), true);
     assert.equal(Math.max(...learnedView("other", spread.other).week.flat()), 0.4, "a kind still learning shows faintly");
     assert.equal(slotWeights(spread.call).length, 7 * 48);
+  });
+});
+
+describe("Learned periods", () => {
+  const now = Date.parse("2026-11-12T06:00:00Z");
+  const pack = (tasks: PlanTask[], spread: LearnedSpread, extra: Partial<Parameters<typeof packPlan>[0]> = {}) =>
+    packPlan({ tasks, meetings: [], viewerId: ME, now, timeZone: LONDON, preferences: preferencesFromSpread(spread), ...extra });
+
+  it("names where the blocks went when a kind has a morning and an afternoon", () => {
+    const spread = callsAt({ "2026-11-10T09:30:00Z": 12, "2026-11-11T15:00:00Z": 10 });
+    assert.deepEqual(learnedPeriods(spread.call), [
+      { from: 540, to: 630 },
+      { from: 870, to: 960 },
+    ]);
+    const plan = pack([task("Call Jane Cooper", "2026-11-13")], spread, { meetings: [meeting("2026-11-13T08:30:00Z", "2026-11-13T12:00:00Z")] });
+    assert.equal(plan.placed[0]?.at, "2026-11-13T14:30:00.000Z");
+    assert.equal(plan.reason, "Calls after lunch, as you usually do.");
+    assert.equal(learnedView("call", spread.call).label, "Morning and late afternoon");
+  });
+
+  it("uses every learned period on every working day, and the line says which one it used", () => {
+    const spread = callsAt({ "2026-11-10T09:30:00Z": 12, "2026-11-12T15:00:00Z": 8 });
+    assert.deepEqual(learnedPeriods(spread.call), [
+      { from: 540, to: 630 },
+      { from: 900, to: 930 },
+    ]);
+    const plan = pack([task("Call Jane Cooper", "2026-11-12")], spread);
+    assert.equal(plan.placed[0]?.at, "2026-11-12T09:00:00.000Z", "Thursday's call goes in the first learned period");
+    assert.equal(plan.reason, "Calls in the morning, as you usually do.");
+    const both = pack(
+      [task("Call Jane Cooper", "2026-11-13"), task("Ring Daniel Shaw", "2026-11-16")],
+      spread,
+      { meetings: [meeting("2026-11-13T08:30:00Z", "2026-11-13T12:00:00Z")] },
+    );
+    assert.deepEqual(both.placed.map((entry) => entry.at), ["2026-11-13T15:00:00.000Z", "2026-11-16T09:00:00.000Z"]);
+    assert.equal(both.reason, "Calls in the morning or in the afternoon, as you usually do.");
+  });
+
+  it("checks the whole block against a period, and falls back to the nearest time, not the earliest", () => {
+    assert.equal(periodScore([{ from: 870, to: 960 }], 930, 30), 0);
+    assert.equal(periodScore([{ from: 870, to: 960 }], 945, 30), 1);
+    assert.equal(periodScore([{ from: 870, to: 960 }], 600, 15), 1 + 255);
+    const late = callsAt({ "2026-11-10T16:00:00Z": 12 });
+    const plan = pack([task("Call Jane Cooper", "2026-11-13")], late, { meetings: [meeting("2026-11-13T14:55:00Z", "2026-11-13T17:30:00Z")] });
+    assert.equal(plan.placed[0]?.at, "2026-11-13T14:40:00.000Z", "straight before the meeting, the closest to 15:30");
+    assert.equal(plan.reason, null);
+  });
+
+  it("places a kind learned outside working hours as close to it as working hours allow", () => {
+    const evening = callsAt({ "2026-11-10T19:00:00Z": 12 });
+    const plan = pack([task("Call Jane Cooper", "2026-11-13")], evening);
+    assert.equal(plan.placed[0]?.at, "2026-11-13T17:15:00.000Z");
+    assert.equal(plan.reason, null, "no claim, since the block isn't in the learned time");
+  });
+
+  it("moves a Replan block into learned times when its time no longer works", () => {
+    const planned = datedTask("Call Jane Cooper", "2026-11-13", { dueAt: "2026-11-13T10:00:00.000Z", dueHasTime: true, scheduledBy: "planner" });
+    const plan = pack([planned], afternoonCalls(), { replan: true, meetings: [meeting("2026-11-13T10:00:00Z", "2026-11-13T10:30:00Z")] });
+    assert.equal(plan.placed[0]?.at, "2026-11-13T14:30:00.000Z");
+  });
+
+  it("leaves blocks dragged in the preview out of the reason line", () => {
+    const spread = emptySpread();
+    for (let index = 0; index < 12; index += 1) addSignal(spread, "other", "placed", "2026-11-10T15:00:00Z", LONDON);
+    const chores = [task("Tidy the Brightwell notes", "2026-11-13"), task("Draft the Halden terms", "2026-11-13"), task("Update the price list", "2026-11-13")];
+    const keep = [
+      { taskId: chores[0].id, at: "2026-11-13T09:00:00.000Z", durationMinutes: 15 },
+      { taskId: chores[1].id, at: "2026-11-13T09:30:00.000Z", durationMinutes: 15 },
+    ];
+    const plan = pack(chores, spread, { keep });
+    assert.equal(plan.placed.find((entry) => entry.taskId === chores[2].id)?.at, "2026-11-13T14:30:00.000Z");
+    assert.equal(plan.reason, "Other tasks after lunch, as you usually do.", "the two dragged blocks don't outvote it");
+  });
+
+  it("gives an undated task the earliest learned time in the next 3 working days, or else the earliest room", () => {
+    const later = Date.parse("2026-11-12T16:00:00Z");
+    const undated = { ...task("Call Jane Cooper", "2026-11-13"), dueAt: null };
+    const learned = pack([undated], afternoonCalls(), { now: later });
+    assert.equal(learned.placed[0]?.at, "2026-11-13T14:30:00.000Z", "tomorrow's learned time beats the rest of today");
+    const full = ["2026-11-12", "2026-11-13", "2026-11-16"].map((day) => meeting(`${day}T14:00:00Z`, `${day}T17:00:00Z`));
+    const fallback = pack([undated], afternoonCalls(), { now: later, meetings: full });
+    assert.equal(fallback.placed[0]?.at, "2026-11-12T17:05:00.000Z", "no learned time free, so the earliest day with room");
+    const defaults = pack([undated], emptySpread(), { now: later });
+    assert.equal(defaults.placed[0]?.at, "2026-11-12T16:00:00.000Z", "defaults keep the earliest day with room");
   });
 });

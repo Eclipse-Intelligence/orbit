@@ -23,7 +23,7 @@ function Strip({ view }: { view: LearnedKindView }) {
   return (
     <div
       role="img"
-      aria-label={`${NAMES[view.kind]}: ${view.label.toLowerCase()}, Monday to Friday, ${clock(STRIP_FROM)} to ${clock(STRIP_TO)}`}
+      aria-label={`${NAMES[view.kind]}: ${view.learned ? `usually ${view.label.toLowerCase()}` : "not enough yet"}, Monday to Friday, ${clock(STRIP_FROM)} to ${clock(STRIP_TO)}`}
       className="grid grid-cols-[2.25em_repeat(20,minmax(0,1fr))] items-center gap-0.5"
     >
       {view.week.map((row, day) => (

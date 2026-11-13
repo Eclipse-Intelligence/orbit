@@ -7,6 +7,7 @@ import {
   upsertCompany,
 } from "@/lib/crm/companies";
 import type { Actor, CompanyWrite } from "@/lib/crm/types";
+import { agentSource } from "@/lib/crm/validation";
 import { registerChatTools } from "@/server/mcp/chat";
 import { registerDocsTools } from "@/server/mcp/docs";
 import { registerLearningTools } from "@/server/mcp/learning";
@@ -180,7 +181,7 @@ export function createCrmMcpServer(actor: Actor, options: { workspaces?: { id: s
         const result = await upsertCompany(actor, writeFromArgs(args), {
           provenance: {
             operation: "upsert_company",
-            source: args.provenanceSource,
+            source: agentSource(args.provenanceSource),
             sourceUrl: args.provenanceUrl,
           },
         });

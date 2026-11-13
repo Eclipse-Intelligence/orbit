@@ -27,12 +27,12 @@ export function registerPlanTools(server: McpServer, actor: UserActor) {
     "plan_tasks",
     {
       description:
-        "Read Plan's proposal for the person's own open tasks, today and the next 14 days, from every workspace they're in. Nothing changes. placed lists proposed blocks (taskId, at, durationMinutes, group call, email or other): calls and meeting tasks go back to back late morning, emails after lunch, up to 6 tasks or 90 minutes a run, inside their working hours, clear of meetings (all but free, working elsewhere, declined and all-day ones) with 5 minutes after each, never on weekends off, bank holidays or in the past. A date-only task keeps its day, an undated one gets any day, and timed tasks stay put. placed and the other lists carry workspaceId. overdue lists overdue tasks with a suggested slot (at); they stay on their own day until moved with schedule_tasks and moveDay; unplaced lists tasks that couldn't fit, with nextFree and outside (outside working hours) times. Send the blocks the person agrees to with schedule_tasks.",
+        "Read Plan's proposal for the person's own open tasks, today and the next 14 days, from every workspace they're in. Nothing changes. placed lists proposed blocks (taskId, at, durationMinutes, group call, email or other): calls and meeting tasks go back to back and emails together, first at the times the person usually does each kind (learned from what they did by hand in the app over the last 90 days; until there's enough, calls late morning and emails after lunch), up to 6 tasks or 90 minutes a run, inside their working hours, clear of meetings (all but free, working elsewhere, declined and all-day ones) with 5 minutes after each, never on weekends off, bank holidays or in the past. A date-only task keeps its day, an undated one takes the earliest learned time in the next 3 working days or else the earliest day with room, and timed tasks stay put. placed and the other lists carry workspaceId. overdue lists overdue tasks with a suggested slot (at); they stay on their own day until moved with schedule_tasks and moveDay; unplaced lists tasks that couldn't fit, with nextFree and outside (outside working hours) times. Send the blocks the person agrees to with schedule_tasks.",
       inputSchema: {
         replan: z.boolean().optional().describe("Also move blocks Plan placed earlier, to another time on the same day. Blocks the person placed never move."),
       },
     },
-    async (args) => run(async () => ({ plan: await buildPlan(actor, { replan: args.replan === true, ai: false }) })),
+    async (args) => run(async () => ({ plan: await buildPlan(actor, { replan: args.replan === true, ai: false, store: false }) })),
   );
 
   server.registerTool(

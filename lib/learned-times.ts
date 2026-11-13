@@ -10,6 +10,7 @@ export const LEARN_THRESHOLD = 10;
 export const HALF_HOURS = 48;
 export const WEEK_SLOTS = 7 * HALF_HOURS;
 export const LEARNED_GOOD = 0.5;
+export const MAX_PERIODS = 3;
 export const SIGNAL_WEIGHTS: Record<LearnedSignal, number> = { placed: 4, booked: 2, ticked: 1 };
 
 const SMOOTHING = [0.25, 0.6, 1, 0.6, 0.25];
@@ -22,6 +23,7 @@ export type LearnedKindView = {
   kind: LearnedKind;
   learned: boolean;
   label: string;
+  periods: LearnedPeriod[];
   caption: string;
   week: number[][];
 };
@@ -98,25 +100,39 @@ export function dayProfile(spread: KindSpread) {
   return smoothed.map((value) => (peak > 0 ? value / peak : 0));
 }
 
-export function learnedWindow(spread: KindSpread) {
+export type LearnedPeriod = { from: number; to: number };
+
+export function learnedPeriods(spread: KindSpread): LearnedPeriod[] {
   const profile = dayProfile(spread);
-  const top = profile.indexOf(Math.max(...profile));
-  if (top < 0 || profile[top] <= 0) return null;
-  let first = top;
-  let last = top;
-  while (first > 0 && profile[first - 1] >= LEARNED_GOOD) first -= 1;
-  while (last < HALF_HOURS - 1 && profile[last + 1] >= LEARNED_GOOD) last += 1;
-  return { from: first * 30, to: (last + 1) * 30 };
+  const runs: (LearnedPeriod & { peak: number })[] = [];
+  let first = -1;
+  let peak = 0;
+  for (let half = 0; half <= HALF_HOURS; half += 1) {
+    const good = half < HALF_HOURS && profile[half] >= LEARNED_GOOD;
+    if (good) {
+      if (first < 0) {
+        first = half;
+        peak = 0;
+      }
+      peak = Math.max(peak, profile[half]);
+    } else if (first >= 0) {
+      runs.push({ from: first * 30, to: half * 30, peak });
+      first = -1;
+    }
+  }
+  return runs
+    .sort((left, right) => right.peak - left.peak || left.from - right.from)
+    .slice(0, MAX_PERIODS)
+    .sort((left, right) => left.from - right.from)
+    .map(({ from, to }) => ({ from, to }));
 }
 
-export function slotScore(weights: number[], start: number, minutes: number, timeZone = appTimeZone()) {
-  const first = slotAt(start, timeZone);
-  if (first === null) return Number.POSITIVE_INFINITY;
-  const count = Math.max(1, Math.ceil(minutes / 30));
-  let total = 0;
-  for (let index = 0; index < count; index += 1) total += weights[(first + index) % WEEK_SLOTS] ?? 0;
-  const average = total / count;
-  return average >= LEARNED_GOOD ? 0 : 1 + Math.round((1 - average) * 100);
+export function periodScore(periods: LearnedPeriod[], start: number, minutes: number) {
+  const end = start + minutes;
+  if (periods.some((period) => start >= period.from && end <= period.to)) return 0;
+  let gap = Number.POSITIVE_INFINITY;
+  for (const period of periods) gap = Math.min(gap, end <= period.from ? period.from - end : start >= period.to ? start - period.to : 0);
+  return 1 + gap;
 }
 
 export function timeOfDayLabel(minutes: number) {
@@ -127,6 +143,13 @@ export function timeOfDayLabel(minutes: number) {
   if (minutes < 15 * 60) return "After lunch";
   if (minutes < 18 * 60) return "Late afternoon";
   return "Evening";
+}
+
+export function periodsLabel(periods: LearnedPeriod[]) {
+  const labels = [...new Set(periods.map((period) => timeOfDayLabel((period.from + period.to) / 2)))];
+  if (labels.length === 0) return null;
+  const lowered = labels.map((label, index) => (index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1)));
+  return lowered.length > 1 ? `${lowered.slice(0, -1).join(", ")} and ${lowered[lowered.length - 1]}` : lowered[0];
 }
 
 export function reasonPhrase(minutes: number) {
@@ -164,13 +187,14 @@ export function learnedCaption(kind: LearnedKind, spread: KindSpread) {
 
 export function learnedView(kind: LearnedKind, spread: KindSpread): LearnedKindView {
   const learned = isLearned(spread);
-  const window = learned ? learnedWindow(spread) : null;
+  const periods = learned ? learnedPeriods(spread) : [];
   const strength = learned ? 1 : Math.min(1, (spread.placed + spread.booked + spread.ticked / 2) / LEARN_THRESHOLD);
   const weights = slotWeights(spread).map((weight) => Math.round(weight * strength * 1000) / 1000);
   return {
     kind,
     learned,
-    label: window ? timeOfDayLabel((window.from + window.to) / 2) : DEFAULT_LABELS[kind],
+    label: periodsLabel(periods) ?? DEFAULT_LABELS[kind],
+    periods,
     caption: learnedCaption(kind, spread),
     week: STRIP_DAYS.map((day) => weights.slice(day * HALF_HOURS + STRIP_FROM, day * HALF_HOURS + STRIP_TO)),
   };

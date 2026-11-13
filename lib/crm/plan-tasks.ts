@@ -4,7 +4,7 @@ import { DEFAULT_TASK_DURATION, clockLabel, isTaskDuration, taskDueDay } from "@
 import type { Task } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { isBlockOverdue } from "@/lib/task-blocks";
-import { reasonPhrase, slotScore } from "@/lib/learned-times";
+import { periodScore, reasonPhrase, type LearnedPeriod } from "@/lib/learned-times";
 import { appTimeZone } from "@/lib/time";
 import {
   DEFAULT_START_MINUTES,
@@ -30,6 +30,7 @@ export const RUN_BREAK_MINUTES = 15;
 export const LOOK_BEYOND_DAYS = 30;
 export const MAX_SUGGESTED_MINUTES = 240;
 export const MAX_SCHEDULE_ENTRIES = 100;
+export const LEARNED_UNDATED_DAYS = 3;
 
 const OUTSIDE_EARLIEST = 7 * 60;
 const OUTSIDE_LATEST = 22 * 60;
@@ -39,7 +40,7 @@ const NOT_BLOCKING = new Set(["free", "workingelsewhere"]);
 const GROUP_RANK: Record<PlanGroup, number> = { call: 0, email: 1, other: 2 };
 const PRIORITY_RANK: Record<string, number> = { high: 0, normal: 1, low: 2 };
 
-export type PlanPreference = { from: number; to: number; learned: boolean; slots?: number[] | null };
+export type PlanPreference = { from: number; to: number; learned: boolean; periods?: LearnedPeriod[] | null };
 export type PlanPreferences = Record<PlanGroup, PlanPreference | null>;
 
 export const DEFAULT_PLAN_PREFERENCES: PlanPreferences = {
@@ -217,8 +218,8 @@ const DEFAULT_PHRASES: Record<"call" | "email", string> = { call: "late morning"
 
 export function preferenceScore(preference: PlanPreference | null, start: number, minutes: number, timeZone = appTimeZone()) {
   if (!preference) return 0;
-  if (preference.slots && preference.slots.length > 0) return slotScore(preference.slots, start, minutes, timeZone);
   const wall = wallMinutes(start, timeZone);
+  if (preference.periods && preference.periods.length > 0) return periodScore(preference.periods, wall, minutes);
   const latest = Math.max(preference.from, preference.to - minutes);
   if (wall < preference.from) return preference.from - wall;
   if (wall > latest) return wall - latest;
@@ -246,9 +247,12 @@ export function planReason(
       if (group !== "other") defaults.push(`${REASON_NOUNS[group]} ${DEFAULT_PHRASES[group]}`);
       continue;
     }
-    const fits = entries.filter((entry) => preferenceScore(preference, Date.parse(entry.at), entry.durationMinutes, timeZone) === 0).length;
-    if (fits === 0 || fits * 2 < entries.length) continue;
-    learned.push(`${REASON_NOUNS[group]} ${reasonPhrase((preference.from + preference.to) / 2)}`);
+    const fits = entries
+      .map((entry) => Date.parse(entry.at))
+      .filter((start, index) => preferenceScore(preference, start, entries[index].durationMinutes, timeZone) === 0);
+    if (fits.length === 0 || fits.length * 2 < entries.length) continue;
+    const phrases = [...new Set(fits.map((start) => wallMinutes(start, timeZone)).sort((left, right) => left - right).map(reasonPhrase))];
+    learned.push(`${REASON_NOUNS[group]} ${phrases.join(" or ")}`);
   }
   if (learned.length > 0) sentences.push(`${joinPhrases(learned)}, as you usually do.`);
   if (defaults.length > 0) sentences.push(`${joinPhrases(defaults)} by default.`);
@@ -392,14 +396,17 @@ export function packPlan(input: PackInput): PlanProposal {
     return best;
   };
 
-  const findSlot = (day: string, minutes: number, group: PlanGroup, guardRuns: boolean) => {
+  const learnedFit = (group: PlanGroup, interval: Interval) =>
+    preferenceScore(preferences[group], interval.start, Math.round((interval.end - interval.start) / MINUTE), timeZone) === 0;
+
+  const findSlot = (day: string, minutes: number, group: PlanGroup, guardRuns: boolean, strict = false) => {
     const window = workingWindow(day, hours, timeZone);
     if (!window) return null;
     return searchWindow(
       window.open,
       window.close,
       minutes,
-      (interval) => !guardRuns || runClear(day, group, interval, null),
+      (interval) => (!guardRuns || runClear(day, group, interval, null)) && (!strict || learnedFit(group, interval)),
       (start) => preferenceScore(preferences[group], start, minutes, timeZone),
     );
   };
@@ -420,7 +427,7 @@ export function packPlan(input: PackInput): PlanProposal {
     return interval;
   };
 
-  const extendRun = (item: Item, day: string) => {
+  const extendRun = (item: Item, day: string, strict = false) => {
     for (const run of runs) {
       if (run.day !== day || run.group !== item.group) continue;
       if (run.count >= RUN_MAX_TASKS || run.minutes + item.minutes > RUN_MAX_MINUTES) continue;
@@ -428,6 +435,7 @@ export function packPlan(input: PackInput): PlanProposal {
         const interval = { start, end: start + item.minutes * MINUTE };
         const whole = { start: Math.min(run.start, interval.start), end: Math.max(run.end, interval.end) };
         if (!insideHours(day, interval) || !free(interval) || !runClear(day, item.group, whole, run)) continue;
+        if (strict && !learnedFit(item.group, interval)) continue;
         commit(item, start);
         run.start = whole.start;
         run.end = whole.end;
@@ -451,23 +459,23 @@ export function packPlan(input: PackInput): PlanProposal {
     return minutes;
   };
 
-  const startRun = (item: Item, day: string, pending: Item[]) => {
+  const startRun = (item: Item, day: string, pending: Item[], strict = false) => {
     const want = wanted(item, pending, day);
-    const start = (want > item.minutes ? findSlot(day, want, item.group, true) : null) ?? findSlot(day, item.minutes, item.group, true);
+    const start = (want > item.minutes ? findSlot(day, want, item.group, true, strict) : null) ?? findSlot(day, item.minutes, item.group, true, strict);
     if (start === null) return false;
     const interval = commit(item, start);
     runs.push({ group: item.group, day, start: interval.start, end: interval.end, count: 1, minutes: item.minutes });
     return true;
   };
 
-  const placeOn = (item: Item, day: string, pending: Item[]) => {
+  const placeOn = (item: Item, day: string, pending: Item[], strict = false) => {
     if (item.group === "other") {
-      const start = findSlot(day, item.minutes, item.group, false);
+      const start = findSlot(day, item.minutes, item.group, false, strict);
       if (start === null) return false;
       commit(item, start);
       return true;
     }
-    return extendRun(item, day) || startRun(item, day, pending);
+    return extendRun(item, day, strict) || startRun(item, day, pending, strict);
   };
 
   const hold = (start: number | null, minutes: number) => {
@@ -517,7 +525,9 @@ export function packPlan(input: PackInput): PlanProposal {
     });
   };
 
+  const keptIds = new Set<string>();
   for (const { item, keep } of keptItems) {
+    keptIds.add(item.task.id);
     const start = Date.parse(keep.at);
     taken.push({ start, end: start + keep.durationMinutes * MINUTE });
     placed.push({
@@ -589,9 +599,11 @@ export function packPlan(input: PackInput): PlanProposal {
   }
 
   const missedUndated: Item[] = [];
+  const learnedDays = days.filter((day) => workingWindow(day, hours, timeZone)).slice(0, LEARNED_UNDATED_DAYS);
   const pendingUndated = [...undated];
   for (const item of undated) {
     pendingUndated.splice(pendingUndated.indexOf(item), 1);
+    if (preferences[item.group]?.learned && learnedDays.some((day) => placeOn(item, day, pendingUndated, true))) continue;
     const joined = item.group !== "other" && days.some((day) => extendRun(item, day));
     if (joined) continue;
     if (!days.some((day) => placeOn(item, day, pendingUndated))) missedUndated.push(item);
@@ -648,7 +660,7 @@ export function packPlan(input: PackInput): PlanProposal {
     placed,
     overdue,
     unplaced,
-    reason: planReason(placed, preferences, timeZone),
+    reason: planReason(placed.filter((entry) => !keptIds.has(entry.taskId)), preferences, timeZone),
     ordering,
     replan,
   };
