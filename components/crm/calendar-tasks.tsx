@@ -128,14 +128,15 @@ export function TaskDropZone({ day, active, bar = false }: { day: string | null;
       role="status"
       className={cn(
         "flex border border-dashed",
-        bar ? "h-full items-center gap-2 overflow-hidden rounded-none px-4" : "mx-1 mt-1 mb-1.5 flex-col gap-0.5 rounded-[10px] px-3 py-2.5",
+        bar ? "pointer-events-none h-full items-center justify-end gap-2 overflow-hidden rounded-none px-4" : "mx-1 mt-1 mb-1.5 flex-col gap-0.5 rounded-[10px] px-3 py-2.5",
         active
           ? "border-violet border-solid bg-[color-mix(in_srgb,var(--violet)_14%,transparent)]"
           : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_8%,transparent)]",
+        bar && !active && "bg-[color-mix(in_srgb,var(--violet)_6%,transparent)]",
       )}
     >
-      <span className="ui-style shrink-0 font-medium">Keep the day, remove the time</span>
-      {day && <span className={cn("caption-style text-soft", bar && "truncate")}>Stays on {day}, off the calendar.</span>}
+      <span className={cn("ui-style shrink-0 font-medium", bar && "bg-background/85 rounded-md px-1.5 py-0.5")}>Keep the day, remove the time</span>
+      {day && <span className={cn("caption-style text-soft", bar && "bg-background/85 shrink-0 rounded-md px-1.5 py-0.5 max-lg:hidden")}>Stays on {day}, off the calendar.</span>}
     </div>
   );
 }

@@ -139,6 +139,7 @@ export function GridTaskBlock({
         className={cn(
           "focus-visible:ring-ring/60 absolute inset-0 flex min-w-0 overflow-hidden rounded-md pr-1.5 text-left outline-none focus-visible:ring-2",
           movable ? "cursor-grab" : "cursor-pointer",
+          movable && resizable && "[@media(pointer:coarse)]:pr-5",
           edged ? "pl-[24px]" : "pl-[21px]",
           two ? "flex-col pt-0.5" : "items-center gap-1.5",
         )}
@@ -174,7 +175,7 @@ export function GridTaskBlock({
           className={cn(
             "absolute right-0 bottom-0 z-[2] flex h-1.5 cursor-ns-resize items-end justify-center pb-0.5",
             edged ? "left-6" : "left-5",
-            "[@media(pointer:coarse)]:left-auto [@media(pointer:coarse)]:h-full [@media(pointer:coarse)]:max-h-7 [@media(pointer:coarse)]:w-8 [@media(pointer:coarse)]:justify-end [@media(pointer:coarse)]:rounded-br-md [@media(pointer:coarse)]:pr-1 [@media(pointer:coarse)]:pb-[3px]",
+            "[@media(pointer:coarse)]:left-auto [@media(pointer:coarse)]:h-full [@media(pointer:coarse)]:max-h-4 [@media(pointer:coarse)]:w-8 [@media(pointer:coarse)]:justify-end [@media(pointer:coarse)]:rounded-br-md [@media(pointer:coarse)]:pr-1 [@media(pointer:coarse)]:pb-[3px]",
           )}
         >
           <span

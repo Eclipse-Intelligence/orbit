@@ -359,10 +359,11 @@ export default function CalendarScreen({
   const { drag, press, pickUpFromList, pickUpBlock, resizeBlock } = useTaskDrag({
     onPlace: place,
     onCarry: () => setDrawerOpen(false),
+    onOpen: (task, from) => openTask(task, from),
   });
   const blockDrag: TaskBlockDrag | undefined = gridDrag ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const heldFromList = drag?.source === "list" ? drag.task.id : null;
-  const droppingBack = drag?.source === "block" && drag.mode === "move" ? drag : null;
+  const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed ? drag : null;
   const { done, complete: markDone } = useTaskDone(tasks);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [keptTask, setKeptTask] = useState<Task | null>(null);
@@ -580,7 +581,7 @@ export default function CalendarScreen({
           )}
           <div className="relative hidden min-h-0 min-w-0 flex-1 md:flex">
             {droppingBack && (
-              <div data-task-drop="" className={cn("bg-background absolute inset-x-0 top-0 z-30 h-11", panelOpen && "lg:hidden")}>
+              <div data-task-drop="" className={cn("pointer-events-none absolute inset-x-0 top-0 z-30 h-11", panelOpen && "lg:hidden")}>
                 <TaskDropZone bar day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} />
               </div>
             )}

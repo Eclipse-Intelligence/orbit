@@ -155,10 +155,14 @@ async function mouseDrag(page, from, to, hold) {
 async function touchDrag(page, selector, to, options = {}) {
   return page
     .evaluate(
-      async ({ selector, to, holdMs, fromTop, quick }) => {
+      async ({ selector, to, holdMs, fromTop, quick, reveal }) => {
         const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const element = [...document.querySelectorAll(selector)].find((node) => node.getBoundingClientRect().width > 0);
         if (!element) return null;
+        if (reveal) {
+          element.scrollIntoView({ block: "nearest" });
+          await sleep(150);
+        }
         const box = element.getBoundingClientRect();
         const from = { x: box.left + Math.min(60, box.width / 2), y: fromTop ? box.top + 6 : box.top + box.height / 2 };
         const touchEvent = (type, element, id, x, y) => {
@@ -204,7 +208,7 @@ async function touchDrag(page, selector, to, options = {}) {
         await sleep(300);
         return { ring, drawerOpen, label, lifted, clicked };
       },
-      { selector, to, holdMs: options.holdMs ?? 450, fromTop: options.fromTop ?? false, quick: options.quick ?? false },
+      { selector, to, holdMs: options.holdMs ?? 450, fromTop: options.fromTop ?? false, quick: options.quick ?? false, reveal: options.reveal ?? false },
     )
     .catch((error) => ({ error: String(error).slice(0, 120) }));
 }
@@ -807,7 +811,7 @@ for (const [device, viewport] of [
         await page.getByRole("button", { name: "Calendars and tasks" }).tap();
         await page.waitForTimeout(700);
         const before = await readTask(block.plainId);
-        const held = await touchDrag(page, `[role="dialog"] [data-task-id="${block.plainId}"]`, null);
+        const held = await touchDrag(page, `[role="dialog"] [data-task-id="${block.plainId}"]`, null, { reveal: true });
         await page.waitForTimeout(900);
         const after = await readTask(block.plainId);
         check(
@@ -822,7 +826,7 @@ for (const [device, viewport] of [
           await page.waitForTimeout(700);
         }
         const toGrid = await gridPoint(page, block.day, 15 * 60 + 8);
-        const carried = await touchDrag(page, `[role="dialog"] [data-task-id="${block.plainId}"]`, toGrid);
+        const carried = await touchDrag(page, `[role="dialog"] [data-task-id="${block.plainId}"]`, toGrid, { reveal: true });
         await page.waitForTimeout(1200);
         check(synthetic("moving a held task out of the drawer closes it and carries the task onto the grid"), Boolean(carried && !carried.error && !carried.drawerOpen && carried.lifted), JSON.stringify(carried));
         const dropped = await readTask(block.plainId);
@@ -1122,8 +1126,63 @@ for (const width of [1100, 1280, 1440]) {
         }
         const earlyAfter = timing(await readTask(block.earlyId));
         check(`${device} a wobbly click on a block at the top edge, with the menu hidden, changes nothing and doesn't scroll`, Boolean(earlyBox) && earlyAfter === earlyBefore && (await scrollOf()) === scrollBefore, `${earlyAfter}, scroll ${scrollBefore} to ${await scrollOf()}`);
+        check(`${device} the wobbly click opens the task, as a click would`, ((await page.getByRole("dialog", { name: "Task" }).textContent().catch(() => "")) ?? "").includes("Sweep early"));
         await page.keyboard.press("Escape");
         await page.waitForTimeout(500);
+        const newEvent = page.getByRole("dialog", { name: "New event" });
+        const shortDrag = async (locator, dy) => {
+          const box = await locator.boundingBox();
+          if (!box) return false;
+          const spot = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+          await page.mouse.move(spot.x, spot.y);
+          await page.mouse.down();
+          for (let step = 1; step <= 4; step += 1) await page.mouse.move(spot.x, spot.y + (dy * step) / 4);
+          await page.waitForTimeout(200);
+          await page.mouse.up();
+          await page.waitForTimeout(1000);
+          return true;
+        };
+        const stackedFirst = page.locator(`[data-task-block="${block.stacked[0]}"]`).filter({ visible: true });
+        const firstBefore = timing(await readTask(block.stacked[0]));
+        const shortMoved = await shortDrag(stackedFirst, 6);
+        check(
+          `${device} a 6px drag of a block moves nothing, opens the task and never New event`,
+          shortMoved && !(await newEvent.isVisible().catch(() => false)) && timing(await readTask(block.stacked[0])) === firstBefore && (await page.getByRole("dialog", { name: "Task" }).isVisible().catch(() => false)),
+          timing(await readTask(block.stacked[0])),
+        );
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(500);
+        if (await newEvent.isVisible().catch(() => false)) await page.keyboard.press("Escape");
+        await stackedFirst.hover();
+        const shortResized = await shortDrag(stackedFirst.locator("[data-task-resize]"), 5);
+        check(
+          `${device} a 5px resize changes nothing and never opens New event`,
+          shortResized && !(await newEvent.isVisible().catch(() => false)) && timing(await readTask(block.stacked[0])) === firstBefore,
+          timing(await readTask(block.stacked[0])),
+        );
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(500);
+        if (await newEvent.isVisible().catch(() => false)) await page.keyboard.press("Escape");
+        const earlyCard = page.locator(`[data-task-block="${block.earlyId}"]`).filter({ visible: true });
+        await earlyCard.hover();
+        const grip = await earlyCard.locator("[data-task-resize]").boundingBox();
+        const resizeScroll = await scrollOf();
+        if (grip) await mouseDrag(page, { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 }, { x: grip.x + grip.width / 2, y: grip.y - 12 });
+        await page.waitForTimeout(1000);
+        const shrunk = await readTask(block.earlyId);
+        check(`${device} shrinking an 08:00 block doesn't scroll the grid`, Boolean(grip) && (await scrollOf()) === resizeScroll && londonClock(shrunk?.dueAt) === "08:00" && shrunk?.durationMinutes === 15, `${timing(shrunk)}, scroll ${resizeScroll} to ${await scrollOf()}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(400);
+        const moveBox = await earlyCard.boundingBox();
+        const moveScroll = await scrollOf();
+        if (moveBox) await mouseDrag(page, { x: moveBox.x + 30, y: moveBox.y + moveBox.height / 2 }, { x: moveBox.x + 30, y: moveBox.y + moveBox.height / 2 + 100 });
+        await page.waitForTimeout(1200);
+        const lowered = await readTask(block.earlyId);
+        check(
+          `${device} dragging an 08:00 block down 100px moves it down without scrolling`,
+          Boolean(moveBox) && (await scrollOf()) === moveScroll && londonClock(lowered?.dueAt) > "09:00",
+          `${timing(lowered)}, scroll ${moveScroll} to ${await scrollOf()}`,
+        );
         await page.getByRole("button", { name: /^Show calendars and tasks/ }).click();
         await page.waitForTimeout(400);
       } finally {

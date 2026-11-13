@@ -28,8 +28,9 @@ import {
 
 const GRID_QUERY = "(min-width: 768px)";
 const DRAGGING_CLASSES = ["select-none", "cursor-grabbing"];
-const MOVE_ARM_PX = 12;
-const RESIZE_ARM_PX = 8;
+const MOVE_ARM_PX = 8;
+const RESIZE_ARM_PX = 6;
+const EDGE_DEEPER_PX = 16;
 
 export type TaskDrag = {
   task: Task;
@@ -40,6 +41,7 @@ export type TaskDrag = {
   y: number;
   slot: GridSlot | null;
   overList: boolean;
+  armed: boolean;
   scrolling: -1 | 0 | 1;
 };
 
@@ -140,22 +142,28 @@ function swallowNextClick() {
 export function useTaskDrag({
   onPlace,
   onCarry,
+  onOpen,
 }: {
   onPlace: (task: Task, placement: DropPlacement) => void;
   onCarry?: () => void;
+  onOpen?: (task: Task, opener: HTMLElement | null) => void;
 }) {
   const [drag, setDrag] = useState<TaskDrag | null>(null);
   const [press, setPress] = useState<TaskPress | null>(null);
   const live = useRef<TaskDrag | null>(null);
   const busy = useRef(false);
   const cancel = useRef<(() => void) | null>(null);
-  const latest = useRef({ onPlace, onCarry });
+  const latest = useRef({ onPlace, onCarry, onOpen });
   useEffect(() => {
-    latest.current = { onPlace, onCarry };
+    latest.current = { onPlace, onCarry, onOpen };
   });
   useEffect(
     () => () => {
-      latest.current = { onPlace: () => undefined, onCarry: undefined };
+      latest.current = {
+        onPlace: () => undefined,
+        onCarry: undefined,
+        onOpen: undefined,
+      };
       cancel.current?.();
       cancel.current = null;
       document.body.classList.remove(...DRAGGING_CLASSES);
@@ -186,6 +194,14 @@ export function useTaskDrag({
         ) as HTMLElement | null) ?? event.currentTarget
       ).getBoundingClientRect();
       const touch = event.pointerType === "touch";
+      const opener =
+        event.currentTarget
+          .closest("[data-task-block]")
+          ?.querySelector<HTMLElement>("button[data-task-id]") ??
+        event.currentTarget;
+      let startEdge = 0;
+      let leftEdge = false;
+      let wasActive = false;
 
       function resizeSlot(): GridSlot | null {
         const scroller = gridScroller();
@@ -260,6 +276,7 @@ export function useTaskDrag({
         arm();
         const inZone = pickup.mode === "move" && overDropZone(x, y);
         if (armed && !inZone) leftDropZone = true;
+        if (scrollSpeed() === 0) leftEdge = true;
         const overList = inZone && leftDropZone;
         const next: TaskDrag = {
           task: pickup.task,
@@ -270,6 +287,7 @@ export function useTaskDrag({
           y,
           slot: overList || !armed ? null : slotAt(),
           overList,
+          armed,
           scrolling,
         };
         live.current = next;
@@ -278,7 +296,16 @@ export function useTaskDrag({
 
       function tick() {
         if (!active) return;
-        const speed = armed && !live.current?.overList ? scrollSpeed() : 0;
+        const toward = armed && !live.current?.overList ? scrollSpeed() : 0;
+        const deeper =
+          toward < 0
+            ? y <= activeY - EDGE_DEEPER_PX
+            : y >= activeY + EDGE_DEEPER_PX;
+        const speed =
+          toward !== 0 &&
+          (leftEdge || Math.sign(toward) !== startEdge || deeper)
+            ? toward
+            : 0;
         const scroller = gridScroller();
         if (speed !== 0 && scroller) {
           const before = scroller.scrollTop;
@@ -304,8 +331,12 @@ export function useTaskDrag({
           setPress(null);
           setDrag(null);
         }
-        if (result !== "drop" || !final || !armed) return;
+        if (result !== "drop" || !wasActive) return;
         swallowNextClick();
+        if (!armed || !final) {
+          if (!touch) latest.current.onOpen?.(pickup.task, opener);
+          return;
+        }
         if (final.overList) {
           if (
             pickup.source === "block" &&
@@ -326,6 +357,7 @@ export function useTaskDrag({
         {
           start() {
             active = true;
+            wasActive = true;
             fresh = true;
             setPress(null);
             if (!touch) document.body.classList.add(...DRAGGING_CLASSES);
@@ -339,6 +371,7 @@ export function useTaskDrag({
               fresh = false;
               activeX = x;
               activeY = y;
+              startEdge = Math.sign(scrollSpeed());
             }
             update(live.current?.scrolling ?? 0);
           },
