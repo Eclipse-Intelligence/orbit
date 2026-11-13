@@ -95,12 +95,14 @@ async function seedBlock(page, device) {
   const id = await add(title, `${day}T10:00`);
   const overdueDay = londonDay(-1);
   const overdueId = await add(`Sweep overdue ${stamp}`, `${overdueDay}T10:00`);
-  const ids = [id, overdueId].filter(Boolean);
-  if (!id || !overdueId) {
+  const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title: `Sweep plain ${stamp}`, ownerId: mine.ownerId, companyId: null, contactId: null, opportunityId: null }) });
+  const plainId = created?.ok ? (await created.json()).task.id : null;
+  const ids = [id, overdueId, plainId].filter(Boolean);
+  if (!id || !overdueId || !plainId) {
     await dropTasks(ids);
     return null;
   }
-  return { id, title, day, overdueId, overdueDay, ids };
+  return { id, title, day, overdueId, overdueDay, plainId, ids };
 }
 
 async function dropTasks(ids) {
@@ -111,19 +113,15 @@ async function focusedTaskId(page) {
   return page.evaluate(() => (document.activeElement?.closest("[data-task-block]") ? document.activeElement.getAttribute("data-task-id") : null));
 }
 
-async function circleArea(locator) {
+async function touchTarget(locator) {
   return locator
-    .evaluate((element) => {
-      const strip = element.closest("[data-task-circle-area]") ?? element;
-      const block = element.closest("[data-task-block]");
-      const box = strip.getBoundingClientRect();
-      const x = box.left + box.width / 2;
-      const own = element.getBoundingClientRect();
-      const middle = own.top + own.height / 2;
-      const inside = [Math.max(box.top + 2, middle - 20), middle, Math.min(box.bottom - 2, middle + 20)].every((y) => element.contains(document.elementFromPoint(x, y)));
-      const outer = block.getBoundingClientRect();
-      const outside = [outer.top - 2, outer.bottom + 2].every((y) => !element.contains(document.elementFromPoint(x, y)));
-      return { height: box.height, owns: inside && outside };
+    .evaluate((circle) => {
+      const block = circle.closest("[data-task-block]");
+      const open = block.querySelector("button[data-task-id]");
+      const own = circle.getBoundingClientRect();
+      const hit = document.elementFromPoint(own.left + own.width / 2, own.top + own.height / 2);
+      const box = open.getBoundingClientRect();
+      return { opens: open.contains(hit), width: box.width, height: box.height, blockHeight: block.getBoundingClientRect().height };
     })
     .catch(() => null);
 }
@@ -581,8 +579,12 @@ for (const [device, viewport] of [
         const area = await tapArea(circle);
         check(`${device} block's done circle is easy to tap`, Boolean(area && area.height >= 43 && area.owns), area ? `${Math.round(area.height)}px${area.owns ? "" : ", covered"}` : "missing");
       } else {
-        const area = await circleArea(circle);
-        check(`${device} block's done circle reaches only its own block`, Boolean(area?.owns), area ? `${Math.round(area.height)}px strip${area.owns ? "" : ", spills over"}` : "missing");
+        const target = await touchTarget(circle);
+        check(
+          `${device} tapping a block's circle opens the task, with the whole block as the target`,
+          Boolean(target?.opens && target.width >= 44 && target.height >= target.blockHeight - 1),
+          target ? `${Math.round(target.width)}x${Math.round(target.height)}px` : "missing",
+        );
       }
       await shot("calendar-block");
       await card.locator("button[data-task-id]").tap();
@@ -596,9 +598,26 @@ for (const [device, viewport] of [
       await panel.getByRole("button", { name: "Close" }).tap();
       await page.waitForTimeout(700);
       check(`${device} closing the panel returns focus to the block`, (await focusedTaskId(page)) === block.id);
-      await circle.tap();
+      if (device === "iphone") {
+        await circle.tap();
+      } else {
+        const spot = await circle.boundingBox();
+        await page.touchscreen.tap(spot.x + spot.width / 2, spot.y + spot.height / 2);
+        await page.waitForTimeout(900);
+        check(`${device} tapping the circle opens the panel where Done is`, await visible(panel));
+        await panel.getByRole("button", { name: /^Mark .* done$/ }).tap();
+        await page.waitForTimeout(500);
+        await panel.getByRole("button", { name: "Close" }).tap();
+      }
       await page.waitForTimeout(700);
-      check(`${device} the circle marks the block done with Undo`, (await visible(page.getByText("Task done."))) && (await visible(card.getByRole("button", { name: "Done", exact: true }))));
+      check(`${device} Done marks the block done with Undo`, (await visible(page.getByText("Task done."))) && (await visible(card.getByRole("button", { name: /^Done/ }))));
+      if (device === "iphone") {
+        await card.getByRole("button", { name: /^Done/ }).tap();
+        await page.waitForTimeout(900);
+        check(`${device} a done block's circle opens the task`, await visible(panel));
+        await panel.getByRole("button", { name: "Close" }).tap();
+        await page.waitForTimeout(600);
+      }
       await page.getByRole("button", { name: "Undo" }).last().tap();
       await page.waitForTimeout(800);
       check(`${device} Undo brings the block back`, await visible(card.getByRole("button", { name: /^Mark .* done$/ })));
@@ -624,6 +643,13 @@ for (const [device, viewport] of [
       check(`${device} drawer lists the overdue task under Overdue`, await visible(drawer.getByRole("region", { name: /^Overdue/ }).locator(`[data-task-id="${block.overdueId}"]`)));
       const rowArea = await tapArea(listRow);
       check(`${device} drawer rows are easy to tap`, Boolean(rowArea && rowArea.height >= 43 && rowArea.owns), rowArea ? `${Math.round(rowArea.height)}px` : "missing");
+      const plainRow = drawer.locator(`[data-task-id="${block.plainId}"]`);
+      await plainRow.scrollIntoViewIfNeeded().catch(() => undefined);
+      const plainArea = await tapArea(plainRow);
+      const plainLines = await plainRow.evaluate((row) => row.querySelectorAll("span.truncate").length).catch(() => 0);
+      if (plainLines === 1) {
+        check(`${device} a one-line drawer row is easy to tap`, Boolean(plainArea && plainArea.height >= 43 && plainArea.owns), plainArea ? `${Math.round(plainArea.height)}px${plainArea.owns ? "" : ", covered"}` : "missing");
+      } else console.log(`skip ${device} one-line row (the sweep's user is in more than one workspace, so every row has a second line)`);
       await shot("calendar-drawer");
       await calendarsToggle.tap();
       await page.waitForTimeout(400);

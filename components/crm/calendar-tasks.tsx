@@ -136,7 +136,7 @@ export function CalendarTaskList({
   now: number;
   workspaces: PlannerWorkspace[];
   hidden: ReadonlySet<string>;
-  onOpen: (task: Task) => void;
+  onOpen: (task: Task, opener: HTMLElement | null) => void;
 }) {
   const names = workspaces.length > 1 ? new Map(workspaces.map((item) => [item.id, item.name])) : null;
   const groups = groupTaskList(
@@ -179,8 +179,8 @@ export function CalendarTaskList({
                     size="none"
                     data-task-id={task.id}
                     data-calendar-task=""
-                    onClick={() => onOpen(task)}
-                    className="hover:bg-surface-hover hit gap-2 px-2 py-1.5"
+                    onClick={(event) => onOpen(task, event.currentTarget)}
+                    className="hover:bg-surface-hover gap-2 px-2 py-1.5 [@media(pointer:coarse)]:min-h-11"
                   >
                     <TaskKindIcon title={task.title} className={cn("mt-[3px] size-3.5 shrink-0", onGrid ? "text-violet" : "text-subtle")} />
                     <span className="flex min-w-0 flex-1 flex-col">

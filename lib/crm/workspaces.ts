@@ -51,7 +51,7 @@ export async function alertLink(actor: UserActor, path: string) {
 
 export async function actorForWorkspace(actor: UserActor, workspaceId: string) {
   if (workspaceId === actor.workspaceId) return actor;
-  return (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId) ?? actor;
+  return actorIn(await workspaceActors(actor), workspaceId);
 }
 
 export async function actorForTask(actor: UserActor, taskId: unknown) {

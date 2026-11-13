@@ -33,6 +33,7 @@ type PanelProps = {
   outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
   recordNotes?: boolean;
+  returnTo?: HTMLElement | null;
 };
 
 export function TaskDoneCircle({ done, disabled, title, onClick, className }: { done: boolean; disabled: boolean; title: string; onClick: () => void; className?: string }) {
@@ -74,7 +75,11 @@ function focusRow(row: HTMLElement) {
   row.querySelector<HTMLElement>("button[aria-expanded]")?.focus({ preventScroll: true });
 }
 
-function returnFocus(id: string, opener: HTMLElement | null) {
+function returnFocus(id: string, returnTo: HTMLElement | null, opener: HTMLElement | null) {
+  if (returnTo && shown(returnTo)) {
+    focusRow(returnTo);
+    return;
+  }
   if (opener && opener.matches(`[data-task-id="${id}"]`) && shown(opener)) {
     focusRow(opener);
     return;
@@ -93,7 +98,7 @@ function focusedElement() {
   return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers, recordNotes = true }: PanelProps & { instant: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -218,7 +223,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         flush();
-        returnFocus(task.id, opener);
+        returnFocus(task.id, returnTo, opener);
       }}
       onOpenAutoFocus={(event) => {
         event.preventDefault();

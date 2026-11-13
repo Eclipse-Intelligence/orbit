@@ -19,8 +19,7 @@ import {
 import { isTaskDuration } from "@/lib/crm/task-time";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
-import { CrmError } from "@/lib/crm/errors";
-import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
+import { taskActorOrError } from "@/lib/crm/workspaces";
 
 export async function detectTaskRecordsAction(text: string, companyId: string | null = null): Promise<PadDetection> {
   const user = await getUserActor();
@@ -30,12 +29,23 @@ export async function detectTaskRecordsAction(text: string, companyId: string | 
 
 const SEARCH_KINDS: PadSearchKind[] = ["contact", "company", "opportunity"];
 
-export async function searchTaskLinksAction(kind: PadSearchKind, query: string, companyId: string | null = null, taskId?: string): Promise<PadOption[]> {
-  const viewer = await getUserActor();
-  if (!viewer || !SEARCH_KINDS.includes(kind) || typeof query !== "string") return [];
-  const user = taskId === undefined ? viewer : (await taskActorOrError(viewer, taskId)).actor;
-  if (!user) throw new CrmError("not_found", TASK_LOOKUP_FAILED, 404);
+export async function searchTaskLinksAction(kind: PadSearchKind, query: string, companyId: string | null = null): Promise<PadOption[]> {
+  const user = await getUserActor();
+  if (!user || !SEARCH_KINDS.includes(kind) || typeof query !== "string") return [];
   return searchPadRecords(user, kind, query, typeof companyId === "string" && isUuid(companyId) ? companyId : null);
+}
+
+export async function searchLinksForTaskAction(taskId: string, kind: PadSearchKind, query: string, companyId: string | null = null): Promise<{ options?: PadOption[]; error?: string }> {
+  const viewer = await getUserActor();
+  if (!viewer) return { error: "Your session ended. Sign in again." };
+  if (!SEARCH_KINDS.includes(kind) || typeof query !== "string") return { options: [] };
+  const resolved = await taskActorOrError(viewer, taskId);
+  if (!resolved.actor) return { error: resolved.error };
+  try {
+    return { options: await searchPadRecords(resolved.actor, kind, query, typeof companyId === "string" && isUuid(companyId) ? companyId : null) };
+  } catch {
+    return { error: "Couldn't search. Try again." };
+  }
 }
 
 export async function parseTaskWithAiAction(text: string): Promise<PadAiParse | null> {

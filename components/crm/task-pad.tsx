@@ -9,7 +9,7 @@ import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { listGroups } from "@/components/crm/clickup";
-import { addPadTaskAction, detectTaskRecordsAction, parseTaskWithAiAction, searchTaskLinksAction } from "@/app/(crm)/task-pad";
+import { addPadTaskAction, detectTaskRecordsAction, parseTaskWithAiAction, searchLinksForTaskAction, searchTaskLinksAction } from "@/app/(crm)/task-pad";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { DEFAULT_TASK_DURATION, localInstant } from "@/lib/crm/task-time";
@@ -118,7 +118,13 @@ export function SearchChip({
     let cancelled = false;
     const [, , text] = key.split("|");
     const timer = window.setTimeout(() => {
-      searchTaskLinksAction(kind, text, companyId, taskId).then(
+      const search = taskId
+        ? searchLinksForTaskAction(taskId, kind, text, companyId).then((found) => {
+            if (!found.options) throw new Error(found.error);
+            return found.options;
+          })
+        : searchTaskLinksAction(kind, text, companyId);
+      search.then(
         (found) => !cancelled && setResults({ key, options: found }),
         () => !cancelled && setResults({ key, options: [], failed: true }),
       );

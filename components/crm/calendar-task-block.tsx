@@ -11,7 +11,7 @@ import CloseIcon from "@/public/assets/images/mail/close.svg";
 const TWO_LINES_PX = 28;
 
 export type TaskBlockHandlers = {
-  onOpen: (block: TaskBlock) => void;
+  onOpen: (block: TaskBlock, opener: HTMLElement | null) => void;
   onComplete: (block: TaskBlock) => void;
 };
 
@@ -43,28 +43,28 @@ export function taskBlockLabel(block: TaskBlock) {
     .join(", ");
 }
 
-function DoneCircle({ block, onComplete, size }: { block: TaskBlock; onComplete: (block: TaskBlock) => void; size: "sm" | "lg" }) {
+function DoneCircle({ block, onOpen, onComplete, size }: TaskBlockHandlers & { block: TaskBlock; size: "sm" | "lg" }) {
   const icon = size === "sm" ? "size-2.5" : "size-3";
   const ring = size === "sm" ? "shadow-[inset_0_0_0_1.25px_color-mix(in_srgb,var(--violet)_80%,white_10%)]" : "shadow-[inset_0_0_0_1.5px_color-mix(in_srgb,var(--violet)_80%,white_10%)]";
   return (
     <button
       type="button"
-      disabled={block.done}
-      aria-label={block.done ? "Done" : `Mark “${block.title}” done`}
+      data-task-circle=""
+      aria-label={block.done ? `Done. Open “${block.title}”` : `Mark “${block.title}” done`}
       title={block.done ? "Done" : "Mark done"}
-      onClick={() => onComplete(block)}
+      onClick={(event) => (block.done ? onOpen(block, event.currentTarget) : onComplete(block))}
       className={cn(
-        "group/circle hit ease-power2-out pointer-events-auto flex shrink-0 items-center justify-center rounded-full text-white transition-colors duration-150 enabled:cursor-pointer disabled:cursor-default",
-        size === "sm" ? "size-3" : "size-[22px]",
-        block.done ? "bg-success" : block.overdue ? "bg-danger enabled:hover:bg-success" : cn(ring, "enabled:hover:bg-success enabled:hover:shadow-none"),
+        "group/circle ease-power2-out flex shrink-0 cursor-pointer items-center justify-center rounded-full text-white transition-colors duration-150",
+        size === "sm" ? "pointer-events-auto size-3 [@media(pointer:coarse)]:pointer-events-none" : "hit size-[22px]",
+        block.done ? "bg-success" : block.overdue ? "bg-danger hover:bg-success" : cn(ring, "hover:bg-success hover:shadow-none"),
       )}
     >
       {block.done ? (
         <CheckIcon aria-hidden className={icon} />
       ) : (
         <>
-          {block.overdue && <CloseIcon aria-hidden className={cn(size === "sm" ? "size-2" : "size-2.5", "group-enabled/circle:group-hover/circle:hidden")} />}
-          <CheckIcon aria-hidden className={cn(icon, "hidden group-enabled/circle:group-hover/circle:block")} />
+          {block.overdue && <CloseIcon aria-hidden className={cn(size === "sm" ? "size-2" : "size-2.5", "group-hover/circle:hidden")} />}
+          <CheckIcon aria-hidden className={cn(icon, "hidden group-hover/circle:block")} />
         </>
       )}
     </button>
@@ -99,7 +99,7 @@ export function GridTaskBlock({ block, style, height, onOpen, onComplete }: Task
         data-task-id={block.task.id}
         aria-label={taskBlockLabel(block)}
         title={taskBlockLabel(block)}
-        onClick={() => onOpen(block)}
+        onClick={(event) => onOpen(block, event.currentTarget)}
         className={cn(
           "focus-visible:ring-ring/60 absolute inset-0 flex min-w-0 cursor-pointer overflow-hidden rounded-md pr-1.5 text-left outline-none focus-visible:ring-2",
           edged ? "pl-[24px]" : "pl-[21px]",
@@ -125,11 +125,8 @@ export function GridTaskBlock({ block, style, height, onOpen, onComplete }: Task
           <span className={cn("shrink-0 text-[11px] leading-[18px] tabular-nums", block.done ? "text-faint" : "text-soft")}>{durationLabel(block.durationMinutes)}</span>
         )}
       </button>
-      <span
-        data-task-circle-area=""
-        className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center overflow-hidden rounded-l-md", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}
-      >
-        <DoneCircle block={block} onComplete={onComplete} size="sm" />
+      <span className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}>
+        <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="sm" />
       </span>
     </div>
   );
@@ -146,7 +143,7 @@ export function AgendaTaskBlock({ block, past, onOpen, onComplete }: TaskBlockHa
         data-list-row=""
         data-task-id={block.task.id}
         aria-label={taskBlockLabel(block)}
-        onClick={() => onOpen(block)}
+        onClick={(event) => onOpen(block, event.currentTarget)}
         className="focus-visible:ring-ring/60 flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md text-left outline-none focus-visible:ring-2"
       >
         <span className="caption-style text-soft w-[76px] shrink-0 tabular-nums">{formatTime(block.startsAt)}</span>
@@ -157,7 +154,7 @@ export function AgendaTaskBlock({ block, past, onOpen, onComplete }: TaskBlockHa
           </span>
         </span>
       </button>
-      <DoneCircle block={block} onComplete={onComplete} size="lg" />
+      <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="lg" />
     </div>
   );
 }

@@ -276,12 +276,17 @@ export default function CalendarScreen({
   const shownTask = panelTask ?? keptTask;
   const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
   const blocks = taskBlocks(planner.tasks, { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done });
-  const openTask = (task: Task) => {
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
+  const openTask = (task: Task, from: HTMLElement | null) => {
     setDrawerOpen(false);
+    setOpener(from);
     setOpenTaskId(task.id);
   };
   const taskHandlers: TaskBlockHandlers = {
-    onOpen: (block: TaskBlock) => setOpenTaskId(block.task.id),
+    onOpen: (block: TaskBlock, from: HTMLElement | null) => {
+      setOpener(from);
+      setOpenTaskId(block.task.id);
+    },
     onComplete: (block: TaskBlock) => markDone(block.task),
   };
   const calendarCount = groups.reduce((total, group) => total + group.calendars.length, 0);
@@ -508,20 +513,21 @@ export default function CalendarScreen({
       />
       <InviteNotice message={notice} onDone={clearNotice} />
       <HomeWorkspace.Provider value={viewer.workspaceId ?? null}>
-      <TaskPanel
-        task={shownTask}
-        open={Boolean(panelTask)}
-        onOpenChange={(open) => {
-          if (!open) setOpenTaskId(null);
-        }}
-        viewer={{ ...viewer, role: team?.role ?? viewer.role }}
-        members={team?.members ?? []}
-        tagged={shownTask ? (planner.tagged[shownTask.id] ?? []) : []}
-        admins={team?.admins ?? []}
-        completed={shownTask ? done.has(shownTask.id) : false}
-        onComplete={markDone}
-        recordNotes={!shownTask || shownTask.workspaceId === viewer.workspaceId}
-      />
+        <TaskPanel
+          task={shownTask}
+          open={Boolean(panelTask)}
+          onOpenChange={(open) => {
+            if (!open) setOpenTaskId(null);
+          }}
+          viewer={{ ...viewer, role: team?.role ?? viewer.role }}
+          members={team?.members ?? []}
+          tagged={shownTask ? (planner.tagged[shownTask.id] ?? []) : []}
+          admins={team?.admins ?? []}
+          completed={shownTask ? done.has(shownTask.id) : false}
+          onComplete={markDone}
+          returnTo={opener}
+          recordNotes={!shownTask || shownTask.workspaceId === viewer.workspaceId}
+        />
       </HomeWorkspace.Provider>
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent side="left" className="w-[min(320px,86vw)]">

@@ -315,7 +315,7 @@ export async function openTaskIdsAction(ids: string[]): Promise<{ open?: string[
   const open: string[] = [];
   for (const id of wanted) {
     const resolved = await taskActorOrError(user, id);
-    if (!resolved.actor) return { error: resolved.error };
+    if (!resolved.actor) continue;
     const task = await getTask(resolved.actor, id).catch(() => null);
     if (task && !task.completedAt && !task.archivedAt) open.push(id);
   }

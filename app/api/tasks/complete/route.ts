@@ -22,8 +22,10 @@ export async function POST(request: Request) {
       try {
         after(async () => {
           for (const id of ids) {
+            const owner = actors.get(id);
+            if (!owner) continue;
             try {
-              await pushClickUpTask(actors.get(id) ?? actor, id);
+              await pushClickUpTask(owner, id);
             } catch (error) {
               console.error("ClickUp push failed", error);
             }
