@@ -26,6 +26,8 @@ const TABLE_PIPE = /\[\[[^\]\n]*\]\]|\\\||\|/g;
 const INLINE_MARKUP = /[[<]/;
 export const TAG_BODY = /^#([\p{L}\p{N}_\-/]+)/u;
 export const ENTRY_TIME = /^([01]\d|2[0-3]):([0-5]\d)(?= |$)/;
+export const ENTRY_HEADING = /^(#{1,6})(?:[ \t]+|$)/;
+const ENTRY_BLOCK_START = /^(?:#{1,6}(?:[ \t]|$)|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)|>|`{3,}|~{3,}|\||(?:[-*_][ \t]*){3,}$)/;
 const LETTER = /\p{L}/u;
 
 function blank(text: string) {
@@ -412,4 +414,10 @@ export function toggleTaskMarker(line: string) {
 export function highlightIn(snippet: string, wanted: string) {
   const index = wanted ? snippet.toLowerCase().indexOf(wanted.toLowerCase()) : -1;
   return index < 0 ? { matchFrom: 0, matchTo: 0 } : { matchFrom: index, matchTo: index + wanted.length };
+}
+
+export function timedEntry(time: string, text: string) {
+  const clean = text.replace(/\r\n?/g, "\n").trim();
+  if (!clean) return time;
+  return ENTRY_BLOCK_START.test(clean) ? `${time}\n${clean}` : `${time} ${clean}`;
 }

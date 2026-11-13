@@ -1,7 +1,7 @@
 import type { Text } from "@codemirror/state";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { safeHref } from "@/lib/docs/editor/links";
-import { ENTRY_TIME, splitTarget } from "@/lib/docs/markdown";
+import { ENTRY_HEADING, ENTRY_TIME, splitTarget } from "@/lib/docs/markdown";
 import type { MentionKind } from "@/lib/mentions";
 
 export type WidgetSpec =
@@ -215,6 +215,11 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
         const solo = current.text.trim().length === 5 && !active.has(current.number);
         line(current.from, solo ? "note-entry note-entry-solo" : "note-entry");
         widget(current.from, Math.min(current.to, current.from + 6), { kind: "entry", time: `${match[1]}:${match[2]}` });
+        const heading = ENTRY_HEADING.exec(current.text.slice(6));
+        if (heading) {
+          line(current.from, `note-h note-h${Math.min(heading[1].length, 3)}`);
+          syntax(current.from + 6, current.from + 6 + heading[0].length, active.has(current.number));
+        }
       }
     },
   });
