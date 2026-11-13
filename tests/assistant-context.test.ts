@@ -311,6 +311,17 @@ describe("page context", () => {
     assert.doesNotMatch(await pageContext(owner, readPageInput({ path: "/tasks", focus: { kind: "task", id: "not-a-task" } })), /Task they have open/);
   });
 
+  it("describes a task from another of the user's workspaces as read only, and nothing to anyone outside it", async () => {
+    const elsewhere = (await createTask(second, { title: "Second brand renewal call", ownerId: owner.userId, companyId: null, contactId: null, opportunityId: null })).body.task;
+    const text = await pageContext(owner, readPageInput({ path: "/calendar", focus: { kind: "task", id: elsewhere.id } }));
+    assert.ok(text.includes(`Task they have open: task "Second brand renewal call" [task id ${elsewhere.id}]`), text);
+    assert.match(text, /\nThat task is in the "Second brand" workspace, not this one\. Its records are shown for reading only: to change the task or log on its records, the user switches to that workspace first\.\n/);
+    assert.doesNotMatch(await pageContext(member, readPageInput({ path: "/calendar", focus: { kind: "task", id: elsewhere.id } })), /Second brand renewal call|Task they have open/);
+    assert.doesNotMatch(await pageContext(other, readPageInput({ path: "/calendar", focus: { kind: "task", id: elsewhere.id } })), /Second brand renewal call|Task they have open/);
+    const here = await pageContext(owner, readPageInput({ path: "/tasks", focus: { kind: "task", id: (await createTask(owner, { title: "Home task", ownerId: owner.userId })).body.task.id } }));
+    assert.doesNotMatch(here, /workspace, not this one/);
+  });
+
   it("offers the company's people on a task with only a company, and says when nobody is linked", async () => {
     const companyOnly = (await createTask(owner, { title: "Ring the Initech switchboard", companyId, contactId: null, opportunityId: null })).body.task.id;
     const text = await pageContext(owner, readPageInput({ path: "/tasks", focus: { kind: "task", id: companyOnly } }));

@@ -17,7 +17,7 @@ import { detectTaskRecordsInDb } from "@/lib/crm/task-detect";
 import { detectPadRecords } from "@/lib/crm/task-pad";
 import { backfillTaskLinks, linkTask, taskLinkCandidates } from "@/lib/crm/task-links";
 import { taskTitleSegments } from "@/lib/crm/task-title";
-import { createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { addTaskParticipants, createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import type { Actor, Task, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
@@ -249,6 +249,29 @@ describe("linking tasks on creation", () => {
     const card = describeAction("update_task", { taskId: id, contactId: raj, companyId: halden, opportunityId: null }, new Map([[id, "Send Raj the order form"], [raj, "Raj Mehta"], [halden, "Halden Group"]]));
     assert.deepEqual(card.lines, ["Person: Raj Mehta", "Company: Halden Group", "Opportunity: none"]);
     assert.deepEqual(describeAction("update_task", { taskId: id, title: "Send it" }, new Map()).lines, ["Title: Send it"]);
+  });
+
+  it("refuses a relink through the assistant from someone only tagged or who can't see the task", async () => {
+    const lee = await join(await createUser("lee@links.test", "Lee Tagged"), "member");
+    const olly = await join(await createUser("olly@links.test", "Olly Outside"), "member");
+    const task = (await createTask(mark, { title: "Book the Halden review", contactId: raj, ownerId: sam.userId })).body.task;
+    assert.deepEqual(await addTaskParticipants(sam, task.id, [lee.userId]), [lee.userId]);
+    assert.equal((await getTask(lee, task.id)).id, task.id);
+    const relink = async (actor: UserActor) => String(((await runTool(actor, "update_task", { taskId: task.id, contactId: jane, companyId: acme })) as { error?: string }).error);
+    assert.match(await relink(lee), /Only the assignee/);
+    assert.match(await relink(olly), /not found|Couldn't find/i);
+    assert.deepEqual(links(await getTask(mark, task.id)), { companyId: halden, contactId: raj, opportunityId: null });
+    assert.match(String(((await runTool(mark, "update_task", { taskId: task.id, contactId: 42 })) as { error?: string }).error), /contactId takes a record id, or null/);
+    assert.match(String(((await runTool(mark, "update_task", { taskId: task.id, opportunityId: { id: renewal } })) as { error?: string }).error), /opportunityId takes a record id/);
+    assert.deepEqual(links(await getTask(mark, task.id)), { companyId: halden, contactId: raj, opportunityId: null });
+  });
+
+  it("refuses moving a task with an opportunity to another company unless the opportunity moves too", async () => {
+    const task = (await createTask(mark, { title: "Send the rollout plan", contactId: raj, opportunityId: renewal })).body.task;
+    const moved = (await runTool(mark, "update_task", { taskId: task.id, contactId: jane, companyId: acme })) as { error?: string };
+    assert.match(String(moved.error), /That opportunity belongs to a different company\./);
+    const cleared = ((await runTool(mark, "update_task", { taskId: task.id, contactId: jane, companyId: acme, opportunityId: null })) as { task: Task }).task;
+    assert.deepEqual(links(cleared), { companyId: acme, contactId: jane, opportunityId: null });
   });
 
   it("keeps the time blocking rules when the assistant relinks a teammate's timed task", async () => {
