@@ -195,7 +195,7 @@ $$;
 
 drop function if exists private.settle_task_block(uuid, timestamptz, text, boolean);
 drop function if exists private.settle_task_block(uuid, text, text, boolean);
-create function private.settle_task_block(p_task_id uuid, p_pending_at timestamptz, p_ref text, p_set_ref boolean, p_drop_event boolean)
+create or replace function private.settle_task_block(p_task_id uuid, p_pending_at timestamptz, p_ref text, p_set_ref boolean, p_drop_event boolean)
 returns void
 language sql
 security definer
@@ -224,7 +224,6 @@ as $$
   where id = p_task_id and calendar_event_ref is distinct from p_ref;
 $$;
 
-drop function if exists private.release_task_block(uuid);
 create or replace function private.defer_task_block(p_task_id uuid, p_refused boolean)
 returns void
 language sql

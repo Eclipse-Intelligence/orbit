@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { calendarAlerts } from "@/lib/calendar-alerts";
 import { isPersonalEvent, storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
@@ -22,6 +23,7 @@ import {
 } from "@/lib/crm/task-outlook";
 import { archiveTask, completeTask, createTask, getTask, placeTask, reopenTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
+import { applyMigrationSql, migrationBatches } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { refreshTimes, offerTimes } from "@/lib/mail/scheduling";
@@ -250,6 +252,19 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
     ...overrides,
   };
 }
+
+describe("the migration", () => {
+  it("runs again over itself", async () => {
+    const sql = readFileSync("supabase/migrations/20270124100000_task_blocks_outlook.sql", "utf8");
+    await applyMigrationSql(getAdminPool(), sql);
+    await applyMigrationSql(getAdminPool(), sql);
+    assert.deepEqual(migrationBatches("set x = 1;\ncreate index concurrently if not exists a on b (c);\nselect 1;"), [
+      "set x = 1;",
+      "create index concurrently if not exists a on b (c);",
+      "select 1;",
+    ]);
+  });
+});
 
 describe("task block event shape", () => {
   it("is Busy, Private, with no reminder, no guests and a From Orbit link", () => {
