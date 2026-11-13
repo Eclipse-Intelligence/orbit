@@ -1175,7 +1175,25 @@ for (const width of [1100, 1280, 1440]) {
         await page.waitForTimeout(400);
         const moveBox = await earlyCard.boundingBox();
         const moveScroll = await scrollOf();
-        if (moveBox) await mouseDrag(page, { x: moveBox.x + 30, y: moveBox.y + moveBox.height / 2 }, { x: moveBox.x + 30, y: moveBox.y + moveBox.height / 2 + 100 });
+        const headings = moveBox
+          ? await mouseDrag(page, { x: moveBox.x + 30, y: moveBox.y + moveBox.height / 2 }, { x: moveBox.x + 30, y: moveBox.y + moveBox.height / 2 + 100 }, async () => {
+              await page.screenshot({ path: path.join(out, `desktop-${width}-drop-bar.png`) });
+              return page.evaluate(() => {
+                const scroller = [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0);
+                const label = document.querySelector("[data-task-drop-zone] span[aria-hidden]");
+                if (!scroller || !label) return { bar: false, covered: [] };
+                const box = label.getBoundingClientRect();
+                const covered = [...(scroller.previousElementSibling?.querySelectorAll("span") ?? [])]
+                  .filter((span) => {
+                    const own = span.getBoundingClientRect();
+                    return own.width > 0 && own.left < box.right && own.right > box.left && own.top < box.bottom && own.bottom > box.top;
+                  })
+                  .map((span) => span.textContent);
+                return { bar: true, covered };
+              });
+            })
+          : null;
+        check(`${device} with the menu hidden the drop bar shows and leaves every day heading readable`, Boolean(headings?.bar) && headings.covered.length === 0, JSON.stringify(headings));
         await page.waitForTimeout(1200);
         const lowered = await readTask(block.earlyId);
         check(

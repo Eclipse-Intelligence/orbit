@@ -257,7 +257,8 @@ export function useTaskDrag({
         const scroller = gridScroller();
         if (!scroller) return 0;
         const area = scroller.getBoundingClientRect();
-        if (x < area.left || x > area.right) return 0;
+        if (x < area.left || x > area.right || y < area.top || y > area.bottom)
+          return 0;
         return edgeScrollSpeed(y, area.top, area.bottom);
       }
 

@@ -122,21 +122,30 @@ export function taskWhenLabel(task: Pick<Task, "dueAt" | "dueHasTime">, now: num
 }
 
 export function TaskDropZone({ day, active, bar = false }: { day: string | null; active: boolean; bar?: boolean }) {
+  const tone = active
+    ? "border-violet border-solid bg-[color-mix(in_srgb,var(--violet)_14%,transparent)]"
+    : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_6%,transparent)]";
+  if (bar) {
+    return (
+      <div data-task-drop-zone="" role="status" className={cn("pointer-events-none flex h-full items-center border border-dashed", tone)}>
+        <span aria-hidden className="w-14 shrink-0 px-1 text-center text-[11px] leading-[13px] font-medium">
+          Remove the time
+        </span>
+        <span className="sr-only">Keep the day, remove the time.{day ? ` Stays on ${day}, off the calendar.` : ""}</span>
+      </div>
+    );
+  }
   return (
     <div
       data-task-drop-zone=""
       role="status"
       className={cn(
-        "flex border border-dashed",
-        bar ? "pointer-events-none h-full items-center justify-end gap-2 overflow-hidden rounded-none px-4" : "mx-1 mt-1 mb-1.5 flex-col gap-0.5 rounded-[10px] px-3 py-2.5",
-        active
-          ? "border-violet border-solid bg-[color-mix(in_srgb,var(--violet)_14%,transparent)]"
-          : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_8%,transparent)]",
-        bar && !active && "bg-[color-mix(in_srgb,var(--violet)_6%,transparent)]",
+        "mx-1 mt-1 mb-1.5 flex flex-col gap-0.5 rounded-[10px] border border-dashed px-3 py-2.5",
+        active ? tone : "border-[color-mix(in_srgb,var(--violet)_45%,transparent)] bg-[color-mix(in_srgb,var(--violet)_8%,transparent)]",
       )}
     >
-      <span className={cn("ui-style shrink-0 font-medium", bar && "bg-background/85 rounded-md px-1.5 py-0.5")}>Keep the day, remove the time</span>
-      {day && <span className={cn("caption-style text-soft", bar && "bg-background/85 shrink-0 rounded-md px-1.5 py-0.5 max-lg:hidden")}>Stays on {day}, off the calendar.</span>}
+      <span className="ui-style font-medium">Keep the day, remove the time</span>
+      {day && <span className="caption-style text-soft">Stays on {day}, off the calendar.</span>}
     </div>
   );
 }
