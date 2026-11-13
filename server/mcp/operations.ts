@@ -126,7 +126,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "update_next_action",
     {
-      description: "Update a task. Omitted fields stay unchanged. dueDate makes it date only; dueAt gives it a time. completed true marks it done. ownerId reassigns it; the assignee can hand it on and stays tagged.",
+      description: "Update a task. Omitted fields stay unchanged. dueDate makes it date only; dueAt gives it a time. completed true marks it done. ownerId reassigns it; the assignee can hand it on and stays tagged. companyId, contactId and opportunityId relink it (null takes a link off); look the record up first, and pass companyId too when the person or opportunity is at another company.",
       inputSchema: {
         id: z.uuid(),
         title: z.string().optional(),
