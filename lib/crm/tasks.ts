@@ -895,8 +895,6 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
   });
 }
 
-export const PLANNER_TASK_LIMIT = 1000;
-
 export async function listPlannerTasks(actor: UserActor, now = Date.now()): Promise<Task[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
@@ -910,8 +908,7 @@ export async function listPlannerTasks(actor: UserActor, now = Date.now()): Prom
            (t.completed_at is null and ${mine})
            or (t.completed_at >= $2::timestamptz and t.owner_id = $3 and t.due_has_time and t.due_at is not null)
          )
-       order by t.due_at asc nulls last, t.created_at asc, t.id asc
-       limit ${PLANNER_TASK_LIMIT}`,
+       order by t.due_at asc nulls last, t.created_at asc, t.id asc`,
       values,
     );
     return result.rows.map(mapTask);

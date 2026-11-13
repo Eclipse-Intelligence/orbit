@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useSyncExternalStore, type ReactNode } from "react";
+import Button from "@/components/_ui/button";
 import TaskKindIcon from "@/components/crm/task-kind-icon";
 import { dateKey, shiftDateKey, weekStartKey } from "@/lib/calendar-view";
 import { clockLabel, durationLabel } from "@/lib/crm/task-time";
@@ -77,20 +78,18 @@ export function SectionToggle({
   onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="item"
+      size="none"
       aria-expanded={open}
-      aria-controls={controls}
+      aria-controls={open ? controls : undefined}
       onClick={onToggle}
-      className={cn(
-        "hover:bg-surface-hover focus-visible:ring-ring/60 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-1.5 font-medium outline-none focus-visible:ring-2",
-        large ? "h-10 text-[14px]" : "h-[30px] text-[13px]",
-      )}
+      className={cn("hover:bg-surface-hover items-center gap-1.5 px-1.5 font-medium", large ? "h-10 text-[14px]" : "h-[30px] text-[13px]")}
     >
-      <ChevronDownIcon aria-hidden className={cn("text-subtle size-3 transition-transform duration-150", !open && "-rotate-90")} />
+      <ChevronDownIcon aria-hidden className={cn("text-subtle ease-power2-out size-3 transition-transform duration-150", !open && "-rotate-90")} />
       {label}
       <span className="text-faint text-[12px] font-normal tabular-nums">{count}</span>
-    </button>
+    </Button>
   );
 }
 
@@ -154,11 +153,11 @@ export function CalendarTaskList({
   return (
     <div id={id} className="flex flex-col">
       {groups.map((group) => (
-        <section key={group.kind} aria-label={group.label} className="flex flex-col">
-          <h3 className={cn("flex items-center gap-1.5 px-2 pt-3 pb-1 text-[12px] leading-none font-medium", group.kind === "overdue" ? "text-danger" : "text-subtle")}>
+        <section key={group.kind} aria-label={`${group.label}, ${group.tasks.length}`} className="flex flex-col">
+          <span aria-hidden className={cn("flex items-center gap-1.5 px-2 pt-3 pb-1 text-[12px] leading-none font-medium", group.kind === "overdue" ? "text-danger" : "text-subtle")}>
             {group.label}
             <span className="text-faint font-medium tabular-nums">{group.tasks.length}</span>
-          </h3>
+          </span>
           <ul className="flex flex-col">
             {group.tasks.map((task) => {
               const when = taskWhenLabel(task, now);
@@ -175,12 +174,13 @@ export function CalendarTaskList({
               ].filter(Boolean);
               return (
                 <li key={task.id}>
-                  <button
-                    type="button"
+                  <Button
+                    variant="item"
+                    size="none"
                     data-task-id={task.id}
                     data-calendar-task=""
                     onClick={() => onOpen(task)}
-                    className="hover:bg-surface-hover focus-visible:ring-ring/60 flex w-full cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-left outline-none focus-visible:ring-2"
+                    className="hover:bg-surface-hover hit gap-2 px-2 py-1.5"
                   >
                     <TaskKindIcon title={task.title} className={cn("mt-[3px] size-3.5 shrink-0", onGrid ? "text-violet" : "text-subtle")} />
                     <span className="flex min-w-0 flex-1 flex-col">
@@ -196,8 +196,8 @@ export function CalendarTaskList({
                         </span>
                       )}
                     </span>
-                    <span className="text-faint shrink-0 text-[12px] leading-[18px] tabular-nums">{durationLabel(task.durationMinutes)}</span>
-                  </button>
+                    <span className="text-faint shrink-0 text-[12px] leading-[18px] font-normal tabular-nums">{durationLabel(task.durationMinutes)}</span>
+                  </Button>
                 </li>
               );
             })}

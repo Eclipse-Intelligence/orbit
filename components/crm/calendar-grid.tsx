@@ -306,7 +306,8 @@ export default function CalendarGrid({
       </div>
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto pb-20 [scrollbar-gutter:stable]"
+        className="min-h-0 flex-1 overflow-y-auto pb-20 outline-none [scrollbar-gutter:stable]"
+        tabIndex={-1}
         data-calendar-scroller=""
       >
         <div

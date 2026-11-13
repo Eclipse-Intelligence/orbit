@@ -89,8 +89,10 @@ export function SearchChip({
   onPick,
   onClosed,
   allow,
+  taskId,
 }: {
   allow?: (option: PadOption) => boolean;
+  taskId?: string;
   kind: PadSearchKind;
   icon: Icon;
   label: string;
@@ -116,7 +118,7 @@ export function SearchChip({
     let cancelled = false;
     const [, , text] = key.split("|");
     const timer = window.setTimeout(() => {
-      searchTaskLinksAction(kind, text, companyId).then(
+      searchTaskLinksAction(kind, text, companyId, taskId).then(
         (found) => !cancelled && setResults({ key, options: found }),
         () => !cancelled && setResults({ key, options: [], failed: true }),
       );
@@ -125,7 +127,7 @@ export function SearchChip({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [open, key, kind, companyId]);
+  }, [open, key, kind, companyId, taskId]);
 
   function choose(option: PadOption | null) {
     setOpen(false);

@@ -18,6 +18,7 @@ import CalendarGrid from "@/components/crm/calendar-grid";
 import { CalendarTaskList, SectionToggle, useCalendarSections } from "@/components/crm/calendar-tasks";
 import type { TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import TaskPanel from "@/components/crm/task-panel";
+import { HomeWorkspace } from "@/components/crm/task-workspace";
 import { useTaskDone } from "@/components/crm/use-task-done";
 import InviteDialog, {
   InviteNotice,
@@ -270,7 +271,8 @@ export default function CalendarScreen({
   const [keptTask, setKeptTask] = useState<Task | null>(null);
   const listedTask = openTaskId ? (planner.tasks.find((task) => task.id === openTaskId) ?? null) : null;
   if (listedTask && listedTask !== keptTask) setKeptTask(listedTask);
-  const panelTask = listedTask ?? (keptTask && keptTask.id === openTaskId ? keptTask : null);
+  const panelTask = listedTask ?? (keptTask && keptTask.id === openTaskId && done.has(keptTask.id) ? keptTask : null);
+  if (openTaskId && !panelTask) setOpenTaskId(null);
   const shownTask = panelTask ?? keptTask;
   const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
   const blocks = taskBlocks(planner.tasks, { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done });
@@ -505,13 +507,14 @@ export default function CalendarScreen({
         onSent={setNotice}
       />
       <InviteNotice message={notice} onDone={clearNotice} />
+      <HomeWorkspace.Provider value={viewer.workspaceId ?? null}>
       <TaskPanel
         task={shownTask}
         open={Boolean(panelTask)}
         onOpenChange={(open) => {
           if (!open) setOpenTaskId(null);
         }}
-        viewer={{ ...viewer, role: team?.role ?? viewer.role, workspaceId: shownTask?.workspaceId ?? viewer.workspaceId }}
+        viewer={{ ...viewer, role: team?.role ?? viewer.role }}
         members={team?.members ?? []}
         tagged={shownTask ? (planner.tagged[shownTask.id] ?? []) : []}
         admins={team?.admins ?? []}
@@ -519,6 +522,7 @@ export default function CalendarScreen({
         onComplete={markDone}
         recordNotes={!shownTask || shownTask.workspaceId === viewer.workspaceId}
       />
+      </HomeWorkspace.Provider>
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent side="left" className="w-[min(320px,86vw)]">
           <SheetHeader className="px-4">

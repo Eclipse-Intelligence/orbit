@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { formatTime } from "@/components/crm/calendar-event-details";
 import { durationLabel } from "@/lib/crm/task-time";
 import type { TaskBlock } from "@/lib/task-blocks";
@@ -9,12 +9,15 @@ import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import CloseIcon from "@/public/assets/images/mail/close.svg";
 
 const TWO_LINES_PX = 28;
-const OWN_HIT_PX = 44;
 
 export type TaskBlockHandlers = {
   onOpen: (block: TaskBlock) => void;
   onComplete: (block: TaskBlock) => void;
 };
+
+function clashing(block: TaskBlock) {
+  return Boolean(block.clash) && !block.done && !block.overdue;
+}
 
 function tone(block: TaskBlock) {
   if (block.done) return "bg-white/[0.035] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]";
@@ -40,7 +43,9 @@ export function taskBlockLabel(block: TaskBlock) {
     .join(", ");
 }
 
-function DoneCircle({ block, onComplete, size, hit }: { block: TaskBlock; onComplete: (block: TaskBlock) => void; size: "sm" | "lg"; hit: boolean }) {
+function DoneCircle({ block, onComplete, size }: { block: TaskBlock; onComplete: (block: TaskBlock) => void; size: "sm" | "lg" }) {
+  const icon = size === "sm" ? "size-2.5" : "size-3";
+  const ring = size === "sm" ? "shadow-[inset_0_0_0_1.25px_color-mix(in_srgb,var(--violet)_80%,white_10%)]" : "shadow-[inset_0_0_0_1.5px_color-mix(in_srgb,var(--violet)_80%,white_10%)]";
   return (
     <button
       type="button"
@@ -49,53 +54,31 @@ function DoneCircle({ block, onComplete, size, hit }: { block: TaskBlock; onComp
       title={block.done ? "Done" : "Mark done"}
       onClick={() => onComplete(block)}
       className={cn(
-        "group/circle flex shrink-0 items-center justify-center rounded-full transition-colors duration-150 enabled:cursor-pointer disabled:cursor-default",
-        hit && "hit",
+        "group/circle hit ease-power2-out pointer-events-auto flex shrink-0 items-center justify-center rounded-full text-white transition-colors duration-150 enabled:cursor-pointer disabled:cursor-default",
         size === "sm" ? "size-3" : "size-[22px]",
-        block.done
-          ? "bg-success text-white"
-          : block.overdue
-            ? "bg-danger enabled:hover:bg-success text-white"
-            : size === "sm"
-              ? "enabled:hover:bg-success text-white shadow-[inset_0_0_0_1.25px_color-mix(in_srgb,var(--violet)_80%,white_10%)] enabled:hover:shadow-none"
-              : "enabled:hover:bg-success text-white shadow-[inset_0_0_0_1.5px_color-mix(in_srgb,var(--violet)_80%,white_10%)] enabled:hover:shadow-none",
+        block.done ? "bg-success" : block.overdue ? "bg-danger enabled:hover:bg-success" : cn(ring, "enabled:hover:bg-success enabled:hover:shadow-none"),
       )}
     >
       {block.done ? (
-        <CheckIcon aria-hidden className={size === "sm" ? "size-2.5" : "size-3"} />
-      ) : block.overdue ? (
-        <>
-          <CloseIcon aria-hidden className={cn(size === "sm" ? "size-2" : "size-2.5", "group-enabled/circle:group-hover/circle:hidden")} />
-          <CheckIcon aria-hidden className={cn(size === "sm" ? "size-2.5" : "size-3", "hidden group-enabled/circle:group-hover/circle:block")} />
-        </>
+        <CheckIcon aria-hidden className={icon} />
       ) : (
-        <CheckIcon aria-hidden className={cn(size === "sm" ? "size-2.5" : "size-3", "hidden group-enabled/circle:group-hover/circle:block")} />
+        <>
+          {block.overdue && <CloseIcon aria-hidden className={cn(size === "sm" ? "size-2" : "size-2.5", "group-enabled/circle:group-hover/circle:hidden")} />}
+          <CheckIcon aria-hidden className={cn(icon, "hidden group-enabled/circle:group-hover/circle:block")} />
+        </>
       )}
     </button>
   );
 }
 
 function Detail({ block }: { block: TaskBlock }) {
-  const parts = [
-    block.overdue ? (
-      <span key="overdue" className="text-danger font-medium">
-        Overdue
-      </span>
-    ) : null,
-    block.clash ? (
-      <span key="clash" className="text-(--tag-amber-text)">
-        Clashes with {block.clash}
-      </span>
-    ) : null,
-    block.person ? <span key="person">{block.person}</span> : null,
-    block.workspaceName ? <span key="workspace">{block.workspaceName}</span> : null,
-    <span key="duration" className="tabular-nums">
-      {durationLabel(block.durationMinutes)}
-    </span>,
-  ].filter(Boolean);
+  const parts: ReactNode[] = clashing(block)
+    ? [<span key="clash" className="text-(--tag-amber-text)">Clashes with {block.clash}</span>]
+    : [block.overdue ? <span key="overdue" className="text-danger font-medium">Overdue</span> : null, block.person, block.workspaceName];
+  parts.push(<span key="duration" className="tabular-nums">{durationLabel(block.durationMinutes)}</span>);
   return (
     <>
-      {parts.map((part, index) => (
+      {parts.filter(Boolean).map((part, index) => (
         <span key={index}>
           {index > 0 && " · "}
           {part}
@@ -107,7 +90,7 @@ function Detail({ block }: { block: TaskBlock }) {
 
 export function GridTaskBlock({ block, style, height, onOpen, onComplete }: TaskBlockHandlers & { block: TaskBlock; style: CSSProperties; height: number }) {
   const two = height >= TWO_LINES_PX;
-  const edged = Boolean(block.clash) && !block.done && !block.overdue;
+  const edged = clashing(block);
   return (
     <div className={cn("absolute rounded-md", tone(block))} style={style} data-task-block={block.task.id}>
       <button
@@ -133,7 +116,7 @@ export function GridTaskBlock({ block, style, height, onOpen, onComplete }: Task
           {block.title}
         </span>
         {two ? (
-          <span className="text-soft min-w-0 truncate text-[11px] leading-[13px]">
+          <span data-task-detail="" className="text-soft min-w-0 truncate text-[11px] leading-[13px]">
             <Detail block={block} />
           </span>
         ) : block.overdue ? (
@@ -142,8 +125,11 @@ export function GridTaskBlock({ block, style, height, onOpen, onComplete }: Task
           <span className={cn("shrink-0 text-[11px] leading-[18px] tabular-nums", block.done ? "text-faint" : "text-soft")}>{durationLabel(block.durationMinutes)}</span>
         )}
       </button>
-      <span className={cn("absolute z-[1] flex", edged ? "left-[7px]" : "left-1", two ? "top-1" : "top-1/2 -translate-y-1/2")}>
-        <DoneCircle block={block} onComplete={onComplete} size="sm" hit={height >= OWN_HIT_PX} />
+      <span
+        data-task-circle-area=""
+        className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center overflow-hidden rounded-l-md", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}
+      >
+        <DoneCircle block={block} onComplete={onComplete} size="sm" />
       </span>
     </div>
   );
@@ -171,7 +157,7 @@ export function AgendaTaskBlock({ block, past, onOpen, onComplete }: TaskBlockHa
           </span>
         </span>
       </button>
-      <DoneCircle block={block} onComplete={onComplete} size="lg" hit />
+      <DoneCircle block={block} onComplete={onComplete} size="lg" />
     </div>
   );
 }

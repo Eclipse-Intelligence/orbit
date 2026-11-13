@@ -5,7 +5,6 @@ import { clickupToken } from "@/lib/clickup";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { completeTasksFromBeacon } from "@/lib/crm/task-beacon";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { actorForTask } from "@/lib/crm/workspaces";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 export const dynamic = "force-dynamic";
@@ -19,11 +18,12 @@ export async function POST(request: Request) {
     revalidatePath(TASKS_PATH);
     if (clickupToken()) {
       const ids = result.completed;
+      const actors = result.actors;
       try {
         after(async () => {
           for (const id of ids) {
             try {
-              await pushClickUpTask(await actorForTask(actor, id), id);
+              await pushClickUpTask(actors.get(id) ?? actor, id);
             } catch (error) {
               console.error("ClickUp push failed", error);
             }

@@ -2,20 +2,28 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { runTool } from "@/lib/assistant/tools";
 import { dateKey, shiftDateKey } from "@/lib/calendar-view";
+import { createContact } from "@/lib/crm/contacts";
+import { completeTasksFromBeacon } from "@/lib/crm/task-beacon";
 import { readPlanner } from "@/lib/crm/task-blocks";
+import { linkTask } from "@/lib/crm/task-links";
 import { wallInstant } from "@/lib/crm/task-time";
-import { addTaskParticipants, completeTask, createTask, getTask } from "@/lib/crm/tasks";
+import { addTaskParticipants, completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { Task, UserActor } from "@/lib/crm/types";
-import { actorForTask, createWorkspace } from "@/lib/crm/workspaces";
+import { actorForTask, createWorkspace, TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { groupTaskList, isBlockOverdue, taskBlocks, taskListGroupKind } from "@/lib/task-blocks";
-import { createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, resetDatabase } from "./helpers";
 
 delete process.env.TYPESAFE_API_KEY;
 delete process.env.LLM_API_KEY;
 
 const MINUTE = 60_000;
+
+after(async () => {
+  await getPool().end();
+  await getAdminPool().end();
+});
 
 function task(overrides: Partial<Task>): Task {
   return {
@@ -192,11 +200,6 @@ describe("tasks on the calendar, from the database", () => {
     sam = { ...mark, userId: samId, email: "sam@blocks.test", fullName: "Sam Okafor", role: "member", scopes: scopesForRole("member") };
   });
 
-  after(async () => {
-    await getPool().end();
-    await getAdminPool().end();
-  });
-
   it("reads owned timed tasks from every workspace, and leaves out created-only, tagged and admin-visible ones", async () => {
     const make = async (actor: UserActor, title: string, input: Record<string, unknown>) => (await createTask(actor, { title, ...input })).body.task;
     const owned = await make(mark, "Call Jane Cooper", { dueAt: at(1, 10), durationMinutes: 30 });
@@ -308,5 +311,140 @@ describe("tasks on the calendar, from the database", () => {
     assert.ok(samResult.taskBlocks.length > 0);
     assert.ok(samResult.taskBlocks.every((block) => !("workspace" in block)));
     assert.ok(samResult.taskBlocks.every((block) => block.title !== "Call Jane Cooper"));
+  });
+});
+
+describe("acting on a task in its own workspace", () => {
+  const RANDOM = "11111111-2222-4333-8444-555555555555";
+  const soon = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
+  const failure = async (work: () => Promise<unknown>) => {
+    try {
+      await work();
+      return "";
+    } catch (error) {
+      const known = error as { code?: string; status?: number; message?: string };
+      return `${known.code}|${known.status}|${known.message}`;
+    }
+  };
+  const beacon = (ids: string[], origin = "http://localhost") =>
+    new Request("http://localhost/api/tasks/complete", { method: "POST", headers: { origin, host: "localhost" }, body: JSON.stringify({ ids }) });
+  let markA: UserActor;
+  let markB: UserActor;
+  let samA: UserActor;
+  let eve: UserActor;
+  let danaA: UserActor;
+  let danaB: UserActor;
+
+  before(async () => {
+    const admin = getAdminPool();
+    markA = { ...(await createUser("mark@scope.test", "Mark Scope")), workspaceName: "Scope A" };
+    await admin.query("update crm.workspaces set name = 'Scope A' where id = $1", [markA.workspaceId]);
+    const second = await createWorkspace(markA, { name: "Secret B" });
+    markB = { ...markA, workspaceId: second.id, workspaceName: "Secret B" };
+    const person = async (email: string, name: string) => (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
+    const join = (workspaceId: string, userId: string, role: string) => admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, $3)", [workspaceId, userId, role]);
+    const samId = await person("sam@scope.test", "Sam Scope");
+    await join(markA.workspaceId, samId, "member");
+    samA = { ...markA, userId: samId, email: "sam@scope.test", fullName: "Sam Scope", role: "member", scopes: scopesForRole("member") };
+    eve = await createUser("eve@scope.test", "Eve Outsider");
+    const danaId = await person("dana@scope.test", "Dana Scope");
+    await join(markA.workspaceId, danaId, "admin");
+    await join(markB.workspaceId, danaId, "member");
+    danaA = { ...markA, userId: danaId, email: "dana@scope.test", fullName: "Dana Scope", role: "admin", scopes: scopesForRole("admin") };
+    danaB = { ...danaA, workspaceId: markB.workspaceId, workspaceName: "Secret B", role: "member", scopes: scopesForRole("member") };
+  });
+
+  it("never moves someone outside the workspace into it, and fails like an unknown task", async () => {
+    const hidden = (await createTask(markB, { title: "B private", dueAt: soon(30) })).body.task;
+    const resolved = await actorForTask(eve, hidden.id);
+    assert.equal(resolved, eve);
+    const seen = await failure(() => completeTask(resolved, hidden.id));
+    assert.match(seen, /^not_found\|404/);
+    assert.equal(seen, await failure(async () => completeTask(await actorForTask(eve, RANDOM), RANDOM)));
+    const forged = { ...eve, workspaceId: markB.workspaceId, role: "owner" as const, scopes: scopesForRole("owner") };
+    assert.match(await failure(() => completeTask(forged, hidden.id)), /^not_found\|404/);
+    assert.deepEqual((await completeTasksFromBeacon(beacon([hidden.id, RANDOM]), eve)).completed, []);
+    assert.equal((await getTask(markB, hidden.id)).completedAt, null);
+  });
+
+  it("leaves a member on their own actor for a task they can't see", async () => {
+    const marks = (await createTask(markA, { title: "Mark only", dueAt: soon(30) })).body.task;
+    const resolved = await actorForTask(samA, marks.id);
+    assert.equal(resolved, samA);
+    assert.match(await failure(() => completeTask(resolved, marks.id)), /^not_found\|404/);
+    assert.match(await failure(() => updateTask(resolved, marks.id, { title: "x" })), /^not_found\|404/);
+    assert.equal((await getTask(markA, marks.id)).completedAt, null);
+  });
+
+  it("takes the role from the task's workspace, so an admin elsewhere who is tagged here can't change it", async () => {
+    const tagged = (await createTask(markB, { title: "Mark tags Dana", dueAt: soon(31) })).body.task;
+    await addTaskParticipants(markB, tagged.id, [danaA.userId]);
+    const resolved = await actorForTask(danaA, tagged.id);
+    assert.equal(resolved.workspaceId, markB.workspaceId);
+    assert.equal(resolved.role, "member");
+    assert.match(await failure(() => updateTask(resolved, tagged.id, { title: "renamed" })), /^forbidden\|403/);
+    assert.match(await failure(() => completeTask(resolved, tagged.id)), /^forbidden\|403/);
+    assert.match(await failure(() => updateTask(danaA, tagged.id, { title: "renamed as an admin of A" })), /^forbidden\|403/);
+    const task = await getTask(markB, tagged.id);
+    assert.equal(task.title, "Mark tags Dana");
+    assert.equal(task.completedAt, null);
+  });
+
+  it("refuses people and records from the workspace the viewer came from", async () => {
+    const own = (await createTask(danaB, { title: "Dana's own in B", dueAt: soon(40) })).body.task;
+    const resolved = await actorForTask(danaA, own.id);
+    assert.equal(resolved.workspaceId, markB.workspaceId);
+    const contact = (await createContact(markA, { firstName: "Ann", lastName: "Scope", email: "ann@scope.test" })).body.contact;
+    assert.match(await failure(() => updateTask(resolved, own.id, { ownerId: samA.userId })), /^invalid_input\|400/);
+    assert.match(await failure(() => linkTask(resolved, own.id, { contactId: contact.id }, { operation: "link_task", source: "web" })), /^not_found\|404/);
+    const task = await getTask(danaB, own.id);
+    assert.equal(task.ownerId, danaA.userId);
+    assert.equal(task.contactId, null);
+  });
+
+  it("keeps an agent token to its own workspace", async () => {
+    const target = (await createTask(markB, { title: "Agent target", dueAt: soon(60) })).body.task;
+    const { actor } = await createAgent(markA.workspaceId, ["crm:read", "tasks:write"]);
+    assert.match(await failure(() => getTask(actor, target.id)), /^not_found\|404/);
+    assert.match(await failure(() => completeTask(actor, target.id)), /^not_found\|404/);
+    assert.equal((await getTask(markB, target.id)).completedAt, null);
+  });
+
+  it("completes from the beacon in the task's workspace and audits it there once", async () => {
+    const target = (await createTask(markB, { title: "Beacon in B", dueAt: soon(50) })).body.task;
+    const result = await completeTasksFromBeacon(beacon([target.id]), markA);
+    assert.deepEqual(result.completed, [target.id]);
+    assert.equal(result.actors.get(target.id)?.workspaceId, markB.workspaceId);
+    const audits = await getAdminPool().query<{ workspace_id: string }>("select workspace_id from crm.audit_events where entity_id = $1 and operation = 'complete_task'", [target.id]);
+    assert.deepEqual(
+      audits.rows.map((row) => row.workspace_id),
+      [markB.workspaceId],
+    );
+    assert.equal((await completeTasksFromBeacon(beacon([target.id], "http://evil.test"), markA)).status, 403);
+    assert.equal((await completeTasksFromBeacon(beacon([target.id]), null)).status, 401);
+  });
+
+  it("refuses when the lookup itself fails instead of acting in the current workspace", async () => {
+    const target = (await createTask(markB, { title: "Lookup fails", dueAt: soon(70) })).body.task;
+    const broken = { ...markA, userId: "not-a-user-id" };
+    await assert.rejects(() => actorForTask(broken, target.id));
+    assert.deepEqual(await taskActorOrError(broken, target.id), { error: TASK_LOOKUP_FAILED });
+    assert.equal(TASK_LOOKUP_FAILED, "Couldn't find that task. Try again.");
+    assert.deepEqual((await completeTasksFromBeacon(beacon([target.id]), broken)).completed, []);
+    assert.equal((await getTask(markB, target.id)).completedAt, null);
+  });
+
+  it("shows an admin only their own blocks, and someone in one workspace no other names", async () => {
+    await createTask(samA, { title: "Sam timed", dueAt: soon(26) });
+    await createTask(danaA, { title: "Dana timed in A", dueAt: soon(27) });
+    const planner = await readPlanner(danaA);
+    const blocks = taskBlocks(planner.tasks, { viewerId: danaA.userId, now: Date.now(), workspaces: planner.workspaces });
+    assert.ok(blocks.length > 0);
+    assert.ok(blocks.every((block) => block.task.ownerId === danaA.userId));
+    const single = JSON.stringify(await readPlanner(samA));
+    assert.ok(!single.includes("Secret B") && !single.includes(markB.workspaceId));
+    const tool = JSON.stringify(await runTool(samA, "list_calendar_events", {}));
+    assert.ok(!tool.includes("Secret B") && !tool.includes(markB.workspaceId) && !tool.includes('"workspace"'));
+    assert.equal((await readPlanner(eve)).tasks.length, 0);
   });
 });

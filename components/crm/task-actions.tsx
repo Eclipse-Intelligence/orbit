@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import CopyButton from "@/components/_ui/copy-button";
@@ -15,6 +14,7 @@ import FindDetailButton from "@/components/crm/find-detail";
 import { useFindAvailability } from "@/components/crm/find-availability";
 import type { InvitePrefill } from "@/components/crm/invite-dialog";
 import { SearchChip } from "@/components/crm/task-pad";
+import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { useComposer } from "@/components/mail/compose-dock";
 import { relinkTaskAction, taskContextAction, taskInviteSetupAction } from "@/app/(crm)/task-act";
 import { renderTemplate, type EmailTemplate } from "@/lib/crm/email-template-rules";
@@ -318,9 +318,9 @@ function ContactStrip({ task, context, kind, here }: Actions & { here?: TitleHer
         <div className="@container/details flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             {task.contactId ? (
-              <Link href={contactHref(task.contactId)} className="ui-style text-foreground truncate font-medium hover:underline">
+              <TaskRecordLink href={contactHref(task.contactId)} className="ui-style text-foreground truncate font-medium hover:underline">
                 {name}
-              </Link>
+              </TaskRecordLink>
             ) : (
               <span className="ui-style font-medium">{name}</span>
             )}
@@ -330,9 +330,9 @@ function ContactStrip({ task, context, kind, here }: Actions & { here?: TitleHer
                 {task.contactJobTitle && task.companyName && ", "}
                 {task.companyName &&
                   (task.companyId && here?.kind !== "company" ? (
-                    <Link href={companyHref(task.companyId)} className="hover:text-foreground underline decoration-white/30 underline-offset-2">
+                    <TaskRecordLink href={companyHref(task.companyId)} className="hover:text-foreground underline decoration-white/30 underline-offset-2">
                       {task.companyName}
-                    </Link>
+                    </TaskRecordLink>
                   ) : (
                     task.companyName
                   ))}
@@ -420,9 +420,9 @@ function CompanyStrip({ task, context, kind, canChange, here, onLinked }: Action
         <Monogram name={company} className="size-8 rounded-full text-[12px]" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           {task.companyId && here?.kind !== "company" ? (
-            <Link href={companyHref(task.companyId)} className="ui-style text-foreground truncate font-medium hover:underline">
+            <TaskRecordLink href={companyHref(task.companyId)} className="ui-style text-foreground truncate font-medium hover:underline">
               {company}
-            </Link>
+            </TaskRecordLink>
           ) : (
             <span className="ui-style font-medium">{company}</span>
           )}
@@ -469,9 +469,9 @@ function ContextLine({ task, context, here }: { task: Task; context: TaskContext
         {here?.kind === "opportunity" && here.id === opportunity.id ? (
           <span className="text-soft truncate">{opportunity.name}</span>
         ) : (
-          <Link href={dealHref(opportunity.id)} className="text-soft hover:text-foreground truncate underline decoration-white/30 underline-offset-2">
+          <TaskRecordLink href={dealHref(opportunity.id)} className="text-soft hover:text-foreground truncate underline decoration-white/30 underline-offset-2">
             {opportunity.name}
-          </Link>
+          </TaskRecordLink>
         )}
         <Tag size="sm" tone={opportunity.status === "won" ? "green" : opportunity.status === "lost" ? "red" : "purple"} className="text-[12px]">
           {stage}
@@ -589,6 +589,7 @@ export function EditLinks({ task }: { task: Task }) {
           value={record(task.contactId, task.contactName)}
           companyId={task.companyId}
           variant="card"
+          taskId={task.id}
           onPick={(option) => void change(option ? { contactId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { contactId: null })}
           onClosed={() => refocus("contact")}
         />
@@ -601,6 +602,7 @@ export function EditLinks({ task }: { task: Task }) {
           value={record(task.companyId, task.companyName)}
           companyId={null}
           variant="card"
+          taskId={task.id}
           onPick={(option) => void change({ companyId: option?.id ?? null })}
           onClosed={() => refocus("company")}
         />
@@ -613,6 +615,7 @@ export function EditLinks({ task }: { task: Task }) {
           value={record(task.opportunityId, task.opportunityName)}
           companyId={null}
           variant="card"
+          taskId={task.id}
           onPick={(option) => void change(option ? { opportunityId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { opportunityId: null })}
           onClosed={() => refocus("opportunity")}
         />

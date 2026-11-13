@@ -19,7 +19,7 @@ import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/c
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { actorForTask } from "@/lib/crm/workspaces";
+import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 
 import { completeTask, getTask, listDueReminders, reopenTask, updateTask, type DueReminder } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
@@ -43,8 +43,7 @@ async function requireUser() {
 }
 
 async function taskUser(id: unknown) {
-  const user = await requireUser();
-  return actorForTask(user, id).catch(() => user);
+  return (await taskActorOrError(await requireUser(), id)).actor ?? null;
 }
 
 function text(formData: FormData, key: string) {
@@ -283,6 +282,7 @@ export async function completeTaskAction(
   id: string,
 ): Promise<RecordActionState> {
   const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   try {
     await completeTask(user, id, {
       provenance: { operation: "complete_task", source: "web" },
@@ -297,6 +297,7 @@ export async function completeTaskAction(
 
 export async function reopenTaskAction(id: string): Promise<RecordActionState> {
   const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id)) return { error: "Couldn't undo. Try again." };
   try {
     await reopenTask(user, id, { provenance: { operation: "reopen_task", source: "web" } });
@@ -313,7 +314,9 @@ export async function openTaskIdsAction(ids: string[]): Promise<{ open?: string[
   const wanted = [...new Set((Array.isArray(ids) ? ids : []).filter((id): id is string => typeof id === "string" && isUuid(id)))].slice(0, 50);
   const open: string[] = [];
   for (const id of wanted) {
-    const task = await getTask(await actorForTask(user, id).catch(() => user), id).catch(() => null);
+    const resolved = await taskActorOrError(user, id);
+    if (!resolved.actor) return { error: resolved.error };
+    const task = await getTask(resolved.actor, id).catch(() => null);
     if (task && !task.completedAt && !task.archivedAt) open.push(id);
   }
   return { open };
@@ -321,6 +324,7 @@ export async function openTaskIdsAction(ids: string[]): Promise<{ open?: string[
 
 export async function remindTaskAction(id: string, at: string): Promise<RecordActionState> {
   const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || typeof at !== "string") return { error: "Couldn't move the task. Try again." };
   try {
     await snoozeTask(user, id, at);
@@ -334,6 +338,7 @@ export async function remindTaskAction(id: string, at: string): Promise<RecordAc
 
 export async function assignTaskAction(id: string, ownerId: string): Promise<RecordActionState> {
   const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || !isUuid(ownerId)) return { error: "Couldn't assign the task. Try again." };
   try {
     await updateTask(user, id, { ownerId }, { provenance: { operation: "assign_task", source: "web" } });
@@ -347,6 +352,7 @@ export async function assignTaskAction(id: string, ownerId: string): Promise<Rec
 
 export async function taskLinkCandidatesAction(id: string): Promise<Partial<LinkCandidates> & { error?: string }> {
   const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id)) return { error: "Couldn't find people to link. Try again." };
   try {
     return await taskLinkCandidates(user, id);
@@ -357,6 +363,7 @@ export async function taskLinkCandidatesAction(id: string): Promise<Partial<Link
 
 export async function searchTaskLinkTargetsAction(id: string, query: string) {
   const user = await taskUser(id);
+  if (!user) return { contacts: [], companies: [], error: TASK_LOOKUP_FAILED };
   const text = typeof query === "string" ? query.trim().slice(0, 200) : "";
   if (!text) return { contacts: [], companies: [] };
   const [contacts, companies] = await Promise.all([
@@ -368,6 +375,7 @@ export async function searchTaskLinkTargetsAction(id: string, query: string) {
 
 export async function linkTaskAction(id: string, link: { contactId?: string; companyId?: string }): Promise<RecordActionState> {
   const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id)) return { error: "Couldn't link the task. Try again." };
   try {
     await linkTask(user, id, { contactId: link?.contactId, companyId: link?.companyId }, { operation: "link_task", source: "web" });

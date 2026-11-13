@@ -9,6 +9,7 @@ import { useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { activateRow } from "@/components/shortcuts/keyboard-list";
 import { TaskAct } from "@/components/crm/task-actions";
+import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
@@ -57,14 +58,39 @@ export function TaskDoneCircle({ done, disabled, title, onClick, className }: { 
 const PANEL_IGNORED = new Set(["o", "j", "k", "1", "2", "3", "4", "5", "6"]);
 const FIELD = "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='listbox'], [role='menu']";
 
-function returnFocus(id: string) {
-  const row = document.querySelector<HTMLElement>(`[data-task-id="${id}"]`);
-  if (!row) return;
+function shown(element: HTMLElement) {
+  return element.isConnected && element.getClientRects().length > 0;
+}
+
+function focusRow(row: HTMLElement) {
   if (row.hasAttribute("data-list-row")) {
     activateRow(row);
     return;
   }
+  if (row instanceof HTMLButtonElement) {
+    row.focus({ preventScroll: true });
+    return;
+  }
   row.querySelector<HTMLElement>("button[aria-expanded]")?.focus({ preventScroll: true });
+}
+
+function returnFocus(id: string, opener: HTMLElement | null) {
+  if (opener && opener.matches(`[data-task-id="${id}"]`) && shown(opener)) {
+    focusRow(opener);
+    return;
+  }
+  const row = [...document.querySelectorAll<HTMLElement>(`[data-task-id="${id}"]`)].find(shown);
+  if (row) {
+    focusRow(row);
+    return;
+  }
+  document.querySelector<HTMLElement>("[data-calendar-scroller]")?.focus({ preventScroll: true });
+}
+
+function focusedElement() {
+  if (typeof document === "undefined") return null;
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
 function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers, recordNotes = true }: PanelProps & { instant: boolean }) {
@@ -86,6 +112,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
   const owner = named(task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
   const creator = named(task.createdByUserId);
   const [doneHere, setDoneHere] = useState(false);
+  const [opener] = useState(focusedElement);
   const done = completed || doneHere || Boolean(task.completedAt);
   const [busy, setBusy] = useState(false);
   const [removed, setRemoved] = useState<string[]>([]);
@@ -191,7 +218,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         flush();
-        returnFocus(task.id);
+        returnFocus(task.id, opener);
       }}
       onOpenAutoFocus={(event) => {
         event.preventDefault();
@@ -202,6 +229,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
         (first ?? content)?.focus?.({ preventScroll: true });
       }}
     >
+      <TaskWorkspace.Provider value={task.workspaceId}>
       <DiscussionProvider discussion={discussion}>
         <div className="flex min-h-0 flex-1 flex-col">
           <SheetHeader className="max-md:h-auto max-md:min-h-14 max-md:px-3.5 max-md:pt-[env(safe-area-inset-top)]">
@@ -286,6 +314,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
           )}
         </div>
       </DiscussionProvider>
+      </TaskWorkspace.Provider>
     </SheetContent>
   );
 }

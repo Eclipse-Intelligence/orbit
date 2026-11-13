@@ -18,6 +18,7 @@ import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
 import type { LinkCandidate } from "@/lib/crm/task-links";
+import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { saveTaskDetailsAction, type TaskDetails } from "@/app/(crm)/discussions";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { reminderLabel } from "@/lib/crm/reminder-options";
@@ -443,11 +444,20 @@ export function TaskTitleField({
 
 const LINK_CHIP = "bg-secondary text-foreground inline-flex max-w-full items-center gap-1.5 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 hit [@media(pointer:coarse)]:h-7 [@media(pointer:coarse)]:pr-2.5 [@media(pointer:coarse)]:pl-2";
 
-function LinkChip({ href, label, icon: Icon, mark }: { href: string; label: string; icon?: ComponentType<SVGProps<SVGSVGElement>>; mark?: ReactNode }) {
-  return (
-    <Link href={href} className={LINK_CHIP}>
+function LinkChip({ href, label, icon: Icon, mark, record }: { href: string; label: string; icon?: ComponentType<SVGProps<SVGSVGElement>>; mark?: ReactNode; record?: boolean }) {
+  const content = (
+    <>
       {mark ?? (Icon && <Icon aria-hidden className="text-subtle size-3 shrink-0" />)}
       <span className="truncate">{label}</span>
+    </>
+  );
+  return record ? (
+    <TaskRecordLink href={href} className={LINK_CHIP}>
+      {content}
+    </TaskRecordLink>
+  ) : (
+    <Link href={href} className={LINK_CHIP}>
+      {content}
     </Link>
   );
 }
@@ -478,11 +488,11 @@ export function TaskLinks({ task }: { task: Task }) {
   const links = splitDescription(task.description).links;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
-      {task.contactId && task.contactName && <LinkChip href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} />}
+      {task.contactId && task.contactName && <LinkChip record href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} />}
       {task.companyId && task.companyName && (
-        <LinkChip href={companyHref(task.companyId)} label={task.companyName} mark={<Monogram name={task.companyName} className="size-4 rounded-full text-[9px]" />} />
+        <LinkChip record href={companyHref(task.companyId)} label={task.companyName} mark={<Monogram name={task.companyName} className="size-4 rounded-full text-[9px]" />} />
       )}
-      {task.opportunityId && task.opportunityName && <LinkChip href={recordHref("opportunity", task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} />}
+      {task.opportunityId && task.opportunityName && <LinkChip record href={recordHref("opportunity", task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} />}
       {links.map((link, index) => (
         <LinkChip key={`${index}:${link.href}`} href={link.href} label={link.label} icon={MailIcon} />
       ))}
@@ -551,8 +561,13 @@ export function LinkPerson({ taskId, title, onLinked }: { taskId: string; title:
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void searchTaskLinkTargetsAction(taskId, text)
-        .then(({ contacts: found, companies }) => {
+        .then((result) => {
           if (cancelled) return;
+          if ("error" in result && result.error) {
+            setError(result.error);
+            return;
+          }
+          const { contacts: found, companies } = result;
           setError((current) => (current === SEARCH_FAILED ? null : current));
           setResults({
             query: text,

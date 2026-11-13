@@ -58,7 +58,20 @@ export async function actorForTask(actor: UserActor, taskId: unknown) {
   if (typeof taskId !== "string" || !isUuid(taskId)) return actor;
   const found = await withActor(actor, (db) => db.query<{ workspace_id: string }>("select workspace_id from crm.tasks where id = $1", [taskId]));
   const workspaceId = found.rows[0]?.workspace_id;
-  return workspaceId && workspaceId !== actor.workspaceId ? actorForWorkspace(actor, workspaceId) : actor;
+  if (!workspaceId || workspaceId === actor.workspaceId) return actor;
+  const member = (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId);
+  if (!member) throw new CrmError("not_found", TASK_LOOKUP_FAILED, 404);
+  return member;
+}
+
+export const TASK_LOOKUP_FAILED = "Couldn't find that task. Try again.";
+
+export async function taskActorOrError(actor: UserActor, taskId: unknown): Promise<{ actor: UserActor; error?: undefined } | { actor?: undefined; error: string }> {
+  try {
+    return { actor: await actorForTask(actor, taskId) };
+  } catch {
+    return { error: TASK_LOOKUP_FAILED };
+  }
 }
 
 export async function homeWorkspaceId(actor: UserActor) {
