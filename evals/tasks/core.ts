@@ -23,6 +23,14 @@ import type { EvalTask } from "../types";
 import { ANSEL_TRANSCRIPT, PERSON } from "./base";
 import { PLAYBOOK_TOOL, playbookTopic, bodyMatches, bodyMentions, dueOn, idsExclude, idsInclude, recipient, startsAt, task, toContact, touches } from "./shared";
 
+function exactlyCards(names: string[]) {
+  return custom(`proposes exactly ${names.join(", ")}`, (transcript) => {
+    const proposed = transcript.cards.map((item) => item.name).sort();
+    const wanted = [...names].sort();
+    return proposed.length === wanted.length && proposed.every((name, index) => name === wanted[index]) ? true : `It proposed ${transcript.cards.map((item) => item.name).join(", ") || "nothing"}.`;
+  });
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function mentionsDay(days: number, label: string) {
@@ -262,6 +270,37 @@ export const CORE_TASKS: EvalTask[] = [
       card("update_task", arg.all(arg.is("taskId", "task:Chase Ansel if he's gone quiet"), arg.equals("completed", true))),
       card("create_task", arg.all(arg.is("contactId", "contact:Ansel Pike"), dueOn("dueDate", { weekday: 5 }, { weekday: 4 }), (args) => args.dueAt === undefined || args.dueAt === null)),
       noCard("create_task", arg.not(arg.is("contactId", "contact:Ansel Pike")), "every next task is on Ansel"),
+      exactlyCards(["log_activity", "update_task", "create_task"]),
+    ],
+  }),
+  task({
+    id: "write-call-outcome-other-person-than-open-task",
+    suite: "core",
+    category: "multi_step",
+    origin: "Tasks plan review: with one person's task open, a call outcome about someone else settles that person's task, never the open one.",
+    page: { path: "/tasks", focus: { kind: "task", id: "task:Chase Ansel if he's gone quiet" } },
+    message: "Spoke to Cyril Dunmore, he wants the proposal Friday.",
+    checks: [
+      card("log_activity", arg.all(arg.equals("type", "call"), arg.is("contactId", "contact:Cyril Dunmore"))),
+      card("update_task", arg.all(arg.is("taskId", "task:Chase Sagebrook intro"), arg.equals("completed", true))),
+      noCard("update_task", arg.is("taskId", "task:Chase Ansel if he's gone quiet"), "leaves the open task about Ansel alone"),
+      noCard(["log_activity", "create_task"], arg.is("contactId", "contact:Ansel Pike"), "logs nothing on Ansel"),
+      card("create_task", arg.all(arg.is("contactId", "contact:Cyril Dunmore"), dueOn("dueDate", { weekday: 5 }, { weekday: 4 }))),
+    ],
+  }),
+  task({
+    id: "write-call-outcome-teammate-task",
+    suite: "core",
+    category: "multi_step",
+    origin: "Tasks plan: the next task after a teammate's task stays with that teammate, as Done with an outcome does.",
+    fixture: { eclipse: { tasks: [{ title: "Call Juno about the renewal", due: { days: 0 }, contact: "Juno Frith", company: "Driftbox Cloud", owner: "colleague" }] } },
+    page: { path: "/tasks", focus: { kind: "task", id: "task:Call Juno about the renewal" } },
+    message: "Spoke to her, she wants the proposal Friday.",
+    checks: [
+      card("log_activity", arg.all(arg.equals("type", "call"), arg.is("contactId", "contact:Juno Frith"))),
+      card("update_task", arg.all(arg.is("taskId", "task:Call Juno about the renewal"), arg.equals("completed", true))),
+      card("create_task", arg.all(arg.is("contactId", "contact:Juno Frith"), arg.is("ownerId", "member:Tamsin Holt"), dueOn("dueDate", { weekday: 5 }, { weekday: 4 }), (args) => args.dueAt === undefined || args.dueAt === null)),
+      exactlyCards(["log_activity", "update_task", "create_task"]),
     ],
   }),
   task({
@@ -274,6 +313,8 @@ export const CORE_TASKS: EvalTask[] = [
       card("log_activity", arg.all(arg.equals("type", "call"), arg.is("contactId", "contact:Cyril Dunmore"))),
       card("update_task", arg.all(arg.is("taskId", "task:Chase Sagebrook intro"), arg.equals("completed", true))),
       card("create_task", arg.all(arg.is("contactId", "contact:Cyril Dunmore"), dueOn("dueDate", { weekday: 5 }, { weekday: 4 }), (args) => args.dueAt === undefined || args.dueAt === null)),
+      noCard("create_task", arg.not(arg.is("contactId", "contact:Cyril Dunmore")), "every next task is on Cyril"),
+      exactlyCards(["log_activity", "update_task", "create_task"]),
     ],
   }),
   task({

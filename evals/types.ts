@@ -135,7 +135,7 @@ type ContactSeed = {
   unowned?: boolean;
 };
 
-type TaskSeed = { title: string; due?: When; company?: string; contact?: string; done?: boolean; remindMinutes?: number };
+type TaskSeed = { title: string; due?: When; company?: string; contact?: string; done?: boolean; remindMinutes?: number; owner?: "colleague" };
 
 type DealSeed = { name: string; company: string; stage: string; value: number; contact?: string; close?: When };
 

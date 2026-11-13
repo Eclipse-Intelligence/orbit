@@ -371,7 +371,66 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     const timed = await runOnce(byId("write-call-outcome-on-open-task"), settings(scripted([outcome({ dueAt: `${londonDay({ weekday: 5 })}T10:00` })])));
     assert.deepEqual(failed(timed), ["proposes create_task"]);
     const open = await runOnce(byId("write-call-outcome-on-open-task"), settings(scripted([outcome({ dueDate: londonDay({ weekday: 5 }) }, false)])));
-    assert.deepEqual(failed(open), ["proposes update_task"]);
+    assert.deepEqual(failed(open), ["proposes update_task", "proposes exactly log_activity, update_task, create_task"]);
+  });
+
+  it("fails an extra card, and a call outcome that settles the open task when it names someone else", async () => {
+    const extra = await runOnce(
+      byId("write-call-outcome-on-open-task"),
+      settings(
+        scripted([
+          ({ world }) => ({
+            calls: [
+              { name: "log_activity", args: { type: "call", contactId: world.id("contact:Ansel Pike"), body: "He wants the proposal Friday." } },
+              { name: "update_task", args: { taskId: world.id("task:Chase Ansel if he's gone quiet"), completed: true } },
+              { name: "create_task", args: { title: "Send Ansel the proposal", contactId: world.id("contact:Ansel Pike"), dueDate: londonDay({ weekday: 5 }) } },
+              { name: "update_contact", args: { contactId: world.id("contact:Ansel Pike"), notes: "Wants the proposal Friday." } },
+            ],
+          }),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(extra), ["proposes exactly log_activity, update_task, create_task"]);
+
+    const outcome = (taskKey: string): Step => ({ world }) => ({
+      calls: [
+        { name: "log_activity", args: { type: "call", contactId: world.id("contact:Cyril Dunmore"), body: "He wants the proposal Friday." } },
+        { name: "update_task", args: { taskId: world.id(taskKey), completed: true } },
+        { name: "create_task", args: { title: "Send Cyril the proposal", contactId: world.id("contact:Cyril Dunmore"), dueDate: londonDay({ weekday: 5 }) } },
+      ],
+    });
+    let seen = "";
+    const right = await runOnce(
+      byId("write-call-outcome-other-person-than-open-task"),
+      settings(
+        scripted([
+          (call) => {
+            seen = JSON.stringify(call.body.messages);
+            return { calls: [{ name: "list_tasks", args: { contactId: call.world.id("contact:Cyril Dunmore") } }] };
+          },
+          outcome("task:Chase Sagebrook intro"),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(right), []);
+    assert.match(seen, /Task they have open: task \\"Chase Ansel if he's gone quiet\\"/);
+    const wrong = await runOnce(byId("write-call-outcome-other-person-than-open-task"), settings(scripted([outcome("task:Chase Ansel if he's gone quiet")])));
+    assert.deepEqual(failed(wrong), ["proposes update_task", "leaves the open task about Ansel alone"]);
+  });
+
+  it("keeps the next task with the teammate who owned the open task", async () => {
+    const outcome = (owner: boolean): Step => ({ world, body }) => {
+      assert.match(JSON.stringify(body.messages), /assigned to the teammate \\"Tamsin Holt\\"/);
+      return {
+        calls: [
+          { name: "log_activity", args: { type: "call", contactId: world.id("contact:Juno Frith"), body: "She wants the proposal Friday." } },
+          { name: "update_task", args: { taskId: world.id("task:Call Juno about the renewal"), completed: true } },
+          { name: "create_task", args: { title: "Send Juno the proposal", contactId: world.id("contact:Juno Frith"), dueDate: londonDay({ weekday: 5 }), ...(owner ? { ownerId: world.colleague.userId } : {}) } },
+        ],
+      };
+    };
+    assert.deepEqual(failed(await runOnce(byId("write-call-outcome-teammate-task"), settings(scripted([outcome(true)])))), []);
+    assert.deepEqual(failed(await runOnce(byId("write-call-outcome-teammate-task"), settings(scripted([outcome(false)])))), ["proposes create_task"]);
   });
 
   it("finds the named person's open task for a call outcome without a page", async () => {

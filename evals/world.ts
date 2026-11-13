@@ -175,6 +175,7 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
         remindMinutes: task.remindMinutes ?? null,
         companyId: ref("company", task.company),
         contactId: ref("contact", task.contact),
+        ...(task.owner === "colleague" ? { ownerId: world.colleague.userId } : {}),
         completed: task.done ?? false,
       },
       { provenance: SEED },
