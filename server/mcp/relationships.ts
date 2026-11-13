@@ -430,7 +430,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_due_actions",
     {
       description:
-        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none). Each task has dueDate (its London day), dueHasTime (false means due any time that day; dueAt is then London midnight), durationMinutes and scheduledBy.",
+        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none). Each task has dueDate (its London day), dueHasTime (false means due any time that day; dueAt is then London midnight), durationMinutes and scheduledBy (person when someone gave it a time, including dragging or resizing it on the Calendar page; planner when Orbit's planner placed it). Plan never moves a block a person placed.",
       inputSchema: { view: z.enum(TASK_VIEWS).optional() },
     },
     async (args) => run(() => getDueActions(actor, args.view ?? "today")),

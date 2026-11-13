@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { formatTime } from "@/components/crm/calendar-event-details";
 import { durationLabel } from "@/lib/crm/task-time";
 import type { TaskBlock } from "@/lib/task-blocks";
@@ -14,6 +14,13 @@ export type TaskBlockHandlers = {
   onOpen: (block: TaskBlock, opener: HTMLElement | null) => void;
   onComplete: (block: TaskBlock) => void;
 };
+
+export type TaskBlockDrag = {
+  onPickUp: (event: ReactPointerEvent<HTMLElement>, block: TaskBlock) => void;
+  onResize: (event: ReactPointerEvent<HTMLElement>, block: TaskBlock) => void;
+};
+
+const RESIZE_ON_TOUCH_PX = 40;
 
 function clashing(block: TaskBlock) {
   return Boolean(block.clash) && !block.done && !block.overdue;
@@ -88,11 +95,33 @@ function Detail({ block }: { block: TaskBlock }) {
   );
 }
 
-export function GridTaskBlock({ block, style, height, onOpen, onComplete }: TaskBlockHandlers & { block: TaskBlock; style: CSSProperties; height: number }) {
+export function GridTaskBlock({
+  block,
+  style,
+  height,
+  onOpen,
+  onComplete,
+  drag,
+  lifted,
+  resizing,
+}: TaskBlockHandlers & { block: TaskBlock; style: CSSProperties; height: number; drag?: TaskBlockDrag; lifted?: boolean; resizing?: boolean }) {
   const two = height >= TWO_LINES_PX;
   const edged = clashing(block);
+  const movable = Boolean(drag) && !block.done;
   return (
-    <div className={cn("absolute rounded-md", tone(block))} style={style} data-task-block={block.task.id}>
+    <div
+      className={cn(
+        "group/block absolute rounded-md",
+        tone(block),
+        movable && "touch-manipulation select-none [-webkit-touch-callout:none]",
+        lifted && "outline-violet bg-transparent opacity-35 shadow-none outline-1 outline-offset-[-1px] outline-dashed",
+        resizing && "z-[6] shadow-[inset_0_0_0_1px_var(--violet),0_6px_18px_rgba(0,0,0,0.4)]",
+      )}
+      style={style}
+      data-task-block={block.task.id}
+      data-task-lifted={lifted ? "" : undefined}
+      onPointerDown={movable && drag ? (event) => drag.onPickUp(event, block) : undefined}
+    >
       <button
         type="button"
         data-list-row=""
@@ -101,7 +130,8 @@ export function GridTaskBlock({ block, style, height, onOpen, onComplete }: Task
         title={taskBlockLabel(block)}
         onClick={(event) => onOpen(block, event.currentTarget)}
         className={cn(
-          "focus-visible:ring-ring/60 absolute inset-0 flex min-w-0 cursor-pointer overflow-hidden rounded-md pr-1.5 text-left outline-none focus-visible:ring-2",
+          "focus-visible:ring-ring/60 absolute inset-0 flex min-w-0 overflow-hidden rounded-md pr-1.5 text-left outline-none focus-visible:ring-2",
+          movable ? "cursor-grab" : "cursor-pointer",
           edged ? "pl-[24px]" : "pl-[21px]",
           two ? "flex-col pt-0.5" : "items-center gap-1.5",
         )}
@@ -128,6 +158,24 @@ export function GridTaskBlock({ block, style, height, onOpen, onComplete }: Task
       <span className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}>
         <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="sm" />
       </span>
+      {movable && drag && (
+        <span
+          aria-hidden
+          data-task-resize=""
+          onPointerDown={(event) => drag.onResize(event, block)}
+          className={cn(
+            "absolute inset-x-0 bottom-0 z-[2] flex h-1.5 cursor-ns-resize items-end justify-center pb-0.5 [@media(pointer:coarse)]:h-2.5",
+            height < RESIZE_ON_TOUCH_PX && "[@media(pointer:coarse)]:hidden",
+          )}
+        >
+          <span
+            className={cn(
+              "bg-violet ease-power2-out h-1 w-[22px] rounded-full opacity-0 transition-opacity duration-150 group-hover/block:opacity-100 [@media(pointer:coarse)]:opacity-60",
+              resizing && "opacity-100",
+            )}
+          />
+        </span>
+      )}
     </div>
   );
 }

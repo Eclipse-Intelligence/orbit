@@ -109,6 +109,101 @@ async function dropTasks(ids) {
   for (const id of ids) await api(`/tasks/${id}`, { method: "DELETE" });
 }
 
+async function readTask(id) {
+  const found = await api(`/tasks/${id}`);
+  return found?.ok ? (await found.json()).task : null;
+}
+
+function londonClock(iso) {
+  return iso ? new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso)) : "";
+}
+
+function timing(task) {
+  return task ? `${task.dueDate} ${task.dueHasTime ? londonClock(task.dueAt) : "no time"} ${task.durationMinutes}m ${task.scheduledBy ?? "unplaced"}` : "missing";
+}
+
+async function gridPoint(page, day, minutes) {
+  return page.evaluate(
+    ({ day, minutes }) => {
+      const scroller = [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0);
+      const column = scroller?.querySelector(`[data-day="${day}"]`);
+      if (!column) return null;
+      const box = column.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + (minutes / 1440) * box.height };
+    },
+    { day, minutes },
+  );
+}
+
+async function mouseDrag(page, from, to, hold) {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 12; step += 1) {
+    await page.mouse.move(from.x + ((to.x - from.x) * step) / 12, from.y + ((to.y - from.y) * step) / 12);
+    await page.waitForTimeout(16);
+  }
+  await page.waitForTimeout(150);
+  const seen = hold ? await hold() : null;
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  return seen;
+}
+
+async function touchDrag(page, selector, to, options = {}) {
+  return page
+    .evaluate(
+      async ({ selector, to, holdMs, fromTop, quick }) => {
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const element = [...document.querySelectorAll(selector)].find((node) => node.getBoundingClientRect().width > 0);
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        const from = { x: box.left + Math.min(60, box.width / 2), y: fromTop ? box.top + 6 : box.top + box.height / 2 };
+        const touchEvent = (type, element, id, x, y) => {
+          const point = { identifier: id, target: element, clientX: x, clientY: y, pageX: x, pageY: y };
+          let touch = point;
+          try {
+            touch = new Touch(point);
+          } catch {}
+          const touches = type === "touchend" ? [] : [touch];
+          try {
+            return new TouchEvent(type, { touches, changedTouches: [touch], bubbles: true, cancelable: true });
+          } catch {
+            const event = new Event(type, { bubbles: true, cancelable: true });
+            Object.defineProperty(event, "touches", { value: touches });
+            Object.defineProperty(event, "changedTouches", { value: [touch] });
+            return event;
+          }
+        };
+        const fire = (type, x, y) => element.dispatchEvent(touchEvent(type, element, 7, x, y));
+        element.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 7, pointerType: "touch", isPrimary: true, clientX: from.x, clientY: from.y, bubbles: true, cancelable: true }));
+        fire("touchstart", from.x, from.y);
+        if (quick) {
+          await sleep(80);
+          fire("touchend", from.x, from.y);
+          await sleep(500);
+          return { lifted: Boolean(document.querySelector("[data-task-lifted-card]")) };
+        }
+        await sleep(120);
+        const ring = Boolean(document.querySelector(".animate-press-fill"));
+        await sleep(holdMs);
+        const drawerOpen = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].some((node) => (node.textContent ?? "").includes("Choose which calendars"));
+        const target = to ?? { x: from.x, y: from.y };
+        for (let step = 1; step <= 12; step += 1) {
+          fire("touchmove", from.x + ((target.x - from.x) * step) / 12, from.y + ((target.y - from.y) * step) / 12);
+          await sleep(20);
+        }
+        await sleep(200);
+        const label = document.querySelector("[data-drop-label]")?.textContent ?? "";
+        const lifted = Boolean(document.querySelector("[data-task-lifted-card]"));
+        fire("touchend", target.x, target.y);
+        await sleep(300);
+        return { ring, drawerOpen, label, lifted };
+      },
+      { selector, to, holdMs: options.holdMs ?? 450, fromTop: options.fromTop ?? false, quick: options.quick ?? false },
+    )
+    .catch((error) => ({ error: String(error).slice(0, 120) }));
+}
+
 async function focusedTaskId(page) {
   return page.evaluate(() => (document.activeElement?.closest("[data-task-block]") ? document.activeElement.getAttribute("data-task-id") : null));
 }
@@ -671,6 +766,71 @@ for (const [device, viewport] of [
       await page.waitForTimeout(300);
       await page.keyboard.press("Escape");
       await page.waitForTimeout(400);
+      if (device === "ipad") {
+        await goto(page, `${base}/calendar?date=${block.day}&view=day`);
+        await page.waitForTimeout(1500);
+        const target = await gridPoint(page, block.day, 12 * 60 + 8);
+        const lifted = await touchDrag(page, `[data-task-block="${block.id}"] button[data-task-id]`, target, { fromTop: true });
+        check(`${device} holding a block fills the ring, then lifts it`, Boolean(lifted?.ring && lifted.lifted), JSON.stringify(lifted));
+        check(`${device} the slot label shows the new time`, (lifted?.label ?? "").includes("12:00 to 12:30"), lifted?.label);
+        await page.waitForTimeout(1200);
+        const moved = await readTask(block.id);
+        check(`${device} long-press drag moves the block`, Boolean(moved?.dueHasTime && londonClock(moved.dueAt) === "12:00" && moved.durationMinutes === 30 && moved.scheduledBy === "person"), timing(moved));
+        check(`${device} dropping a block doesn't open the task`, !(await visible(page.getByRole("dialog", { name: "Task" }))));
+        await shot("calendar-long-press-drop");
+        const quick = await touchDrag(page, `[data-task-block="${block.id}"] button[data-task-id]`, null, { quick: true });
+        await page.waitForTimeout(600);
+        check(`${device} a quick touch on a block doesn't lift it`, Boolean(quick && !quick.lifted && londonClock((await readTask(block.id))?.dueAt) === "12:00"), JSON.stringify(quick));
+        await page.getByRole("button", { name: "Calendars and tasks" }).tap();
+        await page.waitForTimeout(700);
+        const toGrid = await gridPoint(page, block.day, 15 * 60 + 8);
+        const carried = await touchDrag(page, `[role="dialog"] [data-task-id="${block.plainId}"]`, toGrid);
+        await page.waitForTimeout(1200);
+        check(`${device} holding a task in the drawer closes the drawer and carries it onto the grid`, Boolean(carried && !carried.error && !carried.drawerOpen && carried.lifted), JSON.stringify(carried));
+        const dropped = await readTask(block.plainId);
+        check(`${device} the carried task lands at its time`, Boolean(dropped?.dueHasTime && dropped.dueDate === block.day && londonClock(dropped.dueAt) === "15:00" && dropped.scheduledBy === "person"), timing(dropped));
+        check(`${device} the carried task shows as a block`, await visible(page.locator(`[data-task-block="${block.plainId}"]`).filter({ visible: true })));
+        const scrolled = await page.evaluate(async () => {
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const scroller = [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0);
+          const element = [...document.querySelectorAll("[data-task-block] button[data-task-id]")].find((node) => node.getBoundingClientRect().width > 0);
+          if (!scroller || !element) return null;
+          const area = scroller.getBoundingClientRect();
+          const box = element.getBoundingClientRect();
+          const touchEvent = (type, element, id, x, y) => {
+            const point = { identifier: id, target: element, clientX: x, clientY: y, pageX: x, pageY: y };
+            let touch = point;
+            try {
+              touch = new Touch(point);
+            } catch {}
+            const touches = type === "touchend" ? [] : [touch];
+            try {
+              return new TouchEvent(type, { touches, changedTouches: [touch], bubbles: true, cancelable: true });
+            } catch {
+              const event = new Event(type, { bubbles: true, cancelable: true });
+              Object.defineProperty(event, "touches", { value: touches });
+              Object.defineProperty(event, "changedTouches", { value: [touch] });
+              return event;
+            }
+          };
+          const fire = (type, x, y) => element.dispatchEvent(touchEvent(type, element, 9, x, y));
+          const x = box.left + 20;
+          element.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 9, pointerType: "touch", isPrimary: true, clientX: x, clientY: box.top + 4, bubbles: true, cancelable: true }));
+          fire("touchstart", x, box.top + 4);
+          await sleep(450);
+          const before = scroller.scrollTop;
+          fire("touchmove", x, area.bottom - 8);
+          await sleep(150);
+          const edge = Boolean(document.querySelector('[data-drag-edge="bottom"]'));
+          await sleep(250);
+          const after = scroller.scrollTop;
+          fire("touchmove", x, area.top - 40);
+          await sleep(100);
+          fire("touchend", x, area.top - 40);
+          return { before, after, edge };
+        });
+        check(`${device} dragging to the grid's bottom edge scrolls it`, Boolean(scrolled && scrolled.after > scrolled.before && scrolled.edge), JSON.stringify(scrolled));
+      }
     } finally {
       await dropTasks(block.ids);
     }
@@ -793,6 +953,71 @@ for (const width of [1100, 1280, 1440]) {
         await page.waitForTimeout(400);
         check(`${device} the toolbar button hides the menu`, !(await menu.isVisible().catch(() => false)));
         await page.getByRole("button", { name: /^Show calendars and tasks/ }).click();
+        await page.waitForTimeout(500);
+        const plainRow = menu.locator(`[data-task-id="${block.plainId}"]`);
+        await plainRow.scrollIntoViewIfNeeded().catch(() => undefined);
+        const rowBox = await plainRow.boundingBox();
+        const slot = await gridPoint(page, block.day, 14 * 60 + 5);
+        const fromList =
+          rowBox && slot
+            ? await mouseDrag(page, { x: rowBox.x + 40, y: rowBox.y + rowBox.height / 2 }, slot, async () => {
+                const seen = {
+                  slot: await page.locator("[data-drop-slot]").isVisible().catch(() => false),
+                  label: (await page.locator("[data-drop-label]").textContent().catch(() => "")) ?? "",
+                  held: (await plainRow.getAttribute("data-task-held").catch(() => null)) !== null,
+                  lifted: await page.locator("[data-task-lifted-card]").isVisible().catch(() => false),
+                };
+                await page.screenshot({ path: path.join(out, `desktop-${width}-drag-from-list.png`) });
+                return seen;
+              })
+            : null;
+        check(`${device} dragging a task shows the slot, its time and a placeholder in the list`, Boolean(fromList?.slot && fromList.held && fromList.lifted && fromList.label.includes("14:00 to 14:15")), JSON.stringify(fromList));
+        const plainBlock = page.locator(`[data-task-block="${block.plainId}"]`).filter({ visible: true });
+        check(`${device} a task dropped on the grid shows as a block at once`, await plainBlock.isVisible().catch(() => false));
+        check(`${device} a drop doesn't open the task or a new event`, (await page.getByRole("dialog").filter({ visible: true }).count()) === 0);
+        await page.waitForTimeout(1500);
+        const listed = await readTask(block.plainId);
+        check(`${device} the drop gives the task its day, time and duration, placed by you`, Boolean(listed?.dueHasTime && listed.dueDate === block.day && londonClock(listed.dueAt) === "14:00" && listed.durationMinutes === 15 && listed.scheduledBy === "person"), timing(listed));
+        const from = await gridPoint(page, block.day, 10 * 60 + 8);
+        const to = await gridPoint(page, block.day, 11 * 60 + 8);
+        const moving = await mouseDrag(page, from, to, async () => ({
+          ghost: await card.getAttribute("data-task-lifted").then((value) => value !== null).catch(() => false),
+          label: (await page.locator("[data-drop-label]").textContent().catch(() => "")) ?? "",
+        }));
+        check(`${device} moving a block ghosts it and shows the new time`, Boolean(moving?.ghost && moving.label.includes("11:00 to 11:30")), JSON.stringify(moving));
+        await page.waitForTimeout(1500);
+        const moved = await readTask(block.id);
+        check(`${device} a moved block keeps its duration`, Boolean(moved?.dueHasTime && londonClock(moved.dueAt) === "11:00" && moved.durationMinutes === 30), timing(moved));
+        await card.hover();
+        const edge = await card.locator("[data-task-resize]").boundingBox();
+        const end = await gridPoint(page, block.day, 12 * 60 + 2);
+        const resizing =
+          edge && end
+            ? await mouseDrag(page, { x: edge.x + edge.width / 2, y: edge.y + edge.height / 2 }, { x: edge.x + edge.width / 2, y: end.y }, async () => {
+                await page.screenshot({ path: path.join(out, `desktop-${width}-resize.png`) });
+                return (await page.locator("[data-drop-label]").textContent().catch(() => "")) ?? "";
+              })
+            : null;
+        check(`${device} resizing shows the new duration first`, (resizing ?? "").startsWith("1h") && (resizing ?? "").includes("11:00 to 12:00"), resizing ?? "no handle");
+        await page.waitForTimeout(1500);
+        const resized = await readTask(block.id);
+        check(`${device} resizing changes the duration in 15 minute steps`, resized?.durationMinutes === 60 && londonClock(resized.dueAt) === "11:00", timing(resized));
+        const cardBox = await card.boundingBox();
+        const menuBox = await menu.boundingBox();
+        const back =
+          cardBox && menuBox
+            ? await mouseDrag(page, { x: cardBox.x + 30, y: cardBox.y + 10 }, { x: menuBox.x + menuBox.width / 2, y: menuBox.y + Math.min(240, menuBox.height / 2) }, async () => {
+                const zone = page.locator("[data-task-drop-zone]");
+                const seen = { zone: await zone.isVisible().catch(() => false), text: (await zone.textContent().catch(() => "")) ?? "" };
+                await page.screenshot({ path: path.join(out, `desktop-${width}-drop-on-list.png`) });
+                return seen;
+              })
+            : null;
+        check(`${device} dragging a block over the list says the day stays`, Boolean(back?.zone && back.text.includes("Keep the day, remove the time")), JSON.stringify(back));
+        await page.waitForTimeout(1500);
+        const unplaced = await readTask(block.id);
+        check(`${device} a block dropped on the list is date only on the same day`, Boolean(unplaced && !unplaced.dueHasTime && unplaced.dueDate === block.day && unplaced.scheduledBy === null), timing(unplaced));
+        check(`${device} the block leaves the grid`, !(await card.isVisible().catch(() => false)));
       } finally {
         await dropTasks(block.ids);
       }

@@ -96,6 +96,7 @@
   --animate-rise-in: rise-in 0.45s var(--ease-power3-out) both;
   --animate-enter-from-right: enter-from-right 0.22s var(--ease-power3-out) both;
   --animate-enter-from-left: enter-from-left 0.22s var(--ease-power3-out) both;
+  --animate-press-fill: press-fill 0.35s linear both;
 
   @keyframes aurora-a {
     0% {
@@ -130,6 +131,15 @@
     }
     100% {
       transform: translate3d(12%, 4%, 0) scale(1);
+    }
+  }
+
+  @keyframes press-fill {
+    from {
+      stroke-dashoffset: 100;
+    }
+    to {
+      stroke-dashoffset: 0;
     }
   }
 

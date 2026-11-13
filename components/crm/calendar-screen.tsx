@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
@@ -15,8 +15,10 @@ import {
 import CalendarAgenda from "@/components/crm/calendar-agenda";
 import type { CalendarMeta } from "@/components/crm/calendar-event-details";
 import CalendarGrid from "@/components/crm/calendar-grid";
-import { CalendarTaskList, SectionToggle, useCalendarSections } from "@/components/crm/calendar-tasks";
-import type { TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import { CalendarTaskList, SectionToggle, TaskDropZone, useCalendarSections } from "@/components/crm/calendar-tasks";
+import type { TaskBlockDrag, TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import TaskKindIcon from "@/components/crm/task-kind-icon";
+import { useGridDrag, useTaskDrag, type TaskDrag, type TaskPress } from "@/hooks/use-task-drag";
 import TaskPanel from "@/components/crm/task-panel";
 import { HomeWorkspace } from "@/components/crm/task-workspace";
 import { useTaskDone } from "@/components/crm/use-task-done";
@@ -29,6 +31,7 @@ import SectionHeader from "@/components/crm/section-header";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import type { Viewer } from "@/components/crm/viewer";
 import { setCalendarVisibleAction } from "@/app/(crm)/calendar/actions";
+import { placeTaskAction } from "@/app/(crm)/records";
 import {
   mergeDuplicateEvents,
   rangeDays,
@@ -39,14 +42,67 @@ import {
 import type { CalendarGroup, CalendarItem } from "@/lib/crm/calendars";
 import type { InviteSetup } from "@/lib/crm/invites";
 import type { Planner } from "@/lib/crm/task-blocks";
+import { durationLabel, taskDueDay } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
+import { LONG_PRESS_MS } from "@/lib/pointer-gesture";
 import { taskBlocks, type TaskBlock } from "@/lib/task-blocks";
+import { placedTask, placementLanded, slotDateLabel, type DropPlacement } from "@/lib/task-drag";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
+
+const MOVE_FAILED = "Couldn't move the task. Try again.";
+
+type Placed = Record<string, { task: Task; seq: number; saved: boolean }>;
+
+function unsettled(placed: Placed, tasks: Task[]) {
+  const kept: Placed = {};
+  for (const [id, entry] of Object.entries(placed)) {
+    const server = tasks.find((task) => task.id === id);
+    if (server && !entry.saved && !placementLanded(server, entry.task)) kept[id] = entry;
+  }
+  return kept;
+}
+
+function LiftedTask({ drag }: { drag: TaskDrag }) {
+  return (
+    <div
+      aria-hidden
+      data-task-lifted-card=""
+      className="pointer-events-none fixed z-[60] flex w-[200px] items-center gap-1.5 rounded-md bg-[color-mix(in_srgb,var(--violet)_15%,#1b1b1b)] px-2 py-1 shadow-[inset_0_0_0_1px_var(--violet),0_14px_30px_rgba(0,0,0,0.55)]"
+      style={{ left: Math.max(8, Math.min(drag.x - 16, window.innerWidth - 208)), top: Math.min(drag.y + 12, window.innerHeight - 40) }}
+    >
+      <TaskKindIcon title={drag.task.title} className="text-violet size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-[12px] leading-[18px] font-medium">{drag.task.title}</span>
+      <span className="text-soft shrink-0 text-[11px] leading-[18px] tabular-nums">{durationLabel(drag.durationMinutes)}</span>
+    </div>
+  );
+}
+
+function PressRing({ press }: { press: TaskPress }) {
+  return (
+    <svg aria-hidden viewBox="0 0 38 38" className="pointer-events-none fixed z-[60] size-[38px]" style={{ left: press.x - 19, top: press.y - 19 }}>
+      <circle cx="19" cy="19" r="16" fill="rgb(255 255 255 / 0.12)" stroke="rgb(255 255 255 / 0.18)" strokeWidth="3" />
+      <circle
+        cx="19"
+        cy="19"
+        r="16"
+        fill="none"
+        stroke="var(--violet)"
+        strokeWidth="3"
+        strokeLinecap="round"
+        pathLength={100}
+        strokeDasharray="100"
+        transform="rotate(-90 19 19)"
+        className="animate-press-fill"
+        style={{ animationDuration: `${LONG_PRESS_MS}ms` }}
+      />
+    </svg>
+  );
+}
 
 function calendarHref(date: string, mode: CalendarMode | null) {
   const params = new URLSearchParams({ date });
@@ -266,16 +322,54 @@ export default function CalendarScreen({
   }
 
   const { sections, toggle: toggleSection } = useCalendarSections();
-  const { done, complete: markDone } = useTaskDone(planner.tasks);
+  const [placed, setPlaced] = useState<Placed>({});
+  const [plannerSeen, setPlannerSeen] = useState(planner);
+  if (plannerSeen !== planner) {
+    setPlannerSeen(planner);
+    const kept = unsettled(placed, planner.tasks);
+    if (Object.keys(kept).length !== Object.keys(placed).length) setPlaced(kept);
+  }
+  const placeSeq = useRef(0);
+  const tasks = useMemo(() => planner.tasks.map((task) => placed[task.id]?.task ?? task), [planner.tasks, placed]);
+  const place = (task: Task, placement: DropPlacement) => {
+    const seq = (placeSeq.current += 1);
+    setError(null);
+    setPlaced((current) => ({ ...current, [task.id]: { task: placedTask(task, placement, viewer.id), seq, saved: false } }));
+    void placeTaskAction(task.id, placement)
+      .catch(() => ({ error: MOVE_FAILED }))
+      .then((result) => {
+        if (!result.error) {
+          setPlaced((current) => (current[task.id]?.seq === seq ? { ...current, [task.id]: { ...current[task.id], saved: true } } : current));
+          router.refresh();
+          return;
+        }
+        setPlaced((current) => {
+          if (current[task.id]?.seq !== seq) return current;
+          const rest = { ...current };
+          delete rest[task.id];
+          return rest;
+        });
+        setError(result.error || MOVE_FAILED);
+      });
+  };
+  const gridDrag = useGridDrag();
+  const { drag, press, pickUpFromList, pickUpBlock, resizeBlock } = useTaskDrag({
+    onPlace: place,
+    onCarry: () => setDrawerOpen(false),
+  });
+  const blockDrag: TaskBlockDrag | undefined = gridDrag ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
+  const heldFromList = drag?.source === "list" ? drag.task.id : null;
+  const droppingBack = drag?.source === "block" && drag.mode === "move" ? drag : null;
+  const { done, complete: markDone } = useTaskDone(tasks);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [keptTask, setKeptTask] = useState<Task | null>(null);
-  const listedTask = openTaskId ? (planner.tasks.find((task) => task.id === openTaskId) ?? null) : null;
+  const listedTask = openTaskId ? (tasks.find((task) => task.id === openTaskId) ?? null) : null;
   if (listedTask && listedTask !== keptTask) setKeptTask(listedTask);
   const panelTask = listedTask ?? (keptTask && keptTask.id === openTaskId && done.has(keptTask.id) ? keptTask : null);
   if (openTaskId && !panelTask) setOpenTaskId(null);
   const shownTask = panelTask ?? keptTask;
   const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
-  const blocks = taskBlocks(planner.tasks, { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done });
+  const blocks = taskBlocks(tasks, { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done });
   const [opener, setOpener] = useState<HTMLElement | null>(null);
   const openTask = (task: Task, from: HTMLElement | null) => {
     setDrawerOpen(false);
@@ -290,7 +384,7 @@ export default function CalendarScreen({
     onComplete: (block: TaskBlock) => markDone(block.task),
   };
   const calendarCount = groups.reduce((total, group) => total + group.calendars.length, 0);
-  const openTaskCount = planner.tasks.filter((task) => !task.completedAt && !done.has(task.id)).length;
+  const openTaskCount = tasks.filter((task) => !task.completedAt && !done.has(task.id)).length;
 
   const step = stepDays(desktopMode);
   const menu = (large: boolean) => {
@@ -318,15 +412,18 @@ export default function CalendarScreen({
           large={large}
           onToggle={() => toggleSection("tasks")}
         />
+        {droppingBack && !large && <TaskDropZone day={slotDateLabel(taskDueDay(droppingBack.task.dueAt) ?? date)} active={droppingBack.overList} />}
         {sections.tasks && (
           <CalendarTaskList
             id={`calendar-tasks-${suffix}`}
-            tasks={planner.tasks}
+            tasks={tasks}
             viewerId={viewer.id}
             now={now}
             workspaces={planner.workspaces}
             hidden={done}
             onOpen={openTask}
+            onPickUp={gridDrag ? (event, task) => pickUpFromList(event, task, { carry: large }) : undefined}
+            held={heldFromList}
           />
         )}
       </div>
@@ -472,6 +569,7 @@ export default function CalendarScreen({
             <aside
               id="calendar-panel"
               aria-label="Calendars and tasks"
+              data-task-drop=""
               className="border-border hidden w-60 shrink-0 overflow-y-auto border-r px-2 pt-3 pb-8 lg:block"
             >
               {menu(false)}
@@ -487,6 +585,8 @@ export default function CalendarScreen({
               onSlot={(day, time) => startInvite({ date: day, time })}
               blocks={blocks}
               taskHandlers={taskHandlers}
+              drag={drag}
+              blockDrag={blockDrag}
             />
           </div>
           <div className="flex min-h-0 min-w-0 flex-1 md:hidden">
@@ -512,6 +612,8 @@ export default function CalendarScreen({
         onSent={setNotice}
       />
       <InviteNotice message={notice} onDone={clearNotice} />
+      {drag?.mode === "move" && <LiftedTask drag={drag} />}
+      {press && <PressRing press={press} />}
       <HomeWorkspace.Provider value={viewer.workspaceId ?? null}>
         <TaskPanel
           task={shownTask}

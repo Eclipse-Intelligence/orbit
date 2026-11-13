@@ -256,11 +256,12 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   return next;
 }
 
-function sameDue(write: PreparedTask, current: TaskRow) {
+function sameDue(write: PreparedTask, current: TaskRow, strict = false) {
   const before = iso(current.due_at);
   const after = write.dueAt ?? null;
   const instant = before === null || after === null ? before === after : new Date(before).getTime() === new Date(after).getTime();
   const timed = Boolean(current.due_has_time && current.due_at);
+  if (strict) return instant && timed === Boolean(write.dueHasTime);
   return instant && (!timed || Boolean(write.dueHasTime));
 }
 
@@ -450,13 +451,13 @@ async function applyTask(
   current: TaskRow,
   write: PreparedTask,
   provenance: Provenance | undefined,
-  options: { restoring?: boolean; undoing?: string | null } = {},
+  options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   await assertAssignee(db, actor.workspaceId, write.ownerId);
-  if (write.dueAt !== undefined && sameDue(write, current)) {
+  if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule)) {
     delete write.dueAt;
     delete write.dueHasTime;
-    delete write.scheduledBy;
+    if (!options.claimSchedule || write.scheduledBy === (current.scheduled_by ?? null)) delete write.scheduledBy;
   }
   settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
   const links = await resolveLinks(
@@ -572,6 +573,39 @@ export async function updateTaskInDb(
   const current = await readTask(db, id);
   if (!current) throw notFound("task");
   return applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
+}
+
+export type TaskPlacement = { at: string; durationMinutes: number } | { dateOnly: true };
+
+export const TASK_PLACE_FAILED = "Couldn't move the task. Try again.";
+
+function placementWrite(current: TaskRow, actor: UserActor, placement: TaskPlacement): TaskWrite {
+  if ("dateOnly" in placement) {
+    const day = taskDueDay(iso(current.due_at));
+    if (!day) throw new CrmError("invalid_input", "This task has no day to keep. Give it a date first.", 400, { field: "dueDate" });
+    return { dueDate: day };
+  }
+  if (typeof placement.at !== "string" || !/T\d{2}:\d{2}/.test(placement.at) || Number.isNaN(Date.parse(placement.at))) {
+    throw new CrmError("invalid_input", TASK_PLACE_FAILED, 400, { field: "dueAt" });
+  }
+  const write: TaskWrite = { dueAt: placement.at, durationMinutes: placement.durationMinutes, scheduledBy: "person" };
+  if (!current.owner_id) write.ownerId = actor.userId;
+  return write;
+}
+
+export async function placeTask(actor: UserActor, id: string, placement: TaskPlacement, options: MutationOptions = {}) {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(id) || !placement || typeof placement !== "object") throw notFound("task");
+  const provenance = options.provenance ?? { operation: "drag_task", source: "web" };
+  return withActor(actor, async (db) => {
+    const current = await readTask(db, id);
+    if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
+    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+    const write = prepareTask(placementWrite(current, actor, placement), "patch");
+    const timed = !("dateOnly" in placement);
+    const updated = await applyTask(db, actor, current, write, provenance, { claimSchedule: timed });
+    return updated.task;
+  });
 }
 
 export function mineFilter(actor: Actor, values: unknown[], alias = "t") {
