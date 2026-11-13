@@ -20,6 +20,8 @@ create table if not exists crm.task_preparations (
   primary key (task_id, user_id)
 );
 
+alter table crm.task_preparations add column if not exists started_at timestamptz;
+
 alter table crm.task_preparations drop constraint if exists task_preparations_kind;
 alter table crm.task_preparations
   add constraint task_preparations_kind check (kind in ('brief', 'draft'));
