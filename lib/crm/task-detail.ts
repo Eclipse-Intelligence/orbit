@@ -4,6 +4,8 @@ import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { linkedThread, sharedTaskContextInDb, viewerLastEmailInDb, type TaskPerson } from "@/lib/crm/task-act";
 import { splitDescription } from "@/lib/crm/task-description";
+import type { TaskPreparation } from "@/lib/crm/task-preparation";
+import { preparationBasis, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, readTaskInDb } from "@/lib/crm/tasks";
 import type { Actor, ActivityType, Task, UserActor } from "@/lib/crm/types";
 import { actorForTask } from "@/lib/crm/workspaces";
@@ -24,6 +26,7 @@ export type TaskDetail = {
   people: TaskPerson[];
   lastActivity: { type: ActivityType; title: string | null; occurredAt: string } | null;
   mail: { lastEmail: { subject: string | null; at: string } | null; thread: TaskThread | null } | null;
+  preparation: TaskPreparation | null;
 };
 
 export async function threadSummaryInDb(db: Db, userId: string, value: string): Promise<TaskThread | null> {
@@ -68,7 +71,7 @@ export async function taskDetailInDb(db: Db, home: Actor, task: Task, viewer: Ac
   const mail = home.type === "user" ? await viewerMail(db, home, task) : null;
   const readOnly = home.workspaceId !== viewer.workspaceId;
   const deal = shared.opportunity;
-  return {
+  const detail: TaskDetail = {
     task: { ...task, description: splitDescription(task.description).text || null },
     workspace: { id: home.workspaceId, name: home.type === "user" ? home.workspaceName : null, current: !readOnly },
     readOnly,
@@ -82,7 +85,10 @@ export async function taskDetailInDb(db: Db, home: Actor, task: Task, viewer: Ac
     people: shared.people,
     lastActivity: shared.lastActivity,
     mail,
+    preparation: null,
   };
+  if (home.type === "user") detail.preparation = await readPreparationInDb(db, home.userId, task.id, preparationBasis(detail));
+  return detail;
 }
 
 export async function taskDetail(actor: Actor, taskId: string, options: { anyWorkspace?: boolean } = {}): Promise<TaskDetail> {

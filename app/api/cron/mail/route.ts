@@ -1,6 +1,7 @@
 import { backgroundTargets } from "@/lib/crm/conversations";
 import { followUpCallsAcross } from "@/lib/crm/follow-ups";
 import { cronAuthorization } from "@/lib/crm/scheduler";
+import { prepareTasksDueToday } from "@/lib/crm/task-prepare";
 import { processDueMail } from "@/lib/mail/due";
 import { readInviteReplies } from "@/lib/mail/invite-replies";
 import { classifyCapture } from "@/lib/mail/capture-filter";
@@ -33,6 +34,9 @@ async function handle(request: Request) {
       await processDueMail(target.actor, { deadline: Math.min(mailDeadline, Date.now() + 30_000) }).catch((error) => console.error("Due mail failed", error));
       await prepareMail(target.actor, { deadline: Math.min(mailDeadline, Date.now() + Math.max(share, 30_000)) }).catch((error) =>
         console.error("Preparing mail failed", error),
+      );
+      await prepareTasksDueToday(target.actor, { deadline: Math.min(mailDeadline, Date.now() + 60_000) }).catch((error) =>
+        console.error("Preparing tasks failed", error instanceof Error ? error.message : error),
       );
       await followUpCallsAcross(target.actor, { deadline: Math.min(mailDeadline, Date.now() + 30_000) }).catch((error) =>
         console.error("Call follow-ups failed", error),
