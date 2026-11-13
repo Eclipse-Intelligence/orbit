@@ -61,6 +61,7 @@ import ClockIcon from "@/public/assets/images/companies/detail/clock.svg";
 const SETTINGS_KEY = "orbit-assistant-settings";
 const DOCK_MARGIN = 16;
 const QUICK_ADD_SPACE = 72;
+const COMPOSER_FOCUS_FRAMES = 90;
 const PILL_WIDTH = 384;
 const PILL_MIN = 224;
 const OPEN_WIDTH = 736;
@@ -763,13 +764,23 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
 
   useEffect(() => {
     if (!open || covered || !composerWanted.current) return;
-    const frame = window.requestAnimationFrame(() => {
+    let frame = 0;
+    let tries = 0;
+    const settle = () => {
+      tries += 1;
       const node = input.current;
-      if (!node) return;
-      composerWanted.current = false;
-      node.focus();
-      node.setSelectionRange(node.value.length, node.value.length);
-    });
+      if (node && document.activeElement !== node) {
+        node.focus();
+        node.setSelectionRange(node.value.length, node.value.length);
+      }
+      const trapped = document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      if ((node && document.activeElement === node && !trapped) || tries >= COMPOSER_FOCUS_FRAMES) {
+        composerWanted.current = false;
+        return;
+      }
+      frame = window.requestAnimationFrame(settle);
+    };
+    frame = window.requestAnimationFrame(settle);
     return () => window.cancelAnimationFrame(frame);
   }, [open, covered, asked]);
 
