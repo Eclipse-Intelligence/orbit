@@ -32,7 +32,7 @@ import {
   type ToolSwitches,
 } from "@/lib/assistant/tools";
 import { eclipseAvailable } from "@/lib/assistant/eclipse-scope";
-import { isWebApproval, needsWebApproval, webCard, webGateState, WEB_TOOLS } from "@/lib/assistant/web-gate";
+import { isWebApproval, needsWebApproval, ownText, webCard, webGateState, WEB_TOOLS } from "@/lib/assistant/web-gate";
 import { linearHere } from "@/lib/crm/linear-connection";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, docRefusalForCard, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
@@ -1414,7 +1414,7 @@ export async function sendMessage(
 }
 
 async function readPage(actor: UserActor, page: unknown, message: string) {
-  return pageContext(actor, readPageInput(page), { taggedTaskIds: taggedTaskIds(message) }).catch((error) => {
+  return pageContext(actor, readPageInput(page), { taggedTaskIds: taggedTaskIds(ownText(message).own) }).catch((error) => {
     console.error("Couldn't read the page context", error instanceof Error ? error.message : error);
     return "";
   });

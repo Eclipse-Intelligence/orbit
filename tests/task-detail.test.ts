@@ -3,7 +3,9 @@ import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { GET as restGetTask } from "@/app/api/v1/tasks/[id]/route";
+import { pageContext } from "@/lib/assistant/page-context";
 import { runTool } from "@/lib/assistant/tools";
+import { outsideRead, webGateState } from "@/lib/assistant/web-gate";
 import { createActivity } from "@/lib/crm/activities";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -11,8 +13,8 @@ import { CrmError } from "@/lib/crm/errors";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
-import { taskDetail, taskDetailOrNull, type TaskDetail } from "@/lib/crm/task-detail";
-import { addTaskParticipants, createTask } from "@/lib/crm/tasks";
+import { detailOfTask, taskDetail, taskDetailOrNull, type TaskDetail } from "@/lib/crm/task-detail";
+import { addTaskParticipants, archiveTask, createTask, getTask } from "@/lib/crm/tasks";
 import type { Actor, AgentActor, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -130,6 +132,8 @@ before(async () => {
   jane = (
     await createContact(mark, { companyId: northwind, firstName: "Jane", lastName: "Cooper", email: "jane@northwind-detail.test", phone: "07700 900412", jobTitle: "Head of Operations" })
   ).body.contact.id;
+  await sql("update crm.contacts set source = 'Referral' where id = $1", [jane]);
+  await sql("update crm.companies set source = 'Website' where id = $1", [northwind]);
   const stage = (await listPipeline(mark)).stages[0];
   stageName = stage.name;
   renewal = (await createOpportunity(mark, { companyId: northwind, name: "Northwind renewal 2027", stageId: stage.id, value: 48000, currency: "GBP", primaryContactId: jane })).body.opportunity.id;
@@ -158,8 +162,8 @@ function assertCrmFields(detail: TaskDetail) {
   assert.equal(detail.task.ownerId, sam.userId);
   assert.equal(detail.task.ownerName, "Sam Okafor");
   assert.equal(detail.task.description, "Ask about the three-year price.");
-  assert.deepEqual(detail.contact, { id: jane, name: "Jane Cooper", jobTitle: "Head of Operations", phone: "07700 900412", email: "jane@northwind-detail.test" });
-  assert.deepEqual(detail.company, { id: northwind, name: "Northwind Trading", phone: "+44 20 7946 0101" });
+  assert.deepEqual(detail.contact, { id: jane, name: "Jane Cooper", jobTitle: "Head of Operations", phone: "07700 900412", email: "jane@northwind-detail.test", source: "Referral" });
+  assert.deepEqual(detail.company, { id: northwind, name: "Northwind Trading", phone: "+44 20 7946 0101", source: "Website" });
   assert.deepEqual(detail.opportunity, { id: renewal, name: "Northwind renewal 2027", stage: stageName, status: "open", value: "48000.00", currency: "GBP", linked: true });
   assert.deepEqual(detail.people, []);
   assert.equal(detail.lastActivity?.type, "call");
@@ -250,6 +254,62 @@ describe("list_tasks with a task id", () => {
   });
 });
 
+describe("list_tasks with a task id and a workspace", () => {
+  it("returns the one task without fanning out, with its flags worked out for the chat's own workspace", async () => {
+    for (const workspace of ["all", "Second brand", mark.workspaceName]) {
+      const result = (await runTool(mark, "list_tasks", { taskId: callJane, workspace }, { multiWorkspace: true })) as TaskDetail & { workspaces?: unknown; note?: unknown };
+      assert.equal(result.workspaces, undefined, workspace);
+      assert.equal(result.note, undefined, workspace);
+      assert.equal(result.task.id, callJane, workspace);
+      assert.equal(result.readOnly, false, workspace);
+      assert.equal(result.canChange, true, workspace);
+      assert.deepEqual(result.workspace, { id: mark.workspaceId, name: mark.workspaceName, current: true }, workspace);
+    }
+    const elsewhere = (await createTask(second, { title: "Fan-out check", ownerId: mark.userId, companyId: null, contactId: null, opportunityId: null })).body.task.id;
+    const away = (await runTool(mark, "list_tasks", { taskId: elsewhere, workspace: "all" }, { multiWorkspace: true })) as TaskDetail;
+    assert.equal(away.task.id, elsewhere);
+    assert.equal(away.readOnly, true);
+    assert.equal(away.canChange, false);
+    assert.equal(away.workspace.name, "Second brand");
+    const listed = (await runTool(mark, "list_tasks", { workspace: "all" }, { multiWorkspace: true })) as { workspaces?: unknown[] };
+    assert.ok(Array.isArray(listed.workspaces));
+  });
+});
+
+describe("what a task block tells the model", () => {
+  it("says when the user can't change the task, and offers something else", async () => {
+    const tagged = await pageContext(priya, null, { taggedTaskIds: [callJane] });
+    assert.match(tagged, /\nThe user can't change that task: only its assignee, its creator, an owner or an admin can\. Don't propose update_task on it; offer what they can do instead, such as logging the activity or a new task\.\n/);
+    assert.doesNotMatch(await pageContext(sam, null, { taggedTaskIds: [callJane] }), /can't change that task/);
+    const gone = (await createTask(mark, { title: "Archived follow-up", ownerId: mark.userId, contactId: jane })).body.task.id;
+    await archiveTask(mark, gone);
+    assert.match(await pageContext(mark, null, { taggedTaskIds: [gone] }), /task "Archived follow-up" \[task id [^\]]+\], archived, [^\n]*\nThe user can't change that task \(it is archived\)\./);
+  });
+
+  it("marks a lead-form person and the last activity as outside content, in the block and in list_tasks", async () => {
+    const lead = (await createContact(mark, { firstName: "Lena", lastName: "Leadform", email: "lena@leads-detail.test" })).body.contact.id;
+    await sql("update crm.contacts set source = 'Meta Lead Ad' where id = $1", [lead]);
+    const leadTask = (await createTask(mark, { title: "Call Lena back", ownerId: mark.userId, contactId: lead })).body.task.id;
+    const block = await pageContext(mark, null, { taggedTaskIds: [leadTask] });
+    assert.match(block, /\nFrom a lead form: the person or company on that task was added from a Meta lead ad/);
+    assert.doesNotMatch(block, /Last activity with them/);
+    assert.equal(webGateState([{ role: "user", content: "Hi", page_context: block }]).outside, true);
+    const fromLead = await runTool(mark, "list_tasks", { taskId: leadTask });
+    assert.equal((fromLead as TaskDetail).contact?.source, "Meta Lead Ad");
+    assert.equal(outsideRead("list_tasks", JSON.stringify(fromLead)), true);
+
+    const plain = (await createTask(mark, { title: "Tidy the notes", ownerId: mark.userId, companyId: null, contactId: null, opportunityId: null })).body.task.id;
+    const quiet = await pageContext(mark, null, { taggedTaskIds: [plain] });
+    assert.equal(webGateState([{ role: "user", content: "Hi", page_context: quiet }]).outside, false);
+    assert.equal(outsideRead("list_tasks", JSON.stringify(await runTool(mark, "list_tasks", { taskId: plain }))), false);
+
+    const active = await pageContext(sam, null, { taggedTaskIds: [callJane] });
+    assert.match(active, /\nLast activity with them: call "Call with Jane"/);
+    assert.equal(webGateState([{ role: "user", content: "Hi", page_context: active }]).outside, true);
+    assert.equal(outsideRead("list_tasks", JSON.stringify(await runTool(priya, "list_tasks", { taskId: callJane }))), true);
+  });
+});
+
 describe("MCP get_next_action", () => {
   it("is registered for agent and personal tokens with crm:read, and gives agents no mail", async () => {
     const asAgent = await mcpCall(agent, "get_next_action", { id: callJane });
@@ -288,5 +348,17 @@ describe("GET /api/v1/tasks/:id", () => {
     assert.match(body.task.description, /\/mail\?thread=/);
     assertCrmFields(body.detail);
     assert.equal(body.detail.mail, null);
+  });
+
+  it("still returns the task when its detail can't be read", async () => {
+    const task = await getTask(agent, callJane);
+    const original = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(await detailOfTask(agent, { ...task, contactId: "not-a-uuid" }), null);
+    } finally {
+      console.error = original;
+    }
+    assertCrmFields((await detailOfTask(agent, task))!);
   });
 });

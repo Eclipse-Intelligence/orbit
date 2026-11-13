@@ -199,16 +199,15 @@ async function viewerBookingUrl(actor: UserActor) {
   return page?.exists && page.enabled ? bookingUrl(page.slug) : null;
 }
 
-export type SharedTaskContext = Pick<TaskContext, "opportunity" | "lastActivity" | "people" | "lookups">;
+export type SharedTaskContext = Pick<TaskContext, "opportunity" | "lastActivity" | "people">;
 
 export async function sharedTaskContextInDb(db: Db, workspaceId: string, task: Task): Promise<SharedTaskContext> {
-  const [opportunity, lastActivity, people, lookups] = await Promise.all([
+  const [opportunity, lastActivity, people] = await Promise.all([
     opportunityFor(db, workspaceId, task),
     lastActivityFor(db, workspaceId, task),
     companyPeople(db, workspaceId, task),
-    contactLookupsFor(db, workspaceId, task.contactId),
   ]);
-  return { opportunity, lastActivity, people, lookups };
+  return { opportunity, lastActivity, people };
 }
 
 export async function viewerLastEmailInDb(db: Db, actor: UserActor, task: Task) {
@@ -216,12 +215,13 @@ export async function viewerLastEmailInDb(db: Db, actor: UserActor, task: Task) 
 }
 
 export async function taskContextInDb(db: Db, actor: UserActor, task: Task): Promise<Omit<TaskContext, "bookingUrl">> {
-  const [shared, lastEmail, thread] = await Promise.all([
+  const [shared, lookups, lastEmail, thread] = await Promise.all([
     sharedTaskContextInDb(db, actor.workspaceId, task),
+    contactLookupsFor(db, actor.workspaceId, task.contactId),
     lastEmailFor(db, actor, task.contactEmail),
     threadFor(db, actor, task.description),
   ]);
-  return { ...shared, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread };
+  return { ...shared, lookups, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread };
 }
 
 export async function taskContext(actor: UserActor, taskId: string): Promise<TaskContext> {

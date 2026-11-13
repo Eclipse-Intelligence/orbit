@@ -449,12 +449,94 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.match(seen, /Task is about: person \\"Cyril Dunmore\\" \[person id [0-9a-f-]{36}\][^;]*; company \\"Sagebrook Experts\\"/);
     assert.match(seen, /Task they have open: task \\"Chase Ansel if he's gone quiet\\"/);
     assert.match(seen, /A tagged task comes with its full picture/);
-    assert.match(guide, /A task the message tags \(\W+Task they tagged\W+in the page_context block\) is the task it is about, with the full picture already there, and it wins over a task they have open/);
+    assert.match(guide, /A task the message tags \(\W+Task they tagged\W+in the page_context block, with the full picture already there\) wins over a task they have open, but only when the outcome is about that task, it isn't done or archived, and the block doesn't say the user can't change it\. A tag used as a passing reference/);
+    assert.match(guide, /With several tagged tasks and no clear one, ask which, or check list_tasks\./);
     assert.deepEqual(result.cards.map((item) => item.name), ["log_activity", "update_task", "create_task"]);
     assert.deepEqual(result.cards[1].title, "Complete task: Chase Sagebrook intro");
 
     const wrong = await runOnce(byId("write-call-outcome-tagged-task"), settings(scripted([outcome("task:Chase Ansel if he's gone quiet", "contact:Ansel Pike")])));
     assert.deepEqual(failed(wrong), ["proposes log_activity", "proposes update_task", "proposes create_task", "leaves the open task about Ansel alone", "logs nothing on Ansel"]);
+  });
+
+  it("asks which task when two are tagged and nothing says which one the call settled", async () => {
+    let seen = "";
+    const asked = await runOnce(
+      byId("write-call-outcome-two-tagged-tasks"),
+      settings(
+        scripted([
+          ({ body }) => {
+            seen = JSON.stringify(body.messages);
+            return { content: "Which task did that call settle: Chase Sagebrook intro or Send Quillfeather proposal?" };
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(asked), []);
+    assert.equal(seen.match(/Task they tagged: task/g)?.length, 2);
+    const guessed = await runOnce(
+      byId("write-call-outcome-two-tagged-tasks"),
+      settings(scripted([({ world }) => ({ content: "Done.", calls: [{ name: "update_task", args: { taskId: world.id("task:Chase Sagebrook intro"), completed: true } }] })])),
+    );
+    assert.deepEqual(failed(guessed), ["completes neither tagged task without knowing which", "asks the user a question"]);
+  });
+
+  it("never completes a task tagged only as a reference, nor another person's open task", async () => {
+    const outcome = (taskKey: string): Step => ({ world }) => ({
+      calls: [
+        { name: "log_activity", args: { type: "call", contactId: world.id("contact:Cyril Dunmore"), body: "He wants the proposal Friday." } },
+        { name: "update_task", args: { taskId: world.id(taskKey), completed: true } },
+        { name: "create_task", args: { title: "Send Cyril the proposal", contactId: world.id("contact:Cyril Dunmore"), dueDate: londonDay({ weekday: 5 }) } },
+      ],
+    });
+    let seen = "";
+    const right = await runOnce(
+      byId("write-call-outcome-tag-as-reference"),
+      settings(
+        scripted([
+          (call) => {
+            seen = JSON.stringify(call.body.messages);
+            return { calls: [{ name: "list_tasks", args: { contactId: call.world.id("contact:Cyril Dunmore") } }] };
+          },
+          outcome("task:Chase Sagebrook intro"),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(right), []);
+    assert.match(seen, /Task they tagged: task \\"Send Quillfeather proposal\\"/);
+    assert.match(seen, /Task they have open: task \\"Chase Ansel if he's gone quiet\\"/);
+    assert.deepEqual(failed(await runOnce(byId("write-call-outcome-tag-as-reference"), settings(scripted([outcome("task:Send Quillfeather proposal")])))), [
+      "proposes update_task",
+      "leaves the referenced Quillfeather task alone",
+    ]);
+    assert.deepEqual(failed(await runOnce(byId("write-call-outcome-tag-as-reference"), settings(scripted([outcome("task:Chase Ansel if he's gone quiet")])))), [
+      "proposes update_task",
+      "leaves the open task about Ansel alone",
+    ]);
+  });
+
+  it("logs the call and sets the next step without touching a tagged task that is already done", async () => {
+    const outcome = (complete: boolean): Step => ({ world }) => ({
+      calls: [
+        { name: "log_activity", args: { type: "call", contactId: world.id("contact:Odile Marsh"), body: "She wants the revised outline Friday." } },
+        ...(complete ? [{ name: "update_task", args: { taskId: world.id("task:Book Fernhill follow-up"), completed: true } }] : []),
+        { name: "create_task", args: { title: "Send Odile the revised outline", contactId: world.id("contact:Odile Marsh"), dueDate: londonDay({ weekday: 5 }) } },
+      ],
+    });
+    let seen = "";
+    const right = await runOnce(
+      byId("write-call-outcome-done-tagged-task"),
+      settings(
+        scripted([
+          (call) => {
+            seen = JSON.stringify(call.body.messages);
+            return outcome(false)(call);
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(right), []);
+    assert.match(seen, /Task they tagged: task \\"Book Fernhill follow-up\\" \[task id [0-9a-f-]{36}\], done, /);
+    assert.deepEqual(failed(await runOnce(byId("write-call-outcome-done-tagged-task"), settings(scripted([outcome(true)])))), ["leaves the done task alone"]);
   });
 
   it("keeps the next task with the teammate who owned the open task", async () => {

@@ -289,6 +289,11 @@ export function taskDetailLines(found: TaskDetail, lead: string): Lines {
       `That task is in the ${quoted(found.workspace.name, "other")} workspace, not this one. Its records are shown for reading only: to change the task or log on its records, the user switches to that workspace first.`,
     );
   }
+  if (!found.readOnly && !found.canChange) {
+    lines.push(
+      `The user can't change that task${task.archivedAt ? " (it is archived)" : ": only its assignee, its creator, an owner or an admin can"}. Don't propose update_task on it; offer what they can do instead, such as logging the activity or a new task.`,
+    );
+  }
   const description = text(task.description);
   if (description) lines.push(`Task detail: ${description}`);
   const about: string[] = [];
@@ -312,6 +317,9 @@ export function taskDetailLines(found: TaskDetail, lead: string): Lines {
     about.push(deal.linked ? named : `no opportunity linked, but their open ${named}`);
   }
   lines.push(about.length > 0 ? `Task is about: ${about.join("; ")}` : "Task is about: nobody yet, no person, company or opportunity is linked");
+  if (isLeadSource(found.contact?.source) || isLeadSource(found.company?.source)) {
+    lines.push("From a lead form: the person or company on that task was added from a Meta lead ad, so their name and details were typed in by whoever filled in the form.");
+  }
   if (found.people.length > 0) {
     lines.push(
       "People at that company (the task has no person linked):",
@@ -501,11 +509,14 @@ export function taggedTaskIds(message: string) {
 }
 
 async function taggedTasks(actor: UserActor, ids: string[]): Promise<Lines> {
-  const lines: Lines = [];
-  for (const id of ids.slice(0, TAGGED_TASKS_SHOWN)) {
-    const found = await taskDetailOrNull(actor, id);
-    lines.push(...(found ? taskDetailLines(found, "Task they tagged") : [`Task they tagged [task id ${id}] ${MISSING}.`]));
-  }
+  if (ids.length === 0) return [];
+  const shown = ids.slice(0, TAGGED_TASKS_SHOWN);
+  const found = await Promise.all(shown.map((id) => taskDetailOrNull(actor, id)));
+  const lines: Lines = shown.flatMap((id, index) => {
+    const detail = found[index];
+    return detail ? taskDetailLines(detail, "Task they tagged") : [`Task they tagged [task id ${id}] ${MISSING}.`];
+  });
+  lines.push("Tagged tasks are described as they were when this message was sent. To act on a tag from an earlier message, read the task again with list_tasks and its taskId.");
   const more = ids.length - TAGGED_TASKS_SHOWN;
   if (more > 0) {
     lines.push(`They tagged ${more === 1 ? "1 more task" : `${more} more tasks`}, not described here. Read each with list_tasks and its taskId when it matters.`);

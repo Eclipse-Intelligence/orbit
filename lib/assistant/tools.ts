@@ -1971,7 +1971,7 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        taskId: { type: "string", description: "One task's id. Returns just that task with its full picture; the other parameters are ignored." },
+        taskId: { type: "string", description: "One task's id. Returns just that task with its full picture, from whichever of the user's workspaces it is in; the other parameters, workspace included, are ignored." },
         mine: { type: "boolean", description: "Only the user's own tasks: assigned to them or unassigned. Use for \"my tasks\"." },
         view: {
           type: "string",
@@ -6170,6 +6170,10 @@ const OWN_FIELDS: Record<string, ReadonlySet<string>> = {
 
 const TOOL_TIMEOUT_MS = 90_000;
 
+function readsOneTask(name: string, args: Args) {
+  return name === "list_tasks" && Boolean(optionalStr(args.taskId));
+}
+
 function allowsNull(schema: unknown) {
   return Boolean(schema && typeof schema === "object" && /\bnull\b/i.test(String((schema as { description?: unknown }).description ?? "")));
 }
@@ -6415,7 +6419,7 @@ export async function runTool(
       const refusal = await crossWorkspaceRefusal(actor, tool.name, resolved.args);
       if (refusal) return { error: refusal, field: "workspace" };
     } else if (WORKSPACE_READ_TOOLS.has(tool.name)) {
-      scope = await workspaceTargets(actor, requestedWorkspace);
+      if (!readsOneTask(tool.name, cleaned)) scope = await workspaceTargets(actor, requestedWorkspace);
     } else if (typeof requestedWorkspace === "string" && requestedWorkspace.trim()) {
       const wanted = requestedWorkspace.trim();
       const actors = await workspaceActors(actor);

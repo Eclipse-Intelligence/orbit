@@ -18,8 +18,8 @@ export type TaskDetail = {
   readOnly: boolean;
   canChange: boolean;
   assignedToViewer: boolean;
-  contact: TaskPerson | null;
-  company: { id: string; name: string; phone: string | null } | null;
+  contact: (TaskPerson & { source: string | null }) | null;
+  company: { id: string; name: string; phone: string | null; source: string | null } | null;
   opportunity: { id: string; name: string; stage: string | null; status: string; value: string | null; currency: string; linked: boolean } | null;
   people: TaskPerson[];
   lastActivity: { type: ActivityType; title: string | null; occurredAt: string } | null;
@@ -48,17 +48,24 @@ export async function threadSummaryInDb(db: Db, userId: string, value: string): 
   return { emailId: row.id, subject: row.subject, messages: row.messages, latest: iso(row.latest), fromNames: row.people ?? [] };
 }
 
+async function leadSources(db: Db, task: Task) {
+  if (!task.contactId && !task.companyId) return { contact: null, company: null };
+  const result = await db.query<{ contact: string | null; company: string | null }>(
+    `select (select source from crm.contacts where id = $1) as contact, (select source from crm.companies where id = $2) as company`,
+    [task.contactId, task.companyId],
+  );
+  return result.rows[0] ?? { contact: null, company: null };
+}
+
 async function viewerMail(db: Db, actor: UserActor, task: Task): Promise<NonNullable<TaskDetail["mail"]>> {
   const thread = linkedThread(task.description);
-  const [lastEmail, summary] = await Promise.all([viewerLastEmailInDb(db, actor, task), thread ? threadSummaryInDb(db, actor.userId, thread.value) : null]);
-  return { lastEmail, thread: summary };
+  const summary = thread ? await threadSummaryInDb(db, actor.userId, thread.value) : null;
+  return { lastEmail: await viewerLastEmailInDb(db, actor, task), thread: summary };
 }
 
 export async function taskDetailInDb(db: Db, home: Actor, task: Task, viewer: Actor = home): Promise<TaskDetail> {
-  const [shared, mail] = await Promise.all([
-    sharedTaskContextInDb(db, home.workspaceId, task),
-    home.type === "user" ? viewerMail(db, home, task) : null,
-  ]);
+  const [shared, sources] = await Promise.all([sharedTaskContextInDb(db, home.workspaceId, task), leadSources(db, task)]);
+  const mail = home.type === "user" ? await viewerMail(db, home, task) : null;
   const readOnly = home.workspaceId !== viewer.workspaceId;
   const deal = shared.opportunity;
   return {
@@ -68,9 +75,9 @@ export async function taskDetailInDb(db: Db, home: Actor, task: Task, viewer: Ac
     canChange: !readOnly && !task.archivedAt && hasScope(home.scopes, "tasks:write") && canChangeTask(home, task),
     assignedToViewer: home.type === "user" && task.ownerId === home.userId,
     contact: task.contactId
-      ? { id: task.contactId, name: task.contactName ?? task.contactEmail ?? "Unnamed person", jobTitle: task.contactJobTitle, phone: task.contactPhone, email: task.contactEmail }
+      ? { id: task.contactId, name: task.contactName ?? task.contactEmail ?? "Unnamed person", jobTitle: task.contactJobTitle, phone: task.contactPhone, email: task.contactEmail, source: sources.contact }
       : null,
-    company: task.companyId ? { id: task.companyId, name: task.companyName ?? "Unnamed company", phone: task.companyPhone } : null,
+    company: task.companyId ? { id: task.companyId, name: task.companyName ?? "Unnamed company", phone: task.companyPhone, source: sources.company } : null,
     opportunity: deal ? { ...deal, linked: task.opportunityId === deal.id } : null,
     people: shared.people,
     lastActivity: shared.lastActivity,
@@ -87,6 +94,15 @@ export async function taskDetail(actor: Actor, taskId: string, options: { anyWor
     if (!task || task.workspaceId !== home.workspaceId) throw notFound("task");
     return taskDetailInDb(db, home, task, actor);
   });
+}
+
+export async function detailOfTask(actor: Actor, task: Task): Promise<TaskDetail | null> {
+  try {
+    return await withActor(actor, (db) => taskDetailInDb(db, actor, task));
+  } catch (error) {
+    console.error("Couldn't read the task's detail", error instanceof Error ? error.message : error);
+    return null;
+  }
 }
 
 export async function taskDetailOrNull(actor: UserActor, taskId: string) {
