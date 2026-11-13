@@ -1071,7 +1071,7 @@ for (const width of [1100, 1280, 1440]) {
   const fab = page.getByRole("button", { name: "Quick add", exact: true });
   const fabBox = (await fab.isVisible()) ? await fab.boundingBox() : null;
   check(`${device} quick add stays usable beside the panel`, Boolean(panelBox && fabBox && fabBox.x + fabBox.width <= panelBox.x));
-  const pill = page.getByRole("button", { name: /^(Ask Orbit|Continue your chat)/ });
+  const pill = page.locator("button[aria-keyshortcuts=\"o\"]").filter({ hasText: /^(Ask Orbit|Continue your chat)/ });
   const pillBox = (await pill.isVisible()) ? await pill.boundingBox() : null;
   const clear = (box) => !box || !panelBox || box.x + box.width <= panelBox.x;
   const apart = (box) => !box || !fabBox || box.x + box.width <= fabBox.x || box.y + box.height <= fabBox.y;
