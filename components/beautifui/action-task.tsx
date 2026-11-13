@@ -8,6 +8,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import { ClickUpBadge } from "@/components/crm/clickup";
 import Button from "@/components/_ui/button";
 import { TaskAct } from "@/components/crm/task-actions";
+import TaskAskButton from "@/components/crm/task-ask";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskTitle from "@/components/crm/task-title";
@@ -22,6 +23,7 @@ import { taskDueLabel, taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
+import { usePageFocus } from "@/stores/page-context-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
@@ -203,6 +205,7 @@ function ActionTask({
   }, [expanded]);
   const preview = splitDescription(task.description).text.split("\n")[0]?.trim();
   const expansion = useExpansion(expanded);
+  usePageFocus("task", task.id, expanded);
   const row = useRef<HTMLLIElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState(0);
@@ -415,6 +418,7 @@ function ActionTask({
                 <TaskAct task={task} here={here} canChange={canChange} />
                 <TaskFields details={details} viewer={viewer} members={members} tagged={tagged} layout="row" done={completed} />
                 <div className="flex items-center gap-2 max-sm:pt-1">
+                  <TaskAskButton taskId={task.id} variant="ghost" className="max-sm:hidden" />
                   <span className="flex-1 max-sm:hidden" />
                   <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="hit max-sm:flex-1">
                     Open

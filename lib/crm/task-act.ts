@@ -199,6 +199,18 @@ async function viewerBookingUrl(actor: UserActor) {
   return page?.exists && page.enabled ? bookingUrl(page.slug) : null;
 }
 
+export async function taskContextInDb(db: Db, actor: UserActor, task: Task): Promise<Omit<TaskContext, "bookingUrl">> {
+  const [opportunity, lastActivity, lastEmail, thread, people, lookups] = await Promise.all([
+    opportunityFor(db, actor.workspaceId, task),
+    lastActivityFor(db, actor.workspaceId, task),
+    lastEmailFor(db, actor, task.contactEmail),
+    threadFor(db, actor, task.description),
+    companyPeople(db, actor.workspaceId, task),
+    contactLookupsFor(db, actor.workspaceId, task.contactId),
+  ]);
+  return { opportunity, lastActivity, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread, people, lookups };
+}
+
 export async function taskContext(actor: UserActor, taskId: string): Promise<TaskContext> {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(taskId)) throw notFound("task");
@@ -206,15 +218,7 @@ export async function taskContext(actor: UserActor, taskId: string): Promise<Tas
     withActor(actor, async (db) => {
       const task = await readTaskInDb(db, taskId);
       if (!task || task.workspaceId !== actor.workspaceId) throw notFound("task");
-      const [opportunity, lastActivity, lastEmail, thread, people, lookups] = await Promise.all([
-        opportunityFor(db, actor.workspaceId, task),
-        lastActivityFor(db, actor.workspaceId, task),
-        lastEmailFor(db, actor, task.contactEmail),
-        threadFor(db, actor, task.description),
-        companyPeople(db, actor.workspaceId, task),
-        contactLookupsFor(db, actor.workspaceId, task.contactId),
-      ]);
-      return { opportunity, lastActivity, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread, people, lookups };
+      return taskContextInDb(db, actor, task);
     }),
     viewerBookingUrl(actor),
   ]);

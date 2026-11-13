@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread, holdEscape } from "@/components/chat/discussion";
@@ -9,6 +9,7 @@ import { useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { activateRow } from "@/components/shortcuts/keyboard-list";
 import { TaskAct } from "@/components/crm/task-actions";
+import TaskAskButton from "@/components/crm/task-ask";
 import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
@@ -18,6 +19,7 @@ import { completeTaskAction } from "@/app/(crm)/records";
 import { untagTaskAction } from "@/app/(crm)/discussions";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
+import { usePageFocus } from "@/stores/page-context-store";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 
@@ -98,7 +100,7 @@ function focusedElement() {
   return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -118,6 +120,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
   const creator = named(task.createdByUserId);
   const [doneHere, setDoneHere] = useState(false);
   const [opener] = useState(focusedElement);
+  const asking = useRef(false);
   const done = completed || doneHere || Boolean(task.completedAt);
   const [busy, setBusy] = useState(false);
   const [removed, setRemoved] = useState<string[]>([]);
@@ -223,6 +226,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         flush();
+        if (asking.current) {
+          asking.current = false;
+          return;
+        }
         returnFocus(task.id, returnTo, opener);
       }}
       onOpenAutoFocus={(event) => {
@@ -243,7 +250,22 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
               <span className="caption-style text-subtle truncate">{created}</span>
             </div>
             <SheetDescription className="sr-only">{task.title}</SheetDescription>
-            <SheetCloseButton label="Close" className="hit" />
+            <div className="flex shrink-0 items-center gap-2">
+              <TaskAskButton
+                taskId={task.id}
+                variant="secondary"
+                onAsk={
+                  modal
+                    ? () => {
+                        asking.current = true;
+                        flush();
+                        onClose();
+                      }
+                    : undefined
+                }
+              />
+              <SheetCloseButton label="Close" className="hit" />
+            </div>
           </SheetHeader>
           <div data-chat-room-pane className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-5 pb-4 max-md:px-3.5">
@@ -337,6 +359,7 @@ export default function TaskPanel({
   modal?: boolean;
 }) {
   const shown = open && task ? task.id : null;
+  usePageFocus("task", task?.id ?? "", Boolean(shown));
   const [last, setLast] = useState<string | null>(shown);
   const [instant, setInstant] = useState(false);
   if (last !== shown) {
@@ -345,7 +368,7 @@ export default function TaskPanel({
   }
   return (
     <Sheet open={open && Boolean(task)} onOpenChange={onOpenChange} modal={modal}>
-      {task && <TaskPanelBody key={task.id} task={task} instant={instant} onClose={() => onOpenChange(false)} {...rest} />}
+      {task && <TaskPanelBody key={task.id} task={task} instant={instant} modal={modal} onClose={() => onOpenChange(false)} {...rest} />}
     </Sheet>
   );
 }

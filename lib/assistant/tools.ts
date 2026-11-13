@@ -173,6 +173,7 @@ import { toolSource, withToolSource, type AssistantSource } from "@/lib/assistan
 import { AGENT_MAILBOX, agentMailThread, isAgentMail, searchAgentMail, sendFromAgentMailbox } from "@/lib/agent-mail/store";
 import {
   CHANGES_GUIDE,
+  TASKS_GUIDE,
   coldEmailGuide,
   currentToolNames,
   DOCS_GUIDE,
@@ -239,6 +240,30 @@ function taskLinkArgs(args: Record<string, unknown>) {
   const links = { companyId: optionalStr(args.companyId), contactId: optionalStr(args.contactId), opportunityId: optionalStr(args.opportunityId) };
   if (!links.companyId && !links.contactId && !links.opportunityId) return {};
   return { ...(links.companyId ? { companyId: links.companyId } : {}), contactId: links.contactId ?? null, opportunityId: links.opportunityId ?? null };
+}
+
+const TASK_LINK_LABELS = { contactId: "Person", companyId: "Company", opportunityId: "Opportunity" } as const;
+
+type TaskLinkKey = keyof typeof TASK_LINK_LABELS;
+
+const TASK_LINK_KEYS = Object.keys(TASK_LINK_LABELS) as TaskLinkKey[];
+
+function taskRelinkArgs(args: Record<string, unknown>) {
+  const links: Partial<Record<TaskLinkKey, string | null>> = {};
+  for (const key of TASK_LINK_KEYS) {
+    const value = args[key];
+    if (value === undefined) continue;
+    if (value !== null && typeof value !== "string") throw new CrmError("invalid_input", `${key} takes a record id, or null to take the link off.`, 400, { field: key });
+    links[key] = value === null || value.trim() === "" ? null : value.trim();
+  }
+  return links;
+}
+
+function taskRelinkLines(args: Record<string, unknown>, name: Names) {
+  return TASK_LINK_KEYS.filter((key) => args[key] !== undefined).map((key) => {
+    const id = nullableStr(args[key]);
+    return `${TASK_LINK_LABELS[key]}: ${id ? name(id) : "none"}`;
+  });
 }
 
 function nullableStr(value: unknown) {
@@ -3212,6 +3237,7 @@ const TOOL_LIST: AssistantTool[] = [
       if (topic === "linear") await assertLinearHere(actor);
       const texts: Record<Exclude<GuideTopic, "cold_email" | "workflows" | "eclipse">, string> = {
         changes: CHANGES_GUIDE,
+        tasks: TASKS_GUIDE,
         proposals: PROPOSALS_GUIDE,
         linear: LINEAR_GUIDE,
         docs: DOCS_GUIDE,
@@ -3429,13 +3455,16 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Updating a task",
     write: true,
     description:
-      "Change a task's title, detail, due day or time, duration, reminder, priority or assignee, or mark it done with completed true (false reopens it). ClickUp is updated too. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
+      "Change a task's title, detail, due day or time, duration, reminder, priority, assignee or who it is about (contactId, companyId, opportunityId), or mark it done with completed true (false reopens it). ClickUp is updated too. To relink, find the record with search_records and pass its id; null takes that link off and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company, and opportunityId too (that company's opportunity, or null) when the task has an opportunity, since an opportunity must belong to the task's company. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
     parameters: {
       type: "object",
       properties: {
         taskId: idParam("Task id. Send this or schedule, not both."),
         ...TASK_FIELDS,
         completed: { type: "boolean", description: "True marks the task done; false reopens a done task." },
+        contactId: { type: "string", description: "Person id the task is about, or null to take the person off." },
+        companyId: { type: "string", description: "Company id the task is about, or null to take the company off." },
+        opportunityId: { type: "string", description: "Opportunity id the task is about, or null to take the opportunity off." },
         schedule: {
           type: "array",
           description: "Blocks to put on the user's calendar in one go, instead of taskId. Each is placed by Plan, not by hand.",
@@ -3461,6 +3490,7 @@ const TOOL_LIST: AssistantTool[] = [
         lines: [
           ...fieldLines(args, { title: "Title", dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
           ...fieldLines(args, { ownerId: "Owner" }, name),
+          ...taskRelinkLines(args, name),
         ],
       };
     },
@@ -3487,6 +3517,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(args.priority !== undefined ? { priority: oneOf(args.priority, ["low", "normal", "high"] as const) } : {}),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
           ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
+          ...taskRelinkArgs(args),
         },
         { provenance: { operation: completing ? "complete_task" : "update_task", ...provenanceSource() } },
       );

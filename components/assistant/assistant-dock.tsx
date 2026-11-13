@@ -46,7 +46,7 @@ import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useDocsStore } from "@/stores/docs-store";
-import { pageSnapshot } from "@/stores/page-context-store";
+import { pageSnapshot, unpinPageFocus } from "@/stores/page-context-store";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import CopyIcon from "@/public/assets/images/assistant/copy.svg";
@@ -61,6 +61,7 @@ import ClockIcon from "@/public/assets/images/companies/detail/clock.svg";
 const SETTINGS_KEY = "orbit-assistant-settings";
 const DOCK_MARGIN = 16;
 const QUICK_ADD_SPACE = 72;
+const COMPOSER_FOCUS_FRAMES = 90;
 const PILL_WIDTH = 384;
 const PILL_MIN = 224;
 const OPEN_WIDTH = 736;
@@ -625,6 +626,8 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const { mac } = useShortcuts();
   const { covered, lift, tucked, room } = useScreenState();
   const [open, setOpen] = useState(false);
+  const composerWanted = useRef(false);
+  const [asked, setAsked] = useState(0);
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [model, setModel] = useState(DEFAULT_MODEL);
@@ -747,21 +750,43 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   useEffect(() => {
     function ask(event: Event) {
       const text = (event as CustomEvent<AskOrbitDetail>).detail?.text;
-      if (typeof text !== "string" || !text.trim()) return;
+      if (typeof text !== "string") return;
       event.preventDefault();
       setHistoryOpen(false);
-      setDraft((current) => (current.includes(text) ? current : current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
+      if (text.trim()) setDraft((current) => (current.includes(text) ? current : current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
       setOpen(true);
-      window.requestAnimationFrame(() => {
-        const node = input.current;
-        if (!node) return;
-        node.focus();
-        node.setSelectionRange(node.value.length, node.value.length);
-      });
+      composerWanted.current = true;
+      setAsked((count) => count + 1);
     }
     window.addEventListener(ASK_ORBIT_EVENT, ask);
     return () => window.removeEventListener(ASK_ORBIT_EVENT, ask);
   }, []);
+
+  useEffect(() => {
+    if (!open || covered || !composerWanted.current) return;
+    let frame = 0;
+    let tries = 0;
+    const settle = () => {
+      tries += 1;
+      const node = input.current;
+      if (node && document.activeElement !== node) {
+        node.focus();
+        node.setSelectionRange(node.value.length, node.value.length);
+      }
+      const trapped = document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      if ((node && document.activeElement === node && !trapped) || tries >= COMPOSER_FOCUS_FRAMES) {
+        composerWanted.current = false;
+        return;
+      }
+      frame = window.requestAnimationFrame(settle);
+    };
+    frame = window.requestAnimationFrame(settle);
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, covered, asked]);
+
+  useEffect(() => {
+    if (!open) unpinPageFocus();
+  }, [open]);
 
   const onEvent = useCallback((event: AssistantEvent) => {
     if (event.type === "conversation") {

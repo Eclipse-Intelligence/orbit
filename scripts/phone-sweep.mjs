@@ -589,6 +589,35 @@ for (const [device, viewport] of [
     await page.waitForTimeout(600);
     check(`${device} task panel closes`, !(await visible(panel)));
 
+    const rowAsk = row.getByRole("button", { name: "Ask Orbit", exact: true });
+    if (device === "iphone") check(`${device} the open row leaves Ask Orbit to the panel`, !(await visible(rowAsk)));
+    else {
+      check(`${device} the open row has Ask Orbit`, await visible(rowAsk));
+      const rowAskArea = await tapArea(rowAsk);
+      check(`${device} the open row's Ask Orbit is easy to tap`, Boolean(rowAskArea && rowAskArea.height >= 43 && rowAskArea.owns), rowAskArea ? `${Math.round(rowAskArea.height)}px${rowAskArea.owns ? "" : ", covered"}` : "missing");
+    }
+    await row.getByRole("button", { name: "Open", exact: true }).tap();
+    await page.waitForTimeout(800);
+    const panelAsk = panel.getByRole("button", { name: "Ask Orbit", exact: true });
+    check(`${device} the task panel has Ask Orbit`, await visible(panelAsk));
+    const askArea = await tapArea(panelAsk);
+    check(`${device} Ask Orbit on a task is easy to tap`, Boolean(askArea && askArea.height >= 43 && askArea.owns), askArea ? `${Math.round(askArea.height)}px${askArea.owns ? "" : ", covered"}` : "missing");
+    await panelAsk.tap();
+    await page.waitForTimeout(1000);
+    const taskAssistant = page.locator('section[aria-label="Orbit assistant"]');
+    check(`${device} Ask Orbit on a task opens the assistant`, (await visible(taskAssistant)) && !(await visible(panel)));
+    check(
+      `${device} Ask Orbit on a task puts the caret in the message box`,
+      await page.evaluate(() => {
+        const active = document.activeElement;
+        return Boolean(active && active.tagName === "TEXTAREA" && active.closest('section[aria-label="Orbit assistant"]'));
+      }),
+    );
+    await shot("task-ask-orbit");
+    await taskAssistant.getByRole("button", { name: "Minimise", exact: true }).tap();
+    await page.waitForTimeout(600);
+    check(`${device} the assistant closes after Ask Orbit on a task`, !(await visible(taskAssistant)));
+
     if (sweepTask?.companyId) {
       await goto(page, `${base}/companies/${sweepTask.companyId}`);
       await page.waitForTimeout(1500);
@@ -1052,7 +1081,7 @@ for (const width of [1100, 1280, 1440]) {
   const fab = page.getByRole("button", { name: "Quick add", exact: true });
   const fabBox = (await fab.isVisible()) ? await fab.boundingBox() : null;
   check(`${device} quick add stays usable beside the panel`, Boolean(panelBox && fabBox && fabBox.x + fabBox.width <= panelBox.x));
-  const pill = page.getByRole("button", { name: /^(Ask Orbit|Continue your chat)/ });
+  const pill = page.locator('button[aria-keyshortcuts="o"]');
   const pillBox = (await pill.isVisible()) ? await pill.boundingBox() : null;
   const clear = (box) => !box || !panelBox || box.x + box.width <= panelBox.x;
   const apart = (box) => !box || !fabBox || box.x + box.width <= fabBox.x || box.y + box.height <= fabBox.y;

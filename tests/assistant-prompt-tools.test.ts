@@ -33,6 +33,7 @@ const MANUAL_LINES: [string, RegExp][] = [
   ["docs", /To jot something in the user's daily note, use save_doc with append_daily/],
   ["workflows", /leave it off unless the user asks for it on/],
   ["changes", /find the change with list_recent_changes and propose undo_change with its id/],
+  ["tasks", /propose three cards in the same turn, without asking first/],
   ["cold_email", /It is 50 to 90 words with no link or attachment and at most one figure/],
 ];
 
