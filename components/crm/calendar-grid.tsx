@@ -26,8 +26,10 @@ import {
   packColumns,
   wallMinutes,
 } from "@/lib/calendar-view";
+import { GridTaskBlock, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
+import type { TaskBlock } from "@/lib/task-blocks";
 import { cn } from "@/lib/utils";
 
 const MIN_HOUR_HEIGHT = 64;
@@ -35,6 +37,7 @@ const MAX_HOUR_HEIGHT = 120;
 const FOCUS_START_HOUR = 8;
 const FOCUS_HOURS = 12;
 const MIN_MINUTES = 20;
+const MIN_TASK_MINUTES = 15;
 const COMPACT_BELOW_PX = 44;
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
@@ -161,6 +164,8 @@ export default function CalendarGrid({
   calendars,
   now,
   onSlot,
+  blocks = [],
+  taskHandlers,
 }: {
   days: string[];
   today: string;
@@ -168,6 +173,8 @@ export default function CalendarGrid({
   calendars: Map<string, CalendarMeta>;
   now: number;
   onSlot?: (day: string, time: string) => void;
+  blocks?: TaskBlock[];
+  taskHandlers?: TaskBlockHandlers;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
@@ -208,9 +215,17 @@ export default function CalendarGrid({
     string,
     { item: CalendarItem; top: number; bottom: number }[]
   >();
+  const tasked = new Map<string, { block: TaskBlock; top: number; bottom: number }[]>();
   for (const key of days) {
     allDay.set(key, []);
     timed.set(key, []);
+    tasked.set(key, []);
+  }
+  for (const block of taskHandlers ? blocks : []) {
+    for (const key of days) {
+      const span = daySpan(block.startsAt, block.endsAt, key);
+      if (span) tasked.get(key)!.push({ block, ...span });
+    }
   }
   for (const item of items) {
     if (item.isAllDay) {
@@ -291,7 +306,8 @@ export default function CalendarGrid({
       </div>
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto pb-20 [scrollbar-gutter:stable]"
+        className="min-h-0 flex-1 overflow-y-auto pb-20 outline-none [scrollbar-gutter:stable]"
+        tabIndex={-1}
         data-calendar-scroller=""
       >
         <div
@@ -313,13 +329,21 @@ export default function CalendarGrid({
           </div>
           {days.map((key) => {
             const entries = timed.get(key) ?? [];
+            const taskEntries = tasked.get(key) ?? [];
             const slots = packColumns(
-              entries.map((entry) => ({
-                id: entry.item.id,
-                top: entry.top,
-                bottom: entry.bottom,
-              })),
-              MIN_MINUTES,
+              [
+                ...entries.map((entry) => ({
+                  id: entry.item.id,
+                  top: entry.top,
+                  bottom: Math.max(entry.bottom, entry.top + MIN_MINUTES),
+                })),
+                ...taskEntries.map((entry) => ({
+                  id: entry.block.id,
+                  top: entry.top,
+                  bottom: Math.max(entry.bottom, entry.top + MIN_TASK_MINUTES),
+                })),
+              ],
+              0,
             );
             return (
               <div
@@ -337,7 +361,9 @@ export default function CalendarGrid({
                     ? (event) => {
                         if (
                           dismissing.current ||
-                          (event.target as HTMLElement).closest("button, a")
+                          (event.target as HTMLElement).closest(
+                            "button, a, [data-task-block]",
+                          )
                         )
                           return;
                         const box = event.currentTarget.getBoundingClientRect();
@@ -397,6 +423,32 @@ export default function CalendarGrid({
                     />
                   );
                 })}
+                {taskHandlers &&
+                  taskEntries.map((entry) => {
+                    const slot = slots.get(entry.block.id) ?? {
+                      column: 0,
+                      columns: 1,
+                    };
+                    const height =
+                      Math.max(entry.bottom - entry.top, MIN_TASK_MINUTES) *
+                        perMinute -
+                      2;
+                    return (
+                      <GridTaskBlock
+                        key={entry.block.id}
+                        block={entry.block}
+                        height={height}
+                        onOpen={taskHandlers.onOpen}
+                        onComplete={taskHandlers.onComplete}
+                        style={{
+                          top: entry.top * perMinute + 1,
+                          height,
+                          left: `calc(${(slot.column / slot.columns) * 100}% + 2px)`,
+                          width: `calc(${100 / slot.columns}% - 4px)`,
+                        }}
+                      />
+                    );
+                  })}
                 {key === today && (
                   <div
                     aria-hidden

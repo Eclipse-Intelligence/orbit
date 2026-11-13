@@ -19,6 +19,7 @@ import {
 import { isTaskDuration } from "@/lib/crm/task-time";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
+import { taskActorOrError } from "@/lib/crm/workspaces";
 
 export async function detectTaskRecordsAction(text: string, companyId: string | null = null): Promise<PadDetection> {
   const user = await getUserActor();
@@ -32,6 +33,19 @@ export async function searchTaskLinksAction(kind: PadSearchKind, query: string, 
   const user = await getUserActor();
   if (!user || !SEARCH_KINDS.includes(kind) || typeof query !== "string") return [];
   return searchPadRecords(user, kind, query, typeof companyId === "string" && isUuid(companyId) ? companyId : null);
+}
+
+export async function searchLinksForTaskAction(taskId: string, kind: PadSearchKind, query: string, companyId: string | null = null): Promise<{ options?: PadOption[]; error?: string }> {
+  const viewer = await getUserActor();
+  if (!viewer) return { error: "Your session ended. Sign in again." };
+  if (!SEARCH_KINDS.includes(kind) || typeof query !== "string") return { options: [] };
+  const resolved = await taskActorOrError(viewer, taskId);
+  if (!resolved.actor) return { error: resolved.error };
+  try {
+    return { options: await searchPadRecords(resolved.actor, kind, query, typeof companyId === "string" && isUuid(companyId) ? companyId : null) };
+  } catch {
+    return { error: "Couldn't search. Try again." };
+  }
 }
 
 export async function parseTaskWithAiAction(text: string): Promise<PadAiParse | null> {

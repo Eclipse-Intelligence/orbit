@@ -18,11 +18,14 @@ export async function POST(request: Request) {
     revalidatePath(TASKS_PATH);
     if (clickupToken()) {
       const ids = result.completed;
+      const actors = result.actors;
       try {
         after(async () => {
           for (const id of ids) {
+            const owner = actors.get(id);
+            if (!owner) continue;
             try {
-              await pushClickUpTask(actor, id);
+              await pushClickUpTask(owner, id);
             } catch (error) {
               console.error("ClickUp push failed", error);
             }

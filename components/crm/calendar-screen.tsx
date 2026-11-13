@@ -15,6 +15,11 @@ import {
 import CalendarAgenda from "@/components/crm/calendar-agenda";
 import type { CalendarMeta } from "@/components/crm/calendar-event-details";
 import CalendarGrid from "@/components/crm/calendar-grid";
+import { CalendarTaskList, SectionToggle, useCalendarSections } from "@/components/crm/calendar-tasks";
+import type { TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import TaskPanel from "@/components/crm/task-panel";
+import { HomeWorkspace } from "@/components/crm/task-workspace";
+import { useTaskDone } from "@/components/crm/use-task-done";
 import InviteDialog, {
   InviteNotice,
   NoticeContext,
@@ -33,6 +38,9 @@ import {
 } from "@/lib/calendar-view";
 import type { CalendarGroup, CalendarItem } from "@/lib/crm/calendars";
 import type { InviteSetup } from "@/lib/crm/invites";
+import type { Planner } from "@/lib/crm/task-blocks";
+import type { Task } from "@/lib/crm/types";
+import { taskBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
@@ -173,6 +181,7 @@ export default function CalendarScreen({
   items,
   now,
   invite,
+  planner,
 }: {
   viewer: Viewer;
   today: string;
@@ -182,6 +191,7 @@ export default function CalendarScreen({
   items: CalendarItem[];
   now: number;
   invite: InviteSetup;
+  planner: Planner;
 }) {
   const router = useRouter();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -255,10 +265,73 @@ export default function CalendarScreen({
     router.refresh();
   }
 
+  const { sections, toggle: toggleSection } = useCalendarSections();
+  const { done, complete: markDone } = useTaskDone(planner.tasks);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  const [keptTask, setKeptTask] = useState<Task | null>(null);
+  const listedTask = openTaskId ? (planner.tasks.find((task) => task.id === openTaskId) ?? null) : null;
+  if (listedTask && listedTask !== keptTask) setKeptTask(listedTask);
+  const panelTask = listedTask ?? (keptTask && keptTask.id === openTaskId && done.has(keptTask.id) ? keptTask : null);
+  if (openTaskId && !panelTask) setOpenTaskId(null);
+  const shownTask = panelTask ?? keptTask;
+  const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
+  const blocks = taskBlocks(planner.tasks, { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done });
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
+  const openTask = (task: Task, from: HTMLElement | null) => {
+    setDrawerOpen(false);
+    setOpener(from);
+    setOpenTaskId(task.id);
+  };
+  const taskHandlers: TaskBlockHandlers = {
+    onOpen: (block: TaskBlock, from: HTMLElement | null) => {
+      setOpener(from);
+      setOpenTaskId(block.task.id);
+    },
+    onComplete: (block: TaskBlock) => markDone(block.task),
+  };
+  const calendarCount = groups.reduce((total, group) => total + group.calendars.length, 0);
+  const openTaskCount = planner.tasks.filter((task) => !task.completedAt && !done.has(task.id)).length;
+
   const step = stepDays(desktopMode);
-  const list = (
-    <CalendarList groups={groups} visible={visible} onToggle={toggle} />
-  );
+  const menu = (large: boolean) => {
+    const suffix = large ? "drawer" : "panel";
+    return (
+      <div className="flex flex-col gap-0.5">
+        <SectionToggle
+          label="Calendars"
+          count={calendarCount}
+          open={sections.calendars}
+          controls={`calendar-list-${suffix}`}
+          large={large}
+          onToggle={() => toggleSection("calendars")}
+        />
+        {sections.calendars && (
+          <div id={`calendar-list-${suffix}`} className="px-1.5 pt-1 pb-3">
+            <CalendarList groups={groups} visible={visible} onToggle={toggle} />
+          </div>
+        )}
+        <SectionToggle
+          label="Tasks"
+          count={openTaskCount}
+          open={sections.tasks}
+          controls={`calendar-tasks-${suffix}`}
+          large={large}
+          onToggle={() => toggleSection("tasks")}
+        />
+        {sections.tasks && (
+          <CalendarTaskList
+            id={`calendar-tasks-${suffix}`}
+            tasks={planner.tasks}
+            viewerId={viewer.id}
+            now={now}
+            workspaces={planner.workspaces}
+            hidden={done}
+            onOpen={openTask}
+          />
+        )}
+      </div>
+    );
+  };
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -283,7 +356,7 @@ export default function CalendarScreen({
           variant="secondary"
           size="icon"
           className="lg:hidden"
-          aria-label="Choose calendars"
+          aria-label="Calendars and tasks"
           data-shortcut="calendars-panel"
           onClick={() => setDrawerOpen(true)}
         >
@@ -293,11 +366,11 @@ export default function CalendarScreen({
           variant="secondary"
           size="icon"
           className="hidden lg:inline-flex"
-          aria-label={panelOpen ? "Hide calendars" : "Show calendars"}
+          aria-label={panelOpen ? "Hide calendars and tasks" : "Show calendars and tasks"}
           aria-expanded={panelOpen}
           aria-controls="calendar-panel"
           data-shortcut="calendars-panel"
-          title={`${panelOpen ? "Hide" : "Show"} calendars (\\)`}
+          title={`${panelOpen ? "Hide" : "Show"} calendars and tasks (\\)`}
           onClick={() => setPanelOpen((current) => !current)}
         >
           <CalendarIcon aria-hidden className="size-3.5" />
@@ -398,10 +471,10 @@ export default function CalendarScreen({
           {panelOpen && (
             <aside
               id="calendar-panel"
-              aria-label="Calendars"
-              className="border-border hidden w-60 shrink-0 overflow-y-auto border-r px-3 py-4 lg:block"
+              aria-label="Calendars and tasks"
+              className="border-border hidden w-60 shrink-0 overflow-y-auto border-r px-2 pt-3 pb-8 lg:block"
             >
-              {list}
+              {menu(false)}
             </aside>
           )}
           <div className="hidden min-h-0 min-w-0 flex-1 md:flex">
@@ -412,6 +485,8 @@ export default function CalendarScreen({
               calendars={calendars}
               now={now}
               onSlot={(day, time) => startInvite({ date: day, time })}
+              blocks={blocks}
+              taskHandlers={taskHandlers}
             />
           </div>
           <div className="flex min-h-0 min-w-0 flex-1 md:hidden">
@@ -422,6 +497,8 @@ export default function CalendarScreen({
               calendars={calendars}
               now={now}
               onNew={() => startInvite(date === today ? {} : { date })}
+              blocks={blocks}
+              taskHandlers={taskHandlers}
             />
           </div>
         </KeyboardList>
@@ -435,16 +512,33 @@ export default function CalendarScreen({
         onSent={setNotice}
       />
       <InviteNotice message={notice} onDone={clearNotice} />
+      <HomeWorkspace.Provider value={viewer.workspaceId ?? null}>
+        <TaskPanel
+          task={shownTask}
+          open={Boolean(panelTask)}
+          onOpenChange={(open) => {
+            if (!open) setOpenTaskId(null);
+          }}
+          viewer={{ ...viewer, role: team?.role ?? viewer.role }}
+          members={team?.members ?? []}
+          tagged={shownTask ? (planner.tagged[shownTask.id] ?? []) : []}
+          admins={team?.admins ?? []}
+          completed={shownTask ? done.has(shownTask.id) : false}
+          onComplete={markDone}
+          returnTo={opener}
+          recordNotes={!shownTask || shownTask.workspaceId === viewer.workspaceId}
+        />
+      </HomeWorkspace.Provider>
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent side="left" className="w-[min(320px,86vw)]">
           <SheetHeader className="px-4">
-            <SheetTitle>Calendars</SheetTitle>
-            <SheetCloseButton />
+            <SheetTitle className="sr-only">Calendars and tasks</SheetTitle>
+            <SheetCloseButton className="ml-auto" />
           </SheetHeader>
           <SheetDescription className="sr-only">
-            Choose which calendars to show
+            Choose which calendars to show and open your tasks
           </SheetDescription>
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">{list}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-8">{menu(true)}</div>
         </SheetContent>
       </Sheet>
     </section>

@@ -11,6 +11,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { completeTaskWithOutcome, relinkTask, taskContext, type LinkChange, type TaskContext, type TaskOutcome } from "@/lib/crm/task-act";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { UserActor } from "@/lib/crm/types";
+import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 const SIGN_IN = "Sign in again.";
@@ -37,9 +38,16 @@ function pushLater(user: UserActor, ids: string[]) {
   }
 }
 
-export async function taskContextAction(id: string): Promise<{ context?: TaskContext; error?: string }> {
+async function taskUser(id: unknown) {
   const user = await getUserActor();
+  if (!user) return null;
+  return (await taskActorOrError(user, id)).actor ?? TASK_LOOKUP_FAILED;
+}
+
+export async function taskContextAction(id: string): Promise<{ context?: TaskContext; error?: string }> {
+  const user = await taskUser(id);
   if (!user) return { error: SIGN_IN };
+  if (typeof user === "string") return { error: user };
   if (typeof id !== "string" || !isUuid(id)) return { error: "Task not found." };
   try {
     return { context: await taskContext(user, id) };
@@ -59,8 +67,9 @@ export async function taskInviteSetupAction(): Promise<{ setup?: InviteSetup; er
 }
 
 export async function relinkTaskAction(id: string, change: LinkChange): Promise<{ ok?: boolean; error?: string }> {
-  const user = await getUserActor();
+  const user = await taskUser(id);
   if (!user) return { error: SIGN_IN };
+  if (typeof user === "string") return { error: user };
   if (typeof id !== "string" || !isUuid(id) || !change || typeof change !== "object") return { error: "Couldn't link the task. Try again." };
   try {
     await relinkTask(user, id, { companyId: change.companyId, contactId: change.contactId, opportunityId: change.opportunityId }, { operation: "link_task", source: "web" });
@@ -73,8 +82,9 @@ export async function relinkTaskAction(id: string, change: LinkChange): Promise<
 }
 
 export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOutcome): Promise<{ ok?: boolean; next?: boolean; logged?: boolean; completed?: boolean; error?: string }> {
-  const user = await getUserActor();
+  const user = await taskUser(id);
   if (!user) return { error: SIGN_IN };
+  if (typeof user === "string") return { error: user };
   if (typeof id !== "string" || !isUuid(id) || !outcome || typeof outcome !== "object") return { error: "Couldn't save. Try again." };
   try {
     const saved = await completeTaskWithOutcome(user, id, outcome);

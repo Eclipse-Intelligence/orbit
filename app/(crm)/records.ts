@@ -11,14 +11,15 @@ import type { ActivityEdit } from "@/lib/crm/activity-edit";
 import { actionError } from "@/lib/companies";
 import { snoozeTask } from "@/lib/crm/action-needed";
 import { pushClickUpTask } from "@/lib/crm/clickup";
-import { createCompany } from "@/lib/crm/companies";
-import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
+import { createCompany, listCompanies } from "@/lib/crm/companies";
+import { createContact, findContactsToLink, getContact, updateContact } from "@/lib/crm/contacts";
 import { mergeContacts } from "@/lib/crm/merge";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
 import { TASKS_PATH } from "@/lib/crm/task-views";
+import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 
 import { completeTask, getTask, listDueReminders, reopenTask, updateTask, type DueReminder } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
@@ -39,6 +40,10 @@ async function requireUser() {
   const user = await getUserActor();
   if (!user) redirect("/login");
   return user;
+}
+
+async function taskUser(id: unknown) {
+  return (await taskActorOrError(await requireUser(), id)).actor ?? null;
 }
 
 function text(formData: FormData, key: string) {
@@ -276,7 +281,8 @@ export async function moveOpportunityStageAction(
 export async function completeTaskAction(
   id: string,
 ): Promise<RecordActionState> {
-  const user = await requireUser();
+  const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   try {
     await completeTask(user, id, {
       provenance: { operation: "complete_task", source: "web" },
@@ -290,7 +296,8 @@ export async function completeTaskAction(
 }
 
 export async function reopenTaskAction(id: string): Promise<RecordActionState> {
-  const user = await requireUser();
+  const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id)) return { error: "Couldn't undo. Try again." };
   try {
     await reopenTask(user, id, { provenance: { operation: "reopen_task", source: "web" } });
@@ -307,14 +314,17 @@ export async function openTaskIdsAction(ids: string[]): Promise<{ open?: string[
   const wanted = [...new Set((Array.isArray(ids) ? ids : []).filter((id): id is string => typeof id === "string" && isUuid(id)))].slice(0, 50);
   const open: string[] = [];
   for (const id of wanted) {
-    const task = await getTask(user, id).catch(() => null);
+    const resolved = await taskActorOrError(user, id);
+    if (!resolved.actor) continue;
+    const task = await getTask(resolved.actor, id).catch(() => null);
     if (task && !task.completedAt && !task.archivedAt) open.push(id);
   }
   return { open };
 }
 
 export async function remindTaskAction(id: string, at: string): Promise<RecordActionState> {
-  const user = await requireUser();
+  const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || typeof at !== "string") return { error: "Couldn't move the task. Try again." };
   try {
     await snoozeTask(user, id, at);
@@ -327,7 +337,8 @@ export async function remindTaskAction(id: string, at: string): Promise<RecordAc
 }
 
 export async function assignTaskAction(id: string, ownerId: string): Promise<RecordActionState> {
-  const user = await requireUser();
+  const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || !isUuid(ownerId)) return { error: "Couldn't assign the task. Try again." };
   try {
     await updateTask(user, id, { ownerId }, { provenance: { operation: "assign_task", source: "web" } });
@@ -340,7 +351,8 @@ export async function assignTaskAction(id: string, ownerId: string): Promise<Rec
 }
 
 export async function taskLinkCandidatesAction(id: string): Promise<Partial<LinkCandidates> & { error?: string }> {
-  const user = await requireUser();
+  const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id)) return { error: "Couldn't find people to link. Try again." };
   try {
     return await taskLinkCandidates(user, id);
@@ -349,8 +361,21 @@ export async function taskLinkCandidatesAction(id: string): Promise<Partial<Link
   }
 }
 
+export async function searchTaskLinkTargetsAction(id: string, query: string) {
+  const user = await taskUser(id);
+  if (!user) return { contacts: [], companies: [], error: TASK_LOOKUP_FAILED };
+  const text = typeof query === "string" ? query.trim().slice(0, 200) : "";
+  if (!text) return { contacts: [], companies: [] };
+  const [contacts, companies] = await Promise.all([
+    findContactsToLink(user, null, text, 8),
+    listCompanies(user, { query: text, limit: 20, sort: "name", order: "asc" }).then((result) => result.data),
+  ]);
+  return { contacts, companies };
+}
+
 export async function linkTaskAction(id: string, link: { contactId?: string; companyId?: string }): Promise<RecordActionState> {
-  const user = await requireUser();
+  const user = await taskUser(id);
+  if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id)) return { error: "Couldn't link the task. Try again." };
   try {
     await linkTask(user, id, { contactId: link?.contactId, companyId: link?.companyId }, { operation: "link_task", source: "web" });

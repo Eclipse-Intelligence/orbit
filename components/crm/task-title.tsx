@@ -2,7 +2,7 @@
 
 import { useEffect, useId, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
+import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { openDmAction } from "@/app/(crm)/chat/actions";
@@ -126,9 +126,9 @@ export default function TaskTitle({
       );
     }
     return (
-      <Link key={index} href={target.href} onClick={stop} onPointerDown={stop} title={target.name} className={TITLE_LINK}>
+      <TaskRecordLink key={index} href={target.href} onClick={stop} onPointerDown={stop} title={target.name} className={TITLE_LINK}>
         {segment.text}
-      </Link>
+      </TaskRecordLink>
     );
   });
 }

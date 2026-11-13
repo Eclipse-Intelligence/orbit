@@ -895,6 +895,26 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
   });
 }
 
+export async function listPlannerTasks(actor: UserActor, now = Date.now()): Promise<Task[]> {
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, async (db) => {
+    const values: unknown[] = [actor.workspaceId, dayWindow(new Date(now)).start.toISOString(), actor.userId];
+    const mine = mineFilter(actor, values)!;
+    const result = await db.query<TaskRow>(
+      `${TASK_SQL}
+       where t.workspace_id = $1
+         and t.archived_at is null
+         and (
+           (t.completed_at is null and ${mine})
+           or (t.completed_at >= $2::timestamptz and t.owner_id = $3 and t.due_has_time and t.due_at is not null)
+         )
+       order by t.due_at asc nulls last, t.created_at asc, t.id asc`,
+      values,
+    );
+    return result.rows.map(mapTask);
+  });
+}
+
 export async function listTaskParticipants(actor: UserActor, taskIds: string[]): Promise<Record<string, string[]>> {
   assertScope(actor.scopes, "crm:read");
   const ids = [...new Set(taskIds.filter(isUuid))];

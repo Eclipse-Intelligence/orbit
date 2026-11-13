@@ -1,5 +1,7 @@
 import { linkCreatedWorkspace } from "@/lib/assistant/eclipse-scope";
+import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure, tooLong } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -49,7 +51,27 @@ export async function alertLink(actor: UserActor, path: string) {
 
 export async function actorForWorkspace(actor: UserActor, workspaceId: string) {
   if (workspaceId === actor.workspaceId) return actor;
-  return (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId) ?? actor;
+  return actorIn(await workspaceActors(actor), workspaceId);
+}
+
+export async function actorForTask(actor: UserActor, taskId: unknown) {
+  if (typeof taskId !== "string" || !isUuid(taskId)) return actor;
+  const found = await withActor(actor, (db) => db.query<{ workspace_id: string }>("select workspace_id from crm.tasks where id = $1", [taskId]));
+  const workspaceId = found.rows[0]?.workspace_id;
+  if (!workspaceId || workspaceId === actor.workspaceId) return actor;
+  const member = (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId);
+  if (!member) throw new CrmError("not_found", TASK_LOOKUP_FAILED, 404);
+  return member;
+}
+
+export const TASK_LOOKUP_FAILED = "Couldn't find that task. Try again.";
+
+export async function taskActorOrError(actor: UserActor, taskId: unknown): Promise<{ actor: UserActor; error?: undefined } | { actor?: undefined; error: string }> {
+  try {
+    return { actor: await actorForTask(actor, taskId) };
+  } catch {
+    return { error: TASK_LOOKUP_FAILED };
+  }
 }
 
 export async function homeWorkspaceId(actor: UserActor) {

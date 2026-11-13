@@ -4,6 +4,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { calendarRange, dateKey, parseDateKey, parseMode } from "@/lib/calendar-view";
 import { listCalendarGroups, listCalendarItems } from "@/lib/crm/calendars";
 import { getInviteSetup } from "@/lib/crm/invites";
+import { readPlanner } from "@/lib/crm/task-blocks";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export default async function CalendarPage({
   const date = parseDateKey(typeof resolved.date === "string" ? resolved.date : null) ?? today;
   const mode = parseMode(typeof resolved.view === "string" ? resolved.view : null);
   const range = calendarRange(date, mode ?? "week");
-  const [groups, items, invite] = await Promise.all([
+  const [groups, items, invite, planner] = await Promise.all([
     listCalendarGroups(user),
     listCalendarItems(
       user,
@@ -37,6 +38,7 @@ export default async function CalendarPage({
       now,
     ),
     getInviteSetup(user),
+    readPlanner(user, now),
   ]);
 
   return (
@@ -47,6 +49,7 @@ export default async function CalendarPage({
         email: user.email,
         role: user.role,
         workspaceName: user.workspaceName,
+        workspaceId: user.workspaceId,
       }}
       today={today}
       date={date}
@@ -55,6 +58,7 @@ export default async function CalendarPage({
       items={items}
       now={now}
       invite={invite}
+      planner={planner}
     />
   );
 }

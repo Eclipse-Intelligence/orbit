@@ -1,6 +1,7 @@
 import { isUuid } from "@/lib/crm/mutate";
 import { completeTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
+import { actorForTask } from "@/lib/crm/workspaces";
 
 const MAX_IDS = 50;
 
@@ -29,19 +30,22 @@ async function readIds(request: Request) {
 }
 
 export async function completeTasksFromBeacon(request: Request, actor: UserActor | null) {
-  if (!actor) return { status: 401, body: { error: "Your session ended. Sign in again." }, completed: [] as string[] };
-  if (!sameOrigin(request)) return { status: 403, body: { error: "Couldn't mark the task done. Try again." }, completed: [] as string[] };
+  if (!actor) return { status: 401, body: { error: "Your session ended. Sign in again." }, completed: [] as string[], actors: new Map<string, UserActor>() };
+  if (!sameOrigin(request)) return { status: 403, body: { error: "Couldn't mark the task done. Try again." }, completed: [] as string[], actors: new Map<string, UserActor>() };
   const ids = await readIds(request);
-  if (!ids) return { status: 400, body: { error: "Couldn't mark the task done. Try again." }, completed: [] as string[] };
+  if (!ids) return { status: 400, body: { error: "Couldn't mark the task done. Try again." }, completed: [] as string[], actors: new Map<string, UserActor>() };
   const completed: string[] = [];
   const failed: string[] = [];
+  const actors = new Map<string, UserActor>();
   for (const id of ids) {
     try {
-      await completeTask(actor, id, { provenance: { operation: "complete_task", source: "web" } });
+      const owner = await actorForTask(actor, id);
+      await completeTask(owner, id, { provenance: { operation: "complete_task", source: "web" } });
       completed.push(id);
+      actors.set(id, owner);
     } catch {
       failed.push(id);
     }
   }
-  return { status: 200, body: { completed, failed }, completed };
+  return { status: 200, body: { completed, failed }, completed, actors };
 }

@@ -63,6 +63,69 @@ async function seedCallTask(label) {
   return { id, title };
 }
 
+function londonDay(offset) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + offset * 86_400_000));
+}
+
+async function seedBlock(page, device) {
+  if (!env.CRM_AGENT_TOKEN) return null;
+  const stamp = `${device}${Date.now().toString(36)}`;
+  await goto(page, `${base}/tasks`);
+  await page.waitForTimeout(1200);
+  const pad = page.locator('textarea[data-shortcut="add-record"]').first();
+  if ((await pad.count()) === 0 || !(await pad.isVisible())) return null;
+  await pad.click();
+  await pad.fill(`Sweep owner ${stamp}`);
+  await page.waitForTimeout(800);
+  await pad.press("Enter");
+  let mine = null;
+  for (let attempt = 0; attempt < 4 && !mine; attempt += 1) {
+    await page.waitForTimeout(1000);
+    const found = await api(`/tasks?q=${encodeURIComponent(stamp)}&view=all&limit=5`);
+    mine = found?.ok ? ((await found.json()).data ?? [])[0] : null;
+  }
+  if (mine) await api(`/tasks/${mine.id}`, { method: "DELETE" });
+  if (!mine?.ownerId) return null;
+  const add = async (title, dueAt) => {
+    const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title, dueAt, durationMinutes: 30, ownerId: mine.ownerId }) });
+    return created?.ok ? (await created.json()).task.id : null;
+  };
+  const day = londonDay(1);
+  const title = `Sweep block ${stamp}`;
+  const id = await add(title, `${day}T10:00`);
+  const overdueDay = londonDay(-1);
+  const overdueId = await add(`Sweep overdue ${stamp}`, `${overdueDay}T10:00`);
+  const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title: `Sweep plain ${stamp}`, ownerId: mine.ownerId, companyId: null, contactId: null, opportunityId: null }) });
+  const plainId = created?.ok ? (await created.json()).task.id : null;
+  const ids = [id, overdueId, plainId].filter(Boolean);
+  if (!id || !overdueId || !plainId) {
+    await dropTasks(ids);
+    return null;
+  }
+  return { id, title, day, overdueId, overdueDay, plainId, ids };
+}
+
+async function dropTasks(ids) {
+  for (const id of ids) await api(`/tasks/${id}`, { method: "DELETE" });
+}
+
+async function focusedTaskId(page) {
+  return page.evaluate(() => (document.activeElement?.closest("[data-task-block]") ? document.activeElement.getAttribute("data-task-id") : null));
+}
+
+async function touchTarget(locator) {
+  return locator
+    .evaluate((circle) => {
+      const block = circle.closest("[data-task-block]");
+      const open = block.querySelector("button[data-task-id]");
+      const own = circle.getBoundingClientRect();
+      const hit = document.elementFromPoint(own.left + own.width / 2, own.top + own.height / 2);
+      const box = open.getBoundingClientRect();
+      return { opens: open.contains(hit), width: box.width, height: box.height, blockHeight: block.getBoundingClientRect().height };
+    })
+    .catch(() => null);
+}
+
 async function skipOutcome(row) {
   const outcome = row.getByRole("group", { name: "Done with an outcome" });
   const offered = (await outcome.count()) > 0 && (await outcome.isVisible());
@@ -389,6 +452,8 @@ for (const [device, viewport] of [
     const call = row.locator('a:visible[href^="tel:"], a:visible[href^="msteams:"]').first();
     const callHref = (await call.getAttribute("href").catch(() => null)) ?? "";
     check(`${device} Call rings from the phone`, callHref.startsWith("tel:"), callHref);
+    await call.evaluate((link) => link.scrollIntoView({ block: "center" })).catch(() => undefined);
+    await page.waitForTimeout(300);
     const callArea = await tapArea(call);
     check(`${device} Call is easy to tap`, Boolean(callArea && callArea.height >= 43 && callArea.owns), callArea ? `${Math.round(callArea.height)}px${callArea.owns ? "" : ", covered"}` : "missing");
     check(`${device} Call leads on a call task`, ((await call.getAttribute("class").catch(() => "")) ?? "").includes("bg-primary"));
@@ -503,6 +568,113 @@ for (const [device, viewport] of [
   await page.waitForTimeout(1200);
   check(`${device} calendar loads`, await visible(page.getByRole("heading", { name: "Calendar" })));
   await shot("calendar");
+  const block = await seedBlock(page, device);
+  if (block) {
+    try {
+      await goto(page, `${base}/calendar?date=${block.day}&view=day`);
+      await page.waitForTimeout(1500);
+      const card = page.locator(`[data-task-block="${block.id}"]`).filter({ visible: true });
+      check(`${device} calendar shows the task as a block`, await visible(card));
+      check(`${device} calendar with blocks no overflow`, await noHorizontalScroll());
+      const circle = card.getByRole("button", { name: /^Mark .* done$/ });
+      if (device === "iphone") {
+        const area = await tapArea(circle);
+        check(`${device} block's done circle is easy to tap`, Boolean(area && area.height >= 43 && area.owns), area ? `${Math.round(area.height)}px${area.owns ? "" : ", covered"}` : "missing");
+      } else {
+        const target = await touchTarget(circle);
+        check(
+          `${device} tapping a block's circle opens the task, with the whole block as the target`,
+          Boolean(target?.opens && target.width >= 44 && target.height >= target.blockHeight - 1),
+          target ? `${Math.round(target.width)}x${Math.round(target.height)}px` : "missing",
+        );
+      }
+      await shot("calendar-block");
+      await card.locator("button[data-task-id]").tap();
+      await page.waitForTimeout(900);
+      const panel = page.getByRole("dialog", { name: "Task" });
+      check(
+        `${device} a block opens its own task in the panel`,
+        (await visible(panel)) && ((await panel.textContent()) ?? "").includes(block.title) && (await visible(panel.getByRole("button", { name: /^Duration 30m/ }))),
+      );
+      await shot("calendar-task-panel");
+      await panel.getByRole("button", { name: "Close" }).tap();
+      await page.waitForTimeout(700);
+      check(`${device} closing the panel returns focus to the block`, (await focusedTaskId(page)) === block.id);
+      if (device === "iphone") {
+        await circle.tap();
+      } else {
+        const spot = await circle.boundingBox();
+        await page.touchscreen.tap(spot.x + spot.width / 2, spot.y + spot.height / 2);
+        await page.waitForTimeout(900);
+        check(`${device} tapping the circle opens the panel where Done is`, await visible(panel));
+        await panel.getByRole("button", { name: /^Mark .* done$/ }).tap();
+        await page.waitForTimeout(500);
+        await panel.getByRole("button", { name: "Close" }).tap();
+      }
+      await page.waitForTimeout(700);
+      check(`${device} Done marks the block done with Undo`, (await visible(page.getByText("Task done."))) && (await visible(card.getByRole("button", { name: /^Done/ }))));
+      if (device === "iphone") {
+        await card.getByRole("button", { name: /^Done/ }).tap();
+        await page.waitForTimeout(900);
+        check(`${device} a done block's circle opens the task`, await visible(panel));
+        await panel.getByRole("button", { name: "Close" }).tap();
+        await page.waitForTimeout(600);
+      }
+      await page.getByRole("button", { name: "Undo" }).last().tap();
+      await page.waitForTimeout(800);
+      check(`${device} Undo brings the block back`, await visible(card.getByRole("button", { name: /^Mark .* done$/ })));
+      await goto(page, `${base}/calendar?date=${block.overdueDay}&view=day`);
+      await page.waitForTimeout(1500);
+      const overdue = page.locator(`[data-task-block="${block.overdueId}"]`).filter({ visible: true });
+      check(
+        `${device} a past block stays on its day marked Overdue`,
+        (await visible(overdue)) && ((await overdue.locator("button[data-task-id]").getAttribute("aria-label")) ?? "").includes("overdue") && (await visible(overdue.getByText("Overdue"))),
+      );
+      await goto(page, `${base}/calendar?date=${block.day}&view=day`);
+      await page.waitForTimeout(1500);
+      await page.getByRole("button", { name: "Calendars and tasks" }).tap();
+      await page.waitForTimeout(700);
+      const drawer = page.getByRole("dialog", { name: "Calendars and tasks" });
+      const calendarsToggle = drawer.getByRole("button", { name: /^Calendars/ });
+      check(
+        `${device} drawer has Calendars collapsed and Tasks open`,
+        (await calendarsToggle.getAttribute("aria-expanded")) === "false" && (await drawer.getByRole("button", { name: /^Tasks/ }).getAttribute("aria-expanded")) === "true",
+      );
+      const listRow = drawer.locator(`[data-task-id="${block.id}"]`);
+      check(`${device} drawer lists the task`, await visible(listRow));
+      check(`${device} drawer lists the overdue task under Overdue`, await visible(drawer.getByRole("region", { name: /^Overdue/ }).locator(`[data-task-id="${block.overdueId}"]`)));
+      const rowArea = await tapArea(listRow);
+      check(`${device} drawer rows are easy to tap`, Boolean(rowArea && rowArea.height >= 43 && rowArea.owns), rowArea ? `${Math.round(rowArea.height)}px` : "missing");
+      const plainRow = drawer.locator(`[data-task-id="${block.plainId}"]`);
+      await plainRow.scrollIntoViewIfNeeded().catch(() => undefined);
+      const plainArea = await tapArea(plainRow);
+      const plainLines = await plainRow.evaluate((row) => row.querySelectorAll("span.truncate").length).catch(() => 0);
+      if (plainLines === 1) {
+        check(`${device} a one-line drawer row is easy to tap`, Boolean(plainArea && plainArea.height >= 43 && plainArea.owns), plainArea ? `${Math.round(plainArea.height)}px${plainArea.owns ? "" : ", covered"}` : "missing");
+      } else console.log(`skip ${device} one-line row (the sweep's user is in more than one workspace, so every row has a second line)`);
+      await shot("calendar-drawer");
+      await calendarsToggle.tap();
+      await page.waitForTimeout(400);
+      check(`${device} Calendars expands`, (await calendarsToggle.getAttribute("aria-expanded")) === "true");
+      await listRow.tap();
+      await page.waitForTimeout(900);
+      check(`${device} a task in the drawer opens the panel`, (await visible(page.getByRole("dialog", { name: "Task" }))) && !(await visible(drawer)));
+      await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
+      await page.waitForTimeout(600);
+      await page.reload();
+      await page.waitForTimeout(1500);
+      await page.getByRole("button", { name: "Calendars and tasks" }).tap();
+      await page.waitForTimeout(700);
+      const again = page.getByRole("dialog", { name: "Calendars and tasks" }).getByRole("button", { name: /^Calendars/ });
+      check(`${device} Calendars stays expanded after a reload`, (await again.getAttribute("aria-expanded")) === "true");
+      await again.tap();
+      await page.waitForTimeout(300);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(400);
+    } finally {
+      await dropTasks(block.ids);
+    }
+  } else check(`${device} calendar block checks ran`, false, "set CRM_AGENT_TOKEN and keep the Add task card so the sweep can add a task");
   await goto(page, `${base}/settings/general`);
   await page.waitForTimeout(1200);
   check(`${device} settings loads`, await visible(page.getByRole("heading", { name: "General" })));
@@ -594,6 +766,38 @@ for (const width of [1100, 1280, 1440]) {
     const teams = (await row.locator('a:visible[href^="msteams:"], a:visible[href^="tel:"]').first().getAttribute("href").catch(() => null)) ?? "";
     check(`${device} Call opens Teams on desktop`, teams.startsWith("msteams:"), teams);
   } else if (width === 1280) check(`${device} keyboard outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
+  if (width === 1280) {
+    const block = await seedBlock(page, "desk");
+    if (block) {
+      try {
+        await goto(page, `${base}/calendar?date=${block.day}&view=week`);
+        await page.waitForTimeout(1500);
+        const menu = page.getByRole("complementary", { name: "Calendars and tasks" });
+        check(`${device} calendar menu has Calendars and Tasks`, (await menu.getByRole("button", { name: /^Calendars/ }).isVisible()) && (await menu.getByRole("button", { name: /^Tasks/ }).isVisible()));
+        const card = page.locator(`[data-task-block="${block.id}"]`).filter({ visible: true });
+        check(`${device} the week shows the task block`, await card.isVisible().catch(() => false));
+        check(`${device} a 30 minute block shows a second line with its duration`, ((await card.locator("[data-task-detail]").textContent().catch(() => "")) ?? "").includes("30m"));
+        check(`${device} the menu lists the task`, await menu.locator(`[data-task-id="${block.id}"]`).isVisible().catch(() => false));
+        console.log(`skip ${device} clash (the sweep can't add a calendar event offline; covered in tests/task-blocks.test.ts)`);
+        console.log(`skip ${device} another workspace's block (the sweep's user and agent token share one workspace; covered in tests/task-blocks.test.ts)`);
+        await page.screenshot({ path: path.join(out, `desktop-${width}-calendar.png`) });
+        await card.locator("button[data-task-id]").click();
+        await page.waitForTimeout(900);
+        const panel = page.getByRole("dialog", { name: "Task" });
+        check(`${device} a block opens its own task in the panel`, (await panel.isVisible().catch(() => false)) && ((await panel.textContent()) ?? "").includes(block.title));
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(600);
+        check(`${device} Esc returns focus to the block`, (await focusedTaskId(page)) === block.id);
+        await page.getByRole("button", { name: /^Hide calendars and tasks/ }).click();
+        await page.waitForTimeout(400);
+        check(`${device} the toolbar button hides the menu`, !(await menu.isVisible().catch(() => false)));
+        await page.getByRole("button", { name: /^Show calendars and tasks/ }).click();
+      } finally {
+        await dropTasks(block.ids);
+      }
+    } else check(`${device} calendar block checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+  }
 
   await context.close();
 }
