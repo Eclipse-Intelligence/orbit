@@ -57,9 +57,11 @@ function ownChatPost(content: string) {
   }
 }
 
+const TASK_MAIL = /\\?"(?:lastEmail|thread)\\?"\s*:\s*\{/;
+
 export function outsideRead(name: string, content: string) {
   if (name === "team_chat" && ownChatPost(content)) return hasOutsideRecord(content);
-  return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && outsideDescription(content)) || hasOutsideRecord(content);
+  return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && outsideDescription(content)) || (name === "list_tasks" && TASK_MAIL.test(content)) || hasOutsideRecord(content);
 }
 
 const PAGE_TOOLS: ReadonlySet<string> = new Set(["read_web_page", "map_website"]);
@@ -92,7 +94,7 @@ const FORWARDED_START = "[Forwarded material starts.";
 const FORWARDED_END = "[Forwarded material ends.]";
 const FIRST_PARTY_FIELD = /^(domain|website|url|linkedin(url)?|x(url)?|twitter(url)?|homepage)$/i;
 const PAGE_OUTSIDE_LINE =
-  /^(?:Open: email thread |Event they last opened:|Capture item they last selected: (?:waiting for a reply|email from someone|sent email nobody|email reminder|suggested follow-up email|unfiled ))/m;
+  /^(?:Open: email thread |Event they last opened:|Capture item they last selected: (?:waiting for a reply|email from someone|sent email nobody|email reminder|suggested follow-up email|unfiled )|The user's last email with them: |The task came from the user's email thread )/m;
 const PAGE_DOMAIN = /(?:^|, )domain "([^"\\]+)"/gm;
 
 function text(value: unknown) {
