@@ -1,5 +1,6 @@
 import { requireAgent } from "@/lib/api/agent";
 import { idempotencyKey, readJson, withApi } from "@/lib/api/http";
+import { detailOfTask } from "@/lib/crm/task-detail";
 import { archiveTask, getTask, updateTask } from "@/lib/crm/tasks";
 import { parseInput, takeProvenance, taskMutationSchema } from "@/lib/crm/validation";
 
@@ -9,7 +10,8 @@ export async function GET(request: Request, context: Context) {
   return withApi(async () => {
     const actor = await requireAgent(request);
     const { id } = await context.params;
-    return Response.json({ task: await getTask(actor, id) });
+    const task = await getTask(actor, id);
+    return Response.json({ task, detail: await detailOfTask(actor, task) });
   });
 }
 

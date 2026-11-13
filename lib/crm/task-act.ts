@@ -47,7 +47,7 @@ function cannotChange() {
   return new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner or an admin can change it.", 403);
 }
 
-function linkedThread(description: string | null) {
+export function linkedThread(description: string | null) {
   for (const link of splitDescription(description).links) {
     const value = new URLSearchParams(link.href.split("?")[1] ?? "").get("thread");
     if (!value) continue;
@@ -199,16 +199,29 @@ async function viewerBookingUrl(actor: UserActor) {
   return page?.exists && page.enabled ? bookingUrl(page.slug) : null;
 }
 
+export type SharedTaskContext = Pick<TaskContext, "opportunity" | "lastActivity" | "people">;
+
+export async function sharedTaskContextInDb(db: Db, workspaceId: string, task: Task): Promise<SharedTaskContext> {
+  const [opportunity, lastActivity, people] = await Promise.all([
+    opportunityFor(db, workspaceId, task),
+    lastActivityFor(db, workspaceId, task),
+    companyPeople(db, workspaceId, task),
+  ]);
+  return { opportunity, lastActivity, people };
+}
+
+export async function viewerLastEmailInDb(db: Db, actor: UserActor, task: Task) {
+  return (await lastEmailFor(db, actor, task.contactEmail)) ?? (await lastEmailAnywhere(db, actor, task.contactEmail));
+}
+
 export async function taskContextInDb(db: Db, actor: UserActor, task: Task): Promise<Omit<TaskContext, "bookingUrl">> {
-  const [opportunity, lastActivity, lastEmail, thread, people, lookups] = await Promise.all([
-    opportunityFor(db, actor.workspaceId, task),
-    lastActivityFor(db, actor.workspaceId, task),
+  const [shared, lookups, lastEmail, thread] = await Promise.all([
+    sharedTaskContextInDb(db, actor.workspaceId, task),
+    contactLookupsFor(db, actor.workspaceId, task.contactId),
     lastEmailFor(db, actor, task.contactEmail),
     threadFor(db, actor, task.description),
-    companyPeople(db, actor.workspaceId, task),
-    contactLookupsFor(db, actor.workspaceId, task.contactId),
   ]);
-  return { opportunity, lastActivity, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread, people, lookups };
+  return { ...shared, lookups, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread };
 }
 
 export async function taskContext(actor: UserActor, taskId: string): Promise<TaskContext> {
