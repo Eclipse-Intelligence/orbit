@@ -33,6 +33,7 @@ describe("the task timing migration", () => {
     const client = await getAdminPool().connect();
     try {
       await client.query("begin");
+      await client.query("drop trigger tasks_outlook_enqueue on crm.tasks");
       await client.query("alter table crm.tasks drop constraint tasks_timing_check, drop column due_has_time, drop column scheduled_by");
       const insert = async (title: string, dueAt: string | null, remind: number | null, sync: unknown = {}) =>
         (

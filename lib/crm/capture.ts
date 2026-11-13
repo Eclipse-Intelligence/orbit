@@ -88,7 +88,7 @@ const PEOPLE_COUNTS = `
       (case when jsonb_typeof(e.attendees) = 'array' then e.attendees else '[]'::jsonb end)
       || (case when jsonb_typeof(e.organizer) = 'object' then jsonb_build_array(e.organizer) else '[]'::jsonb end)
     ) as person
-    where e.user_id = $1 and not e.is_cancelled
+    where e.user_id = $1 and not e.is_cancelled and e.task_id is null
       and jsonb_typeof(person) = 'object' and jsonb_typeof(person->'email') = 'string'
       and ${HAS_MAILBOX}
     group by 1

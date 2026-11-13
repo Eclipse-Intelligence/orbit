@@ -541,6 +541,38 @@ export function personalDraft(input: PersonalEventInput) {
   };
 }
 
+export const TASK_BLOCK_NOTE = "From Orbit.";
+
+export function taskBlockBodyHtml(link: string | null) {
+  if (!link) return `<p>${TASK_BLOCK_NOTE}</p>`;
+  return `<p>${TASK_BLOCK_NOTE} <a href="${escapeHtml(link)}">Open the task</a></p>`;
+}
+
+export function taskBlockDraft(input: { title: string; start: Date; end: Date; timeZone: string; link: string | null; transactionId: string }) {
+  return {
+    subject: input.title,
+    body: { contentType: "HTML" as const, content: taskBlockBodyHtml(input.link) },
+    ...graphDateTimes(input.start, input.end, input.timeZone),
+    attendees: [],
+    showAs: "busy",
+    sensitivity: "private",
+    isReminderOn: false,
+    responseRequested: false,
+    transactionId: input.transactionId,
+  };
+}
+
+export function taskBlockPatch(input: { title: string; start: Date; end: Date; timeZone: string; link: string | null }) {
+  return {
+    subject: input.title,
+    body: { contentType: "HTML" as const, content: taskBlockBodyHtml(input.link) },
+    ...graphDateTimes(input.start, input.end, input.timeZone),
+    showAs: "busy",
+    sensitivity: "private",
+    isReminderOn: false,
+  };
+}
+
 function eventsUrl(calendarId?: string | null) {
   return calendarId
     ? `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events`
@@ -647,7 +679,7 @@ async function graphWrite(
 
 export async function createGraphEvent(
   accessToken: string,
-  draft: GraphEventDraft | ReturnType<typeof personalDraft>,
+  draft: GraphEventDraft | ReturnType<typeof personalDraft> | ReturnType<typeof taskBlockDraft>,
   options: { calendarId?: string | null; fetchImpl?: typeof fetch } = {},
 ) {
   const response = await graphWrite(eventsUrl(options.calendarId), accessToken, draft, options.fetchImpl ?? fetch, true);
@@ -708,6 +740,27 @@ export async function moveGraphEvent(
   const response = await graphWrite(eventUrl(eventId), accessToken, patch, fetchImpl, true, "PATCH");
   if (!response.ok) throw await writeError(response, "move");
   return (await response.json().catch(() => ({}))) as GraphEvent;
+}
+
+export async function patchGraphEvent(
+  accessToken: string,
+  eventId: string,
+  patch: ReturnType<typeof taskBlockPatch>,
+  fetchImpl: typeof fetch = fetch,
+) {
+  const response = await graphWrite(eventUrl(eventId), accessToken, patch, fetchImpl, true, "PATCH");
+  if (!response.ok) throw await writeError(response, "move");
+  return (await response.json().catch(() => ({}))) as GraphEvent;
+}
+
+export async function graphEventGone(accessToken: string, eventId: string, fetchImpl: typeof fetch = fetch) {
+  const response = await fetchImpl(`${eventUrl(eventId)}?$select=id`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+  });
+  if (response.status === 404) return true;
+  if (response.ok) return false;
+  throw await writeError(response, "move");
 }
 
 export type InviteResponse = "accept" | "tentativelyAccept" | "decline";

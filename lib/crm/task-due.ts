@@ -114,7 +114,7 @@ export async function busyFor(actor: Actor, ownerId: string | null | undefined, 
       const result = await db.query<{ starts_at: Date; ends_at: Date }>(
         `select e.starts_at, e.ends_at
          from crm.calendar_events e
-         where e.user_id = $1 and not e.is_cancelled and coalesce(lower(e.show_as), 'busy') <> 'free'
+         where e.user_id = $1 and not e.is_cancelled and e.task_id is null and coalesce(lower(e.show_as), 'busy') <> 'free'
            and e.starts_at < $3 and e.ends_at > $2
          order by e.starts_at
          limit 5000`,

@@ -17,6 +17,8 @@ import {
 import { formatWhen } from "@/lib/companies";
 import type { CalendarEntry, CalendarGroup } from "@/lib/crm/calendars";
 import { GENERIC_ERROR } from "@/lib/utils";
+import LockIcon from "@/public/assets/images/mail/lock.svg";
+import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 
 const CONNECT_ACCOUNT = "/api/microsoft/connect?purpose=calendar_account";
 
@@ -34,7 +36,7 @@ function needsReconnect(group: CalendarGroup) {
 }
 
 function sourceLine(group: CalendarGroup) {
-  if (group.kind === "primary") return "Main account";
+  if (group.kind === "primary") return group.taskBlocks === "orbit" ? "Main account · Read only" : "Main account";
   if (group.provider === "ics") return "Calendar link · read-only";
   if (group.canSend) return group.canInvite ? "Calendar, mail and invites" : "Calendar and mail";
   return "Calendar only";
@@ -236,6 +238,23 @@ export default function CalendarsSettings({
               )}
             </span>
           </div>
+          {group.taskBlocks === "outlook" && (
+            <p className="caption-style text-soft flex items-center gap-2">
+              <LockIcon aria-hidden className="text-violet size-3 shrink-0" />
+              Task blocks go to your Outlook calendar as Busy, Private.
+            </p>
+          )}
+          {group.taskBlocks === "orbit" && (
+            <div role="status" className="bg-warning/10 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg px-3 py-2">
+              <AlertIcon aria-hidden className="text-warning size-3.5 shrink-0" />
+              <span className="caption-style text-warning min-w-0 flex-1">Task blocks show in Orbit only.</span>
+              {configured && (
+                <a href={reconnectHref(group)} className={buttonVariants({ variant: "secondary", size: "sm" })}>
+                  Reconnect to put task blocks in Outlook
+                </a>
+              )}
+            </div>
+          )}
           {group.calendars.length === 0 ? (
             <p className="caption-style text-subtle">No calendars synced yet.</p>
           ) : (

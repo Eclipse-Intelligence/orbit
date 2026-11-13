@@ -11,6 +11,7 @@ import {
   relinkCalendar,
   wantedEmail,
   DEFAULT_CALENDAR_PLACEHOLDER,
+  readGrantedScopes,
 } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
 import { internalAddresses } from "@/lib/crm/conversations";
@@ -23,6 +24,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import type { CalendarPerson } from "@/lib/microsoft/calendar";
+import { grantsCalendarWrite, microsoftConfigured } from "@/lib/microsoft/oauth";
 
 const EVENTS_SHOWN = 1500;
 const STALE_MS = 10 * 60 * 1000;
@@ -54,6 +56,7 @@ export type CalendarGroup = {
   lastSyncedAt: string | null;
   lastError: string | null;
   removes: RemovalImpact | null;
+  taskBlocks: "outlook" | "orbit" | null;
   calendars: CalendarEntry[];
 };
 
@@ -151,6 +154,8 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
          where connection_id = $1 and source = 'calendar'`,
         [stored.id],
       );
+      const connected = stored.status === "connected" && Boolean(stored.refreshTokenCipher);
+      const writes = connected && microsoftConfigured() ? grantsCalendarWrite(await readGrantedScopes(db, stored.id)) : null;
       groups.push({
         kind: "primary",
         provider: "microsoft",
@@ -158,13 +163,14 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
         email: stored.email,
         label: stored.email,
         displayName: null,
-        connected: stored.status === "connected" && Boolean(stored.refreshTokenCipher),
+        connected,
         scopeMissing: Boolean(state.rows[0]?.scope_missing),
         canSend: true,
         canInvite: true,
         lastSyncedAt: iso(state.rows[0]?.last_synced_at ?? null),
         lastError: state.rows[0]?.last_error ?? null,
         removes: null,
+        taskBlocks: writes === true ? "outlook" : writes === false ? "orbit" : null,
         calendars: calendars.rows.filter((row) => row.connection_id === stored.id).map(mapCalendar),
       });
     }
@@ -185,6 +191,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
         lastSyncedAt: account.lastSyncedAt,
         lastError: account.lastError,
         removes: account.provider === "microsoft" ? (impacts.get(account.id) ?? null) : null,
+        taskBlocks: null,
         calendars: calendars.rows.filter((row) => row.account_id === account.id).map(mapCalendar),
       });
     }
@@ -251,6 +258,7 @@ type ItemRow = {
   invite_identity_id: string | null;
   invite_uid: string | null;
   contact_ids: string[] | null;
+  task_id: string | null;
 };
 
 function readResponse(value: unknown, email: string) {
@@ -287,7 +295,7 @@ export async function listCalendarItems(
               (e.online_meeting_url is null and l.join_url is not null) as join_from_description,
               e.organizer, e.attendees,
               e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
-              e.invite_identity_id, e.invite_uid, e.contact_ids,
+              e.invite_identity_id, e.invite_uid, e.contact_ids, e.task_id,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
@@ -306,6 +314,7 @@ export async function listCalendarItems(
        ) g on true
        where e.user_id = $1
          and not e.is_cancelled
+         and e.task_id is null
          and e.starts_at < $3
          and (e.ends_at > $2 or e.starts_at >= $2)
        order by e.starts_at, e.ends_at desc, e.id

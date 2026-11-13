@@ -3,6 +3,7 @@ import { processAllCalendarAlerts } from "@/lib/calendar-alerts";
 import { sweepAgentMail } from "@/lib/agent-mail/jobs";
 import { pollAgentMailboxes } from "@/lib/agent-mail/poll";
 import { processAllDueMail } from "@/lib/mail/due";
+import { syncTaskBlocks } from "@/lib/crm/task-outlook";
 import { sweepWaitingSteers } from "@/lib/assistant/chat";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,10 @@ async function handle(request: Request) {
     console.error("Calendar alerts failed", error);
     return { users: 0, sent: 0 };
   });
+  const taskBlocks = await syncTaskBlocks({ deadline: Date.now() + 15_000 }).catch((error) => {
+    console.error("Outlook task blocks failed", error instanceof Error ? error.name : "unknown");
+    return null;
+  });
   const polled = await pollAgentMailboxes({ deadline: Date.now() + 20_000 }).catch((error) => {
     console.error("Agent mail poll failed", error instanceof Error ? error.name : "unknown");
     return null;
@@ -31,7 +36,7 @@ async function handle(request: Request) {
     console.error("Waiting assistant messages sweep failed", error instanceof Error ? error.name : "unknown");
     return 0;
   });
-  return Response.json({ users, calendar, agentMail, polled, steering });
+  return Response.json({ users, calendar, taskBlocks, agentMail, polled, steering });
 }
 
 export const GET = handle;

@@ -18,7 +18,7 @@ async function ownBusy(actor: UserActor, from: number, to: number): Promise<Busy
     const result = await db.query<{ starts_at: Date; ends_at: Date }>(
       `select e.starts_at, e.ends_at from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.user_id = e.user_id
-       where e.user_id = $1 and not e.is_cancelled and coalesce(lower(e.show_as), 'busy') <> 'free'
+       where e.user_id = $1 and not e.is_cancelled and e.task_id is null and coalesce(lower(e.show_as), 'busy') <> 'free'
          and e.starts_at < $3 and e.ends_at > $2
        order by e.starts_at limit 2000`,
       [actor.userId, new Date(from).toISOString(), new Date(to).toISOString()],

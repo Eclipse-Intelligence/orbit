@@ -1043,8 +1043,8 @@ const TASK_FIELDS = {
   title: { type: "string", description: "What needs doing." },
   description: { type: "string", description: "Extra detail, or null to clear it." },
   dueDate: { type: "string", description: "Due day only, as YYYY-MM-DD in London time, or null to clear. Use this unless the user gave a time." },
-  dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear. Only when the user gave a time; it puts the task on their calendar. Send dueDate or dueAt, not both." },
-  durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15." },
+  dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear. Only when the user gave a time; it puts the task on their calendar. A time on a task someone else owns is saved as date only. Send dueDate or dueAt, not both." },
+  durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15. Only the owner can change it on a timed task." },
   remindMinutes: {
     type: "integer",
     enum: REMINDER_OPTIONS.map((option) => option.minutes),
@@ -6314,8 +6314,9 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       invite_identity_id: string | null;
       invite_uid: string | null;
       contact_ids: string[] | null;
+      task_id: string | null;
     }>(
-      `select id, subject, starts_at, ends_at, organizer, attendees, created_by_orbit, invite_identity_id, invite_uid, contact_ids
+      `select id, subject, starts_at, ends_at, organizer, attendees, created_by_orbit, invite_identity_id, invite_uid, contact_ids, task_id
        from crm.calendar_events
        where id = any($1::uuid[]) and user_id = $2`,
       [list, actor.userId],

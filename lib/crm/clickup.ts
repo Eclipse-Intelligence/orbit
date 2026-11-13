@@ -732,6 +732,11 @@ function guessedAsLocal(local: Fields, remote: Fields) {
   return dayKeyIn(new Date(local.dueAt)) === dayKeyIn(new Date(remote.dueAt)) ? { ...remote, dueAt: local.dueAt, dueHasTime: true } : remote;
 }
 
+function keptDayOnly(write: Pick<TaskWrite, "dueAt" | "dueHasTime">, saved: Pick<Task, "dueAt" | "dueHasTime">): Snapshot {
+  if (!write.dueHasTime || saved.dueHasTime || !saved.dueAt) return {};
+  return { dueAt: saved.dueAt, dueHasTime: false };
+}
+
 function mergeFields(local: Fields, incoming: Fields, snap: Snapshot, localTime: number, changedAt: number) {
   const write: TaskWrite = {};
   const next: Snapshot = {};
@@ -797,7 +802,10 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
         changedAt,
       );
       const changed = Object.keys(write).length > 0;
-      if (changed) await updateTaskInDb(db, s.actor, row.id, write, { ...PROVENANCE, sourceUrl: clip(task.url, 2000) });
+      if (changed) {
+        const saved = await updateTaskInDb(db, s.actor, row.id, write, { ...PROVENANCE, sourceUrl: clip(task.url, 2000) });
+        Object.assign(next, keptDayOnly(write, saved.task));
+      }
       await db.query(
         `update crm.tasks
          set clickup_sync = clickup_sync || $2::jsonb, clickup_synced_at = now(), clickup_error = null,
@@ -840,12 +848,13 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
       { operation: "import_clickup", source: "clickup", sourceUrl: clip(task.url, 2000) },
     );
     if (!created) return "ignored";
+    const kept = keptDayOnly({ dueAt: remote.dueAt, dueHasTime: remote.dueHasTime }, created);
     await db.query(
       `update crm.tasks
        set clickup_task_id = $2, clickup_list_id = $3, clickup_url = $4, clickup_synced_at = now(),
            clickup_error = null, clickup_sync = $5::jsonb
        where id = $1`,
-      [created.id, taskId, listId, clip(task.url, 500), JSON.stringify({ ...remote, remoteUpdatedAt: changedAt })],
+      [created.id, taskId, listId, clip(task.url, 500), JSON.stringify({ ...remote, ...kept, remoteUpdatedAt: changedAt })],
     );
     return "imported";
   });

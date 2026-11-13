@@ -26,6 +26,7 @@ import {
 import { CrmError } from "@/lib/crm/errors";
 import { removeMember } from "@/lib/crm/team";
 import type { UserActor } from "@/lib/crm/types";
+import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { openChatTyping, watchChat, watchLiveActivity } from "@/lib/docs/live/client";
@@ -46,7 +47,7 @@ async function sql(text: string, values: unknown[] = []) {
 
 async function rerunChatMigrations() {
   const files = readdirSync("supabase/migrations").filter((file) => file.endsWith(".sql") && file >= "20270116120000_chat.sql").sort();
-  for (const file of files) await getAdminPool().query(readFileSync(`supabase/migrations/${file}`, "utf8"));
+  for (const file of files) await applyMigrationSql(getAdminPool(), readFileSync(`supabase/migrations/${file}`, "utf8"));
 }
 
 async function until(check: () => Promise<boolean> | boolean, label: string) {

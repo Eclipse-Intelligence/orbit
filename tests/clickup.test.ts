@@ -897,6 +897,41 @@ describe("clickup sync", () => {
     await db.query("delete from crm.workspace_members where user_id = any($1::uuid[])", [[sam, ola]]);
   });
 
+  it("brings a teammate's timed ClickUp task in date only and never pushes that back to ClickUp", async () => {
+    const db = getAdminPool();
+    const tia = (await db.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["tia@orbit.test", "Tia Teammate"])).rows[0].id;
+    await db.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, tia]);
+    const remote = remoteTask(fake, {
+      id: "fortia",
+      listId: RELATIONSHIPS,
+      name: "Tia calls Jane",
+      orbit: "jane@acme.com",
+      assignees: [{ id: 303, email: "tia@orbit.test" }],
+      due_date: String(Date.UTC(2026, 6, 1, 13, 0)),
+      due_date_time: true,
+    });
+    const mine = remoteTask(fake, { id: "formark", listId: RELATIONSHIPS, name: "Mark calls Jane", orbit: "jane@acme.com", due_date: String(Date.UTC(2026, 6, 2, 13, 0)), due_date_time: true });
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const theirs = await importedTask(owner.workspaceId, "fortia");
+    assert.equal(theirs?.due_has_time, false);
+    assert.equal(theirs?.due_at?.toISOString(), "2026-06-30T23:00:00.000Z");
+    assert.equal(await pushClickUpTask(owner, theirs!.id, { fetchImpl }), "unchanged");
+    assert.equal((await importedTask(owner.workspaceId, "formark"))?.due_has_time, true);
+
+    remote.name = "Tia calls Jane today";
+    remote.due_date = String(Date.UTC(2026, 6, 1, 15, 0));
+    remote.date_updated = String(Date.now() + 2_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const edited = await importedTask(owner.workspaceId, "fortia");
+    assert.equal(edited?.title, "Tia calls Jane today");
+    assert.equal(edited?.due_has_time, false);
+    assert.equal(await pushClickUpTask(owner, edited!.id, { fetchImpl }), "unchanged");
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    assert.equal(puts(fake, "fortia").length, 0);
+    assert.equal(mine.due_date_time, true);
+    await db.query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [owner.workspaceId, tia]);
+  });
+
   it("skips ClickUp tasks already linked to a task the person can't change, after handing it on", async () => {
     const db = getAdminPool();
     const priyaId = (await db.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["priya@orbit.test", "Priya Nair"])).rows[0].id;

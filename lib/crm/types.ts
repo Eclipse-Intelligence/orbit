@@ -421,6 +421,7 @@ export type Task = {
   clickupListId: string | null;
   clickupUrl: string | null;
   clickupError: string | null;
+  inOutlook: boolean;
   createdAt: string;
   updatedAt: string;
 };
