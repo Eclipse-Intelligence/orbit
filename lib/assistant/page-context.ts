@@ -6,6 +6,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { taskContextInDb } from "@/lib/crm/task-act";
 import { splitDescription } from "@/lib/crm/task-description";
 import { readTaskInDb } from "@/lib/crm/tasks";
+import { actorForTask } from "@/lib/crm/workspaces";
 import type { UserActor } from "@/lib/crm/types";
 import { isLeadSource } from "@/lib/assistant/web-gate";
 import type { Db } from "@/lib/db/pool";
@@ -494,14 +495,28 @@ async function pageLines(db: Db, actor: UserActor, input: PageInput): Promise<Li
     const found = await captureItem(db, actor, input.focus.id);
     if (found) lines.push(`Capture item they last selected: ${found}`);
   }
-  if (input.focus?.kind === "task" && TASK_PAGES.has(first)) lines.push(...(await openTask(db, actor, input.focus.id)));
   if (input.selection && (parts.length === 0 || (first === "contacts" && !second))) lines.push(...(await selectionLines(db, actor, input.selection)));
   return lines;
+}
+
+async function focusedTask(actor: UserActor, input: PageInput): Promise<Lines> {
+  if (input.focus?.kind !== "task" || !TASK_PAGES.has(segments(input.path)[0] ?? "") || !isUuid(input.focus.id)) return [];
+  const id = input.focus.id;
+  const home = await actorForTask(actor, id).catch(() => null);
+  if (!home) return [];
+  const lines = await withActor(home, (db) => openTask(db, home, id));
+  if (lines.length === 0 || home.workspaceId === actor.workspaceId) return lines;
+  return [
+    lines[0],
+    `That task is in the ${quoted(home.workspaceName, "other")} workspace, not this one. Its records are shown for reading only: to change the task or log on its records, the user switches to that workspace first.`,
+    ...lines.slice(1),
+  ];
 }
 
 export async function pageContext(actor: UserActor, input: PageInput | null): Promise<string> {
   if (!input) return "";
   const lines = await withActor(actor, (db) => pageLines(db, actor, input));
+  lines.push(...(await focusedTask(actor, input)));
   if (lines.length === 0) return "";
   return `<${PAGE_CONTEXT_TAG}>\n${lines.join("\n")}\n</${PAGE_CONTEXT_TAG}>`;
 }

@@ -11,7 +11,7 @@ export default function TaskAskButton({ taskId, variant, className, onAsk }: { t
   const composer = useComposer();
 
   function ask() {
-    focusOnPage("task", taskId);
+    focusOnPage("task", taskId, { pinned: true });
     if (!askOrbit("")) {
       composer.showToast({ message: "Ask Orbit isn't available here.", tone: "alert" });
       return;

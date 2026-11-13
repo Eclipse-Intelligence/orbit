@@ -114,7 +114,6 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
   );
   const canChange = canChangeTaskAs(viewer, task);
   const details = useTaskDetails(task, canChange);
-  usePageFocus("task", task.id);
   const team = members.length > 1;
   const named = (person: string | null) => (person ? (members.find((member) => member.id === person) ?? null) : null);
   const owner = named(task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
@@ -227,7 +226,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         flush();
-        if (asking.current) return;
+        if (asking.current) {
+          asking.current = false;
+          return;
+        }
         returnFocus(task.id, returnTo, opener);
       }}
       onOpenAutoFocus={(event) => {
@@ -357,6 +359,7 @@ export default function TaskPanel({
   modal?: boolean;
 }) {
   const shown = open && task ? task.id : null;
+  usePageFocus("task", task?.id ?? "", Boolean(shown));
   const [last, setLast] = useState<string | null>(shown);
   const [instant, setInstant] = useState(false);
   if (last !== shown) {
