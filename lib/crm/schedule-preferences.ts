@@ -17,6 +17,7 @@ import {
   type LearnedSpread,
 } from "@/lib/learned-times";
 import { appTimeZone } from "@/lib/time";
+import { clockText } from "@/lib/working-hours";
 
 export const LEARNED_CACHE_MS = 10 * 60_000;
 export const PLACED_OPERATIONS = ["update_task", "drag_task", "create_task"] as const;
@@ -146,6 +147,18 @@ export async function learnedSpreadInDb(
 
 export async function planPreferencesInDb(db: Db, actor: UserActor, actors: UserActor[], now = Date.now()): Promise<PlanPreferences> {
   return preferencesFromSpread(await learnedSpreadInDb(db, actor, actors, now));
+}
+
+export type PreferredTime = { from: string; to: string; learned: boolean } | null;
+
+export async function getPreferredTimes(actor: UserActor, now = Date.now()): Promise<Record<"call" | "email" | "other", PreferredTime>> {
+  const actors = await workspaceActors(actor).catch(() => [actor]);
+  const preferences = await withActor(actor, (db) => planPreferencesInDb(db, actor, actors, now));
+  const shown = (kind: "call" | "email" | "other"): PreferredTime => {
+    const preference = preferences[kind];
+    return preference ? { from: clockText(preference.from), to: clockText(preference.to), learned: preference.learned } : null;
+  };
+  return { call: shown("call"), email: shown("email"), other: shown("other") };
 }
 
 export async function getLearnedTimes(actor: UserActor, now = Date.now()): Promise<LearnedTimes> {
