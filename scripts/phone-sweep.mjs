@@ -378,6 +378,7 @@ async function resetLearned(page, device) {
   check(`${device} holding Reset starts every kind from scratch`, (captions.match(/Not enough yet \(0 of about 10\)/g) ?? []).length === 3, captions.slice(0, 160));
 }
 
+try {
 for (const [device, viewport] of [
   ["iphone", { width: 390, height: 844 }],
   ["ipad", { width: 820, height: 1180 }],
@@ -770,6 +771,7 @@ for (const [device, viewport] of [
 
   const prepareTask = await seedCallTask(`${device}e`, "Email");
   if (prepareTask) {
+    try {
     await goto(page, `${base}/tasks`);
     await page.waitForTimeout(1500);
     const row = page.locator(`li[data-task-id="${prepareTask.id}"]`);
@@ -791,7 +793,8 @@ for (const [device, viewport] of [
       await row.locator("button[aria-expanded]").first().tap({ position: { x: 3, y: 8 } });
       await page.waitForTimeout(1800);
       const card = row.locator("[data-task-preparation]");
-      check(`${device} a prepared draft shows in the open task`, (await visible(card)) && /only you see this/.test((await card.textContent().catch(() => "")) ?? ""));
+      check(`${device} a prepared draft shows in the open task`, await visible(card));
+      check(`${device} "Only you see this" is visible on the prepared draft`, await visible(card.locator("[data-preparation-private]")));
       check(`${device} the draft shows its subject and body`, (await visible(card.getByText("Sweep prepared draft"))) && (await visible(card.getByText(/Here is the case study/))));
       check(`${device} Prepare again replaces Prepare`, (await visible(card.getByRole("button", { name: "Prepare again" }))) && !(await visible(row.getByRole("button", { name: "Prepare", exact: true }))));
       check(`${device} prepared draft no overflow`, await noHorizontalScroll());
@@ -811,6 +814,9 @@ for (const [device, viewport] of [
       page.off("request", watch);
       check(`${device} opening the draft sends nothing`, sends.length === 0, sends.join(", "));
     } else check(`${device} prepared draft checks ran`, false, "set DATABASE_ADMIN_URL to a local database so the sweep can seed a draft");
+    } finally {
+      await dropTasks([prepareTask.id]);
+    }
   } else check(`${device} Prepare checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
   const recordTask = sweepTask?.companyId ? await seedCallTask(`${device}r`) : null;
@@ -1142,7 +1148,7 @@ for (const width of [1100, 1280, 1440]) {
     await context.close();
     continue;
   }
-  await first.locator("button[aria-expanded]").first().click();
+  await first.locator("button[aria-expanded]").first().click({ position: { x: 3, y: 8 } });
   await page.waitForTimeout(400);
   await first.getByRole("button", { name: "Open", exact: true }).click();
   await page.waitForTimeout(900);
@@ -1171,6 +1177,29 @@ for (const width of [1100, 1280, 1440]) {
     : false;
   check(`${device} open Ask Orbit is usable with the panel open`, Boolean(dockBox) && (clear(dockBox) || onTop) && dockBox.width >= 300, dockBox ? `${Math.round(dockBox.width)}px wide` : "didn't open");
   await page.screenshot({ path: path.join(out, `desktop-${width}-assistant.png`) });
+
+  const deskPrepare = width === 1280 ? await seedCallTask("deske", "Email") : null;
+  if (deskPrepare) {
+    try {
+      await goto(page, `${base}/tasks`);
+      await page.waitForTimeout(1500);
+      const row = page.locator(`li[data-task-id="${deskPrepare.id}"]`);
+      await row.locator("button[aria-expanded]").first().click({ position: { x: 3, y: 8 } });
+      await page.waitForTimeout(1500);
+      check(`${device} Prepare sits in the open row's footer`, await row.getByRole("button", { name: "Prepare", exact: true }).isVisible().catch(() => false));
+      if (await seedPreparation(deskPrepare.id)) {
+        await goto(page, `${base}/tasks`);
+        await page.waitForTimeout(1500);
+        await row.locator("button[aria-expanded]").first().click({ position: { x: 3, y: 8 } });
+        await page.waitForTimeout(1800);
+        const card = row.locator("[data-task-preparation]");
+        check(`${device} a prepared draft shows with "Only you see this"`, (await card.isVisible().catch(() => false)) && (await card.locator("[data-preparation-private]").isVisible().catch(() => false)));
+        await page.screenshot({ path: path.join(out, `desktop-${width}-task-prepared.png`) });
+      } else check(`${device} prepared draft checks ran`, false, "set DATABASE_ADMIN_URL to a local database so the sweep can seed a draft");
+    } finally {
+      await dropTasks([deskPrepare.id]);
+    }
+  } else if (width === 1280) check(`${device} Prepare checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
   const callTask = width === 1280 ? await seedCallTask("desk") : null;
   if (callTask) {
@@ -1431,9 +1460,11 @@ for (const width of [1100, 1280, 1440]) {
   await context.close();
 }
 
+} finally {
 if (sweepTask) await api(`/tasks/${sweepTask.id}`, { method: "DELETE" });
 for (const id of sweepCallTasks) if (id) await api(`/tasks/${id}`, { method: "DELETE" });
 for (const id of sweepContacts) await api(`/contacts/${id}`, { method: "DELETE" });
+}
 
 check("the browser stayed on this machine", blocked.size === 0, [...blocked].join(", "));
 console.log(problems.length ? `\n${problems.length} problems. Screenshots are in ${out}` : `\nall checks passed. Screenshots are in ${out}`);

@@ -1,6 +1,6 @@
 # Tasks plan: connected, quick to act on, and run with the agent
 
-Status: settled with Mark (2026-11-12), written from three Fable reviews of the code and revised after a Fable review of the plan. Mockups approved by Mark (2026-11-12). Nothing is built yet.
+Status: settled with Mark (2026-11-12), written from three Fable reviews of the code and revised after a Fable review of the plan. Mockups approved by Mark (2026-11-12). Phases 1 to 4 are live; Phase 5 (Prepare) is in review (PR #350); Phases 6 and 7 remain.
 
 ## What Tasks becomes
 
