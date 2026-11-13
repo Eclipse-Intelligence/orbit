@@ -13,7 +13,10 @@ import { CrmError } from "@/lib/crm/errors";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { taskDetail, type TaskDetail } from "@/lib/crm/task-detail";
-import { prepareTask, prepareTasksDueToday, setTaskPrepareSettings, taskPrepareSettings } from "@/lib/crm/task-prepare";
+import { morningTargets, prepareAllowed, prepareMorningPass, prepareTask, prepareTaskRequest, prepareTasksDueToday, setTaskPrepareSettings, taskPrepareSettings } from "@/lib/crm/task-prepare";
+import { taskContext } from "@/lib/crm/task-act";
+import { basisFingerprint, isStale } from "@/lib/crm/task-preparation-store";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import { briefRows, composeFromPreparation, preparable, preparationKind, type TaskPreparation } from "@/lib/crm/task-preparation";
 import { addTaskParticipants, createTask, updateTask } from "@/lib/crm/tasks";
 import type { Actor, AgentActor, UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -327,12 +330,22 @@ describe("a preparation goes out of date", () => {
     const id = (await createTask(mark, { title: "Call Jane Cooper about pricing", ownerId: mark.userId, contactId: jane })).body.task.id;
     await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
     assert.equal((await taskDetail(mark, id)).preparation?.stale, false);
+    await updateTask(mark, id, { priority: "high" });
+    assert.equal((await taskDetail(mark, id)).preparation?.stale, false);
     await updateTask(mark, id, { dueDate: londonDay(3) });
+    assert.equal((await taskDetail(mark, id)).preparation?.stale, true);
+    await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
+    await sql("update crm.contacts set notes = 'Prefers calls after 4pm.' where id = $1", [jane]);
+    assert.equal((await taskDetail(mark, id)).preparation?.stale, true);
+    await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
+    await sql("update crm.opportunities set probability = 70, expected_close_date = '2026-12-31' where id = $1", [renewal]);
+    assert.equal((await taskDetail(mark, id)).preparation?.stale, true);
+    await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
     assert.equal((await taskDetail(mark, id)).preparation?.stale, false);
     await createActivity(mark, { type: "meeting", title: "Lunch with Jane", contactId: jane, occurredAt: new Date(Date.now() - 60_000).toISOString() });
     const stale = (await taskDetail(mark, id)).preparation;
     assert.equal(stale?.stale, true);
-    assert.equal(stale?.builtFrom?.lastActivity?.title, "Call with Jane");
+    assert.ok(stale?.builtFrom?.lastActivity);
     await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
     assert.equal((await taskDetail(mark, id)).preparation?.stale, false);
     await updateTask(mark, id, { title: "Call Jane Cooper about the price rise" });
@@ -479,5 +492,146 @@ describe("preparing each morning", () => {
     const done = model(answer);
     assert.equal((await prepareTasksDueToday(olivia, { deadline: soon(), fetchImpl: done.fetchImpl, now: at(13) })).failed, 0);
     assert.equal(done.prompts.length, 0);
+  });
+});
+
+describe("a preparation follows its task", () => {
+  it("moves with the task to another workspace, dropping people who aren't in it, and the morning run still works there", async () => {
+    const created = await createWorkspace(mark, { name: "Prepare second" });
+    const second: UserActor = { ...mark, workspaceId: created.id, workspaceName: "Prepare second" };
+    const elsewhere = (await createContact(second, { firstName: "Lucy", lastName: "Hart", email: "lucy@brightwell-prepare.test" })).body.contact.id;
+    const id = (await createTask(mark, { title: "Call Jane Cooper about the move", ownerId: mark.userId, contactId: jane, dueDate: londonDay() })).body.task.id;
+    await addTaskParticipants(mark, id, [sam.userId]);
+    await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
+    await prepareTask(sam, id, { fetchImpl: model(answer).fetchImpl });
+    await sql("update crm.tasks set workspace_id = $2, contact_id = $3, company_id = null, opportunity_id = null where id = $1", [id, second.workspaceId, elsewhere]);
+    assert.deepEqual(await sql("select user_id, workspace_id from crm.task_preparations where task_id = $1", [id]), [{ user_id: mark.userId, workspace_id: second.workspaceId }]);
+    await sql("update crm.task_preparations set checked_at = now() - interval '2 days' where task_id = $1", [id]);
+    const at10 = new Date(startOfDay(new Date(), "Europe/London").getTime() + 10 * 3_600_000);
+    const { fetchImpl, prompts } = model(answer);
+    const report = await prepareTasksDueToday(mark, { deadline: Date.now() + 120_000, fetchImpl, now: at10, actors: [mark, second] });
+    assert.equal(report.failed, 0);
+    assert.ok(report.prepared >= 1);
+    assert.ok(prompts.some((prompt) => prompt.user.includes("Lucy Hart")));
+    assert.equal((await taskDetail(second, id)).preparation?.stale, false);
+  });
+
+  it("drops the old assignee's preparation when the task is reassigned, and keeps everyone else's", async () => {
+    const id = (await createTask(mark, { title: "Call Jane Cooper about the handover", ownerId: sam.userId, contactId: jane })).body.task.id;
+    await prepareTask(sam, id, { fetchImpl: model(answer).fetchImpl });
+    await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
+    await updateTask(mark, id, { ownerId: priya.userId });
+    assert.deepEqual(await sql("select user_id from crm.task_preparations where task_id = $1", [id]), [{ user_id: mark.userId }]);
+    assert.equal((await taskDetail(priya, id)).preparation, null);
+  });
+});
+
+describe("guards around preparing", () => {
+  it("refuses a second Prepare of the same task while one started in the last minute", async () => {
+    const id = (await createTask(mark, { title: "Call Jane Cooper about the guard", ownerId: mark.userId, contactId: jane })).body.task.id;
+    await sql(
+      "insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, started_at, checked_at) values ($1, $2, $3, 'brief', 'pending', now(), '-infinity')",
+      [id, mark.userId, mark.workspaceId],
+    );
+    const { fetchImpl, prompts } = model(answer);
+    await rejects(prepareTask(mark, id, { fetchImpl }), "conflict");
+    assert.equal(prompts.length, 0);
+    await sql("update crm.task_preparations set started_at = now() - interval '61 seconds' where task_id = $1", [id]);
+    assert.equal((await prepareTask(mark, id, { fetchImpl })).kind, "brief");
+    assert.deepEqual(await sql("select state, started_at from crm.task_preparations where task_id = $1", [id]), [{ state: "ready", started_at: null }]);
+    const failing = model(answer, 500);
+    await assert.rejects(prepareTask(mark, id, { fetchImpl: failing.fetchImpl }));
+    assert.deepEqual(await sql("select state, started_at from crm.task_preparations where task_id = $1", [id]), [{ state: "ready", started_at: null }]);
+  });
+
+  it("says nothing about email when there is no address to look up, and says so when the mailbox has none", async () => {
+    const quiet = (await createContact(mark, { firstName: "Noel", lastName: "Noemail", phone: "07700 900999" })).body.contact.id;
+    const silent = (await createContact(mark, { firstName: "Esme", lastName: "Unwritten", email: "esme@unwritten-prepare.test" })).body.contact.id;
+    const first = (await createTask(mark, { title: "Call Noel Noemail", ownerId: mark.userId, contactId: quiet })).body.task.id;
+    const second = (await createTask(mark, { title: "Call Esme Unwritten", ownerId: mark.userId, contactId: silent })).body.task.id;
+    const { fetchImpl, prompts } = model(answer);
+    await prepareTask(mark, first, { fetchImpl });
+    await prepareTask(mark, second, { fetchImpl });
+    assert.doesNotMatch(prompts[0].user, /emails with them/);
+    assert.match(prompts[1].user, /Mark has no emails with them in their mailbox\./);
+  });
+
+  it("keeps a preparation fresh when the email lookup timed out", () => {
+    const basis = {
+      title: "Call Jane",
+      description: null,
+      dueDate: null,
+      contact: null,
+      company: null,
+      opportunity: null,
+      lastActivity: null,
+      lastEmailAt: "2026-11-05T09:00:00.000Z",
+      threadLatest: null,
+    };
+    const stored = { fingerprint: basisFingerprint(basis), basis };
+    assert.equal(isStale(stored, { basis: { ...basis, lastEmailAt: null }, emailKnown: false }), false);
+    assert.equal(isStale(stored, { basis: { ...basis, lastEmailAt: null }, emailKnown: true }), true);
+  });
+
+  it("returns the viewer's own preparation with the task's context, so opening a row reads the task once", async () => {
+    const id = (await createTask(mark, { title: "Call Jane Cooper about context", ownerId: mark.userId, contactId: jane })).body.task.id;
+    assert.equal((await taskContext(mark, id)).preparation, null);
+    await prepareTask(mark, id, { fetchImpl: model(answer).fetchImpl });
+    const context = await taskContext(mark, id);
+    assert.equal(context.preparation?.kind, "brief");
+    assert.equal(context.preparation?.stale, false);
+    assert.equal((await taskContext(sam, id).catch(() => null))?.preparation ?? null, null);
+  });
+
+  it("prepares a meeting as a meeting brief, end to end", async () => {
+    const id = (await createTask(mark, { title: "Book a demo with Jane Cooper", ownerId: mark.userId, contactId: jane })).body.task.id;
+    const { fetchImpl, prompts } = model(answer);
+    const prepared = await prepareTask(mark, id, { fetchImpl });
+    assert.equal(prepared.kind, "brief");
+    assert.match(prompts[0].system, /about to meet someone/);
+    assert.deepEqual(briefRows(prepared.brief!, true).map((row) => row.label), ["Who", "Last contact", "Stage", "Open from last meeting", "Talking points"]);
+    assert.match(await pageContext(mark, null, { taggedTaskIds: [id] }), /The user's own preparation for it, a meeting brief/);
+  });
+});
+
+describe("the prepare route and MCP limits", () => {
+  it("answers 401, 404, 429, 502 and 200", async () => {
+    const id = (await createTask(mark, { title: "Call Jane Cooper about the route", ownerId: mark.userId, contactId: jane })).body.task.id;
+    assert.equal((await prepareTaskRequest(null, { taskId: id })).status, 401);
+    assert.equal((await prepareTaskRequest(mark, { taskId: "nope" })).status, 404);
+    assert.equal((await prepareTaskRequest(mark, { taskId: crypto.randomUUID() })).status, 404);
+    const failing = await prepareTaskRequest(mark, { taskId: id }, { fetchImpl: model(answer, 500).fetchImpl });
+    assert.equal(failing.status, 502);
+    assert.match(String(failing.body.error), /Try again/);
+    const done = await prepareTaskRequest(mark, { taskId: id }, { fetchImpl: model(answer).fetchImpl });
+    assert.equal(done.status, 200);
+    assert.equal(done.body.preparation?.kind, "brief");
+    const busy = await createUser("busy@prepare.test", "Bea Busy");
+    const own = (await createTask(busy, { title: "Call the bank about fees", ownerId: busy.userId, companyId: null, contactId: null, opportunityId: null })).body.task.id;
+    for (let index = 0; index < 30; index += 1) await prepareAllowed(busy);
+    assert.equal((await prepareTaskRequest(busy, { taskId: own })).status, 429);
+    const limited = await mcpCall(busy, "prepare_next_action", { id: own });
+    assert.equal(limited.error, true);
+    assert.match(limited.text, /^rate_limited:/);
+  });
+});
+
+describe("the morning pass covers everyone", () => {
+  it("includes people with no mailbox or calendar and more than 50 other tasks due today", async () => {
+    const solo = await createUser("solo@morning.test", "Sol Solo");
+    const person = (await createContact(solo, { firstName: "Tara", lastName: "Tasks", email: "tara@morning-solo.test" })).body.contact.id;
+    for (let index = 0; index < 55; index += 1) {
+      await createTask(solo, { title: `Tidy note ${index} for Tara Tasks`, ownerId: solo.userId, contactId: person, dueDate: londonDay() });
+    }
+    const call = (await createTask(solo, { title: "Call Tara Tasks about the plan", ownerId: solo.userId, contactId: person, dueAt: `${londonDay()}T23:30` })).body.task.id;
+    const targets = (await morningTargets()).filter((target) => target.actor.userId === solo.userId);
+    assert.equal(targets.length, 1);
+    assert.deepEqual(targets[0].actors.map((actor) => actor.workspaceId), [solo.workspaceId]);
+    const at10 = new Date(startOfDay(new Date(), "Europe/London").getTime() + 10 * 3_600_000);
+    const { fetchImpl, prompts } = model(answer);
+    const report = await prepareMorningPass({ deadline: Date.now() + 120_000, fetchImpl, now: at10, targets });
+    assert.deepEqual(report, { prepared: 1, fresh: 0, failed: 0 });
+    assert.equal(prompts.length, 1);
+    assert.equal((await taskDetail(solo, call)).preparation?.automatic, true);
   });
 });

@@ -9,9 +9,10 @@ export type PreparedEmail = { to: { address: string; name: string | null }[]; su
 export type PreparationBasis = {
   title: string;
   description: string | null;
-  contact: { id: string; name: string; jobTitle: string | null; email: string | null; phone: string | null } | null;
-  company: { id: string; name: string } | null;
-  opportunity: { id: string; stage: string | null; status: string; value: string | null } | null;
+  dueDate: string | null;
+  contact: { id: string; name: string; jobTitle: string | null; email: string | null; phone: string | null; notes: string | null } | null;
+  company: { id: string; name: string; description: string | null } | null;
+  opportunity: { id: string; stage: string | null; status: string; value: string | null; probability: number | null; closeDate: string | null } | null;
   lastActivity: { type: string; title: string | null; occurredAt: string } | null;
   lastEmailAt: string | null;
   threadLatest: string | null;
@@ -42,12 +43,12 @@ export function composeFromPreparation(draft: PreparedEmail) {
   return { to: draft.to.map((person) => ({ address: person.address.toLowerCase(), name: person.name })), subject: draft.subject, body: draft.body };
 }
 
-export function briefRows(brief: CallBrief) {
+export function briefRows(brief: CallBrief, meeting = false) {
   return [
     { label: "Who", text: brief.who, items: [] as string[] },
     { label: "Last contact", text: brief.lastContact, items: [] as string[] },
     { label: "Stage", text: brief.stage ?? "", items: [] as string[] },
-    { label: "Open from last call", text: "", items: brief.openPoints },
+    { label: meeting ? "Open from last meeting" : "Open from last call", text: "", items: brief.openPoints },
     { label: "Talking points", text: "", items: brief.talkingPoints },
   ].filter((row) => row.text.trim() || row.items.length > 0);
 }

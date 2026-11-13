@@ -8,6 +8,8 @@ import { CrmError, isPgError, notFound, tooLong } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { splitDescription } from "@/lib/crm/task-description";
+import type { TaskPreparation } from "@/lib/crm/task-preparation";
+import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
 import type { LookupState } from "@/lib/enrichment/contacts";
@@ -22,6 +24,7 @@ export type TaskContext = {
   bookingUrl: string | null;
   people: TaskPerson[];
   lookups: TaskLookups;
+  preparation: TaskPreparation | null;
 };
 
 export type TaskLookups = Partial<Record<"phone" | "email", LookupState>>;
@@ -145,7 +148,7 @@ async function lastEmailAnywhere(db: Db, actor: UserActor, address: string | nul
     return lastEmailRow(result.rows[0]);
   } catch (error) {
     await db.query("rollback to savepoint last_email");
-    if (isPgError(error) && error.code === "57014") return null;
+    if (isPgError(error) && error.code === "57014") return undefined;
     throw error;
   } finally {
     await db.query("release savepoint last_email");
@@ -155,16 +158,17 @@ async function lastEmailAnywhere(db: Db, actor: UserActor, address: string | nul
 async function threadFor(db: Db, actor: UserActor, description: string | null) {
   const thread = linkedThread(description);
   if (!thread) return null;
-  const result = await db.query<{ subject: string | null; at: Date | null }>(
+  const result = await db.query<{ subject: string | null; at: Date | null; latest: Date | null }>(
     `select (array_agg(m.subject order by coalesce(m.sent_at, m.received_at, m.created_at) desc))[1] as subject,
-       max(coalesce(m.sent_at, m.received_at, m.created_at)) as at
+       max(coalesce(m.sent_at, m.received_at, m.created_at)) as at,
+       max(coalesce(m.received_at, m.sent_at, m.created_at)) as latest
      from crm.mail_messages m
      where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
      having count(*) > 0`,
     [actor.userId, thread.sourceId, thread.key],
   );
   const row = result.rows[0];
-  return row ? { key: thread.value, subject: row.subject, at: iso(row.at) } : null;
+  return row ? { key: thread.value, subject: row.subject, at: iso(row.at), latest: iso(row.latest) } : null;
 }
 
 async function contactLookupsFor(db: Db, workspaceId: string, contactId: string | null): Promise<TaskLookups> {
@@ -211,17 +215,28 @@ export async function sharedTaskContextInDb(db: Db, workspaceId: string, task: T
 }
 
 export async function viewerLastEmailInDb(db: Db, actor: UserActor, task: Task) {
-  return (await lastEmailFor(db, actor, task.contactEmail)) ?? (await lastEmailAnywhere(db, actor, task.contactEmail));
+  const found = (await lastEmailFor(db, actor, task.contactEmail)) ?? (await lastEmailAnywhere(db, actor, task.contactEmail));
+  return { lastEmail: found ?? null, known: found !== undefined };
 }
 
 export async function taskContextInDb(db: Db, actor: UserActor, task: Task): Promise<Omit<TaskContext, "bookingUrl">> {
-  const [shared, lookups, lastEmail, thread] = await Promise.all([
+  const [shared, lookups, recent, found] = await Promise.all([
     sharedTaskContextInDb(db, actor.workspaceId, task),
     contactLookupsFor(db, actor.workspaceId, task.contactId),
     lastEmailFor(db, actor, task.contactEmail),
     threadFor(db, actor, task.description),
   ]);
-  return { ...shared, lookups, lastEmail: lastEmail ?? (await lastEmailAnywhere(db, actor, task.contactEmail)), thread };
+  const anywhere = recent ?? (await lastEmailAnywhere(db, actor, task.contactEmail));
+  const lastEmail = anywhere ?? null;
+  const thread = found ? { key: found.key, subject: found.subject, at: found.at } : null;
+  const current = await currentBasisInDb(
+    db,
+    task,
+    { opportunity: shared.opportunity, lastActivity: shared.lastActivity, lastEmailAt: lastEmail?.at ?? null, threadLatest: found?.latest ?? null },
+    anywhere !== undefined,
+  );
+  const preparation = await readPreparationInDb(db, actor.userId, task.id, current);
+  return { ...shared, lookups, lastEmail, thread, preparation };
 }
 
 export async function taskContext(actor: UserActor, taskId: string): Promise<TaskContext> {

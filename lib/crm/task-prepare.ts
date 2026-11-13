@@ -6,16 +6,17 @@ import { isUuid } from "@/lib/crm/mutate";
 import { aboutWriterNote, getPersonalContext } from "@/lib/crm/personal-context";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { linkedThread } from "@/lib/crm/task-act";
-import { taskDetailInDb, type TaskDetail } from "@/lib/crm/task-detail";
-import { preparationKind, type CallBrief, type PreparationBasis, type PreparationKind, type PreparedEmail, type TaskPreparation } from "@/lib/crm/task-preparation";
-import { basisFingerprint, preparationBasis } from "@/lib/crm/task-preparation-store";
+import { memberActor } from "@/lib/crm/conversations";
+import { taskDetailWithBasisInDb, type TaskDetail } from "@/lib/crm/task-detail";
+import { preparationKind, type CallBrief, type PreparationKind, type PreparedEmail, type TaskPreparation } from "@/lib/crm/task-preparation";
+import { basisFingerprint, type CurrentBasis } from "@/lib/crm/task-preparation-store";
 import { taskKind } from "@/lib/crm/task-kind";
 import { readTaskInDb } from "@/lib/crm/tasks";
-import type { Task, UserActor } from "@/lib/crm/types";
-import { workspaceActors } from "@/lib/crm/workspaces";
+import type { Task, UserActor, WorkspaceRole } from "@/lib/crm/types";
+import { actorForTask, workspaceActors } from "@/lib/crm/workspaces";
 import { query, type Db } from "@/lib/db/pool";
 import { emailWritingNotes } from "@/lib/learning/memories";
-import { completeJson } from "@/lib/llm";
+import { completeJson, LlmError } from "@/lib/llm";
 import { clean, formatThread, recipientContext, threadText, today, voiceSamples } from "@/lib/mail/ai";
 import { mailFullWhen, personName, stripQuoted } from "@/lib/mail/format";
 import { editExamples } from "@/lib/mail/prepare";
@@ -44,7 +45,9 @@ const BODY_MAX = 20_000;
 const ON_DEMAND_MS = 50_000;
 const STEP_MS = 25_000;
 const MORNING_HOUR = 6;
-const CANDIDATES_READ = 50;
+const CANDIDATES_READ = 500;
+const CANDIDATES_KEPT = 50;
+const CLAIM_SECONDS = 60;
 const MAX_FAILURES = 3;
 const RETRY_MINUTES = 30;
 const RATE_LIMIT = 30;
@@ -61,10 +64,10 @@ type Material = {
   task: Task;
   kind: PreparationKind;
   detail: TaskDetail;
-  basis: PreparationBasis;
+  current: CurrentBasis;
   records: string[];
   activities: string[];
-  emails: string[];
+  emails: string[] | null;
   thread: string | null;
   people: string[];
   voice: string[];
@@ -200,9 +203,9 @@ async function activityLines(db: Db, workspaceId: string, task: Task) {
   });
 }
 
-async function emailLines(db: Db, actor: UserActor, address: string | null) {
+async function emailLines(db: Db, actor: UserActor, address: string | null): Promise<string[] | null> {
   const email = address?.trim().toLowerCase();
-  if (!email) return [];
+  if (!email) return null;
   await db.query("savepoint task_emails");
   try {
     await db.query("select set_config('statement_timeout', $1, true)", [String(EMAIL_DEADLINE_MS)]);
@@ -235,7 +238,7 @@ async function emailLines(db: Db, actor: UserActor, address: string | null) {
     });
   } catch (error) {
     await db.query("rollback to savepoint task_emails");
-    if (isPgError(error) && error.code === "57014") return [];
+    if (isPgError(error) && error.code === "57014") return null;
     throw error;
   } finally {
     await db.query("release savepoint task_emails");
@@ -250,20 +253,20 @@ async function threadMaterial(db: Db, actor: UserActor, task: Task, detail: Task
   return text.messages.length ? formatThread(text.messages, text.subject) : null;
 }
 
-async function gatherInDb(db: Db, actor: UserActor, task: Task, kind: PreparationKind, detail: TaskDetail, basis: PreparationBasis): Promise<Material> {
+async function gatherInDb(db: Db, actor: UserActor, task: Task, kind: PreparationKind, detail: TaskDetail, current: CurrentBasis): Promise<Material> {
   const address = detail.contact?.email ?? null;
-  const [records, activities, emails, thread, people] = await Promise.all([
+  const [records, activities, people] = await Promise.all([
     recordLines(db, actor.workspaceId, detail),
     activityLines(db, actor.workspaceId, task),
-    emailLines(db, actor, address),
-    threadMaterial(db, actor, task, detail),
     address ? recipientContext(db, actor, [address.toLowerCase()]) : Promise.resolve([] as string[]),
   ]);
+  const emails = await emailLines(db, actor, address);
+  const thread = await threadMaterial(db, actor, task, detail);
   const drafting = kind === "draft";
   const [voice, edits, writing] = drafting
     ? await Promise.all([voiceSamples(db, actor), editExamples(db, actor), emailWritingNotes(db, actor)])
     : [[], [], []];
-  return { task, kind, detail, basis, records, activities, emails, thread, people, voice, edits, writing };
+  return { task, kind, detail, current, records, activities, emails, thread, people, voice, edits, writing };
 }
 
 function taskBlock(material: Material) {
@@ -283,7 +286,11 @@ function materialBlocks(material: Material, first: string) {
     material.records.length ? `What the CRM knows:\n${material.records.join("\n\n")}` : "",
     material.people.length ? `More from the CRM about the person:\n${material.people.join("\n")}` : "",
     material.activities.length ? `Activity with them, newest first (calls, meetings, notes and emails logged in the CRM):\n\n${material.activities.join("\n\n---\n\n")}` : "No activity is logged with them yet.",
-    material.emails.length ? `${first}'s own recent emails with them, oldest first:\n\n${material.emails.join("\n\n---\n\n")}` : `${first} has no emails with them in their mailbox.`,
+    material.emails === null
+      ? ""
+      : material.emails.length
+        ? `${first}'s own recent emails with them, oldest first:\n\n${material.emails.join("\n\n---\n\n")}`
+        : `${first} has no emails with them in their mailbox.`,
     material.thread ? `The email conversation the task came from:\n${material.thread}` : "",
   ].filter(Boolean);
 }
@@ -384,16 +391,17 @@ async function writePreparation(actor: UserActor, material: Material, options: {
 
 async function storePreparation(actor: UserActor, material: Material, content: CallBrief | PreparedEmail, checkedAt: Date | null): Promise<TaskPreparation> {
   const automatic = checkedAt !== null;
-  const fingerprint = basisFingerprint(material.basis);
+  const basis = material.current.basis;
   const stored = await withActor(actor, async (db) => {
     const result = await db.query<{ prepared_at: Date }>(
-      `insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, content, basis, fingerprint, automatic, failures, error, prepared_at, checked_at)
-       values ($1, $2, $3, $4, 'ready', $5::jsonb, $6::jsonb, $7, $8, 0, null, now(), coalesce($9::timestamptz, now()))
+      `insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, content, basis, fingerprint, automatic, failures, error, started_at, prepared_at, checked_at)
+       values ($1, $2, $3, $4, 'ready', $5::jsonb, $6::jsonb, $7, $8, 0, null, null, now(), coalesce($9::timestamptz, now()))
        on conflict (task_id, user_id) do update set
          workspace_id = excluded.workspace_id, kind = excluded.kind, state = 'ready', content = excluded.content, basis = excluded.basis,
-         fingerprint = excluded.fingerprint, automatic = excluded.automatic, failures = 0, error = null, prepared_at = now(), checked_at = excluded.checked_at
+         fingerprint = excluded.fingerprint, automatic = excluded.automatic, failures = 0, error = null, started_at = null,
+         prepared_at = now(), checked_at = excluded.checked_at
        returning prepared_at`,
-      [material.task.id, actor.userId, actor.workspaceId, material.kind, JSON.stringify(content), JSON.stringify(material.basis), fingerprint, automatic, checkedAt?.toISOString() ?? null],
+      [material.task.id, actor.userId, actor.workspaceId, material.kind, JSON.stringify(content), JSON.stringify(basis), basisFingerprint(basis), automatic, checkedAt?.toISOString() ?? null],
     );
     return result.rows[0];
   });
@@ -404,8 +412,25 @@ async function storePreparation(actor: UserActor, material: Material, content: C
     preparedAt: stored.prepared_at.toISOString(),
     automatic,
     stale: false,
-    builtFrom: material.basis,
+    builtFrom: basis,
   };
+}
+
+async function claimInDb(db: Db, actor: UserActor, task: Task, kind: PreparationKind) {
+  const claimed = await db.query(
+    `insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, started_at, checked_at)
+     values ($1, $2, $3, $4, 'pending', now(), '-infinity')
+     on conflict (task_id, user_id) do update set started_at = now()
+     where crm.task_preparations.started_at is null or crm.task_preparations.started_at < now() - make_interval(secs => ${CLAIM_SECONDS})`,
+    [task.id, actor.userId, actor.workspaceId, kind],
+  );
+  return (claimed.rowCount ?? 0) > 0;
+}
+
+async function release(actor: UserActor, taskId: string) {
+  await withActor(actor, (db) => db.query("update crm.task_preparations set started_at = null where task_id = $1 and user_id = $2", [taskId, actor.userId])).catch(
+    () => undefined,
+  );
 }
 
 function cannotPrepare(task: Task) {
@@ -416,20 +441,59 @@ function cannotPrepare(task: Task) {
   return null;
 }
 
+async function materialInDb(db: Db, actor: UserActor, task: Task) {
+  const kind = preparationKind(task.title)!;
+  const { detail, current } = await taskDetailWithBasisInDb(db, actor, task);
+  return { kind, detail, current: current! };
+}
+
 export async function prepareTask(actor: UserActor, taskId: string, options: { deadline?: number; fetchImpl?: typeof fetch } = {}): Promise<TaskPreparation> {
+  const deadline = options.deadline ?? Date.now() + ON_DEMAND_MS;
   assertScope(actor.scopes, "crm:read");
   if (typeof taskId !== "string" || !isUuid(taskId)) throw notFound("task");
   if (!aiReady()) throw new CrmError("unavailable", notSetUp("AI", "LLM_API_KEY", actor), 503);
-  const material = await withActor(actor, async (db) => {
+  const found = await withActor(actor, async (db) => {
     const task = await readTaskInDb(db, taskId);
     if (!task || task.workspaceId !== actor.workspaceId) throw notFound("task");
     const refused = cannotPrepare(task);
     if (refused) throw refused;
-    const detail = await taskDetailInDb(db, actor, task);
-    return gatherInDb(db, actor, task, preparationKind(task.title)!, detail, preparationBasis(detail));
+    if (!(await claimInDb(db, actor, task, preparationKind(task.title)!))) throw new CrmError("conflict", "Already preparing it. Try again in a minute.", 409);
+    return task;
   });
-  const content = await writePreparation(actor, material, { deadline: options.deadline ?? Date.now() + ON_DEMAND_MS, fetchImpl: options.fetchImpl });
-  return storePreparation(actor, material, content, null);
+  try {
+    const material = await withActor(actor, async (db) => {
+      const { kind, detail, current } = await materialInDb(db, actor, found);
+      return gatherInDb(db, actor, found, kind, detail, current);
+    });
+    const content = await writePreparation(actor, material, { deadline, fetchImpl: options.fetchImpl });
+    return await storePreparation(actor, material, content, null);
+  } catch (error) {
+    await release(actor, found.id);
+    throw error;
+  }
+}
+
+export type PrepareResponse = { status: number; body: { preparation?: TaskPreparation; error?: string } & Record<string, unknown> };
+
+export async function prepareTaskRequest(user: UserActor | null, input: unknown, options: { fetchImpl?: typeof fetch } = {}): Promise<PrepareResponse> {
+  if (!user) return { status: 401, body: { error: "Sign in again." } };
+  const taskId = (input as { taskId?: unknown } | null)?.taskId;
+  if (typeof taskId !== "string" || !isUuid(taskId)) return { status: 404, body: { error: "Task not found." } };
+  let home: UserActor;
+  try {
+    home = await actorForTask(user, taskId);
+  } catch {
+    return { status: 404, body: { error: "Task not found." } };
+  }
+  try {
+    if (!(await prepareAllowed(home))) return { status: 429, body: { error: "Too many requests. Try again in a few minutes." } };
+    return { status: 200, body: { preparation: await prepareTask(home, taskId, { fetchImpl: options.fetchImpl }) } };
+  } catch (error) {
+    if (error instanceof CrmError) return { status: error.status, body: { ...error.details, error: error.message } };
+    if (error instanceof LlmError) return { status: 502, body: { error: error.message } };
+    console.error("Preparing a task failed", error instanceof Error ? error.message : error);
+    return { status: 500, body: { error: "Couldn't prepare it. Try again." } };
+  }
 }
 
 async function dueToday(db: Db, actor: UserActor, window: { start: Date; end: Date }, retryBefore: Date) {
@@ -448,19 +512,23 @@ async function dueToday(db: Db, actor: UserActor, window: { start: Date; end: Da
      limit ${CANDIDATES_READ}`,
     [actor.workspaceId, actor.userId, window.start.toISOString(), window.end.toISOString(), retryBefore.toISOString()],
   );
-  return result.rows.filter((row) => preparationKind(row.title) !== null).map((row) => row.id);
+  return result.rows
+    .filter((row) => preparationKind(row.title) !== null)
+    .slice(0, CANDIDATES_KEPT)
+    .map((row) => row.id);
 }
 
-async function noteFailure(actor: UserActor, material: Material, error: unknown, dayStart: Date, checkedAt: Date) {
+async function noteFailure(actor: UserActor, taskId: string, kind: PreparationKind, error: unknown, dayStart: Date, checkedAt: Date) {
   const message = (error instanceof Error ? error.message : "Preparing failed.").slice(0, 500);
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, automatic, failures, error, checked_at)
-       values ($1, $2, $3, $4, 'failed', true, 1, $5, $7)
+       select t.id, $2, t.workspace_id, $3, 'failed', true, 1, $4, $6 from crm.tasks t where t.id = $1
        on conflict (task_id, user_id) do update set
-         failures = case when crm.task_preparations.checked_at < $6 then 1 else crm.task_preparations.failures + 1 end,
-         error = excluded.error, checked_at = excluded.checked_at`,
-      [material.task.id, actor.userId, actor.workspaceId, material.kind, message, dayStart.toISOString(), checkedAt.toISOString()],
+         state = case when crm.task_preparations.state = 'ready' then 'ready' else 'failed' end,
+         failures = case when crm.task_preparations.checked_at < $5 then 1 else crm.task_preparations.failures + 1 end,
+         error = excluded.error, started_at = null, checked_at = excluded.checked_at`,
+      [taskId, actor.userId, kind, message, dayStart.toISOString(), checkedAt.toISOString()],
     ),
   );
 }
@@ -469,12 +537,13 @@ async function morningMaterial(actor: UserActor, taskId: string, checkedAt: Date
   return withActor(actor, async (db) => {
     const task = await readTaskInDb(db, taskId);
     if (!task || task.workspaceId !== actor.workspaceId || task.ownerId !== actor.userId || cannotPrepare(task)) return null;
-    const detail = await taskDetailInDb(db, actor, task);
-    if (detail.preparation && !detail.preparation.stale && detail.preparation.kind === preparationKind(task.title)) {
+    const { kind, detail, current } = await materialInDb(db, actor, task);
+    if (detail.preparation && !detail.preparation.stale && detail.preparation.kind === kind) {
       await db.query("update crm.task_preparations set checked_at = $3 where task_id = $1 and user_id = $2", [task.id, actor.userId, checkedAt.toISOString()]);
       return "fresh" as const;
     }
-    return gatherInDb(db, actor, task, preparationKind(task.title)!, detail, preparationBasis(detail));
+    if (!(await claimInDb(db, actor, task, kind))) return null;
+    return gatherInDb(db, actor, task, kind, detail, current);
   });
 }
 
@@ -493,26 +562,66 @@ export async function prepareTasksDueToday(
   const actors = options.actors ?? (await workspaceActors(actor).catch(() => [actor]));
   for (const target of actors) {
     if (options.deadline - Date.now() < STEP_MS) break;
-    const ids = await withActor(target, (db) => dueToday(db, target, window, retryBefore));
+    const ids = await withActor(target, (db) => dueToday(db, target, window, retryBefore)).catch((error) => {
+      console.error("Reading tasks to prepare failed", error instanceof Error ? error.message : error);
+      return [] as string[];
+    });
     for (const id of ids) {
       if (options.deadline - Date.now() < STEP_MS) return report;
-      const material = await morningMaterial(target, id, now);
-      if (!material) continue;
-      if (material === "fresh") {
-        report.fresh += 1;
-        continue;
-      }
+      let material: Material | "fresh" | null = null;
       try {
+        material = await morningMaterial(target, id, now);
+        if (!material) continue;
+        if (material === "fresh") {
+          report.fresh += 1;
+          continue;
+        }
         const content = await writePreparation(target, material, { deadline: options.deadline, fetchImpl: options.fetchImpl });
         await storePreparation(target, material, content, now);
         report.prepared += 1;
       } catch (error) {
         report.failed += 1;
         console.error("Preparing a task failed", error instanceof Error ? error.message : error);
-        await noteFailure(target, material, error, window.start, now).catch(() => undefined);
-        return report;
+        const kind = material && material !== "fresh" ? material.kind : null;
+        if (kind) await noteFailure(target, id, kind, error, window.start, now).catch(() => undefined);
+        if (error instanceof LlmError) return report;
       }
     }
   }
   return report;
+}
+
+type MemberRow = { workspace_id: string; workspace_name: string; user_id: string; role: WorkspaceRole; email: string | null; full_name: string | null; is_home: boolean };
+
+export type MorningTarget = { actor: UserActor; actors: UserActor[] };
+
+export async function morningTargets(): Promise<MorningTarget[]> {
+  if (!aiReady()) return [];
+  const result = await query<MemberRow>("select * from private.background_members()");
+  const people = new Map<string, MemberRow[]>();
+  for (const row of result.rows) people.set(row.user_id, [...(people.get(row.user_id) ?? []), row]);
+  return [...people.values()].map((rows) => {
+    const home = rows.find((row) => row.is_home) ?? rows[0];
+    return { actor: memberActor(home), actors: rows.map((row) => memberActor(row)) };
+  });
+}
+
+export async function prepareMorningPass(options: { deadline: number; fetchImpl?: typeof fetch; now?: Date; targets?: MorningTarget[] }) {
+  const total: MorningReport = { prepared: 0, fresh: 0, failed: 0 };
+  const targets = options.targets ?? (await morningTargets());
+  if (targets.length === 0) return total;
+  const start = Math.floor((options.now ?? new Date()).getTime() / 300_000) % targets.length;
+  const ordered = [...targets.slice(start), ...targets.slice(0, start)];
+  for (const target of ordered) {
+    if (options.deadline - Date.now() < STEP_MS) break;
+    try {
+      const report = await prepareTasksDueToday(target.actor, { deadline: options.deadline, fetchImpl: options.fetchImpl, now: options.now, actors: target.actors });
+      total.prepared += report.prepared;
+      total.fresh += report.fresh;
+      total.failed += report.failed;
+    } catch (error) {
+      console.error("Preparing tasks failed", error instanceof Error ? error.message : error);
+    }
+  }
+  return total;
 }

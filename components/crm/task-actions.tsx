@@ -29,6 +29,7 @@ import { threadHref } from "@/lib/mail/view";
 import { normalizePhone, teamsCallUrl } from "@/lib/phone";
 import { appTimeZone } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { useTaskPreparations } from "@/stores/task-preparation-store";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
@@ -82,11 +83,14 @@ function useTaskContext(task: Task) {
   const [state, setState] = useState<{ key: string; context: TaskContext | null; error: string | null } | null>(null);
   useEffect(() => {
     let cancelled = false;
+    const requestedAt = Date.now();
     void taskContextAction(task.id)
       .catch(() => ({ error: "Couldn't load the details. Try again." }))
       .then((result) => {
         if (cancelled) return;
-        setState({ key, context: "context" in result && result.context ? result.context : null, error: result.error ?? null });
+        const context = "context" in result && result.context ? result.context : null;
+        if (context) useTaskPreparations.getState().loaded(task.id, context.preparation, requestedAt);
+        setState({ key, context, error: result.error ?? null });
       });
     return () => {
       cancelled = true;

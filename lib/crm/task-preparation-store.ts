@@ -1,31 +1,55 @@
 import { createHash } from "node:crypto";
 import { iso } from "@/lib/crm/mutate";
+import { splitDescription } from "@/lib/crm/task-description";
 import type { CallBrief, PreparationBasis, PreparationKind, PreparedEmail, TaskPreparation } from "@/lib/crm/task-preparation";
+import type { Task } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 
-type BasisSource = {
-  task: { title: string; description: string | null };
-  contact: { id: string; name: string; jobTitle: string | null; email: string | null; phone: string | null } | null;
-  company: { id: string; name: string } | null;
+export type BasisParts = {
   opportunity: { id: string; stage: string | null; status: string; value: string | null } | null;
   lastActivity: { type: string; title: string | null; occurredAt: string } | null;
-  mail: { lastEmail: { at: string } | null; thread: { latest: string | null } | null } | null;
+  lastEmailAt: string | null;
+  threadLatest: string | null;
 };
 
-export function preparationBasis(detail: BasisSource): PreparationBasis {
+export type CurrentBasis = { basis: PreparationBasis; emailKnown: boolean };
+
+type Extras = { contact_notes: string | null; company_description: string | null; probability: number | null; close_date: Date | string | null };
+
+export async function currentBasisInDb(db: Db, task: Task, parts: BasisParts, emailKnown: boolean): Promise<CurrentBasis> {
+  const extras = await db.query<Extras>(
+    `select (select notes from crm.contacts where id = $1) as contact_notes,
+       (select description from crm.companies where id = $2) as company_description,
+       (select probability from crm.opportunities where id = $3) as probability,
+       (select expected_close_date from crm.opportunities where id = $3) as close_date`,
+    [task.contactId, task.companyId, parts.opportunity?.id ?? null],
+  );
+  const row = extras.rows[0];
+  const closeDate = row?.close_date ? new Date(row.close_date).toISOString().slice(0, 10) : null;
   return {
-    title: detail.task.title,
-    description: detail.task.description ?? null,
-    contact: detail.contact
-      ? { id: detail.contact.id, name: detail.contact.name, jobTitle: detail.contact.jobTitle, email: detail.contact.email, phone: detail.contact.phone }
-      : null,
-    company: detail.company ? { id: detail.company.id, name: detail.company.name } : null,
-    opportunity: detail.opportunity
-      ? { id: detail.opportunity.id, stage: detail.opportunity.stage, status: detail.opportunity.status, value: detail.opportunity.value }
-      : null,
-    lastActivity: detail.lastActivity ? { type: detail.lastActivity.type, title: detail.lastActivity.title, occurredAt: detail.lastActivity.occurredAt } : null,
-    lastEmailAt: detail.mail?.lastEmail?.at ?? null,
-    threadLatest: detail.mail?.thread?.latest ?? null,
+    emailKnown,
+    basis: {
+      title: task.title,
+      description: splitDescription(task.description).text || null,
+      dueDate: task.dueDate,
+      contact: task.contactId
+        ? {
+            id: task.contactId,
+            name: task.contactName ?? task.contactEmail ?? "Unnamed person",
+            jobTitle: task.contactJobTitle,
+            email: task.contactEmail,
+            phone: task.contactPhone,
+            notes: row?.contact_notes ?? null,
+          }
+        : null,
+      company: task.companyId ? { id: task.companyId, name: task.companyName ?? "Unnamed company", description: row?.company_description ?? null } : null,
+      opportunity: parts.opportunity
+        ? { ...parts.opportunity, probability: row?.probability ?? null, closeDate }
+        : null,
+      lastActivity: parts.lastActivity,
+      lastEmailAt: parts.lastEmailAt,
+      threadLatest: parts.threadLatest,
+    },
   };
 }
 
@@ -70,7 +94,12 @@ function draftOf(content: Record<string, unknown>): PreparedEmail {
   return { to, subject: text(content.subject), body: text(content.body) };
 }
 
-export async function readPreparationInDb(db: Db, userId: string, taskId: string, current: PreparationBasis | null): Promise<TaskPreparation | null> {
+export function isStale(stored: { fingerprint: string | null; basis: PreparationBasis | null }, current: CurrentBasis) {
+  const compared = current.emailKnown ? current.basis : { ...current.basis, lastEmailAt: stored.basis?.lastEmailAt ?? null };
+  return stored.fingerprint !== basisFingerprint(compared);
+}
+
+export async function readPreparationInDb(db: Db, userId: string, taskId: string, current: CurrentBasis): Promise<TaskPreparation | null> {
   const result = await db.query<PreparationRow>(
     `select kind, content, basis, fingerprint, automatic, prepared_at from crm.task_preparations
      where task_id = $1 and user_id = $2 and state = 'ready' and content is not null`,
@@ -84,7 +113,7 @@ export async function readPreparationInDb(db: Db, userId: string, taskId: string
     draft: row.kind === "draft" ? draftOf(row.content) : null,
     preparedAt: iso(row.prepared_at) ?? new Date(0).toISOString(),
     automatic: row.automatic,
-    stale: current ? row.fingerprint !== basisFingerprint(current) : false,
+    stale: isStale(row, current),
     builtFrom: row.basis,
   };
 }

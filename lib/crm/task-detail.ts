@@ -5,7 +5,7 @@ import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { linkedThread, sharedTaskContextInDb, viewerLastEmailInDb, type TaskPerson } from "@/lib/crm/task-act";
 import { splitDescription } from "@/lib/crm/task-description";
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
-import { preparationBasis, readPreparationInDb } from "@/lib/crm/task-preparation-store";
+import { currentBasisInDb, readPreparationInDb, type CurrentBasis } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, readTaskInDb } from "@/lib/crm/tasks";
 import type { Actor, ActivityType, Task, UserActor } from "@/lib/crm/types";
 import { actorForTask } from "@/lib/crm/workspaces";
@@ -60,15 +60,21 @@ async function leadSources(db: Db, task: Task) {
   return result.rows[0] ?? { contact: null, company: null };
 }
 
-async function viewerMail(db: Db, actor: UserActor, task: Task): Promise<NonNullable<TaskDetail["mail"]>> {
+async function viewerMail(db: Db, actor: UserActor, task: Task) {
   const thread = linkedThread(task.description);
   const summary = thread ? await threadSummaryInDb(db, actor.userId, thread.value) : null;
-  return { lastEmail: await viewerLastEmailInDb(db, actor, task), thread: summary };
+  const last = await viewerLastEmailInDb(db, actor, task);
+  return { mail: { lastEmail: last.lastEmail, thread: summary }, emailKnown: last.known };
 }
 
 export async function taskDetailInDb(db: Db, home: Actor, task: Task, viewer: Actor = home): Promise<TaskDetail> {
+  return (await taskDetailWithBasisInDb(db, home, task, viewer)).detail;
+}
+
+export async function taskDetailWithBasisInDb(db: Db, home: Actor, task: Task, viewer: Actor = home): Promise<{ detail: TaskDetail; current: CurrentBasis | null }> {
   const [shared, sources] = await Promise.all([sharedTaskContextInDb(db, home.workspaceId, task), leadSources(db, task)]);
-  const mail = home.type === "user" ? await viewerMail(db, home, task) : null;
+  const viewed = home.type === "user" ? await viewerMail(db, home, task) : null;
+  const mail = viewed?.mail ?? null;
   const readOnly = home.workspaceId !== viewer.workspaceId;
   const deal = shared.opportunity;
   const detail: TaskDetail = {
@@ -87,8 +93,15 @@ export async function taskDetailInDb(db: Db, home: Actor, task: Task, viewer: Ac
     mail,
     preparation: null,
   };
-  if (home.type === "user") detail.preparation = await readPreparationInDb(db, home.userId, task.id, preparationBasis(detail));
-  return detail;
+  if (home.type !== "user" || !viewed) return { detail, current: null };
+  const current = await currentBasisInDb(
+    db,
+    task,
+    { opportunity: shared.opportunity, lastActivity: shared.lastActivity, lastEmailAt: mail?.lastEmail?.at ?? null, threadLatest: mail?.thread?.latest ?? null },
+    viewed.emailKnown,
+  );
+  detail.preparation = await readPreparationInDb(db, home.userId, task.id, current);
+  return { detail, current };
 }
 
 export async function taskDetail(actor: Actor, taskId: string, options: { anyWorkspace?: boolean } = {}): Promise<TaskDetail> {

@@ -11,6 +11,7 @@ create table if not exists crm.task_preparations (
   fingerprint text,
   automatic boolean not null default false,
   failures smallint not null default 0,
+  started_at timestamptz,
   error text,
   prepared_at timestamptz,
   checked_at timestamptz not null default now(),
@@ -27,7 +28,7 @@ alter table crm.task_preparations drop constraint if exists task_preparations_st
 alter table crm.task_preparations
   add constraint task_preparations_state check (
     (state = 'ready' and content is not null and prepared_at is not null)
-    or state = 'failed'
+    or state in ('pending', 'failed')
   );
 
 alter table crm.task_preparations drop constraint if exists task_preparations_size;
@@ -54,7 +55,7 @@ drop policy if exists task_preparations_own on crm.task_preparations;
 create policy task_preparations_own on crm.task_preparations for all to authenticated
   using (
     user_id = (select private.session_user_id())
-    and task_id in (select t.id from crm.tasks t)
+    and exists (select 1 from crm.tasks t where t.id = task_preparations.task_id)
   )
   with check (
     user_id = (select private.session_user_id())
@@ -90,5 +91,37 @@ create policy task_preferences_self on crm.task_preferences for all to authentic
 
 revoke all on crm.task_preferences from anon, authenticated, crm_agent;
 grant select, insert, update on crm.task_preferences to authenticated;
+
+create or replace function private.task_preparations_follow_task()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.workspace_id is distinct from old.workspace_id then
+    delete from crm.task_preparations p
+    where p.task_id = new.id
+      and not exists (
+        select 1 from crm.workspace_members m where m.workspace_id = new.workspace_id and m.user_id = p.user_id
+      );
+    update crm.task_preparations set workspace_id = new.workspace_id
+    where task_id = new.id and workspace_id is distinct from new.workspace_id;
+  end if;
+  if old.owner_id is not null and new.owner_id is distinct from old.owner_id then
+    delete from crm.task_preparations where task_id = new.id and user_id = old.owner_id;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.task_preparations_follow_task() from public;
+
+drop trigger if exists tasks_preparations_follow on crm.tasks;
+create trigger tasks_preparations_follow
+  after update of workspace_id, owner_id on crm.tasks
+  for each row
+  when (old.workspace_id is distinct from new.workspace_id or old.owner_id is distinct from new.owner_id)
+  execute function private.task_preparations_follow_task();
 
 reset lock_timeout;
