@@ -1180,7 +1180,7 @@ describe("moving records to another workspace", () => {
     );
     const handedEvent = events.find((event) => event.entity_id === handed.id);
     assert.equal(handedEvent?.workspace_id, ridgeon.workspaceId);
-    assert.deepEqual(handedEvent?.changes.fields, ["ownerId", "dueAt", "dueHasTime", "scheduledBy"]);
+    assert.deepEqual(handedEvent?.changes.fields, ["ownerId", "dueAt", "dueHasTime", "scheduledBy", "clickupTaskId", "clickupListId", "clickupUrl"]);
     assert.deepEqual([handedEvent?.changes.before.ownerId, handedEvent?.changes.after.ownerId], [priya.userId, eclipse.userId]);
     assert.deepEqual(events.find((event) => event.entity_id === unassigned.id)?.changes.fields, ["ownerId"]);
     const leftEvent = events.find((event) => event.entity_id === left.id);
@@ -1196,12 +1196,17 @@ describe("moving records to another workspace", () => {
     const mine = (await createTask(eclipse, { title: "Dock unassigned", companyId: dock.id, ownerId: null }, { provenance: PROVENANCE })).body.task;
     assert.equal(fromAgent.ownerId, null);
     assert.equal(fromAgent.dueHasTime, true);
-    await admin("update crm.tasks set clickup_list_id = '901', clickup_synced_at = now() where id = $1", [fromAgent.id]);
+    const pending = (await createTask(eclipse, { title: "Dock not yet in ClickUp", companyId: dock.id }, { provenance: PROVENANCE })).body.task;
+    const archived = (await createTask(eclipse, { title: "Dock archived", companyId: dock.id }, { provenance: PROVENANCE })).body.task;
+    await admin("update crm.tasks set clickup_task_id = 'dock1', clickup_list_id = '901', clickup_synced_at = now() where id = $1", [fromAgent.id]);
+    await admin("update crm.tasks set clickup_task_id = 'dock2', clickup_list_id = '901' where id = $1", [mine.id]);
+    await admin("update crm.tasks set clickup_list_id = '901' where id = $1", [pending.id]);
+    await admin("update crm.tasks set clickup_task_id = 'dock3', clickup_list_id = '901', archived_at = now() where id = $1", [archived.id]);
     const preview = await previewMoveToWorkspace(eclipse, { companyIds: [dock.id], workspaceId: ridgeon.workspaceId });
-    assert.equal(preview.clickupUnlinked, 1);
+    assert.equal(preview.clickupUnlinked, 2);
     const moved = await moveRecordsToWorkspace(eclipse, { companyIds: [dock.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
-    assert.equal(moved.clickupUnlinked, 1);
-    assert.match(moved.message, /1 task is unlinked from ClickUp\.$/);
+    assert.equal(moved.clickupUnlinked, 2);
+    assert.match(moved.message, /2 tasks are unlinked from ClickUp\.$/);
     const rows = await admin<{ id: string; owner_id: string | null; due_has_time: boolean; due_at: Date; remind_minutes: number | null; clickup_list_id: string | null; clickup_synced_at: Date | null }>(
       "select id, owner_id, due_has_time, due_at, remind_minutes, clickup_list_id, clickup_synced_at from crm.tasks where id = any($1::uuid[])",
       [[fromAgent.id, mine.id]],
@@ -1212,11 +1217,12 @@ describe("moving records to another workspace", () => {
       [eclipse.userId, true, at, 15, null, null],
     );
     assert.equal(rows.find((row) => row.id === mine.id)?.owner_id, null);
-    const events = await admin<{ changes: { fields: string[] } }>(
-      "select changes from crm.audit_events where event_type = 'task.updated' and entity_id = $1 and operation = 'move_test'",
-      [fromAgent.id],
+    const events = await admin<{ entity_id: string; changes: { fields: string[] } }>(
+      "select entity_id, changes from crm.audit_events where event_type = 'task.updated' and entity_id = any($1::uuid[]) and operation = 'move_test'",
+      [[fromAgent.id, mine.id]],
     );
-    assert.deepEqual(events.map((event) => event.changes.fields), [["ownerId"]]);
+    assert.deepEqual(events.find((event) => event.entity_id === fromAgent.id)?.changes.fields, ["ownerId", "clickupTaskId", "clickupListId"]);
+    assert.deepEqual(events.find((event) => event.entity_id === mine.id)?.changes.fields, ["clickupTaskId", "clickupListId"]);
   });
 
   it("puts a handed-over task on its London day in summer and winter", async () => {

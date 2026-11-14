@@ -70,7 +70,6 @@ const LINK_FIELD_TYPES = ["short_text", "text", "url", "email"];
 function clickupNotSetUp(actor: UserActor) {
   return notSetUp("ClickUp", "CLICKUP_API_TOKEN", actor);
 }
-const CLICKUP_CHECKING = "Waiting for ClickUp. Orbit will check again shortly.";
 const CLICKUP_NOT_SET_UP = "Choose a ClickUp workspace and lists in Settings › Tools first.";
 
 type ClickUpSyncResult = {
@@ -647,7 +646,10 @@ async function createRemote(s: Session, taskId: string) {
       }
       if (Date.now() - earlier.at < UNCONFIRMED_SETTLE_MS) {
         await withActor(s.actor, (db) =>
-          db.query("update crm.tasks set clickup_sync = clickup_sync - 'creatingAt', clickup_error = $2 where id = $1", [row.id, CLICKUP_CHECKING]),
+          db.query(
+            "update crm.tasks set clickup_sync = (clickup_sync - 'creatingAt') || jsonb_build_object('waitingSince', $2::bigint), clickup_error = null where id = $1",
+            [row.id, earlier.at],
+          ),
         );
         return "unchanged" as const;
       }
@@ -1090,18 +1092,23 @@ function readPollCursor(value: unknown): PollCursor | null {
   return { since: cursor.since, page: cursor.page, startedAt: cursor.startedAt, lists: cursor.lists };
 }
 
-async function pollCursorInDb(db: Db, workspaceId: string) {
-  const result = await db.query<{ clickup_poll: unknown }>(
-    "select clickup_poll from crm.integration_state where workspace_id = $1 and source = 'clickup' and connection_id is null",
-    [workspaceId],
+async function pollCursorInDb(db: Db, actor: UserActor) {
+  const result = await db.query<{ cursor: unknown }>(
+    "select clickup_poll -> $2::text as cursor from crm.integration_state where workspace_id = $1 and source = 'clickup' and connection_id is null",
+    [actor.workspaceId, actor.userId],
   );
-  return readPollCursor(result.rows[0]?.clickup_poll);
+  return readPollCursor(result.rows[0]?.cursor);
 }
 
-async function savePollCursor(db: Db, workspaceId: string, cursor: PollCursor | null) {
+async function savePollCursor(db: Db, actor: UserActor, cursor: PollCursor | null) {
   await db.query(
-    "update crm.integration_state set clickup_poll = $2::jsonb where workspace_id = $1 and source = 'clickup' and connection_id is null",
-    [workspaceId, cursor ? JSON.stringify(cursor) : null],
+    `update crm.integration_state
+     set clickup_poll = case
+       when $3::jsonb is null then nullif(coalesce(clickup_poll, '{}'::jsonb) - $2::text, '{}'::jsonb)
+       else coalesce(clickup_poll, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+     end
+     where workspace_id = $1 and source = 'clickup' and connection_id is null`,
+    [actor.workspaceId, actor.userId, cursor ? JSON.stringify(cursor) : null],
   );
 }
 
@@ -1117,7 +1124,7 @@ export async function syncClickUp(
   const key = clickupKey(actor);
   const claim = await withActor(actor, async (db) => {
     const claimed = await claimIntegration(db, key, Boolean(options.force), SYNC_GAP_MS);
-    return claimed ? { ...claimed, cursor: await pollCursorInDb(db, actor.workspaceId) } : null;
+    return claimed ? { ...claimed, cursor: await pollCursorInDb(db, actor) } : null;
   });
   if (!claim) return idle();
   const started = Date.now();
@@ -1170,8 +1177,8 @@ export async function syncClickUp(
         if (body.lastPage || !complete) break;
       }
     }
-    const cursor = stoppedAt === null ? null : { since, page: Math.max(0, stoppedAt - 1), startedAt: chainStartedAt, lists };
-    await withActor(actor, (db) => savePollCursor(db, actor.workspaceId, cursor));
+    const cursor = stoppedAt === null ? null : { since, page: Math.max(firstPage, stoppedAt - 1), startedAt: chainStartedAt, lists };
+    await withActor(actor, (db) => savePollCursor(db, actor, cursor));
     syncedAt = new Date(chainStartedAt).toISOString();
     for (const id of await pushQueue(actor)) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) {

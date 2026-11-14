@@ -5,6 +5,7 @@ import { readContactInDb } from "@/lib/crm/contacts";
 import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure, tooMany } from "@/lib/crm/errors";
 import { fillCompanyGaps, fillContactGaps, type GapFill } from "@/lib/crm/merge";
+import { clickupUnlinkedLine } from "@/lib/crm/move-lines";
 import { isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { readOpportunityInDb } from "@/lib/crm/opportunities";
 import { assertScope, type Scope } from "@/lib/crm/scopes";
@@ -133,10 +134,6 @@ export type MovePreview = {
   clickupUnlinked: number;
 };
 
-export function clickupUnlinkedLine(count: number) {
-  if (count <= 0) return "";
-  return count === 1 ? "1 task is unlinked from ClickUp." : `${count} tasks are unlinked from ClickUp.`;
-}
 
 export type MovedRecord = { id: string; name: string; targetId: string; merged: boolean };
 
@@ -412,7 +409,7 @@ function dealDetails(record: PlanRecord) {
   return record.deals ?? [];
 }
 
-const TASK_MOVE_FIELDS = ["ownerId", "dueAt", "dueHasTime", "scheduledBy", "remindMinutes", "companyId", "opportunityId"];
+const TASK_MOVE_FIELDS = ["ownerId", "dueAt", "dueHasTime", "scheduledBy", "remindMinutes", "companyId", "opportunityId", "clickupTaskId", "clickupListId", "clickupUrl"];
 
 async function auditTaskChanges(db: Db, actor: UserActor, changes: PlanTaskChange[], provenance: Provenance, context: Record<string, unknown>) {
   for (const change of changes) {

@@ -1363,7 +1363,9 @@ describe("clickup sync edge cases", () => {
     await pushClickUpTask(owner, task.id, { fetchImpl: slowSearch });
     const named = () => [...fake.tasks.values()].filter((item) => item.name === "Lost create").length;
     assert.equal(named(), 1);
-    assert.equal((await taskRow(task.id)).clickup_task_id, null);
+    const waiting = await taskRow(task.id);
+    assert.deepEqual([waiting.clickup_task_id, waiting.clickup_error], [null, null]);
+    assert.equal(typeof waiting.clickup_sync.waitingSince, "number");
     await pushClickUpTask(owner, task.id, { fetchImpl });
     assert.equal(named(), 1);
     assert.ok((await taskRow(task.id)).clickup_task_id);
@@ -1377,8 +1379,18 @@ describe("clickup sync edge cases", () => {
     }
     const first = await syncClickUp({ actor: owner, force: true, fetchImpl });
     assert.equal(first.complete, false);
+    const stored = await getAdminPool().query<{ clickup_poll: Record<string, { page: number }> }>(
+      "select clickup_poll from crm.integration_state where workspace_id = $1 and source = 'clickup' and connection_id is null",
+      [owner.workspaceId],
+    );
+    assert.equal(stored.rows[0].clickup_poll[owner.userId].page, 19);
     const second = await syncClickUp({ actor: owner, force: true, fetchImpl });
     assert.equal(second.complete, true);
+    const cleared = await getAdminPool().query<{ clickup_poll: unknown }>(
+      "select clickup_poll from crm.integration_state where workspace_id = $1 and source = 'clickup' and connection_id is null",
+      [owner.workspaceId],
+    );
+    assert.equal(cleared.rows[0].clickup_poll, null);
     const imported = await getAdminPool().query<{ total: number }>(
       "select count(*)::int as total from crm.tasks where workspace_id = $1 and clickup_task_id like 'page%'",
       [owner.workspaceId],

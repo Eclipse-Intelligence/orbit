@@ -3,11 +3,17 @@ set lock_timeout = '5s';
 alter table crm.integration_state add column if not exists clickup_poll jsonb;
 grant update (clickup_poll) on crm.integration_state to authenticated;
 
-alter table crm.tasks disable trigger tasks_set_updated_at;
-update crm.tasks
-set remind_minutes = null
-where remind_minutes is not null and not due_has_time;
-alter table crm.tasks enable trigger tasks_set_updated_at;
+do $$
+begin
+  if exists (select 1 from crm.tasks where remind_minutes is not null and not due_has_time) then
+    alter table crm.tasks disable trigger tasks_set_updated_at;
+    update crm.tasks
+    set remind_minutes = null
+    where remind_minutes is not null and not due_has_time;
+    alter table crm.tasks enable trigger tasks_set_updated_at;
+  end if;
+end;
+$$;
 
 do $$
 begin
@@ -457,7 +463,7 @@ begin
     'tasks', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'task'),
     'clickupTasks', (
       select count(*) from pg_temp.orbit_move_map m join crm.tasks ct on ct.id = m.old_id
-      where m.kind = 'task' and (ct.clickup_task_id is not null or ct.clickup_list_id is not null)
+      where m.kind = 'task' and ct.clickup_task_id is not null and ct.archived_at is null
     ),
     'documents', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'document'),
     'knowledge', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'knowledge'),
@@ -624,6 +630,7 @@ begin
   if not v_copy then
     with prior as (
       select x.id, x.owner_id, x.due_at, x.due_has_time, x.scheduled_by, x.remind_minutes,
+        x.clickup_task_id, x.clickup_list_id, x.clickup_url,
         case
           when x.owner_id is null
             and (
@@ -667,7 +674,7 @@ begin
         clickup_sync = '{}'::jsonb
     from prior h
     where h.id = t.id
-    returning t.id, t.owner_id, t.due_at, t.due_has_time, t.scheduled_by, t.remind_minutes
+    returning t.id, t.owner_id, t.due_at, t.due_has_time, t.scheduled_by, t.remind_minutes, t.clickup_task_id, t.clickup_list_id, t.clickup_url
     )
     select coalesce(jsonb_agg(jsonb_build_object(
       'id', moved.id,
@@ -676,20 +683,28 @@ begin
         'dueAt', private.handover_instant(prior.due_at),
         'dueHasTime', coalesce(prior.due_has_time and prior.due_at is not null, false),
         'scheduledBy', prior.scheduled_by,
-        'remindMinutes', prior.remind_minutes
+        'remindMinutes', prior.remind_minutes,
+        'clickupTaskId', prior.clickup_task_id,
+        'clickupListId', prior.clickup_list_id,
+        'clickupUrl', prior.clickup_url
       ),
       'after', jsonb_build_object(
         'ownerId', moved.owner_id,
         'dueAt', private.handover_instant(moved.due_at),
         'dueHasTime', coalesce(moved.due_has_time and moved.due_at is not null, false),
         'scheduledBy', moved.scheduled_by,
-        'remindMinutes', moved.remind_minutes
+        'remindMinutes', moved.remind_minutes,
+        'clickupTaskId', moved.clickup_task_id,
+        'clickupListId', moved.clickup_list_id,
+        'clickupUrl', moved.clickup_url
       )
     )), '[]'::jsonb)
     into v_task_moves
     from moved
     join prior on prior.id = moved.id
-    where moved.owner_id is distinct from prior.owner_id;
+    where moved.owner_id is distinct from prior.owner_id
+      or prior.clickup_task_id is not null
+      or prior.clickup_list_id is not null;
 
     update crm.activities a
     set workspace_id = p_target,
