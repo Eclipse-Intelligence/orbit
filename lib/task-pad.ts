@@ -174,7 +174,7 @@ function readWeekdays(text: string, spans: Span[]): WeekdayWord[] {
   return found.filter((item) => item.target >= 0);
 }
 
-const FREE_AFTER = /^\s*(?:$|[,.;:!?)]|(?:about|re|regarding|with|for|and|to|at|in|via|on|by|then|if|please)\b)/i;
+const FREE_AFTER = /^\s*(?:$|[,.;:!?)]|(?:about|re|regarding|with|for|and|to|at|in|via|on|by|then|if|please|remind)\b)/i;
 
 const TIME_ZONE = /\b(?:gmt|bst|utc|est|edt|pst|pdt|cet|cest|ist|aest)\b/i;
 const UNREAD_DATE = /\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[.-]\d{1,2}[.-]\d{2,4}\b|\b2moro\b/i;
