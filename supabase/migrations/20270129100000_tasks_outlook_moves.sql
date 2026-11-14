@@ -2,6 +2,12 @@ set lock_timeout = '5s';
 
 alter table crm.task_outlook_queue add column if not exists create_key uuid;
 alter table crm.task_outlook_queue add column if not exists create_user_id uuid;
+alter table crm.task_outlook_queue add column if not exists create_sent_at timestamptz;
+
+alter table crm.task_outlook_queue drop constraint if exists task_outlook_queue_create_user_id_fkey;
+alter table crm.task_outlook_queue
+  add constraint task_outlook_queue_create_user_id_fkey
+  foreign key (create_user_id) references crm.profiles (id) on delete set null;
 
 alter table crm.calendar_events add column if not exists block_starts_at timestamptz;
 alter table crm.calendar_events add column if not exists block_ends_at timestamptz;
@@ -66,6 +72,7 @@ returns table (
   attempts integer,
   create_key text,
   create_user_id uuid,
+  create_sent_at timestamptz,
   event_id uuid,
   event_user_id uuid,
   provider_event_id text,
@@ -102,11 +109,11 @@ as $$
     set claimed_at = clock_timestamp()
     from picked
     where q.task_id = picked.task_id
-    returning q.task_id, q.pending_at, q.attempts, q.create_key, q.create_user_id
+    returning q.task_id, q.pending_at, q.attempts, q.create_key, q.create_user_id, q.create_sent_at
   )
   select t.id, t.workspace_id, t.title, t.due_at, t.due_has_time, t.duration_minutes, t.owner_id,
          t.completed_at, t.archived_at, t.calendar_event_ref, c.pending_at::text, c.attempts,
-         c.create_key::text, c.create_user_id,
+         c.create_key::text, c.create_user_id, c.create_sent_at,
          e.id, e.user_id, e.provider_event_id, e.starts_at, e.ends_at, e.subject, e.block_workspace_id,
          e.block_starts_at, e.block_ends_at
   from claimed c
@@ -126,9 +133,23 @@ as $$
         when create_key is not null and create_user_id is not distinct from p_user_id then create_key
         else gen_random_uuid()
       end,
-      create_user_id = p_user_id
+      create_user_id = p_user_id,
+      create_sent_at = clock_timestamp()
   where task_id = p_task_id
   returning create_key
+$$;
+
+create or replace function private.hold_task_block(p_task_id uuid, p_pending_at timestamptz, p_grace interval)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update crm.task_outlook_queue
+  set claimed_at = null,
+      attempts = case when pending_at = p_pending_at then attempts + 1 else attempts end,
+      retry_at = greatest(clock_timestamp() + interval '1 minute', coalesce(create_sent_at, clock_timestamp()) + p_grace)
+  where task_id = p_task_id;
 $$;
 
 create or replace function private.settle_task_block(p_task_id uuid, p_pending_at timestamptz, p_ref text, p_set_ref boolean, p_drop_event boolean)
@@ -147,7 +168,8 @@ as $$
   update crm.task_outlook_queue
   set claimed_at = null,
       create_key = case when p_set_ref then null else create_key end,
-      create_user_id = case when p_set_ref then null else create_user_id end
+      create_user_id = case when p_set_ref then null else create_user_id end,
+      create_sent_at = case when p_set_ref then null else create_sent_at end
   where task_id = p_task_id;
 $$;
 
@@ -726,26 +748,22 @@ begin
         ),
         contact_id = (select mp.new_id from pg_temp.orbit_move_map mp where mp.kind = 'contact' and mp.old_id = t.contact_id),
         opportunity_id = (select md.new_id from pg_temp.orbit_move_map md where md.kind = 'deal' and md.old_id = t.opportunity_id),
-        owner_id = private.move_owner(t.owner_id, p_target, p_user),
+        owner_id = h.next_owner,
         due_at = case
-          when t.due_has_time and t.due_at is not null and private.move_owner(t.owner_id, p_target, p_user) is distinct from t.owner_id
+          when t.due_has_time and t.due_at is not null and h.next_owner is distinct from t.owner_id
           then date_trunc('day', t.due_at at time zone 'Europe/London') at time zone 'Europe/London'
           else t.due_at
         end,
-        scheduled_by = case
-          when t.due_has_time and private.move_owner(t.owner_id, p_target, p_user) is distinct from t.owner_id then null
-          else t.scheduled_by
-        end,
-        remind_minutes = case
-          when t.due_has_time and private.move_owner(t.owner_id, p_target, p_user) is distinct from t.owner_id then null
-          else t.remind_minutes
-        end,
-        due_has_time = case
-          when private.move_owner(t.owner_id, p_target, p_user) is distinct from t.owner_id then false
-          else t.due_has_time
-        end
-    from pg_temp.orbit_move_map m
-    where m.kind = 'task' and m.old_id = t.id;
+        scheduled_by = case when t.due_has_time and h.next_owner is distinct from t.owner_id then null else t.scheduled_by end,
+        remind_minutes = case when t.due_has_time and h.next_owner is distinct from t.owner_id then null else t.remind_minutes end,
+        due_has_time = case when h.next_owner is distinct from t.owner_id then false else t.due_has_time end
+    from (
+      select m.old_id, private.move_owner(x.owner_id, p_target, p_user) as next_owner
+      from pg_temp.orbit_move_map m
+      join crm.tasks x on x.id = m.old_id
+      where m.kind = 'task'
+    ) h
+    where h.old_id = t.id;
 
     update crm.activities a
     set workspace_id = p_target,
@@ -1085,9 +1103,11 @@ grant execute on function private.move_records_to_workspace(uuid, uuid, uuid, js
 revoke all on function private.task_outlook_enqueue() from public;
 revoke all on function private.claim_task_blocks(uuid[], uuid, integer) from public;
 revoke all on function private.begin_task_block_create(uuid, uuid) from public;
+revoke all on function private.hold_task_block(uuid, timestamptz, interval) from public;
 revoke all on function private.settle_task_block(uuid, timestamptz, text, boolean, boolean) from public;
 grant execute on function private.claim_task_blocks(uuid[], uuid, integer) to crm_app;
 grant execute on function private.begin_task_block_create(uuid, uuid) to crm_app;
+grant execute on function private.hold_task_block(uuid, timestamptz, interval) to crm_app;
 grant execute on function private.settle_task_block(uuid, timestamptz, text, boolean, boolean) to crm_app;
 
 reset lock_timeout;

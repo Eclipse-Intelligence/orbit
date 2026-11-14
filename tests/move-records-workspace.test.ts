@@ -1156,6 +1156,19 @@ describe("moving records to another workspace", () => {
     assert.equal(kept.remind_minutes, 15);
   });
 
+  it("puts a handed-over task on its London day in summer and winter", async () => {
+    const quay = await company(eclipse, "Quay", { domain: "quay-move.test" });
+    const summer = (await createTask(priya, { title: "Call Quay late", companyId: quay.id, dueAt: "2030-07-10T23:30:00.000Z" }, { provenance: PROVENANCE })).body.task;
+    const winter = (await createTask(priya, { title: "Call Quay early", companyId: quay.id, dueAt: "2030-01-15T00:30:00.000Z" }, { provenance: PROVENANCE })).body.task;
+    await moveRecordsToWorkspace(eclipse, { companyIds: [quay.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    const rows = await admin<{ id: string; due_at: Date; due_has_time: boolean }>("select id, due_at, due_has_time from crm.tasks where id = any($1::uuid[])", [[summer.id, winter.id]]);
+    const day = (id: string) => rows.find((item) => item.id === id)!;
+    assert.equal(new Date(day(summer.id).due_at).toISOString(), "2030-07-10T23:00:00.000Z");
+    assert.equal(new Date(day(winter.id).due_at).toISOString(), "2030-01-15T00:00:00.000Z");
+    assert.equal(day(summer.id).due_has_time, false);
+    assert.equal(day(winter.id).due_has_time, false);
+  });
+
   it("turns timeouts, deadlocks and missed matches into messages a person can act on", () => {
     for (const code of ["57014", "40P01"]) {
       assert.throws(() => moveFailure({ code, message: "x" }, "Mark Ridgeon"), refused("timeout", /Move fewer records/));

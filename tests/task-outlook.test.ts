@@ -50,15 +50,18 @@ function utc(iso: string) {
   return { dateTime: iso.replace("Z", "").replace(/\.\d{3}$/, ".0000000"), timeZone: "UTC" };
 }
 
+function londonOffset(at: number) {
+  const name = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", timeZoneName: "shortOffset" })
+    .formatToParts(new Date(at))
+    .find((part) => part.type === "timeZoneName")!.value;
+  return name === "GMT" ? 0 : Number(name.replace("GMT", "")) * HOUR;
+}
+
 function fromGraph(value: unknown) {
   const item = value as { dateTime: string; timeZone: string };
   if (item.timeZone === "UTC") return new Date(`${item.dateTime}Z`).toISOString();
-  const local = new Date(`${item.dateTime}Z`);
-  const offset = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", timeZoneName: "shortOffset" })
-    .formatToParts(local)
-    .find((part) => part.type === "timeZoneName")!.value;
-  const hours = offset === "GMT" ? 0 : Number(offset.replace("GMT", ""));
-  return new Date(local.getTime() - hours * HOUR).toISOString();
+  const wall = Date.parse(`${item.dateTime}Z`);
+  return new Date(wall - londonOffset(wall - londonOffset(wall))).toISOString();
 }
 
 class FakeOutlook {
@@ -251,6 +254,7 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
     attempts: 0,
     create_key: null,
     create_user_id: null,
+    create_sent_at: null,
     event_id: null,
     event_user_id: null,
     provider_event_id: null,

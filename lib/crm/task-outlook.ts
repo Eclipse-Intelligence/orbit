@@ -36,6 +36,7 @@ const RUN_ROUNDS = 4;
 const RESERVE_MS = 4_000;
 const MIN_MINUTES = 5;
 const MAX_MINUTES = 480;
+const CREATE_GRACE_MS = 2 * MINUTE_MS;
 
 export const CALENDAR_SYNC: Provenance = { operation: "calendar_sync", source: "microsoft" };
 
@@ -54,6 +55,7 @@ export type BlockRow = {
   attempts: number;
   create_key: string | null;
   create_user_id: string | null;
+  create_sent_at: Date | string | null;
   event_id: string | null;
   event_user_id: string | null;
   provider_event_id: string | null;
@@ -89,7 +91,7 @@ export function blockRef(row: Pick<BlockRow, "calendar_event_ref" | "provider_ev
 
 export function planBlock(row: BlockRow, now: number): BlockPlan {
   const ref = blockRef(row);
-  const eventUser = ref ? (row.event_user_id ?? row.owner_id) : null;
+  const eventUser = ref ? (row.event_user_id ?? (row.create_key ? row.create_user_id : null) ?? row.owner_id) : null;
   if (ref && !eventUser) return { kind: "forget" };
   if (ref && eventUser && eventUser !== row.owner_id) return { kind: "remove", userId: eventUser, requeue: true };
   const due = time(row.due_at);
@@ -286,6 +288,7 @@ async function dropCreated(outlook: Outlook, row: BlockRow, id: string, fetchImp
     }
   }
   await settle(row, null, { requeue: true, dropEvent: true });
+  await defer(row);
   return "removed";
 }
 
@@ -449,7 +452,18 @@ async function runRow(row: BlockRow, plan: BlockPlan, access: Access, fetchImpl:
   return writeBlock(access, row, plan, fetchImpl);
 }
 
-async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result: BlockRun): Promise<BlockRow[]> {
+async function hold(row: BlockRow) {
+  await query("select private.hold_task_block($1, $2, $3::interval)", [row.task_id, row.pending_at, `${CREATE_GRACE_MS / 1000} seconds`]).catch((error) =>
+    console.error("Holding a task block failed", error),
+  );
+}
+
+function recently(row: BlockRow, now: number) {
+  const sent = time(row.create_sent_at);
+  return sent === null || now - sent < CREATE_GRACE_MS;
+}
+
+async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result: BlockRun, deadline: number): Promise<BlockRow[]> {
   const uncertain = new Map<string, BlockRow[]>();
   for (const row of rows) {
     if (!row.create_key || !row.create_user_id || blockRef(row)) continue;
@@ -457,49 +471,80 @@ async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result:
   }
   if (uncertain.size === 0) return rows;
   const recovered = new Map<string, BlockRow | null>();
+  const skip = async (row: BlockRow, outcome: "deferred" | "throttled" | null) => {
+    if (outcome) {
+      await defer(row);
+      result[outcome] += 1;
+    } else {
+      await release(row);
+    }
+    recovered.set(row.task_id, null);
+  };
   for (const [userId, items] of uncertain) {
-    let access: Access = "orbit_only";
+    if (deadline - Date.now() < RESERVE_MS) {
+      for (const row of items) await skip(row, null);
+      continue;
+    }
+    let access: Access = "retry";
     try {
       const actor = await actingActor(userId, items[0].workspace_id, true);
       access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
     } catch (error) {
       console.error("Opening Outlook for task blocks failed", error);
-      access = "retry";
     }
-    if (access === "orbit_only") continue;
+    if (access === "orbit_only" || access === "retry") {
+      console.error("Couldn't look up an unconfirmed Outlook block", { userId, access });
+      for (const row of items) await skip(row, "deferred");
+      continue;
+    }
+    let throttled = false;
     for (const row of items) {
-      if (access === "retry") {
-        await defer(row);
-        result.deferred += 1;
-        recovered.set(row.task_id, null);
+      if (deadline - Date.now() < RESERVE_MS) {
+        await skip(row, null);
         continue;
       }
+      if (throttled) {
+        await skip(row, "throttled");
+        continue;
+      }
+      let events: GraphEvent[];
       try {
-        const [found, ...extra] = await findTaskBlockEvents(access.token.accessToken, row.create_key!, fetchImpl);
-        for (const event of extra) await deleteGraphEvent(access.token.accessToken, event.id!.trim(), fetchImpl);
-        if (!found) continue;
-        const id = found.id!.trim();
-        const shown = eventWindow(found);
-        if (userId === row.owner_id) await query("select private.link_task_block($1, $2)", [row.task_id, id]);
-        recovered.set(row.task_id, {
-          ...row,
-          calendar_event_ref: id,
-          provider_event_id: id,
-          event_id: null,
-          event_user_id: userId,
-          event_starts_at: shown?.start ?? null,
-          event_ends_at: shown?.end ?? null,
-          event_subject: found.subject ?? null,
-          block_starts_at: null,
-          block_ends_at: null,
-        });
+        events = await findTaskBlockEvents(access.token.accessToken, row.create_key!, fetchImpl);
       } catch (error) {
+        console.error("Looking up an unconfirmed Outlook block failed", error);
         const failure = graphFailure(error);
-        if (failure === "throttled" || failure === "retry") {
-          await defer(row);
-          result[failed(failure)] += 1;
+        if (failure === "throttled") throttled = true;
+        await skip(row, failure === "throttled" ? "throttled" : "deferred");
+        continue;
+      }
+      const [found, ...extra] = events;
+      if (!found) {
+        if (recently(row, Date.now())) {
+          await hold(row);
+          result.deferred += 1;
           recovered.set(row.task_id, null);
         }
+        continue;
+      }
+      const id = found.id!.trim();
+      const shown = eventWindow(found);
+      if (userId === row.owner_id) await query("select private.link_task_block($1, $2)", [row.task_id, id]);
+      recovered.set(row.task_id, {
+        ...row,
+        calendar_event_ref: id,
+        provider_event_id: id,
+        event_id: null,
+        event_user_id: userId,
+        event_starts_at: shown?.start ?? null,
+        event_ends_at: shown?.end ?? null,
+        event_subject: found.subject ?? null,
+        block_starts_at: null,
+        block_ends_at: null,
+      });
+      for (const event of extra) {
+        await deleteGraphEvent(access.token.accessToken, event.id!.trim(), fetchImpl).catch((error) =>
+          console.error("Removing a second Outlook block failed", error),
+        );
       }
     }
   }
@@ -530,7 +575,7 @@ export async function syncTaskBlocks(
     ]);
     if (claimed.rows.length === 0) break;
     const now = options.now ?? Date.now();
-    const rows = await recoverCreates(claimed.rows, fetchImpl, result);
+    const rows = await recoverCreates(claimed.rows, fetchImpl, result, deadline);
     const groups = new Map<string, { row: BlockRow; plan: BlockPlan }[]>();
     for (const row of rows) {
       const plan = planBlock(row, now);
