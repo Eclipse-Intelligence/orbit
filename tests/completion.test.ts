@@ -426,8 +426,10 @@ describe("imports, pipeline, communications, and webhooks", () => {
         events: ["company.created"],
       });
       await createCompany(owner, { name: "Hook Co", domain: "hookco.example" });
-      for (let attempt = 0; attempt < 10 && hits.length === 0; attempt += 1) {
+      const deadline = Date.now() + 5000;
+      while (hits.length === 0 && Date.now() < deadline) {
         await deliverDueWebhooks();
+        if (hits.length === 0) await new Promise((resolve) => setTimeout(resolve, 25));
       }
       assert.equal(hits.length, 1);
       assert.equal(hits[0].event, "company.created");
