@@ -874,11 +874,19 @@ function QuickDates({ details }: { details: TaskDetailsState }) {
 
 function Description({ details, layout }: { details: TaskDetailsState; layout: "panel" | "row" }) {
   const field = useAutoSize(details.text);
+  const own = useRef<HTMLTextAreaElement | null>(null);
+  const attach = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      own.current = node;
+      field(node);
+    },
+    [field],
+  );
   const [editing, setEditing] = useState<number | null>(null);
   useEffect(() => {
     if (editing === null) return;
     const settle = () => {
-      if (!(document.activeElement instanceof HTMLTextAreaElement && document.activeElement.getAttribute("aria-label") === "Description")) setEditing(null);
+      if (document.activeElement !== own.current) setEditing(null);
     };
     const later = () => window.setTimeout(settle, 0);
     window.addEventListener("focus", later);
@@ -914,7 +922,7 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
   }
   return (
     <Textarea
-      ref={field}
+      ref={attach}
       aria-label="Description"
       value={details.text}
       placeholder="Add a description"

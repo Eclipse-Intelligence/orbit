@@ -905,7 +905,7 @@ export default function TaskPad({
     if (event.nativeEvent.isComposing) return;
     if (docQuery) {
       const count = docOptions?.length ?? 0;
-      if ((event.key === "Enter" || (event.key === "Tab" && !event.shiftKey)) && docFound.loading) {
+      if (event.key === "Enter" && !event.shiftKey && docFound.loading) {
         event.preventDefault();
         return;
       }

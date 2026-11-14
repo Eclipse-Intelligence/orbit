@@ -252,7 +252,7 @@ export function DocPickPopover({
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing) return;
               const picks = event.key === "Enter" || (event.key === "Tab" && !event.shiftKey);
-              if (picks && found.loading) {
+              if (event.key === "Enter" && found.loading) {
                 event.preventDefault();
                 return;
               }

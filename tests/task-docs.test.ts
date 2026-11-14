@@ -712,8 +712,13 @@ describe("task docs, second review", () => {
     );
     assert.equal(audit.length, 1);
     assert.equal(audit[0].workspace_id, elsewhere.workspaceId);
-    assert.deepEqual([...audit[0].changes.before.docIds].sort(), [shared, privateDoc].sort());
+    assert.deepEqual(audit[0].changes.before.docIds, [shared, privateDoc]);
     assert.deepEqual(audit[0].changes.after.docIds, []);
+    const there = { ...mark, workspaceId: elsewhere.workspaceId, workspaceName: elsewhere.workspaceName, role: elsewhere.role, scopes: elsewhere.scopes };
+    const moveChange = (await listRecentChanges(there, { entityType: "task" })).find((item) => item.entityId === task.id && item.summary.includes("Docs"));
+    assert.ok(moveChange);
+    assert.equal(moveChange.canUndo, false);
+    assert.match(moveChange.reason ?? "", /^Can't undo: the task moved workspace and its docs stayed in /);
   });
 
   it("adds the year to a daily note from another year", async () => {

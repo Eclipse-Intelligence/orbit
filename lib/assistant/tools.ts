@@ -670,7 +670,7 @@ export async function taskDocsRefusalFor(actor: UserActor, name: string, args: A
     return result.rows[0] ?? null;
   }).catch(() => null);
   if (!current || current.owner_id === actor.userId || current.created_by_user_id === actor.userId) return null;
-  const wanted = new Set(Array.isArray(args.docIds) ? args.docIds.map((item) => str(item).toLowerCase()) : []);
+  const wanted = new Set(Array.isArray(args.docIds) ? args.docIds.map((item) => str(item).toLowerCase()).filter(Boolean) : []);
   const now = new Set(current.doc_ids ?? []);
   if (wanted.size === now.size && [...wanted].every((item) => now.has(item))) return null;
   return { error: DOCS_NOT_YOURS, field: "docIds" };

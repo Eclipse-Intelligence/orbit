@@ -236,6 +236,11 @@ function shownValue(field: string, value: unknown, names: Map<string, string>) {
   return clip(String(value));
 }
 
+function movedDocsReason(from: Record<string, unknown> | null) {
+  const name = typeof from?.name === "string" && from.name ? from.name : "the other workspace";
+  return `Can't undo: the task moved workspace and its docs stayed in ${name}.`;
+}
+
 async function docsUndoCheck(db: Db, actor: Actor, current: Record<string, unknown>, before: Record<string, unknown>) {
   const now = Array.isArray(current.docIds) ? current.docIds.map(String) : [];
   const wanted = Array.isArray(before.docIds) ? before.docIds.map(String) : [];
@@ -527,6 +532,7 @@ async function describeEvent(
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
       if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
+      else if (updateEntity === "task" && fields.fields.includes("docIds") && record(changes?.movedFrom)) check = movedDocsReason(record(changes?.movedFrom));
       else if (updateEntity === "task" && fields.fields.includes("docIds") && !canLinkTaskDocs(actor, current.values as unknown as TaskDocRights)) check = "Can't undo: only the task's assignee or creator can change its docs.";
       else if (updateEntity === "task" && fields.fields.length === 1 && fields.fields[0] === "docIds") check = await docsUndoCheck(db, actor, current.values, fields.before);
     }

@@ -51,27 +51,29 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
-declare
-  dropped uuid[];
 begin
-  with gone as (
-    delete from crm.task_docs d where d.task_id = new.id and d.workspace_id is distinct from new.workspace_id
-    returning d.page_id, d.page_archived
-  )
-  select array_agg(page_id order by page_id) filter (where not page_archived) into dropped from gone;
-  if dropped is not null then
-    perform set_config(
-      'orbit.task_docs_dropped',
-      (coalesce(nullif(current_setting('orbit.task_docs_dropped', true), ''), '[]')::jsonb
-        || jsonb_build_array(jsonb_build_object('taskId', new.id, 'docIds', to_jsonb(dropped))))::text,
-      true
-    );
-  end if;
+  delete from crm.task_docs d where d.task_id = new.id and d.workspace_id is distinct from new.workspace_id;
   return new;
 end;
 $$;
 
 revoke all on function private.task_docs_task_moved() from public;
+
+create or replace function private.task_doc_links_in(p_workspace uuid)
+returns table (task_id uuid, page_ids uuid[])
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select d.task_id, array_agg(d.page_id order by d.created_at, d.page_id)
+  from crm.task_docs d
+  where d.workspace_id = p_workspace and not d.page_archived
+  group by d.task_id;
+$$;
+
+revoke all on function private.task_doc_links_in(uuid) from public;
+grant execute on function private.task_doc_links_in(uuid) to crm_app;
 
 drop trigger if exists tasks_docs_move on crm.tasks;
 create trigger tasks_docs_move
