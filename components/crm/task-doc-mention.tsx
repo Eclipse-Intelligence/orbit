@@ -5,7 +5,7 @@ import { DocPickHeader, DocPickNotice, DocPickOptions, useDocPicks } from "@/com
 import { useDocChange } from "@/components/crm/task-docs";
 import type { Task } from "@/lib/crm/types";
 import type { DocPick } from "@/lib/docs/client-types";
-import { insideClosedReference, pickIntoDescription, textEdit, withoutReferenceNear } from "@/lib/task-doc-picks";
+import { caretAfterEdit, insideClosedReference, pickIntoDescription, textEdit, withoutReferenceNear } from "@/lib/task-doc-picks";
 import { docQueryAt, withoutDocQuery, type DocQuery } from "@/lib/task-pad";
 
 type Mode = "title" | "description";
@@ -17,6 +17,7 @@ export function useDocMention({
   mode,
   value,
   onChange,
+  onStore,
 }: {
   task: Pick<Task, "id" | "docIds">;
   enabled: boolean;
@@ -24,6 +25,7 @@ export function useDocMention({
   mode: Mode;
   value: string;
   onChange: (value: string) => void;
+  onStore?: () => void;
 }) {
   const id = useId();
   const listId = `${id}-docs-list`;
@@ -102,10 +104,26 @@ export function useDocMention({
     write(next.text, next.caret);
     setNote(next.note);
     if (task.docIds.includes(doc.id)) return;
+    const reference = next.reference;
     void change.link(doc).then((linked) => {
-      if (linked || !next.reference) return;
+      if (linked || !reference) return;
       setNote(null);
-      onChange(withoutReferenceNear(latest.current, next.reference, at));
+      const current = latest.current;
+      const cleaned = withoutReferenceNear(current, reference, at);
+      if (cleaned === current) return;
+      const element = field.current;
+      const focused = Boolean(element && document.activeElement === element);
+      const caret = element?.selectionStart ?? current.length;
+      const edit = textEdit(current, cleaned);
+      const kept = caretAfterEdit(edit, caret);
+      onChange(cleaned);
+      onStore?.();
+      if (focused) {
+        window.requestAnimationFrame(() => {
+          const target = field.current;
+          if (target && document.activeElement === target) target.setSelectionRange(kept, kept);
+        });
+      }
     });
   }
 
@@ -146,14 +164,14 @@ export function useDocMention({
 
   const open = query !== null;
   const listed = open && Boolean(options && options.length > 0);
-  const fieldProps = enabled
+  const fieldProps = open
     ? {
-        role: open ? "combobox" : undefined,
+        role: "combobox",
         "aria-autocomplete": "list" as const,
-        "aria-expanded": open,
+        "aria-expanded": true,
         "aria-controls": listed ? listId : undefined,
         "aria-activedescendant": listed && active >= 0 ? `${id}-docs-option-${active}` : undefined,
-        "data-mention-open": open ? "" : undefined,
+        "data-mention-open": "",
       }
     : {};
 

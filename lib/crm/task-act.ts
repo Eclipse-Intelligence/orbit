@@ -11,6 +11,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
+import { undoAuditEvent } from "@/lib/crm/undo";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
 import type { LookupState } from "@/lib/enrichment/contacts";
 
@@ -265,7 +266,7 @@ function linkValue(value: unknown) {
   return value.toLowerCase();
 }
 
-export async function relinkTask(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
+export async function relinkTaskUndoable(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(taskId)) throw notFound("task");
   if (change.mailThreadKey !== undefined && change.mailThreadKey !== null) {
@@ -283,10 +284,33 @@ export async function relinkTask(actor: UserActor, taskId: string, change: LinkC
   return withActor(actor, async (db) => {
     const task = await lockedTask(db, actor, taskId);
     const same = (Object.keys(write) as (keyof typeof write)[]).every((key) => write[key] === undefined || write[key] === (task[key]?.toLowerCase() ?? null));
-    if (same) return task;
+    if (same) return { task, undo: null };
     const updated = await updateTaskInDb(db, actor, taskId, write, provenance);
-    return updated.task;
+    const event = await db.query<{ id: string }>(
+      `select id from crm.audit_events
+       where workspace_id = $1 and entity_type = 'task' and entity_id = $2 and event_type = 'task.updated' and created_at = now()
+       order by id desc limit 1`,
+      [actor.workspaceId, taskId],
+    );
+    return { task: updated.task, undo: event.rows[0]?.id ?? null };
   });
+}
+
+export async function relinkTask(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
+  return (await relinkTaskUndoable(actor, taskId, change, provenance)).task;
+}
+
+export async function undoTaskLinkChange(actor: UserActor, taskId: string, eventId: string) {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(taskId) || !isUuid(eventId)) throw notFound("change");
+  const event = await withActor(actor, (db) =>
+    db.query<{ id: string }>(
+      "select id from crm.audit_events where id = $1 and workspace_id = $2 and entity_type = 'task' and entity_id = $3 and event_type = 'task.updated'",
+      [eventId, actor.workspaceId, taskId],
+    ),
+  );
+  if (!event.rows[0]) throw notFound("change");
+  return undoAuditEvent(actor, eventId, { operation: "undo_change", source: "web" });
 }
 
 function cleanOutcome(input: TaskOutcome) {

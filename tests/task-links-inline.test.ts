@@ -13,6 +13,7 @@ import {
   hasDocReference,
   insertDocReference,
   insideClosedReference,
+  caretAfterEdit,
   textEdit,
   withoutReferenceNear,
   partsSourceOffset,
@@ -125,6 +126,10 @@ describe("[[ in a task's title and description", () => {
     assert.equal(withoutReferenceNear("Nothing here", "[[Plan]]", 0), "Nothing here");
     assert.deepEqual(textEdit("Check [[pri now", "Check [[Pricing notes]] now"), { start: 8, end: 11, insert: "Pricing notes]]" });
     assert.deepEqual(textEdit("Ask [[my d about", "Ask about"), { start: 4, end: 11, insert: "" });
+    const removal = textEdit("See [[Plan]] and more", "See and more");
+    assert.equal(caretAfterEdit(removal, 21), 12, "a caret after the removed reference moves back with the text");
+    assert.equal(caretAfterEdit(removal, 2), 2, "a caret before it stays put");
+    assert.equal(caretAfterEdit(removal, 8), 4, "a caret inside it lands where it was");
   });
 
   it("links duplicate titles to the first linked doc the viewer can open", () => {

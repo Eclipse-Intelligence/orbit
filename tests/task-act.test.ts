@@ -5,7 +5,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { completeTaskWithOutcome, relinkTask, taskContext } from "@/lib/crm/task-act";
+import { completeTaskWithOutcome, relinkTask, relinkTaskUndoable, taskContext, undoTaskLinkChange } from "@/lib/crm/task-act";
 import { taskKind } from "@/lib/crm/task-kind";
 import { GET as restGetTask } from "@/app/api/v1/tasks/[id]/route";
 import { randomUUID } from "node:crypto";
@@ -343,6 +343,26 @@ describe("relinking from the task", () => {
     await relinkTask(mark, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" });
     assert.equal((await audits(task.id, "task.updated")).length, 1, "clearing an email that is already gone records nothing");
     await assert.rejects(() => relinkTask(mark, task.id, { mailThreadKey: "someone|else" } as never, { operation: "link_task", source: "web" }), /can only be removed here/);
+  });
+
+  it("undoes a removed email through that change's audit event, only on the same task and only for people who can change it", async () => {
+    const task = (await createTask(mark, { title: "Reply to Jane about the order", contactId: jane, mailThreadKey: `${markBox.sourceId}|renewal` })).body.task;
+    const other = (await createTask(mark, { title: "Something else", contactId: jane })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    const removed = await relinkTaskUndoable(mark, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" });
+    assert.equal(removed.task.mailThreadKey, null);
+    assert.ok(removed.undo);
+    const again = await relinkTaskUndoable(mark, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" });
+    assert.equal(again.undo, null, "an unchanged link offers no undo");
+    await assert.rejects(() => undoTaskLinkChange(mark, other.id, removed.undo!), /not found/i);
+    await assert.rejects(() => undoTaskLinkChange(priya, task.id, removed.undo!));
+    assert.equal((await getTask(mark, task.id)).mailThreadKey, null);
+    await undoTaskLinkChange(mark, task.id, removed.undo!);
+    const restored = await getTask(mark, task.id);
+    assert.equal(restored.mailThreadKey, `${markBox.sourceId}|renewal`);
+    assert.equal(restored.mailThread?.subject, "Renewal terms, v2");
+    assert.equal((await audits(task.id, "task.undone")).length, 1);
+    await assert.rejects(() => undoTaskLinkChange(mark, task.id, removed.undo!), "a change is undone once");
   });
 });
 

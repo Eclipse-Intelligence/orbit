@@ -7,7 +7,8 @@ import Button from "@/components/_ui/button";
 import { SearchChip } from "@/components/crm/task-pad";
 import { useComposer } from "@/components/mail/compose-dock";
 import { EditTaskDocs, TASK_EDIT_CHIP, TaskDocChips } from "@/components/crm/task-docs";
-import { relinkTaskAction } from "@/app/(crm)/task-act";
+import { forgetLinkUndo, offerLinkUndo } from "@/components/crm/task-link-undo";
+import { relinkTaskAction, undoTaskLinkAction } from "@/app/(crm)/task-act";
 import { taskLinkCandidatesAction } from "@/app/(crm)/records";
 import type { PadOption } from "@/lib/crm/task-pad";
 import type { LinkChange } from "@/lib/crm/task-act";
@@ -22,7 +23,10 @@ import UserIcon from "@/public/assets/images/tasks/user.svg";
 
 const LINK_FAILED = "Couldn't link the task. Try again.";
 const SLOT = "inline-flex min-w-0 max-w-full [&>button]:hit";
-const EMAIL_UNDO_MS = 5000;
+const EMAIL_UNDO_MS = 8000;
+const UNDO_FAILED = "Couldn't undo. Try again.";
+
+type Saved = { ok?: boolean; undo?: string | null; error?: string };
 
 function useNamedPeople(task: Task, wanted: boolean) {
   const [found, setFound] = useState<{ key: string; people: PadOption[] } | null>(null);
@@ -46,12 +50,12 @@ function useNamedPeople(task: Task, wanted: boolean) {
   return wanted && found?.key === key ? found.people : [];
 }
 
-function EmailChip({ task, busy, onRemove }: { task: Task; busy: boolean; onRemove: () => void }) {
+function EmailChip({ task, onRemove }: { task: Task; onRemove: (chip: HTMLElement | null) => void }) {
   if (!task.mailThreadKey) return null;
   const readable = Boolean(task.mailThread?.readable);
   const name = readable ? task.mailThread?.subject || "Email" : "Email";
   return (
-    <span className={TASK_EDIT_CHIP}>
+    <span data-email-chip="" className={TASK_EDIT_CHIP}>
       <MailIcon aria-hidden />
       {readable ? (
         <Link href={threadHref(task.mailThreadKey)} className="truncate hover:underline">
@@ -63,10 +67,9 @@ function EmailChip({ task, busy, onRemove }: { task: Task; busy: boolean; onRemo
       <Button
         variant="ghost"
         size="none"
-        disabled={busy}
         aria-label={readable ? `Remove link to ${name}` : "Remove link to an email"}
         title="Remove"
-        onClick={onRemove}
+        onClick={(event) => onRemove(event.currentTarget.closest<HTMLElement>("[data-email-chip]"))}
         className="hit size-5 shrink-0 rounded-full [@media(pointer:coarse)]:ml-3"
       >
         <XIcon aria-hidden />
@@ -79,50 +82,41 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
   const router = useRouter();
   const composer = useComposer();
   const group = useRef<HTMLDivElement>(null);
-  const saving = useRef(false);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
   const lastSlot = useRef<string | null>(null);
-  const pendingEmail = useRef<{ timer: number; taskId: string } | null>(null);
   const [hiddenEmail, setHiddenEmail] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const unlinked = !task.companyId && !task.contactId && !task.opportunityId;
   const named = useNamedPeople(task, unlinked);
+  const busy = pending > 0;
+  if (hiddenEmail && hiddenEmail !== task.mailThreadKey) setHiddenEmail(null);
 
-  useEffect(
-    () => () => {
-      const pending = pendingEmail.current;
-      if (!pending) return;
-      window.clearTimeout(pending.timer);
-      pendingEmail.current = null;
-      void relinkTaskAction(pending.taskId, { mailThreadKey: null }).catch(() => null);
-    },
-    [],
-  );
-
-  async function save(next: LinkChange, message: string | null) {
-    if (saving.current) return false;
-    saving.current = true;
-    setBusy(true);
+  function save(next: LinkChange, message: string | null): Promise<Saved> {
+    setPending((count) => count + 1);
     setError(null);
     setNote(null);
-    const result = await relinkTaskAction(task.id, next).catch(() => ({ error: LINK_FAILED }));
-    saving.current = false;
-    setBusy(false);
-    const slot = lastSlot.current;
-    if (slot) {
-      window.requestAnimationFrame(() => {
-        if (document.activeElement && document.activeElement !== document.body) return;
-        group.current?.querySelector<HTMLElement>(`[data-link-slot="${slot}"] button`)?.focus();
-      });
-    }
-    if (result.error) {
-      setError(result.error);
-      return false;
-    }
-    setNote(message);
-    router.refresh();
-    return true;
+    const run = queue.current.then(async (): Promise<Saved> => {
+      const result: Saved = await relinkTaskAction(task.id, next).catch(() => ({ error: LINK_FAILED }));
+      setPending((count) => count - 1);
+      const slot = lastSlot.current;
+      if (slot) {
+        window.requestAnimationFrame(() => {
+          if (document.activeElement && document.activeElement !== document.body) return;
+          group.current?.querySelector<HTMLElement>(`[data-link-slot="${slot}"] button`)?.focus();
+        });
+      }
+      if (result.error) {
+        setError(result.error);
+        return result;
+      }
+      setNote(message);
+      router.refresh();
+      return result;
+    });
+    queue.current = run;
+    return run;
   }
 
   function change(kind: "company" | "contact" | "opportunity", option: Parameters<typeof relinkChange>[2]) {
@@ -131,30 +125,43 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
     void save(next, relinkNote(task, kind, next));
   }
 
-  function removeEmail() {
+  function nextFocus(chip: HTMLElement | null) {
+    const targets = [...(group.current?.querySelectorAll<HTMLElement>("button, a[href]") ?? [])].filter((element) => !chip?.contains(element));
+    const after = targets.find((element) => chip && chip.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return after ?? targets[targets.length - 1] ?? null;
+  }
+
+  function removeEmail(chip: HTMLElement | null) {
     const key = task.mailThreadKey;
-    if (!key || pendingEmail.current) return;
+    if (!key) return;
+    const taskId = task.id;
+    const focus = nextFocus(chip);
     setHiddenEmail(key);
-    const timer = window.setTimeout(() => {
-      pendingEmail.current = null;
-      lastSlot.current = null;
-      void save({ mailThreadKey: null }, null).then((ok) => {
-        if (!ok) setHiddenEmail(null);
-      });
-    }, EMAIL_UNDO_MS);
-    pendingEmail.current = { timer, taskId: task.id };
-    composer.showToast({
-      message: "Email link removed.",
-      duration: EMAIL_UNDO_MS,
-      action: {
-        label: "Undo",
-        run: () => {
-          const pending = pendingEmail.current;
-          if (pending) window.clearTimeout(pending.timer);
-          pendingEmail.current = null;
-          setHiddenEmail(null);
-        },
-      },
+    window.requestAnimationFrame(() => focus?.focus());
+    lastSlot.current = null;
+    void save({ mailThreadKey: null }, null).then((result) => {
+      if (result.error) {
+        setHiddenEmail(null);
+        composer.showToast({ message: result.error, tone: "alert" });
+        return;
+      }
+      const eventId = result.undo;
+      if (!eventId) return;
+      const undo = () => {
+        forgetLinkUndo(undo);
+        void undoTaskLinkAction(taskId, eventId)
+          .catch(() => ({ error: UNDO_FAILED }))
+          .then((undone) => {
+            if (undone.error) {
+              composer.showToast({ message: undone.error, tone: "alert" });
+              return;
+            }
+            setHiddenEmail(null);
+            router.refresh();
+          });
+      };
+      offerLinkUndo(undo, EMAIL_UNDO_MS);
+      composer.showToast({ message: "Email link removed.", duration: EMAIL_UNDO_MS, action: { label: "Undo", run: undo } });
     });
   }
 
@@ -213,7 +220,7 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
           />
         </span>
       </span>
-      {hiddenEmail !== task.mailThreadKey && <EmailChip task={task} busy={busy} onRemove={removeEmail} />}
+      {hiddenEmail !== task.mailThreadKey && <EmailChip task={task} onRemove={removeEmail} />}
       {task.canLinkDocs ? <EditTaskDocs task={task} warn={warn} /> : <TaskDocChips task={task} />}
       {busy && (
         <span role="status" className="caption-style text-subtle">

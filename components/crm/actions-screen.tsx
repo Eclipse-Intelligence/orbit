@@ -20,6 +20,7 @@ import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction } from "@/app/(crm)/records";
 import { useTaskDone } from "@/components/crm/use-task-done";
+import { undoLinkChange } from "@/components/crm/task-link-undo";
 import { taskWindowAction, type TaskWindow } from "@/app/(crm)/tasks/actions";
 import { relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
@@ -493,7 +494,7 @@ export default function ActionsScreen({
   });
   useShortcut("task-undo", () => {
     if (inPanel() || inField()) return false;
-    return undoLast();
+    return undoLinkChange() || undoLast();
   });
   useShortcut("task-collapse", () => {
     if (!expandedId || inPanel()) return false;

@@ -90,6 +90,11 @@ export function textEdit(before: string, after: string) {
   return { start, end: before.length - tail, insert: after.slice(start, after.length - tail) };
 }
 
+export function caretAfterEdit(edit: { start: number; end: number; insert: string }, caret: number) {
+  if (edit.end <= caret) return caret - (edit.end - edit.start) + edit.insert.length;
+  return Math.min(caret, edit.start);
+}
+
 export function pickIntoDescription(text: string, found: DocQuerySpan, doc: { title: string | null; shared: boolean }) {
   if (doc.shared) return { ...insertDocReference(text, found, doc.title), note: null, reference: `[[${docReferenceTitle(doc.title)}]]` };
   return { ...removeDocQuery(text, found), note: PRIVATE_DOC_NOTE, reference: null };

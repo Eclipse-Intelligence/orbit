@@ -241,7 +241,7 @@ export function SearchChip({
         <ul id={`${id}-list`} role="listbox" aria-label={noun} className="flex max-h-64 flex-col overflow-y-auto">
           {named.length > 0 && (
             <li role="group" aria-labelledby={`${id}-named`} className="flex flex-col">
-              <span id={`${id}-named`} className="caption-style text-subtle px-2.5 pt-1 pb-0.5">
+              <span id={`${id}-named`} role="presentation" className="caption-style text-subtle px-2.5 pt-1 pb-0.5">
                 {suggested?.heading}
               </span>
               <ul role="none" className="flex flex-col">
