@@ -217,13 +217,6 @@ const SYNC_FROM = `
   left join crm.profiles op on op.id = t.owner_id
 `;
 
-const DIRTY_SQL = `(
-  t.title is distinct from t.clickup_sync->>'title'
-  or t.due_at is distinct from (t.clickup_sync->>'dueAt')::timestamptz
-  or (t.clickup_sync ? 'dueHasTime' and t.due_has_time is distinct from (t.clickup_sync->>'dueHasTime')::boolean)
-  or (t.completed_at is not null) is distinct from (t.clickup_sync->>'done')::boolean
-)`;
-
 const PROVENANCE: Provenance = { operation: "sync_clickup", source: "clickup", synced: true };
 
 function client(token: string, options: ClickUpOptions) {
@@ -432,6 +425,38 @@ export async function linkedElsewhere(workspaceId: string, clickupTaskId: string
 async function linkedElsewhereInAppDb(appDb: Db, workspaceId: string, clickupTaskId: string) {
   const result = await appDb.query<{ linked: boolean }>(LINKED_SQL, [workspaceId, clickupTaskId]);
   return Boolean(result.rows[0]?.linked);
+}
+
+type KeeperRow = {
+  task_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  user_id: string;
+  role: WorkspaceRole;
+  email: string | null;
+  full_name: string | null;
+};
+
+async function keepers(prefer: UserActor, taskIds: string[]) {
+  const found = new Map<string, UserActor>();
+  if (taskIds.length === 0) return found;
+  const result = await query<KeeperRow>("select * from private.clickup_keepers($1, $2::uuid[], $3)", [prefer.workspaceId, taskIds, prefer.userId]);
+  for (const row of result.rows) found.set(row.task_id, memberActor(row));
+  return found;
+}
+
+async function keeperFor(s: Session, taskId: string, listId: string | null, title: string) {
+  const matches = await query<{ id: string }>("select id from private.clickup_matching_tasks($1, $2, $3, $4) as id", [
+    s.actor.workspaceId,
+    taskId,
+    listId,
+    title,
+  ]);
+  if (matches.rows.length === 0) return { found: false, actor: s.actor };
+  const people = await keepers(s.actor, matches.rows.map((row) => row.id));
+  const all = [...people.values()];
+  if (all.some((person) => person.userId === s.actor.userId)) return { found: true, actor: s.actor };
+  return { found: true, actor: all[0] ?? null };
 }
 
 async function linkedRow(db: Db, workspaceId: string, clickupTaskId: string) {
@@ -898,6 +923,9 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
   if (!task?.id || !isClickUpId(String(task.id))) return "ignored";
   const taskId = String(task.id);
   const listId = task.list?.id ? String(task.list.id) : null;
+  const keeper = await keeperFor(s, taskId, listId, remoteFields(task).title);
+  if (keeper.found && !keeper.actor) return "ignored";
+  if (keeper.actor && keeper.actor.userId !== s.actor.userId) return pullRemote({ ...s, actor: keeper.actor }, task, watched);
   if (task.archived || (task as { deleted?: boolean }).deleted) {
     const row = await withActor(s.actor, (db) => linkedRow(db, s.actor.workspaceId, taskId));
     return row ? archiveDeleted(s, row) : "ignored";
@@ -991,45 +1019,35 @@ function watchedSet(state: ClickUpState) {
 }
 
 async function linkedLists(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ clickup_list_id: string }>(
-      `select distinct t.clickup_list_id from crm.tasks t
-       where t.workspace_id = $1 and t.clickup_task_id is not null and t.clickup_list_id is not null
-         and t.archived_at is null and ${directTaskSql("t")}
-       limit $2`,
-      [actor.workspaceId, MAX_POLL_LISTS],
-    );
-    return result.rows.map((row) => row.clickup_list_id);
+  const result = await query<{ list: string }>("select list from private.clickup_linked_lists($1, $2) as list", [actor.workspaceId, MAX_POLL_LISTS]);
+  return result.rows.map((row) => row.list);
+}
+
+async function withKeepers(actor: UserActor, ids: string[]) {
+  const people = await keepers(actor, ids);
+  return ids.flatMap((id) => {
+    const keeper = people.get(id);
+    return keeper ? [{ id, actor: keeper }] : [];
   });
 }
 
 async function pushQueue(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ id: string }>(
-      `select t.id from crm.tasks t
-       where t.workspace_id = $1 and t.archived_at is null and t.clickup_list_id is not null and ${directTaskSql("t")}
-         and (t.clickup_task_id is null or ${DIRTY_SQL})
-       order by t.clickup_synced_at asc nulls first, t.updated_at asc
-       limit $2`,
-      [actor.workspaceId, PUSH_BATCH],
-    );
-    return result.rows.map((row) => row.id);
-  });
+  const result = await query<{ id: string }>("select id from private.clickup_push_queue($1, $2) as id", [actor.workspaceId, PUSH_BATCH]);
+  return withKeepers(actor, result.rows.map((row) => row.id));
 }
 
 async function staleLinks(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<SyncRow>(
-      `select ${SYNC_COLUMNS} ${SYNC_FROM}
-       where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null and ${directTaskSql("t")}
-         and t.clickup_task_id is not null
-         and (t.clickup_synced_at is null or t.clickup_synced_at < now() - make_interval(secs => $2::double precision))
-       order by t.clickup_synced_at asc nulls first
-       limit $3`,
-      [actor.workspaceId, VERIFY_AFTER_MS / 1000, VERIFY_BATCH],
-    );
-    return result.rows;
-  });
+  const result = await query<{ id: string }>("select id from private.clickup_stale_tasks($1, $2, $3) as id", [
+    actor.workspaceId,
+    VERIFY_AFTER_MS / 1000,
+    VERIFY_BATCH,
+  ]);
+  const found: { row: SyncRow; actor: UserActor }[] = [];
+  for (const item of await withKeepers(actor, result.rows.map((row) => row.id))) {
+    const row = await withActor(item.actor, (db) => readSyncRow(db, item.actor.workspaceId, item.id));
+    if (row) found.push({ row, actor: item.actor });
+  }
+  return found;
 }
 
 export async function syncClickUp(
@@ -1084,31 +1102,31 @@ export async function syncClickUp(
         if (body.lastPage || !complete) break;
       }
     }
-    for (const id of await pushQueue(actor)) {
+    for (const item of await pushQueue(actor)) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) {
         complete = false;
         break;
       }
       try {
-        const outcome = await pushRow(s, id);
+        const outcome = await pushRow({ ...s, actor: item.actor }, item.id);
         if (outcome === "pushed") result.pushed += 1;
         else if (outcome === "archived") result.archived += 1;
       } catch (error) {
         fail(error, "Couldn't update ClickUp.");
       }
     }
-    for (const row of await staleLinks(actor)) {
+    for (const { row, actor: keeper } of await staleLinks(actor)) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
       try {
         const remote = await s.api.getTask(row.clickup_task_id!);
         if (!remote) {
-          if ((await archiveDeleted(s, row)) === "archived") result.archived += 1;
+          if ((await archiveDeleted({ ...s, actor: keeper }, row)) === "archived") result.archived += 1;
           continue;
         }
         const outcome = await pullRemote(s, remote, watched);
         if (outcome === "archived") result.archived += 1;
         else if (outcome === "updated") result.updated += 1;
-        await withActor(actor, (db) =>
+        await withActor(keeper, (db) =>
           db.query("update crm.tasks set clickup_synced_at = now() where id = $1", [row.id]),
         );
       } catch (error) {
@@ -1575,8 +1593,11 @@ export async function processClickUpEvent(actor: UserActor, event: ClickUpEvent,
   if (!token) return "ignored";
   const state = await getClickUpState(actor);
   if (!state?.teamId) return "ignored";
-  const s = session(client(token, options), state, actor, options);
-  const linked = await withActor(actor, (db) => linkedRow(db, actor.workspaceId, event.taskId));
+  const base = session(client(token, options), state, actor, options);
+  const keeper = await keeperFor(base, event.taskId, null, "");
+  if (keeper.found && !keeper.actor) return "ignored";
+  const s = keeper.actor ? { ...base, actor: keeper.actor } : base;
+  const linked = await withActor(s.actor, (db) => linkedRow(db, s.actor.workspaceId, event.taskId));
   if (event.event !== "taskDeleted" && linked && event.newestAt !== null) {
     const pushedAt = snapshotOf(linked).pushedAt;
     if (pushedAt && event.newestAt >= pushedAt - 5_000 && event.newestAt <= pushedAt + ECHO_WINDOW_MS) {

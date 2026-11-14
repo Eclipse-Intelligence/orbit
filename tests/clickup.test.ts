@@ -1097,7 +1097,10 @@ describe("clickup sync", () => {
       remote.status = { status: "done", type: "closed" };
       remote.date_updated = String(Date.now() + 3_000);
       await syncClickUp({ actor: owner, force: true, fetchImpl });
+      await assert.rejects(getTask(owner, task.id), /not found/i);
       assert.ok((await getTask(sam, task.id)).completedAt);
+      const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [remote.id]);
+      assert.equal(copies.rows[0].n, 1);
       const events = await db.query<{ actor_user_id: string | null }>("select actor_user_id from crm.workflow_events where entity_id = $1", [task.id]);
       assert.deepEqual(events.rows, [{ actor_user_id: null }]);
       process.env.LLM_API_KEY = "llm-test";

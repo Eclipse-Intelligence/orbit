@@ -383,6 +383,108 @@ create trigger tasks_keep_workspace
 
 drop function if exists private.waiting_approvals_of_others(uuid, uuid);
 
+create or replace function private.clickup_keepers(p_workspace uuid, p_tasks uuid[], p_prefer uuid)
+returns table (task_id uuid, workspace_id uuid, workspace_name text, user_id uuid, role text, email text, full_name text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select t.id, w.id, w.name, keeper.user_id, keeper.role, p.email, p.full_name
+  from crm.tasks t
+  join crm.workspaces w on w.id = t.workspace_id
+  join lateral (
+    select m.user_id, m.role
+    from crm.workspace_members m
+    where m.workspace_id = t.workspace_id and m.user_id in (t.owner_id, t.created_by_user_id)
+    order by (m.user_id = p_prefer) desc, (m.user_id = t.owner_id) desc
+    limit 1
+  ) keeper on true
+  join crm.profiles p on p.id = keeper.user_id
+  where t.workspace_id = p_workspace and t.id = any(p_tasks);
+$$;
+
+revoke all on function private.clickup_keepers(uuid, uuid[], uuid) from public;
+grant execute on function private.clickup_keepers(uuid, uuid[], uuid) to crm_app;
+
+create or replace function private.clickup_matching_tasks(p_workspace uuid, p_clickup_task text, p_list text, p_title text)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select t.id from crm.tasks t
+  where t.workspace_id = p_workspace and t.clickup_task_id = p_clickup_task
+  union all
+  select t.id from crm.tasks t
+  where t.workspace_id = p_workspace and t.clickup_task_id is null and t.archived_at is null
+    and p_list is not null
+    and (
+      (t.clickup_sync -> 'unconfirmed' ->> 'listId' = p_list and t.clickup_sync -> 'unconfirmed' ->> 'title' = p_title)
+      or (t.clickup_list_id = p_list and t.title = p_title and t.clickup_sync ? 'creatingAt')
+    );
+$$;
+
+revoke all on function private.clickup_matching_tasks(uuid, text, text, text) from public;
+grant execute on function private.clickup_matching_tasks(uuid, text, text, text) to crm_app;
+
+create or replace function private.clickup_linked_lists(p_workspace uuid, p_limit integer)
+returns setof text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select distinct t.clickup_list_id from crm.tasks t
+  where t.workspace_id = p_workspace and t.clickup_task_id is not null and t.clickup_list_id is not null and t.archived_at is null
+  limit p_limit;
+$$;
+
+revoke all on function private.clickup_linked_lists(uuid, integer) from public;
+grant execute on function private.clickup_linked_lists(uuid, integer) to crm_app;
+
+create or replace function private.clickup_push_queue(p_workspace uuid, p_limit integer)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select t.id from crm.tasks t
+  where t.workspace_id = p_workspace and t.archived_at is null and t.clickup_list_id is not null
+    and (
+      t.clickup_task_id is null
+      or t.title is distinct from t.clickup_sync ->> 'title'
+      or t.due_at is distinct from (t.clickup_sync ->> 'dueAt')::timestamptz
+      or (t.clickup_sync ? 'dueHasTime' and t.due_has_time is distinct from (t.clickup_sync ->> 'dueHasTime')::boolean)
+      or (t.completed_at is not null) is distinct from (t.clickup_sync ->> 'done')::boolean
+    )
+  order by t.clickup_synced_at asc nulls first, t.updated_at asc
+  limit p_limit;
+$$;
+
+revoke all on function private.clickup_push_queue(uuid, integer) from public;
+grant execute on function private.clickup_push_queue(uuid, integer) to crm_app;
+
+create or replace function private.clickup_stale_tasks(p_workspace uuid, p_seconds double precision, p_limit integer)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select t.id from crm.tasks t
+  where t.workspace_id = p_workspace and t.archived_at is null and t.completed_at is null
+    and t.clickup_task_id is not null
+    and (t.clickup_synced_at is null or t.clickup_synced_at < now() - make_interval(secs => p_seconds))
+  order by t.clickup_synced_at asc nulls first
+  limit p_limit;
+$$;
+
+revoke all on function private.clickup_stale_tasks(uuid, double precision, integer) from public;
+grant execute on function private.clickup_stale_tasks(uuid, double precision, integer) to crm_app;
+
 create or replace function private.approval_waits_on_other(p_run uuid, p_user uuid, p_workspace uuid)
 returns boolean
 language sql
@@ -660,3 +762,5 @@ revoke all on function private.team_remove_records(uuid, uuid, uuid, text, text,
 grant execute on function private.team_remove_records(uuid, uuid, uuid, text, text, text) to crm_app;
 
 reset lock_timeout;
+
+create index concurrently if not exists webhook_deliveries_workspace_created_idx on crm.webhook_deliveries (workspace_id, created_at desc);

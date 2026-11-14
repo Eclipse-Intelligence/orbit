@@ -284,7 +284,8 @@ describe("who sees a preparation", () => {
 
   it("shows it only to the person who prepared it: never the creator, a tagged person or an admin", async () => {
     assert.ok((await taskDetail(sam, shared)).preparation);
-    for (const viewer of [mark, priya, anna]) {
+    await assert.rejects(taskDetail(anna, shared), /not found/i);
+    for (const viewer of [mark, priya]) {
       const detail = await taskDetail(viewer, shared);
       assert.equal(detail.task.id, shared);
       assert.equal(detail.preparation, null, viewer.email);
@@ -314,11 +315,14 @@ describe("who sees a preparation", () => {
   });
 
   it("gives an agent token none, and refuses it the table", async () => {
-    const detail = await taskDetail(agent, shared);
+    await assert.rejects(taskDetail(agent, shared), /not found/i);
+    const own = (await createTask(agent, { title: "Call Jane Cooper about the agent's pilot", ownerId: sam.userId, contactId: jane })).body.task.id;
+    await prepareTask(sam, own, { fetchImpl: model(answer).fetchImpl });
+    const detail = await taskDetail(agent, own);
     assert.equal(detail.preparation, null);
     assert.equal(detail.mail, null);
     await assert.rejects(withActor(agent, (db) => db.query("select * from crm.task_preparations")), /permission denied/);
-    const asAgent = await mcpCall(agent, "get_next_action", { id: shared });
+    const asAgent = await mcpCall(agent, "get_next_action", { id: own });
     assert.equal(asAgent.error, false);
     assert.equal((JSON.parse(asAgent.text) as TaskDetail).preparation, null);
     assert.ok(!asAgent.names.includes("prepare_next_action"));

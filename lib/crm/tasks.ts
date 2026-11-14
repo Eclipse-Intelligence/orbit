@@ -358,8 +358,8 @@ function taskAlerts(db: Db, actor: Actor, before: Task | null, task: Task, prove
   }
 }
 
-export function canChangeTask(actor: Actor, task: { ownerId: string | null; createdByUserId: string | null }) {
-  if (actor.type !== "user") return true;
+export function canChangeTask(actor: Actor, task: { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null }) {
+  if (actor.type !== "user") return Boolean(task.createdByAgentId) && task.createdByAgentId === actor.agentId;
   return task.ownerId === actor.userId || task.createdByUserId === actor.userId;
 }
 
@@ -401,7 +401,7 @@ async function keepAssignerTagged(
   provenance: Provenance | undefined,
 ) {
   if (actor.type !== "user" || nextOwner === actor.userId || nextOwner === previousOwner) return false;
-  if (nextOwner === null && canChangeTask(actor, { ownerId: null, createdByUserId: task.createdByUserId })) return false;
+  if (nextOwner === null && canChangeTask(actor, { ownerId: null, createdByUserId: task.createdByUserId, createdByAgentId: null })) return false;
   return (await tagInDb(db, actor, task, [actor.userId], provenance)).length > 0;
 }
 
@@ -538,7 +538,7 @@ async function applyTask(
     },
   );
   const settled = write.completedAt === undefined && write.completed !== undefined && Boolean(current.completed_at) === write.completed;
-  if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
+  if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange(write);
   const completedAt =
     write.completedAt !== undefined
       ? write.completedAt !== null && current.completed_at
@@ -568,7 +568,7 @@ async function applyTask(
   const before = mapTask(current);
   if (change.sets.length === 0) return { task: (await withMailThreadsInDb(db, actor, [before]))[0], changed: false };
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
-  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
+  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id });
   let taggedAssigner = false;
   if (reassigning && !options.restoring && !silent(provenance)) {
     taggedAssigner = await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
@@ -696,7 +696,7 @@ export async function placeTask(
   return withActor(actor, async (db) => {
     const current = await readTask(db, actor, id);
     if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
-    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange();
     if (current.completed_at) throw new CrmError("invalid_input", "This task is done. Reopen it to move it.", 400);
     const input = placementWrite(current, actor, placement);
     if (Object.keys(input).length === 0) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0], changed: false };
@@ -717,7 +717,7 @@ export async function scheduleTaskInDb(
   await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
   const current = await readTask(db, actor, id);
   if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
-  if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+  if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange();
   const refusal = refuse(mapTask(current));
   if (refusal) throw new CrmError("invalid_input", refusal, 400, { field: "schedule" });
   const placedByPerson = Boolean(current.due_has_time && current.due_at && current.scheduled_by === "person");
@@ -906,7 +906,7 @@ export async function completeTask(
       await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
       const current = await readTask(db, actor, id);
       if (!current || current.archived_at) throw notFound("task");
-      if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
+      if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
         return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
       }
       const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
@@ -929,7 +929,7 @@ export async function reopenTask(
       await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
       const current = await readTask(db, actor, id);
       if (!current) throw notFound("task");
-      if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+      if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange();
       if (!current.completed_at || current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
       const updated = await applyTask(db, actor, current, prepareTask({ completed: false }, "patch"), provenance);
       return { task: updated.task };

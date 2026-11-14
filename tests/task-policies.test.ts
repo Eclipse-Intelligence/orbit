@@ -277,3 +277,46 @@ describe("only your own tasks", () => {
     await assert.rejects(getTask(mark, owned.id), hidden);
   });
 });
+
+describe("raw writes that skip the app", () => {
+  it("refuses changing a task's creator", async () => {
+    const task = (await createTask(mark, { title: "Mine to keep" })).body.task;
+    await rejectsAsUser(mark.userId, "update crm.tasks set created_by_user_id = $2 where id = $1", [task.id, priya.userId]);
+    await rejectsAsUser(mark.userId, "update crm.tasks set created_by_user_id = null, created_by_agent_id = $2 where id = $1", [task.id, agent.agentId]);
+  });
+
+  it("refuses an audit row in someone else's name", async () => {
+    await rejectsAsUser(
+      priya.userId,
+      `insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, operation)
+       values ($1, 'company.updated', 'company', gen_random_uuid(), 'user', $2, 'forged')`,
+      [mark.workspaceId, mark.userId],
+    );
+    await rejectsAsUser(
+      priya.userId,
+      `insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, operation)
+       values ($1, 'company.updated', 'company', gen_random_uuid(), 'system', 'forged')`,
+      [mark.workspaceId],
+    );
+  });
+
+  it("refuses a forged webhook delivery and webhook changes by a member", async () => {
+    const endpoint = await admin().query<{ id: string }>(
+      "insert into crm.webhook_endpoints (workspace_id, url, secret, events, created_by_user_id) values ($1, 'https://hooks.example.com/forged', 's', array['*'], $2) returning id",
+      [mark.workspaceId, mark.userId],
+    );
+    await rejectsAsUser(
+      priya.userId,
+      `insert into crm.webhook_deliveries (workspace_id, endpoint_id, event_id, event_type, payload)
+       values ($1, $2, gen_random_uuid(), 'company.updated', '{"entity": {"type": "company"}}'::jsonb)`,
+      [mark.workspaceId, endpoint.rows[0].id],
+    );
+    await rejectsAsUser(
+      priya.userId,
+      "insert into crm.webhook_endpoints (workspace_id, url, secret, events, created_by_user_id) values ($1, 'https://hooks.example.com/member', 's', array['*'], $2)",
+      [mark.workspaceId, priya.userId],
+    );
+    const changed = await queryAsUser(priya.userId, "update crm.webhook_endpoints set url = 'https://evil.example.com' where id = $1 returning id", [endpoint.rows[0].id]);
+    assert.equal(changed.length, 0);
+  });
+});

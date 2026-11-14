@@ -139,7 +139,7 @@ describe("task discussions", () => {
       },
       { conversationId: null, count: 0, page: null },
     );
-    const opened = await Promise.all([mark, sam, ada, mark, sam, ada].map((actor) => openDiscussion(actor, { kind: "task", id: task.id })));
+    const opened = await Promise.all([mark, sam, mark, sam].map((actor) => openDiscussion(actor, { kind: "task", id: task.id })));
     assert.equal(new Set(opened.map((item) => item.conversationId)).size, 1);
     const rows = await sql<{ count: number }>("select count(*)::int as count from crm.chat_conversations where task_id = $1", [task.id]);
     assert.equal(rows[0].count, 1);
@@ -148,14 +148,14 @@ describe("task discussions", () => {
     assert.deepEqual(after.page?.messages, []);
   });
 
-  it("shows the discussion to the owner, the creator and admins, and no one else", async () => {
+  it("shows the discussion to the owner and the creator, and no one else, admins included", async () => {
     const task = await newTask("Draft Samsara renewal terms");
     const { conversationId } = await openDiscussion(sam, {
       kind: "task",
       id: task.id,
     });
     await send(sam, conversationId, "Starting on this today.");
-    for (const actor of [mark, sam, ada]) {
+    for (const actor of [mark, sam]) {
       const discussion = await getDiscussion(actor, {
         kind: "task",
         id: task.id,
@@ -167,6 +167,7 @@ describe("task discussions", () => {
       );
     }
     await refused(getDiscussion(priya, { kind: "task", id: task.id }), /Task not found/);
+    await refused(getDiscussion(ada, { kind: "task", id: task.id }), /Task not found/);
     await refused(openDiscussion(priya, { kind: "task", id: task.id }), /Task not found/);
     await refused(listMessages(priya, conversationId), /Conversation not found/);
     await refused(postMessage(priya, { conversationId, body: "Let me in" }), /Conversation not found/);
@@ -184,14 +185,14 @@ describe("task discussions", () => {
     });
     const first = await send(sam, conversationId, `${tag(priya)} can you check the discount maths? ${tag(ada)} too.`);
 
-    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id]?.sort(), [mark.userId, priya.userId].sort());
+    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id]?.sort(), [mark.userId, priya.userId, ada.userId].sort());
     const audit = await sql<{ user_id: string; source: string }>(
       "select changes->'participant'->>'userId' as user_id, source from crm.audit_events where entity_id = $1 and event_type = 'task.participant_added' and actor_user_id = $2",
       [task.id, sam.userId],
     );
     assert.deepEqual(
       audit.map((row) => [row.user_id, row.source]).sort(),
-      [[priya.userId, "chat"]],
+      [[ada.userId, "chat"], [priya.userId, "chat"]].sort(),
     );
 
     assert.deepEqual(await alertsFor(priya), [
@@ -204,7 +205,7 @@ describe("task discussions", () => {
     ]);
     assert.deepEqual(
       (await alertsFor(ada)).map((alert) => [alert.title, alert.href]),
-      [["Sam Okafor mentioned you in a task", opened(taskPanelHref(task.id))]],
+      [["Sam Okafor tagged you in a task", opened(taskPanelHref(task.id, { tagged: true }))]],
     );
     assert.deepEqual(await alertsFor(mark), []);
 
@@ -273,12 +274,12 @@ describe("task discussions", () => {
     });
     await send(sam, conversationId, "Hello");
     await chatWorkSettled();
-    for (const person of [mark, sam, ada])
+    for (const person of [mark, sam])
       assert.ok(
         chatEvents(person.userId).some((event) => event.type === "message"),
         person.fullName ?? "",
       );
-    for (const person of [priya, olly]) assert.deepEqual(chatEvents(person.userId), [], person.fullName ?? "");
+    for (const person of [priya, olly, ada]) assert.deepEqual(chatEvents(person.userId), [], person.fullName ?? "");
     await send(sam, conversationId, `${tag(priya)} welcome`);
     await chatWorkSettled();
     await until(() => chatEvents(priya.userId).some((event) => event.type === "message" && event.message.body.includes("welcome")), "the tagged person's live event");
@@ -361,9 +362,8 @@ describe("task discussions", () => {
     await sql("update crm.tasks set workspace_id = $2 where id = $1", [task.id, other.workspaceId]);
     await refused(getDiscussion(priya, { kind: "task", id: task.id }), /Task not found/);
     assert.equal((await getDiscussion(mark, { kind: "task", id: task.id })).count, 1);
-    const moved = await getDiscussion(other, { kind: "task", id: task.id });
-    assert.equal(moved.conversationId, conversationId);
-    assert.equal(moved.count, 1);
+    assert.equal((await getDiscussion(mark, { kind: "task", id: task.id })).conversationId, conversationId);
+    await refused(getDiscussion(other, { kind: "task", id: task.id }), /Task not found/);
     await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [other.workspaceId, mark.userId]);
   });
 });

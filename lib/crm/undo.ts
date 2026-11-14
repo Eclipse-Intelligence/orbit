@@ -547,7 +547,7 @@ async function describeEvent(
   if (undone) return refuse(summary, "This change has already been undone.");
   if (!current) return refuse(summary, notFoundMessage(noun));
   if (!hasScope(actor.scopes, SCOPES[entity])) return refuse(summary, `You don't have permission to change this ${noun}.`);
-  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null })) {
+  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null })) {
     return refuse(summary, "Can't undo: you're only tagged on this task now.");
   }
   if (check) return refuse(summary, check);
