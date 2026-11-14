@@ -10,7 +10,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { createProof } from "@/lib/crm/proof";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { createTask, updateTask } from "@/lib/crm/tasks";
+import { completeTask, createTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool } from "@/lib/db/pool";
@@ -176,10 +176,10 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
         companyId: ref("company", task.company),
         contactId: ref("contact", task.contact),
         ...(task.owner === "colleague" ? { ownerId: world.colleague.userId } : {}),
-        completed: task.done ?? false,
       },
       { provenance: SEED },
     );
+    if (task.done) await completeTask(actor, created.body.task.id, { provenance: SEED });
     ids.set(`task:${task.title}`, created.body.task.id);
   }
   for (const activity of seed.activities ?? []) {
