@@ -1,4 +1,4 @@
-import { appTimeZone, dayKeyIn } from "@/lib/time";
+import { appTimeZone, dayKeyIn, zonedParts } from "@/lib/time";
 
 type CalendarDay = { value: string; day: number; inMonth: boolean };
 
@@ -91,21 +91,39 @@ export function formatDateTimeLabel(value: string, now = new Date()) {
   return `${formatDateLabel(parts.date, now)}, ${parts.time}`;
 }
 
-export function nextQuarterHour(now = new Date()) {
-  const minutes = now.getHours() * 60 + now.getMinutes();
+function wallClock(now: Date, timeZone: string) {
+  const parts = zonedParts(now, timeZone);
+  return { day: Date.UTC(parts.year, parts.month - 1, parts.day), minutes: parts.hour * 60 + parts.minute };
+}
+
+function utcDayValue(time: number) {
+  const date = new Date(time);
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+export function todayValue(now = new Date(), timeZone = appTimeZone()) {
+  return dayKeyIn(now, timeZone);
+}
+
+export function currentTimeValue(now = new Date(), timeZone = appTimeZone()) {
+  const { minutes } = wallClock(now, timeZone);
+  return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+}
+
+export function nextQuarterHour(now = new Date(), timeZone = appTimeZone()) {
+  const { minutes } = wallClock(now, timeZone);
   const next = Math.ceil((minutes + 1) / 15) * 15;
   if (next >= 24 * 60) return null;
   return `${pad(Math.floor(next / 60))}:${pad(next % 60)}`;
 }
 
-export function quickDates(now = new Date()) {
-  const today = dateValue(now);
-  const tomorrow = dateValue(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
-  const toMonday = ((8 - now.getDay()) % 7) || 7;
-  const nextWeek = dateValue(new Date(now.getFullYear(), now.getMonth(), now.getDate() + toMonday));
+export function quickDates(now = new Date(), timeZone = appTimeZone()) {
+  const { day } = wallClock(now, timeZone);
+  const daysAhead = (count: number) => utcDayValue(day + count * 86_400_000);
+  const toMonday = ((8 - new Date(day).getUTCDay()) % 7) || 7;
   return [
-    { label: "Today", value: today },
-    { label: "Tomorrow", value: tomorrow },
-    { label: "Next Monday", value: nextWeek },
+    { label: "Today", value: daysAhead(0) },
+    { label: "Tomorrow", value: daysAhead(1) },
+    { label: "Next Monday", value: daysAhead(toMonday) },
   ];
 }

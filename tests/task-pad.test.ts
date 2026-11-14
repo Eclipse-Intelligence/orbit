@@ -187,6 +187,51 @@ describe("task pad parser", () => {
     assert.deepEqual(nameMarks("Visit Acmeworks", ["Acme"]), []);
   });
 
+  it("needs a stronger signal before reading numbers as dates or times, and asks the AI when unsure", () => {
+    const monday = new Date("2026-11-16T10:30:00Z");
+    const read = (text: string) => {
+      const result = parseTaskText(text, monday);
+      return { title: result.title, due: result.due, remindMinutes: result.remindMinutes, durationMinutes: result.durationMinutes, unsure: result.unsure };
+    };
+    const plain = (title: string, unsure = false) => ({ title, due: null, remindMinutes: null, durationMinutes: null, unsure });
+    const at = (title: string, due: string, durationMinutes: number | null = null, unsure = false) => ({ title, due, remindMinutes: null, durationMinutes, unsure });
+    assert.deepEqual(read("Review 24/7 support plan"), plain("Review 24/7 support plan"));
+    assert.deepEqual(read("Read version 2.10 notes"), plain("Read version 2.10 notes"));
+    assert.deepEqual(read("Call Sam 2.30"), plain("Call Sam 2.30", true));
+    assert.deepEqual(read("Send 1/2 page summary"), plain("Send 1/2 page summary", true));
+    assert.deepEqual(read("Call Sam sat 3pm"), at("Call Sam", "2026-11-21T15:00"));
+    assert.deepEqual(read("Call Sam 3pm sat"), at("Call Sam", "2026-11-21T15:00"));
+    assert.deepEqual(read("Call Sam on sat"), at("Call Sam", "2026-11-21"));
+    assert.deepEqual(read("Call Sam next sun"), at("Call Sam", "2026-11-22"));
+    assert.deepEqual(read("Call Sam weds"), at("Call Sam", "2026-11-18"));
+    assert.deepEqual(read("I sat down with Sunil"), plain("I sat down with Sunil"));
+    assert.deepEqual(read("Call Sam tomorrow 9"), at("Call Sam", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Call Sam tomorrow at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Call Sam 9 tomorrow"), at("Call Sam", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Call Sam at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Call Sam at 17"), at("Call Sam", "2026-11-16T17:00"));
+    assert.deepEqual(read("Call Sam tomorrow 2.30"), at("Call Sam", "2026-11-17T14:30", null, true));
+    assert.deepEqual(read("Call Sam tomorrow 3"), at("Call Sam", "2026-11-17T15:00", null, true));
+    assert.deepEqual(read("Call Sam at 3"), at("Call Sam", "2026-11-16T15:00", null, true));
+    assert.deepEqual(read("Call Sam 1:30"), at("Call Sam", "2026-11-16T13:30", null, true));
+    assert.deepEqual(read("Call Sam at 3 sat"), at("Call Sam", "2026-11-21T15:00", null, true));
+    assert.deepEqual(read("Lunch with Sam 1 friday"), at("Lunch with Sam", "2026-11-20T13:00", null, true));
+    assert.deepEqual(read("Review top 10 today"), at("Review top 10", "2026-11-16"));
+    assert.deepEqual(read("Order 10 monday"), at("Order 10", "2026-11-23"));
+    assert.deepEqual(read("Room 12 friday"), at("Room 12", "2026-11-20"));
+    assert.deepEqual(read("Chapter 7 tomorrow"), at("Chapter 7", "2026-11-17"));
+    assert.deepEqual(read("Meet at 10 Downing Street"), plain("Meet at 10 Downing Street"));
+    assert.deepEqual(read("Call Sam 8am-6pm"), at("Call Sam", "2026-11-17T08:00"));
+    assert.deepEqual(read("Call 020 7946 0-5pm"), plain("Call 020 7946 0-5pm", true));
+    assert.deepEqual(read("Call Sam 3-4pm"), at("Call Sam", "2026-11-16T15:00", 60));
+    assert.deepEqual(read("Call Sam 11-1pm"), at("Call Sam", "2026-11-16T11:00", 120));
+    assert.deepEqual(read("Call Sam remind me 15 mins before"), plain("Call Sam remind me 15 mins before", true));
+    assert.deepEqual(read("Follow up 22/11"), at("Follow up", "2026-11-22", null, true));
+    assert.deepEqual(read("Follow up 3/4"), at("Follow up", "2027-04-03", null, true));
+    assert.deepEqual(read("Follow up on 3/4"), at("Follow up", "2027-04-03"));
+    assert.deepEqual(read("Call Sam on 3/4/27"), at("Call Sam", "2027-04-03"));
+  });
+
   it("flags leftovers it can't read so the AI can help", () => {
     const result = parse("Prep for Thursday after next");
     assert.equal(result.unsure, true);

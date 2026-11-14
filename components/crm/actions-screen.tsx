@@ -217,7 +217,7 @@ export default function ActionsScreen({
       </div>
     ) : undefined;
   const colleagues = useMemo(() => members.map((member) => ({ id: member.id, name: member.name })), [members]);
-  const { done, message, setMessage, complete: markDone, release, settle, abandon, undoLast, remind } = useTaskDone(allTasks);
+  const { done, message, setMessage, complete: markDone, release, settle, abandon, undoLast, remind, reopen } = useTaskDone(allTasks);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selected, setSelected] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -375,7 +375,7 @@ export default function ActionsScreen({
     if (assigningIds.has(id)) return;
     setMessage(null);
     setAssigningIds((current) => new Set(current).add(id));
-    const result = await assignTaskAction(id, ownerId);
+    const result = await assignTaskAction(id, ownerId).catch(() => ({ error: "Couldn't assign the task. Try again." }));
     setAssigningIds((current) => {
       const next = new Set(current);
       next.delete(id);
@@ -430,9 +430,9 @@ export default function ActionsScreen({
     setExpandedId(next);
   }
 
-  const latest = useRef({ toggle, complete, completeFromPanel, remind, openPanel, assign, concluding });
+  const latest = useRef({ toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, concluding });
   useEffect(() => {
-    latest.current = { toggle, complete, completeFromPanel, remind, openPanel, assign, concluding };
+    latest.current = { toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, concluding };
   });
   const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
   const onComplete = useCallback((task: Task, via?: "swipe") => latest.current.complete(task, via), []);
@@ -445,6 +445,7 @@ export default function ActionsScreen({
     [],
   );
   const onRemind = useCallback((task: Task) => latest.current.remind(task), []);
+  const onReopen = useCallback((task: Task) => void latest.current.reopen(task), []);
   const onOpen = useCallback((task: Task) => latest.current.openPanel(task.id), []);
   const onAssign = useCallback((task: Task, ownerId: string) => void latest.current.assign(task.id, ownerId), []);
   const onPanelComplete = useCallback((task: Task) => latest.current.completeFromPanel(task), []);
@@ -639,6 +640,7 @@ export default function ActionsScreen({
                 onToggle={onToggle}
                 onComplete={onComplete}
                 onRemind={onRemind}
+                onReopen={onReopen}
                 canComplete={view !== "completed" && canChange(entry.task)}
                 onOpen={onOpen}
                 comments={allDiscussions[entry.task.id] ?? 0}
@@ -671,6 +673,7 @@ export default function ActionsScreen({
         modal={panelModal}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}
+        onReopen={onReopen}
         outcome={outcome?.place === "panel" && outcome.task.id === (panelTask ?? kept)?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id, outcomeId: outcome.outcomeId } : null}
         outcomeHandlers={outcomeHandlers}
       />

@@ -2707,12 +2707,12 @@ const TOOL_LIST: AssistantTool[] = [
         unread: "Mark unread",
         flag: "Flag",
         unflag: "Remove the flag from",
-        snooze: "Snooze",
+        snooze: "Remind me about",
         remind_if_no_reply: "Remind me if there's no reply to",
       };
       return {
         title: `${verb[str(args.action)] ?? "Update"} ${count} ${count === 1 ? "conversation" : "conversations"}`,
-        lines: [str(args.until) ? `Until ${formatDateTimeLabel(str(args.until))}` : "", ...shown, ...more, str(args.summary) ? `Why: ${str(args.summary)}` : ""],
+        lines: [str(args.until) ? `${str(args.action) === "snooze" ? "On" : "Until"} ${formatDateTimeLabel(str(args.until))}` : "", ...shown, ...more, str(args.summary) ? `Why: ${str(args.summary)}` : ""],
       };
     },
     run: async (actor, args, context) => {

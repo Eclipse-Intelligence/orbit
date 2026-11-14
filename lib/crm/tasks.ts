@@ -62,6 +62,7 @@ const TASK_SQL = `
     co.name as company_name,
     nullif(trim(co.phone), '') as company_phone,
     t.contact_id,
+    ct.company_id as contact_company_id,
     coalesce(
       nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''),
       ct.email,
@@ -110,6 +111,7 @@ type TaskRow = {
   company_name: string | null;
   company_phone: string | null;
   contact_id: string | null;
+  contact_company_id: string | null;
   contact_name: string | null;
   contact_first_name: string | null;
   contact_last_name: string | null;
@@ -169,6 +171,7 @@ function mapTask(row: TaskRow): Task {
     companyName: row.company_name,
     companyPhone: row.company_phone,
     contactId: row.contact_id,
+    contactCompanyId: row.contact_id ? row.contact_company_id : null,
     contactName: row.contact_name,
     contactFirstName: row.contact_first_name,
     contactLastName: row.contact_last_name,

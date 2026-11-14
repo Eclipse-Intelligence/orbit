@@ -9,8 +9,10 @@ import { parseInput, taskMutationSchema } from "@/lib/crm/validation";
 import {
   formatDateTimeLabel,
   monthGrid,
+  currentTimeValue,
   nextQuarterHour,
   quickDates,
+  todayValue,
   splitDateTime,
 } from "@/lib/date-input";
 import { createUser, resetDatabase } from "./helpers";
@@ -46,15 +48,34 @@ describe("date picker helpers", () => {
   });
 
   it("offers today, tomorrow and next Monday, and rounds times up", () => {
-    const thursday = new Date(2026, 9, 15, 16, 7);
+    const thursday = new Date("2026-10-15T15:07:00Z");
     assert.deepEqual(
       quickDates(thursday).map((quick) => quick.value),
       ["2026-10-15", "2026-10-16", "2026-10-19"],
     );
-    assert.equal(quickDates(new Date(2026, 9, 19, 10))[2].value, "2026-10-26");
+    assert.equal(quickDates(new Date("2026-10-19T09:00:00Z"))[2].value, "2026-10-26");
     assert.equal(nextQuarterHour(thursday), "16:15");
-    assert.equal(nextQuarterHour(new Date(2026, 9, 15, 16, 15)), "16:30");
-    assert.equal(nextQuarterHour(new Date(2026, 9, 15, 23, 50)), null);
+    assert.equal(nextQuarterHour(new Date("2026-10-15T15:15:00Z")), "16:30");
+    assert.equal(nextQuarterHour(new Date("2026-10-15T22:50:00Z")), null);
+  });
+
+  it("reads Today, Tomorrow and the next free time in London, whatever the device's zone", () => {
+    const zone = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      const londonAfterMidnight = new Date("2026-10-15T23:30:00Z");
+      assert.deepEqual(
+        quickDates(londonAfterMidnight).map((quick) => quick.value),
+        ["2026-10-16", "2026-10-17", "2026-10-19"],
+      );
+      assert.equal(todayValue(londonAfterMidnight), "2026-10-16");
+      assert.equal(nextQuarterHour(londonAfterMidnight), "00:45");
+      assert.equal(currentTimeValue(londonAfterMidnight), "00:30");
+      assert.equal(quickDates(new Date("2026-03-29T00:30:00Z"))[0].value, "2026-03-29");
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
   });
 });
 

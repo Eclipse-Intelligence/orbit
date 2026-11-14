@@ -1,4 +1,6 @@
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
+import { MAX_TASK_DURATION } from "@/lib/crm/task-time";
+import { onWorkingDay, snoozeDetail } from "@/lib/crm/task-snooze";
 
 export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" | "ask" };
 
@@ -6,6 +8,7 @@ type PadParse = {
   title: string;
   due: string | null;
   remindMinutes: number | null;
+  durationMinutes: number | null;
   unsure: boolean;
   marks: PadMark[];
 };
@@ -15,7 +18,11 @@ type Span = { start: number; end: number; kind: "when" | "reminder" };
 
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
-const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri)";
+const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri)";
+const WEEKEND_SHORT = "(sat|sun)";
+const MEETING_CUE = /\b(?:call|ring|phone|meet|meeting|chat|catch\s+up|catch-up|demo|interview|lunch|coffee|at)\b/i;
+const CLOCK = "(?:\\d{1,2}(?:[:.]\\d{2})?\\s*(?:am|pm)\\b|\\d{1,2}:\\d{2}\\b|noon\\b|midday\\b|midnight\\b)";
+const DAY_WORD = "(?:today|tonight|tomorrow|tmrw|tmr|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri|sat|sun)";
 const MONTH = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
 const NUMBER_WORDS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, ten: 10, fifteen: 15, thirty: 30 };
 const LEAD = "(?:\\b(?:on|by|due|for|at|this)\\s+)?";
@@ -23,7 +30,7 @@ const NOT_MONEY = "(?<![£$€]\\s*)(?<!\\b(?:gbp|usd|eur)\\s*)";
 const NOT_CURRENCY_AFTER = "(?!\\s*(?:gbp|usd|eur)\\b)";
 
 const TEMPORAL =
-  /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri)\b|\b(january|february|march|april|june|july|august|september|october|november|december|jan|feb|apr|jun|jul|aug|sept?|oct|nov|dec)\b|\b(today|tomorrow|tonight|morning|afternoon|evening|noon|midday|week|weekend|month|fortnight|remind|reminder|after next|fortnight)\b|\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b\d{1,2}(st|nd|rd|th)\b/i;
+  /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri)\b|\b(january|february|march|april|june|july|august|september|october|november|december|jan|feb|apr|jun|jul|aug|sept?|oct|nov|dec)\b|\b(today|tomorrow|tonight|morning|afternoon|evening|noon|midday|week|weekend|month|fortnight|remind|reminder|after next|fortnight)\b|\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b\d{1,2}(st|nd|rd|th)\b/i;
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
@@ -96,6 +103,11 @@ export function londonParts(now: Date) {
   return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute") };
 }
 
+function guessable(hour: string, meridiem: string | undefined) {
+  const value = Number(hour);
+  return Boolean(meridiem) || hour.length === 2 || value === 0 || value > 6;
+}
+
 function cleanTitle(text: string, spans: Span[]) {
   let result = "";
   let last = 0;
@@ -129,7 +141,20 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     time: { hour: number; minute: number } | null;
     exact: number | null;
     remind: number | null;
-  } = { date: null, time: null, exact: null, remind: null };
+    duration: number | null;
+  } = { date: null, time: null, exact: null, remind: null, duration: null };
+  let ambiguous = false;
+  const clock = (hour: string, minute: number, meridiem: string | undefined) => {
+    if (guessable(hour, meridiem)) return toHour(Number(hour), minute, meridiem);
+    ambiguous = true;
+    return toHour(Number(hour) + 12, minute, undefined);
+  };
+  const bareHour = (hour: string) => {
+    const value = Number(hour);
+    if (value < 1 || value > 23) return null;
+    if (value <= 12) ambiguous = true;
+    return { hour: value <= 6 ? value + 12 : value, minute: 0 };
+  };
 
   const take = (
     pattern: RegExp,
@@ -195,8 +220,14 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(new RegExp(`${LEAD}\\b${MONTH}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, "i"), (match) =>
     setDate({ year: match[3] ? Number(match[3]) : today.year, month: monthIndex(match[1]) + 1, day: Number(match[2]) }, Boolean(match[3])),
   );
-  take(new RegExp(`${LEAD}\\b(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?\\b`, "i"), (match) => {
+  take(new RegExp(`${LEAD}(?<![\\d/.])\\b(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?\\b(?![/.]\\d)`, "i"), (match) => {
+    if (match[1] === "24" && match[2] === "7" && !match[3]) return false;
     const year = match[3] ? (match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3])) : today.year;
+    const led = /^\s*(?:on|by|due|for|this)\s/i.test(match[0]);
+    const after = text.slice(match.index + match[0].length);
+    const closing = /^\s*(?:$|[,;.!?]|(?:at\s+)?\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?\b|at\b|remind)/i.test(after);
+    if (!match[3] && !led && valid({ year, month: Number(match[2]), day: Number(match[1]) })) ambiguous = true;
+    if (!match[3] && !led && !closing) return false;
     return setDate({ year, month: Number(match[2]), day: Number(match[1]) }, Boolean(match[3]));
   });
   take(new RegExp(`${LEAD}\\b(?:(next|this|coming)\\s+)?${WEEKDAY}\\b`, "i"), (match) => {
@@ -204,16 +235,68 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (target < 0) return false;
     found.date = addDays(today, ((target - weekday(today) + 7) % 7) || 7);
   });
-  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2})(?::|\\.)(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}`, "i"), (match) => {
-    const parsed = toHour(Number(match[1]), Number(match[2]), match[3]);
+  const weekendDay = (match: RegExpExecArray) => {
+    found.date = addDays(today, ((weekdayIndex(match[1]) - weekday(today) + 7) % 7) || 7);
+  };
+  take(new RegExp(`\\b(?:on|by|due|for|until|this|next|coming)\\s+${WEEKEND_SHORT}\\b`, "i"), weekendDay);
+  take(new RegExp(`${LEAD}\\b${WEEKEND_SHORT}\\b(?=\\s*,?\\s*(?:(?:at\\s+)?${CLOCK}|at\\s+\\d{1,2}\\b))`, "i"), weekendDay);
+  take(new RegExp(`(?<=(?:${CLOCK}|\\bat\\s+\\d{1,2})\\s*,?\\s*)(?:on\\s+)?\\b${WEEKEND_SHORT}\\b`, "i"), weekendDay);
+  take(
+    new RegExp(`\\b(?:at\\s+|from\\s+)?${NOT_MONEY}(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*-\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)\\b`, "i"),
+    (match) => {
+      const end = toHour(Number(match[4]), Number(match[5] ?? 0), match[6]);
+      if (!end) return false;
+      const startHour = Number(match[1]);
+      if (startHour < 1) return false;
+      const startMinute = Number(match[2] ?? 0);
+      const later = toHour(startHour, startMinute, match[3] ?? match[6]);
+      const start = match[3] || (later && later.hour * 60 + later.minute < end.hour * 60 + end.minute) ? later : toHour(startHour, startMinute, "am");
+      if (!start) return false;
+      const minutes = end.hour * 60 + end.minute - (start.hour * 60 + start.minute);
+      if (minutes <= 0) return false;
+      found.time = start;
+      found.duration = minutes <= MAX_TASK_DURATION ? minutes : null;
+    },
+  );
+  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2}):(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}`, "i"), (match) => {
+    const parsed = clock(match[1], Number(match[2]), match[3]);
     if (!parsed) return false;
     found.time = parsed;
   });
-  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2})\\s*(am|pm)\\b`, "i"), (match) => {
+  take(
+    new RegExp(
+      `(?:\\bat\\s+|(?<=\\b${DAY_WORD}\\s+))${NOT_MONEY}(\\d{1,2})\\.(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}|\\b${NOT_MONEY}(\\d{1,2})\\.(\\d{2})\\s*(am|pm)\\b`,
+      "i",
+    ),
+    (match) => {
+      const parsed = clock(match[1] ?? match[4], Number(match[2] ?? match[5]), match[3] ?? match[6]);
+      if (!parsed) return false;
+      found.time = parsed;
+    },
+  );
+  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(?<!\\d\\s*-\\s*)(\\d{1,2})\\s*(am|pm)\\b`, "i"), (match) => {
     const parsed = toHour(Number(match[1]), 0, match[2]);
     if (!parsed) return false;
     found.time = parsed;
   });
+  take(
+    new RegExp(`(?:(?<=\\b${DAY_WORD}\\s+)(?:at\\s+)?|\\bat\\s+)${NOT_MONEY}(\\d{1,2})(?=\\s*(?:$|[,;!?]|\\.(?!\\d)|and\\b|remind|(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b))`, "i"),
+    (match) => {
+      if (found.time) return false;
+      const parsed = bareHour(match[1]);
+      if (!parsed) return false;
+      found.time = parsed;
+    },
+  );
+  take(
+    new RegExp(`(?<![\\d£$€.,:/]\\s?)\\b${NOT_MONEY}(\\d{1,2})(?=\\s+(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b)`, "i"),
+    (match) => {
+      if (found.time || !MEETING_CUE.test(text.slice(0, match.index))) return false;
+      const parsed = bareHour(match[1]);
+      if (!parsed) return false;
+      found.time = parsed;
+    },
+  );
   take(/\b(?:at\s+)?(noon|midday|midnight)\b/i, (match) => {
     found.time = match[1].toLowerCase() === "midnight" ? { hour: 0, minute: 0 } : { hour: 12, minute: 0 };
   });
@@ -241,8 +324,10 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     due = time ? `${date}T${pad(time.hour)}:${pad(time.minute)}` : date;
   }
 
-  const title = cleanTitle(text, spans);
-  const marks = spans
+  const kept = due ? spans : spans.filter((span) => span.kind !== "reminder");
+  const title = cleanTitle(text, kept);
+  if (/(?<![£$€\d.]\s*)\b\d{1,2}\.[0-5]\d\b(?!\s*(?:gbp|usd|eur)\b)/i.test(title) && !/\b(?:v|ver|version|release)\s*\d/i.test(title)) ambiguous = true;
+  const marks = kept
     .filter((span) => span.kind === "when" || due)
     .map((span) => {
       const lead = /^[\s,;]*(?:(?:and|on|by|due|for|at|this)\s+)?/i.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
@@ -251,7 +336,14 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     })
     .filter((mark) => mark.end > mark.start)
     .sort((a, b) => a.start - b.start);
-  return { title, due, remindMinutes: due ? found.remind : null, unsure: TEMPORAL.test(title), marks };
+  return {
+    title,
+    due,
+    remindMinutes: due ? found.remind : null,
+    durationMinutes: due && found.time ? found.duration : null,
+    unsure: ambiguous || TEMPORAL.test(title),
+    marks,
+  };
 }
 
 export function stripMention(text: string, caret: number) {
@@ -411,6 +503,77 @@ const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "num
 
 export function padDueHasTime(due: string | null | undefined) {
   return Boolean(due && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(due));
+}
+
+type LinkedTask = {
+  companyId: string | null;
+  contactId: string | null;
+  contactCompanyId?: string | null;
+  contactName?: string | null;
+  opportunityId: string | null;
+  opportunityName?: string | null;
+};
+type LinkPick = { id: string; company?: PadRef | null } | null;
+type Relink = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
+
+export function relinkChange(task: LinkedTask, kind: "company" | "contact" | "opportunity", option: LinkPick): Relink {
+  const contactCompany = task.contactId ? (task.contactCompanyId === undefined ? task.companyId : task.contactCompanyId) : null;
+  if (kind === "company") {
+    const companyId = option?.id ?? null;
+    if (!companyId || companyId === task.companyId) return { companyId };
+    return {
+      companyId,
+      ...(task.opportunityId ? { opportunityId: null } : {}),
+      ...(contactCompany && contactCompany !== companyId ? { contactId: null } : {}),
+    };
+  }
+  if (!option) return kind === "contact" ? { contactId: null } : { opportunityId: null };
+  const companyId = option.company?.id;
+  const moves = Boolean(companyId && companyId !== task.companyId);
+  if (kind === "contact") {
+    return { contactId: option.id, ...(companyId ? { companyId } : {}), ...(moves && task.opportunityId ? { opportunityId: null } : {}) };
+  }
+  return {
+    opportunityId: option.id,
+    ...(companyId ? { companyId } : {}),
+    ...(contactCompany && companyId && contactCompany !== companyId ? { contactId: null } : {}),
+  };
+}
+
+export function relinkNote(task: LinkedTask, kind: "company" | "contact" | "opportunity", change: Relink) {
+  const names = [
+    kind !== "contact" && change.contactId === null && task.contactId ? (task.contactName ?? "the person") : null,
+    kind !== "opportunity" && change.opportunityId === null && task.opportunityId ? (task.opportunityName ?? "the opportunity") : null,
+  ].filter((name): name is string => Boolean(name));
+  if (names.length === 0) return null;
+  return `Removed ${names.join(" and ")}. ${names.length === 1 ? "It belongs" : "They belong"} to another company.`;
+}
+
+export function ownerSetsTime(viewerId: string | null | undefined, ownerId: string | null | undefined) {
+  return Boolean(viewerId && ownerId && ownerId !== viewerId);
+}
+
+export function ownerTimeLine(ownerName: string | null | undefined) {
+  return `Only ${ownerName?.trim().split(/\s+/)[0] || "the assignee"} can set a time.`;
+}
+
+export function dayOnlyHint(ownerName: string | null | undefined) {
+  return `${ownerTimeLine(ownerName).slice(0, -1)}, so this saves the day only.`;
+}
+
+export function dayOnlyNote(ownerName: string | null | undefined) {
+  return `Saved the day only. ${ownerTimeLine(ownerName)}`;
+}
+
+export function movedMessage(
+  task: { dueHasTime: boolean; ownerName: string | null },
+  at: string,
+  saved: { dueAt: string | null; dueHasTime: boolean } | undefined,
+  now: number,
+) {
+  const timed = saved ? saved.dueHasTime : task.dueHasTime;
+  const when = snoozeDetail(saved?.dueAt ? new Date(saved.dueAt) : onWorkingDay(new Date(at)), timed, now);
+  return task.dueHasTime && !timed ? `Due ${when}. ${ownerTimeLine(task.ownerName)}` : `Due ${when}.`;
 }
 
 export function reminderClock(due: string, minutes: number) {

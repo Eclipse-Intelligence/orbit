@@ -8,7 +8,7 @@ import {
   DEFAULT_TIME,
   TIME_OPTIONS,
   WEEKDAY_LABELS,
-  dateValue,
+  currentTimeValue,
   formatDateLabel,
   formatDateTimeLabel,
   joinDateTime,
@@ -18,6 +18,7 @@ import {
   parseDateValue,
   quickDates,
   splitDateTime,
+  todayValue,
 } from "@/lib/date-input";
 import { cn } from "@/lib/utils";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
@@ -85,9 +86,9 @@ function PickerField({
       if (!withTime) setOpen(false);
       return;
     }
-    const today = dateValue(new Date());
+    const today = todayValue();
     const time =
-      parts?.time ?? (date === today && DEFAULT_TIME <= currentTime() ? (nextQuarterHour() ?? "23:45") : DEFAULT_TIME);
+      parts?.time ?? (date === today && DEFAULT_TIME <= currentTimeValue() ? (nextQuarterHour() ?? "23:45") : DEFAULT_TIME);
     commit(joinDateTime(date, time));
   }
 
@@ -96,7 +97,7 @@ function PickerField({
       ? formatDateTimeLabel(current)
       : formatDateLabel(selectedDate)
     : (placeholder ?? (withTime ? "Pick a date and time" : "Pick a date"));
-  const today = dateValue(new Date());
+  const today = todayValue();
 
   return (
     <Popover
@@ -239,13 +240,8 @@ function PickerField({
   );
 }
 
-function currentTime() {
-  const now = new Date();
-  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-}
-
 function monthOf(date: string | null) {
-  const parsed = parseDateValue(date) ?? new Date();
+  const parsed = parseDateValue(date ?? todayValue()) ?? new Date();
   return { year: parsed.getFullYear(), month: parsed.getMonth() };
 }
 

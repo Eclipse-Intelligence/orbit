@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
+import Button from "@/components/_ui/button";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread, holdEscape } from "@/components/chat/discussion";
 import { useDiscussion } from "@/components/chat/use-discussion";
@@ -16,7 +17,6 @@ import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-out
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
 import RecordNotes from "@/components/docs/record-notes";
-import { completeTaskAction } from "@/app/(crm)/records";
 import { untagTaskAction } from "@/app/(crm)/discussions";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -31,7 +31,8 @@ type PanelProps = {
   tagged: string[];
   admins?: string[];
   completed?: boolean;
-  onComplete?: (task: Task) => void;
+  onComplete: (task: Task) => void;
+  onReopen?: (task: Task) => void;
   onClose: () => void;
   outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
@@ -101,7 +102,7 @@ function focusedElement() {
   return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onReopen, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -114,16 +115,14 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
     },
   );
   const canChange = canChangeTaskAs(viewer, task);
-  const details = useTaskDetails(task, canChange);
+  const details = useTaskDetails(task, canChange, true, viewer.id);
   const team = members.length > 1;
   const named = (person: string | null) => (person ? (members.find((member) => member.id === person) ?? null) : null);
   const owner = named(task.ownerId) ?? (task.ownerId ? { id: task.ownerId, name: task.ownerName ?? "Former member" } : null);
   const creator = named(task.createdByUserId);
-  const [doneHere, setDoneHere] = useState(false);
   const [opener] = useState(focusedElement);
   const asking = useRef(false);
-  const done = completed || doneHere || Boolean(task.completedAt);
-  const [busy, setBusy] = useState(false);
+  const done = completed || Boolean(task.completedAt);
   const [removed, setRemoved] = useState<string[]>([]);
   const taggedKey = tagged.join(",");
   const [seenTagged, setSeenTagged] = useState(taggedKey);
@@ -142,29 +141,15 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
     details.flush();
   }
 
-  async function complete() {
-    if (done || busy || !canChange) return;
-    if (onComplete) {
-      onComplete(task);
-      return;
-    }
-    setBusy(true);
-    setDoneHere(true);
-    setError(null);
-    const result = await completeTaskAction(task.id);
-    setBusy(false);
-    if (result.error) {
-      setDoneHere(false);
-      setError(result.error);
-      return;
-    }
-    router.refresh();
+  function complete() {
+    if (done || !canChange) return;
+    onComplete(task);
   }
 
   async function untag(person: string) {
     setRemoved((current) => [...current, person]);
     setError(null);
-    const result = await untagTaskAction(task.id, person);
+    const result = await untagTaskAction(task.id, person).catch(() => ({ error: "Couldn't remove them. Try again." }));
     if (result.error) {
       setRemoved((current) => current.filter((item) => item !== person));
       setError(result.error);
@@ -186,7 +171,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
     if (key !== "d" && key !== "e") return;
     event.preventDefault();
     if (!canChange || done) return;
-    void complete();
+    complete();
   }
 
   const created = [
@@ -276,10 +261,17 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                 <div className="flex flex-col gap-5">
                   <div className="flex items-start gap-2.5">
                     <span className="mt-px flex">
-                      <TaskDoneCircle done={done} disabled={busy || !canChange} title={task.title} onClick={() => void complete()} />
+                      <TaskDoneCircle done={done} disabled={!canChange} title={task.title} onClick={complete} />
                     </span>
                     <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} />
                   </div>
+                  {done && canChange && onReopen && !outcome && (
+                    <div className="flex">
+                      <Button variant="secondary" size="sm" onClick={() => onReopen(task)} className="hit">
+                        Reopen
+                      </Button>
+                    </div>
+                  )}
                   {outcome && outcomeHandlers ? (
                     <TaskOutcomeForm
                       key={outcome.outcomeId}

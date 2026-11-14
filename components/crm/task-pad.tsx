@@ -24,6 +24,8 @@ import {
   padRelease,
   padDueHasTime,
   padSaveIds,
+  ownerSetsTime,
+  dayOnlyHint,
   parseTaskText,
   reminderClock,
   resolvePadLinks,
@@ -49,6 +51,8 @@ type Override<T> = { set: boolean; value: T; side?: boolean };
 type PadContact = PadRecord & { company: PadRecord | null };
 type Variant = "card" | "inline";
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
+
+const AI_WAIT_MS = 1_500;
 
 const unset = <T,>(): Override<T> => ({ set: false, value: undefined as T });
 
@@ -462,10 +466,13 @@ export default function TaskPad({
   const [highlight, setHighlight] = useState(0);
   const [detected, setDetected] = useState<{ text: string; scope: string | null; value: PadDetection } | null>(null);
   const [ai, setAi] = useState<{ text: string; value: PadAiParse } | null>(null);
-  const [reading, setReading] = useState(false);
+  const [readingText, setReadingText] = useState<string | null>(null);
+  const reading = readingText !== null && readingText === text;
+  const aiReads = useRef(new Map<string, Promise<PadAiParse | null>>());
+  const latestRead = useRef<(value: string) => Promise<PadAiParse | null>>(async () => null);
   const [due, setDue] = useState<Override<string | null>>(unset);
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
-  const [duration, setDuration] = useState(DEFAULT_TASK_DURATION);
+  const [chosenDuration, setDuration] = useState<number | null>(null);
   const [askingTime, setAskingTime] = useState(false);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
   const startContact = (): Override<PadContact | null> => (initialContact ? { set: true, value: { ...initialContact, company: null } } : unset());
@@ -487,12 +494,12 @@ export default function TaskPad({
 
   const parsed = useMemo(() => parseTaskText(text), [text]);
   const aiFits = ai !== null && ai.text === text && parsed.unsure;
-  const title = aiFits ? ai.value.title : parsed.title;
-  const autoDue = aiFits ? (ai.value.due ?? parsed.due) : parsed.due;
-  const finalDue = due.set ? due.value : autoDue;
-  const autoReminder = aiFits ? ai.value.remindMinutes : parsed.remindMinutes;
-  const finalReminder = finalDue ? (reminder.set ? reminder.value : autoReminder) : null;
-  const needsTime = Boolean(finalDue) && !padDueHasTime(finalDue) && finalReminder !== null;
+  const assignable = Boolean(viewerId) && members.length > 1;
+  const assignee = members.find((member) => member.id === owner) ?? null;
+  const forTeammate = assignable && ownerSetsTime(viewerId, owner);
+  const read = derive(aiFits ? ai.value : null);
+  const { title, chosenDue, chosenReminder, finalDue, finalReminder, duration, needsTime } = read;
+  const droppedTime = forTeammate && (padDueHasTime(chosenDue) || chosenReminder !== null);
   const anchor = fixedCompany ?? (company.set ? company.value : null);
   const scope = anchor?.id ?? null;
   const seen = text.trim().length >= 3 ? (detected?.value ?? null) : null;
@@ -502,14 +509,47 @@ export default function TaskPad({
   const finalOpportunity = shown.opportunity;
   const ask = shown.ask;
   const finalList = clickup ? (list.set ? list.value : clickup.listId) : null;
-  const assignable = Boolean(viewerId) && members.length > 1;
-  const assignee = members.find((member) => member.id === owner) ?? null;
   const asking = ask !== null && askOpen;
   const detectedContact = shown.fromText;
   const detectedCompany = !fixedCompany && !company.set && !finalContact && seen?.company && finalCompany?.id === seen.company.id;
   const confirm = seen && detectedContact ? padConfirmLine(seen) : seen && detectedCompany ? padConfirmLine({ ...seen, contact: null, matchedBy: null, word: companyWord(seen) }) : null;
   const listing = mention !== null && suggestions.length > 0;
   const card = variant === "card";
+
+  function derive(value: PadAiParse | null) {
+    const chosenDue = due.set ? due.value : value ? (value.due ?? parsed.due) : parsed.due;
+    const autoReminder = value ? value.remindMinutes : parsed.remindMinutes;
+    const chosenReminder = chosenDue ? (reminder.set ? reminder.value : autoReminder) : null;
+    const finalDue = forTeammate && chosenDue ? chosenDue.slice(0, 10) : chosenDue;
+    const finalReminder = forTeammate ? null : chosenReminder;
+    return {
+      title: value ? value.title : parsed.title,
+      chosenDue,
+      chosenReminder,
+      finalDue,
+      finalReminder,
+      duration: chosenDuration ?? (!due.set && padDueHasTime(chosenDue) ? parsed.durationMinutes : null) ?? DEFAULT_TASK_DURATION,
+      needsTime: Boolean(finalDue) && !padDueHasTime(finalDue) && finalReminder !== null,
+    };
+  }
+
+  function readWithAi(value: string) {
+    const apply = (found: PadAiParse | null) => {
+      if (found) setAi((current) => (current?.text === value ? current : { text: value, value: found }));
+      return found;
+    };
+    const known = aiReads.current.get(value);
+    if (known) return known.then(apply);
+    setReadingText(value);
+    const request = parseTaskWithAiAction(value)
+      .catch(() => null)
+      .then((found) => {
+        setReadingText((current) => (current === value ? null : current));
+        return found;
+      });
+    aiReads.current.set(value, request);
+    return request.then(apply);
+  }
 
   function resolve(found: PadDetection | null) {
     return resolvePadLinks({ text, found, fixedCompany, contact, company, opportunity, dismissed });
@@ -547,24 +587,17 @@ export default function TaskPad({
   }, [text, scope]);
 
   useEffect(() => {
+    latestRead.current = readWithAi;
+  });
+
+  useEffect(() => {
     if (!parsed.unsure || text.trim().length < 4) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      setReading(true);
-      void parseTaskWithAiAction(text)
-        .then(
-          (value) => {
-            if (!cancelled && value) setAi({ text, value });
-          },
-          () => undefined,
-        )
-        .finally(() => !cancelled && setReading(false));
-    }, 700);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      setReading(false);
-    };
+    if (aiReads.current.has(text)) {
+      void latestRead.current(text);
+      return;
+    }
+    const timer = window.setTimeout(() => void latestRead.current(text), 700);
+    return () => window.clearTimeout(timer);
   }, [text, parsed.unsure]);
 
   useEffect(() => {
@@ -671,7 +704,7 @@ export default function TaskPad({
     setAi(null);
     setDue(unset());
     setReminder(unset());
-    setDuration(DEFAULT_TASK_DURATION);
+    setDuration(null);
     setAskingTime(false);
     setCompany(startCompany());
     setContact(startContact());
@@ -703,6 +736,16 @@ export default function TaskPad({
       return;
     }
     setBusy(true);
+    let saving = read;
+    if (parsed.unsure && !aiFits && text.trim().length >= 4) {
+      const answer = await Promise.race([readWithAi(text), new Promise<null>((resolve) => window.setTimeout(() => resolve(null), AI_WAIT_MS))]);
+      if (answer) saving = derive(answer);
+      if (saving.needsTime) {
+        setBusy(false);
+        setAskingTime(true);
+        return;
+      }
+    }
     setError(null);
     setWarning(null);
     const fresh = await freshDetection();
@@ -730,27 +773,28 @@ export default function TaskPad({
       return;
     }
     const result = await addPadTaskAction({
-      title,
-      dueAt: finalDue && padDueHasTime(finalDue) ? localInstant(finalDue) : finalDue,
-      remindMinutes: finalReminder,
-      durationMinutes: duration,
+      title: saving.title,
+      dueAt: saving.finalDue && padDueHasTime(saving.finalDue) ? localInstant(saving.finalDue) : saving.finalDue,
+      remindMinutes: saving.finalReminder,
+      durationMinutes: saving.duration,
       ...padSaveIds(links, { fixedCompany, contact, company, opportunity }),
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
-    });
+    }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
       return;
     }
+    const notes = result.warning ?? undefined;
     reset();
     router.refresh();
     if (onAdded) {
-      onAdded({ warning: result.warning });
+      onAdded({ warning: notes });
       return;
     }
-    setWarning(result.warning ?? null);
+    setWarning(notes ?? null);
     input.current?.focus();
   }
 
@@ -848,7 +892,7 @@ export default function TaskPad({
       )}
     />,
     <DurationMenu key="duration" compact value={duration} onChange={setDuration} className={chipClass(duration === DEFAULT_TASK_DURATION ? "empty" : "on", variant)} />,
-    <ReminderChip
+    forTeammate ? null : <ReminderChip
       key="reminder"
       due={finalDue}
       title={title}
@@ -1109,6 +1153,11 @@ export default function TaskPad({
           {error}
         </p>
       )}
+      {droppedTime && !error && (
+        <p role="status" className={cn("caption-style text-soft", card ? "px-[18px] pt-2.5" : "px-0.5")}>
+          {dayOnlyHint(assignee?.name)}
+        </p>
+      )}
       {warning && !error && (
         <p role="status" className={cn("caption-style text-soft", card ? "px-[18px] pt-2.5" : "px-0.5")}>
           {warning}
@@ -1165,7 +1214,7 @@ export default function TaskPad({
             {clickup && <ClickUpButton picker={clickup} listId={finalList} onChange={(value) => setList({ set: true, value })} onClosed={() => focusAt()} />}
             {add}
           </div>
-          {(confirm || which || error || warning) && <div className="order-3 flex basis-full flex-col gap-1.5 pr-1">{notes}</div>}
+          {(confirm || which || error || warning || droppedTime) && <div className="order-3 flex basis-full flex-col gap-1.5 pr-1">{notes}</div>}
         </div>
       </div>
     </div>
