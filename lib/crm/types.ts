@@ -448,6 +448,7 @@ export type TaskRepeat = {
   end: string;
   rrule: string;
   changedDates: number;
+  skippedDates: string[];
 };
 
 export type TaskMailThread = { subject: string | null; readable: boolean };

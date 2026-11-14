@@ -247,8 +247,14 @@ create policy task_occurrence_changes_write_member on crm.task_occurrence_change
 drop policy if exists task_occurrence_changes_write_agent on crm.task_occurrence_changes;
 create policy task_occurrence_changes_write_agent on crm.task_occurrence_changes
   for all to crm_agent
-  using (exists (select 1 from crm.task_series s where s.id = task_occurrence_changes.series_id))
-  with check (exists (select 1 from crm.task_series s where s.id = task_occurrence_changes.series_id));
+  using (exists (
+    select 1 from crm.task_series s
+    where s.id = task_occurrence_changes.series_id and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+  ))
+  with check (exists (
+    select 1 from crm.task_series s
+    where s.id = task_occurrence_changes.series_id and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+  ));
 
 create or replace function private.series_occurrence_allowed(p_series uuid, p_workspace uuid, p_user uuid, p_agent uuid)
 returns boolean
@@ -279,7 +285,13 @@ as $$
         )
         or (
           nullif(current_setting('app.agent_id', true), '')::uuid is not null
-          and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+          and (
+            s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+            or exists (
+              select 1 from crm.tasks c
+              where c.id = s.current_task_id and c.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+            )
+          )
         )
       )
   )
@@ -335,7 +347,7 @@ begin
     and d.workspace_id = new.workspace_id
   on conflict (task_id, page_id) do nothing;
   update crm.task_series
-  set current_task_id = new.id, roll_pending = (roll_at is null or roll_at <= now())
+  set current_task_id = new.id, roll_pending = (roll_pending or roll_at is null or roll_at <= now())
   where id = new.series_id and current_task_id is distinct from new.id;
   return null;
 end;
@@ -378,8 +390,7 @@ as $$
         (2, s.owner_id),
         (3, t.owner_id),
         (4, t.created_by_user_id),
-        (5, t.owner_id),
-        (6, (select o.user_id from crm.workspace_members o where o.workspace_id = s.workspace_id and o.role = 'owner' order by o.created_at limit 1))
+        (5, (select o.user_id from crm.workspace_members o where o.workspace_id = s.workspace_id and o.role = 'owner' order by o.created_at limit 1))
     ) as wanted (rank, user_id)
     join crm.workspace_members candidate on candidate.workspace_id = s.workspace_id and candidate.user_id = wanted.user_id
     order by wanted.rank
@@ -414,7 +425,10 @@ begin
   with followed as (
     update crm.task_series s
     set workspace_id = p_target,
-        owner_id = t.owner_id,
+        owner_id = case
+          when exists (select 1 from crm.workspace_members m where m.workspace_id = p_target and m.user_id = s.owner_id) then s.owner_id
+          else t.owner_id
+        end,
         company_id = t.company_id,
         contact_id = t.contact_id,
         opportunity_id = t.opportunity_id,
@@ -447,12 +461,6 @@ begin
       or (s.opportunity_id is not null and not exists (select 1 from crm.opportunities o where o.id = s.opportunity_id and o.workspace_id = s.workspace_id))
     );
 
-  update crm.task_series s
-  set current_task_id = null, ended_at = coalesce(s.ended_at, now()), roll_at = null
-  where s.workspace_id = p_source
-    and s.current_task_id is not null
-    and not exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.series_id = s.id);
-
   return v_moved;
 end;
 $$;
@@ -466,8 +474,9 @@ language sql
 security definer
 set search_path = ''
 as $$
-  update crm.task_series set roll_at = greatest(coalesce(roll_at, p_until), p_until), roll_pending = false
-  where id = p_series and ended_at is null and archived_at is null;
+  update crm.task_series s set roll_at = greatest(coalesce(s.roll_at, p_until), p_until), roll_pending = false
+  where s.id = p_series and s.ended_at is null and s.archived_at is null
+    and (s.roll_pending or s.roll_at is null or s.roll_at <= now());
 $$;
 
 revoke all on function private.delay_series_roll(uuid, timestamptz) from public;
@@ -493,10 +502,19 @@ begin
   end if;
   if tg_op = 'UPDATE' and (
     v_series.current_task_id is not null and v_series.current_task_id <> new.id
-    or not (
-      v_series.owner_id = (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid
-      or v_series.created_by_user_id = (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid
-      or (v_series.created_by_agent_id is not null and v_series.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid)
+    or not coalesce(
+      (
+        (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub') is not null
+        and (
+          v_series.owner_id is not distinct from (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid
+          or v_series.created_by_user_id is not distinct from (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid
+        )
+      )
+      or (
+        nullif(current_setting('app.agent_id', true), '') is not null
+        and v_series.created_by_agent_id is not distinct from nullif(current_setting('app.agent_id', true), '')::uuid
+      ),
+      false
     )
   ) then
     raise exception 'That task can''t join this repeating task.' using errcode = '42501';
@@ -521,7 +539,16 @@ set search_path = ''
 as $$
 declare
   v_user uuid := (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid;
+  v_agent uuid := nullif(current_setting('app.agent_id', true), '')::uuid;
+  v_owns boolean;
 begin
+  if tg_op = 'UPDATE' then
+    v_owns := coalesce(
+      (v_user is not null and (old.owner_id is not distinct from v_user or old.created_by_user_id is not distinct from v_user))
+      or (v_agent is not null and old.created_by_agent_id is not distinct from v_agent),
+      false
+    );
+  end if;
   if new.current_task_id is not null
     and (tg_op = 'INSERT' or old.current_task_id is distinct from new.current_task_id or old.workspace_id is distinct from new.workspace_id)
     and not exists (
@@ -532,12 +559,12 @@ begin
   end if;
   if tg_op = 'UPDATE'
     and current_user in ('authenticated', 'crm_agent')
-    and not (
-      old.owner_id = v_user
-      or old.created_by_user_id = v_user
-      or (old.created_by_agent_id is not null and old.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid)
-    )
+    and not v_owns
     and (
+      old.roll_at is distinct from new.roll_at
+      or (old.roll_pending and not new.roll_pending)
+      or (old.current_task_id is not null and new.current_task_id is null)
+      or
       old.rule is distinct from new.rule or old.ends is distinct from new.ends or old.starts_on is distinct from new.starts_on
       or old.at is distinct from new.at or old.title is distinct from new.title or old.description is distinct from new.description
       or old.priority is distinct from new.priority or old.company_id is distinct from new.company_id
@@ -575,7 +602,7 @@ set search_path = ''
 as $$
 begin
   update crm.task_series
-  set current_task_id = null, roll_at = null, roll_pending = false
+  set current_task_id = null, roll_at = null, roll_pending = false, ended_at = coalesce(ended_at, now())
   where id = old.series_id and current_task_id = new.id;
   return null;
 end;
@@ -589,6 +616,43 @@ create trigger tasks_leave_series
   for each row
   when (old.series_id is not null and old.series_id is distinct from new.series_id)
   execute function private.tasks_leave_series();
+
+create or replace function private.owns_series(p_series uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from crm.task_series s
+    where s.id = p_series
+      and (
+        (
+          (select private.session_user_id()) is not null
+          and (s.owner_id = (select private.session_user_id()) or s.created_by_user_id = (select private.session_user_id()))
+        )
+        or (
+          nullif(current_setting('app.agent_id', true), '')::uuid is not null
+          and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+        )
+      )
+  )
+$$;
+
+revoke all on function private.owns_series(uuid) from public;
+grant execute on function private.owns_series(uuid) to authenticated, crm_agent;
+
+drop policy if exists tasks_select_series_owner on crm.tasks;
+create policy tasks_select_series_owner on crm.tasks
+  for select to authenticated, crm_agent
+  using (series_id is not null and private.owns_series(series_id));
+
+drop policy if exists tasks_update_series_owner on crm.tasks;
+create policy tasks_update_series_owner on crm.tasks
+  for update to authenticated, crm_agent
+  using (series_id is not null and private.owns_series(series_id))
+  with check (series_id is null or private.owns_series(series_id));
 
 drop policy if exists tasks_series_binding on crm.tasks;
 create policy tasks_series_binding on crm.tasks

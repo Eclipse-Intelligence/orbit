@@ -136,7 +136,7 @@ import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
 import { archiveTask, listTasks } from "@/lib/crm/tasks";
-import { readRepeat, readSeriesTitle, REPEAT_SCOPES, updateTaskFromApi } from "@/lib/crm/task-series";
+import { readRepeat, readSeriesTitle, REPEAT_SCOPES, seriesRightsRefusal, updateTaskFromApi } from "@/lib/crm/task-series";
 import { endWords, ruleWords, shortDay } from "@/lib/task-repeat";
 import { dayKeyAt } from "@/lib/crm/working-days";
 import { emailThreadKey } from "@/lib/crm/task-mail";
@@ -658,6 +658,15 @@ export async function taskTimingRefusalFor(actor: UserActor, name: string, args:
 }
 
 export const DOCS_NOT_YOURS = "Only the task's assignee or creator can change its docs. Leave docIds out.";
+
+export async function taskRepeatRefusalFor(actor: UserActor, name: string, args: Args) {
+  if (name !== "update_task") return null;
+  const seriesWide =
+    args.repeat !== undefined || args.repeatScope === "all" || args.repeatScope === "following" || (args.skip === true && optionalStr(args.occursOn) !== undefined) || (optionalStr(args.occursOn) !== undefined && args.repeatScope === "this");
+  if (!seriesWide) return null;
+  const reason = await seriesRightsRefusal(actor, { taskId: optionalStr(args.taskId), seriesId: optionalStr(args.seriesId) }).catch(() => null);
+  return reason ? { error: reason, field: "repeatScope" } : null;
+}
 
 export async function taskDocsRefusalFor(actor: UserActor, name: string, args: Args) {
   if (name !== "update_task" || args.docIds === undefined) return null;

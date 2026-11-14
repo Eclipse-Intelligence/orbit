@@ -207,6 +207,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const timingError = useRef(false);
   const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
   const repeatScope = useRepeatScope(task);
+  const declined = useRef<{ title?: string; text?: string }>({});
   const visible = useRef(shown);
   useEffect(() => {
     visible.current = shown;
@@ -256,6 +257,8 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
       if (!picked) {
         const restore = timed ? timing.fail(ticket) : null;
         if (restore) show(restore);
+        if (write.title !== undefined) declined.current.title = write.title;
+        if (write.description !== undefined) declined.current.text = write.description ?? "";
         return false;
       }
       scope = picked;
@@ -297,6 +300,8 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   function saveTitle(ask = true) {
     if (!canChange) return;
     const next = title.trim();
+    if (!ask && declined.current.title === next) return;
+    if (ask) delete declined.current.title;
     if (!next) {
       setTitle(sent.current.title);
       dropDraft(task.id, "title");
@@ -321,6 +326,8 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   function saveText(ask = true) {
     if (!canChange) return;
     const next = text.trim();
+    if (!ask && (declined.current.text ?? null) === (next || "")) return;
+    if (ask) delete declined.current.text;
     const previous = sent.current.text;
     if (next === previous) {
       dropDraft(task.id, "text");

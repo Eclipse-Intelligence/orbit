@@ -308,7 +308,7 @@ function CustomRepeat({ task, anchor, onCancel, onSave }: { task: Task; anchor: 
           <span id={`${id}-on`} className="caption-style text-subtle">
             On
           </span>
-          <div className="flex flex-wrap gap-1.5 [@media(pointer:coarse)]:gap-2">
+          <div className="flex flex-wrap gap-1.5 [@media(pointer:coarse)]:gap-3">
             {WEEKDAYS.map((day, index) => {
               const on = draft.weekdays.includes(day);
               return (
@@ -395,7 +395,7 @@ function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => voi
   const [until, setUntil] = useState(() => ("until" in repeat.ends ? repeat.ends.until : ""));
   const from = task.occursOn ?? anchorOf(task);
   const pattern: RepeatPattern = { startsOn: repeat.startsOn, at: repeat.at, rule: repeat.rule, ends: until ? { until } : { never: true } };
-  const days = until && until >= from ? occurrenceDays(pattern, shiftDay(from, 1), until, 5000) : null;
+  const days = until && until >= from ? occurrenceDays(pattern, shiftDay(from, 1), until, 5000).filter((day) => !repeat.skippedDates.includes(day)) : null;
   const left = days ? days.length : null;
   const lastDay = days && days.length > 0 ? days[days.length - 1] : from;
   const problem = until && until < from ? "The end date is before the first one." : null;

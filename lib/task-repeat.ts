@@ -581,6 +581,7 @@ export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): Task
     end: view.stopped ? "" : "count" in view.ends && view.current ? `${Math.max(0, (remainingCount(pattern, after) ?? 0) - skipped)} more` : endWords(pattern, view.current ? after : null),
     rrule: toRrule(pattern),
     changedDates: view.changes.filter((change) => change.occursOn > after && !change.skip && change.dueAt).length,
+    skippedDates: view.changes.filter((change) => change.occursOn > after && change.skip).map((change) => change.occursOn),
   };
 }
 
