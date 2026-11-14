@@ -10,6 +10,7 @@ import {
   readRepeatHistory,
   rollDueSeries,
   setTaskRepeat,
+  skipDeletedOccurrenceInDb,
   skipOccurrence,
   TOO_MANY_SERIES,
   updateOccurrence,
@@ -19,6 +20,7 @@ import type { Task, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { undoAuditEvent } from "@/lib/crm/undo";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { withActor } from "@/lib/crm/context";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -27,6 +29,8 @@ import { POST as restCreateTask } from "@/app/api/v1/tasks/route";
 import { runTool } from "@/lib/assistant/tools";
 import { SCOPES } from "@/lib/crm/scopes";
 import { createCrmMcpServer } from "@/server/mcp/server";
+import { moveRecordsToWorkspace } from "@/lib/crm/move-workspace";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
 let mark: UserActor;
@@ -398,6 +402,52 @@ describe("repeating tasks over the API, MCP and the assistant", () => {
     const following = (await runTool(mark, "update_task", { seriesId: made.task.seriesId, occursOn: "2027-04-30", title: "Review the pipeline", repeatScope: "following" })) as { task: Task };
     assert.equal(following.task.title, "Review the pipeline");
     assert.equal(following.task.occursOn, "2027-04-30");
+  });
+});
+
+describe("repeating tasks in ClickUp", () => {
+  it("skips an occurrence deleted in ClickUp and deletes an undone next one there", async () => {
+    const task = await weekly("ClickUp weekly", "2027-03-03", "09:00");
+    await sql("update crm.tasks set clickup_task_id = 'cu-1', clickup_list_id = 'list-1', clickup_url = 'https://app.clickup.test/t/cu-1' where id = $1", [task.id]);
+    const skipped = await withActor(mark, (db) => skipDeletedOccurrenceInDb(db, mark, task.id, { operation: "clickup_deleted", source: "clickup" }));
+    assert.equal(skipped, true);
+    const [row] = await sql<{ occurs_on: string; clickup_task_id: string | null; clickup_list_id: string | null; archived_at: Date | null }>(
+      "select occurs_on::text as occurs_on, clickup_task_id, clickup_list_id, archived_at from crm.tasks where id = $1",
+      [task.id],
+    );
+    assert.deepEqual(row, { occurs_on: "2027-03-10", clickup_task_id: null, clickup_list_id: "list-1", archived_at: null });
+
+    await completeTask(mark, task.id);
+    const next = (await occurrences(task.seriesId!)).find((item) => !item.completed)!;
+    const [carried] = await sql<{ clickup_list_id: string | null }>("select clickup_list_id from crm.tasks where id = $1", [next.id]);
+    assert.equal(carried.clickup_list_id, "list-1");
+    await sql("update crm.tasks set clickup_task_id = 'cu-2' where id = $1", [next.id]);
+    await reopenTask(mark, task.id);
+    const [gone] = await sql<{ archived: boolean; sync: Record<string, unknown> }>("select archived_at is not null as archived, clickup_sync as sync from crm.tasks where id = $1", [next.id]);
+    assert.equal(gone.archived, true);
+    assert.equal(gone.sync.deleteRemote, true);
+  });
+});
+
+describe("repeating tasks moving workspace", () => {
+  it("moves a series with its open task and takes done ones left behind out of it", async () => {
+    const created = await createWorkspace(mark, { name: "Mark Ridgeon" });
+    const ridgeon: UserActor = { ...mark, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
+    const halden = (await createCompany(mark, { name: "Halden Move", domain: "halden-move.test" })).body.company;
+    const task = (await createRepeatingTask(mark, { title: "Halden weekly", dueAt: at("2027-03-02", "09:00"), companyId: halden.id }, { every: "week" })).body.task;
+    await completeTask(mark, task.id);
+    const open = (await occurrences(task.seriesId!)).find((row) => !row.completed)!;
+    await moveRecordsToWorkspace(mark, { companyIds: [halden.id], workspaceId: ridgeon.workspaceId }, { operation: "move_records", source: "web" });
+    const [series] = await sql<{ workspace_id: string; company_id: string; current_task_id: string }>("select workspace_id, company_id, current_task_id from crm.task_series where id = $1", [task.seriesId]);
+    assert.equal(series.workspace_id, ridgeon.workspaceId);
+    assert.equal(series.current_task_id, open.id);
+    const moved = await getTask(ridgeon, open.id);
+    assert.equal(moved.seriesId, task.seriesId);
+    assert.equal(moved.repeat?.current, true);
+    await completeTask(ridgeon, open.id);
+    const next = (await occurrences(task.seriesId!)).filter((row) => !row.completed);
+    assert.equal(next.length, 1);
+    assert.equal((await getTask(ridgeon, next[0].id)).companyId, series.company_id);
   });
 });
 
