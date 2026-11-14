@@ -47,9 +47,12 @@ export function clearFields(errors: FieldErrors, fields: TaskField[]): FieldErro
   return next.length === errors.length && next.every((entry, index) => entry.fields.length === errors[index].fields.length) ? errors : next;
 }
 
-export function draftReaction(change: { kept: boolean; value: string }, local: string, sent: string): "adopt" | "clear" | "ignore" {
-  if (!change.kept) return local === change.value ? "clear" : "ignore";
-  return local !== change.value && local === sent ? "adopt" : "ignore";
+export type DraftNews = { kept: boolean; draft: string; saved: string };
+
+export function draftReaction(news: DraftNews, local: string, sent: string): "adopt" | "restore" | "clear" | "ignore" {
+  if (news.kept) return local !== news.draft && local === sent ? "adopt" : "ignore";
+  if (local === news.draft && news.draft !== news.saved) return "restore";
+  return local === news.saved ? "clear" : "ignore";
 }
 
 export function fieldError(errors: FieldErrors) {

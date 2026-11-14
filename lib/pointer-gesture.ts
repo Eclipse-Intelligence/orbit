@@ -14,26 +14,50 @@ type GestureHandlers = {
 
 type GestureOptions = { touchTarget?: EventTarget | null };
 
-function swallowReleaseClick(pointerId: number) {
+const RELEASE_WAIT_MS = 10_000;
+
+function afterEscapeCancel(pointerId: number) {
   const swallow = (click: Event) => {
     click.stopPropagation();
     click.preventDefault();
   };
-  let timer = 0;
-  const stop = () => {
+  const held = (key: KeyboardEvent) => {
+    if (key.key !== "Escape") return;
+    key.preventDefault();
+    key.stopImmediatePropagation();
+  };
+  const keysTimer = window.setTimeout(releaseKeys, RELEASE_WAIT_MS);
+  function releaseKeys() {
+    window.clearTimeout(keysTimer);
+    window.removeEventListener("keydown", held, { capture: true });
+    window.removeEventListener("keyup", lifted, { capture: true });
+  }
+  function lifted(key: KeyboardEvent) {
+    if (key.key === "Escape") releaseKeys();
+  }
+  let timer = window.setTimeout(stop, RELEASE_WAIT_MS);
+  function stop() {
     window.clearTimeout(timer);
     window.removeEventListener("pointerup", released, { capture: true });
+    window.removeEventListener("pointercancel", cancelled, { capture: true });
     window.removeEventListener("pointerdown", stop, { capture: true });
     window.removeEventListener("click", swallow, { capture: true });
-  };
+  }
   function released(up: Event) {
     if ((up as PointerEvent).pointerId !== pointerId) return;
     window.removeEventListener("pointerup", released, { capture: true });
+    window.clearTimeout(timer);
     timer = window.setTimeout(stop, 0);
   }
+  function cancelled(cancel: Event) {
+    if ((cancel as PointerEvent).pointerId === pointerId) stop();
+  }
   window.addEventListener("pointerup", released, { capture: true });
+  window.addEventListener("pointercancel", cancelled, { capture: true });
   window.addEventListener("pointerdown", stop, { capture: true });
   window.addEventListener("click", swallow, { capture: true });
+  window.addEventListener("keydown", held, { capture: true });
+  window.addEventListener("keyup", lifted, { capture: true });
 }
 
 export function startPointerGesture(event: GestureStart, handlers: GestureHandlers, options: GestureOptions = {}): () => void {
@@ -121,7 +145,7 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     key.preventDefault();
     key.stopImmediatePropagation();
     finish("cancel");
-    swallowReleaseClick(event.pointerId);
+    afterEscapeCancel(event.pointerId);
   }
 
   function finish(result: GestureResult) {

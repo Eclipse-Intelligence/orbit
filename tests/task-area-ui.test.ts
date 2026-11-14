@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
-import { panelTaskFor, stillOpenIds } from "@/lib/task-done";
-import { shownAlert, typingInto } from "@/lib/reminder-alerts";
+import { CrmError } from "@/lib/crm/errors";
+import { missingOrFailed, panelTaskFor, stillOpenIds } from "@/lib/task-done";
+import { keyboardUp, shownAlert, typingInto } from "@/lib/reminder-alerts";
+import { draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
 import { clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { parseTaskText } from "@/lib/task-pad";
 
@@ -45,11 +47,20 @@ describe("task area UI", () => {
   });
 
   it("shows an unsaved draft kept by the panel in a row that is already open, unless that row is being edited", () => {
-    assert.equal(draftReaction({ kept: true, value: "Call Jane edited" }, "Call Jane", "Call Jane"), "adopt");
-    assert.equal(draftReaction({ kept: true, value: "Call Jane edited" }, "Call Jane edited", "Call Jane"), "ignore");
-    assert.equal(draftReaction({ kept: true, value: "Call Jane edited" }, "Call Jane now", "Call Jane"), "ignore");
-    assert.equal(draftReaction({ kept: false, value: "Call Jane edited" }, "Call Jane edited", "Call Jane"), "clear");
-    assert.equal(draftReaction({ kept: false, value: "Call Jane edited" }, "Call Jane", "Call Jane"), "ignore");
+    const kept = { kept: true, draft: "Call Jane edited", saved: "Call Jane" };
+    assert.equal(draftReaction(kept, "Call Jane", "Call Jane"), "adopt");
+    assert.equal(draftReaction(kept, "Call Jane edited", "Call Jane"), "ignore");
+    assert.equal(draftReaction(kept, "Call Jane now", "Call Jane"), "ignore");
+  });
+
+  it("puts other views back to the saved title when a draft is reverted, and clears the error once it saves", () => {
+    const reverted = { kept: false, draft: "Call Jane edited", saved: "Call Jane" };
+    assert.equal(draftReaction(reverted, "Call Jane edited", "Call Jane"), "restore");
+    assert.equal(draftReaction(reverted, "Call Jane", "Call Jane"), "clear");
+    assert.equal(draftReaction(reverted, "Call Jane later", "Call Jane"), "ignore");
+    const savedElsewhere = { kept: false, draft: "Call Jane edited", saved: "Call Jane edited" };
+    assert.equal(draftReaction(savedElsewhere, "Call Jane edited", "Call Jane"), "clear");
+    assert.equal(draftReaction(savedElsewhere, "Call Jane later", "Call Jane"), "ignore");
   });
 
   it("shows only the newest reminder alert, with a count of the rest", () => {
@@ -58,7 +69,14 @@ describe("task area UI", () => {
     assert.deepEqual(shownAlert(["a", "b", "c"]), { alert: "c", more: 2 });
   });
 
-  it("hides reminder alerts only while a text field has focus", () => {
+  it("hides reminder alerts only while the on-screen keyboard takes up the screen", () => {
+    assert.equal(keyboardUp(844, 844, true), false);
+    assert.equal(keyboardUp(844, 500, true), true);
+    assert.equal(keyboardUp(844, 500, false), false);
+    assert.equal(keyboardUp(900, 860, true), false);
+  });
+
+  it("knows which focused elements take typing", () => {
     assert.equal(typingInto(null), false);
     assert.equal(typingInto({ tagName: "TEXTAREA" }), true);
     assert.equal(typingInto({ tagName: "TEXTAREA", readOnly: true }), false);
@@ -70,12 +88,69 @@ describe("task area UI", () => {
     assert.equal(typingInto({ tagName: "BUTTON" }), false);
   });
 
+  it("tells every other view of a task about a kept or dropped draft, never the view that raised it", () => {
+    const store = taskDrafts();
+    const views = new Map<string, { local: string; sent: string; error: boolean; heard: number }>();
+    const watcher = (name: string) => {
+      const view = { local: "Call Jane", sent: "Call Jane", error: false, heard: 0 };
+      views.set(name, view);
+      const listen = (change: DraftChange) => {
+        if (change.id !== "t1") return;
+        view.heard += 1;
+        const reaction = draftReaction(change, view.local, view.sent);
+        if (reaction === "adopt") {
+          view.local = change.draft;
+          view.error = true;
+        }
+        if (reaction === "restore") {
+          view.local = change.saved;
+          view.sent = change.saved;
+        }
+        if (reaction === "restore" || reaction === "clear") view.error = false;
+      };
+      return listen;
+    };
+    const panel = watcher("panel");
+    const row = watcher("row");
+    const stopPanel = store.watch(panel);
+    store.watch(row);
+    views.get("panel")!.local = "Call Jane edited";
+    store.keep(panel, "t1", "title", "Call Jane edited", "Call Jane");
+    assert.equal(views.get("panel")!.heard, 0);
+    assert.deepEqual(views.get("row"), { local: "Call Jane edited", sent: "Call Jane", error: true, heard: 1 });
+    assert.deepEqual(store.get("t1"), { title: "Call Jane edited" });
+    views.get("panel")!.local = "Call Jane";
+    store.drop(panel, "t1", "title", "Call Jane");
+    assert.deepEqual(views.get("row"), { local: "Call Jane", sent: "Call Jane", error: false, heard: 2 });
+    assert.equal(store.get("t1"), undefined);
+    store.drop(panel, "t1", "title", "Call Jane");
+    assert.equal(views.get("row")!.heard, 2);
+    stopPanel();
+    store.keep(row, "t1", "text", "Notes", "");
+    assert.equal(views.get("panel")!.heard, 0);
+  });
+
+  it("puts the saved title back when the title is emptied, and saves only real changes", () => {
+    assert.deepEqual(draftCommit("title", "   ", "Call Jane"), { save: false, value: "Call Jane" });
+    assert.deepEqual(draftCommit("title", " Call Jane ", "Call Jane"), { save: false, value: "Call Jane" });
+    assert.deepEqual(draftCommit("title", "Call Jane edited", "Call Jane"), { save: true, value: "Call Jane edited" });
+    assert.deepEqual(draftCommit("text", "", "Notes"), { save: true, value: "" });
+    assert.deepEqual(draftCommit("text", "", ""), { save: false, value: "" });
+  });
+
   it("treats tasks as still open when the follow-up check fails, so they show again", async () => {
     const ids = ["a", "b"];
     assert.deepEqual(await stillOpenIds(ids, async () => Promise.reject(new Error("offline"))), ids);
     assert.deepEqual(await stillOpenIds(ids, async () => ({ error: "Couldn't check the tasks. Try again." }) as { open?: string[] }), ids);
     assert.deepEqual(await stillOpenIds(ids, async () => ({ open: ["b"] })), ["b"]);
     assert.deepEqual(await stillOpenIds(ids, async () => ({ open: [] })), []);
+  });
+
+  it("tells a missing or hidden task apart from a failed lookup when checking what is still open", () => {
+    assert.equal(missingOrFailed(new CrmError("not_found", "Couldn't find that task. Try again.", 404)), null);
+    assert.equal(missingOrFailed(new CrmError("forbidden", "You're not in that workspace.", 403)), null);
+    assert.equal(missingOrFailed(new CrmError("unavailable", "Down", 503)), undefined);
+    assert.equal(missingOrFailed(new Error("connect ECONNREFUSED")), undefined);
   });
 
   it("keeps the Calendar panel open on a date-only task being reopened", () => {
@@ -98,6 +173,25 @@ describe("task area UI", () => {
     assert.equal(parseTaskText("Call Jane next Monday 3pm", mondayMorning).due, "2026-11-23T15:00");
     assert.equal(parseTaskText("Call Jane Monday", mondayMorning).due, "2026-11-23");
     assert.equal(parseTaskText("Call Jane Tuesday 3pm", mondayMorning).due, "2026-11-17T15:00");
+    const read = (text: string) => {
+      const parsed = parseTaskText(text, mondayMorning);
+      return [parsed.title, parsed.due];
+    };
+    assert.deepEqual(read("Call Jane next week Monday 3pm"), ["Call Jane", "2026-11-23T15:00"]);
+    assert.deepEqual(read("Call Jane Monday next week 3pm"), ["Call Jane", "2026-11-23T15:00"]);
+    assert.deepEqual(read("Call Jane Monday week 3pm"), ["Call Jane", "2026-11-30T15:00"]);
+    assert.equal(parseTaskText("Call Jane Monday week 3pm", mondayMorning).unsure, true);
+    assert.deepEqual(read("Call Jane Monday in 2 weeks 3pm"), ["Call Jane", "2026-11-30T15:00"]);
+    assert.deepEqual(read("Call Jane next week sat"), ["Call Jane", "2026-11-28"]);
+    assert.deepEqual(read("Call Jane Monday 30 Nov 3pm"), ["Call Jane", "2026-11-30T15:00"]);
+    assert.deepEqual(read("Call Jane tomorrow 3pm re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-17T15:00"]);
+    assert.deepEqual(read("Send Monday report Tuesday 3pm"), ["Send Monday report", "2026-11-17T15:00"]);
+    assert.deepEqual(read("Call Jane 20 Nov re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-20"]);
+    const springSaturday = new Date("2027-03-27T12:00:00Z");
+    const gap = parseTaskText("Call Jane Sunday 1:30am", springSaturday);
+    assert.equal(gap.due, "2027-03-28T01:30");
+    assert.equal(gap.unsure, true);
+    assert.equal(parseTaskText("Call Jane Sunday 2:30am", springSaturday).unsure, false);
     const saturday = new Date("2026-11-21T09:00:00Z");
     assert.equal(parseTaskText("Call Sam sat 3pm", saturday).due, "2026-11-21T15:00");
     assert.equal(parseTaskText("Call Sam next sat 3pm", saturday).due, "2026-11-28T15:00");
@@ -148,6 +242,26 @@ describe("drag cancel with Escape", () => {
     const later = new Event("click", { cancelable: true });
     fake.dispatchEvent(later);
     assert.equal(later.defaultPrevented, false);
+    const repeat = new KeyboardEventLike("keydown", "Escape");
+    fake.dispatchEvent(repeat);
+    assert.equal(repeat.defaultPrevented, true);
+    fake.dispatchEvent(new KeyboardEventLike("keyup", "Escape"));
+    const fresh = new KeyboardEventLike("keydown", "Escape");
+    fake.dispatchEvent(fresh);
+    assert.equal(fresh.defaultPrevented, false);
+  });
+
+  it("stops swallowing clicks when the pointer is cancelled after an Escape", () => {
+    const { seen, handlers } = record();
+    startPointerGesture({ pointerType: "mouse", pointerId: 1, clientX: 10, clientY: 10 }, handlers);
+    fake.dispatchEvent(pointer("pointermove", { clientX: 40, clientY: 10 }));
+    fake.dispatchEvent(new KeyboardEventLike("keydown", "Escape"));
+    fake.dispatchEvent(new KeyboardEventLike("keyup", "Escape"));
+    fake.dispatchEvent(pointer("pointercancel"));
+    const click = new Event("click", { cancelable: true });
+    fake.dispatchEvent(click);
+    assert.equal(click.defaultPrevented, false);
+    assert.deepEqual(seen, ["start", "end:cancel"]);
   });
 
   it("lets Escape through before a drag has started", () => {

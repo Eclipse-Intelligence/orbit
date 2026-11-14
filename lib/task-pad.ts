@@ -112,6 +112,14 @@ function toHour(hour: number, minute: number, meridiem: string | undefined) {
   return { hour: h, minute };
 }
 
+function wallTimeExists(day: Day, time: { hour: number; minute: number }) {
+  const wall = Date.UTC(day.year, day.month - 1, day.day, time.hour, time.minute);
+  return [0, 60, -60].some((offset) => {
+    const parts = londonParts(new Date(wall - offset * 60_000));
+    return parts.year === day.year && parts.month === day.month && parts.day === day.day && parts.hour === time.hour && parts.minute === time.minute;
+  });
+}
+
 export function londonParts(now: Date) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/London",
@@ -169,6 +177,24 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   let ambiguous = false;
   let evening = false;
   let sameWeekday = false;
+  let dateSource: "explicit" | "relative" | "week" | null = null;
+  let weekAnchor: Day | null = null;
+  const weekdays: { start: number; end: number; target: number; next: boolean; weekLater: boolean }[] = [];
+  const collect = (pattern: RegExp, read: (match: RegExpExecArray) => { target: number; next: boolean; weekLater: boolean } | null) => {
+    const global = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+    for (let match = global.exec(text); match; match = global.exec(text)) {
+      if (match[0].length === 0) {
+        global.lastIndex += 1;
+        continue;
+      }
+      const start = match.index;
+      const end = start + match[0].length;
+      const taken = spans.some((span) => start < span.end && end > span.start) || weekdays.some((item) => start < item.end && end > item.start);
+      if (taken) continue;
+      const said = read(match);
+      if (said && said.target >= 0) weekdays.push({ start, end, ...said });
+    }
+  };
   const clock = (hour: string, minute: number, meridiem: string | undefined) => {
     if (guessable(hour, meridiem)) return toHour(Number(hour), minute, meridiem);
     ambiguous = true;
@@ -205,6 +231,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   const setDate = (candidate: Day, explicitYear: boolean) => {
     if (!valid(candidate)) return false;
     found.date = !explicitYear && compare(candidate, today) < 0 ? { ...candidate, year: candidate.year + 1 } : candidate;
+    dateSource = "explicit";
   };
 
   take(
@@ -216,15 +243,20 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   );
   take(/\bin\s+(\d+|an?|one|two|three|four|five|six|ten|fifteen|thirty)\s*(mins?|minutes?|hrs?|hours?|days?|weeks?)\b/i, (match) => {
     const minutes = amount(match[1]) * unitMinutes(match[2]);
-    if (minutes >= 24 * 60) found.date = addDays(today, Math.round(minutes / (24 * 60)));
-    else found.exact = minutes;
+    if (minutes >= 24 * 60) {
+      found.date = addDays(today, Math.round(minutes / (24 * 60)));
+      dateSource = /^w/i.test(match[2]) ? "week" : "relative";
+      weekAnchor = dateSource === "week" ? found.date : null;
+    } else found.exact = minutes;
   });
   take(new RegExp(`${LEAD}\\b(?:the\\s+)?day\\s+after\\s+tomorrow\\b`, "i"), () => {
     found.date = addDays(today, 2);
+    dateSource = "relative";
   });
   take(new RegExp(`${LEAD}\\b(today|tonight|tomorrow|tmrw|tmr)\\b`, "i"), (match) => {
     const word = match[1].toLowerCase();
     found.date = word === "today" || word === "tonight" ? today : addDays(today, 1);
+    dateSource = "relative";
     if (word === "tonight" && !found.time) {
       found.time = { hour: 19, minute: 0 };
       evening = true;
@@ -233,15 +265,20 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(new RegExp(`${LEAD}\\b(?:end\\s+of\\s+(?:the\\s+)?week|eow)\\b`, "i"), () => {
     found.date = addDays(today, (5 - weekday(today) + 7) % 7);
     found.time = found.time ?? { hour: 17, minute: 0 };
+    dateSource = "relative";
   });
   take(new RegExp(`${LEAD}\\bnext\\s+week\\b`, "i"), () => {
     found.date = addDays(today, ((1 - weekday(today) + 7) % 7) || 7);
+    dateSource = "week";
+    weekAnchor = found.date;
   });
   take(new RegExp(`${LEAD}\\b(?:this\\s+)?weekend\\b`, "i"), () => {
     found.date = addDays(today, ((6 - weekday(today) + 7) % 7) || 7);
+    dateSource = "relative";
   });
   take(new RegExp(`${LEAD}\\bnext\\s+month\\b`, "i"), () => {
     found.date = { year: today.month === 12 ? today.year + 1 : today.year, month: today.month === 12 ? 1 : today.month + 1, day: 1 };
+    dateSource = "relative";
   });
   take(new RegExp(`${LEAD}\\b(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+${MONTH}\\b(?:\\s+(\\d{4}))?`, "i"), (match) =>
     setDate({ year: match[3] ? Number(match[3]) : today.year, month: monthIndex(match[2]) + 1, day: Number(match[1]) }, Boolean(match[3])),
@@ -259,22 +296,39 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (!match[3] && !led && !closing) return false;
     return setDate({ year, month: Number(match[2]), day: Number(match[1]) }, Boolean(match[3]));
   });
-  const onWeekday = (target: number, said: string) => {
-    const ahead = (target - weekday(today) + 7) % 7;
-    found.date = addDays(today, ahead || 7);
-    sameWeekday = ahead === 0 && !/\bnext\b/i.test(said);
+  const plainDay = (match: RegExpExecArray, group: number) => ({ target: weekdayIndex(match[group]), next: /\bnext\b/i.test(match[0]), weekLater: false });
+  collect(new RegExp(`${LEAD}\\b${WEEKDAY}\\s+week\\b`, "i"), (match) => ({ target: weekdayIndex(match[1]), next: false, weekLater: true }));
+  collect(new RegExp(`${LEAD}\\b(?:(next|this|coming)\\s+)?${WEEKDAY}\\b`, "i"), (match) => plainDay(match, 2));
+  collect(new RegExp(`\\b(?:on|by|due|for|until|this|next|coming)\\s+${WEEKEND_SHORT}\\b`, "i"), (match) => plainDay(match, 1));
+  collect(new RegExp(`(?<=\\bweek\\s+)${WEEKEND_SHORT}\\b`, "i"), (match) => plainDay(match, 1));
+  collect(new RegExp(`${LEAD}\\b${WEEKEND_SHORT}\\b(?=\\s*,?\\s*(?:(?:at\\s+)?${CLOCK}|at\\s+\\d{1,2}\\b))`, "i"), (match) => plainDay(match, 1));
+  collect(new RegExp(`(?<=(?:${CLOCK}|\\bat\\s+\\d{1,2})\\s*,?\\s*)(?:on\\s+)?\\b${WEEKEND_SHORT}\\b`, "i"), (match) => plainDay(match, 1));
+  weekdays.sort((a, b) => a.start - b.start);
+  const consume = (item: { start: number; end: number }) => spans.push({ start: item.start, end: item.end, kind: "when" });
+  const clockNear = new RegExp(`^\\s*,?\\s*(?:at\\s+)?(?:${CLOCK}|\\d{1,2}\\b(?!\\s*(?:st|nd|rd|th|\\/)))`, "i");
+  const clockBefore = new RegExp(`(?:${CLOCK}|\\bat\\s+\\d{1,2})\\s*,?\\s*(?:on\\s+)?$`, "i");
+  const strength = (item: { start: number; end: number }) => {
+    const said = text.slice(item.start, item.end);
+    if (clockNear.test(text.slice(item.end)) || clockBefore.test(text.slice(0, item.start))) return 2;
+    return /^\s*(?:on|by|due|for|until|this|next|coming)\s/i.test(said) || /\bweek\b/i.test(text.slice(Math.max(0, item.start - 6), item.end)) ? 1 : 0;
   };
-  take(new RegExp(`${LEAD}\\b(?:(next|this|coming)\\s+)?${WEEKDAY}\\b`, "i"), (match) => {
-    const target = weekdayIndex(match[2]);
-    if (target < 0) return false;
-    onWeekday(target, match[0]);
-  });
-  const weekendDay = (match: RegExpExecArray) => {
-    onWeekday(weekdayIndex(match[1]), match[0]);
-  };
-  take(new RegExp(`\\b(?:on|by|due|for|until|this|next|coming)\\s+${WEEKEND_SHORT}\\b`, "i"), weekendDay);
-  take(new RegExp(`${LEAD}\\b${WEEKEND_SHORT}\\b(?=\\s*,?\\s*(?:(?:at\\s+)?${CLOCK}|at\\s+\\d{1,2}\\b))`, "i"), weekendDay);
-  take(new RegExp(`(?<=(?:${CLOCK}|\\bat\\s+\\d{1,2})\\s*,?\\s*)(?:on\\s+)?\\b${WEEKEND_SHORT}\\b`, "i"), weekendDay);
+  const chosen = weekdays.reduce<(typeof weekdays)[number] | undefined>((best, item) => (!best || strength(item) > strength(best) ? item : best), undefined);
+  if (chosen && (dateSource === "explicit" || dateSource === "relative")) {
+    for (const item of weekdays) {
+      const touches = spans.some((span) => /^[\s,]*(?:the\s+)?$/i.test(item.end <= span.start ? text.slice(item.end, span.start) : span.end <= item.start ? text.slice(span.end, item.start) : "x"));
+      if (touches) consume(item);
+    }
+  } else if (chosen && dateSource === "week" && weekAnchor) {
+    const monday = addDays(weekAnchor, -((weekday(weekAnchor) + 6) % 7));
+    found.date = addDays(monday, (chosen.target + 6) % 7);
+    consume(chosen);
+  } else if (chosen) {
+    const ahead = (chosen.target - weekday(today) + 7) % 7;
+    found.date = addDays(today, (ahead || 7) + (chosen.weekLater ? 7 : 0));
+    sameWeekday = ahead === 0 && !chosen.next && !chosen.weekLater;
+    if (chosen.weekLater && ahead === 0) ambiguous = true;
+    consume(chosen);
+  }
   take(
     new RegExp(`\\b(?:at\\s+|from\\s+)?${NOT_MONEY}(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*-\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)\\b`, "i"),
     (match) => {
@@ -369,6 +423,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (time && sameWeekday && !passed) day = today;
     const date = `${day.year}-${pad(day.month)}-${pad(day.day)}`;
     due = time ? `${date}T${pad(time.hour)}:${pad(time.minute)}` : date;
+    if (time && !wallTimeExists(day, time)) ambiguous = true;
   }
 
   const kept = due ? spans : spans.filter((span) => span.kind !== "reminder");

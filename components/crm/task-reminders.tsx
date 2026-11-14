@@ -14,6 +14,7 @@ import {
   reminderFired,
   reminderKey,
   requestReminderPermission,
+  keyboardUp,
   shownAlert,
   typingInto,
 } from "@/lib/reminder-alerts";
@@ -28,22 +29,38 @@ export default function TaskReminders() {
   const [permission, setPermission] = useState<string>("unsupported");
   const timers = useRef(new Map<string, number>());
   const devicePushed = useRef(false);
-  const [typing, setTyping] = useState(false);
+  const [keyboard, setKeyboard] = useState(false);
 
   useEffect(() => {
+    const view = window.visualViewport;
     const coarse = window.matchMedia("(pointer: coarse)");
+    let width = window.innerWidth;
+    let resting = view?.height ?? window.innerHeight;
     let timer = 0;
-    const check = () => setTyping(coarse.matches && typingInto(document.activeElement));
-    const left = () => {
+    const check = () => {
+      const height = view?.height ?? window.innerHeight;
+      const typing = coarse.matches && typingInto(document.activeElement);
+      if (window.innerWidth !== width || !typing) {
+        width = window.innerWidth;
+        resting = height;
+      }
+      setKeyboard(keyboardUp(resting, height, typing));
+    };
+    const soon = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(check, 0);
     };
-    document.addEventListener("focusin", check);
-    document.addEventListener("focusout", left);
+    soon();
+    view?.addEventListener("resize", soon);
+    window.addEventListener("resize", soon);
+    document.addEventListener("focusin", soon);
+    document.addEventListener("focusout", soon);
     return () => {
       window.clearTimeout(timer);
-      document.removeEventListener("focusin", check);
-      document.removeEventListener("focusout", left);
+      view?.removeEventListener("resize", soon);
+      window.removeEventListener("resize", soon);
+      document.removeEventListener("focusin", soon);
+      document.removeEventListener("focusout", soon);
     };
   }, []);
 
@@ -127,7 +144,7 @@ export default function TaskReminders() {
   }, [refresh]);
 
   const { alert, more } = shownAlert(alerts);
-  if (!alert || typing) return null;
+  if (!alert || keyboard) return null;
 
   function dismiss(key: string) {
     setAlerts((current) => current.filter((alert) => alert.key !== key));

@@ -1,3 +1,5 @@
+import { CrmError } from "@/lib/crm/errors";
+
 export type DoneState = { done: Set<string>; awaiting: Set<string>; confirmed: Set<string>; sent: Set<string> };
 
 export function reconcileDone(open: Set<string>, state: DoneState): DoneState {
@@ -19,4 +21,8 @@ export async function stillOpenIds(wanted: string[], check: (ids: string[]) => P
 export function panelTaskFor<T extends { id: string }>(openId: string | null, listed: T | null, kept: T | null, keep: (id: string) => boolean) {
   if (listed) return listed;
   return kept && kept.id === openId && keep(kept.id) ? kept : null;
+}
+
+export function missingOrFailed(error: unknown) {
+  return error instanceof CrmError && error.status < 500 ? null : undefined;
 }

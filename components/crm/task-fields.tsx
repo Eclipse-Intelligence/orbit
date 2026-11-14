@@ -28,6 +28,7 @@ import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
+import { draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
 import { clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
@@ -158,32 +159,15 @@ function dueWrite(value: string): TaskDetails {
   return padDueHasTime(value) ? { dueAt: localInstant(value), dueHasTime: true } : { dueDate: value };
 }
 
-const drafts = new Map<string, { title?: string; text?: string }>();
-type DraftChange = { id: string; field: "title" | "text"; kept: boolean; value: string };
-const draftWatchers = new Set<(change: DraftChange) => void>();
-
-function tellDraftWatchers(change: DraftChange) {
-  for (const watcher of draftWatchers) watcher(change);
-}
-
-function keepDraft(id: string, field: "title" | "text", value: string) {
-  drafts.set(id, { ...drafts.get(id), [field]: value });
-  tellDraftWatchers({ id, field, kept: true, value });
-}
-
-function dropDraft(id: string, field: "title" | "text", value: string) {
-  const draft = drafts.get(id);
-  if (!draft || draft[field] === undefined) return;
-  delete draft[field];
-  if (draft.title === undefined && draft.text === undefined) drafts.delete(id);
-  tellDraftWatchers({ id, field, kept: false, value });
-}
+const drafts = taskDrafts();
 
 export function useTaskDetails(task: Task, canChange: boolean, shown = true, viewerId: string | null = null) {
   const router = useRouter();
   const composer = useComposer();
   const source = sourceOf(task);
   const [draft] = useState(() => drafts.get(task.id));
+  const latestDraftChange = useRef<(change: DraftChange) => void>(() => undefined);
+  const [self] = useState(() => (change: DraftChange) => latestDraftChange.current(change));
   const [seen, setSeen] = useState(source);
   const [title, setTitle] = useState(draft?.title ?? source.title);
   const [text, setText] = useState(draft?.text ?? source.text);
@@ -259,7 +243,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
       return false;
     }
-    setErrors((current) => clearFields(current, fields));
+    setErrors((current) => clearFields(current, [...fields, "other"]));
     const applied = timed && result.saved ? timing.succeed(ticket, { due: dueValue(result.saved), reminder: result.saved.remindMinutes, duration: result.saved.durationMinutes }) : null;
     if (timed && !result.saved) timing.fail(ticket);
     if (applied && result.saved) {
@@ -276,47 +260,34 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     return true;
   }
 
-  function saveTitle() {
+  function saveDraft(field: DraftField) {
     if (!canChange) return;
-    const next = title.trim();
-    if (!next) {
-      setTitle(sent.current.title);
-      dropDraft(task.id, "title", sent.current.title);
+    const previous = sent.current[field];
+    const commit = draftCommit(field, field === "title" ? title : text, previous);
+    if (!commit.save) {
+      if (field === "title" && commit.value !== title) setTitle(commit.value);
+      setErrors((current) => clearFields(current, [field]));
+      drafts.drop(self, task.id, field, previous);
       return;
     }
-    const previous = sent.current.title;
-    if (next === previous) {
-      dropDraft(task.id, "title", next);
-      return;
-    }
-    sent.current.title = next;
-    void save({ title: next }).then((ok) => {
+    const next = commit.value;
+    sent.current[field] = next;
+    void save(field === "title" ? { title: next } : { description: next || null }).then((ok) => {
       if (ok) {
-        dropDraft(task.id, "title", next);
+        drafts.drop(self, task.id, field, next);
         return;
       }
-      if (sent.current.title === next) sent.current.title = previous;
-      keepDraft(task.id, "title", next);
+      if (sent.current[field] === next) sent.current[field] = previous;
+      drafts.keep(self, task.id, field, next, sent.current[field]);
     });
   }
 
+  function saveTitle() {
+    saveDraft("title");
+  }
+
   function saveText() {
-    if (!canChange) return;
-    const next = text.trim();
-    const previous = sent.current.text;
-    if (next === previous) {
-      dropDraft(task.id, "text", next);
-      return;
-    }
-    sent.current.text = next;
-    void save({ description: next || null }).then((ok) => {
-      if (ok) {
-        dropDraft(task.id, "text", next);
-        return;
-      }
-      if (sent.current.text === next) sent.current.text = previous;
-      keepDraft(task.id, "text", next);
-    });
+    saveDraft("text");
   }
 
   function flush() {
@@ -326,27 +297,26 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
 
   function onDraftChange(change: DraftChange) {
     if (change.id !== task.id) return;
-    const local = change.field === "title" ? title.trim() : text.trim();
-    const field = change.field === "title" ? "title" : "text";
-    const reaction = draftReaction(change, local, sent.current[change.field]);
-    if (reaction === "clear") setErrors((current) => clearFields(current, [field]));
-    if (reaction !== "adopt") return;
-    if (change.field === "title") setTitle(change.value);
-    else setText(change.value);
-    setErrors((current) => failFields(current, [field], saveFailedMessage([field])));
+    const field = change.field;
+    const reaction = draftReaction(change, field === "title" ? title.trim() : text.trim(), sent.current[field]);
+    if (reaction === "ignore") return;
+    const show = (value: string) => (field === "title" ? setTitle(value) : setText(value));
+    if (reaction === "adopt") {
+      show(change.draft);
+      setErrors((current) => failFields(current, [field], saveFailedMessage([field])));
+      return;
+    }
+    if (reaction === "restore") {
+      sent.current[field] = change.saved;
+      show(change.saved);
+    }
+    setErrors((current) => clearFields(current, [field]));
   }
 
-  const latestDraftChange = useRef(onDraftChange);
   useEffect(() => {
     latestDraftChange.current = onDraftChange;
   });
-  useEffect(() => {
-    const watcher = (change: DraftChange) => latestDraftChange.current(change);
-    draftWatchers.add(watcher);
-    return () => {
-      draftWatchers.delete(watcher);
-    };
-  }, []);
+  useEffect(() => drafts.watch(self), [self]);
 
   const latestFlush = useRef(flush);
   useEffect(() => {

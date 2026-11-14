@@ -55,3 +55,9 @@ export function typingInto(element: Focused | null) {
   if (tag === "INPUT") return !element.readOnly && !element.disabled && !/^(button|checkbox|radio|range|color|file|submit|reset|image|hidden)$/i.test(element.type ?? "text");
   return Boolean(element.isContentEditable);
 }
+
+export const KEYBOARD_MIN_PX = 120;
+
+export function keyboardUp(restingHeight: number, height: number, typing: boolean) {
+  return typing && restingHeight - height >= KEYBOARD_MIN_PX;
+}
