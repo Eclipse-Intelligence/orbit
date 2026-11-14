@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { pushState } from "@/components/push/push-client";
 import { dueRemindersAction } from "@/app/(crm)/records";
 import { reminderFireAt, reminderHeadline } from "@/lib/crm/reminder-options";
 import { TASKS_PATH } from "@/lib/crm/task-views";
@@ -24,6 +25,7 @@ export default function TaskReminders() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [permission, setPermission] = useState<string>("unsupported");
   const timers = useRef(new Map<string, number>());
+  const devicePushed = useRef(false);
 
   const fire = useCallback(
     (key: string, reminder: DueReminder) => {
@@ -32,7 +34,7 @@ export default function TaskReminders() {
       markReminderFired(key);
       const headline = reminderHeadline(reminder.dueAt);
       const about = reminder.contactName ?? reminder.companyName;
-      if (notificationPermission() === "granted") {
+      if (notificationPermission() === "granted" && !(reminder.pushed && devicePushed.current)) {
         try {
           const notification = new Notification(headline, {
             body: about ? `${reminder.title} · ${about}` : reminder.title,
@@ -53,6 +55,10 @@ export default function TaskReminders() {
   );
 
   const refresh = useCallback(async () => {
+    devicePushed.current = await pushState().then(
+      (state) => state === "on",
+      () => false,
+    );
     let reminders: DueReminder[];
     try {
       reminders = await dueRemindersAction();

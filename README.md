@@ -497,7 +497,7 @@ Mail needs two more jobs, made the same way with their own name, schedule and pa
 | Job | Schedule | Path | What it does |
 | --- | --- | --- | --- |
 | `orbit-mail` | `*/5 * * * *` (every five minutes) | `/api/cron/mail` | Syncs every connected mailbox into the Mail mirror (backfill included, up to four minutes a run), then for each user sends due mail and prepares replies and reminders (`prepareMail`). |
-| `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Sends scheduled emails, brings snoozed conversations back, raises No reply reminders, sends meeting reminders and picks up agent mailbox jobs left behind (`maxDuration` 300). |
+| `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Sends scheduled emails, brings snoozed conversations back, raises No reply reminders, sends meeting and task reminders and picks up agent mailbox jobs left behind (`maxDuration` 300). |
 | `orbit-learn` | `*/10 1-5 * * *` (every ten minutes, 1am to 6am UTC) | `/api/cron/learn` | Nightly learning (see Learning). Each part runs once a day, so the extra runs only pick up what an earlier run didn't finish. |
 
 ## Contact enrichment
@@ -625,7 +625,7 @@ Prepare gets a call or meeting task ready with a brief, and an email task with a
 
 A task is due on a day, or at a time on that day. A day alone ("Call Jane Monday") is date only: due all that day, and not overdue until it ends. A time typed or picked makes it timed, and only timed tasks will go on the calendar. Rows and the panel show the time only for timed tasks ("Today 14:30", "Fri 13 Nov"). Each task has a Duration (5, 10, 15, 30, 45 or 60 minutes, or a custom number up to 480; 15 by default). Schedule gives it a time: the next free slot today, tomorrow morning, Monday morning (all inside your working hours), or a date and time; on a timed task it also offers Remove the time, which keeps the day. Moving a task to another day keeps its kind.
 
-A task with a due time can have a reminder: at the due time, 5, 10, 15 or 30 minutes, 1 or 2 hours, 24 hours, 2 days or a week before. While Orbit is open, it checks every minute and shows an alert with Open tasks and Dismiss, plus a browser notification once you choose Turn on browser alerts. Reminders cover tasks you own and unowned ones.
+A task with a due time can have a reminder: at the due time, 5, 10, 15 or 30 minutes, 1 or 2 hours, 24 hours, 2 days or a week before. While Orbit is open, it checks every minute and shows an alert with Open tasks and Dismiss, plus a browser notification once you choose Turn on browser alerts. Reminders cover tasks you own and unowned ones. With notifications on (Settings › General › Notifications), the reminder also reaches your phone or desktop when Orbit is closed, once, and tapping it opens the task. A reminder whose time had already passed more than 10 minutes earlier when it was set isn't pushed. It goes to the task's assignee, or to its creator when nobody owns it. Changing the time or reminder sends it again at the new time; a completed task sends nothing.
 
 ## Activity pad
 
