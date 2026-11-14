@@ -25,7 +25,8 @@ import { createCrmMcpServer } from "@/server/mcp/server";
 import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
 import { describeAction, DOCS_NOT_YOURS, recordNames, taskDocsRefusalFor } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
-import { moveRecordsToWorkspace } from "@/lib/crm/move-workspace";
+import { droppedDocLinks, moveRecordsToWorkspace } from "@/lib/crm/move-workspace";
+import { appTransaction } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { writeTaskDocsInDb } from "@/lib/crm/task-docs";
 import { archiveWebhook, createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
@@ -724,6 +725,19 @@ describe("task docs, second review", () => {
     assert.ok(moveChange);
     assert.equal(moveChange.canUndo, false);
     assert.match(moveChange.reason ?? "", /^Can't undo: the task moved workspace and its docs stayed in /);
+  });
+
+  it("audits only links dropped by tasks that really moved, not a task unlinked at the same time", async () => {
+    const moved = (await createTask(mark, { title: "Really moved", docIds: [shared] })).body.task;
+    const stayed = (await createTask(mark, { title: "Unlinked meanwhile", docIds: [shared] })).body.task;
+    const before = new Map([
+      [moved.id, [shared]],
+      [stayed.id, [shared]],
+    ]);
+    await sql("update crm.tasks set workspace_id = $2, company_id = null, contact_id = null, opportunity_id = null, owner_id = null where id = $1", [moved.id, elsewhere.workspaceId]);
+    await sql("delete from crm.task_docs where task_id = $1", [stayed.id]);
+    const dropped = await appTransaction((db) => droppedDocLinks(db, before, new Map(), elsewhere.workspaceId));
+    assert.deepEqual(dropped, [{ taskId: moved.id, docIds: [shared] }]);
   });
 
   it("adds the year to a daily note from another year", async () => {

@@ -260,7 +260,7 @@ export function DocPickPopover({
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 setHighlight((active + (event.key === "ArrowDown" ? 1 : -1) + docs.length) % docs.length);
-              } else if (picks && active >= 0) {
+              } else if (picks && active >= 0 && !found.loading) {
                 event.preventDefault();
                 choose(docs[active]);
               }

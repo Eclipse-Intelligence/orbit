@@ -374,8 +374,12 @@ async function docLinksIn(db: Db, workspaceId: string): Promise<DocLinks> {
   return new Map(result.rows.map((row) => [row.task_id, row.page_ids]));
 }
 
-function droppedDocLinks(before: DocLinks, after: DocLinks) {
-  return [...before].filter(([taskId]) => !after.has(taskId)).map(([taskId, docIds]) => ({ taskId, docIds }));
+export async function droppedDocLinks(db: Db, before: DocLinks, after: DocLinks, targetId: string) {
+  const gone = [...before].filter(([taskId]) => !after.has(taskId));
+  if (gone.length === 0) return [];
+  const moved = await db.query<{ id: string }>("select id from private.tasks_now_in($1::uuid[], $2) as id", [gone.map(([taskId]) => taskId), targetId]);
+  const ids = new Set(moved.rows.map((row) => row.id));
+  return gone.filter(([taskId]) => ids.has(taskId)).map(([taskId, docIds]) => ({ taskId, docIds }));
 }
 
 async function auditDroppedDocs(db: Db, target: UserActor, plan: Plan, dropped: { taskId: string; docIds: string[] }[], provenance: Provenance) {
@@ -540,7 +544,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
       }
       const linksBefore = await docLinksIn(db, source.workspaceId);
       plan = await runPlan(db, source, target, input, false);
-      dropped = linksBefore.size > 0 ? droppedDocLinks(linksBefore, await docLinksIn(db, source.workspaceId)) : [];
+      dropped = linksBefore.size > 0 ? await droppedDocLinks(db, linksBefore, await docLinksIn(db, source.workspaceId), target.workspaceId) : [];
     },
     async (db) => {
       const done = plan as Plan | null;

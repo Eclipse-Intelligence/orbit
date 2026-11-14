@@ -75,6 +75,19 @@ $$;
 revoke all on function private.task_doc_links_in(uuid) from public;
 grant execute on function private.task_doc_links_in(uuid) to crm_app;
 
+create or replace function private.tasks_now_in(p_task_ids uuid[], p_workspace uuid)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select t.id from crm.tasks t where t.id = any(p_task_ids) and t.workspace_id = p_workspace;
+$$;
+
+revoke all on function private.tasks_now_in(uuid[], uuid) from public;
+grant execute on function private.tasks_now_in(uuid[], uuid) to crm_app;
+
 drop trigger if exists tasks_docs_move on crm.tasks;
 create trigger tasks_docs_move
   after update of workspace_id on crm.tasks

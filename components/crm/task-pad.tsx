@@ -914,7 +914,7 @@ export default function TaskPad({
         setDocHighlight((docActive + (event.key === "ArrowDown" ? 1 : -1) + count) % count);
         return;
       }
-      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && docOptions && docActive >= 0) {
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && docOptions && docActive >= 0 && !docFound.loading) {
         event.preventDefault();
         pickDoc(docOptions[docActive]);
         return;
