@@ -635,7 +635,7 @@ async function createRemote(s: Session, taskId: string) {
         return "pushed" as const;
       }
     } catch (error) {
-      await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."));
+      await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."), refusedByClickUp(error) ? ["unconfirmed"] : []);
       throw error;
     }
   }
@@ -1211,22 +1211,23 @@ export async function createTaskWithClickUp(
   });
   const task = created.body.task;
   if (!listId) return { task, clickupError: null };
+  const clickupError = await sendTaskToClickUpList(actor, task.id, listId, options);
+  return { task: { ...task, clickupListId: listId }, clickupError };
+}
+
+export async function sendTaskToClickUpList(actor: UserActor, taskId: string, listId: string, options: ClickUpOptions = {}) {
   await withActor(actor, async (db) => {
-    await db.query("update crm.tasks set clickup_list_id = $2 where id = $1", [task.id, listId]);
+    await db.query("update crm.tasks set clickup_list_id = $2 where id = $1 and clickup_task_id is null", [taskId, listId]);
     await db.query(
       `update crm.integration_state set last_used_list_id = $2
        where workspace_id = $1 and source = 'clickup' and connection_id is null`,
       [actor.workspaceId, listId],
     );
   });
-  const outcome = await pushClickUpTask(actor, task.id, options);
-  if (outcome === "failed") {
-    const row = await withActor(actor, (db) =>
-      db.query<{ clickup_error: string | null }>("select clickup_error from crm.tasks where id = $1", [task.id]),
-    );
-    return { task: { ...task, clickupListId: listId }, clickupError: row.rows[0]?.clickup_error ?? unreachable("ClickUp") };
-  }
-  return { task: { ...task, clickupListId: listId }, clickupError: null };
+  const outcome = await pushClickUpTask(actor, taskId, options);
+  if (outcome !== "failed") return null;
+  const row = await withActor(actor, (db) => db.query<{ clickup_error: string | null }>("select clickup_error from crm.tasks where id = $1", [taskId]));
+  return row.rows[0]?.clickup_error ?? unreachable("ClickUp");
 }
 
 export async function getClickUpSettings(

@@ -124,7 +124,7 @@ describe("workflow runs picked up again after the server stopped", () => {
     await resumeDelay(started.runId, llm);
     const midway = saved as unknown as RunRow;
     const state = midway.state as Record<string, unknown>;
-    const replay = () => dieAndReclaim(started.runId, { status: "running", state: { ...state, at: stepId, effect: { key: stepId, at: before } } });
+    const replay = () => dieAndReclaim(started.runId, { status: "running", state: { ...state, at: stepId, effect: { key: stepId, at: before, logged: true } } });
     return { runId: started.runId, llm, replay };
   }
 
@@ -143,6 +143,10 @@ describe("workflow runs picked up again after the server stopped", () => {
     assert.equal((await getRunSteps(owner, runId)).run.status, "succeeded");
     assert.equal(await taskCount("Send Replay Co the deck"), 1);
     assert.equal(await succeededLogs(runId, "create_task_1"), 1);
+    const audit = await getAdminPool().query<{ source_url: string; workflow_step: string }>(
+      "select e.source_url, e.changes->>'workflowStep' as workflow_step from crm.audit_events e join crm.tasks t on t.id = e.entity_id where e.event_type = 'task.created' and t.title = 'Send Replay Co the deck'",
+    );
+    assert.deepEqual({ ...audit.rows[0] }, { source_url: `/workflows/${workflowId}`, workflow_step: `${runId}:create_task_1` });
   });
 
   it("never takes another task with the same title for its own", async () => {

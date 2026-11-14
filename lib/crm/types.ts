@@ -140,6 +140,7 @@ export type Provenance = {
   catchUp?: boolean;
   automatic?: boolean;
   synced?: boolean;
+  workflowStep?: string;
 };
 
 export type CompanyListQuery = {

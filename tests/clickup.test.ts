@@ -853,6 +853,25 @@ describe("clickup sync", () => {
     assert.equal(row.clickup_list_id, RELATIONSHIPS);
   });
 
+  it("forgets a lost create when ClickUp refuses the lookup for it", async () => {
+    const unsent: typeof fetch = async (input, init) => {
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return fetchImpl(input, init);
+    };
+    const task = (await createTaskWithClickUp(owner, { title: "Lookup refused", contactId: janeId }, TODOIST, { fetchImpl: unsent })).task;
+    assert.ok((await taskRow(task.id)).clickup_sync.unconfirmed);
+    const refusing: typeof fetch = async (input, init) => {
+      if (new URL(String(input)).searchParams.has("date_created_gt")) return Response.json({ err: "Token invalid", ECODE: "OAUTH_025" }, { status: 401 });
+      return fetchImpl(input, init);
+    };
+    await syncClickUp({ actor: owner, force: true, fetchImpl: refusing });
+    const row = await taskRow(task.id);
+    assert.equal(row.clickup_sync.unconfirmed, undefined);
+    assert.ok(row.clickup_error);
+  });
+
   it("sends follow-up tasks suggested after an email to the default list", async () => {
     const company = (await createCompany(owner, { name: "Initech", domain: "initech-mail.test" })).body.company;
     await createContact(owner, { companyId: company.id, firstName: "Peter", lastName: "Gibbons", email: "peter@initech-mail.test" });
