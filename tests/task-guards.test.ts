@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -8,11 +10,12 @@ import { upsertContact } from "@/lib/crm/contacts";
 import { openDiscussion, postMessage } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
+import { localInstant } from "@/lib/crm/task-time";
 import { detectPadRecords } from "@/lib/crm/task-pad";
 import { archiveTask, completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import { removeMember } from "@/lib/crm/team";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
-import { agentSource, companyMutationSchema, parseInput } from "@/lib/crm/validation";
+import { agentSource, companyMutationSchema, parseInput, SYSTEM_SOURCES } from "@/lib/crm/validation";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createAgent, createUser, resetDatabase } from "@/tests/helpers";
@@ -151,6 +154,8 @@ describe("agent provenance", () => {
     for (const source of ["web", "Email", " clickup ", "workflow", "communication", "assistant", "mcp", "granola"]) assert.equal(agentSource(source), null, source);
     assert.equal(agentSource("research-agent"), "research-agent");
     assert.equal(agentSource(null), null);
+    assert.equal(agentSource("e\u200bmail"), null);
+    assert.equal(agentSource("\uff57\uff45\uff42"), null);
     const parsed = parseInput(companyMutationSchema, { name: "Acme", provenance: { source: "email", sourceUrl: "https://example.com" } });
     assert.equal(parsed.provenance?.source, null);
   });
@@ -166,7 +171,40 @@ describe("agent provenance", () => {
   });
 });
 
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) return entry === "node_modules" ? [] : sourceFiles(path);
+    return /\.tsx?$/.test(entry) ? [path] : [];
+  });
+}
+
+describe("system sources", () => {
+  it("lists every source Orbit writes with an operation", () => {
+    const used = new Map<string, string>();
+    for (const file of ["lib", "app", "server"].flatMap(sourceFiles)) {
+      const text = readFileSync(file, "utf8");
+      for (const object of text.matchAll(/\{[^{}]*\boperation:[^{}]*\}/g)) {
+        for (const literal of object[0].matchAll(/\bsource:\s*"([^"]+)"/g)) used.set(literal[1], file);
+      }
+    }
+    assert.ok(used.size > 10, String(used.size));
+    const missing = [...used].filter(([source]) => !(SYSTEM_SOURCES as readonly string[]).includes(source));
+    assert.deepEqual(missing, []);
+  });
+});
+
 describe("task approval cards", () => {
+  it("never says a due day is cleared while giving one, and shows nothing cleared on a new task", () => {
+    const update = describeAction("update_task", { taskId: "00000000-0000-4000-8000-000000000001", dueDate: "2027-03-01", dueAt: null });
+    assert.ok(update.lines.includes("Due: Mon 1 Mar 2027"), update.lines.join("\n"));
+    assert.ok(!update.lines.includes("Due: none"), update.lines.join("\n"));
+    const cleared = describeAction("update_task", { taskId: "00000000-0000-4000-8000-000000000001", dueDate: null, dueAt: null, remindMinutes: null });
+    assert.deepEqual(cleared.lines.filter((line) => line.endsWith(": none")), ["Due: none", "Reminder: none"]);
+    const create = describeAction("create_task", { title: "Call Ann", dueDate: null, remindMinutes: null, description: null });
+    assert.ok(!create.lines.some((line) => line.endsWith(": none")), create.lines.join("\n"));
+  });
+
   it("shows a teammate's task as date only with no reminder, and ClickUp only when it's set up", async () => {
     const args = { title: "Call Bob", ownerId: priya.userId, dueAt: "2027-03-01T10:00", remindMinutes: 15 };
     const names = await recordNames(eclipse, [args], ["create_task"]);
@@ -204,6 +242,21 @@ describe("midnight times", () => {
     assert.equal(moved.json?.task?.dueHasTime, true);
   });
 
+  it("sets midnight from the web panel's value and from an offset", async () => {
+    const web = (await createTask(eclipse, { title: "Midnight web", dueDate: "2027-03-01" })).body.task;
+    const fromPanel = (await updateTask(eclipse, web.id, { dueAt: localInstant("2027-03-01T00:00"), dueHasTime: true })).body.task;
+    assert.equal(fromPanel.dueHasTime, true);
+    const offset = (await createTask(eclipse, { title: "Midnight offset", dueDate: "2027-03-01" })).body.task;
+    const fromOffset = (await updateTask(eclipse, offset.id, { dueAt: "2027-03-01T00:00+00:00" })).body.task;
+    assert.equal(fromOffset.dueHasTime, true);
+    const summer = (await createTask(eclipse, { title: "Midnight summer", dueDate: "2027-07-01" })).body.task;
+    const fromSummer = (await updateTask(eclipse, summer.id, { dueAt: "2027-07-01T00:00:00+01:00" })).body.task;
+    assert.equal(fromSummer.dueHasTime, true);
+    const viaAssistant = (await createTask(eclipse, { title: "Midnight assistant", dueDate: "2027-03-01" })).body.task;
+    const assisted = (await runTool(eclipse, "update_task", { taskId: viaAssistant.id, dueAt: "2027-03-01T00:00:00Z" })) as { task?: { dueHasTime: boolean } };
+    assert.equal(assisted.task?.dueHasTime, true);
+  });
+
   it("still keeps a date-only task date only when its own dueAt is sent back", async () => {
     const task = (await createTask(eclipse, { title: "Echo day", dueDate: "2027-03-01" })).body.task;
     const echoed = (await updateTask(eclipse, task.id, { dueAt: task.dueAt, title: "Echo day renamed" })).body.task;
@@ -212,19 +265,32 @@ describe("midnight times", () => {
 });
 
 describe("removing a member", () => {
-  it("records an audit event for every record handed to the remover, and leaves done tasks with them", async () => {
+  it("records a catch-up audit event and webhook for every record handed to the remover, done tasks included", async () => {
     const leaver = await createUser("sam@guards.test", "Sam Leaver");
     await addMember(eclipse.workspaceId, leaver.userId);
     const sam = inWorkspace(leaver, eclipse.workspaceId, "Eclipse", "member");
+    const endpoint = await admin().query<{ id: string }>(
+      "insert into crm.webhook_endpoints (workspace_id, url, secret, events) values ($1, 'https://hooks.guards.invalid/orbit', 'secret-value', '{company.updated,task.updated}') returning id",
+      [eclipse.workspaceId],
+    );
     const company = (await createCompany(sam, { name: "Sam's Accounts Ltd", ownerId: sam.userId })).body.company;
     const contact = (await upsertContact(sam, { firstName: "Lee", lastName: "Handover", email: "lee@handover.test", ownerId: sam.userId })).body.contact;
     const open = (await createTask(sam, { title: "Sam's call", dueAt: "2027-03-01T10:00", remindMinutes: 15 })).body.task;
     const done = (await createTask(sam, { title: "Sam's done call" })).body.task;
     await completeTask(sam, done.id);
+    const bulk = await admin().query<{ id: string }>(
+      "insert into crm.companies (workspace_id, name, normalized_name, owner_id) select $1, 'Bulk handover ' || n, 'bulk handover ' || n, $2 from generate_series(1, 400) as n returning id",
+      [eclipse.workspaceId, sam.userId],
+    );
+    const workflowCount = async () => (await admin().query<{ total: number }>("select count(*)::int as total from crm.workflow_events where workspace_id = $1", [eclipse.workspaceId])).rows[0].total;
+    const workflowsBefore = await workflowCount();
+    const started = Date.now();
     await removeMember(eclipse, sam.userId, { operation: "remove_member", source: "web" });
+    const took = Date.now() - started;
+    await admin().query("update crm.webhook_endpoints set archived_at = now(), enabled = false where id = $1", [endpoint.rows[0].id]);
+    assert.ok(took < 5000, `took ${took}ms`);
 
-    const companyEvents = await audits(company.id);
-    const updated = companyEvents.find((row) => row.event_type === "company.updated");
+    const updated = (await audits(company.id)).find((row) => row.event_type === "company.updated");
     assert.ok(updated);
     assert.equal(updated.source, "web");
     assert.deepEqual(updated.changes, { fields: ["ownerId"], before: { ownerId: sam.userId }, after: { ownerId: eclipse.userId } });
@@ -232,13 +298,28 @@ describe("removing a member", () => {
     const taskEvent = (await audits(open.id)).find((row) => row.event_type === "task.updated");
     assert.ok(taskEvent);
     assert.deepEqual(taskEvent.changes.fields, ["ownerId", "dueAt", "dueHasTime", "scheduledBy", "remindMinutes"]);
-    assert.deepEqual((taskEvent.changes.after as Record<string, unknown>).dueHasTime, false);
-    const workflows = await admin().query("select 1 from crm.workflow_events where entity_id = $1 and event_type = 'company.updated'", [company.id]);
-    assert.equal(workflows.rowCount, 1);
+    assert.deepEqual(taskEvent.changes.after, { ownerId: eclipse.userId, dueAt: "2027-03-01T00:00:00.000Z", dueHasTime: false, scheduledBy: null, remindMinutes: null });
+    assert.equal((taskEvent.changes.before as Record<string, unknown>).dueAt, "2027-03-01T10:00:00.000Z");
 
-    const stillDone = await admin().query<{ owner_id: string }>("select owner_id from crm.tasks where id = $1", [done.id]);
-    assert.equal(stillDone.rows[0].owner_id, sam.userId);
-    assert.ok(!(await audits(done.id)).some((row) => row.event_type === "task.updated"));
+    const handedDone = await admin().query<{ owner_id: string }>("select owner_id from crm.tasks where id = $1", [done.id]);
+    assert.equal(handedDone.rows[0].owner_id, eclipse.userId);
+    assert.ok((await audits(done.id)).some((row) => row.event_type === "task.updated"));
+
+    const bulkEvents = await admin().query<{ total: number }>(
+      "select count(*)::int as total from crm.audit_events where entity_id = any($1::uuid[]) and event_type = 'company.updated' and operation = 'remove_member'",
+      [bulk.rows.map((row) => row.id)],
+    );
+    assert.equal(bulkEvents.rows[0].total, 400);
+    const deliveries = await admin().query<{ total: number }>("select count(*)::int as total from crm.webhook_deliveries where endpoint_id = $1", [endpoint.rows[0].id]);
+    assert.equal(deliveries.rows[0].total, 403);
+    const payload = await admin().query<{ payload: Record<string, unknown> }>(
+      "select d.payload from crm.webhook_deliveries d join crm.audit_events e on e.id = d.event_id where d.endpoint_id = $1 and e.entity_id = $2",
+      [endpoint.rows[0].id, company.id],
+    );
+    assert.equal(payload.rows[0].payload.type, "company.updated");
+    assert.deepEqual(payload.rows[0].payload.entity, { type: "company", id: company.id });
+    assert.deepEqual(payload.rows[0].payload.data, updated.changes);
+    assert.equal(await workflowCount(), workflowsBefore);
   });
 });
 

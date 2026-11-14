@@ -281,7 +281,7 @@ function dueDayOf(value: unknown) {
   return reading.ok ? taskDueDay(reading.date.toISOString()) : null;
 }
 
-function taskTimingLines(args: Args, name: Names, current: { ownerId: string | null; timed: boolean } | null) {
+function taskTimingLines(args: Args, name: Names, current: { ownerId: string | null; timed: boolean } | null, creating = false) {
   const self = detail(name, TASK_SELF_KEY);
   const owner = args.ownerId === null ? null : (optionalStr(args.ownerId) ?? current?.ownerId ?? null);
   const ownerChanges = (args.ownerId === null || optionalStr(args.ownerId) !== undefined) && owner !== (current?.ownerId ?? null);
@@ -291,7 +291,7 @@ function taskTimingLines(args: Args, name: Names, current: { ownerId: string | n
   if (!dayOnly) {
     return [
       ...fieldLines(args, { dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder" }),
-      ...clearedLines(args, { dueDate: "Due", dueAt: "Due", remindMinutes: "Reminder" }),
+      ...(creating ? [] : clearedLines(args, { dueDate: "Due", dueAt: "Due", remindMinutes: "Reminder" })),
     ];
   }
   const day = dueDayOf(args.dueAt);
@@ -303,7 +303,15 @@ function taskTimingLines(args: Args, name: Names, current: { ownerId: string | n
 }
 
 function clearedLines(args: Args, labels: Record<string, string>) {
-  return [...new Set(Object.entries(labels).filter(([key]) => args[key] === null).map(([, label]) => `${label}: none`))];
+  const given = (key: string) => args[key] !== undefined && args[key] !== null && args[key] !== "";
+  const entries = Object.entries(labels);
+  return [
+    ...new Set(
+      entries
+        .filter(([key, label]) => args[key] === null && !entries.some(([other, otherLabel]) => other !== key && otherLabel === label && given(other)))
+        .map(([, label]) => `${label}: none`),
+    ),
+  ];
 }
 
 function taskRelinkLines(args: Record<string, unknown>, name: Names) {
@@ -598,10 +606,10 @@ export async function taskTimingRefusalFor(actor: UserActor, name: string, args:
   return timed === false ? { error: "Pick a time for the reminder.", field: "remindMinutes" } : null;
 }
 
-function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null } {
+function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null; dueHasTime?: true } {
   const refused = taskTimingRefusal("create_task", { dueDate: args.dueDate, dueAt: args.dueAt });
   if (refused) throw new CrmError("invalid_input", refused.error, 400, { field: refused.field });
-  if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null };
+  if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null, ...(hasTime(args.dueAt) ? { dueHasTime: true as const } : {}) };
   if (args.dueDate !== undefined) return { dueDate: nullableStr(args.dueDate) ?? null };
   if (args.dueAt !== undefined) return { dueAt: null };
   return {};
@@ -3497,7 +3505,7 @@ const TOOL_LIST: AssistantTool[] = [
       title: `Create task: ${str(args.title)}`,
       lines: [
         ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner" }, name),
-        ...taskTimingLines(args, name, null),
+        ...taskTimingLines(args, name, null, true),
         ...fieldLines(args, { description: "Detail", priority: "Priority" }),
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
         ...taskEmailLines(args),

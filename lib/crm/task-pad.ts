@@ -38,7 +38,7 @@ export const NO_PAD_DETECTION: PadDetection = {
 };
 
 const ASK_LIMIT = 6;
-const NAME_WORD = /\p{Lu}[\p{L}'’-]*/gu;
+const NAME_WORD = /\p{Lu}[\p{L}'’‘ʼ‛-]*/gu;
 
 type Range = { start: number; end: number };
 
@@ -65,7 +65,7 @@ function nameRanges(text: string, names: Iterable<string>) {
 export function padNameWords(text: string) {
   const words: { word: string; leading: boolean }[] = [];
   for (const match of text.matchAll(NAME_WORD)) {
-    const word = match[0].replace(/['’]s$/u, "").replace(/['’-]+$/u, "");
+    const word = match[0].replace(/['’‘ʼ‛]s$/u, "").replace(/['’‘ʼ‛-]+$/u, "");
     if (word.length < 2) continue;
     const before = text.slice(0, match.index ?? 0).trimEnd();
     const leading = before === "" || /[.!?:;]$/u.test(before);
@@ -94,7 +94,7 @@ const NAME_ROW_SQL = `select c.id, trim(concat_ws(' ', nullif(trim(c.first_name)
   left join crm.companies co on co.id = c.company_id`;
 
 const NOT_MEMBER = (members: string) =>
-  `lower(regexp_replace(trim(concat_ws(' ', c.first_name, c.last_name)), '\\s+', ' ', 'g')) <> all(${members}::text[])`;
+  `lower(regexp_replace(${quotesFoldedSql("trim(concat_ws(' ', c.first_name, c.last_name))")}, '\\s+', ' ', 'g')) <> all(${members}::text[])`;
 
 function option(row: NameRow): PadOption {
   return {

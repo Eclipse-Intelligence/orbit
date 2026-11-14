@@ -57,11 +57,15 @@ export const SYSTEM_SOURCES = [
   "contact_email",
   "csv",
   "linkedin_extension",
+  "context.dev",
 ] as const;
+
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]/g;
 
 export function agentSource(source: string | null | undefined) {
   if (typeof source !== "string") return source;
-  return (SYSTEM_SOURCES as readonly string[]).includes(source.trim().toLowerCase()) ? null : source;
+  const plain = source.normalize("NFKC").replace(INVISIBLE, "").trim().toLowerCase();
+  return (SYSTEM_SOURCES as readonly string[]).includes(plain) ? null : source;
 }
 
 const LEADING_DATE = /^\s*(\d{4}-\d{2}-\d{2})(?![\d])/;

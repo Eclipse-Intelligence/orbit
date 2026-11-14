@@ -197,8 +197,6 @@ function blank(value: string | null | undefined) {
   return value === null || (typeof value === "string" && value.trim() === "");
 }
 
-const ZONED = /(?:z|[+-]\d{2}(?::?\d{2})?)$/i;
-
 function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean; wallTime?: boolean } | undefined {
   const input = { ...given };
   if (input.dueAt !== undefined && input.dueDate !== undefined) {
@@ -225,7 +223,7 @@ function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean;
     const day = taskDueDay(reading.date.toISOString());
     return { dueAt: day ? dayStartIso(day) : reading.date.toISOString(), dueHasTime: false };
   }
-  return { dueAt: reading.date.toISOString(), dueHasTime: true, wallTime: input.dueHasTime === true || !ZONED.test(value.trim()) };
+  return { dueAt: reading.date.toISOString(), dueHasTime: true, wallTime: input.dueHasTime === true || value.trim() !== reading.date.toISOString() };
 }
 
 function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {

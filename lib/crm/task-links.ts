@@ -19,13 +19,13 @@ export type LinkCandidates = { candidates: LinkCandidate[]; reason: string | nul
 const LINK_FIELDS = ["companyId", "contactId", "opportunityId"];
 
 function titleWords(title: string) {
-  const words = (title.match(/[\p{L}][\p{L}'’-]*/gu) ?? []).map((word) => word.replace(/['’]s$/iu, "").replace(/['’-]+$/u, ""));
+  const words = (title.match(/[\p{L}][\p{L}'’‘ʼ‛-]*/gu) ?? []).map((word) => word.replace(/['’‘ʼ‛]s$/iu, "").replace(/['’‘ʼ‛-]+$/u, ""));
   return [...new Set(words.filter((word) => word.length >= 2).map((word) => folded(word)))];
 }
 
 function displayWord(title: string, word: string) {
-  const found = (title.match(/[\p{L}][\p{L}'’-]*/gu) ?? []).find((item) => folded(item.replace(/['’]s$/iu, "")) === word);
-  return found ? found.replace(/['’]s$/iu, "") : word;
+  const found = (title.match(/[\p{L}][\p{L}'’‘ʼ‛-]*/gu) ?? []).find((item) => folded(item.replace(/['’‘ʼ‛]s$/iu, "")) === word);
+  return found ? found.replace(/['’‘ʼ‛]s$/iu, "") : word;
 }
 
 export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<LinkCandidates> {

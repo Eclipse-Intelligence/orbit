@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import { announceRemoval, roomsLostOnLeaving } from "@/lib/crm/chat";
 import { announceShareRemoval, sharesLostOnLeaving } from "@/lib/mail/shares";
-import { withActor } from "@/lib/crm/context";
+import { scheduleWebhooks, withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
-import { isUuid, recordAudit } from "@/lib/crm/mutate";
+import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -136,40 +136,6 @@ export async function setMemberRole(actor: UserActor, userId: string, role: stri
   }
 }
 
-type Reassigned = {
-  record_kind: "company" | "contact" | "opportunity" | "task" | "document";
-  record_id: string;
-  due_before: Date | string | null;
-  due_after: Date | string | null;
-  had_time: boolean | null;
-  scheduled_before: string | null;
-  remind_before: number | null;
-};
-
-function reassignedChanges(row: Reassigned, from: string, to: string) {
-  const before: Record<string, unknown> = { ownerId: from };
-  const after: Record<string, unknown> = { ownerId: to };
-  if (row.record_kind === "task" && row.had_time) {
-    Object.assign(before, { dueAt: row.due_before ? iso(row.due_before) : null, dueHasTime: true, scheduledBy: row.scheduled_before, remindMinutes: row.remind_before });
-    Object.assign(after, { dueAt: row.due_after ? iso(row.due_after) : null, dueHasTime: false, scheduledBy: null, remindMinutes: null });
-  }
-  const fields = Object.keys(before).filter((field) => before[field] !== after[field]);
-  return {
-    fields,
-    before: Object.fromEntries(fields.map((field) => [field, before[field]])),
-    after: Object.fromEntries(fields.map((field) => [field, after[field]])),
-  };
-}
-
-async function auditReassigned(actor: UserActor, userId: string, rows: Reassigned[], provenance: Provenance) {
-  if (rows.length === 0) return;
-  await withActor(actor, async (db) => {
-    for (const row of rows) {
-      await recordAudit(db, actor, `${row.record_kind}.updated`, row.record_kind, row.record_id, provenance, reassignedChanges(row, userId, actor.userId));
-    }
-  });
-}
-
 export async function removeMember(actor: UserActor, userId: string, provenance: Provenance = { operation: "remove_member" }) {
   const rooms = isUuid(userId)
     ? await roomsLostOnLeaving(actor.workspaceId, userId).catch((error) => {
@@ -183,17 +149,18 @@ export async function removeMember(actor: UserActor, userId: string, provenance:
         return [];
       })
     : [];
-  let reassigned: Reassigned[] = [];
   try {
-    reassigned = (await query<Reassigned>("select * from private.team_remove_records($1, $2, $3)", [actor.workspaceId, actor.userId, userId])).rows.filter(
-      (row) => Boolean(row.record_kind && row.record_id),
-    );
+    const handed = await query("select * from private.team_remove_records($1, $2, $3, $4, $5)", [
+      actor.workspaceId,
+      actor.userId,
+      userId,
+      provenance.source ?? null,
+      provenance.operation,
+    ]);
+    if ((handed.rowCount ?? 0) > 0) scheduleWebhooks();
   } catch (error) {
     teamError(error);
   }
-  await auditReassigned(actor, userId, reassigned, provenance).catch((error) => {
-    console.error("Couldn't record the records handed over", error instanceof Error ? error.message : error);
-  });
   await announceRemoval(userId, rooms);
   await announceShareRemoval(shares);
 }
