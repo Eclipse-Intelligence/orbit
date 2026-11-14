@@ -358,6 +358,7 @@ describe("follow-up titles from the email", () => {
       const filed = await record(watched);
       assert.equal(filed.suggested, true);
       assert.equal(filed.task?.title, "Send Ivo Hart the pilot scope by Friday");
+      assert.match(filed.task?.description ?? "", /^Suggested after an email\./);
       assert.equal(filed.task?.contactId, (await listTasks(owner, { companyId: company })).data[0].contactId);
       assert.equal(openDuringCall, 0);
       assert.equal(llm.seen.length, 1);
@@ -373,6 +374,7 @@ describe("follow-up titles from the email", () => {
       const meeting = scripted(() => ({ title: "Should not be used" }));
       const met = await recordCommunication(owner, { kind: "meeting", title: "Kickoff", body: "Agreed the plan", companyId: company }, { fetchImpl: meeting.fetchImpl });
       assert.equal(met.task?.title, "Follow up with Larchmont");
+      assert.match(met.task?.description ?? "", /^Suggested after a meeting\./);
       assert.equal(meeting.seen.length, 0);
       await completeTask(owner, met.task!.id);
     } finally {

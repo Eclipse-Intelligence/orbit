@@ -243,7 +243,7 @@ async function suggestFollowUp(
         actor,
         {
           title: title.slice(0, 200),
-          description: withDueNote(`Suggested after a ${kind}.`, due),
+          description: withDueNote(kind === "email" ? "Suggested after an email." : "Suggested after a meeting.", due),
           dueDate: due?.dueDate ?? null,
           companyId: followUp.companyId,
           contactId: followUp.contactId,
