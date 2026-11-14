@@ -230,6 +230,7 @@ export function SearchChip({
               className={cn(
                 "flex cursor-pointer flex-col rounded-lg px-2.5 py-1.5 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:justify-center",
                 index === active && "bg-white/5",
+                index > 0 && index === named.length && "relative mt-2 before:absolute before:inset-x-2.5 before:-top-1 before:h-px before:bg-white/[0.08]",
               )}
             >
               <span className="ui-style text-foreground truncate">{option.name}</span>

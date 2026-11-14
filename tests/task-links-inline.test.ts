@@ -3,7 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { changeTaskDoc } from "@/lib/crm/task-doc-links";
 import { canChangeTask } from "@/lib/crm/task-rights";
-import { addTaskParticipants, createTask, getTask, updateTask } from "@/lib/crm/tasks";
+import { addTaskParticipants, createTask, getTask, listPlannerTasks, updateTask } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createDoc } from "@/lib/docs/store";
@@ -158,5 +158,19 @@ describe("chips and doc links on an existing task", () => {
     const linked = await changeTaskDoc(mark, task.id, shared, "link", WEB);
     assert.ok(linked);
     assert.deepEqual((await getTask(mark, task.id)).docIds, [shared]);
+  });
+
+  it("gives Calendar's tasks their docs and link rights, so its panel shows the same chips", async () => {
+    const task = (await createTask(mark, { title: "Review the renewal plan", ownerId: mark.userId, docIds: [shared, privateDoc] })).body.task;
+    const planned = (await listPlannerTasks(mark)).find((item) => item.id === task.id);
+    assert.ok(planned);
+    assert.equal(planned.canLinkDocs, true);
+    assert.deepEqual(
+      planned.docs.map((doc) => [doc.title, doc.readable]),
+      [
+        ["Renewal plan", true],
+        ["My draft terms", true],
+      ],
+    );
   });
 });
