@@ -201,6 +201,31 @@ describe("task reminder pushes", () => {
     assert.equal((await sentAt(task.id)).updated_at.getTime(), before.getTime());
   });
 
+  it("hands a reminder back when the push times out or the network fails", async () => {
+    const now = Date.now();
+    const task = (await createTask(owner, { title: "Push timed out", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
+    const timedOut: PushSender = async () => {
+      throw Object.assign(new Error("Socket timeout"), { code: "ETIMEDOUT" });
+    };
+    await processTaskReminders({ deadline: later.deadline(), now, send: timedOut });
+    assert.equal((await sentAt(task.id)).reminder_sent_at, null);
+    const next = pusher();
+    await processTaskReminders({ deadline: later.deadline(), now: now + MINUTE, send: next.send });
+    assert.equal(forTask(next.sent, task.id).length, 1);
+  });
+
+  it("does not keep retrying a reminder for a browser that can't get notifications", async () => {
+    const now = Date.now();
+    await getAdminPool().query("update crm.push_subscriptions set endpoint = 'https://unsupported.example/mark' where endpoint = 'https://web.push.apple.com/mark-phone'");
+    try {
+      const task = (await createTask(owner, { title: "Old browser", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
+      await processTaskReminders({ deadline: later.deadline(), now, send: pusher().send });
+      assert.notEqual((await sentAt(task.id)).reminder_sent_at, null);
+    } finally {
+      await getAdminPool().query("update crm.push_subscriptions set endpoint = 'https://web.push.apple.com/mark-phone' where endpoint = 'https://unsupported.example/mark'");
+    }
+  });
+
   it("pushes every due reminder in batches", async () => {
     const now = Date.now();
     const tasks = [];

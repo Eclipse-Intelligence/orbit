@@ -104,6 +104,8 @@ export async function removePushSubscription(actor: UserActor, endpoint: string)
 
 type PushFailure = { status: number | null; reason: string };
 
+export const PUSH_UNSUPPORTED = "This browser can't get notifications.";
+
 function failureReason(error: unknown): PushFailure {
   const status = (error as { statusCode?: number }).statusCode ?? null;
   const body = String((error as { body?: unknown }).body ?? "").slice(0, 300);
@@ -148,7 +150,7 @@ export async function pushToUser(
   await Promise.all(
     subscriptions.map(async (subscription) => {
       if (!isPushEndpoint(subscription.endpoint)) {
-        failures.push({ status: null, reason: "This browser can't get notifications." });
+        failures.push({ status: null, reason: PUSH_UNSUPPORTED });
         return;
       }
       try {

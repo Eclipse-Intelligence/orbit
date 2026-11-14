@@ -3,7 +3,7 @@ import { memberActor } from "@/lib/crm/conversations";
 import { reminderHeadline } from "@/lib/crm/reminder-options";
 import type { WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
-import { pushToUser, type PushSender } from "@/lib/push";
+import { PUSH_UNSUPPORTED, pushToUser, type PushSender } from "@/lib/push";
 import { reminderKey } from "@/lib/reminder-alerts";
 
 type ClaimedReminder = {
@@ -39,8 +39,11 @@ async function release(row: ClaimedReminder) {
   );
 }
 
-function retryable(result: { sent: number; failures: { status: number | null }[] }) {
-  return result.sent === 0 && result.failures.some((failure) => failure.status !== null && failure.status !== 404 && failure.status !== 410);
+function retryable(result: { sent: number; failures: { status: number | null; reason: string }[] }) {
+  return (
+    result.sent === 0 &&
+    result.failures.some((failure) => (failure.status === null ? failure.reason !== PUSH_UNSUPPORTED : failure.status !== 404 && failure.status !== 410))
+  );
 }
 
 type Recipient = ClaimedReminder & { user_id: string; role: WorkspaceRole };
