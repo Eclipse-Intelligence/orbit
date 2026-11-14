@@ -15,7 +15,7 @@ import { suggestsTasks } from "@/lib/learning/brief-format";
 import { latestBrief, runUnit } from "@/lib/learning/nightly";
 import { cleanSubject, followUpTitle, loggedTitle, subjectTitle } from "@/lib/mail/follow-up-title";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
-import { runWorkflowTick } from "@/lib/workflows/engine";
+import { followsUpRepeat, runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import type { WorkflowDefinition } from "@/lib/workflows/definition";
 import { dayWindow } from "@/lib/time";
@@ -233,8 +233,14 @@ describe("tasks, proactive", () => {
     const walk = (await createRepeatingTask(owner, { title: "Weekly call with Gavin", contactId, ownerId: owner.userId }, { every: "week" })).body.task;
     await completeTask(owner, walk.id);
     await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
-    assert.equal(await runs(), 2, "no run for a repeating task, even in a Next step saved before the template skipped them");
+    assert.equal(await runs(), 3);
     assert.equal(llm.seen.length, 1, "no model call for a repeating task");
+    const older = { ...workflow.definition, nodes: workflow.definition.nodes.filter((node) => node.id !== "filter_repeat") };
+    assert.equal(followsUpRepeat(older, { task: { repeats: true } }), true, "a Next step saved before repeats skips them");
+    assert.equal(followsUpRepeat(workflow.definition, { task: { repeats: true } }), false, "the template's own filter decides");
+    const handMade = { ...older, nodes: older.nodes.filter((node) => node.type !== "ai").map((node) => (node.type === "create_task" ? { ...node, config: { ...node.config, title: "Follow up {{task.title}}" } } : node)) };
+    assert.equal(followsUpRepeat(handMade, { task: { repeats: true } }), false, "a workflow you built still runs");
+    assert.equal(followsUpRepeat(older, { task: { repeats: false } }), false);
     await setWorkflowStatus(owner, workflow.id, "paused");
   });
 

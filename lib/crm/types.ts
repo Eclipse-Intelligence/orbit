@@ -433,6 +433,8 @@ export type Task = {
 
 export type TaskRepeat = {
   seriesId: string;
+  ownerId: string | null;
+  creatorId: string | null;
   startsOn: string;
   at: string | null;
   rule: RepeatRule;

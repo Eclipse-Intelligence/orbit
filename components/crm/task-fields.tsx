@@ -14,7 +14,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
-import { isRepeating, RepeatField, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
+import { isRepeating, ownsRepeat, RepeatField, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
 import LinkedText from "@/components/_ui/linked-text";
 import { showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
@@ -249,22 +249,14 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const ticket = timed ? timing.start() : 0;
     setError(null);
     setNotice(null);
-    const change = ask ? scopeChange(task, write) : null;
+    const change = ask && ownsRepeat(task, viewerId) ? scopeChange(task, write) : null;
     let scope: RepeatScope | undefined = task.repeat?.current && !task.completedAt ? "this" : undefined;
     if (change) {
       const picked = await repeatScope.ask(change);
       if (!picked) {
         const restore = timed ? timing.fail(ticket) : null;
         if (restore) show(restore);
-        if (write.title !== undefined) {
-          setTitle(task.title);
-          sent.current.title = task.title;
-        }
-        if (write.description !== undefined) {
-          setText(task.description?.trim() ?? "");
-          sent.current.text = task.description?.trim() ?? "";
-        }
-        return true;
+        return false;
       }
       scope = picked;
     }
@@ -397,7 +389,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   }
 
   async function assign(ownerId: string) {
-    const scope = isRepeating(task) ? await repeatScope.ask({ kind: "assignee" }) : undefined;
+    const scope = isRepeating(task) && ownsRepeat(task, viewerId) ? await repeatScope.ask({ kind: "assignee" }) : undefined;
     if (scope === null) return;
     setBusy(true);
     setError(null);
@@ -1022,7 +1014,7 @@ export default function TaskFields({
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
-          {!done && (details.canChange || task.repeat?.current) && <RepeatField task={task} canChange={details.canChange} layout="row" />}
+          {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && <RepeatField task={task} canChange={details.canChange && ownsRepeat(task, viewer.id)} layout="row" />}
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}
           {details.canChange && !done && (
             <>
@@ -1056,9 +1048,9 @@ export default function TaskFields({
         <Field label="Due">
           <DueChips details={details} layout="panel" />
         </Field>
-        {!done && (details.canChange || task.repeat?.current) && (
+        {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && (
           <Field label="Repeat">
-            <RepeatField task={task} canChange={details.canChange} layout="panel" />
+            <RepeatField task={task} canChange={details.canChange && ownsRepeat(task, viewer.id)} layout="panel" />
           </Field>
         )}
         {details.canChange && (

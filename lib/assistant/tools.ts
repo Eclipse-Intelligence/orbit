@@ -3787,7 +3787,7 @@ const TOOL_LIST: AssistantTool[] = [
     },
     run: async (actor, args) => {
       const scheduling = args.schedule !== undefined && args.schedule !== null;
-      const single = optionalStr(args.taskId) !== undefined || (optionalStr(args.seriesId) !== undefined && optionalStr(args.occursOn) !== undefined);
+      const single = optionalStr(args.taskId) !== undefined || optionalStr(args.seriesId) !== undefined;
       if (scheduling === single) throw new CrmError("invalid_input", "Send either taskId or schedule, not both.", 400, { field: "schedule" });
       if (scheduling) {
         const scheduled = await scheduleTasks(actor, args.schedule, { mode: "agent", provenance: { operation: "schedule_tasks", ...provenanceSource() } });
@@ -3795,6 +3795,9 @@ const TOOL_LIST: AssistantTool[] = [
         return { scheduled: scheduled.map((item) => withTask(item.task)) };
       }
       const completing = args.completed === true;
+      if (args.skip !== undefined && args.skip !== true) throw new CrmError("invalid_input", "Send skip: true, or leave it out.", 400, { field: "skip" });
+      if (args.repeatScope !== undefined && !oneOf(args.repeatScope, REPEAT_SCOPES)) throw new CrmError("invalid_input", "repeatScope is this, following or all.", 400, { field: "repeatScope" });
+      if (optionalStr(args.seriesId) && !optionalStr(args.occursOn) && !optionalStr(args.taskId)) throw new CrmError("invalid_input", "Send occursOn with seriesId, or send the open task's taskId.", 400, { field: "occursOn" });
       const updated = await updateTaskFromApi(
         actor,
         { taskId: optionalStr(args.taskId), seriesId: optionalStr(args.seriesId), occursOn: optionalStr(args.occursOn) },

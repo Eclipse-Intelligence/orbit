@@ -62,7 +62,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
           id: "filter_repeat",
           type: "filter",
           label: "Not a repeating task?",
-          config: { match: "all", conditions: [{ left: "{{task.seriesId}}", op: "is_empty" }] },
+          config: { match: "all", conditions: [{ left: "{{task.repeats}}", op: "is", right: "false" }] },
         },
         {
           id: "filter_1",

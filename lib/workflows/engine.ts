@@ -331,7 +331,8 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
       opportunityName: task.opportunityName,
       openTasks: await openTasksBeside(actor, task),
       seriesId: task.seriesId,
-      repeat: task.repeat?.text ?? null,
+      repeats: Boolean(task.repeat && !task.repeat.ended),
+      repeat: task.repeat && !task.repeat.ended ? task.repeat.text : null,
     };
     companyId = task.companyId;
     contactId = task.contactId;
@@ -455,9 +456,10 @@ function loopVars(frame: LoopFrame | undefined) {
 
 export function followsUpRepeat(definition: WorkflowDefinition, vars: Vars) {
   if (definition.trigger.type !== "task_completed") return false;
-  const task = vars.task as { seriesId?: string | null } | undefined;
-  if (!task?.seriesId) return false;
-  return definition.nodes.some((node) => node.type === "create_task" && (node.config as { link?: unknown }).link === "task");
+  const task = vars.task as { repeats?: boolean } | undefined;
+  if (!task?.repeats) return false;
+  if (/task\.(seriesId|repeats?)\b/.test(JSON.stringify(definition))) return false;
+  return definition.nodes.some((node) => node.type === "create_task" && /\{\{\s*steps\./.test(String((node.config as { title?: unknown }).title ?? "")));
 }
 
 function follow(definition: WorkflowDefinition, source: string, handle: string, state: RunState, vars: Vars): string | null {

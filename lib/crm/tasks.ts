@@ -95,6 +95,8 @@ const TASK_SQL = `
     rs.rule as series_rule,
     rs.ends as series_ends,
     rs.current_task_id as series_current_task_id,
+    rs.owner_id as series_owner_id,
+    rs.created_by_user_id as series_creator_id,
     (rs.ended_at is not null or rs.archived_at is not null) as series_stopped,
     rc.rows as series_changes,
     ${TASK_DOC_IDS_SQL} as doc_ids,
@@ -163,6 +165,8 @@ type TaskRow = {
   series_rule: RepeatRule | null;
   series_ends: RepeatEnds | null;
   series_current_task_id: string | null;
+  series_owner_id: string | null;
+  series_creator_id: string | null;
   series_stopped: boolean | null;
   series_changes: OccurrenceChange[] | null;
   doc_ids: string[] | null;
@@ -174,6 +178,8 @@ function repeatOf(row: TaskRow) {
   if (!row.series_id || !row.series_rule || !row.series_ends || !row.series_starts_on) return null;
   return describeRepeat({
     seriesId: row.series_id,
+    ownerId: row.series_owner_id,
+    creatorId: row.series_creator_id,
     startsOn: row.series_starts_on,
     at: row.series_at,
     rule: row.series_rule,
@@ -181,6 +187,7 @@ function repeatOf(row: TaskRow) {
     current: row.series_current_task_id === row.id,
     stopped: Boolean(row.series_stopped),
     occursOn: row.occurs_on,
+    dueDay: taskDueDay(iso(row.due_at)),
     changes: (row.series_changes ?? []).map((change) => ({ ...change, dueAt: change.dueAt ? new Date(change.dueAt).toISOString() : null })),
   });
 }
@@ -784,7 +791,7 @@ export async function updateTaskInDb(
   id: string,
   input: TaskWrite,
   provenance?: Provenance,
-  options: Pick<TaskApplyOptions, "auditExtra"> = {},
+  options: Pick<TaskApplyOptions, "auditExtra" | "restoring"> = {},
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");

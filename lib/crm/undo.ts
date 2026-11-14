@@ -665,7 +665,7 @@ async function lockEntity(db: Db, workspaceId: string, entity: EntityType, id: s
   await db.query(`select 1 from crm.${TABLES[entity]} where id = $1 and workspace_id = $2 for update`, [id, workspaceId]);
 }
 
-const ALREADY = /already|has changed since/i;
+const ALREADY = /already been undone/i;
 
 export async function undoTaskEvents(actor: Actor, taskId: string, eventIds: string[], provenance: Provenance) {
   return withActor(actor, async (db) => {
@@ -679,7 +679,7 @@ export async function undoTaskEvents(actor: Actor, taskId: string, eventIds: str
       await lockNamespace(db, actor.workspaceId, `undo:${event.id}`);
       const { described } = await describeById(db, actor, event.id, provenance);
       if (!described.plan.ok) {
-        if (undone > 0 && ALREADY.test(described.plan.reason)) continue;
+        if (ALREADY.test(described.plan.reason)) continue;
         throw new CrmError("cannot_undo", described.plan.reason, 409);
       }
       await described.plan.run();

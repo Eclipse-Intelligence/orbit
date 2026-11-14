@@ -100,7 +100,7 @@ export async function saveTaskDetailsAction(id: string, input: TaskDetails, scop
     if (Object.keys(write).length === 0) return { ok: true, saved: timingOf(current) };
     const options = { provenance: { operation: "update_task", source: "web" } };
     const updated = current.seriesId
-      ? await updateOccurrence(actor, { taskId: id }, write, REPEAT_SCOPES.includes(scope as RepeatScope) ? scope : undefined, options)
+      ? await updateOccurrence(actor, { taskId: id }, write, REPEAT_SCOPES.includes(scope as RepeatScope) ? scope : "this", options)
       : await updateTask(actor, id, write, options);
     if (clickupToken()) {
       after(async () => {

@@ -17,7 +17,7 @@ export type RepeatRule = {
   monthWeek?: MonthWeek;
 };
 
-export type RepeatEnds = { never: true } | { count: number } | { until: string };
+export type RepeatEnds = { never: true } | { count: number; spent?: number } | { until: string };
 
 export type RepeatPattern = {
   startsOn: string;
@@ -220,10 +220,11 @@ export function lastOccurrence(pattern: RepeatPattern): string | null {
   const ends = pattern.ends;
   if ("never" in ends) return null;
   if ("until" in ends) return ends.until;
-  const key = JSON.stringify([pattern.startsOn, pattern.rule, ends.count]);
+  const count = Math.max(1, ends.count - (ends.spent ?? 0));
+  const key = JSON.stringify([pattern.startsOn, pattern.rule, count]);
   if (lastDays.has(key)) return lastDays.get(key) ?? null;
   let day: string | null = pattern.startsOn;
-  for (let index = 1; index < ends.count && day; index += 1) day = rawOnOrAfter(pattern, shiftDay(day, 1));
+  for (let index = 1; index < count && day; index += 1) day = rawOnOrAfter(pattern, shiftDay(day, 1));
   if (lastDays.size > 500) lastDays.clear();
   lastDays.set(key, day);
   return day;
@@ -544,6 +545,8 @@ export function toRrule(pattern: RepeatPattern, timeZone = appTimeZone()) {
 
 export type SeriesView = {
   seriesId: string;
+  ownerId?: string | null;
+  creatorId?: string | null;
   startsOn: string;
   at: string | null;
   rule: RepeatRule;
@@ -551,15 +554,20 @@ export type SeriesView = {
   current: boolean;
   stopped: boolean;
   occursOn: string | null;
+  dueDay?: string | null;
   changes: OccurrenceChange[];
 };
 
 export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): TaskRepeat {
   const pattern: RepeatPattern = { startsOn: view.startsOn, at: view.at, rule: view.rule, ends: view.ends };
   const after = view.occursOn ?? view.startsOn;
-  const next = view.current && !view.stopped ? nextOccurrence(pattern, view.changes, after, timeZone) : null;
+  let next = view.current && !view.stopped ? nextOccurrence(pattern, view.changes, after, timeZone) : null;
+  for (let guard = 0; next && view.dueDay && next.day <= view.dueDay && guard < MAX_EXPANSION; guard += 1) next = nextOccurrence(pattern, view.changes, next.occursOn, timeZone);
+  const skipped = view.changes.filter((change) => change.skip && change.occursOn > after).length;
   return {
     seriesId: view.seriesId,
+    ownerId: view.ownerId ?? null,
+    creatorId: view.creatorId ?? null,
     startsOn: view.startsOn,
     at: view.at,
     rule: view.rule,
@@ -570,7 +578,7 @@ export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): Task
     text: repeatChip(pattern),
     phrase: repeatPhrase(pattern),
     short: repeatShort(pattern),
-    end: view.stopped ? "" : endWords(pattern, view.current ? after : null),
+    end: view.stopped ? "" : "count" in view.ends && view.current ? `${Math.max(0, (remainingCount(pattern, after) ?? 0) - skipped)} more` : endWords(pattern, view.current ? after : null),
     rrule: toRrule(pattern),
     changedDates: view.changes.filter((change) => change.occursOn > after && !change.skip && change.dueAt).length,
   };

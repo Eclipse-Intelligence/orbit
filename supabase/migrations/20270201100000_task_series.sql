@@ -233,30 +233,14 @@ create policy task_occurrence_changes_write_member on crm.task_occurrence_change
     exists (
       select 1 from crm.task_series s
       where s.id = task_occurrence_changes.series_id
-        and (
-          s.owner_id = (select private.session_user_id())
-          or s.created_by_user_id = (select private.session_user_id())
-          or exists (
-            select 1 from crm.tasks t
-            where t.id = s.current_task_id
-              and (t.owner_id = (select private.session_user_id()) or t.created_by_user_id = (select private.session_user_id()))
-          )
-        )
+        and (s.owner_id = (select private.session_user_id()) or s.created_by_user_id = (select private.session_user_id()))
     )
   )
   with check (
     exists (
       select 1 from crm.task_series s
       where s.id = task_occurrence_changes.series_id
-        and (
-          s.owner_id = (select private.session_user_id())
-          or s.created_by_user_id = (select private.session_user_id())
-          or exists (
-            select 1 from crm.tasks t
-            where t.id = s.current_task_id
-              and (t.owner_id = (select private.session_user_id()) or t.created_by_user_id = (select private.session_user_id()))
-          )
-        )
+        and (s.owner_id = (select private.session_user_id()) or s.created_by_user_id = (select private.session_user_id()))
     )
   );
 
@@ -351,7 +335,7 @@ begin
     and d.workspace_id = new.workspace_id
   on conflict (task_id, page_id) do nothing;
   update crm.task_series
-  set current_task_id = new.id, roll_pending = true
+  set current_task_id = new.id, roll_pending = (roll_at is null or roll_at <= now())
   where id = new.series_id and current_task_id is distinct from new.id;
   return null;
 end;
@@ -390,10 +374,10 @@ as $$
     select candidate.user_id, candidate.role
     from (
       values
-        (1, case when t.completed_at is null then t.owner_id else s.owner_id end),
-        (2, case when t.completed_at is null then t.created_by_user_id else s.created_by_user_id end),
-        (3, s.owner_id),
-        (4, s.created_by_user_id),
+        (1, s.created_by_user_id),
+        (2, s.owner_id),
+        (3, t.owner_id),
+        (4, t.created_by_user_id),
         (5, t.owner_id),
         (6, (select o.user_id from crm.workspace_members o where o.workspace_id = s.workspace_id and o.role = 'owner' order by o.created_at limit 1))
     ) as wanted (rank, user_id)
@@ -402,7 +386,11 @@ as $$
     limit 1
   ) m on true
   left join crm.profiles p on p.id = m.user_id
-  where (s.roll_pending or (s.roll_at is not null and s.roll_at <= p_now) or t.completed_at is not null)
+  where (
+      s.roll_pending
+      or (s.roll_at is not null and s.roll_at <= p_now)
+      or (t.completed_at is not null and (s.roll_at is null or s.roll_at <= p_now))
+    )
     and s.ended_at is null
     and s.archived_at is null
     and t.archived_at is null
@@ -435,6 +423,7 @@ begin
     from crm.tasks t
     where s.workspace_id = p_source
       and t.id = s.current_task_id
+      and t.series_id = s.id
       and t.workspace_id = p_target
     returning s.id
   )
@@ -530,6 +519,8 @@ returns trigger
 language plpgsql
 set search_path = ''
 as $$
+declare
+  v_user uuid := (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid;
 begin
   if new.current_task_id is not null
     and (tg_op = 'INSERT' or old.current_task_id is distinct from new.current_task_id or old.workspace_id is distinct from new.workspace_id)
@@ -538,6 +529,24 @@ begin
       where t.id = new.current_task_id and t.series_id = new.id and t.workspace_id = new.workspace_id
     ) then
     raise exception 'A repeating task''s open task must belong to it.' using errcode = '23514';
+  end if;
+  if tg_op = 'UPDATE'
+    and current_user in ('authenticated', 'crm_agent')
+    and not (
+      old.owner_id = v_user
+      or old.created_by_user_id = v_user
+      or (old.created_by_agent_id is not null and old.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid)
+    )
+    and (
+      old.rule is distinct from new.rule or old.ends is distinct from new.ends or old.starts_on is distinct from new.starts_on
+      or old.at is distinct from new.at or old.title is distinct from new.title or old.description is distinct from new.description
+      or old.priority is distinct from new.priority or old.company_id is distinct from new.company_id
+      or old.contact_id is distinct from new.contact_id or old.opportunity_id is distinct from new.opportunity_id
+      or old.duration_minutes is distinct from new.duration_minutes or old.remind_minutes is distinct from new.remind_minutes
+      or old.ended_at is distinct from new.ended_at or old.archived_at is distinct from new.archived_at
+      or old.owner_id is distinct from new.owner_id or old.split_from_id is distinct from new.split_from_id
+    ) then
+    raise exception 'Only the repeating task''s assignee or creator can change every date.' using errcode = '42501';
   end if;
   if new.owner_id is not null
     and current_user in ('authenticated', 'crm_agent')
@@ -554,9 +563,32 @@ grant execute on function private.task_series_bind_current() to authenticated, c
 
 drop trigger if exists task_series_bind_current on crm.task_series;
 create trigger task_series_bind_current
-  before insert or update of current_task_id, workspace_id, owner_id on crm.task_series
+  before insert or update on crm.task_series
   for each row
   execute function private.task_series_bind_current();
+
+create or replace function private.tasks_leave_series()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update crm.task_series
+  set current_task_id = null, roll_at = null, roll_pending = false
+  where id = old.series_id and current_task_id = new.id;
+  return null;
+end;
+$$;
+
+revoke all on function private.tasks_leave_series() from public;
+
+drop trigger if exists tasks_leave_series on crm.tasks;
+create trigger tasks_leave_series
+  after update of series_id on crm.tasks
+  for each row
+  when (old.series_id is not null and old.series_id is distinct from new.series_id)
+  execute function private.tasks_leave_series();
 
 drop policy if exists tasks_series_binding on crm.tasks;
 create policy tasks_series_binding on crm.tasks

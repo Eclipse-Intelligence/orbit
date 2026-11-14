@@ -295,7 +295,7 @@ describe("repeating tasks", () => {
     assert.equal(next.dueAt, "2027-03-10T10:00:00.000Z");
     assert.equal((await seriesRow(task.seriesId!)).current_task_id, next.id);
     const [pending] = await sql<{ roll_pending: boolean }>("select roll_pending from crm.task_series where id = $1", [task.seriesId]);
-    assert.equal(pending.roll_pending, true);
+    assert.equal(pending.roll_pending, false);
     assert.equal((await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-03-09T12:00:00Z") })).rolled, 0);
     const settled = await seriesRow(task.seriesId!);
     assert.equal(new Date(settled.roll_at!).toISOString(), "2027-03-17T00:00:00.000Z");
@@ -516,6 +516,86 @@ describe("repeating task review fixes", () => {
       (await import("./helpers")).queryAsUser(mark.userId, "update crm.task_series set current_task_id = $2 where id = $1", [marks.seriesId, own.id]),
       /must belong to it|row-level/,
     );
+  });
+});
+
+describe("repeating task review round 2", () => {
+  it("puts This one changes back to the series when the open one moves on", async () => {
+    const task = await weekly("Series title", "2027-06-01", "09:00");
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Just this week", durationMinutes: 45, ownerId: sam.userId }, "this");
+    await skipOccurrence(sam, { taskId: task.id });
+    const moved = await getTask(mark, task.id);
+    assert.deepEqual([moved.title, moved.durationMinutes, moved.ownerId, moved.occursOn], ["Series title", 15, sam.userId, "2027-06-08"]);
+    assert.equal(moved.dueAt, "2027-06-08T09:00:00.000Z");
+    await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-06-15T01:00:00Z") });
+    const rolled = await getTask(mark, task.id);
+    assert.deepEqual([rolled.ownerId, rolled.occursOn, rolled.dueAt], [mark.userId, "2027-06-15", "2027-06-15T09:00:00.000Z"]);
+  });
+
+  it("lets a colleague handed one occurrence act on it but not on the series", async () => {
+    const task = await weekly("Handed weekly", "2027-06-02", "09:00");
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await assert.rejects(updateOccurrence(sam, { taskId: task.id }, { title: "Renamed by Sam" }, "all"), /assignee or creator can change every date/);
+    await assert.rejects(setTaskRepeat(sam, task.id, null), /assignee or creator can change every date/);
+    await assert.rejects(setTaskRepeat(sam, task.id, { every: "day" }), /assignee or creator can change every date/);
+    await assert.rejects(deleteSeries(sam, task.id), /assignee or creator can change every date/);
+    await assert.rejects(skipOccurrence(sam, { seriesId: task.seriesId!, occursOn: "2027-06-16" }), /not found|assignee or creator/);
+    await assert.rejects(
+      (await import("./helpers")).queryAsUser(sam.userId, "update crm.task_series set title = 'Sam was here' where id = $1", [task.seriesId]),
+      /assignee or creator can change every date/,
+    );
+    const renamed = (await updateOccurrence(sam, { taskId: task.id }, { title: "Sam's week" }, "this")).body.task;
+    assert.equal(renamed.title, "Sam's week");
+    await completeTask(sam, task.id);
+    await reopenTask(sam, task.id);
+    assert.equal((await getTask(sam, task.id)).completedAt, null);
+    const open = (await occurrences(task.seriesId!)).filter((row) => !row.completed && !row.archived);
+    assert.equal(open.length, 1);
+  });
+
+  it("refuses unclear assistant and API input", async () => {
+    const task = await weekly("Strict input", "2027-06-03");
+    const plain = (await createTask(mark, { title: "Plain one", dueDate: "2027-06-03" })).body.task;
+    const skipText = (await runTool(mark, "update_task", { taskId: task.id, skip: "yes" })) as { error?: string };
+    assert.match(skipText.error ?? "", /skip: true/);
+    const badScope = (await runTool(mark, "update_task", { taskId: task.id, title: "x", repeatScope: "everything" })) as { error?: string };
+    assert.match(badScope.error ?? "", /this, following or all/);
+    const noDay = (await runTool(mark, "update_task", { seriesId: task.seriesId, skip: true })) as { error?: string };
+    assert.match(noDay.error ?? "", /Send occursOn with seriesId/);
+    const mismatch = (await runTool(mark, "update_task", { taskId: plain.id, seriesId: task.seriesId, title: "x", repeatScope: "this" })) as { error?: string };
+    assert.match(mismatch.error ?? "", /isn't part of that repeating task/);
+    const notRepeating = (await runTool(mark, "update_task", { taskId: plain.id, occursOn: "2027-06-10", skip: true })) as { error?: string };
+    assert.match(notRepeating.error ?? "", /doesn't repeat/);
+    await assert.rejects(createRepeatingTask(mark, { title: "Empty ends", dueDate: "2027-06-03" }, { every: "day", ends: {} }), /Choose when it ends/);
+  });
+
+  it("reads After N times back as the number chosen and leaves skipped dates out of what's left", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Ten times", dueDate: "2027-06-07" }, { every: "day", ends: { after: 10 } })).body.task;
+    await completeTask(mark, task.id);
+    const second = (await occurrences(task.seriesId!)).find((row) => !row.completed)!;
+    const changed = (await setTaskRepeat(mark, second.id, { every: "weekday", ends: { after: 10 } })).body.task;
+    assert.deepEqual(changed.repeat?.ends, { count: 10, spent: 1 });
+    assert.equal(changed.repeat?.end, "8 more");
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: shiftDay(changed.repeat!.next!.occursOn, 0) });
+    assert.equal((await getTask(mark, second.id)).repeat?.end, "7 more");
+  });
+});
+
+describe("repeating tasks moving workspace again", () => {
+  it("moves a task that left its series, after stopping and repeating again, and after an undone repeat", async () => {
+    const created = await createWorkspace(mark, { name: "Mark Ridgeon Two" });
+    const ridgeon: UserActor = { ...mark, workspaceId: created.id, workspaceName: "Mark Ridgeon Two", role: "owner", scopes: scopesForRole("owner") };
+    const acme = (await createCompany(mark, { name: "Acme Again", domain: "acme-again.test" })).body.company;
+    const task = (await createTask(mark, { title: "Acme check", dueDate: "2027-06-04", companyId: acme.id })).body.task;
+    await setTaskRepeat(mark, task.id, { every: "week" });
+    await setTaskRepeat(mark, task.id, null);
+    await setTaskRepeat(mark, task.id, { every: "day" });
+    const second = (await createTask(mark, { title: "Acme second", dueDate: "2027-06-04", companyId: acme.id })).body.task;
+    const repeated = await setTaskRepeat(mark, second.id, { every: "week" });
+    await undoAuditEvent(mark, repeated.body.undo.find(Boolean)!, { operation: "undo_change" });
+    await moveRecordsToWorkspace(mark, { companyIds: [acme.id], workspaceId: ridgeon.workspaceId }, { operation: "move_records", source: "web" });
+    assert.equal((await getTask(ridgeon, task.id)).workspaceId, ridgeon.workspaceId);
+    assert.equal((await getTask(ridgeon, second.id)).workspaceId, ridgeon.workspaceId);
   });
 });
 

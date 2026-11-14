@@ -23,7 +23,7 @@ import { followSeriesLinks, REPEAT_SCOPES, updateOccurrence, type RepeatScope } 
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 
-import { completeTask, getTask, listDueReminders, placeTask, reopenTask, TASK_PLACE_FAILED, updateTask, type DueReminder, type TaskPlacement } from "@/lib/crm/tasks";
+import { completeTask, getTask, listDueReminders, placeTask, reopenTask, TASK_PLACE_FAILED, type DueReminder, type TaskPlacement } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -363,8 +363,7 @@ export async function assignTaskAction(id: string, ownerId: string, scope?: Repe
   if (!isUuid(id) || !isUuid(ownerId)) return { error: "Couldn't assign the task. Try again." };
   try {
     const options = { provenance: { operation: "assign_task", source: "web" } };
-    if (scope && REPEAT_SCOPES.includes(scope)) await updateOccurrence(user, { taskId: id }, { ownerId }, scope, options);
-    else await updateTask(user, id, { ownerId }, options);
+    await updateOccurrence(user, { taskId: id }, { ownerId }, scope && REPEAT_SCOPES.includes(scope) ? scope : "this", options);
     pushLater(user, id);
     refresh();
     return { ok: true };

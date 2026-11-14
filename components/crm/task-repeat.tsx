@@ -70,6 +70,7 @@ export function doneMessage(task: Task) {
 }
 
 function anchorOf(task: Task) {
+  if (task.repeat?.current && !task.completedAt && task.occursOn) return task.occursOn;
   return task.dueDate ?? taskDueDay(task.dueAt) ?? dayKeyAt(new Date());
 }
 
@@ -79,6 +80,11 @@ function atOf(task: Task) {
 
 export function isRepeating(task: Task) {
   return Boolean(task.repeat && task.repeat.current && !task.completedAt && !task.repeat.ended);
+}
+
+export function ownsRepeat(task: Task, viewerId: string | null | undefined) {
+  if (!task.repeat || task.repeat.ended) return true;
+  return Boolean(viewerId) && (task.repeat.ownerId === viewerId || task.repeat.creatorId === viewerId);
 }
 
 function plural(count: number, one: string, many: string) {
@@ -704,7 +710,13 @@ export function useRepeatScope(task: Task) {
   useEffect(() => {
     latest.current = asking;
   });
-  useEffect(() => () => latest.current?.resolve("this"), []);
+  useEffect(
+    () => () => {
+      const pending = latest.current;
+      if (pending) pending.resolve(pending.change.kind === "title" || pending.change.kind === "description" ? "this" : null);
+    },
+    [],
+  );
   const ask = useCallback((change: ScopeChange) => {
     latest.current?.resolve(null);
     setChoice("this");
