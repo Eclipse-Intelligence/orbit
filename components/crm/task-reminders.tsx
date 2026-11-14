@@ -14,6 +14,8 @@ import {
   reminderFired,
   reminderKey,
   requestReminderPermission,
+  shownAlert,
+  typingInto,
 } from "@/lib/reminder-alerts";
 
 const POLL_MS = 60_000;
@@ -26,6 +28,24 @@ export default function TaskReminders() {
   const [permission, setPermission] = useState<string>("unsupported");
   const timers = useRef(new Map<string, number>());
   const devicePushed = useRef(false);
+  const [typing, setTyping] = useState(false);
+
+  useEffect(() => {
+    const coarse = window.matchMedia("(pointer: coarse)");
+    let timer = 0;
+    const check = () => setTyping(coarse.matches && typingInto(document.activeElement));
+    const left = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(check, 0);
+    };
+    document.addEventListener("focusin", check);
+    document.addEventListener("focusout", left);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("focusin", check);
+      document.removeEventListener("focusout", left);
+    };
+  }, []);
 
   const fire = useCallback(
     (key: string, reminder: DueReminder) => {
@@ -106,58 +126,58 @@ export default function TaskReminders() {
     };
   }, [refresh]);
 
-  if (alerts.length === 0) return null;
+  const { alert, more } = shownAlert(alerts);
+  if (!alert || typing) return null;
 
   function dismiss(key: string) {
     setAlerts((current) => current.filter((alert) => alert.key !== key));
   }
 
+  const about = alert.reminder.contactName ?? alert.reminder.companyName;
   return (
     <div className="pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] left-1/2 z-50 flex w-[min(24em,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-2">
-      {alerts.map((alert) => {
-        const about = alert.reminder.contactName ?? alert.reminder.companyName;
-        return (
-          <div
-            key={alert.key}
-            role="alert"
-            className="border-line-strong bg-popover shadow-overlay animate-in fade-in-0 slide-in-from-bottom-2 ease-power3-out pointer-events-auto flex flex-col gap-3 rounded-xl border p-3 duration-200"
+      <div
+        key={alert.key}
+        role="alert"
+        className="border-line-strong bg-popover shadow-overlay animate-in fade-in-0 slide-in-from-bottom-2 ease-power3-out pointer-events-auto flex flex-col gap-3 rounded-xl border p-3 duration-200"
+      >
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="caption-style flex items-baseline gap-2">
+            <span className="text-warning min-w-0 flex-1 truncate">{alert.headline}</span>
+            {more > 0 && <span className="text-subtle shrink-0">+{more} more</span>}
+          </span>
+          <span className="truncate text-[14px] leading-5">{alert.reminder.title}</span>
+          {about && <span className="caption-style text-subtle truncate">{about}</span>}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 [@media(pointer:coarse)]:gap-x-3 [@media(pointer:coarse)]:gap-y-6">
+          <Button
+            variant="primary"
+            size="sm"
+            type="button"
+            onClick={() => {
+              setAlerts([]);
+              router.push(TASKS_PATH);
+            }}
+            className="hit"
           >
-            <div className="flex min-w-0 flex-col gap-1">
-              <span className="caption-style text-warning">{alert.headline}</span>
-              <span className="truncate text-[14px] leading-5">{alert.reminder.title}</span>
-              {about && <span className="caption-style text-subtle truncate">{about}</span>}
-            </div>
-            <div className="flex flex-wrap items-center gap-2 [@media(pointer:coarse)]:gap-x-3 [@media(pointer:coarse)]:gap-y-6">
-              <Button
-                variant="primary"
-                size="sm"
-                type="button"
-                onClick={() => {
-                  dismiss(alert.key);
-                  router.push(TASKS_PATH);
-                }}
-                className="hit"
-              >
-                Open tasks
-              </Button>
-              <Button variant="ghost" size="sm" type="button" onClick={() => dismiss(alert.key)} className="hit">
-                Dismiss
-              </Button>
-              {permission === "default" && (
-                <Button
-                  variant="link"
-                  size="none"
-                  type="button"
-                  className="caption-style hit ml-auto"
-                  onClick={() => void requestReminderPermission().then((next) => setPermission(next))}
-                >
-                  Turn on browser alerts
-                </Button>
-              )}
-            </div>
-          </div>
-        );
-      })}
+            Open tasks
+          </Button>
+          <Button variant="ghost" size="sm" type="button" onClick={() => dismiss(alert.key)} className="hit">
+            Dismiss
+          </Button>
+          {permission === "default" && (
+            <Button
+              variant="link"
+              size="none"
+              type="button"
+              className="caption-style hit ml-auto"
+              onClick={() => void requestReminderPermission().then((next) => setPermission(next))}
+            >
+              Turn on browser alerts
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

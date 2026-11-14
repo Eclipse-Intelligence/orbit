@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { panelTaskFor, stillOpenIds } from "@/lib/task-done";
-import { clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
+import { shownAlert, typingInto } from "@/lib/reminder-alerts";
+import { clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { parseTaskText } from "@/lib/task-pad";
 
 describe("task area UI", () => {
@@ -41,6 +42,32 @@ describe("task area UI", () => {
     const errors = failFields([], draftFields({ title: "Call Jane", text: "Notes" }), "x");
     assert.equal(fieldError(clearFields(errors, ["title"])), "x");
     assert.equal(fieldError(clearFields(errors, ["title", "text"])), null);
+  });
+
+  it("shows an unsaved draft kept by the panel in a row that is already open, unless that row is being edited", () => {
+    assert.equal(draftReaction({ kept: true, value: "Call Jane edited" }, "Call Jane", "Call Jane"), "adopt");
+    assert.equal(draftReaction({ kept: true, value: "Call Jane edited" }, "Call Jane edited", "Call Jane"), "ignore");
+    assert.equal(draftReaction({ kept: true, value: "Call Jane edited" }, "Call Jane now", "Call Jane"), "ignore");
+    assert.equal(draftReaction({ kept: false, value: "Call Jane edited" }, "Call Jane edited", "Call Jane"), "clear");
+    assert.equal(draftReaction({ kept: false, value: "Call Jane edited" }, "Call Jane", "Call Jane"), "ignore");
+  });
+
+  it("shows only the newest reminder alert, with a count of the rest", () => {
+    assert.deepEqual(shownAlert([]), { alert: null, more: 0 });
+    assert.deepEqual(shownAlert(["a"]), { alert: "a", more: 0 });
+    assert.deepEqual(shownAlert(["a", "b", "c"]), { alert: "c", more: 2 });
+  });
+
+  it("hides reminder alerts only while a text field has focus", () => {
+    assert.equal(typingInto(null), false);
+    assert.equal(typingInto({ tagName: "TEXTAREA" }), true);
+    assert.equal(typingInto({ tagName: "TEXTAREA", readOnly: true }), false);
+    assert.equal(typingInto({ tagName: "INPUT", type: "text" }), true);
+    assert.equal(typingInto({ tagName: "INPUT", type: "search" }), true);
+    assert.equal(typingInto({ tagName: "INPUT", type: "checkbox" }), false);
+    assert.equal(typingInto({ tagName: "INPUT", type: "text", disabled: true }), false);
+    assert.equal(typingInto({ tagName: "DIV", isContentEditable: true }), true);
+    assert.equal(typingInto({ tagName: "BUTTON" }), false);
   });
 
   it("treats tasks as still open when the follow-up check fails, so they show again", async () => {

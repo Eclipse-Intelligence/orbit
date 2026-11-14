@@ -28,7 +28,7 @@ import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
-import { clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
+import { clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { durationLabel, localInstant } from "@/lib/crm/task-time";
@@ -159,16 +159,24 @@ function dueWrite(value: string): TaskDetails {
 }
 
 const drafts = new Map<string, { title?: string; text?: string }>();
+type DraftChange = { id: string; field: "title" | "text"; kept: boolean; value: string };
+const draftWatchers = new Set<(change: DraftChange) => void>();
 
-function keepDraft(id: string, change: { title?: string; text?: string }) {
-  drafts.set(id, { ...drafts.get(id), ...change });
+function tellDraftWatchers(change: DraftChange) {
+  for (const watcher of draftWatchers) watcher(change);
 }
 
-function dropDraft(id: string, field: "title" | "text") {
+function keepDraft(id: string, field: "title" | "text", value: string) {
+  drafts.set(id, { ...drafts.get(id), [field]: value });
+  tellDraftWatchers({ id, field, kept: true, value });
+}
+
+function dropDraft(id: string, field: "title" | "text", value: string) {
   const draft = drafts.get(id);
-  if (!draft) return;
+  if (!draft || draft[field] === undefined) return;
   delete draft[field];
   if (draft.title === undefined && draft.text === undefined) drafts.delete(id);
+  tellDraftWatchers({ id, field, kept: false, value });
 }
 
 export function useTaskDetails(task: Task, canChange: boolean, shown = true, viewerId: string | null = null) {
@@ -273,22 +281,22 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const next = title.trim();
     if (!next) {
       setTitle(sent.current.title);
-      dropDraft(task.id, "title");
+      dropDraft(task.id, "title", sent.current.title);
       return;
     }
     const previous = sent.current.title;
     if (next === previous) {
-      dropDraft(task.id, "title");
+      dropDraft(task.id, "title", next);
       return;
     }
     sent.current.title = next;
     void save({ title: next }).then((ok) => {
       if (ok) {
-        dropDraft(task.id, "title");
+        dropDraft(task.id, "title", next);
         return;
       }
       if (sent.current.title === next) sent.current.title = previous;
-      keepDraft(task.id, { title: next });
+      keepDraft(task.id, "title", next);
     });
   }
 
@@ -297,17 +305,17 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const next = text.trim();
     const previous = sent.current.text;
     if (next === previous) {
-      dropDraft(task.id, "text");
+      dropDraft(task.id, "text", next);
       return;
     }
     sent.current.text = next;
     void save({ description: next || null }).then((ok) => {
       if (ok) {
-        dropDraft(task.id, "text");
+        dropDraft(task.id, "text", next);
         return;
       }
       if (sent.current.text === next) sent.current.text = previous;
-      keepDraft(task.id, { text: next });
+      keepDraft(task.id, "text", next);
     });
   }
 
@@ -315,6 +323,30 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     saveTitle();
     saveText();
   }
+
+  function onDraftChange(change: DraftChange) {
+    if (change.id !== task.id) return;
+    const local = change.field === "title" ? title.trim() : text.trim();
+    const field = change.field === "title" ? "title" : "text";
+    const reaction = draftReaction(change, local, sent.current[change.field]);
+    if (reaction === "clear") setErrors((current) => clearFields(current, [field]));
+    if (reaction !== "adopt") return;
+    if (change.field === "title") setTitle(change.value);
+    else setText(change.value);
+    setErrors((current) => failFields(current, [field], saveFailedMessage([field])));
+  }
+
+  const latestDraftChange = useRef(onDraftChange);
+  useEffect(() => {
+    latestDraftChange.current = onDraftChange;
+  });
+  useEffect(() => {
+    const watcher = (change: DraftChange) => latestDraftChange.current(change);
+    draftWatchers.add(watcher);
+    return () => {
+      draftWatchers.delete(watcher);
+    };
+  }, []);
 
   const latestFlush = useRef(flush);
   useEffect(() => {

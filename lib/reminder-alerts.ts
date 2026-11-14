@@ -41,3 +41,17 @@ export function markReminderFired(key: string, now = Date.now()) {
     localStorage.setItem(FIRED_KEY, JSON.stringify(fired));
   } catch {}
 }
+
+export function shownAlert<T>(alerts: T[]) {
+  return { alert: alerts.at(-1) ?? null, more: Math.max(0, alerts.length - 1) };
+}
+
+type Focused = { tagName: string; type?: string; readOnly?: boolean; disabled?: boolean; isContentEditable?: boolean };
+
+export function typingInto(element: Focused | null) {
+  if (!element) return false;
+  const tag = element.tagName.toUpperCase();
+  if (tag === "TEXTAREA") return !element.readOnly && !element.disabled;
+  if (tag === "INPUT") return !element.readOnly && !element.disabled && !/^(button|checkbox|radio|range|color|file|submit|reset|image|hidden)$/i.test(element.type ?? "text");
+  return Boolean(element.isContentEditable);
+}
