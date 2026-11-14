@@ -586,7 +586,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   const marks = kept
     .filter((span) => span.kind === "when" || due)
     .map((span) => {
-      const lead = /^[\s,;]*(?:(?:and|on|by|due|for|at|this)\s+)?/i.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
+      const lead = /^[\s,;]*(?:and\s+)?/i.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
       const tail = /\s*$/.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
       return { start: span.start + lead, end: span.end - tail, kind: span.kind } as PadMark;
     })
@@ -612,7 +612,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
 }
 
 export type PadAiAnswer = { phrases: string[]; due: string | null; remindMinutes: number | null; durationMinutes: number | null };
-export type PadAiParse = { title: string; due: string | null; remindMinutes: number | null; durationMinutes: number | null };
+export type PadAiParse = { title: string; due: string | null; remindMinutes: number | null; durationMinutes: number | null; marks: PadMark[] };
 
 const MONTH_WORD = new RegExp(`\\b${MONTH}\\b`, "gi");
 const WEEKDAY_WORD = new RegExp(`\\b${WEEKDAY_ANY}\\b`, "gi");
@@ -808,7 +808,8 @@ function dueAgrees(said: string, day: Day, time: { hour: number; minute: number 
 
 export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Date()): PadAiParse {
   const text = typed.trim();
-  const kept: PadAiParse = { title: text, due: null, remindMinutes: null, durationMinutes: null };
+  const lead = typed.length - typed.trimStart().length;
+  const kept: PadAiParse = { title: text, due: null, remindMinutes: null, durationMinutes: null, marks: [] };
   if (!answer.due) return kept;
   const spans: Span[] = [];
   const kinds: string[] = [];
@@ -854,13 +855,44 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
     due: answer.due,
     remindMinutes: reminder,
     durationMinutes: time ? duration : null,
+    marks: spans.map((span, index) => ({ start: span.start + lead, end: span.end + lead, kind: kinds[index] === "remind" ? ("reminder" as const) : ("when" as const) })),
   };
 }
 
-export function confirmedReading(parsed: Pick<PadParse, "title" | "due" | "remindMinutes" | "durationMinutes" | "unsure">, ai: PadAiParse | null): PadAiParse {
+export function confirmedReading(parsed: Pick<PadParse, "title" | "due" | "remindMinutes" | "durationMinutes" | "unsure" | "marks">, ai: PadAiParse | null): PadAiParse {
   if (ai) return ai;
-  if (parsed.unsure) return { title: parsed.title, due: null, remindMinutes: null, durationMinutes: null };
-  return { title: parsed.title, due: parsed.due, remindMinutes: parsed.remindMinutes, durationMinutes: parsed.durationMinutes };
+  if (parsed.unsure) return { title: parsed.title, due: null, remindMinutes: null, durationMinutes: null, marks: [] };
+  return {
+    title: parsed.title,
+    due: parsed.due,
+    remindMinutes: parsed.remindMinutes,
+    durationMinutes: parsed.durationMinutes,
+    marks: parsed.due ? parsed.marks.filter((mark) => mark.kind === "when" || mark.kind === "reminder") : [],
+  };
+}
+
+export function readPhrase(text: string, marks: PadMark[]) {
+  return marks
+    .map((mark) => text.slice(mark.start, mark.end).trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function padReading(
+  text: string,
+  parsed: Pick<PadParse, "title" | "due" | "remindMinutes" | "durationMinutes" | "unsure" | "marks">,
+  ai: PadAiParse | null,
+  keptAsText: readonly string[],
+): PadAiParse & { phrase: string } {
+  const reading = confirmedReading(parsed, ai);
+  const phrase = readPhrase(text, reading.marks);
+  if (!reading.due || !phrase) return { ...reading, marks: reading.due ? reading.marks : [], phrase: reading.due ? phrase : "" };
+  if (keptAsText.includes(phrase)) return { title: capitalise(text.replace(/\s+/g, " ").trim()), due: null, remindMinutes: null, durationMinutes: null, marks: [], phrase: "" };
+  return { ...reading, phrase };
+}
+
+export function backspaceKeeps(marks: PadMark[], caret: number, selectionEnd: number) {
+  return caret === selectionEnd && marks.some((mark) => (mark.kind === "when" || mark.kind === "reminder") && mark.end === caret);
 }
 
 export function stripMention(text: string, caret: number) {

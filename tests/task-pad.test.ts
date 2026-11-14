@@ -113,7 +113,10 @@ describe("task pad parser", () => {
     };
     const previous = process.env.LLM_API_KEY;
     process.env.LLM_API_KEY = "llm-test";
-    const ask = (text: string) => parsePadWithAi(text, FRIDAY_10AM, { fetchImpl });
+    const ask = async (text: string) => {
+      const reading = await parsePadWithAi(text, FRIDAY_10AM, { fetchImpl });
+      return reading && { title: reading.title, due: reading.due, remindMinutes: reading.remindMinutes, durationMinutes: reading.durationMinutes };
+    };
     const nothing = (title: string) => ({ title, due: null, remindMinutes: null, durationMinutes: null });
     try {
       assert.deepEqual(await ask("ring jane after the weekend, remind me 15 mins before"), { title: "Ring jane", due: "2026-10-19", remindMinutes: 15, durationMinutes: null });
@@ -192,8 +195,8 @@ describe("task pad parser", () => {
       marks.map((mark) => [mark.kind, text.slice(mark.start, mark.end)]),
       [
         ["record", "Toby Sutton OBE"],
-        ["when", "3pm"],
-        ["when", "Wednesday"],
+        ["when", "at 3pm"],
+        ["when", "on Wednesday"],
         ["reminder", "remind me 15 mins"],
       ],
     );

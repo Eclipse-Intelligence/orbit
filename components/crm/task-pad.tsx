@@ -16,8 +16,9 @@ import { DEFAULT_TASK_DURATION, localInstant } from "@/lib/crm/task-time";
 import type { PadAiParse, PadReadBody, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
 import {
-  confirmedReading,
+  backspaceKeeps,
   mergeMarks,
+  padReading,
   nameMarks,
   padConfirmLine,
   padFits,
@@ -512,6 +513,7 @@ export default function TaskPad({
   const [unpinned, setUnpinned] = useState<string | null>(null);
   const pinned = thread && unpinned !== thread.key ? thread : null;
   const [dismissed, setDismissed] = useState<string[]>([]);
+  const [keptAsText, setKeptAsText] = useState<string[]>([]);
   const [picked, setPicked] = useState<{ id: string; word: string } | null>(null);
   const [askOpen, setAskOpen] = useState(true);
   const [choice, setChoice] = useState(0);
@@ -531,7 +533,14 @@ export default function TaskPad({
   const assignee = members.find((member) => member.id === owner) ?? null;
   const forTeammate = assignable && ownerSetsTime(viewerId, owner);
   const read = derive(aiFits ? ai.value : null);
-  const { title, chosenDue, chosenReminder, finalDue, finalReminder, duration, needsTime } = read;
+  const { title, chosenDue, chosenReminder, finalDue, finalReminder, duration, needsTime, dateMarks, phrase } = read;
+
+  function keepAsText() {
+    if (!phrase) return;
+    setKeptAsText((current) => (current.includes(phrase) ? current : [...current, phrase]));
+    setDue(unset());
+    setReminder(unset());
+  }
   const droppedTime = forTeammate && (padDueHasTime(chosenDue) || chosenReminder !== null);
   const anchor = fixedCompany ?? (company.set ? company.value : null);
   const scope = anchor?.id ?? null;
@@ -553,7 +562,7 @@ export default function TaskPad({
   const docWarn = assignable && owner !== viewerId;
 
   function derive(value: PadAiParse | null) {
-    const confirmed = confirmedReading(parsed, value);
+    const confirmed = padReading(text, parsed, value, keptAsText);
     const chosenDue = due.set ? due.value : confirmed.due;
     const autoReminder = confirmed.remindMinutes;
     const chosenReminder = chosenDue ? (reminder.set ? reminder.value : autoReminder) : null;
@@ -561,6 +570,8 @@ export default function TaskPad({
     const finalReminder = forTeammate ? null : chosenReminder;
     return {
       title: confirmed.title,
+      dateMarks: confirmed.marks,
+      phrase: confirmed.phrase,
       chosenDue,
       chosenReminder,
       finalDue,
@@ -804,6 +815,7 @@ export default function TaskPad({
     setList(unset());
     setOwner(viewerId);
     setDismissed([]);
+    setKeptAsText([]);
     setPicked(null);
     setAskOpen(true);
     setChoice(0);
@@ -905,6 +917,14 @@ export default function TaskPad({
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing) return;
+    if (event.key === "Backspace" && !event.metaKey && !event.altKey && !event.ctrlKey && phrase && !due.set) {
+      const field = event.currentTarget;
+      if (backspaceKeeps(dateMarks, field.selectionStart, field.selectionEnd)) {
+        event.preventDefault();
+        keepAsText();
+        return;
+      }
+    }
     if (docQuery) {
       const count = docOptions?.length ?? 0;
       if (event.key === "Enter" && !event.shiftKey && docFound.loading) {
@@ -973,7 +993,8 @@ export default function TaskPad({
     picked && finalContact?.id === picked.id ? picked.word : null,
   ].filter((name): name is string => Boolean(name));
   const marks = mergeMarks([
-    ...parsed.marks,
+    ...dateMarks,
+    ...parsed.marks.filter((mark) => mark.kind !== "when" && mark.kind !== "reminder"),
     ...nameMarks(text, names),
     ...(ask ? nameMarks(text, [ask.word], "ask") : []),
     ...(docQuery ? [{ start: docQuery.start, end: docQuery.end, kind: "record" as const }] : []),
@@ -1024,6 +1045,21 @@ export default function TaskPad({
         "[&>span]:text-inherit",
       )}
     />,
+    phrase && !due.set ? (
+      <button
+        key="keep"
+        type="button"
+        onClick={() => {
+          keepAsText();
+          focusAt();
+        }}
+        aria-label={`Keep “${phrase}” as text`}
+        title="Keep these words in the title and drop the date"
+        className={cn(chipClass("empty", variant), "hit")}
+      >
+        <span className="truncate">Keep as text</span>
+      </button>
+    ) : null,
     <DurationMenu key="duration" compact value={duration} onChange={setDuration} className={chipClass(duration === DEFAULT_TASK_DURATION ? "empty" : "on", variant)} />,
     forTeammate ? null : <ReminderChip
       key="reminder"
@@ -1143,6 +1179,9 @@ export default function TaskPad({
             )}
           </div>
         </div>
+        <p role="status" className="sr-only">
+          {phrase && !due.set ? `Due date read from “${phrase}”.` : ""}
+        </p>
         <textarea
           id={`${id}-text`}
           ref={input}
@@ -1168,6 +1207,7 @@ export default function TaskPad({
               setContact(startContact());
               setOpportunity(unset());
               setDismissed([]);
+              setKeptAsText([]);
               setPicked(null);
               setAskOpen(true);
             }

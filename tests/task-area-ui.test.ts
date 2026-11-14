@@ -8,7 +8,10 @@ import { missingOrFailed, panelTaskFor, stillOpenIds } from "@/lib/task-done";
 import { alertRenderKey, keyboardUp, restingView, shownAlert, typingInto } from "@/lib/reminder-alerts";
 import { draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
 import { applyDraftNews, clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
-import { acceptAiReading, confirmedReading, parseTaskText } from "@/lib/task-pad";
+import { acceptAiReading as acceptWithMarks, backspaceKeeps, confirmedReading, padReading, parseTaskText, type PadAiParse } from "@/lib/task-pad";
+
+const plain = (reading: PadAiParse) => ({ title: reading.title, due: reading.due, remindMinutes: reading.remindMinutes, durationMinutes: reading.durationMinutes });
+const acceptAiReading = (...args: Parameters<typeof acceptWithMarks>) => plain(acceptWithMarks(...args));
 
 describe("task area UI", () => {
   it("keeps a failed due date's error until the due date itself saves", () => {
@@ -218,13 +221,41 @@ describe("task area UI", () => {
     const unsure = parseTaskText("Call Sam at 3", now);
     assert.equal(unsure.unsure, true);
     assert.ok(unsure.due);
-    assert.deepEqual(confirmedReading(unsure, null), { title: "Call Sam at 3", due: null, remindMinutes: null, durationMinutes: null });
-    const cleared = acceptAiReading("Call Sam at 3", { phrases: [], due: null, remindMinutes: null, durationMinutes: null }, now);
-    assert.deepEqual(confirmedReading(unsure, cleared), { title: "Call Sam at 3", due: null, remindMinutes: null, durationMinutes: null });
-    const confirmed = acceptAiReading("Call Sam at 3", { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now);
-    assert.deepEqual(confirmedReading(unsure, confirmed), { title: "Call Sam", due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(plain(confirmedReading(unsure, null)), { title: "Call Sam at 3", due: null, remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(plain(confirmedReading(unsure, acceptWithMarks("Call Sam at 3", { phrases: [], due: null, remindMinutes: null, durationMinutes: null }, now))), { title: "Call Sam at 3", due: null, remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(plain(confirmedReading(unsure, acceptWithMarks("Call Sam at 3", { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now))), { title: "Call Sam", due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null });
     const sure = parseTaskText("Call Sam tomorrow 3pm", now);
-    assert.deepEqual(confirmedReading(sure, null), { title: "Call Sam", due: "2026-11-17T15:00", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(plain(confirmedReading(sure, null)), { title: "Call Sam", due: "2026-11-17T15:00", remindMinutes: null, durationMinutes: null });
+  });
+
+  it("shows what was read so it can be kept as text, for the fast reader and the AI alike", () => {
+    const now = new Date("2026-11-16T09:15:00Z");
+    const typed = "Call Sam tomorrow 3pm";
+    const sure = parseTaskText(typed, now);
+    const shown = padReading(typed, sure, null, []);
+    assert.equal(shown.phrase, "tomorrow 3pm");
+    assert.deepEqual(shown.marks.map((mark) => typed.slice(mark.start, mark.end)), ["tomorrow", "3pm"]);
+    assert.deepEqual({ title: shown.title, due: shown.due }, { title: "Call Sam", due: "2026-11-17T15:00" });
+    const kept = padReading(typed, sure, null, ["tomorrow 3pm"]);
+    assert.deepEqual({ title: kept.title, due: kept.due, marks: kept.marks, phrase: kept.phrase }, { title: typed, due: null, marks: [], phrase: "" });
+
+    const led = "Send deck by Friday";
+    assert.deepEqual(padReading(led, parseTaskText(led, now), null, []).phrase, "by Friday", "the highlight covers every word that will be removed");
+
+    const unsureText = "Call Sam at 3";
+    const unsure = parseTaskText(unsureText, now);
+    assert.deepEqual(padReading(unsureText, unsure, null, []).marks, [], "nothing lights up until the AI confirms");
+    const answer = acceptWithMarks(unsureText, { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now);
+    const confirmed = padReading(unsureText, unsure, answer, []);
+    assert.deepEqual(confirmed.marks.map((mark) => unsureText.slice(mark.start, mark.end)), ["at 3"]);
+    assert.equal(confirmed.phrase, "at 3");
+    assert.deepEqual(padReading(unsureText, unsure, answer, ["at 3"]).due, null, "the AI's phrase can be kept as text too");
+    assert.deepEqual(acceptWithMarks("  Call Sam at 3", { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now).marks, [{ start: 11, end: 15, kind: "when" }]);
+
+    const marks = shown.marks;
+    assert.equal(backspaceKeeps(marks, typed.length, typed.length), true, "Backspace right after the phrase keeps it");
+    assert.equal(backspaceKeeps(marks, 8, 8), false);
+    assert.equal(backspaceKeeps(marks, typed.length - 3, typed.length), false, "not with a selection");
   });
 
   it("only takes the AI's date when its phrase is really in the text, holds only date words, and the date is real and near", () => {

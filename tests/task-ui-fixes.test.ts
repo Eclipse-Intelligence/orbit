@@ -119,7 +119,7 @@ describe("task UI fixes", () => {
       assert.equal(calls, 0);
       assert.deepEqual(await readPadRequest(mark, read(), { fetchImpl, now }), {
         status: 200,
-        body: { value: { title: "Call Sam", due: "2026-10-16T15:00", remindMinutes: null, durationMinutes: null }, available: true },
+        body: { value: { title: "Call Sam", due: "2026-10-16T15:00", remindMinutes: null, durationMinutes: null, marks: [{ start: 9, end: 13, kind: "when" }] }, available: true },
       });
       for (let index = 1; index < PAD_READS_PER_WINDOW; index += 1) await readPadRequest(mark, read(), { fetchImpl, now });
       assert.equal(calls, PAD_READS_PER_WINDOW);
