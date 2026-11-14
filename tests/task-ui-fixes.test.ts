@@ -110,16 +110,23 @@ describe("task UI fixes", () => {
     assert.equal(thenFail.succeed(one, saved), null, "an older success isn't shown over a newer edit");
     assert.deepEqual(thenFail.fail(two), saved, "but it is what a later failure goes back to");
 
-    const dayOnly = timingSaves({ due: "2026-11-17", reminder: null, duration: 15 });
-    const timed = dayOnly.start();
-    assert.deepEqual(dayOnly.succeed(timed, { due: "2026-11-17", reminder: null, duration: 15 }), { due: "2026-11-17", reminder: null, duration: 15 }, "a day kept by the server replaces the time typed");
-    assert.equal(dayOnly.pending(), false);
-    const late = dayOnly.start();
-    dayOnly.confirm({ due: "2026-11-20", reminder: null, duration: 15 });
-    assert.deepEqual(dayOnly.fail(late), { due: "2026-11-17", reminder: null, duration: 15 }, "fresh data while a save is out doesn't count as confirmed");
-    dayOnly.confirm({ due: "2026-11-20", reminder: null, duration: 15 });
-    const after = dayOnly.start();
-    assert.deepEqual(dayOnly.fail(after), { due: "2026-11-20", reminder: null, duration: 15 });
+    const hook = timingSaves({ due: "2026-11-17", reminder: null, duration: 15 });
+    const typed = hook.start();
+    assert.deepEqual(hook.succeed(typed, { due: "2026-11-17", reminder: null, duration: 15 }), { due: "2026-11-17", reminder: null, duration: 15 }, "a day kept by the server replaces the time typed");
+    assert.equal(hook.pending(), false);
+    const edit = hook.start();
+    hook.observe({ due: "2026-11-20", reminder: null, duration: 15 });
+    assert.equal(hook.pending(), true, "fresh data that arrives during a save waits");
+    assert.deepEqual(hook.fail(edit), { due: "2026-11-20", reminder: null, duration: 15 }, "a failed save goes back to the fresh data that arrived while it ran");
+    const next = hook.start();
+    assert.deepEqual(hook.fail(next), { due: "2026-11-20", reminder: null, duration: 15 }, "and that data is what counts as saved afterwards");
+
+    const quiet = timingSaves(base);
+    const saving = quiet.start();
+    quiet.observe({ due: "2026-11-21", reminder: 15, duration: 30 });
+    assert.deepEqual(quiet.succeed(saving, { due: "2026-11-18", reminder: null, duration: 15 }), { due: "2026-11-18", reminder: null, duration: 15 });
+    const after = quiet.start();
+    assert.deepEqual(quiet.fail(after), { due: "2026-11-18", reminder: null, duration: 15 }, "a successful save is newer than data read before it finished");
   });
 
   it("shows a done task again once fresh data says it was reopened", () => {

@@ -212,7 +212,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     }
   }
   useEffect(() => {
-    timing.confirm({ due: source.due, reminder: source.reminder, duration: source.duration });
+    timing.observe({ due: source.due, reminder: source.reminder, duration: source.duration });
   }, [timing, source.due, source.reminder, source.duration]);
   useEffect(() => {
     sent.current = { title: source.title, text: source.text };
@@ -237,7 +237,6 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     }
     if (result.error) {
       const restore = timed ? timing.fail(ticket) : null;
-      if (timed && !restore) return true;
       if (restore) show(restore);
       setError(result.error);
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });

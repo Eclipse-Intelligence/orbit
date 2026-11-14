@@ -9,9 +9,7 @@ import { isReminderMinutes } from "@/lib/crm/reminder-options";
 import {
   detectPadRecords,
   NO_PAD_DETECTION,
-  parsePadWithAi,
   searchPadRecords,
-  type PadAiParse,
   type PadDetection,
   type PadOption,
   type PadSearchKind,
@@ -45,17 +43,6 @@ export async function searchLinksForTaskAction(taskId: string, kind: PadSearchKi
     return { options: await searchPadRecords(resolved.actor, kind, query, typeof companyId === "string" && isUuid(companyId) ? companyId : null) };
   } catch {
     return { error: "Couldn't search. Try again." };
-  }
-}
-
-export async function parseTaskWithAiAction(text: string): Promise<PadAiParse | null> {
-  const user = await getUserActor();
-  if (!user || typeof text !== "string") return null;
-  try {
-    return await parsePadWithAi(text);
-  } catch (error) {
-    console.warn("Task pad AI parse failed", error instanceof Error ? error.message : error);
-    return null;
   }
 }
 

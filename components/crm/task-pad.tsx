@@ -9,11 +9,11 @@ import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { listGroups } from "@/components/crm/clickup";
-import { addPadTaskAction, detectTaskRecordsAction, parseTaskWithAiAction, searchLinksForTaskAction, searchTaskLinksAction } from "@/app/(crm)/task-pad";
+import { addPadTaskAction, detectTaskRecordsAction, searchLinksForTaskAction, searchTaskLinksAction } from "@/app/(crm)/task-pad";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { DEFAULT_TASK_DURATION, localInstant } from "@/lib/crm/task-time";
-import type { PadAiParse, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
+import type { PadAiParse, PadReadBody, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
 import {
   mergeMarks,
@@ -26,6 +26,7 @@ import {
   padSaveIds,
   ownerSetsTime,
   dayOnlyHint,
+  londonParts,
   parseTaskText,
   reminderClock,
   resolvePadLinks,
@@ -53,6 +54,13 @@ type Variant = "card" | "inline";
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
 const AI_WAIT_MS = 1_500;
+const AI_READ_PATH = "/api/tasks/read";
+const padAi: { available: boolean | null } = { available: null };
+
+function readKey(value: string) {
+  const now = londonParts(new Date());
+  return `${now.year}-${now.month}-${now.day}T${now.hour}|${value}`;
+}
 
 const unset = <T,>(): Override<T> => ({ set: false, value: undefined as T });
 
@@ -466,9 +474,10 @@ export default function TaskPad({
   const [highlight, setHighlight] = useState(0);
   const [detected, setDetected] = useState<{ text: string; scope: string | null; value: PadDetection } | null>(null);
   const [ai, setAi] = useState<{ text: string; value: PadAiParse } | null>(null);
-  const [readingText, setReadingText] = useState<string | null>(null);
-  const reading = readingText !== null && readingText === text;
-  const aiReads = useRef(new Map<string, Promise<PadAiParse | null>>());
+  const [readingTexts, setReadingTexts] = useState<string[]>([]);
+  const reading = readingTexts.includes(text);
+  const aiReads = useRef(new Map<string, { promise: Promise<PadAiParse | null>; controller: AbortController }>());
+  const answers = useRef(new Map<string, PadAiParse>());
   const latestRead = useRef<(value: string) => Promise<PadAiParse | null>>(async () => null);
   const [due, setDue] = useState<Override<string | null>>(unset);
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
@@ -533,22 +542,51 @@ export default function TaskPad({
     };
   }
 
-  function readWithAi(value: string) {
+  function readWithAi(value: string): Promise<PadAiParse | null> {
     const apply = (found: PadAiParse | null) => {
-      if (found) setAi((current) => (current?.text === value ? current : { text: value, value: found }));
+      if (found) setAi((current) => (current?.text === value && current.value === found ? current : { text: value, value: found }));
       return found;
     };
-    const known = aiReads.current.get(value);
-    if (known) return known.then(apply);
-    setReadingText(value);
-    const request = parseTaskWithAiAction(value)
+    if (padAi.available === false) return Promise.resolve(null);
+    const key = readKey(value);
+    const answered = answers.current.get(key);
+    if (answered) return Promise.resolve(apply(answered));
+    const known = aiReads.current.get(key);
+    if (known) return known.promise.then(apply);
+    const controller = new AbortController();
+    setReadingTexts((current) => [...current, value]);
+    const promise = fetch(AI_READ_PATH, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: value }),
+      signal: controller.signal,
+    })
+      .then((response) => (response.ok ? (response.json() as Promise<PadReadBody>) : null))
       .catch(() => null)
-      .then((found) => {
-        setReadingText((current) => (current === value ? null : current));
+      .then((body) => {
+        if (aiReads.current.get(key)?.controller === controller) aiReads.current.delete(key);
+        setReadingTexts((current) => {
+          const index = current.indexOf(value);
+          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)];
+        });
+        if (body?.available === false) padAi.available = false;
+        const found = controller.signal.aborted ? null : (body?.value ?? null);
+        if (found) answers.current.set(key, found);
         return found;
       });
-    aiReads.current.set(value, request);
-    return request.then(apply);
+    aiReads.current.set(key, { promise, controller });
+    return promise.then(apply);
+  }
+
+  function settledAnswer(value: string) {
+    return answers.current.get(readKey(value)) ?? null;
+  }
+
+  function forgetAiReads() {
+    for (const read of aiReads.current.values()) read.controller.abort();
+    aiReads.current.clear();
+    answers.current.clear();
+    setReadingTexts([]);
   }
 
   function resolve(found: PadDetection | null) {
@@ -591,11 +629,7 @@ export default function TaskPad({
   });
 
   useEffect(() => {
-    if (!parsed.unsure || text.trim().length < 4) return;
-    if (aiReads.current.has(text)) {
-      void latestRead.current(text);
-      return;
-    }
+    if (!parsed.unsure || text.trim().length < 4 || padAi.available === false) return;
     const timer = window.setTimeout(() => void latestRead.current(text), 700);
     return () => window.clearTimeout(timer);
   }, [text, parsed.unsure]);
@@ -702,6 +736,7 @@ export default function TaskPad({
     setSuggestions([]);
     setDetected(null);
     setAi(null);
+    forgetAiReads();
     setDue(unset());
     setReminder(unset());
     setDuration(null);
@@ -771,6 +806,15 @@ export default function TaskPad({
       setBusy(false);
       focusAt();
       return;
+    }
+    if (parsed.unsure && saving === read && !aiFits) {
+      const late = settledAnswer(text);
+      if (late) saving = derive(late);
+      if (saving.needsTime) {
+        setBusy(false);
+        setAskingTime(true);
+        return;
+      }
     }
     const result = await addPadTaskAction({
       title: saving.title,

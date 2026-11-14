@@ -20,7 +20,9 @@ const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "frida
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri)";
 const WEEKEND_SHORT = "(sat|sun)";
-const MEETING_CUE = /\b(?:call|ring|phone|meet|meeting|chat|catch\s+up|catch-up|demo|interview|lunch|coffee|at)\b/i;
+const MEETING_CUE = "(?:call|ring|phone|meet|meeting|chat|catch\\s+up|catch-up|demo|interview|lunch|coffee)";
+const MEETING_ANYWHERE = new RegExp(`\\b${MEETING_CUE}\\b`, "i");
+const COUNTED = /\b(?:room|rooms|top|chapter|chapters|no|nos|number|version|page|pages|step|steps|level|floor|flat|unit|suite|gate|table|platform|row|seat|section|part|lesson|week|day|item|items|slide|slides|issue|ticket)\s*$/i;
 const CLOCK = "(?:\\d{1,2}(?:[:.]\\d{2})?\\s*(?:am|pm)\\b|\\d{1,2}:\\d{2}\\b|noon\\b|midday\\b|midnight\\b)";
 const DAY_WORD = "(?:today|tonight|tomorrow|tmrw|tmr|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri|sat|sun)";
 const MONTH = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
@@ -291,12 +293,23 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(
     new RegExp(`(?<![\\d£$€.,:/]\\s?)\\b${NOT_MONEY}(\\d{1,2})(?=\\s+(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b)`, "i"),
     (match) => {
-      if (found.time || !MEETING_CUE.test(text.slice(0, match.index))) return false;
+      const before = text.slice(0, match.index);
+      if (found.time || COUNTED.test(before)) return false;
+      if (!new RegExp(`\\b${MEETING_CUE}\\s*$`, "i").test(before)) {
+        if (MEETING_ANYWHERE.test(before)) ambiguous = true;
+        return false;
+      }
       const parsed = bareHour(match[1]);
       if (!parsed) return false;
       found.time = parsed;
     },
   );
+  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2})\\s*o['’]?clock\\b`, "i"), (match) => {
+    if (found.time) return false;
+    const parsed = bareHour(match[1]);
+    if (!parsed) return false;
+    found.time = parsed;
+  });
   take(/\b(?:at\s+)?(noon|midday|midnight)\b/i, (match) => {
     found.time = match[1].toLowerCase() === "midnight" ? { hour: 0, minute: 0 } : { hour: 12, minute: 0 };
   });

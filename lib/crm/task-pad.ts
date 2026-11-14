@@ -288,3 +288,22 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
     remindMinutes: due ? snapReminder(result.data.remindMinutes) : null,
   };
 }
+
+export type PadReadBody = { value: PadAiParse | null; available: boolean; error?: string };
+
+export async function readPadRequest(
+  user: UserActor | null,
+  input: unknown,
+  options: { fetchImpl?: typeof fetch; now?: Date } = {},
+): Promise<{ status: number; body: PadReadBody }> {
+  if (!user) return { status: 401, body: { value: null, available: false, error: "Your session ended. Sign in again." } };
+  const text = input && typeof input === "object" && typeof (input as { text?: unknown }).text === "string" ? (input as { text: string }).text : "";
+  if (!process.env.LLM_API_KEY?.trim()) return { status: 200, body: { value: null, available: false } };
+  if (!text.trim()) return { status: 200, body: { value: null, available: true } };
+  try {
+    return { status: 200, body: { value: await parsePadWithAi(text, options.now ?? new Date(), { fetchImpl: options.fetchImpl }), available: true } };
+  } catch (error) {
+    console.warn("Task pad AI parse failed", error instanceof Error ? error.message : error);
+    return { status: 200, body: { value: null, available: true } };
+  }
+}
