@@ -42,13 +42,13 @@ describe("task pad parser", () => {
       { title: call.title, due: call.due, remindMinutes: call.remindMinutes, unsure: call.unsure },
       { title: "Call Jane at Acme", due: "2026-10-19T15:00", remindMinutes: 60, unsure: false },
     );
-    assert.equal(parse("Ship it Friday morning, remind 30 mins").remindMinutes, 30);
+    assert.equal(parse("Ship it Monday morning, remind 30 mins").remindMinutes, 30);
     assert.equal(parse("Check in with Bob in 3 days remind me a day before").remindMinutes, 1440);
     assert.equal(parse("Ping Sam tomorrow, remind me 45 minutes before").remindMinutes, 30);
   });
 
   it("keeps the time when a reminder follows it", () => {
-    const result = parse("Speak to Toby Sutton OBE tomorrow at 12:15 and remind me 30 mins before");
+    const result = parse("Speak to Toby Sutton OBE tomorrow at 12:15pm and remind me 30 mins before");
     assert.equal(result.due, "2026-10-17T12:15");
     assert.equal(result.remindMinutes, 30);
     assert.equal(result.title, "Speak to Toby Sutton OBE");
@@ -90,12 +90,19 @@ describe("task pad parser", () => {
     assert.equal(padDueHasTime(null), false);
   });
 
-  it("reads the AI fallback's date-only due and keeps the reminder it asks for", async () => {
+  it("keeps the typed words and takes only a checked date from the AI fallback", async () => {
     const answers = [
-      { title: "Call Jane", due: "2026-10-19", remindMinutes: 15 },
-      { title: "Call Jane", due: "2026-10-19T11:15", remindMinutes: 45 },
-      { title: "Call Jane", due: null, remindMinutes: 15 },
-      { title: "Call Jane", due: "next Monday", remindMinutes: null },
+      { phrases: ["after the weekend", "nudge me 15 mins before"], due: "2026-10-19", remindMinutes: 15, durationMinutes: null },
+      { phrases: ["monday 11.15", "nudge me 30 mins before"], due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null },
+      { phrases: [], due: null, remindMinutes: 15, durationMinutes: null },
+      { phrases: ["next monday"], due: "next Monday", remindMinutes: null, durationMinutes: null },
+      { phrases: ["Ring Jane"], due: "2026-10-19", remindMinutes: null, durationMinutes: null },
+      { phrases: ["tomorrow"], due: "2026-02-30", remindMinutes: null, durationMinutes: null },
+      { phrases: ["tomorrow"], due: "2026-10-15", remindMinutes: null, durationMinutes: null },
+      { phrases: ["at 8"], due: "2026-10-16T08:00", remindMinutes: null, durationMinutes: null },
+      { phrases: ["in 2029"], due: "2029-01-01", remindMinutes: null, durationMinutes: null },
+      { phrases: ["tomorrow"], due: "2026-10-17T10:00", remindMinutes: 7, durationMinutes: null },
+      { phrases: ["tomorrow 10am", "for 30 mins"], due: "2026-10-17T10:00", remindMinutes: null, durationMinutes: 30 },
     ];
     const prompts: string[] = [];
     const fetchImpl: typeof fetch = async (_input, init) => {
@@ -106,25 +113,27 @@ describe("task pad parser", () => {
     };
     const previous = process.env.LLM_API_KEY;
     process.env.LLM_API_KEY = "llm-test";
+    const ask = (text: string) => parsePadWithAi(text, FRIDAY_10AM, { fetchImpl });
+    const nothing = (title: string) => ({ title, due: null, remindMinutes: null, durationMinutes: null });
     try {
-      assert.deepEqual(await parsePadWithAi("ring jane after the weekend, nudge me 15 mins before", FRIDAY_10AM, { fetchImpl }), {
-        title: "Call Jane",
-        due: "2026-10-19",
-        remindMinutes: 15,
-      });
-      assert.deepEqual(await parsePadWithAi("ring jane monday 11.15, nudge me 45 mins before", FRIDAY_10AM, { fetchImpl }), {
-        title: "Call Jane",
-        due: "2026-10-19T11:15",
-        remindMinutes: 30,
-      });
-      assert.deepEqual(await parsePadWithAi("ring jane, nudge me", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
-      assert.deepEqual(await parsePadWithAi("ring jane next monday", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
+      assert.deepEqual(await ask("ring jane after the weekend, nudge me 15 mins before"), { title: "Ring jane", due: "2026-10-19", remindMinutes: 15, durationMinutes: null });
+      assert.deepEqual(await ask("ring jane monday 11.15, nudge me 30 mins before"), { title: "Ring jane", due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null });
+      assert.deepEqual(await ask("ring jane, nudge me"), nothing("ring jane, nudge me"));
+      assert.deepEqual(await ask("ring jane next monday"), nothing("ring jane next monday"), "a due that is not a date");
+      assert.deepEqual(await ask("ring jane at some point"), nothing("ring jane at some point"), "a phrase that is not in the text");
+      assert.deepEqual(await ask("ring jane tomorrow"), nothing("ring jane tomorrow"), "a date that does not exist");
+      assert.deepEqual(await ask("ring jane tomorrow"), nothing("ring jane tomorrow"), "a date in the past");
+      assert.deepEqual(await ask("ring jane at 8"), nothing("ring jane at 8"), "a time already gone today");
+      assert.deepEqual(await ask("ring jane in 2029"), nothing("ring jane in 2029"), "more than two years out");
+      assert.deepEqual(await ask("ring jane tomorrow"), nothing("ring jane tomorrow"), "a reminder that is not an option");
+      assert.deepEqual(await ask("ring jane tomorrow 10am for 30 mins"), { title: "Ring jane", due: "2026-10-17T10:00", remindMinutes: null, durationMinutes: 30 });
     } finally {
       if (previous === undefined) delete process.env.LLM_API_KEY;
       else process.env.LLM_API_KEY = previous;
     }
     assert.match(prompts[0], /the day alone as YYYY-MM-DD/);
-    assert.doesNotMatch(prompts[0], /09:00/);
+    assert.match(prompts[0], /never rewrite/i);
+    assert.match(prompts[0], /next week is the Monday of next week/);
   });
 
   it("doesn't mistake names and words for dates", () => {
@@ -159,9 +168,9 @@ describe("task pad parser", () => {
 
   it("still reads every time form it read before", () => {
     const cases: [string, string, string][] = [
-      ["Call at 12.50", "Call", "2026-10-16T12:50"],
-      ["Call 12:50", "Call", "2026-10-16T12:50"],
-      ["Call at 12:50", "Call", "2026-10-16T12:50"],
+      ["Call at 13.50", "Call", "2026-10-16T13:50"],
+      ["Call 13:50", "Call", "2026-10-16T13:50"],
+      ["Call at 13.50", "Call", "2026-10-16T13:50"],
       ["Call 12.50pm", "Call", "2026-10-16T12:50"],
       ["Call 1.30pm tomorrow", "Call", "2026-10-17T13:30"],
       ["Call at 3pm", "Call", "2026-10-16T15:00"],

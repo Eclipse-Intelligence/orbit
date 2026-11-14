@@ -59,7 +59,8 @@ export function parseActivityText(text: string, now = new Date()): ActivityParse
   let followUp: ActivityParse["followUp"] = null;
   const follow = FOLLOW_PATTERN.exec(text);
   if (follow) {
-    const due = parseTaskText(follow[1], now).due;
+    const read = parseTaskText(`Follow up ${follow[1]}`, now);
+    const due = read.unsure ? null : read.due;
     if (due) {
       followUp = { due };
       marks.push({ start: follow.index, end: follow.index + follow[0].length, kind: "followup" });

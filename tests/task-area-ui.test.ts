@@ -8,7 +8,7 @@ import { missingOrFailed, panelTaskFor, stillOpenIds } from "@/lib/task-done";
 import { alertRenderKey, keyboardUp, restingView, shownAlert, typingInto } from "@/lib/reminder-alerts";
 import { draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
 import { applyDraftNews, clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
-import { parseTaskText } from "@/lib/task-pad";
+import { acceptAiReading, confirmedReading, parseTaskText } from "@/lib/task-pad";
 
 describe("task area UI", () => {
   it("keeps a failed due date's error until the due date itself saves", () => {
@@ -192,11 +192,14 @@ describe("task area UI", () => {
       sunSpring: "2027-03-28T00:30:00Z",
       satBeforeAutumn: "2026-10-24T19:00:00Z",
       sunAutumn: "2026-10-25T00:30:00Z",
+      sat14: "2026-11-14T10:30:00Z",
+      wed18: "2026-11-18T14:00:00Z",
+      dec31: "2026-12-31T16:00:00Z",
     };
     const fixtures = path.join(import.meta.dirname, "fixtures");
-    const titles = ["task-pad-titles.txt", "task-pad-titles-2.txt"].flatMap((file) => readFileSync(path.join(fixtures, file), "utf8").split("\n")).filter(Boolean);
+    const titles = ["task-pad-titles.txt", "task-pad-titles-2.txt", "task-pad-titles-3.txt", "task-pad-titles-4.txt"].flatMap((file) => readFileSync(path.join(fixtures, file), "utf8").split("\n")).filter(Boolean);
     const confident = JSON.parse(readFileSync(path.join(fixtures, "task-pad-confident.json"), "utf8")) as Record<string, Record<string, string>>;
-    assert.ok(titles.length >= 389);
+    assert.ok(titles.length >= 721);
     for (const [moment, iso] of Object.entries(nows)) {
       for (const text of titles) {
         const parsed = parseTaskText(text, new Date(iso));
@@ -208,6 +211,39 @@ describe("task area UI", () => {
         assert.equal([parsed.due ?? "-", parsed.durationMinutes ?? "-", parsed.remindMinutes ?? "-", parsed.title].join(" | "), confident[text]?.[moment], label);
       }
     }
+  });
+
+  it("never saves an unsure guess the AI hasn't confirmed, and lets an AI null clear it", () => {
+    const now = new Date("2026-11-16T09:15:00Z");
+    const unsure = parseTaskText("Call Sam at 3", now);
+    assert.equal(unsure.unsure, true);
+    assert.ok(unsure.due);
+    assert.deepEqual(confirmedReading(unsure, null), { title: "Call Sam at 3", due: null, remindMinutes: null, durationMinutes: null });
+    const cleared = acceptAiReading("Call Sam at 3", { phrases: [], due: null, remindMinutes: null, durationMinutes: null }, now);
+    assert.deepEqual(confirmedReading(unsure, cleared), { title: "Call Sam at 3", due: null, remindMinutes: null, durationMinutes: null });
+    const confirmed = acceptAiReading("Call Sam at 3", { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now);
+    assert.deepEqual(confirmedReading(unsure, confirmed), { title: "Call Sam", due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null });
+    const sure = parseTaskText("Call Sam tomorrow 3pm", now);
+    assert.deepEqual(confirmedReading(sure, null), { title: "Call Sam", due: "2026-11-17T15:00", remindMinutes: null, durationMinutes: null });
+  });
+
+  it("only takes the AI's date when its phrase is really in the text and the date is real and near", () => {
+    const now = new Date("2026-11-16T09:15:00Z");
+    const typed = "ring jane re the Q3 deck sometime tmrw arvo";
+    const kept = { title: typed, due: null, remindMinutes: null, durationMinutes: null };
+    const read = (phrases: string[], due: string | null, remindMinutes: number | null = null, durationMinutes: number | null = null) =>
+      acceptAiReading(typed, { phrases, due, remindMinutes, durationMinutes }, now);
+    assert.deepEqual(read(["sometime tmrw arvo"], "2026-11-17T14:00"), { title: "Ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(read(["tomorrow afternoon"], "2026-11-17T14:00"), kept, "the phrase must be typed");
+    assert.deepEqual(read([], "2026-11-17"), kept, "a due needs its phrase");
+    assert.deepEqual(read(["tmrw"], "2026-11-31"), kept, "not a calendar date");
+    assert.deepEqual(read(["tmrw"], "2026-11-17T24:10"), kept, "not a clock time");
+    assert.deepEqual(read(["tmrw"], "2026-11-15"), kept, "in the past");
+    assert.deepEqual(read(["tmrw"], "2026-11-16T08:00"), kept, "earlier today");
+    assert.deepEqual(read(["tmrw"], "2028-12-01"), kept, "more than two years out");
+    assert.deepEqual(read(["tmrw"], "2026-11-17", 7), kept, "a reminder that is not an option");
+    assert.deepEqual(read(["tmrw"], "2026-11-17T10:00", null, -5), kept, "a duration that is not real");
+    assert.deepEqual(read(["tmrw"], "2027-03-28T01:30"), kept, "a clock time that doesn't exist in London");
   });
 
   it("reads a weekday as a date only when it clearly is one, and otherwise hands the whole text to the AI", () => {
@@ -238,8 +274,9 @@ describe("task area UI", () => {
       ["Call Sam in 2 weeks Friday", monday, ["Call Sam", "2026-12-04"]],
       ["Call Sam Friday in 2 weeks", monday, ["Call Sam", "2026-12-04"]],
       ["Call Jane Monday in 2 weeks 3pm", monday, asked],
-      ["Call Sam Monday in 2 weeks", "2026-11-22T10:30:00Z", ["Call Sam", "2026-12-07"]],
-      ["Call Sam in 2 weeks Monday", "2026-11-22T10:30:00Z", ["Call Sam", "2026-12-07"]],
+      ["Call Sam Monday in 2 weeks", "2026-11-22T10:30:00Z", asked],
+      ["Call Sam in 2 weeks Monday", "2026-11-22T10:30:00Z", asked],
+      ["Call Sam Friday in 2 weeks", "2026-11-18T10:30:00Z", ["Call Sam", "2026-12-04"]],
       ["Call Jane tomorrow 3pm re Monday meeting", monday, asked],
       ["Send Monday report Tuesday 3pm", monday, asked],
       ["Call Jane 20 Nov re Monday meeting", monday, asked],
@@ -256,8 +293,10 @@ describe("task area UI", () => {
       ["Chase Monday.com invoice", monday, asked],
       ["Chase Friday Media invoice", monday, asked],
       ["Call Monday re Friday Media", monday, asked],
-      ["Call Sam Monday night", monday, ["Call Sam", "2026-11-16T19:00"]],
-      ["Dinner Monday night 8", monday, ["Dinner", "2026-11-16T20:00"]],
+      ["Call Sam Monday night", monday, asked],
+      ["Call Sam Monday night", "2026-11-14T10:30:00Z", ["Call Sam", "2026-11-16T19:00"]],
+      ["Dinner Monday night 8", monday, asked],
+      ["Dinner Monday night 8", "2026-11-14T10:30:00Z", ["Dinner", "2026-11-16T20:00"]],
       ["Drinks Friday night 9", monday, ["Drinks", "2026-11-20T21:00"]],
       ["Call client tomorrow night 8", monday, ["Call client", "2026-11-17T20:00"]],
       ["Call Sam lunchtime", monday, asked],
@@ -267,6 +306,47 @@ describe("task area UI", () => {
       ["Send notes from Monday's call", monday, asked],
       ["Friday", monday, asked],
       ["Monday 9am", monday, asked],
+      ["Call Jo this weekend", "2026-11-14T10:30:00Z", asked],
+      ["Call Jo this weekend", "2026-11-18T14:00:00Z", ["Call Jo", "2026-11-21"]],
+      ["Chase Noon Ltd tomorrow", monday, asked],
+      ["Email Midday Events tomorrow", monday, asked],
+      ["Visit Midnight Oil Studio Friday 2pm", monday, asked],
+      ["Call Jo in an hour and a half", monday, asked],
+      ["Call Jo tomorow 3pm", monday, asked],
+      ["Call Jo tommorow", monday, asked],
+      ["Call NY office 9am their time tomorrow", monday, asked],
+      ["Send deck for Friday meeting", monday, asked],
+      ["Cancel Friday 10am meeting", monday, asked],
+      ["Tell Sam I'm off Monday", "2026-11-18T14:00:00Z", asked],
+      ["Did Jo call Tuesday?", monday, asked],
+      ["Call Jo 7:30", monday, asked],
+      ["Call Jo at 8.30", monday, asked],
+      ["Call Jo 08:30 tomorrow", monday, ["Call Jo", "2026-11-17T08:30"]],
+      ["Send NDA (tomorrow)", monday, asked],
+      ["Call Jo tomorrow @ 3pm", monday, asked],
+      ['Read "Tomorrow" by Friday', monday, asked],
+      ["Call Jo w/c 23 Nov", monday, asked],
+      ["Watch The Day After Tomorrow", monday, asked],
+      ["Call Jo at ten", monday, asked],
+      ["Call Jo at half three", monday, asked],
+      ["Call Jo 3ish tomorrow", monday, asked],
+      ["Call Jo in 3 months", monday, asked],
+      ["Send NDA next year", monday, asked],
+      ["Send NDA 2027", monday, asked],
+      ["Call Jo yesterday", monday, asked],
+      ["Call Bob in 2 weeks on Tuesday", "2026-11-20T18:30:00Z", asked],
+      ["Call Bob in 2 weeks on Tuesday", monday, ["Call Bob", "2026-12-01"]],
+      ["Call Jo tomorrow 13pm", monday, asked],
+      ["Call Jo tomorrow 0pm", monday, asked],
+      ["Call Jo tomorrow at noon sharp", monday, asked],
+      ["Call Jo next week sometime", monday, asked],
+      ["Price rise 4.5% from Monday", "2026-11-18T14:00:00Z", asked],
+      ["Lunch with Hannah Tuesday 1pm", monday, ["Lunch with Hannah", "2026-11-17T13:00"]],
+      ["Call Jo 1 Jan", monday, ["Call Jo", "2027-01-01"]],
+      ["Call Jo 14 Nov", monday, asked],
+      ["Send NDA tomorrow.", monday, ["Send NDA", "2026-11-17"]],
+      ["Drinks Friday evening", "2026-11-20T18:30:00Z", asked],
+      ["Drinks Friday night", "2026-11-20T18:30:00Z", asked],
     ];
     for (const [text, at, expected] of cases) {
       const parsed = parseTaskText(text, new Date(at));

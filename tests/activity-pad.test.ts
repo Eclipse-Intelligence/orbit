@@ -46,8 +46,8 @@ describe("activity pad parser", () => {
   });
 
   it("spots a follow-up deadline without mistaking it for when it happened", () => {
-    const parsed = parseActivityText("Called Jane, she wants revised pricing by Friday", FRIDAY_2PM);
-    assert.deepEqual(parsed.followUp, { due: "2026-10-23" });
+    const parsed = parseActivityText("Called Jane, she wants revised pricing by Monday", FRIDAY_2PM);
+    assert.deepEqual(parsed.followUp, { due: "2026-10-19" });
     assert.equal(parsed.when, null);
     assert.deepEqual(
       parsed.marks.map((mark) => mark.kind),

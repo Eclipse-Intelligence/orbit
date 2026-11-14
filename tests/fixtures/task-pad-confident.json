@@ -6,7 +6,10 @@
     "satBeforeSpring": "2027-03-28T15:00 | - | - | Call John",
     "sunSpring": "2027-03-29T15:00 | - | - | Call John",
     "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call John",
-    "sunAutumn": "2026-10-26T15:00 | - | - | Call John"
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call John",
+    "sat14": "2026-11-15T15:00 | - | - | Call John",
+    "wed18": "2026-11-19T15:00 | - | - | Call John",
+    "dec31": "2027-01-01T15:00 | - | - | Call John"
   },
   "Call John tomorrow 3pm": {
     "monAM": "2026-11-17T15:00 | - | - | Call John",
@@ -15,7 +18,10 @@
     "satBeforeSpring": "2027-03-28T15:00 | - | - | Call John",
     "sunSpring": "2027-03-29T15:00 | - | - | Call John",
     "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call John",
-    "sunAutumn": "2026-10-26T15:00 | - | - | Call John"
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call John",
+    "sat14": "2026-11-15T15:00 | - | - | Call John",
+    "wed18": "2026-11-19T15:00 | - | - | Call John",
+    "dec31": "2027-01-01T15:00 | - | - | Call John"
   },
   "Call Sarah Monday 10am": {
     "monAM": "2026-11-16T10:00 | - | - | Call Sarah",
@@ -24,7 +30,10 @@
     "satBeforeSpring": "2027-03-29T10:00 | - | - | Call Sarah",
     "sunSpring": "2027-03-29T10:00 | - | - | Call Sarah",
     "satBeforeAutumn": "2026-10-26T10:00 | - | - | Call Sarah",
-    "sunAutumn": "2026-10-26T10:00 | - | - | Call Sarah"
+    "sunAutumn": "2026-10-26T10:00 | - | - | Call Sarah",
+    "sat14": "2026-11-16T10:00 | - | - | Call Sarah",
+    "wed18": "2026-11-23T10:00 | - | - | Call Sarah",
+    "dec31": "2027-01-04T10:00 | - | - | Call Sarah"
   },
   "Ring Dave 2pm Friday": {
     "monAM": "2026-11-20T14:00 | - | - | Ring Dave",
@@ -33,16 +42,10 @@
     "satBeforeSpring": "2027-04-02T14:00 | - | - | Ring Dave",
     "sunSpring": "2027-04-02T14:00 | - | - | Ring Dave",
     "satBeforeAutumn": "2026-10-30T14:00 | - | - | Ring Dave",
-    "sunAutumn": "2026-10-30T14:00 | - | - | Ring Dave"
-  },
-  "Meet Priya Thursday 11:30": {
-    "monAM": "2026-11-19T11:30 | - | - | Meet Priya",
-    "friPM": "2026-11-26T11:30 | - | - | Meet Priya",
-    "sunNight": "2026-11-26T11:30 | - | - | Meet Priya",
-    "satBeforeSpring": "2027-04-01T11:30 | - | - | Meet Priya",
-    "sunSpring": "2027-04-01T11:30 | - | - | Meet Priya",
-    "satBeforeAutumn": "2026-10-29T11:30 | - | - | Meet Priya",
-    "sunAutumn": "2026-10-29T11:30 | - | - | Meet Priya"
+    "sunAutumn": "2026-10-30T14:00 | - | - | Ring Dave",
+    "sat14": "2026-11-20T14:00 | - | - | Ring Dave",
+    "wed18": "2026-11-20T14:00 | - | - | Ring Dave",
+    "dec31": "2027-01-01T14:00 | - | - | Ring Dave"
   },
   "Follow up with Tom next week": {
     "monAM": "2026-11-23 | - | - | Follow up with Tom",
@@ -51,7 +54,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Follow up with Tom",
     "sunSpring": "2027-03-29 | - | - | Follow up with Tom",
     "satBeforeAutumn": "2026-10-26 | - | - | Follow up with Tom",
-    "sunAutumn": "2026-10-26 | - | - | Follow up with Tom"
+    "sunAutumn": "2026-10-26 | - | - | Follow up with Tom",
+    "sat14": "2026-11-16 | - | - | Follow up with Tom",
+    "wed18": "2026-11-23 | - | - | Follow up with Tom",
+    "dec31": "2027-01-04 | - | - | Follow up with Tom"
   },
   "Follow up with Tom on Wednesday next week": {
     "monAM": "2026-11-25 | - | - | Follow up with Tom",
@@ -60,7 +66,10 @@
     "satBeforeSpring": "2027-03-31 | - | - | Follow up with Tom",
     "sunSpring": "2027-03-31 | - | - | Follow up with Tom",
     "satBeforeAutumn": "2026-10-28 | - | - | Follow up with Tom",
-    "sunAutumn": "2026-10-28 | - | - | Follow up with Tom"
+    "sunAutumn": "2026-10-28 | - | - | Follow up with Tom",
+    "sat14": "2026-11-18 | - | - | Follow up with Tom",
+    "wed18": "2026-11-25 | - | - | Follow up with Tom",
+    "dec31": "2027-01-06 | - | - | Follow up with Tom"
   },
   "Follow up Friday": {
     "monAM": "2026-11-20 | - | - | Follow up",
@@ -68,7 +77,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Follow up",
     "sunSpring": "2027-04-02 | - | - | Follow up",
     "satBeforeAutumn": "2026-10-30 | - | - | Follow up",
-    "sunAutumn": "2026-10-30 | - | - | Follow up"
+    "sunAutumn": "2026-10-30 | - | - | Follow up",
+    "sat14": "2026-11-20 | - | - | Follow up",
+    "wed18": "2026-11-20 | - | - | Follow up",
+    "dec31": "2027-01-01 | - | - | Follow up"
   },
   "Send proposal to Acme by Friday": {
     "monAM": "2026-11-20 | - | - | Send proposal to Acme",
@@ -76,21 +88,29 @@
     "satBeforeSpring": "2027-04-02 | - | - | Send proposal to Acme",
     "sunSpring": "2027-04-02 | - | - | Send proposal to Acme",
     "satBeforeAutumn": "2026-10-30 | - | - | Send proposal to Acme",
-    "sunAutumn": "2026-10-30 | - | - | Send proposal to Acme"
+    "sunAutumn": "2026-10-30 | - | - | Send proposal to Acme",
+    "sat14": "2026-11-20 | - | - | Send proposal to Acme",
+    "wed18": "2026-11-20 | - | - | Send proposal to Acme",
+    "dec31": "2027-01-01 | - | - | Send proposal to Acme"
   },
   "Send proposal by EOD": {
     "monAM": "2026-11-16T17:00 | - | - | Send proposal",
     "sunSpring": "2027-03-28T17:00 | - | - | Send proposal",
-    "sunAutumn": "2026-10-25T17:00 | - | - | Send proposal"
+    "sunAutumn": "2026-10-25T17:00 | - | - | Send proposal",
+    "sat14": "2026-11-14T17:00 | - | - | Send proposal",
+    "wed18": "2026-11-18T17:00 | - | - | Send proposal",
+    "dec31": "2026-12-31T17:00 | - | - | Send proposal"
   },
   "Send proposal EOD Friday": {
     "monAM": "2026-11-20T17:00 | - | - | Send proposal",
-    "friPM": "2026-11-27T17:00 | - | - | Send proposal",
     "sunNight": "2026-11-27T17:00 | - | - | Send proposal",
     "satBeforeSpring": "2027-04-02T17:00 | - | - | Send proposal",
     "sunSpring": "2027-04-02T17:00 | - | - | Send proposal",
     "satBeforeAutumn": "2026-10-30T17:00 | - | - | Send proposal",
-    "sunAutumn": "2026-10-30T17:00 | - | - | Send proposal"
+    "sunAutumn": "2026-10-30T17:00 | - | - | Send proposal",
+    "sat14": "2026-11-20T17:00 | - | - | Send proposal",
+    "wed18": "2026-11-20T17:00 | - | - | Send proposal",
+    "dec31": "2027-01-01T17:00 | - | - | Send proposal"
   },
   "Send contract by end of week": {
     "monAM": "2026-11-20T17:00 | - | - | Send contract",
@@ -98,7 +118,10 @@
     "satBeforeSpring": "2027-04-02T17:00 | - | - | Send contract",
     "sunSpring": "2027-04-02T17:00 | - | - | Send contract",
     "satBeforeAutumn": "2026-10-30T17:00 | - | - | Send contract",
-    "sunAutumn": "2026-10-30T17:00 | - | - | Send contract"
+    "sunAutumn": "2026-10-30T17:00 | - | - | Send contract",
+    "sat14": "2026-11-20T17:00 | - | - | Send contract",
+    "wed18": "2026-11-20T17:00 | - | - | Send contract",
+    "dec31": "2027-01-01T17:00 | - | - | Send contract"
   },
   "Send contract EOW": {
     "monAM": "2026-11-20T17:00 | - | - | Send contract",
@@ -106,7 +129,10 @@
     "satBeforeSpring": "2027-04-02T17:00 | - | - | Send contract",
     "sunSpring": "2027-04-02T17:00 | - | - | Send contract",
     "satBeforeAutumn": "2026-10-30T17:00 | - | - | Send contract",
-    "sunAutumn": "2026-10-30T17:00 | - | - | Send contract"
+    "sunAutumn": "2026-10-30T17:00 | - | - | Send contract",
+    "sat14": "2026-11-20T17:00 | - | - | Send contract",
+    "wed18": "2026-11-20T17:00 | - | - | Send contract",
+    "dec31": "2027-01-01T17:00 | - | - | Send contract"
   },
   "Chase invoice 4521": {
     "monAM": "- | - | - | Chase invoice 4521",
@@ -115,7 +141,10 @@
     "satBeforeSpring": "- | - | - | Chase invoice 4521",
     "sunSpring": "- | - | - | Chase invoice 4521",
     "satBeforeAutumn": "- | - | - | Chase invoice 4521",
-    "sunAutumn": "- | - | - | Chase invoice 4521"
+    "sunAutumn": "- | - | - | Chase invoice 4521",
+    "sat14": "- | - | - | Chase invoice 4521",
+    "wed18": "- | - | - | Chase invoice 4521",
+    "dec31": "- | - | - | Chase invoice 4521"
   },
   "Call 07700 900123": {
     "monAM": "- | - | - | Call 07700 900123",
@@ -124,7 +153,10 @@
     "satBeforeSpring": "- | - | - | Call 07700 900123",
     "sunSpring": "- | - | - | Call 07700 900123",
     "satBeforeAutumn": "- | - | - | Call 07700 900123",
-    "sunAutumn": "- | - | - | Call 07700 900123"
+    "sunAutumn": "- | - | - | Call 07700 900123",
+    "sat14": "- | - | - | Call 07700 900123",
+    "wed18": "- | - | - | Call 07700 900123",
+    "dec31": "- | - | - | Call 07700 900123"
   },
   "Call Dave on 07700 900123 tomorrow": {
     "monAM": "2026-11-17 | - | - | Call Dave on 07700 900123",
@@ -133,7 +165,10 @@
     "satBeforeSpring": "2027-03-28 | - | - | Call Dave on 07700 900123",
     "sunSpring": "2027-03-29 | - | - | Call Dave on 07700 900123",
     "satBeforeAutumn": "2026-10-25 | - | - | Call Dave on 07700 900123",
-    "sunAutumn": "2026-10-26 | - | - | Call Dave on 07700 900123"
+    "sunAutumn": "2026-10-26 | - | - | Call Dave on 07700 900123",
+    "sat14": "2026-11-15 | - | - | Call Dave on 07700 900123",
+    "wed18": "2026-11-19 | - | - | Call Dave on 07700 900123",
+    "dec31": "2027-01-01 | - | - | Call Dave on 07700 900123"
   },
   "Ring +44 7700 900123 Friday": {
     "monAM": "2026-11-20 | - | - | Ring +44 7700 900123",
@@ -141,7 +176,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Ring +44 7700 900123",
     "sunSpring": "2027-04-02 | - | - | Ring +44 7700 900123",
     "satBeforeAutumn": "2026-10-30 | - | - | Ring +44 7700 900123",
-    "sunAutumn": "2026-10-30 | - | - | Ring +44 7700 900123"
+    "sunAutumn": "2026-10-30 | - | - | Ring +44 7700 900123",
+    "sat14": "2026-11-20 | - | - | Ring +44 7700 900123",
+    "wed18": "2026-11-20 | - | - | Ring +44 7700 900123",
+    "dec31": "2027-01-01 | - | - | Ring +44 7700 900123"
   },
   "Quote £1,200 for Acme": {
     "monAM": "- | - | - | Quote £1,200 for Acme",
@@ -150,7 +188,10 @@
     "satBeforeSpring": "- | - | - | Quote £1,200 for Acme",
     "sunSpring": "- | - | - | Quote £1,200 for Acme",
     "satBeforeAutumn": "- | - | - | Quote £1,200 for Acme",
-    "sunAutumn": "- | - | - | Quote £1,200 for Acme"
+    "sunAutumn": "- | - | - | Quote £1,200 for Acme",
+    "sat14": "- | - | - | Quote £1,200 for Acme",
+    "wed18": "- | - | - | Quote £1,200 for Acme",
+    "dec31": "- | - | - | Quote £1,200 for Acme"
   },
   "Send quote for £12.50 per seat": {
     "monAM": "- | - | - | Send quote for £12.50 per seat",
@@ -159,7 +200,10 @@
     "satBeforeSpring": "- | - | - | Send quote for £12.50 per seat",
     "sunSpring": "- | - | - | Send quote for £12.50 per seat",
     "satBeforeAutumn": "- | - | - | Send quote for £12.50 per seat",
-    "sunAutumn": "- | - | - | Send quote for £12.50 per seat"
+    "sunAutumn": "- | - | - | Send quote for £12.50 per seat",
+    "sat14": "- | - | - | Send quote for £12.50 per seat",
+    "wed18": "- | - | - | Send quote for £12.50 per seat",
+    "dec31": "- | - | - | Send quote for £12.50 per seat"
   },
   "Discount 10% for Acme by Friday": {
     "monAM": "2026-11-20 | - | - | Discount 10% for Acme",
@@ -167,7 +211,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Discount 10% for Acme",
     "sunSpring": "2027-04-02 | - | - | Discount 10% for Acme",
     "satBeforeAutumn": "2026-10-30 | - | - | Discount 10% for Acme",
-    "sunAutumn": "2026-10-30 | - | - | Discount 10% for Acme"
+    "sunAutumn": "2026-10-30 | - | - | Discount 10% for Acme",
+    "sat14": "2026-11-20 | - | - | Discount 10% for Acme",
+    "wed18": "2026-11-20 | - | - | Discount 10% for Acme",
+    "dec31": "2027-01-01 | - | - | Discount 10% for Acme"
   },
   "Upgrade Acme to v2.30": {
     "monAM": "- | - | - | Upgrade Acme to v2.30",
@@ -176,7 +223,10 @@
     "satBeforeSpring": "- | - | - | Upgrade Acme to v2.30",
     "sunSpring": "- | - | - | Upgrade Acme to v2.30",
     "satBeforeAutumn": "- | - | - | Upgrade Acme to v2.30",
-    "sunAutumn": "- | - | - | Upgrade Acme to v2.30"
+    "sunAutumn": "- | - | - | Upgrade Acme to v2.30",
+    "sat14": "- | - | - | Upgrade Acme to v2.30",
+    "wed18": "- | - | - | Upgrade Acme to v2.30",
+    "dec31": "- | - | - | Upgrade Acme to v2.30"
   },
   "Upgrade to version 3.15 on Tuesday": {
     "monAM": "2026-11-17 | - | - | Upgrade to version 3.15",
@@ -185,7 +235,10 @@
     "satBeforeSpring": "2027-03-30 | - | - | Upgrade to version 3.15",
     "sunSpring": "2027-03-30 | - | - | Upgrade to version 3.15",
     "satBeforeAutumn": "2026-10-27 | - | - | Upgrade to version 3.15",
-    "sunAutumn": "2026-10-27 | - | - | Upgrade to version 3.15"
+    "sunAutumn": "2026-10-27 | - | - | Upgrade to version 3.15",
+    "sat14": "2026-11-17 | - | - | Upgrade to version 3.15",
+    "wed18": "2026-11-24 | - | - | Upgrade to version 3.15",
+    "dec31": "2027-01-05 | - | - | Upgrade to version 3.15"
   },
   "Test release 4.10 tomorrow": {
     "monAM": "2026-11-17 | - | - | Test release 4.10",
@@ -194,7 +247,10 @@
     "satBeforeSpring": "2027-03-28 | - | - | Test release 4.10",
     "sunSpring": "2027-03-29 | - | - | Test release 4.10",
     "satBeforeAutumn": "2026-10-25 | - | - | Test release 4.10",
-    "sunAutumn": "2026-10-26 | - | - | Test release 4.10"
+    "sunAutumn": "2026-10-26 | - | - | Test release 4.10",
+    "sat14": "2026-11-15 | - | - | Test release 4.10",
+    "wed18": "2026-11-19 | - | - | Test release 4.10",
+    "dec31": "2027-01-01 | - | - | Test release 4.10"
   },
   "Renewal due 1/12": {
     "monAM": "2026-12-01 | - | - | Renewal",
@@ -203,14 +259,18 @@
     "satBeforeSpring": "2027-12-01 | - | - | Renewal",
     "sunSpring": "2027-12-01 | - | - | Renewal",
     "satBeforeAutumn": "2026-12-01 | - | - | Renewal",
-    "sunAutumn": "2026-12-01 | - | - | Renewal"
+    "sunAutumn": "2026-12-01 | - | - | Renewal",
+    "sat14": "2026-12-01 | - | - | Renewal",
+    "wed18": "2026-12-01 | - | - | Renewal"
   },
   "Renewal due 01/12/2026": {
     "monAM": "2026-12-01 | - | - | Renewal",
     "friPM": "2026-12-01 | - | - | Renewal",
     "sunNight": "2026-12-01 | - | - | Renewal",
     "satBeforeAutumn": "2026-12-01 | - | - | Renewal",
-    "sunAutumn": "2026-12-01 | - | - | Renewal"
+    "sunAutumn": "2026-12-01 | - | - | Renewal",
+    "sat14": "2026-12-01 | - | - | Renewal",
+    "wed18": "2026-12-01 | - | - | Renewal"
   },
   "Call on 3rd December": {
     "monAM": "2026-12-03 | - | - | Call",
@@ -219,7 +279,9 @@
     "satBeforeSpring": "2027-12-03 | - | - | Call",
     "sunSpring": "2027-12-03 | - | - | Call",
     "satBeforeAutumn": "2026-12-03 | - | - | Call",
-    "sunAutumn": "2026-12-03 | - | - | Call"
+    "sunAutumn": "2026-12-03 | - | - | Call",
+    "sat14": "2026-12-03 | - | - | Call",
+    "wed18": "2026-12-03 | - | - | Call"
   },
   "Call Dec 3": {
     "monAM": "2026-12-03 | - | - | Call",
@@ -228,7 +290,9 @@
     "satBeforeSpring": "2027-12-03 | - | - | Call",
     "sunSpring": "2027-12-03 | - | - | Call",
     "satBeforeAutumn": "2026-12-03 | - | - | Call",
-    "sunAutumn": "2026-12-03 | - | - | Call"
+    "sunAutumn": "2026-12-03 | - | - | Call",
+    "sat14": "2026-12-03 | - | - | Call",
+    "wed18": "2026-12-03 | - | - | Call"
   },
   "Meeting 3rd of December 2pm": {
     "monAM": "2026-12-03T14:00 | - | - | Meeting",
@@ -237,72 +301,70 @@
     "satBeforeSpring": "2027-12-03T14:00 | - | - | Meeting",
     "sunSpring": "2027-12-03T14:00 | - | - | Meeting",
     "satBeforeAutumn": "2026-12-03T14:00 | - | - | Meeting",
-    "sunAutumn": "2026-12-03T14:00 | - | - | Meeting"
+    "sunAutumn": "2026-12-03T14:00 | - | - | Meeting",
+    "sat14": "2026-12-03T14:00 | - | - | Meeting",
+    "wed18": "2026-12-03T14:00 | - | - | Meeting"
+  },
+  "Tender due 14 January": {
+    "monAM": "2027-01-14 | - | - | Tender",
+    "friPM": "2027-01-14 | - | - | Tender",
+    "sunNight": "2027-01-14 | - | - | Tender",
+    "satBeforeAutumn": "2027-01-14 | - | - | Tender",
+    "sunAutumn": "2027-01-14 | - | - | Tender",
+    "sat14": "2027-01-14 | - | - | Tender",
+    "wed18": "2027-01-14 | - | - | Tender",
+    "dec31": "2027-01-14 | - | - | Tender"
   },
   "Tender due January 14 2027": {
     "monAM": "2027-01-14 | - | - | Tender",
     "friPM": "2027-01-14 | - | - | Tender",
     "sunNight": "2027-01-14 | - | - | Tender",
     "satBeforeAutumn": "2027-01-14 | - | - | Tender",
-    "sunAutumn": "2027-01-14 | - | - | Tender"
+    "sunAutumn": "2027-01-14 | - | - | Tender",
+    "sat14": "2027-01-14 | - | - | Tender",
+    "wed18": "2027-01-14 | - | - | Tender",
+    "dec31": "2027-01-14 | - | - | Tender"
   },
   "Tender due 14th Jan 2027 5pm": {
     "monAM": "2027-01-14T17:00 | - | - | Tender",
     "friPM": "2027-01-14T17:00 | - | - | Tender",
     "sunNight": "2027-01-14T17:00 | - | - | Tender",
     "satBeforeAutumn": "2027-01-14T17:00 | - | - | Tender",
-    "sunAutumn": "2027-01-14T17:00 | - | - | Tender"
-  },
-  "Coffee with Raj Monday morning": {
-    "monAM": "2026-11-23T09:00 | - | - | Coffee with Raj",
-    "friPM": "2026-11-23T09:00 | - | - | Coffee with Raj",
-    "sunNight": "2026-11-23T09:00 | - | - | Coffee with Raj",
-    "satBeforeSpring": "2027-03-29T09:00 | - | - | Coffee with Raj",
-    "sunSpring": "2027-03-29T09:00 | - | - | Coffee with Raj",
-    "satBeforeAutumn": "2026-10-26T09:00 | - | - | Coffee with Raj",
-    "sunAutumn": "2026-10-26T09:00 | - | - | Coffee with Raj"
-  },
-  "Coffee with Raj Monday afternoon": {
-    "monAM": "2026-11-16T14:00 | - | - | Coffee with Raj",
-    "friPM": "2026-11-23T14:00 | - | - | Coffee with Raj",
-    "sunNight": "2026-11-23T14:00 | - | - | Coffee with Raj",
-    "satBeforeSpring": "2027-03-29T14:00 | - | - | Coffee with Raj",
-    "sunSpring": "2027-03-29T14:00 | - | - | Coffee with Raj",
-    "satBeforeAutumn": "2026-10-26T14:00 | - | - | Coffee with Raj",
-    "sunAutumn": "2026-10-26T14:00 | - | - | Coffee with Raj"
+    "sunAutumn": "2027-01-14T17:00 | - | - | Tender",
+    "sat14": "2027-01-14T17:00 | - | - | Tender",
+    "wed18": "2027-01-14T17:00 | - | - | Tender",
+    "dec31": "2027-01-14T17:00 | - | - | Tender"
   },
   "Drinks with team Friday night": {
     "monAM": "2026-11-20T19:00 | - | - | Drinks with team",
-    "friPM": "2026-11-20T19:00 | - | - | Drinks with team",
     "sunNight": "2026-11-27T19:00 | - | - | Drinks with team",
     "satBeforeSpring": "2027-04-02T19:00 | - | - | Drinks with team",
     "sunSpring": "2027-04-02T19:00 | - | - | Drinks with team",
     "satBeforeAutumn": "2026-10-30T19:00 | - | - | Drinks with team",
-    "sunAutumn": "2026-10-30T19:00 | - | - | Drinks with team"
+    "sunAutumn": "2026-10-30T19:00 | - | - | Drinks with team",
+    "sat14": "2026-11-20T19:00 | - | - | Drinks with team",
+    "wed18": "2026-11-20T19:00 | - | - | Drinks with team",
+    "dec31": "2027-01-01T19:00 | - | - | Drinks with team"
   },
   "Drinks Friday evening": {
     "monAM": "2026-11-20T18:00 | - | - | Drinks",
-    "friPM": "2026-11-27T18:00 | - | - | Drinks",
     "sunNight": "2026-11-27T18:00 | - | - | Drinks",
     "satBeforeSpring": "2027-04-02T18:00 | - | - | Drinks",
     "sunSpring": "2027-04-02T18:00 | - | - | Drinks",
     "satBeforeAutumn": "2026-10-30T18:00 | - | - | Drinks",
-    "sunAutumn": "2026-10-30T18:00 | - | - | Drinks"
-  },
-  "Dinner Monday night 8": {
-    "monAM": "2026-11-16T20:00 | - | - | Dinner",
-    "friPM": "2026-11-23T20:00 | - | - | Dinner",
-    "sunNight": "2026-11-23T20:00 | - | - | Dinner",
-    "satBeforeSpring": "2027-03-29T20:00 | - | - | Dinner",
-    "sunSpring": "2027-03-29T20:00 | - | - | Dinner",
-    "satBeforeAutumn": "2026-10-26T20:00 | - | - | Dinner",
-    "sunAutumn": "2026-10-26T20:00 | - | - | Dinner"
+    "sunAutumn": "2026-10-30T18:00 | - | - | Drinks",
+    "sat14": "2026-11-20T18:00 | - | - | Drinks",
+    "wed18": "2026-11-20T18:00 | - | - | Drinks",
+    "dec31": "2027-01-01T18:00 | - | - | Drinks"
   },
   "Dinner tonight": {
     "monAM": "2026-11-16T19:00 | - | - | Dinner",
     "friPM": "2026-11-20T19:00 | - | - | Dinner",
     "sunSpring": "2027-03-28T19:00 | - | - | Dinner",
-    "sunAutumn": "2026-10-25T19:00 | - | - | Dinner"
+    "sunAutumn": "2026-10-25T19:00 | - | - | Dinner",
+    "sat14": "2026-11-14T19:00 | - | - | Dinner",
+    "wed18": "2026-11-18T19:00 | - | - | Dinner",
+    "dec31": "2026-12-31T19:00 | - | - | Dinner"
   },
   "Dinner tonight at 8": {
     "monAM": "2026-11-16T20:00 | - | - | Dinner",
@@ -310,7 +372,10 @@
     "satBeforeSpring": "2027-03-27T20:00 | - | - | Dinner",
     "sunSpring": "2027-03-28T20:00 | - | - | Dinner",
     "satBeforeAutumn": "2026-10-24T20:00 | - | - | Dinner",
-    "sunAutumn": "2026-10-25T20:00 | - | - | Dinner"
+    "sunAutumn": "2026-10-25T20:00 | - | - | Dinner",
+    "sat14": "2026-11-14T20:00 | - | - | Dinner",
+    "wed18": "2026-11-18T20:00 | - | - | Dinner",
+    "dec31": "2026-12-31T20:00 | - | - | Dinner"
   },
   "Dinner tonight 8": {
     "monAM": "2026-11-16T20:00 | - | - | Dinner",
@@ -318,22 +383,19 @@
     "satBeforeSpring": "2027-03-27T20:00 | - | - | Dinner",
     "sunSpring": "2027-03-28T20:00 | - | - | Dinner",
     "satBeforeAutumn": "2026-10-24T20:00 | - | - | Dinner",
-    "sunAutumn": "2026-10-25T20:00 | - | - | Dinner"
+    "sunAutumn": "2026-10-25T20:00 | - | - | Dinner",
+    "sat14": "2026-11-14T20:00 | - | - | Dinner",
+    "wed18": "2026-11-18T20:00 | - | - | Dinner",
+    "dec31": "2026-12-31T20:00 | - | - | Dinner"
   },
   "Call client tonight 7.30": {
     "monAM": "2026-11-16T19:30 | - | - | Call client",
     "friPM": "2026-11-20T19:30 | - | - | Call client",
     "sunSpring": "2027-03-28T19:30 | - | - | Call client",
-    "sunAutumn": "2026-10-25T19:30 | - | - | Call client"
-  },
-  "Call client at 7.30": {
-    "monAM": "2026-11-17T07:30 | - | - | Call client",
-    "friPM": "2026-11-21T07:30 | - | - | Call client",
-    "sunNight": "2026-11-23T07:30 | - | - | Call client",
-    "satBeforeSpring": "2027-03-28T07:30 | - | - | Call client",
-    "sunSpring": "2027-03-28T07:30 | - | - | Call client",
-    "satBeforeAutumn": "2026-10-25T07:30 | - | - | Call client",
-    "sunAutumn": "2026-10-25T07:30 | - | - | Call client"
+    "sunAutumn": "2026-10-25T19:30 | - | - | Call client",
+    "sat14": "2026-11-14T19:30 | - | - | Call client",
+    "wed18": "2026-11-18T19:30 | - | - | Call client",
+    "dec31": "2026-12-31T19:30 | - | - | Call client"
   },
   "Meeting 14:00 Friday": {
     "monAM": "2026-11-20T14:00 | - | - | Meeting",
@@ -342,7 +404,10 @@
     "satBeforeSpring": "2027-04-02T14:00 | - | - | Meeting",
     "sunSpring": "2027-04-02T14:00 | - | - | Meeting",
     "satBeforeAutumn": "2026-10-30T14:00 | - | - | Meeting",
-    "sunAutumn": "2026-10-30T14:00 | - | - | Meeting"
+    "sunAutumn": "2026-10-30T14:00 | - | - | Meeting",
+    "sat14": "2026-11-20T14:00 | - | - | Meeting",
+    "wed18": "2026-11-20T14:00 | - | - | Meeting",
+    "dec31": "2027-01-01T14:00 | - | - | Meeting"
   },
   "Call at 15": {
     "monAM": "2026-11-16T15:00 | - | - | Call",
@@ -351,7 +416,10 @@
     "satBeforeSpring": "2027-03-28T15:00 | - | - | Call",
     "sunSpring": "2027-03-28T15:00 | - | - | Call",
     "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call",
-    "sunAutumn": "2026-10-25T15:00 | - | - | Call"
+    "sunAutumn": "2026-10-25T15:00 | - | - | Call",
+    "sat14": "2026-11-14T15:00 | - | - | Call",
+    "wed18": "2026-11-18T15:00 | - | - | Call",
+    "dec31": "2027-01-01T15:00 | - | - | Call"
   },
   "Call noon tomorrow": {
     "monAM": "2026-11-17T12:00 | - | - | Call",
@@ -360,7 +428,10 @@
     "satBeforeSpring": "2027-03-28T12:00 | - | - | Call",
     "sunSpring": "2027-03-29T12:00 | - | - | Call",
     "satBeforeAutumn": "2026-10-25T12:00 | - | - | Call",
-    "sunAutumn": "2026-10-26T12:00 | - | - | Call"
+    "sunAutumn": "2026-10-26T12:00 | - | - | Call",
+    "sat14": "2026-11-15T12:00 | - | - | Call",
+    "wed18": "2026-11-19T12:00 | - | - | Call",
+    "dec31": "2027-01-01T12:00 | - | - | Call"
   },
   "Call midday": {
     "monAM": "2026-11-16T12:00 | - | - | Call",
@@ -369,7 +440,10 @@
     "satBeforeSpring": "2027-03-28T12:00 | - | - | Call",
     "sunSpring": "2027-03-28T12:00 | - | - | Call",
     "satBeforeAutumn": "2026-10-25T12:00 | - | - | Call",
-    "sunAutumn": "2026-10-25T12:00 | - | - | Call"
+    "sunAutumn": "2026-10-25T12:00 | - | - | Call",
+    "sat14": "2026-11-14T12:00 | - | - | Call",
+    "wed18": "2026-11-19T12:00 | - | - | Call",
+    "dec31": "2027-01-01T12:00 | - | - | Call"
   },
   "Call at midnight": {
     "monAM": "2026-11-17T00:00 | - | - | Call",
@@ -378,7 +452,10 @@
     "satBeforeSpring": "2027-03-28T00:00 | - | - | Call",
     "sunSpring": "2027-03-29T00:00 | - | - | Call",
     "satBeforeAutumn": "2026-10-25T00:00 | - | - | Call",
-    "sunAutumn": "2026-10-26T00:00 | - | - | Call"
+    "sunAutumn": "2026-10-26T00:00 | - | - | Call",
+    "sat14": "2026-11-15T00:00 | - | - | Call",
+    "wed18": "2026-11-19T00:00 | - | - | Call",
+    "dec31": "2027-01-01T00:00 | - | - | Call"
   },
   "Send 3 proposals to Acme": {
     "monAM": "- | - | - | Send 3 proposals to Acme",
@@ -387,7 +464,10 @@
     "satBeforeSpring": "- | - | - | Send 3 proposals to Acme",
     "sunSpring": "- | - | - | Send 3 proposals to Acme",
     "satBeforeAutumn": "- | - | - | Send 3 proposals to Acme",
-    "sunAutumn": "- | - | - | Send 3 proposals to Acme"
+    "sunAutumn": "- | - | - | Send 3 proposals to Acme",
+    "sat14": "- | - | - | Send 3 proposals to Acme",
+    "wed18": "- | - | - | Send 3 proposals to Acme",
+    "dec31": "- | - | - | Send 3 proposals to Acme"
   },
   "Order 20 units Friday": {
     "monAM": "2026-11-20 | - | - | Order 20 units",
@@ -395,7 +475,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Order 20 units",
     "sunSpring": "2027-04-02 | - | - | Order 20 units",
     "satBeforeAutumn": "2026-10-30 | - | - | Order 20 units",
-    "sunAutumn": "2026-10-30 | - | - | Order 20 units"
+    "sunAutumn": "2026-10-30 | - | - | Order 20 units",
+    "sat14": "2026-11-20 | - | - | Order 20 units",
+    "wed18": "2026-11-20 | - | - | Order 20 units",
+    "dec31": "2027-01-01 | - | - | Order 20 units"
   },
   "Book 2 rooms Tuesday": {
     "monAM": "2026-11-17 | - | - | Book 2 rooms",
@@ -404,7 +487,10 @@
     "satBeforeSpring": "2027-03-30 | - | - | Book 2 rooms",
     "sunSpring": "2027-03-30 | - | - | Book 2 rooms",
     "satBeforeAutumn": "2026-10-27 | - | - | Book 2 rooms",
-    "sunAutumn": "2026-10-27 | - | - | Book 2 rooms"
+    "sunAutumn": "2026-10-27 | - | - | Book 2 rooms",
+    "sat14": "2026-11-17 | - | - | Book 2 rooms",
+    "wed18": "2026-11-24 | - | - | Book 2 rooms",
+    "dec31": "2027-01-05 | - | - | Book 2 rooms"
   },
   "Review 5 CVs tomorrow": {
     "monAM": "2026-11-17 | - | - | Review 5 CVs",
@@ -413,7 +499,10 @@
     "satBeforeSpring": "2027-03-28 | - | - | Review 5 CVs",
     "sunSpring": "2027-03-29 | - | - | Review 5 CVs",
     "satBeforeAutumn": "2026-10-25 | - | - | Review 5 CVs",
-    "sunAutumn": "2026-10-26 | - | - | Review 5 CVs"
+    "sunAutumn": "2026-10-26 | - | - | Review 5 CVs",
+    "sat14": "2026-11-15 | - | - | Review 5 CVs",
+    "wed18": "2026-11-19 | - | - | Review 5 CVs",
+    "dec31": "2027-01-01 | - | - | Review 5 CVs"
   },
   "Call room 4 Friday": {
     "monAM": "2026-11-20 | - | - | Call room 4",
@@ -421,7 +510,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Call room 4",
     "sunSpring": "2027-04-02 | - | - | Call room 4",
     "satBeforeAutumn": "2026-10-30 | - | - | Call room 4",
-    "sunAutumn": "2026-10-30 | - | - | Call room 4"
+    "sunAutumn": "2026-10-30 | - | - | Call room 4",
+    "sat14": "2026-11-20 | - | - | Call room 4",
+    "wed18": "2026-11-20 | - | - | Call room 4",
+    "dec31": "2027-01-01 | - | - | Call room 4"
   },
   "Meet at Platform 9 Tuesday": {
     "monAM": "2026-11-17 | - | - | Meet at Platform 9",
@@ -430,7 +522,10 @@
     "satBeforeSpring": "2027-03-30 | - | - | Meet at Platform 9",
     "sunSpring": "2027-03-30 | - | - | Meet at Platform 9",
     "satBeforeAutumn": "2026-10-27 | - | - | Meet at Platform 9",
-    "sunAutumn": "2026-10-27 | - | - | Meet at Platform 9"
+    "sunAutumn": "2026-10-27 | - | - | Meet at Platform 9",
+    "sat14": "2026-11-17 | - | - | Meet at Platform 9",
+    "wed18": "2026-11-24 | - | - | Meet at Platform 9",
+    "dec31": "2027-01-05 | - | - | Meet at Platform 9"
   },
   "Fly to Paris 6am Monday": {
     "monAM": "2026-11-23T06:00 | - | - | Fly to Paris",
@@ -439,7 +534,10 @@
     "satBeforeSpring": "2027-03-29T06:00 | - | - | Fly to Paris",
     "sunSpring": "2027-03-29T06:00 | - | - | Fly to Paris",
     "satBeforeAutumn": "2026-10-26T06:00 | - | - | Fly to Paris",
-    "sunAutumn": "2026-10-26T06:00 | - | - | Fly to Paris"
+    "sunAutumn": "2026-10-26T06:00 | - | - | Fly to Paris",
+    "sat14": "2026-11-16T06:00 | - | - | Fly to Paris",
+    "wed18": "2026-11-23T06:00 | - | - | Fly to Paris",
+    "dec31": "2027-01-04T06:00 | - | - | Fly to Paris"
   },
   "Train 06:45 Tuesday": {
     "monAM": "2026-11-17T06:45 | - | - | Train",
@@ -448,7 +546,10 @@
     "satBeforeSpring": "2027-03-30T06:45 | - | - | Train",
     "sunSpring": "2027-03-30T06:45 | - | - | Train",
     "satBeforeAutumn": "2026-10-27T06:45 | - | - | Train",
-    "sunAutumn": "2026-10-27T06:45 | - | - | Train"
+    "sunAutumn": "2026-10-27T06:45 | - | - | Train",
+    "sat14": "2026-11-17T06:45 | - | - | Train",
+    "wed18": "2026-11-24T06:45 | - | - | Train",
+    "dec31": "2027-01-05T06:45 | - | - | Train"
   },
   "Call Bob tomorrow remind me 15 mins before": {
     "monAM": "2026-11-17 | - | 15 | Call Bob",
@@ -457,7 +558,10 @@
     "satBeforeSpring": "2027-03-28 | - | 15 | Call Bob",
     "sunSpring": "2027-03-29 | - | 15 | Call Bob",
     "satBeforeAutumn": "2026-10-25 | - | 15 | Call Bob",
-    "sunAutumn": "2026-10-26 | - | 15 | Call Bob"
+    "sunAutumn": "2026-10-26 | - | 15 | Call Bob",
+    "sat14": "2026-11-15 | - | 15 | Call Bob",
+    "wed18": "2026-11-19 | - | 15 | Call Bob",
+    "dec31": "2027-01-01 | - | 15 | Call Bob"
   },
   "Call Bob tomorrow 3pm, remind 1 hour before": {
     "monAM": "2026-11-17T15:00 | - | 60 | Call Bob",
@@ -466,7 +570,10 @@
     "satBeforeSpring": "2027-03-28T15:00 | - | 60 | Call Bob",
     "sunSpring": "2027-03-29T15:00 | - | 60 | Call Bob",
     "satBeforeAutumn": "2026-10-25T15:00 | - | 60 | Call Bob",
-    "sunAutumn": "2026-10-26T15:00 | - | 60 | Call Bob"
+    "sunAutumn": "2026-10-26T15:00 | - | 60 | Call Bob",
+    "sat14": "2026-11-15T15:00 | - | 60 | Call Bob",
+    "wed18": "2026-11-19T15:00 | - | 60 | Call Bob",
+    "dec31": "2027-01-01T15:00 | - | 60 | Call Bob"
   },
   "Call Bob in 2 hours": {
     "monAM": "2026-11-16T11:15 | - | - | Call Bob",
@@ -475,7 +582,10 @@
     "satBeforeSpring": "2027-03-27T22:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T03:30 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-24T22:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T02:30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25T02:30 | - | - | Call Bob",
+    "sat14": "2026-11-14T12:30 | - | - | Call Bob",
+    "wed18": "2026-11-18T16:00 | - | - | Call Bob",
+    "dec31": "2026-12-31T18:00 | - | - | Call Bob"
   },
   "Call Bob in 30 mins": {
     "monAM": "2026-11-16T09:45 | - | - | Call Bob",
@@ -483,7 +593,10 @@
     "sunNight": "2026-11-23T00:00 | - | - | Call Bob",
     "satBeforeSpring": "2027-03-27T20:30 | - | - | Call Bob",
     "sunSpring": "2027-03-28T02:00 | - | - | Call Bob",
-    "satBeforeAutumn": "2026-10-24T20:30 | - | - | Call Bob"
+    "satBeforeAutumn": "2026-10-24T20:30 | - | - | Call Bob",
+    "sat14": "2026-11-14T11:00 | - | - | Call Bob",
+    "wed18": "2026-11-18T14:30 | - | - | Call Bob",
+    "dec31": "2026-12-31T16:30 | - | - | Call Bob"
   },
   "Call Bob in 3 days": {
     "monAM": "2026-11-19 | - | - | Call Bob",
@@ -492,7 +605,10 @@
     "satBeforeSpring": "2027-03-30 | - | - | Call Bob",
     "sunSpring": "2027-03-31 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-27 | - | - | Call Bob",
-    "sunAutumn": "2026-10-28 | - | - | Call Bob"
+    "sunAutumn": "2026-10-28 | - | - | Call Bob",
+    "sat14": "2026-11-17 | - | - | Call Bob",
+    "wed18": "2026-11-21 | - | - | Call Bob",
+    "dec31": "2027-01-03 | - | - | Call Bob"
   },
   "Call Bob in 2 weeks": {
     "monAM": "2026-11-30 | - | - | Call Bob",
@@ -501,16 +617,13 @@
     "satBeforeSpring": "2027-04-10 | - | - | Call Bob",
     "sunSpring": "2027-04-11 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-07 | - | - | Call Bob",
-    "sunAutumn": "2026-11-08 | - | - | Call Bob"
+    "sunAutumn": "2026-11-08 | - | - | Call Bob",
+    "sat14": "2026-11-28 | - | - | Call Bob",
+    "wed18": "2026-12-02 | - | - | Call Bob",
+    "dec31": "2027-01-14 | - | - | Call Bob"
   },
   "Call Bob in 2 weeks on Tuesday": {
-    "monAM": "2026-12-01 | - | - | Call Bob",
-    "friPM": "2026-12-08 | - | - | Call Bob",
-    "sunNight": "2026-12-08 | - | - | Call Bob",
-    "satBeforeSpring": "2027-04-13 | - | - | Call Bob",
-    "sunSpring": "2027-04-13 | - | - | Call Bob",
-    "satBeforeAutumn": "2026-11-10 | - | - | Call Bob",
-    "sunAutumn": "2026-11-10 | - | - | Call Bob"
+    "monAM": "2026-12-01 | - | - | Call Bob"
   },
   "Call Bob in a week": {
     "monAM": "2026-11-23 | - | - | Call Bob",
@@ -519,7 +632,10 @@
     "satBeforeSpring": "2027-04-03 | - | - | Call Bob",
     "sunSpring": "2027-04-04 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-31 | - | - | Call Bob",
-    "sunAutumn": "2026-11-01 | - | - | Call Bob"
+    "sunAutumn": "2026-11-01 | - | - | Call Bob",
+    "sat14": "2026-11-21 | - | - | Call Bob",
+    "wed18": "2026-11-25 | - | - | Call Bob",
+    "dec31": "2027-01-07 | - | - | Call Bob"
   },
   "Call Bob next Monday": {
     "monAM": "2026-11-23 | - | - | Call Bob",
@@ -528,7 +644,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call Bob",
     "sunSpring": "2027-03-29 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-26 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26 | - | - | Call Bob",
+    "sat14": "2026-11-16 | - | - | Call Bob",
+    "wed18": "2026-11-23 | - | - | Call Bob",
+    "dec31": "2027-01-04 | - | - | Call Bob"
   },
   "Call Bob this Monday": {
     "monAM": "2026-11-16 | - | - | Call Bob",
@@ -537,7 +656,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call Bob",
     "sunSpring": "2027-03-29 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-26 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26 | - | - | Call Bob",
+    "sat14": "2026-11-16 | - | - | Call Bob",
+    "wed18": "2026-11-23 | - | - | Call Bob",
+    "dec31": "2027-01-04 | - | - | Call Bob"
   },
   "Call Bob this Friday": {
     "monAM": "2026-11-20 | - | - | Call Bob",
@@ -546,7 +668,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Call Bob",
     "sunSpring": "2027-04-02 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-30 | - | - | Call Bob",
+    "sat14": "2026-11-20 | - | - | Call Bob",
+    "wed18": "2026-11-20 | - | - | Call Bob",
+    "dec31": "2027-01-01 | - | - | Call Bob"
   },
   "Call Bob Friday next week": {
     "monAM": "2026-11-27 | - | - | Call Bob",
@@ -555,7 +680,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Call Bob",
     "sunSpring": "2027-04-02 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-30 | - | - | Call Bob",
+    "sat14": "2026-11-20 | - | - | Call Bob",
+    "wed18": "2026-11-27 | - | - | Call Bob",
+    "dec31": "2027-01-08 | - | - | Call Bob"
   },
   "Call Bob the day after tomorrow": {
     "monAM": "2026-11-18 | - | - | Call Bob",
@@ -564,7 +692,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call Bob",
     "sunSpring": "2027-03-30 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-26 | - | - | Call Bob",
-    "sunAutumn": "2026-10-27 | - | - | Call Bob"
+    "sunAutumn": "2026-10-27 | - | - | Call Bob",
+    "sat14": "2026-11-16 | - | - | Call Bob",
+    "wed18": "2026-11-20 | - | - | Call Bob",
+    "dec31": "2027-01-02 | - | - | Call Bob"
   },
   "Call Bob next month": {
     "monAM": "2026-12-01 | - | - | Call Bob",
@@ -573,16 +704,16 @@
     "satBeforeSpring": "2027-04-01 | - | - | Call Bob",
     "sunSpring": "2027-04-01 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-01 | - | - | Call Bob",
-    "sunAutumn": "2026-11-01 | - | - | Call Bob"
+    "sunAutumn": "2026-11-01 | - | - | Call Bob",
+    "sat14": "2026-12-01 | - | - | Call Bob",
+    "wed18": "2026-12-01 | - | - | Call Bob",
+    "dec31": "2027-01-01 | - | - | Call Bob"
   },
   "Call Bob this weekend": {
     "monAM": "2026-11-21 | - | - | Call Bob",
     "friPM": "2026-11-21 | - | - | Call Bob",
-    "sunNight": "2026-11-28 | - | - | Call Bob",
-    "satBeforeSpring": "2027-04-03 | - | - | Call Bob",
-    "sunSpring": "2027-04-03 | - | - | Call Bob",
-    "satBeforeAutumn": "2026-10-31 | - | - | Call Bob",
-    "sunAutumn": "2026-10-31 | - | - | Call Bob"
+    "wed18": "2026-11-21 | - | - | Call Bob",
+    "dec31": "2027-01-02 | - | - | Call Bob"
   },
   "Call Bob tomorrow morning": {
     "monAM": "2026-11-17T09:00 | - | - | Call Bob",
@@ -591,7 +722,10 @@
     "satBeforeSpring": "2027-03-28T09:00 | - | - | Call Bob",
     "sunSpring": "2027-03-29T09:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-25T09:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26T09:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26T09:00 | - | - | Call Bob",
+    "sat14": "2026-11-15T09:00 | - | - | Call Bob",
+    "wed18": "2026-11-19T09:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T09:00 | - | - | Call Bob"
   },
   "Call Bob tomorrow afternoon": {
     "monAM": "2026-11-17T14:00 | - | - | Call Bob",
@@ -600,17 +734,24 @@
     "satBeforeSpring": "2027-03-28T14:00 | - | - | Call Bob",
     "sunSpring": "2027-03-29T14:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-25T14:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26T14:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26T14:00 | - | - | Call Bob",
+    "sat14": "2026-11-15T14:00 | - | - | Call Bob",
+    "wed18": "2026-11-19T14:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T14:00 | - | - | Call Bob"
   },
   "Call Bob this afternoon": {
     "monAM": "2026-11-16T14:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T14:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T14:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25T14:00 | - | - | Call Bob",
+    "sat14": "2026-11-14T14:00 | - | - | Call Bob"
   },
   "Call Bob this evening": {
     "monAM": "2026-11-16T18:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T18:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T18:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25T18:00 | - | - | Call Bob",
+    "sat14": "2026-11-14T18:00 | - | - | Call Bob",
+    "wed18": "2026-11-18T18:00 | - | - | Call Bob",
+    "dec31": "2026-12-31T18:00 | - | - | Call Bob"
   },
   "Call Bob Tues 2pm": {
     "monAM": "2026-11-17T14:00 | - | - | Call Bob",
@@ -619,7 +760,10 @@
     "satBeforeSpring": "2027-03-30T14:00 | - | - | Call Bob",
     "sunSpring": "2027-03-30T14:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-27T14:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-27T14:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-27T14:00 | - | - | Call Bob",
+    "sat14": "2026-11-17T14:00 | - | - | Call Bob",
+    "wed18": "2026-11-24T14:00 | - | - | Call Bob",
+    "dec31": "2027-01-05T14:00 | - | - | Call Bob"
   },
   "Call Bob Weds": {
     "monAM": "2026-11-18 | - | - | Call Bob",
@@ -628,21 +772,27 @@
     "satBeforeSpring": "2027-03-31 | - | - | Call Bob",
     "sunSpring": "2027-03-31 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-28 | - | - | Call Bob",
-    "sunAutumn": "2026-10-28 | - | - | Call Bob"
+    "sunAutumn": "2026-10-28 | - | - | Call Bob",
+    "sat14": "2026-11-18 | - | - | Call Bob",
+    "dec31": "2027-01-06 | - | - | Call Bob"
   },
   "Call Bob on Sat": {
     "monAM": "2026-11-21 | - | - | Call Bob",
     "friPM": "2026-11-21 | - | - | Call Bob",
     "sunNight": "2026-11-28 | - | - | Call Bob",
     "sunSpring": "2027-04-03 | - | - | Call Bob",
-    "sunAutumn": "2026-10-31 | - | - | Call Bob"
+    "sunAutumn": "2026-10-31 | - | - | Call Bob",
+    "wed18": "2026-11-21 | - | - | Call Bob",
+    "dec31": "2027-01-02 | - | - | Call Bob"
   },
   "Call Bob Monday 23 Nov": {
     "monAM": "2026-11-23 | - | - | Call Bob",
     "friPM": "2026-11-23 | - | - | Call Bob",
     "sunNight": "2026-11-23 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-23 | - | - | Call Bob",
-    "sunAutumn": "2026-11-23 | - | - | Call Bob"
+    "sunAutumn": "2026-11-23 | - | - | Call Bob",
+    "sat14": "2026-11-23 | - | - | Call Bob",
+    "wed18": "2026-11-23 | - | - | Call Bob"
   },
   "Call Bob tomorrow Tuesday": {
     "monAM": "2026-11-17 | - | - | Call Bob"
@@ -654,12 +804,18 @@
     "satBeforeSpring": "2027-03-27 | - | - | Call Bob",
     "sunSpring": "2027-03-28 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-24 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25 | - | - | Call Bob",
+    "sat14": "2026-11-14 | - | - | Call Bob",
+    "wed18": "2026-11-18 | - | - | Call Bob",
+    "dec31": "2026-12-31 | - | - | Call Bob"
   },
   "Call Bob today at 4pm": {
     "monAM": "2026-11-16T16:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T16:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob",
+    "sat14": "2026-11-14T16:00 | - | - | Call Bob",
+    "wed18": "2026-11-18T16:00 | - | - | Call Bob",
+    "dec31": "2026-12-31T16:00 | - | - | Call Bob"
   },
   "Call Bob 4pm": {
     "monAM": "2026-11-16T16:00 | - | - | Call Bob",
@@ -668,7 +824,10 @@
     "satBeforeSpring": "2027-03-28T16:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T16:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-25T16:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob",
+    "sat14": "2026-11-14T16:00 | - | - | Call Bob",
+    "wed18": "2026-11-18T16:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T16:00 | - | - | Call Bob"
   },
   "Call Bob 8am": {
     "monAM": "2026-11-17T08:00 | - | - | Call Bob",
@@ -677,25 +836,10 @@
     "satBeforeSpring": "2027-03-28T08:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T08:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-25T08:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T08:00 | - | - | Call Bob"
-  },
-  "Call Bob at 8.30": {
-    "monAM": "2026-11-17T08:30 | - | - | Call Bob",
-    "friPM": "2026-11-21T08:30 | - | - | Call Bob",
-    "sunNight": "2026-11-23T08:30 | - | - | Call Bob",
-    "satBeforeSpring": "2027-03-28T08:30 | - | - | Call Bob",
-    "sunSpring": "2027-03-28T08:30 | - | - | Call Bob",
-    "satBeforeAutumn": "2026-10-25T08:30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T08:30 | - | - | Call Bob"
-  },
-  "Call Bob 8:30": {
-    "monAM": "2026-11-17T08:30 | - | - | Call Bob",
-    "friPM": "2026-11-21T08:30 | - | - | Call Bob",
-    "sunNight": "2026-11-23T08:30 | - | - | Call Bob",
-    "satBeforeSpring": "2027-03-28T08:30 | - | - | Call Bob",
-    "sunSpring": "2027-03-28T08:30 | - | - | Call Bob",
-    "satBeforeAutumn": "2026-10-25T08:30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T08:30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25T08:00 | - | - | Call Bob",
+    "sat14": "2026-11-15T08:00 | - | - | Call Bob",
+    "wed18": "2026-11-19T08:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T08:00 | - | - | Call Bob"
   },
   "Call Bob 16:00": {
     "monAM": "2026-11-16T16:00 | - | - | Call Bob",
@@ -704,27 +848,39 @@
     "satBeforeSpring": "2027-03-28T16:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T16:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-25T16:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob",
+    "sat14": "2026-11-14T16:00 | - | - | Call Bob",
+    "wed18": "2026-11-18T16:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T16:00 | - | - | Call Bob"
   },
   "Call Bob at 1:30am tomorrow": {
     "monAM": "2026-11-17T01:30 | - | - | Call Bob",
     "friPM": "2026-11-21T01:30 | - | - | Call Bob",
     "sunNight": "2026-11-23T01:30 | - | - | Call Bob",
     "sunSpring": "2027-03-29T01:30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26T01:30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26T01:30 | - | - | Call Bob",
+    "sat14": "2026-11-15T01:30 | - | - | Call Bob",
+    "wed18": "2026-11-19T01:30 | - | - | Call Bob",
+    "dec31": "2027-01-01T01:30 | - | - | Call Bob"
   },
   "Call Bob at 01:30 tomorrow": {
     "monAM": "2026-11-17T01:30 | - | - | Call Bob",
     "friPM": "2026-11-21T01:30 | - | - | Call Bob",
     "sunNight": "2026-11-23T01:30 | - | - | Call Bob",
     "sunSpring": "2027-03-29T01:30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26T01:30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26T01:30 | - | - | Call Bob",
+    "sat14": "2026-11-15T01:30 | - | - | Call Bob",
+    "wed18": "2026-11-19T01:30 | - | - | Call Bob",
+    "dec31": "2027-01-01T01:30 | - | - | Call Bob"
   },
   "Call Bob at 1:30am Sunday": {
     "monAM": "2026-11-22T01:30 | - | - | Call Bob",
     "friPM": "2026-11-22T01:30 | - | - | Call Bob",
     "sunNight": "2026-11-29T01:30 | - | - | Call Bob",
-    "sunAutumn": "2026-11-01T01:30 | - | - | Call Bob"
+    "sunAutumn": "2026-11-01T01:30 | - | - | Call Bob",
+    "sat14": "2026-11-15T01:30 | - | - | Call Bob",
+    "wed18": "2026-11-22T01:30 | - | - | Call Bob",
+    "dec31": "2027-01-03T01:30 | - | - | Call Bob"
   },
   "Send 24/7 support quote": {
     "monAM": "- | - | - | Send 24/7 support quote",
@@ -733,7 +889,10 @@
     "satBeforeSpring": "- | - | - | Send 24/7 support quote",
     "sunSpring": "- | - | - | Send 24/7 support quote",
     "satBeforeAutumn": "- | - | - | Send 24/7 support quote",
-    "sunAutumn": "- | - | - | Send 24/7 support quote"
+    "sunAutumn": "- | - | - | Send 24/7 support quote",
+    "sat14": "- | - | - | Send 24/7 support quote",
+    "wed18": "- | - | - | Send 24/7 support quote",
+    "dec31": "- | - | - | Send 24/7 support quote"
   },
   "Renew 365 licence Friday": {
     "monAM": "2026-11-20 | - | - | Renew 365 licence",
@@ -741,7 +900,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Renew 365 licence",
     "sunSpring": "2027-04-02 | - | - | Renew 365 licence",
     "satBeforeAutumn": "2026-10-30 | - | - | Renew 365 licence",
-    "sunAutumn": "2026-10-30 | - | - | Renew 365 licence"
+    "sunAutumn": "2026-10-30 | - | - | Renew 365 licence",
+    "sat14": "2026-11-20 | - | - | Renew 365 licence",
+    "wed18": "2026-11-20 | - | - | Renew 365 licence",
+    "dec31": "2027-01-01 | - | - | Renew 365 licence"
   },
   "Pay 500 gbp Friday": {
     "monAM": "2026-11-20 | - | - | Pay 500 gbp",
@@ -749,16 +911,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Pay 500 gbp",
     "sunSpring": "2027-04-02 | - | - | Pay 500 gbp",
     "satBeforeAutumn": "2026-10-30 | - | - | Pay 500 gbp",
-    "sunAutumn": "2026-10-30 | - | - | Pay 500 gbp"
-  },
-  "Q4 forecast due Friday 5pm": {
-    "monAM": "2026-11-20T17:00 | - | - | Q4 forecast",
-    "friPM": "2026-11-27T17:00 | - | - | Q4 forecast",
-    "sunNight": "2026-11-27T17:00 | - | - | Q4 forecast",
-    "satBeforeSpring": "2027-04-02T17:00 | - | - | Q4 forecast",
-    "sunSpring": "2027-04-02T17:00 | - | - | Q4 forecast",
-    "satBeforeAutumn": "2026-10-30T17:00 | - | - | Q4 forecast",
-    "sunAutumn": "2026-10-30T17:00 | - | - | Q4 forecast"
+    "sunAutumn": "2026-10-30 | - | - | Pay 500 gbp",
+    "sat14": "2026-11-20 | - | - | Pay 500 gbp",
+    "wed18": "2026-11-20 | - | - | Pay 500 gbp",
+    "dec31": "2027-01-01 | - | - | Pay 500 gbp"
   },
   "H2 plan review Wednesday": {
     "monAM": "2026-11-18 | - | - | H2 plan review",
@@ -767,16 +923,9 @@
     "satBeforeSpring": "2027-03-31 | - | - | H2 plan review",
     "sunSpring": "2027-03-31 | - | - | H2 plan review",
     "satBeforeAutumn": "2026-10-28 | - | - | H2 plan review",
-    "sunAutumn": "2026-10-28 | - | - | H2 plan review"
-  },
-  "Send 2026 price list": {
-    "monAM": "- | - | - | Send 2026 price list",
-    "friPM": "- | - | - | Send 2026 price list",
-    "sunNight": "- | - | - | Send 2026 price list",
-    "satBeforeSpring": "- | - | - | Send 2026 price list",
-    "sunSpring": "- | - | - | Send 2026 price list",
-    "satBeforeAutumn": "- | - | - | Send 2026 price list",
-    "sunAutumn": "- | - | - | Send 2026 price list"
+    "sunAutumn": "2026-10-28 | - | - | H2 plan review",
+    "sat14": "2026-11-18 | - | - | H2 plan review",
+    "dec31": "2027-01-06 | - | - | H2 plan review"
   },
   "Call May about renewal": {
     "monAM": "- | - | - | Call May about renewal",
@@ -785,16 +934,10 @@
     "satBeforeSpring": "- | - | - | Call May about renewal",
     "sunSpring": "- | - | - | Call May about renewal",
     "satBeforeAutumn": "- | - | - | Call May about renewal",
-    "sunAutumn": "- | - | - | Call May about renewal"
-  },
-  "Chase PO 10/2026": {
-    "monAM": "- | - | - | Chase PO 10/2026",
-    "friPM": "- | - | - | Chase PO 10/2026",
-    "sunNight": "- | - | - | Chase PO 10/2026",
-    "satBeforeSpring": "- | - | - | Chase PO 10/2026",
-    "sunSpring": "- | - | - | Chase PO 10/2026",
-    "satBeforeAutumn": "- | - | - | Chase PO 10/2026",
-    "sunAutumn": "- | - | - | Chase PO 10/2026"
+    "sunAutumn": "- | - | - | Call May about renewal",
+    "sat14": "- | - | - | Call May about renewal",
+    "wed18": "- | - | - | Call May about renewal",
+    "dec31": "- | - | - | Call May about renewal"
   },
   "Ticket 12/34 follow up": {
     "monAM": "- | - | - | Ticket 12/34 follow up",
@@ -803,24 +946,21 @@
     "satBeforeSpring": "- | - | - | Ticket 12/34 follow up",
     "sunSpring": "- | - | - | Ticket 12/34 follow up",
     "satBeforeAutumn": "- | - | - | Ticket 12/34 follow up",
-    "sunAutumn": "- | - | - | Ticket 12/34 follow up"
-  },
-  "Budget 2.5m sign off Friday": {
-    "monAM": "2026-11-20 | - | - | Budget 2.5m sign off",
-    "sunNight": "2026-11-27 | - | - | Budget 2.5m sign off",
-    "satBeforeSpring": "2027-04-02 | - | - | Budget 2.5m sign off",
-    "sunSpring": "2027-04-02 | - | - | Budget 2.5m sign off",
-    "satBeforeAutumn": "2026-10-30 | - | - | Budget 2.5m sign off",
-    "sunAutumn": "2026-10-30 | - | - | Budget 2.5m sign off"
+    "sunAutumn": "- | - | - | Ticket 12/34 follow up",
+    "sat14": "- | - | - | Ticket 12/34 follow up",
+    "wed18": "- | - | - | Ticket 12/34 follow up",
+    "dec31": "- | - | - | Ticket 12/34 follow up"
   },
   "Call Bob Friday eod": {
     "monAM": "2026-11-20T17:00 | - | - | Call Bob",
-    "friPM": "2026-11-27T17:00 | - | - | Call Bob",
     "sunNight": "2026-11-27T17:00 | - | - | Call Bob",
     "satBeforeSpring": "2027-04-02T17:00 | - | - | Call Bob",
     "sunSpring": "2027-04-02T17:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-30T17:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-30T17:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-30T17:00 | - | - | Call Bob",
+    "sat14": "2026-11-20T17:00 | - | - | Call Bob",
+    "wed18": "2026-11-20T17:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T17:00 | - | - | Call Bob"
   },
   "Call Bob in an hour": {
     "monAM": "2026-11-16T10:15 | - | - | Call Bob",
@@ -828,70 +968,48 @@
     "sunNight": "2026-11-23T00:30 | - | - | Call Bob",
     "satBeforeSpring": "2027-03-27T21:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T02:30 | - | - | Call Bob",
-    "satBeforeAutumn": "2026-10-24T21:00 | - | - | Call Bob"
-  },
-  "Zoom at 10.00": {
-    "monAM": "2026-11-16T10:00 | - | - | Zoom",
-    "friPM": "2026-11-21T10:00 | - | - | Zoom",
-    "sunNight": "2026-11-23T10:00 | - | - | Zoom",
-    "satBeforeSpring": "2027-03-28T10:00 | - | - | Zoom",
-    "sunSpring": "2027-03-28T10:00 | - | - | Zoom",
-    "satBeforeAutumn": "2026-10-25T10:00 | - | - | Zoom",
-    "sunAutumn": "2026-10-25T10:00 | - | - | Zoom"
-  },
-  "Dinner Monday night at 8": {
-    "monAM": "2026-11-16T20:00 | - | - | Dinner",
-    "friPM": "2026-11-23T20:00 | - | - | Dinner",
-    "sunNight": "2026-11-23T20:00 | - | - | Dinner",
-    "satBeforeSpring": "2027-03-29T20:00 | - | - | Dinner",
-    "sunSpring": "2027-03-29T20:00 | - | - | Dinner",
-    "satBeforeAutumn": "2026-10-26T20:00 | - | - | Dinner",
-    "sunAutumn": "2026-10-26T20:00 | - | - | Dinner"
-  },
-  "Dinner Monday night 8pm": {
-    "monAM": "2026-11-16T20:00 | - | - | Dinner",
-    "friPM": "2026-11-23T20:00 | - | - | Dinner",
-    "sunNight": "2026-11-23T20:00 | - | - | Dinner",
-    "satBeforeSpring": "2027-03-29T20:00 | - | - | Dinner",
-    "sunSpring": "2027-03-29T20:00 | - | - | Dinner",
-    "satBeforeAutumn": "2026-10-26T20:00 | - | - | Dinner",
-    "sunAutumn": "2026-10-26T20:00 | - | - | Dinner"
-  },
-  "Dinner Monday night 8:30": {
-    "monAM": "2026-11-16T20:30 | - | - | Dinner",
-    "friPM": "2026-11-23T20:30 | - | - | Dinner",
-    "sunNight": "2026-11-23T20:30 | - | - | Dinner",
-    "satBeforeSpring": "2027-03-29T20:30 | - | - | Dinner",
-    "sunSpring": "2027-03-29T20:30 | - | - | Dinner",
-    "satBeforeAutumn": "2026-10-26T20:30 | - | - | Dinner",
-    "sunAutumn": "2026-10-26T20:30 | - | - | Dinner"
+    "satBeforeAutumn": "2026-10-24T21:00 | - | - | Call Bob",
+    "sat14": "2026-11-14T11:30 | - | - | Call Bob",
+    "wed18": "2026-11-18T15:00 | - | - | Call Bob",
+    "dec31": "2026-12-31T17:00 | - | - | Call Bob"
   },
   "Drinks Friday night 9": {
     "monAM": "2026-11-20T21:00 | - | - | Drinks",
-    "friPM": "2026-11-20T21:00 | - | - | Drinks",
     "sunNight": "2026-11-27T21:00 | - | - | Drinks",
     "satBeforeSpring": "2027-04-02T21:00 | - | - | Drinks",
     "sunSpring": "2027-04-02T21:00 | - | - | Drinks",
     "satBeforeAutumn": "2026-10-30T21:00 | - | - | Drinks",
-    "sunAutumn": "2026-10-30T21:00 | - | - | Drinks"
+    "sunAutumn": "2026-10-30T21:00 | - | - | Drinks",
+    "sat14": "2026-11-20T21:00 | - | - | Drinks",
+    "wed18": "2026-11-20T21:00 | - | - | Drinks",
+    "dec31": "2027-01-01T21:00 | - | - | Drinks"
   },
   "Call client tonight 7:30": {
     "monAM": "2026-11-16T19:30 | - | - | Call client",
     "friPM": "2026-11-20T19:30 | - | - | Call client",
     "sunSpring": "2027-03-28T19:30 | - | - | Call client",
-    "sunAutumn": "2026-10-25T19:30 | - | - | Call client"
+    "sunAutumn": "2026-10-25T19:30 | - | - | Call client",
+    "sat14": "2026-11-14T19:30 | - | - | Call client",
+    "wed18": "2026-11-18T19:30 | - | - | Call client",
+    "dec31": "2026-12-31T19:30 | - | - | Call client"
   },
   "Call client tonight at 7:30": {
     "monAM": "2026-11-16T19:30 | - | - | Call client",
     "friPM": "2026-11-20T19:30 | - | - | Call client",
     "sunSpring": "2027-03-28T19:30 | - | - | Call client",
-    "sunAutumn": "2026-10-25T19:30 | - | - | Call client"
+    "sunAutumn": "2026-10-25T19:30 | - | - | Call client",
+    "sat14": "2026-11-14T19:30 | - | - | Call client",
+    "wed18": "2026-11-18T19:30 | - | - | Call client",
+    "dec31": "2026-12-31T19:30 | - | - | Call client"
   },
   "Call client tonight at 7.30": {
     "monAM": "2026-11-16T19:30 | - | - | Call client",
     "friPM": "2026-11-20T19:30 | - | - | Call client",
     "sunSpring": "2027-03-28T19:30 | - | - | Call client",
-    "sunAutumn": "2026-10-25T19:30 | - | - | Call client"
+    "sunAutumn": "2026-10-25T19:30 | - | - | Call client",
+    "sat14": "2026-11-14T19:30 | - | - | Call client",
+    "wed18": "2026-11-18T19:30 | - | - | Call client",
+    "dec31": "2026-12-31T19:30 | - | - | Call client"
   },
   "Call client tomorrow night": {
     "monAM": "2026-11-17T19:00 | - | - | Call client",
@@ -900,7 +1018,10 @@
     "satBeforeSpring": "2027-03-28T19:00 | - | - | Call client",
     "sunSpring": "2027-03-29T19:00 | - | - | Call client",
     "satBeforeAutumn": "2026-10-25T19:00 | - | - | Call client",
-    "sunAutumn": "2026-10-26T19:00 | - | - | Call client"
+    "sunAutumn": "2026-10-26T19:00 | - | - | Call client",
+    "sat14": "2026-11-15T19:00 | - | - | Call client",
+    "wed18": "2026-11-19T19:00 | - | - | Call client",
+    "dec31": "2027-01-01T19:00 | - | - | Call client"
   },
   "Call client tomorrow night 8": {
     "monAM": "2026-11-17T20:00 | - | - | Call client",
@@ -909,7 +1030,10 @@
     "satBeforeSpring": "2027-03-28T20:00 | - | - | Call client",
     "sunSpring": "2027-03-29T20:00 | - | - | Call client",
     "satBeforeAutumn": "2026-10-25T20:00 | - | - | Call client",
-    "sunAutumn": "2026-10-26T20:00 | - | - | Call client"
+    "sunAutumn": "2026-10-26T20:00 | - | - | Call client",
+    "sat14": "2026-11-15T20:00 | - | - | Call client",
+    "wed18": "2026-11-19T20:00 | - | - | Call client",
+    "dec31": "2027-01-01T20:00 | - | - | Call client"
   },
   "Chase if not paid by Friday": {
     "monAM": "2026-11-20 | - | - | Chase if not paid",
@@ -917,7 +1041,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Chase if not paid",
     "sunSpring": "2027-04-02 | - | - | Chase if not paid",
     "satBeforeAutumn": "2026-10-30 | - | - | Chase if not paid",
-    "sunAutumn": "2026-10-30 | - | - | Chase if not paid"
+    "sunAutumn": "2026-10-30 | - | - | Chase if not paid",
+    "sat14": "2026-11-20 | - | - | Chase if not paid",
+    "wed18": "2026-11-20 | - | - | Chase if not paid",
+    "dec31": "2027-01-01 | - | - | Chase if not paid"
   },
   "Call Bob Tuesday week": {
     "monAM": "2026-11-24 | - | - | Call Bob",
@@ -926,7 +1053,10 @@
     "satBeforeSpring": "2027-04-06 | - | - | Call Bob",
     "sunSpring": "2027-04-06 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-03 | - | - | Call Bob",
-    "sunAutumn": "2026-11-03 | - | - | Call Bob"
+    "sunAutumn": "2026-11-03 | - | - | Call Bob",
+    "sat14": "2026-11-24 | - | - | Call Bob",
+    "wed18": "2026-12-01 | - | - | Call Bob",
+    "dec31": "2027-01-12 | - | - | Call Bob"
   },
   "Call Bob next Monday 10am": {
     "monAM": "2026-11-23T10:00 | - | - | Call Bob",
@@ -935,7 +1065,10 @@
     "satBeforeSpring": "2027-03-29T10:00 | - | - | Call Bob",
     "sunSpring": "2027-03-29T10:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-26T10:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26T10:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26T10:00 | - | - | Call Bob",
+    "sat14": "2026-11-16T10:00 | - | - | Call Bob",
+    "wed18": "2026-11-23T10:00 | - | - | Call Bob",
+    "dec31": "2027-01-04T10:00 | - | - | Call Bob"
   },
   "Call Bob next week Thursday 2pm": {
     "monAM": "2026-11-26T14:00 | - | - | Call Bob",
@@ -944,12 +1077,17 @@
     "satBeforeSpring": "2027-04-01T14:00 | - | - | Call Bob",
     "sunSpring": "2027-04-01T14:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-29T14:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-29T14:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-29T14:00 | - | - | Call Bob",
+    "sat14": "2026-11-19T14:00 | - | - | Call Bob",
+    "wed18": "2026-11-26T14:00 | - | - | Call Bob",
+    "dec31": "2027-01-07T14:00 | - | - | Call Bob"
   },
   "Call Bob Wed 18 Nov 2pm": {
     "monAM": "2026-11-18T14:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-18T14:00 | - | - | Call Bob",
-    "sunAutumn": "2026-11-18T14:00 | - | - | Call Bob"
+    "sunAutumn": "2026-11-18T14:00 | - | - | Call Bob",
+    "sat14": "2026-11-18T14:00 | - | - | Call Bob",
+    "wed18": "2026-11-18T14:00 | - | - | Call Bob"
   },
   "Sat 10am tennis": {
     "monAM": "2026-11-21T10:00 | - | - | Tennis",
@@ -958,7 +1096,10 @@
     "satBeforeSpring": "2027-04-03T10:00 | - | - | Tennis",
     "sunSpring": "2027-04-03T10:00 | - | - | Tennis",
     "satBeforeAutumn": "2026-10-31T10:00 | - | - | Tennis",
-    "sunAutumn": "2026-10-31T10:00 | - | - | Tennis"
+    "sunAutumn": "2026-10-31T10:00 | - | - | Tennis",
+    "sat14": "2026-11-21T10:00 | - | - | Tennis",
+    "wed18": "2026-11-21T10:00 | - | - | Tennis",
+    "dec31": "2027-01-02T10:00 | - | - | Tennis"
   },
   "Call Bob Sat 10am": {
     "monAM": "2026-11-21T10:00 | - | - | Call Bob",
@@ -967,16 +1108,19 @@
     "satBeforeSpring": "2027-04-03T10:00 | - | - | Call Bob",
     "sunSpring": "2027-04-03T10:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-31T10:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-31T10:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-31T10:00 | - | - | Call Bob",
+    "sat14": "2026-11-21T10:00 | - | - | Call Bob",
+    "wed18": "2026-11-21T10:00 | - | - | Call Bob",
+    "dec31": "2027-01-02T10:00 | - | - | Call Bob"
   },
   "Call Bob Sun morning": {
     "monAM": "2026-11-22T09:00 | - | - | Call Bob",
     "friPM": "2026-11-22T09:00 | - | - | Call Bob",
-    "sunNight": "2026-11-29T09:00 | - | - | Call Bob",
     "satBeforeSpring": "2027-03-28T09:00 | - | - | Call Bob",
-    "sunSpring": "2027-03-28T09:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-25T09:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-25T09:00 | - | - | Call Bob"
+    "sat14": "2026-11-15T09:00 | - | - | Call Bob",
+    "wed18": "2026-11-22T09:00 | - | - | Call Bob",
+    "dec31": "2027-01-03T09:00 | - | - | Call Bob"
   },
   "Call Bob this Sat": {
     "monAM": "2026-11-21 | - | - | Call Bob",
@@ -985,7 +1129,10 @@
     "satBeforeSpring": "2027-03-27 | - | - | Call Bob",
     "sunSpring": "2027-04-03 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-24 | - | - | Call Bob",
-    "sunAutumn": "2026-10-31 | - | - | Call Bob"
+    "sunAutumn": "2026-10-31 | - | - | Call Bob",
+    "sat14": "2026-11-14 | - | - | Call Bob",
+    "wed18": "2026-11-21 | - | - | Call Bob",
+    "dec31": "2027-01-02 | - | - | Call Bob"
   },
   "Meet Joe Bloggs Friday": {
     "monAM": "2026-11-20 | - | - | Meet Joe Bloggs",
@@ -993,7 +1140,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Meet Joe Bloggs",
     "sunSpring": "2027-04-02 | - | - | Meet Joe Bloggs",
     "satBeforeAutumn": "2026-10-30 | - | - | Meet Joe Bloggs",
-    "sunAutumn": "2026-10-30 | - | - | Meet Joe Bloggs"
+    "sunAutumn": "2026-10-30 | - | - | Meet Joe Bloggs",
+    "sat14": "2026-11-20 | - | - | Meet Joe Bloggs",
+    "wed18": "2026-11-20 | - | - | Meet Joe Bloggs",
+    "dec31": "2027-01-01 | - | - | Meet Joe Bloggs"
   },
   "Call Bob Friday 15.30": {
     "monAM": "2026-11-20T15:30 | - | - | Call Bob",
@@ -1002,7 +1152,10 @@
     "satBeforeSpring": "2027-04-02T15:30 | - | - | Call Bob",
     "sunSpring": "2027-04-02T15:30 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-30T15:30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-30T15:30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-30T15:30 | - | - | Call Bob",
+    "sat14": "2026-11-20T15:30 | - | - | Call Bob",
+    "wed18": "2026-11-20T15:30 | - | - | Call Bob",
+    "dec31": "2027-01-01T15:30 | - | - | Call Bob"
   },
   "Send £3.50 refund Friday": {
     "monAM": "2026-11-20 | - | - | Send £3.50 refund",
@@ -1010,7 +1163,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Send £3.50 refund",
     "sunSpring": "2027-04-02 | - | - | Send £3.50 refund",
     "satBeforeAutumn": "2026-10-30 | - | - | Send £3.50 refund",
-    "sunAutumn": "2026-10-30 | - | - | Send £3.50 refund"
+    "sunAutumn": "2026-10-30 | - | - | Send £3.50 refund",
+    "sat14": "2026-11-20 | - | - | Send £3.50 refund",
+    "wed18": "2026-11-20 | - | - | Send £3.50 refund",
+    "dec31": "2027-01-01 | - | - | Send £3.50 refund"
   },
   "Upgrade to iOS 18.2 Friday": {
     "monAM": "2026-11-20 | - | - | Upgrade to iOS 18.2",
@@ -1018,7 +1174,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Upgrade to iOS 18.2",
     "sunSpring": "2027-04-02 | - | - | Upgrade to iOS 18.2",
     "satBeforeAutumn": "2026-10-30 | - | - | Upgrade to iOS 18.2",
-    "sunAutumn": "2026-10-30 | - | - | Upgrade to iOS 18.2"
+    "sunAutumn": "2026-10-30 | - | - | Upgrade to iOS 18.2",
+    "sat14": "2026-11-20 | - | - | Upgrade to iOS 18.2",
+    "wed18": "2026-11-20 | - | - | Upgrade to iOS 18.2",
+    "dec31": "2027-01-01 | - | - | Upgrade to iOS 18.2"
   },
   "Call Bob 20 Nov": {
     "monAM": "2026-11-20 | - | - | Call Bob",
@@ -1026,14 +1185,18 @@
     "satBeforeSpring": "2027-11-20 | - | - | Call Bob",
     "sunSpring": "2027-11-20 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-20 | - | - | Call Bob",
-    "sunAutumn": "2026-11-20 | - | - | Call Bob"
+    "sunAutumn": "2026-11-20 | - | - | Call Bob",
+    "sat14": "2026-11-20 | - | - | Call Bob",
+    "wed18": "2026-11-20 | - | - | Call Bob"
   },
   "Call Bob Nov 20th 3pm": {
     "monAM": "2026-11-20T15:00 | - | - | Call Bob",
     "satBeforeSpring": "2027-11-20T15:00 | - | - | Call Bob",
     "sunSpring": "2027-11-20T15:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-20T15:00 | - | - | Call Bob",
-    "sunAutumn": "2026-11-20T15:00 | - | - | Call Bob"
+    "sunAutumn": "2026-11-20T15:00 | - | - | Call Bob",
+    "sat14": "2026-11-20T15:00 | - | - | Call Bob",
+    "wed18": "2026-11-20T15:00 | - | - | Call Bob"
   },
   "Call Bob 1st Dec": {
     "monAM": "2026-12-01 | - | - | Call Bob",
@@ -1042,14 +1205,18 @@
     "satBeforeSpring": "2027-12-01 | - | - | Call Bob",
     "sunSpring": "2027-12-01 | - | - | Call Bob",
     "satBeforeAutumn": "2026-12-01 | - | - | Call Bob",
-    "sunAutumn": "2026-12-01 | - | - | Call Bob"
+    "sunAutumn": "2026-12-01 | - | - | Call Bob",
+    "sat14": "2026-12-01 | - | - | Call Bob",
+    "wed18": "2026-12-01 | - | - | Call Bob"
   },
   "Call Bob 20 November at noon": {
     "monAM": "2026-11-20T12:00 | - | - | Call Bob",
     "satBeforeSpring": "2027-11-20T12:00 | - | - | Call Bob",
     "sunSpring": "2027-11-20T12:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-20T12:00 | - | - | Call Bob",
-    "sunAutumn": "2026-11-20T12:00 | - | - | Call Bob"
+    "sunAutumn": "2026-11-20T12:00 | - | - | Call Bob",
+    "sat14": "2026-11-20T12:00 | - | - | Call Bob",
+    "wed18": "2026-11-20T12:00 | - | - | Call Bob"
   },
   "Call Bob EOD tomorrow": {
     "monAM": "2026-11-17T17:00 | - | - | Call Bob",
@@ -1058,7 +1225,10 @@
     "satBeforeSpring": "2027-03-28T17:00 | - | - | Call Bob",
     "sunSpring": "2027-03-29T17:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-25T17:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26T17:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-26T17:00 | - | - | Call Bob",
+    "sat14": "2026-11-15T17:00 | - | - | Call Bob",
+    "wed18": "2026-11-19T17:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T17:00 | - | - | Call Bob"
   },
   "Call Bob by EOD Thursday": {
     "monAM": "2026-11-19T17:00 | - | - | Call Bob",
@@ -1067,7 +1237,9 @@
     "satBeforeSpring": "2027-04-01T17:00 | - | - | Call Bob",
     "sunSpring": "2027-04-01T17:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-29T17:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-29T17:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-29T17:00 | - | - | Call Bob",
+    "sat14": "2026-11-19T17:00 | - | - | Call Bob",
+    "wed18": "2026-11-19T17:00 | - | - | Call Bob"
   },
   "Call Bob eow": {
     "monAM": "2026-11-20T17:00 | - | - | Call Bob",
@@ -1075,7 +1247,10 @@
     "satBeforeSpring": "2027-04-02T17:00 | - | - | Call Bob",
     "sunSpring": "2027-04-02T17:00 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-30T17:00 | - | - | Call Bob",
-    "sunAutumn": "2026-10-30T17:00 | - | - | Call Bob"
+    "sunAutumn": "2026-10-30T17:00 | - | - | Call Bob",
+    "sat14": "2026-11-20T17:00 | - | - | Call Bob",
+    "wed18": "2026-11-20T17:00 | - | - | Call Bob",
+    "dec31": "2027-01-01T17:00 | - | - | Call Bob"
   },
   "Post 2 letters tomorrow": {
     "monAM": "2026-11-17 | - | - | Post 2 letters",
@@ -1084,7 +1259,10 @@
     "satBeforeSpring": "2027-03-28 | - | - | Post 2 letters",
     "sunSpring": "2027-03-29 | - | - | Post 2 letters",
     "satBeforeAutumn": "2026-10-25 | - | - | Post 2 letters",
-    "sunAutumn": "2026-10-26 | - | - | Post 2 letters"
+    "sunAutumn": "2026-10-26 | - | - | Post 2 letters",
+    "sat14": "2026-11-15 | - | - | Post 2 letters",
+    "wed18": "2026-11-19 | - | - | Post 2 letters",
+    "dec31": "2027-01-01 | - | - | Post 2 letters"
   },
   "Meet 7 Dials Friday": {
     "monAM": "2026-11-20 | - | - | Meet 7 Dials",
@@ -1092,7 +1270,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Meet 7 Dials",
     "sunSpring": "2027-04-02 | - | - | Meet 7 Dials",
     "satBeforeAutumn": "2026-10-30 | - | - | Meet 7 Dials",
-    "sunAutumn": "2026-10-30 | - | - | Meet 7 Dials"
+    "sunAutumn": "2026-10-30 | - | - | Meet 7 Dials",
+    "sat14": "2026-11-20 | - | - | Meet 7 Dials",
+    "wed18": "2026-11-20 | - | - | Meet 7 Dials",
+    "dec31": "2027-01-01 | - | - | Meet 7 Dials"
   },
   "Visit unit 7 Friday": {
     "monAM": "2026-11-20 | - | - | Visit unit 7",
@@ -1100,7 +1281,10 @@
     "satBeforeSpring": "2027-04-02 | - | - | Visit unit 7",
     "sunSpring": "2027-04-02 | - | - | Visit unit 7",
     "satBeforeAutumn": "2026-10-30 | - | - | Visit unit 7",
-    "sunAutumn": "2026-10-30 | - | - | Visit unit 7"
+    "sunAutumn": "2026-10-30 | - | - | Visit unit 7",
+    "sat14": "2026-11-20 | - | - | Visit unit 7",
+    "wed18": "2026-11-20 | - | - | Visit unit 7",
+    "dec31": "2027-01-01 | - | - | Visit unit 7"
   },
   "Call Bob Friday 3pm remind 30 mins before": {
     "monAM": "2026-11-20T15:00 | - | 30 | Call Bob",
@@ -1109,7 +1293,1182 @@
     "satBeforeSpring": "2027-04-02T15:00 | - | 30 | Call Bob",
     "sunSpring": "2027-04-02T15:00 | - | 30 | Call Bob",
     "satBeforeAutumn": "2026-10-30T15:00 | - | 30 | Call Bob",
-    "sunAutumn": "2026-10-30T15:00 | - | 30 | Call Bob"
+    "sunAutumn": "2026-10-30T15:00 | - | 30 | Call Bob",
+    "sat14": "2026-11-20T15:00 | - | 30 | Call Bob",
+    "wed18": "2026-11-20T15:00 | - | 30 | Call Bob",
+    "dec31": "2027-01-01T15:00 | - | 30 | Call Bob"
+  },
+  "Call Sam tomorrow 3pm": {
+    "monAM": "2026-11-17T15:00 | - | - | Call Sam",
+    "friPM": "2026-11-21T15:00 | - | - | Call Sam",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Sam",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Sam",
+    "sunSpring": "2027-03-29T15:00 | - | - | Call Sam",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Sam",
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call Sam",
+    "sat14": "2026-11-15T15:00 | - | - | Call Sam",
+    "wed18": "2026-11-19T15:00 | - | - | Call Sam",
+    "dec31": "2027-01-01T15:00 | - | - | Call Sam"
+  },
+  "Meeting Friday 10am": {
+    "monAM": "2026-11-20T10:00 | - | - | Meeting",
+    "friPM": "2026-11-27T10:00 | - | - | Meeting",
+    "sunNight": "2026-11-27T10:00 | - | - | Meeting",
+    "satBeforeSpring": "2027-04-02T10:00 | - | - | Meeting",
+    "sunSpring": "2027-04-02T10:00 | - | - | Meeting",
+    "satBeforeAutumn": "2026-10-30T10:00 | - | - | Meeting",
+    "sunAutumn": "2026-10-30T10:00 | - | - | Meeting",
+    "sat14": "2026-11-20T10:00 | - | - | Meeting",
+    "wed18": "2026-11-20T10:00 | - | - | Meeting",
+    "dec31": "2027-01-01T10:00 | - | - | Meeting"
+  },
+  "Send invoice today": {
+    "monAM": "2026-11-16 | - | - | Send invoice",
+    "friPM": "2026-11-20 | - | - | Send invoice",
+    "sunNight": "2026-11-22 | - | - | Send invoice",
+    "satBeforeSpring": "2027-03-27 | - | - | Send invoice",
+    "sunSpring": "2027-03-28 | - | - | Send invoice",
+    "satBeforeAutumn": "2026-10-24 | - | - | Send invoice",
+    "sunAutumn": "2026-10-25 | - | - | Send invoice",
+    "sat14": "2026-11-14 | - | - | Send invoice",
+    "wed18": "2026-11-18 | - | - | Send invoice",
+    "dec31": "2026-12-31 | - | - | Send invoice"
+  },
+  "Chase Acme next Monday": {
+    "monAM": "2026-11-23 | - | - | Chase Acme",
+    "friPM": "2026-11-23 | - | - | Chase Acme",
+    "sunNight": "2026-11-23 | - | - | Chase Acme",
+    "satBeforeSpring": "2027-03-29 | - | - | Chase Acme",
+    "sunSpring": "2027-03-29 | - | - | Chase Acme",
+    "satBeforeAutumn": "2026-10-26 | - | - | Chase Acme",
+    "sunAutumn": "2026-10-26 | - | - | Chase Acme",
+    "sat14": "2026-11-16 | - | - | Chase Acme",
+    "wed18": "2026-11-23 | - | - | Chase Acme",
+    "dec31": "2027-01-04 | - | - | Chase Acme"
+  },
+  "Review deck on 3 Dec": {
+    "monAM": "2026-12-03 | - | - | Review deck",
+    "friPM": "2026-12-03 | - | - | Review deck",
+    "sunNight": "2026-12-03 | - | - | Review deck",
+    "satBeforeSpring": "2027-12-03 | - | - | Review deck",
+    "sunSpring": "2027-12-03 | - | - | Review deck",
+    "satBeforeAutumn": "2026-12-03 | - | - | Review deck",
+    "sunAutumn": "2026-12-03 | - | - | Review deck",
+    "sat14": "2026-12-03 | - | - | Review deck",
+    "wed18": "2026-12-03 | - | - | Review deck"
+  },
+  "Email Lucy the contract tomorrow": {
+    "monAM": "2026-11-17 | - | - | Email Lucy the contract",
+    "friPM": "2026-11-21 | - | - | Email Lucy the contract",
+    "sunNight": "2026-11-23 | - | - | Email Lucy the contract",
+    "satBeforeSpring": "2027-03-28 | - | - | Email Lucy the contract",
+    "sunSpring": "2027-03-29 | - | - | Email Lucy the contract",
+    "satBeforeAutumn": "2026-10-25 | - | - | Email Lucy the contract",
+    "sunAutumn": "2026-10-26 | - | - | Email Lucy the contract",
+    "sat14": "2026-11-15 | - | - | Email Lucy the contract",
+    "wed18": "2026-11-19 | - | - | Email Lucy the contract",
+    "dec31": "2027-01-01 | - | - | Email Lucy the contract"
+  },
+  "Ping Raj about pricing Thursday": {
+    "monAM": "2026-11-19 | - | - | Ping Raj about pricing",
+    "friPM": "2026-11-26 | - | - | Ping Raj about pricing",
+    "sunNight": "2026-11-26 | - | - | Ping Raj about pricing",
+    "satBeforeSpring": "2027-04-01 | - | - | Ping Raj about pricing",
+    "sunSpring": "2027-04-01 | - | - | Ping Raj about pricing",
+    "satBeforeAutumn": "2026-10-29 | - | - | Ping Raj about pricing",
+    "sunAutumn": "2026-10-29 | - | - | Ping Raj about pricing",
+    "sat14": "2026-11-19 | - | - | Ping Raj about pricing",
+    "wed18": "2026-11-19 | - | - | Ping Raj about pricing"
+  },
+  "Prep board pack by Wednesday 9am": {
+    "monAM": "2026-11-18T09:00 | - | - | Prep board pack",
+    "friPM": "2026-11-25T09:00 | - | - | Prep board pack",
+    "sunNight": "2026-11-25T09:00 | - | - | Prep board pack",
+    "satBeforeSpring": "2027-03-31T09:00 | - | - | Prep board pack",
+    "sunSpring": "2027-03-31T09:00 | - | - | Prep board pack",
+    "satBeforeAutumn": "2026-10-28T09:00 | - | - | Prep board pack",
+    "sunAutumn": "2026-10-28T09:00 | - | - | Prep board pack",
+    "sat14": "2026-11-18T09:00 | - | - | Prep board pack",
+    "wed18": "2026-11-25T09:00 | - | - | Prep board pack",
+    "dec31": "2027-01-06T09:00 | - | - | Prep board pack"
+  },
+  "Lunch with Hannah Tuesday 1pm": {
+    "monAM": "2026-11-17T13:00 | - | - | Lunch with Hannah",
+    "friPM": "2026-11-24T13:00 | - | - | Lunch with Hannah",
+    "sunNight": "2026-11-24T13:00 | - | - | Lunch with Hannah",
+    "satBeforeSpring": "2027-03-30T13:00 | - | - | Lunch with Hannah",
+    "sunSpring": "2027-03-30T13:00 | - | - | Lunch with Hannah",
+    "satBeforeAutumn": "2026-10-27T13:00 | - | - | Lunch with Hannah",
+    "sunAutumn": "2026-10-27T13:00 | - | - | Lunch with Hannah",
+    "sat14": "2026-11-17T13:00 | - | - | Lunch with Hannah",
+    "wed18": "2026-11-24T13:00 | - | - | Lunch with Hannah",
+    "dec31": "2027-01-05T13:00 | - | - | Lunch with Hannah"
+  },
+  "Submit VAT return 7 Jan": {
+    "monAM": "2027-01-07 | - | - | Submit VAT return",
+    "friPM": "2027-01-07 | - | - | Submit VAT return",
+    "sunNight": "2027-01-07 | - | - | Submit VAT return",
+    "satBeforeAutumn": "2027-01-07 | - | - | Submit VAT return",
+    "sunAutumn": "2027-01-07 | - | - | Submit VAT return",
+    "sat14": "2027-01-07 | - | - | Submit VAT return",
+    "wed18": "2027-01-07 | - | - | Submit VAT return",
+    "dec31": "2027-01-07 | - | - | Submit VAT return"
+  },
+  "Book dentist tomorrow 9.15am": {
+    "monAM": "2026-11-17T09:15 | - | - | Book dentist",
+    "friPM": "2026-11-21T09:15 | - | - | Book dentist",
+    "sunNight": "2026-11-23T09:15 | - | - | Book dentist",
+    "satBeforeSpring": "2027-03-28T09:15 | - | - | Book dentist",
+    "sunSpring": "2027-03-29T09:15 | - | - | Book dentist",
+    "satBeforeAutumn": "2026-10-25T09:15 | - | - | Book dentist",
+    "sunAutumn": "2026-10-26T09:15 | - | - | Book dentist",
+    "sat14": "2026-11-15T09:15 | - | - | Book dentist",
+    "wed18": "2026-11-19T09:15 | - | - | Book dentist",
+    "dec31": "2027-01-01T09:15 | - | - | Book dentist"
+  },
+  "Call Mark on Tuesday": {
+    "monAM": "2026-11-17 | - | - | Call Mark",
+    "friPM": "2026-11-24 | - | - | Call Mark",
+    "sunNight": "2026-11-24 | - | - | Call Mark",
+    "satBeforeSpring": "2027-03-30 | - | - | Call Mark",
+    "sunSpring": "2027-03-30 | - | - | Call Mark",
+    "satBeforeAutumn": "2026-10-27 | - | - | Call Mark",
+    "sunAutumn": "2026-10-27 | - | - | Call Mark",
+    "sat14": "2026-11-17 | - | - | Call Mark",
+    "wed18": "2026-11-24 | - | - | Call Mark",
+    "dec31": "2027-01-05 | - | - | Call Mark"
+  },
+  "Review the May figures Friday": {
+    "monAM": "2026-11-20 | - | - | Review the May figures",
+    "sunNight": "2026-11-27 | - | - | Review the May figures",
+    "satBeforeSpring": "2027-04-02 | - | - | Review the May figures",
+    "sunSpring": "2027-04-02 | - | - | Review the May figures",
+    "satBeforeAutumn": "2026-10-30 | - | - | Review the May figures",
+    "sunAutumn": "2026-10-30 | - | - | Review the May figures",
+    "sat14": "2026-11-20 | - | - | Review the May figures",
+    "wed18": "2026-11-20 | - | - | Review the May figures",
+    "dec31": "2027-01-01 | - | - | Review the May figures"
+  },
+  "Call Jo tmrw 2pm": {
+    "monAM": "2026-11-17T14:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T14:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T14:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T14:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T14:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T14:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T14:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T14:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T14:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T14:00 | - | - | Call Jo"
+  },
+  "Call Jo tmr": {
+    "monAM": "2026-11-17 | - | - | Call Jo",
+    "friPM": "2026-11-21 | - | - | Call Jo",
+    "sunNight": "2026-11-23 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28 | - | - | Call Jo",
+    "sunSpring": "2027-03-29 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26 | - | - | Call Jo",
+    "sat14": "2026-11-15 | - | - | Call Jo",
+    "wed18": "2026-11-19 | - | - | Call Jo",
+    "dec31": "2027-01-01 | - | - | Call Jo"
+  },
+  "Call Jo wed": {
+    "monAM": "2026-11-18 | - | - | Call Jo",
+    "friPM": "2026-11-25 | - | - | Call Jo",
+    "sunNight": "2026-11-25 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-31 | - | - | Call Jo",
+    "sunSpring": "2027-03-31 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-28 | - | - | Call Jo",
+    "sunAutumn": "2026-10-28 | - | - | Call Jo",
+    "sat14": "2026-11-18 | - | - | Call Jo",
+    "dec31": "2027-01-06 | - | - | Call Jo"
+  },
+  "Call Jo thurs 4pm": {
+    "monAM": "2026-11-19T16:00 | - | - | Call Jo",
+    "friPM": "2026-11-26T16:00 | - | - | Call Jo",
+    "sunNight": "2026-11-26T16:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-04-01T16:00 | - | - | Call Jo",
+    "sunSpring": "2027-04-01T16:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-29T16:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-29T16:00 | - | - | Call Jo",
+    "sat14": "2026-11-19T16:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T16:00 | - | - | Call Jo",
+    "dec31": "2027-01-07T16:00 | - | - | Call Jo"
+  },
+  "Call Jo thur": {
+    "monAM": "2026-11-19 | - | - | Call Jo",
+    "friPM": "2026-11-26 | - | - | Call Jo",
+    "sunNight": "2026-11-26 | - | - | Call Jo",
+    "satBeforeSpring": "2027-04-01 | - | - | Call Jo",
+    "sunSpring": "2027-04-01 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-29 | - | - | Call Jo",
+    "sunAutumn": "2026-10-29 | - | - | Call Jo",
+    "sat14": "2026-11-19 | - | - | Call Jo",
+    "wed18": "2026-11-19 | - | - | Call Jo"
+  },
+  "Call Jo tomorrow 14.00": {
+    "monAM": "2026-11-17T14:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T14:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T14:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T14:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T14:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T14:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T14:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T14:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T14:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T14:00 | - | - | Call Jo"
+  },
+  "Call Jo in 10 minutes": {
+    "monAM": "2026-11-16T09:25 | - | - | Call Jo",
+    "friPM": "2026-11-20T18:40 | - | - | Call Jo",
+    "sunNight": "2026-11-22T23:40 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-27T20:10 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T00:40 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-24T20:10 | - | - | Call Jo",
+    "sat14": "2026-11-14T10:40 | - | - | Call Jo",
+    "wed18": "2026-11-18T14:10 | - | - | Call Jo",
+    "dec31": "2026-12-31T16:10 | - | - | Call Jo"
+  },
+  "Call Jo in 45 mins": {
+    "monAM": "2026-11-16T10:00 | - | - | Call Jo",
+    "friPM": "2026-11-20T19:15 | - | - | Call Jo",
+    "sunNight": "2026-11-23T00:15 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-27T20:45 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T02:15 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-24T20:45 | - | - | Call Jo",
+    "sat14": "2026-11-14T11:15 | - | - | Call Jo",
+    "wed18": "2026-11-18T14:45 | - | - | Call Jo",
+    "dec31": "2026-12-31T16:45 | - | - | Call Jo"
+  },
+  "Call Jo in 90 minutes": {
+    "monAM": "2026-11-16T10:45 | - | - | Call Jo",
+    "friPM": "2026-11-20T20:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T01:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-27T21:30 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T03:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-24T21:30 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T02:00 | - | - | Call Jo",
+    "sat14": "2026-11-14T12:00 | - | - | Call Jo",
+    "wed18": "2026-11-18T15:30 | - | - | Call Jo",
+    "dec31": "2026-12-31T17:30 | - | - | Call Jo"
+  },
+  "Call Jo in 1 day": {
+    "monAM": "2026-11-17 | - | - | Call Jo",
+    "friPM": "2026-11-21 | - | - | Call Jo",
+    "sunNight": "2026-11-23 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28 | - | - | Call Jo",
+    "sunSpring": "2027-03-29 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26 | - | - | Call Jo",
+    "sat14": "2026-11-15 | - | - | Call Jo",
+    "wed18": "2026-11-19 | - | - | Call Jo",
+    "dec31": "2027-01-01 | - | - | Call Jo"
+  },
+  "Call Jo in 10 days": {
+    "monAM": "2026-11-26 | - | - | Call Jo",
+    "friPM": "2026-11-30 | - | - | Call Jo",
+    "sunNight": "2026-12-02 | - | - | Call Jo",
+    "satBeforeSpring": "2027-04-06 | - | - | Call Jo",
+    "sunSpring": "2027-04-07 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-11-03 | - | - | Call Jo",
+    "sunAutumn": "2026-11-04 | - | - | Call Jo",
+    "sat14": "2026-11-24 | - | - | Call Jo",
+    "wed18": "2026-11-28 | - | - | Call Jo",
+    "dec31": "2027-01-10 | - | - | Call Jo"
+  },
+  "Call Jo in 6 weeks": {
+    "monAM": "2026-12-28 | - | - | Call Jo",
+    "friPM": "2027-01-01 | - | - | Call Jo",
+    "sunNight": "2027-01-03 | - | - | Call Jo",
+    "satBeforeSpring": "2027-05-08 | - | - | Call Jo",
+    "sunSpring": "2027-05-09 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-12-05 | - | - | Call Jo",
+    "sunAutumn": "2026-12-06 | - | - | Call Jo",
+    "sat14": "2026-12-26 | - | - | Call Jo",
+    "wed18": "2026-12-30 | - | - | Call Jo",
+    "dec31": "2027-02-11 | - | - | Call Jo"
+  },
+  "Call Jo on 25/12": {
+    "monAM": "2026-12-25 | - | - | Call Jo",
+    "friPM": "2026-12-25 | - | - | Call Jo",
+    "sunNight": "2026-12-25 | - | - | Call Jo",
+    "satBeforeSpring": "2027-12-25 | - | - | Call Jo",
+    "sunSpring": "2027-12-25 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-12-25 | - | - | Call Jo",
+    "sunAutumn": "2026-12-25 | - | - | Call Jo",
+    "sat14": "2026-12-25 | - | - | Call Jo",
+    "wed18": "2026-12-25 | - | - | Call Jo"
+  },
+  "Call Jo 1 Jan": {
+    "monAM": "2027-01-01 | - | - | Call Jo",
+    "friPM": "2027-01-01 | - | - | Call Jo",
+    "sunNight": "2027-01-01 | - | - | Call Jo",
+    "satBeforeAutumn": "2027-01-01 | - | - | Call Jo",
+    "sunAutumn": "2027-01-01 | - | - | Call Jo",
+    "sat14": "2027-01-01 | - | - | Call Jo",
+    "wed18": "2027-01-01 | - | - | Call Jo",
+    "dec31": "2027-01-01 | - | - | Call Jo"
+  },
+  "Call Jo Jan 1st 2027": {
+    "monAM": "2027-01-01 | - | - | Call Jo",
+    "friPM": "2027-01-01 | - | - | Call Jo",
+    "sunNight": "2027-01-01 | - | - | Call Jo",
+    "satBeforeAutumn": "2027-01-01 | - | - | Call Jo",
+    "sunAutumn": "2027-01-01 | - | - | Call Jo",
+    "sat14": "2027-01-01 | - | - | Call Jo",
+    "wed18": "2027-01-01 | - | - | Call Jo",
+    "dec31": "2027-01-01 | - | - | Call Jo"
+  },
+  "Call Jo Dec 26": {
+    "monAM": "2026-12-26 | - | - | Call Jo",
+    "friPM": "2026-12-26 | - | - | Call Jo",
+    "sunNight": "2026-12-26 | - | - | Call Jo",
+    "satBeforeSpring": "2027-12-26 | - | - | Call Jo",
+    "sunSpring": "2027-12-26 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-12-26 | - | - | Call Jo",
+    "sunAutumn": "2026-12-26 | - | - | Call Jo",
+    "sat14": "2026-12-26 | - | - | Call Jo",
+    "wed18": "2026-12-26 | - | - | Call Jo"
+  },
+  "Call Jo 12pm Friday": {
+    "monAM": "2026-11-20T12:00 | - | - | Call Jo",
+    "friPM": "2026-11-27T12:00 | - | - | Call Jo",
+    "sunNight": "2026-11-27T12:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-04-02T12:00 | - | - | Call Jo",
+    "sunSpring": "2027-04-02T12:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-30T12:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-30T12:00 | - | - | Call Jo",
+    "sat14": "2026-11-20T12:00 | - | - | Call Jo",
+    "wed18": "2026-11-20T12:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T12:00 | - | - | Call Jo"
+  },
+  "Call Jo 12am Friday": {
+    "monAM": "2026-11-20T00:00 | - | - | Call Jo",
+    "friPM": "2026-11-27T00:00 | - | - | Call Jo",
+    "sunNight": "2026-11-27T00:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-04-02T00:00 | - | - | Call Jo",
+    "sunSpring": "2027-04-02T00:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-30T00:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-30T00:00 | - | - | Call Jo",
+    "sat14": "2026-11-20T00:00 | - | - | Call Jo",
+    "wed18": "2026-11-20T00:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T00:00 | - | - | Call Jo"
+  },
+  "Book 8 seats tomorrow": {
+    "monAM": "2026-11-17 | - | - | Book 8 seats",
+    "friPM": "2026-11-21 | - | - | Book 8 seats",
+    "sunNight": "2026-11-23 | - | - | Book 8 seats",
+    "satBeforeSpring": "2027-03-28 | - | - | Book 8 seats",
+    "sunSpring": "2027-03-29 | - | - | Book 8 seats",
+    "satBeforeAutumn": "2026-10-25 | - | - | Book 8 seats",
+    "sunAutumn": "2026-10-26 | - | - | Book 8 seats",
+    "sat14": "2026-11-15 | - | - | Book 8 seats",
+    "wed18": "2026-11-19 | - | - | Book 8 seats",
+    "dec31": "2027-01-01 | - | - | Book 8 seats"
+  },
+  "Pick up 9 boxes Tuesday": {
+    "monAM": "2026-11-17 | - | - | Pick up 9 boxes",
+    "friPM": "2026-11-24 | - | - | Pick up 9 boxes",
+    "sunNight": "2026-11-24 | - | - | Pick up 9 boxes",
+    "satBeforeSpring": "2027-03-30 | - | - | Pick up 9 boxes",
+    "sunSpring": "2027-03-30 | - | - | Pick up 9 boxes",
+    "satBeforeAutumn": "2026-10-27 | - | - | Pick up 9 boxes",
+    "sunAutumn": "2026-10-27 | - | - | Pick up 9 boxes",
+    "sat14": "2026-11-17 | - | - | Pick up 9 boxes",
+    "wed18": "2026-11-24 | - | - | Pick up 9 boxes",
+    "dec31": "2027-01-05 | - | - | Pick up 9 boxes"
+  },
+  "Chase PO 4500123 Friday": {
+    "monAM": "2026-11-20 | - | - | Chase PO 4500123",
+    "sunNight": "2026-11-27 | - | - | Chase PO 4500123",
+    "satBeforeSpring": "2027-04-02 | - | - | Chase PO 4500123",
+    "sunSpring": "2027-04-02 | - | - | Chase PO 4500123",
+    "satBeforeAutumn": "2026-10-30 | - | - | Chase PO 4500123",
+    "sunAutumn": "2026-10-30 | - | - | Chase PO 4500123",
+    "sat14": "2026-11-20 | - | - | Chase PO 4500123",
+    "wed18": "2026-11-20 | - | - | Chase PO 4500123",
+    "dec31": "2027-01-01 | - | - | Chase PO 4500123"
+  },
+  "Pay £450 to HMRC by 31 Jan": {
+    "monAM": "2027-01-31 | - | - | Pay £450 to HMRC",
+    "friPM": "2027-01-31 | - | - | Pay £450 to HMRC",
+    "sunNight": "2027-01-31 | - | - | Pay £450 to HMRC",
+    "sat14": "2027-01-31 | - | - | Pay £450 to HMRC",
+    "wed18": "2027-01-31 | - | - | Pay £450 to HMRC",
+    "dec31": "2027-01-31 | - | - | Pay £450 to HMRC"
+  },
+  "Refund $20.00 tomorrow": {
+    "monAM": "2026-11-17 | - | - | Refund $20.00",
+    "friPM": "2026-11-21 | - | - | Refund $20.00",
+    "sunNight": "2026-11-23 | - | - | Refund $20.00",
+    "satBeforeSpring": "2027-03-28 | - | - | Refund $20.00",
+    "sunSpring": "2027-03-29 | - | - | Refund $20.00",
+    "satBeforeAutumn": "2026-10-25 | - | - | Refund $20.00",
+    "sunAutumn": "2026-10-26 | - | - | Refund $20.00",
+    "sat14": "2026-11-15 | - | - | Refund $20.00",
+    "wed18": "2026-11-19 | - | - | Refund $20.00",
+    "dec31": "2027-01-01 | - | - | Refund $20.00"
+  },
+  "Quote 3.5k Thursday": {
+    "monAM": "2026-11-19 | - | - | Quote 3.5k",
+    "friPM": "2026-11-26 | - | - | Quote 3.5k",
+    "sunNight": "2026-11-26 | - | - | Quote 3.5k",
+    "satBeforeSpring": "2027-04-01 | - | - | Quote 3.5k",
+    "sunSpring": "2027-04-01 | - | - | Quote 3.5k",
+    "satBeforeAutumn": "2026-10-29 | - | - | Quote 3.5k",
+    "sunAutumn": "2026-10-29 | - | - | Quote 3.5k",
+    "sat14": "2026-11-19 | - | - | Quote 3.5k",
+    "wed18": "2026-11-19 | - | - | Quote 3.5k"
+  },
+  "Send 10:1 ratio analysis tomorrow": {
+    "monAM": "2026-11-17 | - | - | Send 10:1 ratio analysis",
+    "friPM": "2026-11-21 | - | - | Send 10:1 ratio analysis",
+    "sunNight": "2026-11-23 | - | - | Send 10:1 ratio analysis",
+    "satBeforeSpring": "2027-03-28 | - | - | Send 10:1 ratio analysis",
+    "sunSpring": "2027-03-29 | - | - | Send 10:1 ratio analysis",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send 10:1 ratio analysis",
+    "sunAutumn": "2026-10-26 | - | - | Send 10:1 ratio analysis",
+    "sat14": "2026-11-15 | - | - | Send 10:1 ratio analysis",
+    "wed18": "2026-11-19 | - | - | Send 10:1 ratio analysis",
+    "dec31": "2027-01-01 | - | - | Send 10:1 ratio analysis"
+  },
+  "Check score 3-2 Friday": {
+    "monAM": "2026-11-20 | - | - | Check score 3-2",
+    "sunNight": "2026-11-27 | - | - | Check score 3-2",
+    "satBeforeSpring": "2027-04-02 | - | - | Check score 3-2",
+    "sunSpring": "2027-04-02 | - | - | Check score 3-2",
+    "satBeforeAutumn": "2026-10-30 | - | - | Check score 3-2",
+    "sunAutumn": "2026-10-30 | - | - | Check score 3-2",
+    "sat14": "2026-11-20 | - | - | Check score 3-2",
+    "wed18": "2026-11-20 | - | - | Check score 3-2",
+    "dec31": "2027-01-01 | - | - | Check score 3-2"
+  },
+  "Read chapters 3-5 tomorrow": {
+    "monAM": "2026-11-17 | - | - | Read chapters 3-5",
+    "friPM": "2026-11-21 | - | - | Read chapters 3-5",
+    "sunNight": "2026-11-23 | - | - | Read chapters 3-5",
+    "satBeforeSpring": "2027-03-28 | - | - | Read chapters 3-5",
+    "sunSpring": "2027-03-29 | - | - | Read chapters 3-5",
+    "satBeforeAutumn": "2026-10-25 | - | - | Read chapters 3-5",
+    "sunAutumn": "2026-10-26 | - | - | Read chapters 3-5",
+    "sat14": "2026-11-15 | - | - | Read chapters 3-5",
+    "wed18": "2026-11-19 | - | - | Read chapters 3-5",
+    "dec31": "2027-01-01 | - | - | Read chapters 3-5"
+  },
+  "Review pages 10-12 Monday 10am": {
+    "monAM": "2026-11-16T10:00 | - | - | Review pages 10-12",
+    "friPM": "2026-11-23T10:00 | - | - | Review pages 10-12",
+    "sunNight": "2026-11-23T10:00 | - | - | Review pages 10-12",
+    "satBeforeSpring": "2027-03-29T10:00 | - | - | Review pages 10-12",
+    "sunSpring": "2027-03-29T10:00 | - | - | Review pages 10-12",
+    "satBeforeAutumn": "2026-10-26T10:00 | - | - | Review pages 10-12",
+    "sunAutumn": "2026-10-26T10:00 | - | - | Review pages 10-12",
+    "sat14": "2026-11-16T10:00 | - | - | Review pages 10-12",
+    "wed18": "2026-11-23T10:00 | - | - | Review pages 10-12",
+    "dec31": "2027-01-04T10:00 | - | - | Review pages 10-12"
+  },
+  "Deploy v1.2.3 Thursday 4pm": {
+    "monAM": "2026-11-19T16:00 | - | - | Deploy v1.2.3",
+    "friPM": "2026-11-26T16:00 | - | - | Deploy v1.2.3",
+    "sunNight": "2026-11-26T16:00 | - | - | Deploy v1.2.3",
+    "satBeforeSpring": "2027-04-01T16:00 | - | - | Deploy v1.2.3",
+    "sunSpring": "2027-04-01T16:00 | - | - | Deploy v1.2.3",
+    "satBeforeAutumn": "2026-10-29T16:00 | - | - | Deploy v1.2.3",
+    "sunAutumn": "2026-10-29T16:00 | - | - | Deploy v1.2.3",
+    "sat14": "2026-11-19T16:00 | - | - | Deploy v1.2.3",
+    "wed18": "2026-11-19T16:00 | - | - | Deploy v1.2.3",
+    "dec31": "2027-01-07T16:00 | - | - | Deploy v1.2.3"
+  },
+  "Call Jo tomorrow remind me 10 mins before": {
+    "monAM": "2026-11-17 | - | 10 | Call Jo",
+    "friPM": "2026-11-21 | - | 10 | Call Jo",
+    "sunNight": "2026-11-23 | - | 10 | Call Jo",
+    "satBeforeSpring": "2027-03-28 | - | 10 | Call Jo",
+    "sunSpring": "2027-03-29 | - | 10 | Call Jo",
+    "satBeforeAutumn": "2026-10-25 | - | 10 | Call Jo",
+    "sunAutumn": "2026-10-26 | - | 10 | Call Jo",
+    "sat14": "2026-11-15 | - | 10 | Call Jo",
+    "wed18": "2026-11-19 | - | 10 | Call Jo",
+    "dec31": "2027-01-01 | - | 10 | Call Jo"
+  },
+  "Call Jo tomorrow 3pm reminder 2 hours before": {
+    "monAM": "2026-11-17T15:00 | - | 120 | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | 120 | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | 120 | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | 120 | Call Jo",
+    "sunSpring": "2027-03-29T15:00 | - | 120 | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | 120 | Call Jo",
+    "sunAutumn": "2026-10-26T15:00 | - | 120 | Call Jo",
+    "sat14": "2026-11-15T15:00 | - | 120 | Call Jo",
+    "wed18": "2026-11-19T15:00 | - | 120 | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | 120 | Call Jo"
+  },
+  "Call Jo tomorrow 3pm and remind me 1 day before": {
+    "monAM": "2026-11-17T15:00 | - | 1440 | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | 1440 | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | 1440 | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | 1440 | Call Jo",
+    "sunSpring": "2027-03-29T15:00 | - | 1440 | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | 1440 | Call Jo",
+    "sunAutumn": "2026-10-26T15:00 | - | 1440 | Call Jo",
+    "sat14": "2026-11-15T15:00 | - | 1440 | Call Jo",
+    "wed18": "2026-11-19T15:00 | - | 1440 | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | 1440 | Call Jo"
+  },
+  "Call Jo today 5pm": {
+    "monAM": "2026-11-16T17:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T17:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T17:00 | - | - | Call Jo",
+    "sat14": "2026-11-14T17:00 | - | - | Call Jo",
+    "wed18": "2026-11-18T17:00 | - | - | Call Jo",
+    "dec31": "2026-12-31T17:00 | - | - | Call Jo"
+  },
+  "Call Jo tonight": {
+    "monAM": "2026-11-16T19:00 | - | - | Call Jo",
+    "friPM": "2026-11-20T19:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T19:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T19:00 | - | - | Call Jo",
+    "sat14": "2026-11-14T19:00 | - | - | Call Jo",
+    "wed18": "2026-11-18T19:00 | - | - | Call Jo",
+    "dec31": "2026-12-31T19:00 | - | - | Call Jo"
+  },
+  "Call Jo tonight 9pm": {
+    "monAM": "2026-11-16T21:00 | - | - | Call Jo",
+    "friPM": "2026-11-20T21:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-27T21:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T21:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-24T21:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T21:00 | - | - | Call Jo",
+    "sat14": "2026-11-14T21:00 | - | - | Call Jo",
+    "wed18": "2026-11-18T21:00 | - | - | Call Jo",
+    "dec31": "2026-12-31T21:00 | - | - | Call Jo"
+  },
+  "Call Jo tonight at 11": {
+    "monAM": "2026-11-16T23:00 | - | - | Call Jo",
+    "friPM": "2026-11-20T23:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-27T23:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T23:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-24T23:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T23:00 | - | - | Call Jo",
+    "sat14": "2026-11-14T23:00 | - | - | Call Jo",
+    "wed18": "2026-11-18T23:00 | - | - | Call Jo",
+    "dec31": "2026-12-31T23:00 | - | - | Call Jo"
+  },
+  "Call Jo tomorrow evening 7": {
+    "monAM": "2026-11-17T19:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T19:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T19:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T19:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T19:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T19:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T19:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T19:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T19:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T19:00 | - | - | Call Jo"
+  },
+  "Coffee Tuesday": {
+    "monAM": "2026-11-17 | - | - | Coffee",
+    "friPM": "2026-11-24 | - | - | Coffee",
+    "sunNight": "2026-11-24 | - | - | Coffee",
+    "satBeforeSpring": "2027-03-30 | - | - | Coffee",
+    "sunSpring": "2027-03-30 | - | - | Coffee",
+    "satBeforeAutumn": "2026-10-27 | - | - | Coffee",
+    "sunAutumn": "2026-10-27 | - | - | Coffee",
+    "sat14": "2026-11-17 | - | - | Coffee",
+    "wed18": "2026-11-24 | - | - | Coffee",
+    "dec31": "2027-01-05 | - | - | Coffee"
+  },
+  "1:1 with Dee Thursday 2pm": {
+    "monAM": "2026-11-19T14:00 | - | - | 1:1 with Dee",
+    "friPM": "2026-11-26T14:00 | - | - | 1:1 with Dee",
+    "sunNight": "2026-11-26T14:00 | - | - | 1:1 with Dee",
+    "satBeforeSpring": "2027-04-01T14:00 | - | - | 1:1 with Dee",
+    "sunSpring": "2027-04-01T14:00 | - | - | 1:1 with Dee",
+    "satBeforeAutumn": "2026-10-29T14:00 | - | - | 1:1 with Dee",
+    "sunAutumn": "2026-10-29T14:00 | - | - | 1:1 with Dee",
+    "sat14": "2026-11-19T14:00 | - | - | 1:1 with Dee",
+    "wed18": "2026-11-19T14:00 | - | - | 1:1 with Dee",
+    "dec31": "2027-01-07T14:00 | - | - | 1:1 with Dee"
+  },
+  "1-2-1 with Dee Thursday": {
+    "monAM": "2026-11-19 | - | - | 1-2-1 with Dee",
+    "friPM": "2026-11-26 | - | - | 1-2-1 with Dee",
+    "sunNight": "2026-11-26 | - | - | 1-2-1 with Dee",
+    "satBeforeSpring": "2027-04-01 | - | - | 1-2-1 with Dee",
+    "sunSpring": "2027-04-01 | - | - | 1-2-1 with Dee",
+    "satBeforeAutumn": "2026-10-29 | - | - | 1-2-1 with Dee",
+    "sunAutumn": "2026-10-29 | - | - | 1-2-1 with Dee",
+    "sat14": "2026-11-19 | - | - | 1-2-1 with Dee",
+    "wed18": "2026-11-19 | - | - | 1-2-1 with Dee"
+  },
+  "121 Dee Thursday 2pm": {
+    "monAM": "2026-11-19T14:00 | - | - | 121 Dee",
+    "friPM": "2026-11-26T14:00 | - | - | 121 Dee",
+    "sunNight": "2026-11-26T14:00 | - | - | 121 Dee",
+    "satBeforeSpring": "2027-04-01T14:00 | - | - | 121 Dee",
+    "sunSpring": "2027-04-01T14:00 | - | - | 121 Dee",
+    "satBeforeAutumn": "2026-10-29T14:00 | - | - | 121 Dee",
+    "sunAutumn": "2026-10-29T14:00 | - | - | 121 Dee",
+    "sat14": "2026-11-19T14:00 | - | - | 121 Dee",
+    "wed18": "2026-11-19T14:00 | - | - | 121 Dee",
+    "dec31": "2027-01-07T14:00 | - | - | 121 Dee"
+  },
+  "Send NDA to Jo on Mon 16 Nov": {
+    "monAM": "2026-11-16 | - | - | Send NDA to Jo",
+    "satBeforeAutumn": "2026-11-16 | - | - | Send NDA to Jo",
+    "sunAutumn": "2026-11-16 | - | - | Send NDA to Jo",
+    "sat14": "2026-11-16 | - | - | Send NDA to Jo"
+  },
+  "Send NDA Saturday": {
+    "monAM": "2026-11-21 | - | - | Send NDA",
+    "friPM": "2026-11-21 | - | - | Send NDA",
+    "sunNight": "2026-11-28 | - | - | Send NDA",
+    "sunSpring": "2027-04-03 | - | - | Send NDA",
+    "sunAutumn": "2026-10-31 | - | - | Send NDA",
+    "wed18": "2026-11-21 | - | - | Send NDA",
+    "dec31": "2027-01-02 | - | - | Send NDA"
+  },
+  "Send NDA this Saturday": {
+    "monAM": "2026-11-21 | - | - | Send NDA",
+    "friPM": "2026-11-21 | - | - | Send NDA",
+    "sunNight": "2026-11-28 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-27 | - | - | Send NDA",
+    "sunSpring": "2027-04-03 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-24 | - | - | Send NDA",
+    "sunAutumn": "2026-10-31 | - | - | Send NDA",
+    "sat14": "2026-11-14 | - | - | Send NDA",
+    "wed18": "2026-11-21 | - | - | Send NDA",
+    "dec31": "2027-01-02 | - | - | Send NDA"
+  },
+  "Send NDA Sunday": {
+    "monAM": "2026-11-22 | - | - | Send NDA",
+    "friPM": "2026-11-22 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-28 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send NDA",
+    "sat14": "2026-11-15 | - | - | Send NDA",
+    "wed18": "2026-11-22 | - | - | Send NDA",
+    "dec31": "2027-01-03 | - | - | Send NDA"
+  },
+  "Send NDA this Sunday 6pm": {
+    "monAM": "2026-11-22T18:00 | - | - | Send NDA",
+    "friPM": "2026-11-22T18:00 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-28T18:00 | - | - | Send NDA",
+    "sunSpring": "2027-03-28T18:00 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-25T18:00 | - | - | Send NDA",
+    "sunAutumn": "2026-10-25T18:00 | - | - | Send NDA",
+    "sat14": "2026-11-15T18:00 | - | - | Send NDA",
+    "wed18": "2026-11-22T18:00 | - | - | Send NDA",
+    "dec31": "2027-01-03T18:00 | - | - | Send NDA"
+  },
+  "Send NDA,tomorrow": {
+    "monAM": "2026-11-17 | - | - | Send NDA",
+    "friPM": "2026-11-21 | - | - | Send NDA",
+    "sunNight": "2026-11-23 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-28 | - | - | Send NDA",
+    "sunSpring": "2027-03-29 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send NDA",
+    "sunAutumn": "2026-10-26 | - | - | Send NDA",
+    "sat14": "2026-11-15 | - | - | Send NDA",
+    "wed18": "2026-11-19 | - | - | Send NDA",
+    "dec31": "2027-01-01 | - | - | Send NDA"
+  },
+  "Send NDA tomorrow!": {
+    "monAM": "2026-11-17 | - | - | Send NDA",
+    "friPM": "2026-11-21 | - | - | Send NDA",
+    "sunNight": "2026-11-23 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-28 | - | - | Send NDA",
+    "sunSpring": "2027-03-29 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send NDA",
+    "sunAutumn": "2026-10-26 | - | - | Send NDA",
+    "sat14": "2026-11-15 | - | - | Send NDA",
+    "wed18": "2026-11-19 | - | - | Send NDA",
+    "dec31": "2027-01-01 | - | - | Send NDA"
+  },
+  "Send NDA tomorrow.": {
+    "monAM": "2026-11-17 | - | - | Send NDA",
+    "friPM": "2026-11-21 | - | - | Send NDA",
+    "sunNight": "2026-11-23 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-28 | - | - | Send NDA",
+    "sunSpring": "2027-03-29 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send NDA",
+    "sunAutumn": "2026-10-26 | - | - | Send NDA",
+    "sat14": "2026-11-15 | - | - | Send NDA",
+    "wed18": "2026-11-19 | - | - | Send NDA",
+    "dec31": "2027-01-01 | - | - | Send NDA"
+  },
+  "TOMORROW send NDA": {
+    "monAM": "2026-11-17 | - | - | Send NDA",
+    "friPM": "2026-11-21 | - | - | Send NDA",
+    "sunNight": "2026-11-23 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-28 | - | - | Send NDA",
+    "sunSpring": "2027-03-29 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send NDA",
+    "sunAutumn": "2026-10-26 | - | - | Send NDA",
+    "sat14": "2026-11-15 | - | - | Send NDA",
+    "wed18": "2026-11-19 | - | - | Send NDA",
+    "dec31": "2027-01-01 | - | - | Send NDA"
+  },
+  "Tomorrow 9am send NDA to Jo": {
+    "monAM": "2026-11-17T09:00 | - | - | Send NDA to Jo",
+    "friPM": "2026-11-21T09:00 | - | - | Send NDA to Jo",
+    "sunNight": "2026-11-23T09:00 | - | - | Send NDA to Jo",
+    "satBeforeSpring": "2027-03-28T09:00 | - | - | Send NDA to Jo",
+    "sunSpring": "2027-03-29T09:00 | - | - | Send NDA to Jo",
+    "satBeforeAutumn": "2026-10-25T09:00 | - | - | Send NDA to Jo",
+    "sunAutumn": "2026-10-26T09:00 | - | - | Send NDA to Jo",
+    "sat14": "2026-11-15T09:00 | - | - | Send NDA to Jo",
+    "wed18": "2026-11-19T09:00 | - | - | Send NDA to Jo",
+    "dec31": "2027-01-01T09:00 | - | - | Send NDA to Jo"
+  },
+  "On Friday send NDA to Jo": {
+    "monAM": "2026-11-20 | - | - | Send NDA to Jo",
+    "sunNight": "2026-11-27 | - | - | Send NDA to Jo",
+    "satBeforeSpring": "2027-04-02 | - | - | Send NDA to Jo",
+    "sunSpring": "2027-04-02 | - | - | Send NDA to Jo",
+    "satBeforeAutumn": "2026-10-30 | - | - | Send NDA to Jo",
+    "sunAutumn": "2026-10-30 | - | - | Send NDA to Jo",
+    "sat14": "2026-11-20 | - | - | Send NDA to Jo",
+    "wed18": "2026-11-20 | - | - | Send NDA to Jo",
+    "dec31": "2027-01-01 | - | - | Send NDA to Jo"
+  },
+  "3pm call Jo": {
+    "monAM": "2026-11-16T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-14T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-18T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call Jo"
+  },
+  "9am tomorrow standup": {
+    "monAM": "2026-11-17T09:00 | - | - | Standup",
+    "friPM": "2026-11-21T09:00 | - | - | Standup",
+    "sunNight": "2026-11-23T09:00 | - | - | Standup",
+    "satBeforeSpring": "2027-03-28T09:00 | - | - | Standup",
+    "sunSpring": "2027-03-29T09:00 | - | - | Standup",
+    "satBeforeAutumn": "2026-10-25T09:00 | - | - | Standup",
+    "sunAutumn": "2026-10-26T09:00 | - | - | Standup",
+    "sat14": "2026-11-15T09:00 | - | - | Standup",
+    "wed18": "2026-11-19T09:00 | - | - | Standup",
+    "dec31": "2027-01-01T09:00 | - | - | Standup"
+  },
+  "call jo tomorrow": {
+    "monAM": "2026-11-17 | - | - | Call jo",
+    "friPM": "2026-11-21 | - | - | Call jo",
+    "sunNight": "2026-11-23 | - | - | Call jo",
+    "satBeforeSpring": "2027-03-28 | - | - | Call jo",
+    "sunSpring": "2027-03-29 | - | - | Call jo",
+    "satBeforeAutumn": "2026-10-25 | - | - | Call jo",
+    "sunAutumn": "2026-10-26 | - | - | Call jo",
+    "sat14": "2026-11-15 | - | - | Call jo",
+    "wed18": "2026-11-19 | - | - | Call jo",
+    "dec31": "2027-01-01 | - | - | Call jo"
+  },
+  "call jo FRIDAY 3PM": {
+    "monAM": "2026-11-20T15:00 | - | - | Call jo",
+    "friPM": "2026-11-27T15:00 | - | - | Call jo",
+    "sunNight": "2026-11-27T15:00 | - | - | Call jo",
+    "satBeforeSpring": "2027-04-02T15:00 | - | - | Call jo",
+    "sunSpring": "2027-04-02T15:00 | - | - | Call jo",
+    "satBeforeAutumn": "2026-10-30T15:00 | - | - | Call jo",
+    "sunAutumn": "2026-10-30T15:00 | - | - | Call jo",
+    "sat14": "2026-11-20T15:00 | - | - | Call jo",
+    "wed18": "2026-11-20T15:00 | - | - | Call jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call jo"
+  },
+  "Call Jo   tomorrow   3pm": {
+    "monAM": "2026-11-17T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call Jo"
+  },
+  "Call Jo tomorrow 3 pm": {
+    "monAM": "2026-11-17T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call Jo"
+  },
+  "Call Jo tomorrow 3PM.": {
+    "monAM": "2026-11-17T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call Jo"
+  },
+  "Call Eve this evening": {
+    "monAM": "2026-11-16T18:00 | - | - | Call Eve",
+    "sunSpring": "2027-03-28T18:00 | - | - | Call Eve",
+    "sunAutumn": "2026-10-25T18:00 | - | - | Call Eve",
+    "sat14": "2026-11-14T18:00 | - | - | Call Eve",
+    "wed18": "2026-11-18T18:00 | - | - | Call Eve",
+    "dec31": "2026-12-31T18:00 | - | - | Call Eve"
+  },
+  "Call Jo on her mobile tomorrow": {
+    "monAM": "2026-11-17 | - | - | Call Jo on her mobile",
+    "friPM": "2026-11-21 | - | - | Call Jo on her mobile",
+    "sunNight": "2026-11-23 | - | - | Call Jo on her mobile",
+    "satBeforeSpring": "2027-03-28 | - | - | Call Jo on her mobile",
+    "sunSpring": "2027-03-29 | - | - | Call Jo on her mobile",
+    "satBeforeAutumn": "2026-10-25 | - | - | Call Jo on her mobile",
+    "sunAutumn": "2026-10-26 | - | - | Call Jo on her mobile",
+    "sat14": "2026-11-15 | - | - | Call Jo on her mobile",
+    "wed18": "2026-11-19 | - | - | Call Jo on her mobile",
+    "dec31": "2027-01-01 | - | - | Call Jo on her mobile"
+  },
+  "Text 07700900123 tomorrow 9am": {
+    "monAM": "2026-11-17T09:00 | - | - | Text 07700900123",
+    "friPM": "2026-11-21T09:00 | - | - | Text 07700900123",
+    "sunNight": "2026-11-23T09:00 | - | - | Text 07700900123",
+    "satBeforeSpring": "2027-03-28T09:00 | - | - | Text 07700900123",
+    "sunSpring": "2027-03-29T09:00 | - | - | Text 07700900123",
+    "satBeforeAutumn": "2026-10-25T09:00 | - | - | Text 07700900123",
+    "sunAutumn": "2026-10-26T09:00 | - | - | Text 07700900123",
+    "sat14": "2026-11-15T09:00 | - | - | Text 07700900123",
+    "wed18": "2026-11-19T09:00 | - | - | Text 07700900123",
+    "dec31": "2027-01-01T09:00 | - | - | Text 07700900123"
+  },
+  "Send to 10 Downing Street by Friday": {
+    "monAM": "2026-11-20 | - | - | Send to 10 Downing Street",
+    "sunNight": "2026-11-27 | - | - | Send to 10 Downing Street",
+    "satBeforeSpring": "2027-04-02 | - | - | Send to 10 Downing Street",
+    "sunSpring": "2027-04-02 | - | - | Send to 10 Downing Street",
+    "satBeforeAutumn": "2026-10-30 | - | - | Send to 10 Downing Street",
+    "sunAutumn": "2026-10-30 | - | - | Send to 10 Downing Street",
+    "sat14": "2026-11-20 | - | - | Send to 10 Downing Street",
+    "wed18": "2026-11-20 | - | - | Send to 10 Downing Street",
+    "dec31": "2027-01-01 | - | - | Send to 10 Downing Street"
+  },
+  "Visit 221B Baker Street Tuesday 3pm": {
+    "monAM": "2026-11-17T15:00 | - | - | Visit 221B Baker Street",
+    "friPM": "2026-11-24T15:00 | - | - | Visit 221B Baker Street",
+    "sunNight": "2026-11-24T15:00 | - | - | Visit 221B Baker Street",
+    "satBeforeSpring": "2027-03-30T15:00 | - | - | Visit 221B Baker Street",
+    "sunSpring": "2027-03-30T15:00 | - | - | Visit 221B Baker Street",
+    "satBeforeAutumn": "2026-10-27T15:00 | - | - | Visit 221B Baker Street",
+    "sunAutumn": "2026-10-27T15:00 | - | - | Visit 221B Baker Street",
+    "sat14": "2026-11-17T15:00 | - | - | Visit 221B Baker Street",
+    "wed18": "2026-11-24T15:00 | - | - | Visit 221B Baker Street",
+    "dec31": "2027-01-05T15:00 | - | - | Visit 221B Baker Street"
+  },
+  "Pick up from Gate 12 Friday 6am": {
+    "monAM": "2026-11-20T06:00 | - | - | Pick up from Gate 12",
+    "friPM": "2026-11-27T06:00 | - | - | Pick up from Gate 12",
+    "sunNight": "2026-11-27T06:00 | - | - | Pick up from Gate 12",
+    "satBeforeSpring": "2027-04-02T06:00 | - | - | Pick up from Gate 12",
+    "sunSpring": "2027-04-02T06:00 | - | - | Pick up from Gate 12",
+    "satBeforeAutumn": "2026-10-30T06:00 | - | - | Pick up from Gate 12",
+    "sunAutumn": "2026-10-30T06:00 | - | - | Pick up from Gate 12",
+    "sat14": "2026-11-20T06:00 | - | - | Pick up from Gate 12",
+    "wed18": "2026-11-20T06:00 | - | - | Pick up from Gate 12",
+    "dec31": "2027-01-01T06:00 | - | - | Pick up from Gate 12"
+  },
+  "Flight BA123 Friday 6.45am": {
+    "monAM": "2026-11-20T06:45 | - | - | Flight BA123",
+    "friPM": "2026-11-27T06:45 | - | - | Flight BA123",
+    "sunNight": "2026-11-27T06:45 | - | - | Flight BA123",
+    "satBeforeSpring": "2027-04-02T06:45 | - | - | Flight BA123",
+    "sunSpring": "2027-04-02T06:45 | - | - | Flight BA123",
+    "satBeforeAutumn": "2026-10-30T06:45 | - | - | Flight BA123",
+    "sunAutumn": "2026-10-30T06:45 | - | - | Flight BA123",
+    "sat14": "2026-11-20T06:45 | - | - | Flight BA123",
+    "wed18": "2026-11-20T06:45 | - | - | Flight BA123",
+    "dec31": "2027-01-01T06:45 | - | - | Flight BA123"
+  },
+  "Call Jo this weekend": {
+    "monAM": "2026-11-21 | - | - | Call Jo",
+    "friPM": "2026-11-21 | - | - | Call Jo",
+    "wed18": "2026-11-21 | - | - | Call Jo",
+    "dec31": "2027-01-02 | - | - | Call Jo"
+  },
+  "Lunch 1pm": {
+    "monAM": "2026-11-16T13:00 | - | - | Lunch",
+    "friPM": "2026-11-21T13:00 | - | - | Lunch",
+    "sunNight": "2026-11-23T13:00 | - | - | Lunch",
+    "satBeforeSpring": "2027-03-28T13:00 | - | - | Lunch",
+    "sunSpring": "2027-03-28T13:00 | - | - | Lunch",
+    "satBeforeAutumn": "2026-10-25T13:00 | - | - | Lunch",
+    "sunAutumn": "2026-10-25T13:00 | - | - | Lunch",
+    "sat14": "2026-11-14T13:00 | - | - | Lunch",
+    "wed18": "2026-11-19T13:00 | - | - | Lunch",
+    "dec31": "2027-01-01T13:00 | - | - | Lunch"
+  },
+  "Coffee with Sam 11am tomorrow": {
+    "monAM": "2026-11-17T11:00 | - | - | Coffee with Sam",
+    "friPM": "2026-11-21T11:00 | - | - | Coffee with Sam",
+    "sunNight": "2026-11-23T11:00 | - | - | Coffee with Sam",
+    "satBeforeSpring": "2027-03-28T11:00 | - | - | Coffee with Sam",
+    "sunSpring": "2027-03-29T11:00 | - | - | Coffee with Sam",
+    "satBeforeAutumn": "2026-10-25T11:00 | - | - | Coffee with Sam",
+    "sunAutumn": "2026-10-26T11:00 | - | - | Coffee with Sam",
+    "sat14": "2026-11-15T11:00 | - | - | Coffee with Sam",
+    "wed18": "2026-11-19T11:00 | - | - | Coffee with Sam",
+    "dec31": "2027-01-01T11:00 | - | - | Coffee with Sam"
+  },
+  "Call Jo on Thursday at 16:30": {
+    "monAM": "2026-11-19T16:30 | - | - | Call Jo",
+    "friPM": "2026-11-26T16:30 | - | - | Call Jo",
+    "sunNight": "2026-11-26T16:30 | - | - | Call Jo",
+    "satBeforeSpring": "2027-04-01T16:30 | - | - | Call Jo",
+    "sunSpring": "2027-04-01T16:30 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-29T16:30 | - | - | Call Jo",
+    "sunAutumn": "2026-10-29T16:30 | - | - | Call Jo",
+    "sat14": "2026-11-19T16:30 | - | - | Call Jo",
+    "wed18": "2026-11-19T16:30 | - | - | Call Jo",
+    "dec31": "2026-12-31T16:30 | - | - | Call Jo"
+  },
+  "Send deck by Friday 12pm": {
+    "monAM": "2026-11-20T12:00 | - | - | Send deck",
+    "friPM": "2026-11-27T12:00 | - | - | Send deck",
+    "sunNight": "2026-11-27T12:00 | - | - | Send deck",
+    "satBeforeSpring": "2027-04-02T12:00 | - | - | Send deck",
+    "sunSpring": "2027-04-02T12:00 | - | - | Send deck",
+    "satBeforeAutumn": "2026-10-30T12:00 | - | - | Send deck",
+    "sunAutumn": "2026-10-30T12:00 | - | - | Send deck",
+    "sat14": "2026-11-20T12:00 | - | - | Send deck",
+    "wed18": "2026-11-20T12:00 | - | - | Send deck",
+    "dec31": "2027-01-01T12:00 | - | - | Send deck"
+  },
+  "Send deck by tomorrow": {
+    "monAM": "2026-11-17 | - | - | Send deck",
+    "friPM": "2026-11-21 | - | - | Send deck",
+    "sunNight": "2026-11-23 | - | - | Send deck",
+    "satBeforeSpring": "2027-03-28 | - | - | Send deck",
+    "sunSpring": "2027-03-29 | - | - | Send deck",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send deck",
+    "sunAutumn": "2026-10-26 | - | - | Send deck",
+    "sat14": "2026-11-15 | - | - | Send deck",
+    "wed18": "2026-11-19 | - | - | Send deck",
+    "dec31": "2027-01-01 | - | - | Send deck"
+  },
+  "Send deck for tomorrow": {
+    "monAM": "2026-11-17 | - | - | Send deck",
+    "friPM": "2026-11-21 | - | - | Send deck",
+    "sunNight": "2026-11-23 | - | - | Send deck",
+    "satBeforeSpring": "2027-03-28 | - | - | Send deck",
+    "sunSpring": "2027-03-29 | - | - | Send deck",
+    "satBeforeAutumn": "2026-10-25 | - | - | Send deck",
+    "sunAutumn": "2026-10-26 | - | - | Send deck",
+    "sat14": "2026-11-15 | - | - | Send deck",
+    "wed18": "2026-11-19 | - | - | Send deck",
+    "dec31": "2027-01-01 | - | - | Send deck"
+  },
+  "Book flights for 3 Dec": {
+    "monAM": "2026-12-03 | - | - | Book flights",
+    "friPM": "2026-12-03 | - | - | Book flights",
+    "sunNight": "2026-12-03 | - | - | Book flights",
+    "satBeforeSpring": "2027-12-03 | - | - | Book flights",
+    "sunSpring": "2027-12-03 | - | - | Book flights",
+    "satBeforeAutumn": "2026-12-03 | - | - | Book flights",
+    "sunAutumn": "2026-12-03 | - | - | Book flights",
+    "sat14": "2026-12-03 | - | - | Book flights",
+    "wed18": "2026-12-03 | - | - | Book flights"
+  },
+  "Call Jo this Tues": {
+    "monAM": "2026-11-17 | - | - | Call Jo",
+    "friPM": "2026-11-24 | - | - | Call Jo",
+    "sunNight": "2026-11-24 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-30 | - | - | Call Jo",
+    "sunSpring": "2027-03-30 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-27 | - | - | Call Jo",
+    "sunAutumn": "2026-10-27 | - | - | Call Jo",
+    "sat14": "2026-11-17 | - | - | Call Jo",
+    "wed18": "2026-11-24 | - | - | Call Jo",
+    "dec31": "2027-01-05 | - | - | Call Jo"
+  },
+  "Call Jo Tue": {
+    "monAM": "2026-11-17 | - | - | Call Jo",
+    "friPM": "2026-11-24 | - | - | Call Jo",
+    "sunNight": "2026-11-24 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-30 | - | - | Call Jo",
+    "sunSpring": "2027-03-30 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-27 | - | - | Call Jo",
+    "sunAutumn": "2026-10-27 | - | - | Call Jo",
+    "sat14": "2026-11-17 | - | - | Call Jo",
+    "wed18": "2026-11-24 | - | - | Call Jo",
+    "dec31": "2027-01-05 | - | - | Call Jo"
+  },
+  "Call Jo tues.": {
+    "monAM": "2026-11-17 | - | - | Call Jo",
+    "friPM": "2026-11-24 | - | - | Call Jo",
+    "sunNight": "2026-11-24 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-30 | - | - | Call Jo",
+    "sunSpring": "2027-03-30 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-27 | - | - | Call Jo",
+    "sunAutumn": "2026-10-27 | - | - | Call Jo",
+    "sat14": "2026-11-17 | - | - | Call Jo",
+    "wed18": "2026-11-24 | - | - | Call Jo",
+    "dec31": "2027-01-05 | - | - | Call Jo"
+  },
+  "Call Jo in 2 days at 3pm": {
+    "monAM": "2026-11-18T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-22T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-24T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-29T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-30T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-26T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-27T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-16T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-20T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-02T15:00 | - | - | Call Jo"
+  },
+  "Call Jo in 2 hrs": {
+    "monAM": "2026-11-16T11:15 | - | - | Call Jo",
+    "friPM": "2026-11-20T20:30 | - | - | Call Jo",
+    "sunNight": "2026-11-23T01:30 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-27T22:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T03:30 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-24T22:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T02:30 | - | - | Call Jo",
+    "sat14": "2026-11-14T12:30 | - | - | Call Jo",
+    "wed18": "2026-11-18T16:00 | - | - | Call Jo",
+    "dec31": "2026-12-31T18:00 | - | - | Call Jo"
+  },
+  "Call Jo next week Monday": {
+    "monAM": "2026-11-23 | - | - | Call Jo",
+    "friPM": "2026-11-23 | - | - | Call Jo",
+    "sunNight": "2026-11-23 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-29 | - | - | Call Jo",
+    "sunSpring": "2027-03-29 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-26 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26 | - | - | Call Jo",
+    "sat14": "2026-11-16 | - | - | Call Jo",
+    "wed18": "2026-11-23 | - | - | Call Jo",
+    "dec31": "2027-01-04 | - | - | Call Jo"
+  },
+  "Call Jo next week on Friday at 3pm": {
+    "monAM": "2026-11-27T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-27T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-27T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-04-02T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-04-02T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-30T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-30T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-20T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-27T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-08T15:00 | - | - | Call Jo"
+  },
+  "Send NDA end of day tomorrow": {
+    "monAM": "2026-11-17T17:00 | - | - | Send NDA",
+    "friPM": "2026-11-21T17:00 | - | - | Send NDA",
+    "sunNight": "2026-11-23T17:00 | - | - | Send NDA",
+    "satBeforeSpring": "2027-03-28T17:00 | - | - | Send NDA",
+    "sunSpring": "2027-03-29T17:00 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-25T17:00 | - | - | Send NDA",
+    "sunAutumn": "2026-10-26T17:00 | - | - | Send NDA",
+    "sat14": "2026-11-15T17:00 | - | - | Send NDA",
+    "wed18": "2026-11-19T17:00 | - | - | Send NDA",
+    "dec31": "2027-01-01T17:00 | - | - | Send NDA"
+  },
+  "Send NDA end of the day": {
+    "monAM": "2026-11-16T17:00 | - | - | Send NDA",
+    "sunSpring": "2027-03-28T17:00 | - | - | Send NDA",
+    "sunAutumn": "2026-10-25T17:00 | - | - | Send NDA",
+    "sat14": "2026-11-14T17:00 | - | - | Send NDA",
+    "wed18": "2026-11-18T17:00 | - | - | Send NDA",
+    "dec31": "2026-12-31T17:00 | - | - | Send NDA"
+  },
+  "Send NDA by end of day Friday": {
+    "monAM": "2026-11-20T17:00 | - | - | Send NDA",
+    "sunNight": "2026-11-27T17:00 | - | - | Send NDA",
+    "satBeforeSpring": "2027-04-02T17:00 | - | - | Send NDA",
+    "sunSpring": "2027-04-02T17:00 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-30T17:00 | - | - | Send NDA",
+    "sunAutumn": "2026-10-30T17:00 | - | - | Send NDA",
+    "sat14": "2026-11-20T17:00 | - | - | Send NDA",
+    "wed18": "2026-11-20T17:00 | - | - | Send NDA",
+    "dec31": "2027-01-01T17:00 | - | - | Send NDA"
+  },
+  "Send NDA EOD Fri": {
+    "monAM": "2026-11-20T17:00 | - | - | Send NDA",
+    "sunNight": "2026-11-27T17:00 | - | - | Send NDA",
+    "satBeforeSpring": "2027-04-02T17:00 | - | - | Send NDA",
+    "sunSpring": "2027-04-02T17:00 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-30T17:00 | - | - | Send NDA",
+    "sunAutumn": "2026-10-30T17:00 | - | - | Send NDA",
+    "sat14": "2026-11-20T17:00 | - | - | Send NDA",
+    "wed18": "2026-11-20T17:00 | - | - | Send NDA",
+    "dec31": "2027-01-01T17:00 | - | - | Send NDA"
+  },
+  "Call Jo 15:00 tomorrow": {
+    "monAM": "2026-11-17T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call Jo"
+  },
+  "Call Jo 3.00pm": {
+    "monAM": "2026-11-16T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-14T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-18T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call Jo"
+  },
+  "Call Jo 3:00 pm tomorrow": {
+    "monAM": "2026-11-17T15:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T15:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T15:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T15:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T15:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T15:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T15:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T15:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T15:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T15:00 | - | - | Call Jo"
+  },
+  "Call Jo 03:00 tomorrow": {
+    "monAM": "2026-11-17T03:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T03:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T03:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T03:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T03:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T03:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T03:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T03:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T03:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T03:00 | - | - | Call Jo"
+  },
+  "Call Jo 00:00": {
+    "monAM": "2026-11-17T00:00 | - | - | Call Jo",
+    "friPM": "2026-11-21T00:00 | - | - | Call Jo",
+    "sunNight": "2026-11-23T00:00 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-28T00:00 | - | - | Call Jo",
+    "sunSpring": "2027-03-29T00:00 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-25T00:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-26T00:00 | - | - | Call Jo",
+    "sat14": "2026-11-15T00:00 | - | - | Call Jo",
+    "wed18": "2026-11-19T00:00 | - | - | Call Jo",
+    "dec31": "2027-01-01T00:00 | - | - | Call Jo"
   },
   "Call Sarah Monday": {
     "friPM": "2026-11-23 | - | - | Call Sarah",
@@ -1117,7 +2476,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call Sarah",
     "sunSpring": "2027-03-29 | - | - | Call Sarah",
     "satBeforeAutumn": "2026-10-26 | - | - | Call Sarah",
-    "sunAutumn": "2026-10-26 | - | - | Call Sarah"
+    "sunAutumn": "2026-10-26 | - | - | Call Sarah",
+    "sat14": "2026-11-16 | - | - | Call Sarah",
+    "wed18": "2026-11-23 | - | - | Call Sarah",
+    "dec31": "2027-01-04 | - | - | Call Sarah"
   },
   "Meeting with Acme next Tuesday": {
     "friPM": "2026-11-24 | - | - | Meeting with Acme",
@@ -1125,7 +2487,10 @@
     "satBeforeSpring": "2027-03-30 | - | - | Meeting with Acme",
     "sunSpring": "2027-03-30 | - | - | Meeting with Acme",
     "satBeforeAutumn": "2026-10-27 | - | - | Meeting with Acme",
-    "sunAutumn": "2026-10-27 | - | - | Meeting with Acme"
+    "sunAutumn": "2026-10-27 | - | - | Meeting with Acme",
+    "sat14": "2026-11-17 | - | - | Meeting with Acme",
+    "wed18": "2026-11-24 | - | - | Meeting with Acme",
+    "dec31": "2027-01-05 | - | - | Meeting with Acme"
   },
   "Chase invoice #10 Monday": {
     "friPM": "2026-11-23 | - | - | Chase invoice #10",
@@ -1133,15 +2498,43 @@
     "satBeforeSpring": "2027-03-29 | - | - | Chase invoice #10",
     "sunSpring": "2027-03-29 | - | - | Chase invoice #10",
     "satBeforeAutumn": "2026-10-26 | - | - | Chase invoice #10",
-    "sunAutumn": "2026-10-26 | - | - | Chase invoice #10"
+    "sunAutumn": "2026-10-26 | - | - | Chase invoice #10",
+    "sat14": "2026-11-16 | - | - | Chase invoice #10",
+    "wed18": "2026-11-23 | - | - | Chase invoice #10",
+    "dec31": "2027-01-04 | - | - | Chase invoice #10"
   },
-  "Offer 15% off Monday": {
-    "friPM": "2026-11-23 | - | - | Offer 15% off",
-    "sunNight": "2026-11-23 | - | - | Offer 15% off",
-    "satBeforeSpring": "2027-03-29 | - | - | Offer 15% off",
-    "sunSpring": "2027-03-29 | - | - | Offer 15% off",
-    "satBeforeAutumn": "2026-10-26 | - | - | Offer 15% off",
-    "sunAutumn": "2026-10-26 | - | - | Offer 15% off"
+  "Coffee with Raj Monday morning": {
+    "friPM": "2026-11-23T09:00 | - | - | Coffee with Raj",
+    "sunNight": "2026-11-23T09:00 | - | - | Coffee with Raj",
+    "satBeforeSpring": "2027-03-29T09:00 | - | - | Coffee with Raj",
+    "sunSpring": "2027-03-29T09:00 | - | - | Coffee with Raj",
+    "satBeforeAutumn": "2026-10-26T09:00 | - | - | Coffee with Raj",
+    "sunAutumn": "2026-10-26T09:00 | - | - | Coffee with Raj",
+    "sat14": "2026-11-16T09:00 | - | - | Coffee with Raj",
+    "wed18": "2026-11-23T09:00 | - | - | Coffee with Raj",
+    "dec31": "2027-01-04T09:00 | - | - | Coffee with Raj"
+  },
+  "Coffee with Raj Monday afternoon": {
+    "friPM": "2026-11-23T14:00 | - | - | Coffee with Raj",
+    "sunNight": "2026-11-23T14:00 | - | - | Coffee with Raj",
+    "satBeforeSpring": "2027-03-29T14:00 | - | - | Coffee with Raj",
+    "sunSpring": "2027-03-29T14:00 | - | - | Coffee with Raj",
+    "satBeforeAutumn": "2026-10-26T14:00 | - | - | Coffee with Raj",
+    "sunAutumn": "2026-10-26T14:00 | - | - | Coffee with Raj",
+    "sat14": "2026-11-16T14:00 | - | - | Coffee with Raj",
+    "wed18": "2026-11-23T14:00 | - | - | Coffee with Raj",
+    "dec31": "2027-01-04T14:00 | - | - | Coffee with Raj"
+  },
+  "Dinner Monday night 8": {
+    "friPM": "2026-11-23T20:00 | - | - | Dinner",
+    "sunNight": "2026-11-23T20:00 | - | - | Dinner",
+    "satBeforeSpring": "2027-03-29T20:00 | - | - | Dinner",
+    "sunSpring": "2027-03-29T20:00 | - | - | Dinner",
+    "satBeforeAutumn": "2026-10-26T20:00 | - | - | Dinner",
+    "sunAutumn": "2026-10-26T20:00 | - | - | Dinner",
+    "sat14": "2026-11-16T20:00 | - | - | Dinner",
+    "wed18": "2026-11-23T20:00 | - | - | Dinner",
+    "dec31": "2027-01-04T20:00 | - | - | Dinner"
   },
   "Send 3 proposals Monday": {
     "friPM": "2026-11-23 | - | - | Send 3 proposals",
@@ -1149,7 +2542,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Send 3 proposals",
     "sunSpring": "2027-03-29 | - | - | Send 3 proposals",
     "satBeforeAutumn": "2026-10-26 | - | - | Send 3 proposals",
-    "sunAutumn": "2026-10-26 | - | - | Send 3 proposals"
+    "sunAutumn": "2026-10-26 | - | - | Send 3 proposals",
+    "sat14": "2026-11-16 | - | - | Send 3 proposals",
+    "wed18": "2026-11-23 | - | - | Send 3 proposals",
+    "dec31": "2027-01-04 | - | - | Send 3 proposals"
   },
   "Call Top 10 clients Monday": {
     "friPM": "2026-11-23 | - | - | Call Top 10 clients",
@@ -1157,7 +2553,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call Top 10 clients",
     "sunSpring": "2027-03-29 | - | - | Call Top 10 clients",
     "satBeforeAutumn": "2026-10-26 | - | - | Call Top 10 clients",
-    "sunAutumn": "2026-10-26 | - | - | Call Top 10 clients"
+    "sunAutumn": "2026-10-26 | - | - | Call Top 10 clients",
+    "sat14": "2026-11-16 | - | - | Call Top 10 clients",
+    "wed18": "2026-11-23 | - | - | Call Top 10 clients",
+    "dec31": "2027-01-04 | - | - | Call Top 10 clients"
   },
   "Phase 2 kickoff Monday": {
     "friPM": "2026-11-23 | - | - | Phase 2 kickoff",
@@ -1165,7 +2564,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Phase 2 kickoff",
     "sunSpring": "2027-03-29 | - | - | Phase 2 kickoff",
     "satBeforeAutumn": "2026-10-26 | - | - | Phase 2 kickoff",
-    "sunAutumn": "2026-10-26 | - | - | Phase 2 kickoff"
+    "sunAutumn": "2026-10-26 | - | - | Phase 2 kickoff",
+    "sat14": "2026-11-16 | - | - | Phase 2 kickoff",
+    "wed18": "2026-11-23 | - | - | Phase 2 kickoff",
+    "dec31": "2027-01-04 | - | - | Phase 2 kickoff"
   },
   "Call Bob Monday week": {
     "friPM": "2026-11-30 | - | - | Call Bob",
@@ -1173,7 +2575,10 @@
     "satBeforeSpring": "2027-04-05 | - | - | Call Bob",
     "sunSpring": "2027-04-05 | - | - | Call Bob",
     "satBeforeAutumn": "2026-11-02 | - | - | Call Bob",
-    "sunAutumn": "2026-11-02 | - | - | Call Bob"
+    "sunAutumn": "2026-11-02 | - | - | Call Bob",
+    "sat14": "2026-11-23 | - | - | Call Bob",
+    "wed18": "2026-11-30 | - | - | Call Bob",
+    "dec31": "2027-01-11 | - | - | Call Bob"
   },
   "Call Bob next Friday": {
     "friPM": "2026-11-27 | - | - | Call Bob",
@@ -1181,7 +2586,8 @@
     "satBeforeSpring": "2027-04-02 | - | - | Call Bob",
     "sunSpring": "2027-04-02 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-30 | - | - | Call Bob",
+    "sat14": "2026-11-20 | - | - | Call Bob"
   },
   "Call Bob Mon": {
     "friPM": "2026-11-23 | - | - | Call Bob",
@@ -1189,15 +2595,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call Bob",
     "sunSpring": "2027-03-29 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-26 | - | - | Call Bob",
-    "sunAutumn": "2026-10-26 | - | - | Call Bob"
-  },
-  "Send 2027 price list Monday": {
-    "friPM": "2026-11-23 | - | - | Send 2027 price list",
-    "sunNight": "2026-11-23 | - | - | Send 2027 price list",
-    "satBeforeSpring": "2027-03-29 | - | - | Send 2027 price list",
-    "sunSpring": "2027-03-29 | - | - | Send 2027 price list",
-    "satBeforeAutumn": "2026-10-26 | - | - | Send 2027 price list",
-    "sunAutumn": "2026-10-26 | - | - | Send 2027 price list"
+    "sunAutumn": "2026-10-26 | - | - | Call Bob",
+    "sat14": "2026-11-16 | - | - | Call Bob",
+    "wed18": "2026-11-23 | - | - | Call Bob",
+    "dec31": "2027-01-04 | - | - | Call Bob"
   },
   "Call May on Monday": {
     "friPM": "2026-11-23 | - | - | Call May",
@@ -1205,7 +2606,43 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call May",
     "sunSpring": "2027-03-29 | - | - | Call May",
     "satBeforeAutumn": "2026-10-26 | - | - | Call May",
-    "sunAutumn": "2026-10-26 | - | - | Call May"
+    "sunAutumn": "2026-10-26 | - | - | Call May",
+    "sat14": "2026-11-16 | - | - | Call May",
+    "wed18": "2026-11-23 | - | - | Call May",
+    "dec31": "2027-01-04 | - | - | Call May"
+  },
+  "Dinner Monday night at 8": {
+    "friPM": "2026-11-23T20:00 | - | - | Dinner",
+    "sunNight": "2026-11-23T20:00 | - | - | Dinner",
+    "satBeforeSpring": "2027-03-29T20:00 | - | - | Dinner",
+    "sunSpring": "2027-03-29T20:00 | - | - | Dinner",
+    "satBeforeAutumn": "2026-10-26T20:00 | - | - | Dinner",
+    "sunAutumn": "2026-10-26T20:00 | - | - | Dinner",
+    "sat14": "2026-11-16T20:00 | - | - | Dinner",
+    "wed18": "2026-11-23T20:00 | - | - | Dinner",
+    "dec31": "2027-01-04T20:00 | - | - | Dinner"
+  },
+  "Dinner Monday night 8pm": {
+    "friPM": "2026-11-23T20:00 | - | - | Dinner",
+    "sunNight": "2026-11-23T20:00 | - | - | Dinner",
+    "satBeforeSpring": "2027-03-29T20:00 | - | - | Dinner",
+    "sunSpring": "2027-03-29T20:00 | - | - | Dinner",
+    "satBeforeAutumn": "2026-10-26T20:00 | - | - | Dinner",
+    "sunAutumn": "2026-10-26T20:00 | - | - | Dinner",
+    "sat14": "2026-11-16T20:00 | - | - | Dinner",
+    "wed18": "2026-11-23T20:00 | - | - | Dinner",
+    "dec31": "2027-01-04T20:00 | - | - | Dinner"
+  },
+  "Dinner Monday night 8:30": {
+    "friPM": "2026-11-23T20:30 | - | - | Dinner",
+    "sunNight": "2026-11-23T20:30 | - | - | Dinner",
+    "satBeforeSpring": "2027-03-29T20:30 | - | - | Dinner",
+    "sunSpring": "2027-03-29T20:30 | - | - | Dinner",
+    "satBeforeAutumn": "2026-10-26T20:30 | - | - | Dinner",
+    "sunAutumn": "2026-10-26T20:30 | - | - | Dinner",
+    "sat14": "2026-11-16T20:30 | - | - | Dinner",
+    "wed18": "2026-11-23T20:30 | - | - | Dinner",
+    "dec31": "2027-01-04T20:30 | - | - | Dinner"
   },
   "Call Sarah Monday about renewal": {
     "friPM": "2026-11-23 | - | - | Call Sarah about renewal",
@@ -1213,7 +2650,10 @@
     "satBeforeSpring": "2027-03-29 | - | - | Call Sarah about renewal",
     "sunSpring": "2027-03-29 | - | - | Call Sarah about renewal",
     "satBeforeAutumn": "2026-10-26 | - | - | Call Sarah about renewal",
-    "sunAutumn": "2026-10-26 | - | - | Call Sarah about renewal"
+    "sunAutumn": "2026-10-26 | - | - | Call Sarah about renewal",
+    "sat14": "2026-11-16 | - | - | Call Sarah about renewal",
+    "wed18": "2026-11-23 | - | - | Call Sarah about renewal",
+    "dec31": "2027-01-04 | - | - | Call Sarah about renewal"
   },
   "Call Bob by next Friday": {
     "friPM": "2026-11-27 | - | - | Call Bob",
@@ -1221,15 +2661,43 @@
     "satBeforeSpring": "2027-04-02 | - | - | Call Bob",
     "sunSpring": "2027-04-02 | - | - | Call Bob",
     "satBeforeAutumn": "2026-10-30 | - | - | Call Bob",
-    "sunAutumn": "2026-10-30 | - | - | Call Bob"
+    "sunAutumn": "2026-10-30 | - | - | Call Bob",
+    "sat14": "2026-11-20 | - | - | Call Bob"
   },
-  "Price rise 4.5% from Monday": {
-    "friPM": "2026-11-23 | - | - | Price rise 4.5%",
-    "sunNight": "2026-11-23 | - | - | Price rise 4.5%",
-    "satBeforeSpring": "2027-03-29 | - | - | Price rise 4.5%",
-    "sunSpring": "2027-03-29 | - | - | Price rise 4.5%",
-    "satBeforeAutumn": "2026-10-26 | - | - | Price rise 4.5%",
-    "sunAutumn": "2026-10-26 | - | - | Price rise 4.5%"
+  "Chase Sunny Patel Monday": {
+    "friPM": "2026-11-23 | - | - | Chase Sunny Patel",
+    "sunNight": "2026-11-23 | - | - | Chase Sunny Patel",
+    "satBeforeSpring": "2027-03-29 | - | - | Chase Sunny Patel",
+    "sunSpring": "2027-03-29 | - | - | Chase Sunny Patel",
+    "satBeforeAutumn": "2026-10-26 | - | - | Chase Sunny Patel",
+    "sunAutumn": "2026-10-26 | - | - | Chase Sunny Patel",
+    "sat14": "2026-11-16 | - | - | Chase Sunny Patel",
+    "wed18": "2026-11-23 | - | - | Chase Sunny Patel",
+    "dec31": "2027-01-04 | - | - | Chase Sunny Patel"
+  },
+  "Call Jo next Wednesday 2.30pm": {
+    "friPM": "2026-11-25T14:30 | - | - | Call Jo",
+    "sunNight": "2026-11-25T14:30 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-31T14:30 | - | - | Call Jo",
+    "sunSpring": "2027-03-31T14:30 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-28T14:30 | - | - | Call Jo",
+    "sunAutumn": "2026-10-28T14:30 | - | - | Call Jo",
+    "sat14": "2026-11-18T14:30 | - | - | Call Jo",
+    "wed18": "2026-11-25T14:30 | - | - | Call Jo",
+    "dec31": "2027-01-06T14:30 | - | - | Call Jo"
+  },
+  "Send NDA next Saturday": {
+    "sunNight": "2026-11-28 | - | - | Send NDA",
+    "satBeforeSpring": "2027-04-03 | - | - | Send NDA",
+    "sunSpring": "2027-04-03 | - | - | Send NDA",
+    "satBeforeAutumn": "2026-10-31 | - | - | Send NDA",
+    "sunAutumn": "2026-10-31 | - | - | Send NDA",
+    "sat14": "2026-11-21 | - | - | Send NDA"
+  },
+  "Send NDA next Sunday": {
+    "sunNight": "2026-11-29 | - | - | Send NDA",
+    "sunSpring": "2027-04-04 | - | - | Send NDA",
+    "sunAutumn": "2026-11-01 | - | - | Send NDA"
   },
   "Review numbers on 12/11": {
     "satBeforeSpring": "2027-11-12 | - | - | Review numbers",
@@ -1257,6 +2725,31 @@
     "satBeforeSpring": "2027-05-03 | - | - | Call Bob",
     "sunSpring": "2027-05-03 | - | - | Call Bob"
   },
+  "Call Jo on 3/4": {
+    "satBeforeSpring": "2027-04-03 | - | - | Call Jo",
+    "sunSpring": "2027-04-03 | - | - | Call Jo"
+  },
+  "Call Jo 14 Nov": {
+    "satBeforeSpring": "2027-11-14 | - | - | Call Jo",
+    "sunSpring": "2027-11-14 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-11-14 | - | - | Call Jo",
+    "sunAutumn": "2026-11-14 | - | - | Call Jo",
+    "sat14": "2026-11-14 | - | - | Call Jo"
+  },
+  "Call Jo 13 Nov": {
+    "satBeforeSpring": "2027-11-13 | - | - | Call Jo",
+    "sunSpring": "2027-11-13 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-11-13 | - | - | Call Jo",
+    "sunAutumn": "2026-11-13 | - | - | Call Jo"
+  },
+  "Call Jo today 8am": {
+    "sunSpring": "2027-03-28T08:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T08:00 | - | - | Call Jo"
+  },
+  "Call Jo this morning": {
+    "sunSpring": "2027-03-28T09:00 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25T09:00 | - | - | Call Jo"
+  },
   "Deadline 12/11/2026": {
     "satBeforeAutumn": "2026-11-12 | - | - | Deadline",
     "sunAutumn": "2026-11-12 | - | - | Deadline"
@@ -1264,5 +2757,10 @@
   "Deadline 12/11/26": {
     "satBeforeAutumn": "2026-11-12 | - | - | Deadline",
     "sunAutumn": "2026-11-12 | - | - | Deadline"
+  },
+  "Send NDA Sat 14 Nov": {
+    "satBeforeAutumn": "2026-11-14 | - | - | Send NDA",
+    "sunAutumn": "2026-11-14 | - | - | Send NDA",
+    "sat14": "2026-11-14 | - | - | Send NDA"
   }
 }

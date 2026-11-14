@@ -16,6 +16,7 @@ import { DEFAULT_TASK_DURATION, localInstant } from "@/lib/crm/task-time";
 import type { PadAiParse, PadReadBody, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
 import {
+  confirmedReading,
   mergeMarks,
   nameMarks,
   padConfirmLine,
@@ -527,18 +528,19 @@ export default function TaskPad({
   const card = variant === "card";
 
   function derive(value: PadAiParse | null) {
-    const chosenDue = due.set ? due.value : value ? (value.due ?? parsed.due) : parsed.due;
-    const autoReminder = value ? value.remindMinutes : parsed.remindMinutes;
+    const confirmed = confirmedReading(parsed, value);
+    const chosenDue = due.set ? due.value : confirmed.due;
+    const autoReminder = confirmed.remindMinutes;
     const chosenReminder = chosenDue ? (reminder.set ? reminder.value : autoReminder) : null;
     const finalDue = forTeammate && chosenDue ? chosenDue.slice(0, 10) : chosenDue;
     const finalReminder = forTeammate ? null : chosenReminder;
     return {
-      title: value ? value.title : parsed.title,
+      title: confirmed.title,
       chosenDue,
       chosenReminder,
       finalDue,
       finalReminder,
-      duration: chosenDuration ?? (!due.set && padDueHasTime(chosenDue) ? parsed.durationMinutes : null) ?? DEFAULT_TASK_DURATION,
+      duration: chosenDuration ?? (!due.set && padDueHasTime(chosenDue) ? confirmed.durationMinutes : null) ?? DEFAULT_TASK_DURATION,
       needsTime: Boolean(finalDue) && !padDueHasTime(finalDue) && finalReminder !== null,
     };
   }
