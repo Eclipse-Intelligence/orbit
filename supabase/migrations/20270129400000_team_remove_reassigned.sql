@@ -1,6 +1,7 @@
 set lock_timeout = '5s';
 
 drop function if exists private.team_remove_records(uuid, uuid, uuid);
+drop function if exists private.team_remove_records(uuid, uuid, uuid, text, text);
 
 create or replace function private.handover_changes(p_before jsonb, p_after jsonb, p_keys text[])
 returns jsonb
@@ -35,7 +36,8 @@ create or replace function private.team_remove_records(
   p_actor uuid,
   p_user uuid,
   p_source text default null,
-  p_operation text default 'remove_member'
+  p_operation text default 'remove_member',
+  p_source_url text default null
 )
 returns table (record_kind text, record_id uuid)
 language plpgsql
@@ -154,8 +156,8 @@ begin
     from jsonb_array_elements(handed) as item
   ),
   events as (
-    insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, source, operation, changes)
-    select p_workspace, items.kind || '.updated', items.kind, items.id, 'user', p_actor, p_source, p_operation, items.changes
+    insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, source, source_url, operation, changes)
+    select p_workspace, items.kind || '.updated', items.kind, items.id, 'user', p_actor, p_source, p_source_url, p_operation, items.changes
     from items
     returning id, event_type, entity_type, entity_id, changes, created_at
   )
@@ -168,7 +170,7 @@ begin
     'entity', jsonb_build_object('type', events.entity_type, 'id', events.entity_id),
     'actor', jsonb_build_object('type', 'user', 'userId', p_actor, 'agentId', null),
     'source', p_source,
-    'sourceUrl', null,
+    'sourceUrl', p_source_url,
     'data', events.changes
   )
   from events
@@ -208,8 +210,8 @@ begin
 end;
 $$;
 
-revoke all on function private.team_remove_records(uuid, uuid, uuid, text, text) from public;
-grant execute on function private.team_remove_records(uuid, uuid, uuid, text, text) to crm_app;
+revoke all on function private.team_remove_records(uuid, uuid, uuid, text, text, text) from public;
+grant execute on function private.team_remove_records(uuid, uuid, uuid, text, text, text) to crm_app;
 
 create or replace function private.team_remove(p_workspace uuid, p_actor uuid, p_user uuid)
 returns void

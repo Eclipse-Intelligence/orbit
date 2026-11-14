@@ -223,7 +223,7 @@ function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean;
     const day = taskDueDay(reading.date.toISOString());
     return { dueAt: day ? dayStartIso(day) : reading.date.toISOString(), dueHasTime: false };
   }
-  return { dueAt: reading.date.toISOString(), dueHasTime: true, wallTime: input.dueHasTime === true || value.trim() !== reading.date.toISOString() };
+  return { dueAt: reading.date.toISOString(), dueHasTime: true, wallTime: input.dueHasTime === true };
 }
 
 function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
@@ -1094,7 +1094,8 @@ async function actorInTaskWorkspace(db: Db, actor: UserActor, workspaceId: strin
   );
   const row = found.rows[0];
   if (!row) throw notFound("task");
-  const home: UserActor = { ...actor, workspaceId, workspaceName: row.name, role: row.role, scopes: scopesForRole(row.role) };
+  const scopes = scopesForRole(row.role).filter((scope) => actor.scopes.includes(scope));
+  const home: UserActor = { ...actor, workspaceId, workspaceName: row.name, role: row.role, scopes };
   assertScope(home.scopes, "tasks:write");
   return home;
 }

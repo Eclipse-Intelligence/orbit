@@ -274,6 +274,7 @@ function taskEmailLines(args: Record<string, unknown>) {
 
 const TASK_SELF_KEY = "task:self";
 const TASK_CLICKUP_KEY = "task:clickup";
+const TASK_ROLE_KEY = "task:role";
 
 function dueDayOf(value: unknown) {
   if (typeof value !== "string" || !value.trim()) return null;
@@ -281,13 +282,25 @@ function dueDayOf(value: unknown) {
   return reading.ok ? taskDueDay(reading.date.toISOString()) : null;
 }
 
-function taskTimingLines(args: Args, name: Names, current: { ownerId: string | null; timed: boolean } | null, creating = false) {
+type CurrentTask = { ownerId: string | null; timed: boolean; dueAt: string | null };
+
+function echoesDay(args: Args, current: CurrentTask | null) {
+  if (!current || current.timed || !current.dueAt || args.dueHasTime === true || typeof args.dueAt !== "string") return false;
+  const reading = readDateTime(args.dueAt);
+  return reading.ok && reading.date.getTime() === Date.parse(current.dueAt);
+}
+
+function taskTimingLines(args: Args, name: Names, current: CurrentTask | null, creating = false) {
   const self = detail(name, TASK_SELF_KEY);
   const owner = args.ownerId === null ? null : (optionalStr(args.ownerId) ?? current?.ownerId ?? null);
   const ownerChanges = (args.ownerId === null || optionalStr(args.ownerId) !== undefined) && owner !== (current?.ownerId ?? null);
   const someoneElse = Boolean(owner && self && owner !== self);
   const timed = hasTime(args.dueAt) || (args.dueAt === undefined && args.dueDate === undefined && Boolean(current?.timed));
   const dayOnly = someoneElse && timed && (ownerChanges || args.dueAt !== undefined);
+  if (echoesDay(args, current)) {
+    const day = dueDayOf(args.dueAt);
+    return [day ? `Due: ${formatDateLabel(day)}` : "", ...fieldLines(args, { durationMinutes: "Duration", remindMinutes: "Reminder" })];
+  }
   if (!dayOnly) {
     return [
       ...fieldLines(args, { dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder" }),
@@ -609,7 +622,7 @@ export async function taskTimingRefusalFor(actor: UserActor, name: string, args:
 function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null; dueHasTime?: true } {
   const refused = taskTimingRefusal("create_task", { dueDate: args.dueDate, dueAt: args.dueAt });
   if (refused) throw new CrmError("invalid_input", refused.error, 400, { field: refused.field });
-  if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null, ...(hasTime(args.dueAt) ? { dueHasTime: true as const } : {}) };
+  if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null, ...(args.dueHasTime === true && hasTime(args.dueAt) ? { dueHasTime: true as const } : {}) };
   if (args.dueDate !== undefined) return { dueDate: nullableStr(args.dueDate) ?? null };
   if (args.dueAt !== undefined) return { dueAt: null };
   return {};
@@ -623,10 +636,18 @@ function pushIfLinked(actor: UserActor, task: Task) {
   );
 }
 
+function dueLabel(value: string) {
+  const reading = readDateTime(value);
+  if (!reading.ok) return value;
+  if (reading.dateOnly) return formatDateLabel(taskDueDay(reading.date.toISOString()) ?? value);
+  return formatDateTimeLabel(dateTimeInputValue(reading.date.toISOString()));
+}
+
 function shown(key: string, value: unknown) {
   if (Array.isArray(value)) return value.join(", ");
   const text = String(value);
-  if (key === "dueAt" || key === "startLocal") return formatDateTimeLabel(text);
+  if (key === "dueAt") return dueLabel(text);
+  if (key === "startLocal") return formatDateTimeLabel(text);
   if (key === "expectedCloseDate") return formatDateLabel(text);
   if (key === "dueDate") return formatDateLabel(text);
   if (key === "durationMinutes" && typeof value === "number") return durationLabel(value);
@@ -657,14 +678,21 @@ async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Recor
   const id = str(value);
   if (!isUuid(id)) return { [TASK_SELF_KEY]: actor.userId };
   const rows = await withActor(actor, (db) =>
-    db.query<{ owner_id: string | null; timed: boolean }>(
-      "select owner_id, (due_has_time and due_at is not null) as timed from crm.tasks where id = $1 and workspace_id = $2",
+    db.query<{ owner_id: string | null; created_by_user_id: string | null; timed: boolean; due_at: Date | null }>(
+      "select owner_id, created_by_user_id, (due_has_time and due_at is not null) as timed, due_at from crm.tasks where id = $1 and workspace_id = $2",
       [id, actor.workspaceId],
     ),
   );
   const row = rows.rows[0];
-  if (!row) return { [TASK_SELF_KEY]: actor.userId };
-  return { [TASK_SELF_KEY]: actor.userId, [`${id}:owner`]: row.owner_id ?? "none", [`${id}:timed`]: row.timed ? "yes" : "no" };
+  const self = { [TASK_SELF_KEY]: actor.userId, [TASK_ROLE_KEY]: actor.role };
+  if (!row) return self;
+  return {
+    ...self,
+    [`${id}:owner`]: row.owner_id ?? "none",
+    [`${id}:creator`]: row.created_by_user_id ?? "none",
+    [`${id}:timed`]: row.timed ? "yes" : "no",
+    ...(row.due_at ? { [`${id}:dueAt`]: row.due_at.toISOString() } : {}),
+  };
 }
 
 async function scheduleDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
@@ -1138,6 +1166,7 @@ const TASK_FIELDS = {
   description: { type: "string", description: "Extra detail, or null to clear it." },
   dueDate: { type: "string", description: "Due day only, as YYYY-MM-DD in London time, or null to clear. Use this unless the user gave a time." },
   dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear. Only when the user gave a time; it puts the task on their calendar. A time on a task someone else owns is saved as date only. Send dueDate or dueAt, not both." },
+  dueHasTime: { type: "boolean", description: "Only true when the user asked for midnight (00:00) on a task due that day with no time. Without it, a dueAt equal to the task's current day start keeps it date only." },
   durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15. Only the owner can change it on a timed task." },
   remindMinutes: {
     type: "integer",
@@ -3571,7 +3600,11 @@ const TOOL_LIST: AssistantTool[] = [
       if (args.schedule !== undefined && args.schedule !== null) return describeSchedule(args.schedule, name);
       const id = str(args.taskId);
       const owner = detail(name, `${id}:owner`);
-      const current = owner ? { ownerId: owner === "none" ? null : owner, timed: detail(name, `${id}:timed`) === "yes" } : null;
+      const current = owner ? { ownerId: owner === "none" ? null : owner, timed: detail(name, `${id}:timed`) === "yes", dueAt: detail(name, `${id}:dueAt`) || null } : null;
+      const self = detail(name, TASK_SELF_KEY);
+      const role = detail(name, TASK_ROLE_KEY);
+      const creator = detail(name, `${id}:creator`);
+      const losesChange = args.ownerId === null && Boolean(self) && owner === self && role === "member" && creator !== self;
       return {
         title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
         lines: [
@@ -3581,6 +3614,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...clearedLines(args, { description: "Detail" }),
           ...fieldLines(args, { ownerId: "Owner" }, name),
           ...clearedLines(args, { ownerId: "Owner" }),
+          losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
         ],

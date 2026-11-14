@@ -8,14 +8,17 @@ import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { upsertContact } from "@/lib/crm/contacts";
 import { openDiscussion, postMessage } from "@/lib/crm/chat";
+import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
 import { localInstant } from "@/lib/crm/task-time";
 import { detectPadRecords } from "@/lib/crm/task-pad";
-import { archiveTask, completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
+import { addTaskParticipantsInDb, archiveTask, completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import { removeMember } from "@/lib/crm/team";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
 import { agentSource, companyMutationSchema, parseInput, SYSTEM_SOURCES } from "@/lib/crm/validation";
+import { ASSISTANT_SOURCES } from "@/lib/assistant/source";
+import { EXTENSION_SOURCE } from "@/lib/extension/protocol";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createAgent, createUser, resetDatabase } from "@/tests/helpers";
@@ -179,17 +182,52 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+function enclosingObject(text: string, at: number) {
+  let depth = 0;
+  let open = -1;
+  for (let index = at; index >= 0; index -= 1) {
+    const char = text[index];
+    if (char === "}") depth += 1;
+    else if (char === "{") {
+      if (depth === 0) {
+        open = index;
+        break;
+      }
+      depth -= 1;
+    }
+  }
+  if (open < 0) return "";
+  depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === "{") depth += 1;
+    else if (text[index] === "}" && --depth === 0) return text.slice(open, index + 1);
+  }
+  return "";
+}
+
+function provenanceSourcesInCode() {
+  const used = new Map<string, string>();
+  for (const file of ["lib", "app", "server"].flatMap(sourceFiles)) {
+    const text = readFileSync(file, "utf8");
+    for (const entry of text.matchAll(/\bsource:\s*([^,\n}]+)/g)) {
+      if (!/\boperation\b/.test(enclosingObject(text, entry.index ?? 0))) continue;
+      for (const literal of entry[1].matchAll(/(===\s*)?"([^"]*)"/g)) if (!literal[1]) used.set(literal[2], file);
+    }
+  }
+  return used;
+}
+
 describe("system sources", () => {
   it("lists every source Orbit writes with an operation", () => {
-    const used = new Map<string, string>();
-    for (const file of ["lib", "app", "server"].flatMap(sourceFiles)) {
-      const text = readFileSync(file, "utf8");
-      for (const object of text.matchAll(/\{[^{}]*\boperation:[^{}]*\}/g)) {
-        for (const literal of object[0].matchAll(/\bsource:\s*"([^"]+)"/g)) used.set(literal[1], file);
-      }
-    }
-    assert.ok(used.size > 10, String(used.size));
-    const missing = [...used].filter(([source]) => !(SYSTEM_SOURCES as readonly string[]).includes(source));
+    const used = provenanceSourcesInCode();
+    for (const source of ["workflow", "granola", "microsoft", "web", "clickup", "communication", "mcp"]) assert.ok(used.has(source), source);
+    const declared = [
+      ...ASSISTANT_SOURCES,
+      EXTENSION_SOURCE,
+      ...[...readFileSync("lib/crm/types.ts", "utf8").matchAll(/^\s*\| "([^"]+)"$/gm)].map((match) => match[1]),
+      ...[...(/export type ProviderId = ([^;]+);/.exec(readFileSync("lib/enrichment/providers.ts", "utf8"))?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+    ];
+    const missing = [...new Set([...used.keys(), ...declared])].filter((source) => !(SYSTEM_SOURCES as readonly string[]).includes(source));
     assert.deepEqual(missing, []);
   });
 });
@@ -231,36 +269,41 @@ describe("task approval cards", () => {
 });
 
 describe("midnight times", () => {
-  it("sets a midnight time on a date-only task, with a reminder in the same call", async () => {
+  it("sets an explicit midnight time on a date-only task, with a reminder in the same call", async () => {
     const task = (await createTask(eclipse, { title: "Midnight call", dueDate: "2027-03-01" })).body.task;
-    assert.equal(task.dueHasTime, false);
-    const timed = (await updateTask(eclipse, task.id, { dueAt: "2027-03-01T00:00", remindMinutes: 15 })).body.task;
+    const timed = (await updateTask(eclipse, task.id, { dueAt: "2027-03-01T00:00", dueHasTime: true, remindMinutes: 15 })).body.task;
     assert.equal(timed.dueHasTime, true);
     assert.equal(timed.remindMinutes, 15);
+    const web = (await createTask(eclipse, { title: "Midnight web", dueDate: "2027-03-01" })).body.task;
+    assert.equal((await updateTask(eclipse, web.id, { dueAt: localInstant("2027-03-01T00:00"), dueHasTime: true })).body.task.dueHasTime, true);
+    const assisted = (await createTask(eclipse, { title: "Midnight assistant", dueDate: "2027-07-01" })).body.task;
+    const out = (await runTool(eclipse, "update_task", { taskId: assisted.id, dueAt: "2027-07-01T00:00", dueHasTime: true })) as { task?: { dueHasTime: boolean } };
+    assert.equal(out.task?.dueHasTime, true);
     const viaMcp = (await createTask(eclipse, { title: "Midnight MCP", dueDate: "2027-03-01" })).body.task;
-    const moved = await mcp(eclipse, "update_next_action", { id: viaMcp.id, dueAt: "2027-03-01T00:00" });
+    const moved = await mcp(eclipse, "update_next_action", { id: viaMcp.id, dueAt: "2027-03-01T00:00", dueHasTime: true });
     assert.equal(moved.json?.task?.dueHasTime, true);
   });
 
-  it("sets midnight from the web panel's value and from an offset", async () => {
-    const web = (await createTask(eclipse, { title: "Midnight web", dueDate: "2027-03-01" })).body.task;
-    const fromPanel = (await updateTask(eclipse, web.id, { dueAt: localInstant("2027-03-01T00:00"), dueHasTime: true })).body.task;
-    assert.equal(fromPanel.dueHasTime, true);
-    const offset = (await createTask(eclipse, { title: "Midnight offset", dueDate: "2027-03-01" })).body.task;
-    const fromOffset = (await updateTask(eclipse, offset.id, { dueAt: "2027-03-01T00:00+00:00" })).body.task;
-    assert.equal(fromOffset.dueHasTime, true);
-    const summer = (await createTask(eclipse, { title: "Midnight summer", dueDate: "2027-07-01" })).body.task;
-    const fromSummer = (await updateTask(eclipse, summer.id, { dueAt: "2027-07-01T00:00:00+01:00" })).body.task;
-    assert.equal(fromSummer.dueHasTime, true);
-    const viaAssistant = (await createTask(eclipse, { title: "Midnight assistant", dueDate: "2027-03-01" })).body.task;
-    const assisted = (await runTool(eclipse, "update_task", { taskId: viaAssistant.id, dueAt: "2027-03-01T00:00:00Z" })) as { task?: { dueHasTime: boolean } };
-    assert.equal(assisted.task?.dueHasTime, true);
-  });
-
-  it("still keeps a date-only task date only when its own dueAt is sent back", async () => {
-    const task = (await createTask(eclipse, { title: "Echo day", dueDate: "2027-03-01" })).body.task;
-    const echoed = (await updateTask(eclipse, task.id, { dueAt: task.dueAt, title: "Echo day renamed" })).body.task;
+  it("keeps a date-only task date only when its own day start comes back in any format", async () => {
+    const winter = (await createTask(eclipse, { title: "Echo winter", dueDate: "2027-03-01" })).body.task;
+    const summer = (await createTask(eclipse, { title: "Echo summer", dueDate: "2027-07-01" })).body.task;
+    assert.equal(summer.dueAt, "2027-06-30T23:00:00.000Z");
+    for (const task of [winter, summer]) {
+      const out = (await runTool(eclipse, "update_task", { taskId: task.id, dueAt: task.dueAt, title: `${task.title} renamed` })) as { task?: { dueHasTime: boolean; dueDate: string } };
+      assert.equal(out.task?.dueHasTime, false, task.title);
+      assert.equal(out.task?.dueDate, task.dueDate);
+    }
+    for (const dueAt of ["2027-07-01T00:00:00+01:00", "2027-06-30T23:00:00Z", "2027-06-30T23:00:00.000000+00:00"]) {
+      const moved = await mcp(eclipse, "update_next_action", { id: summer.id, dueAt });
+      assert.equal(moved.json?.task?.dueHasTime, false, dueAt);
+    }
+    const echoed = (await updateTask(eclipse, winter.id, { dueAt: winter.dueAt })).body.task;
     assert.equal(echoed.dueHasTime, false);
+    const update = { taskId: summer.id, dueAt: summer.dueAt };
+    const card = describeAction("update_task", update, await recordNames(eclipse, [update], ["update_task"]));
+    assert.ok(card.lines.includes("Due: Thu 1 Jul 2027"), card.lines.join("\n"));
+    const plain = describeAction("update_task", update);
+    assert.ok(plain.lines.includes("Due: Thu 1 Jul 2027, 00:00"), plain.lines.join("\n"));
   });
 });
 
@@ -285,7 +328,7 @@ describe("removing a member", () => {
     const workflowCount = async () => (await admin().query<{ total: number }>("select count(*)::int as total from crm.workflow_events where workspace_id = $1", [eclipse.workspaceId])).rows[0].total;
     const workflowsBefore = await workflowCount();
     const started = Date.now();
-    await removeMember(eclipse, sam.userId, { operation: "remove_member", source: "web" });
+    await removeMember(eclipse, sam.userId, { operation: "remove_member", source: "web", sourceUrl: "/settings/team" });
     const took = Date.now() - started;
     await admin().query("update crm.webhook_endpoints set archived_at = now(), enabled = false where id = $1", [endpoint.rows[0].id]);
     assert.ok(took < 5000, `took ${took}ms`);
@@ -293,6 +336,8 @@ describe("removing a member", () => {
     const updated = (await audits(company.id)).find((row) => row.event_type === "company.updated");
     assert.ok(updated);
     assert.equal(updated.source, "web");
+    const stored = await admin().query<{ source_url: string | null }>("select source_url from crm.audit_events where entity_id = $1 and event_type = 'company.updated'", [company.id]);
+    assert.equal(stored.rows[0].source_url, "/settings/team");
     assert.deepEqual(updated.changes, { fields: ["ownerId"], before: { ownerId: sam.userId }, after: { ownerId: eclipse.userId } });
     assert.ok((await audits(contact.id)).some((row) => row.event_type === "contact.updated"));
     const taskEvent = (await audits(open.id)).find((row) => row.event_type === "task.updated");
@@ -319,6 +364,7 @@ describe("removing a member", () => {
     assert.equal(payload.rows[0].payload.type, "company.updated");
     assert.deepEqual(payload.rows[0].payload.entity, { type: "company", id: company.id });
     assert.deepEqual(payload.rows[0].payload.data, updated.changes);
+    assert.equal(payload.rows[0].payload.sourceUrl, "/settings/team");
     assert.equal(await workflowCount(), workflowsBefore);
   });
 });
@@ -363,5 +409,34 @@ describe("assistant unassigning", () => {
     assert.equal(out.error, undefined);
     assert.equal(out.task?.ownerId, null);
     assert.equal((await getTask(eclipse, task.id)).ownerId, null);
+  });
+});
+
+describe("unassign card", () => {
+  it("tells a member who unassigns a task someone else made that they can't change it after", async () => {
+    const task = (await createTask(eclipse, { title: "Priya's to hand back", ownerId: priya.userId })).body.task;
+    const args = { taskId: task.id, ownerId: null };
+    const card = describeAction("update_task", args, await recordNames(priya, [args], ["update_task"]));
+    assert.ok(card.lines.includes("Owner: none"), card.lines.join("\n"));
+    assert.ok(card.lines.includes("You'll stay tagged but can't change it."), card.lines.join("\n"));
+    const ownerCard = describeAction("update_task", args, await recordNames(eclipse, [args], ["update_task"]));
+    assert.ok(!ownerCard.lines.includes("You'll stay tagged but can't change it."), ownerCard.lines.join("\n"));
+    await runTool(priya, "update_task", args);
+    const after = await getTask(priya, task.id);
+    assert.equal(after.ownerId, null);
+  });
+});
+
+describe("tagging in another workspace", () => {
+  it("keeps the caller's own scopes rather than the role's there", async () => {
+    const helper = await createUser("scoped@guards.test", "Scoped Helper");
+    await addMember(ridgeon.workspaceId, helper.userId);
+    const task = (await createTask(ridgeon, { title: "Scoped tag" })).body.task;
+    const readOnly: UserActor = { ...eclipse, scopes: ["crm:read"] };
+    await assert.rejects(
+      withActor(readOnly, (db) => addTaskParticipantsInDb(db, readOnly, task.id, [helper.userId])),
+      (error: unknown) => error instanceof CrmError && error.status === 403,
+    );
+    assert.equal((await admin().query("select 1 from crm.task_participants where task_id = $1", [task.id])).rowCount, 0);
   });
 });

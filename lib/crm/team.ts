@@ -150,12 +150,13 @@ export async function removeMember(actor: UserActor, userId: string, provenance:
       })
     : [];
   try {
-    const handed = await query("select * from private.team_remove_records($1, $2, $3, $4, $5)", [
+    const handed = await query("select * from private.team_remove_records($1, $2, $3, $4, $5, $6)", [
       actor.workspaceId,
       actor.userId,
       userId,
       provenance.source ?? null,
       provenance.operation,
+      provenance.sourceUrl ?? null,
     ]);
     if ((handed.rowCount ?? 0) > 0) scheduleWebhooks();
   } catch (error) {
