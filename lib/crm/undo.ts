@@ -122,6 +122,7 @@ const FIELDS: Record<EntityType, Record<string, string>> = {
     companyId: "Company",
     contactId: "Person",
     opportunityId: "Opportunity",
+    mailThreadKey: "Email",
     completedAt: "Done",
   },
 };
@@ -211,6 +212,7 @@ function activityName(summary: ActivitySummary | undefined) {
 
 function shownValue(field: string, value: unknown, names: Map<string, string>) {
   const empty = value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+  if (field === "mailThreadKey") return empty ? "none" : "Email";
   if (empty) {
     if (field === "relationshipOverride") return "Automatic";
     if (field === "completedAt") return "not done";

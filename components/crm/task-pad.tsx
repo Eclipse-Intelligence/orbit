@@ -414,9 +414,10 @@ function StaticChip({ icon: ChipIcon, label, name, variant }: { icon: Icon; labe
 export type PadThread = { key: string; subject: string | null };
 
 function ThreadChip({ thread, variant, onRemove }: { thread: PadThread; variant: Variant; onRemove: () => void }) {
-  const label = thread.subject?.trim() || "Email";
+  const subject = thread.subject?.trim();
+  const label = subject || "Email";
   return (
-    <button type="button" aria-label={`Email: ${label}. Remove`} onClick={onRemove} className={cn(chipClass("on", variant), "max-w-[18em]")}>
+    <button type="button" aria-label={subject ? `Email: ${subject}. Remove` : "Email. Remove"} onClick={onRemove} className={cn(chipClass("on", variant), "max-w-[18em]")}>
       <MailIcon aria-hidden />
       <span className="truncate">{label}</span>
       <XIcon aria-hidden />

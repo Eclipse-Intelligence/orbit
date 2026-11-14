@@ -2,13 +2,21 @@ set lock_timeout = '5s';
 
 alter table crm.tasks add column if not exists mail_thread_key text;
 
-alter table crm.tasks drop constraint if exists tasks_mail_thread_key_check;
-alter table crm.tasks
-  add constraint tasks_mail_thread_key_check
-  check (
-    mail_thread_key is null
-    or (char_length(mail_thread_key) between 38 and 487 and mail_thread_key ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\|')
-  );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'tasks_mail_thread_key_check' and conrelid = 'crm.tasks'::regclass
+  ) then
+    alter table crm.tasks
+      add constraint tasks_mail_thread_key_check
+      check (
+        mail_thread_key is null
+        or (char_length(mail_thread_key) between 38 and 487 and mail_thread_key ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\|')
+      );
+  end if;
+end;
+$$;
 
 create or replace function private.task_mail_link_decode(p_value text)
 returns text
@@ -35,6 +43,37 @@ $$;
 
 revoke all on function private.task_mail_link_decode(text) from public;
 
+create or replace function private.task_mail_link_key(p_line text)
+returns text
+language plpgsql
+immutable
+set search_path = ''
+as $$
+declare
+  v_match text[];
+  v_value text;
+begin
+  v_match := regexp_match(
+    btrim(p_line, E' \t\r\n\f\v   ﻿'),
+    '^\[([^]\n]+)\]\(/mail\?thread=([^)\s]+)\)$'
+  );
+  if v_match is null then
+    return null;
+  end if;
+  v_value := private.task_mail_link_decode(split_part(v_match[2], '&', 1));
+  if v_value is null or strpos(v_value, '|') <> 37 then
+    return null;
+  end if;
+  v_value := lower(left(v_value, 36)) || substr(v_value, 37);
+  if char_length(v_value) > 487 or v_value !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\|.' then
+    return null;
+  end if;
+  return v_value;
+end;
+$$;
+
+revoke all on function private.task_mail_link_key(text) from public;
+
 create or replace function private.task_mail_link_move(p_description text)
 returns table (thread_key text, description text)
 language plpgsql
@@ -42,30 +81,26 @@ immutable
 set search_path = ''
 as $$
 declare
-  v_lines text[];
-  v_index integer;
-  v_match text[];
-  v_value text;
-  v_split integer;
+  v_line text;
+  v_key text;
+  v_kept text[] := '{}';
 begin
   if p_description is null then
     return;
   end if;
-  v_lines := string_to_array(p_description, E'\n');
-  for v_index in 1 .. coalesce(array_length(v_lines, 1), 0) loop
-    v_match := regexp_match(btrim(v_lines[v_index], E' \t\r\n\f\v'), '^\[([^]\n]+)\]\(/mail\?thread=([^)\s]+)\)$');
-    continue when v_match is null;
-    v_value := private.task_mail_link_decode(split_part(v_match[2], '&', 1));
-    continue when v_value is null;
-    v_split := strpos(v_value, '|');
-    continue when v_split <> 37;
-    v_value := lower(left(v_value, 36)) || substr(v_value, 37);
-    continue when char_length(v_value) > 487 or v_value !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\|.';
-    thread_key := v_value;
-    description := nullif(btrim(array_to_string(v_lines[1:v_index - 1] || v_lines[v_index + 1:], E'\n'), E' \t\r\n\f\v'), '');
-    return next;
-    return;
+  foreach v_line in array string_to_array(p_description, E'\n') loop
+    v_key := private.task_mail_link_key(v_line);
+    if v_key is null then
+      v_kept := v_kept || v_line;
+    elsif thread_key is null then
+      thread_key := v_key;
+    end if;
   end loop;
+  if thread_key is null then
+    return;
+  end if;
+  description := nullif(btrim(array_to_string(v_kept, E'\n'), E' \t\r\n\f\v   ﻿'), '');
+  return next;
 end;
 $$;
 

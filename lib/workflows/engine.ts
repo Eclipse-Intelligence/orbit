@@ -13,6 +13,7 @@ import { getCompany, updateCompany } from "@/lib/crm/companies";
 import { getContact, updateContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
+import { emailThreadKey } from "@/lib/crm/task-mail";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { listSenders, sendContactEmail } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
@@ -377,7 +378,7 @@ async function emailVars(actor: UserActor, messageId: string) {
       body_text: string | null;
       at: Date | string | null;
     }>(
-      `select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.from_name, m.to_recipients,
+      `select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.from_name, m.to_recipients,
          m.snippet, m.body_text, coalesce(m.received_at, m.created_at) as at
        from crm.mail_messages m where m.id = $1 and m.user_id = $2`,
       [messageId, actor.userId],
@@ -394,7 +395,6 @@ async function emailVars(actor: UserActor, messageId: string) {
       text: (row.body_text ?? row.snippet ?? "").slice(0, EMAIL_TEXT_LIMIT),
       receivedAt: row.at ? new Date(row.at).toISOString() : null,
       url: link(`/mail?thread=${encodeURIComponent(`${row.source_id}|${row.tk}`)}`),
-      threadKey: `${row.source_id}|${row.tk}`,
     };
   });
 }
@@ -927,9 +927,15 @@ function createTaskLinks(linkTo: string, vars: Vars) {
   return { companyId: linkTo === "none" ? null : companyId, contactId: null, opportunityId: null };
 }
 
-function emailThread(vars: Vars) {
-  const key = (vars.email as { threadKey?: unknown } | undefined)?.threadKey;
-  return typeof key === "string" && key ? { mailThreadKey: key } : {};
+async function emailThread(actor: UserActor, vars: Vars) {
+  const emailId = (vars.email as { id?: unknown } | undefined)?.id;
+  if (typeof emailId !== "string" || !emailId) return {};
+  try {
+    return { mailThreadKey: await emailThreadKey(actor, emailId) };
+  } catch (error) {
+    if (error instanceof CrmError && error.code === "not_found") return {};
+    throw error;
+  }
 }
 
 async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
@@ -979,7 +985,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
           description: withDueNote(render(config.notes, ctx.vars).trim() || null, due),
           dueDate: due?.dueDate ?? null,
           ...links,
-          ...emailThread(ctx.vars),
+          ...(await emailThread(ctx.actor, ctx.vars)),
           ownerId,
           priority: "normal",
         },

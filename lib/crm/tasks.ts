@@ -514,7 +514,7 @@ async function applyTask(
   }
   settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
   if (write.mailThreadKey !== undefined && write.mailThreadKey === current.mail_thread_key) delete write.mailThreadKey;
-  await assertOwnThreadInDb(db, actor, write.mailThreadKey);
+  if (!options.restoring) await assertOwnThreadInDb(db, actor, write.mailThreadKey);
   const links = await resolveLinks(
     db,
     actor.workspaceId,

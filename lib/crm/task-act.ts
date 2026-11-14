@@ -159,7 +159,7 @@ async function threadFor(db: Db, actor: UserActor, task: Task) {
        max(coalesce(m.sent_at, m.received_at, m.created_at)) as at,
        max(coalesce(m.received_at, m.sent_at, m.created_at)) as latest
      from crm.mail_messages m
-     where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
+     where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
      having count(*) > 0`,
     [actor.userId, thread.sourceId, thread.key],
   );

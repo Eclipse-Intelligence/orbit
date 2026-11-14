@@ -6,11 +6,12 @@ import type { Actor, Task, UserActor } from "@/lib/crm/types";
 
 const NOT_A_THREAD = "Choose an email thread from Mail.";
 const NOT_YOURS = "That email thread isn't in your Mail.";
-const NOT_IN_MAIL = "That email isn't in Mail. Search for it again.";
+const NOT_IN_MAIL = "That email isn't in your own Mail. Only emails in your mailbox can be pinned to a task, not ones in a thread shared with you.";
 
-export function readMailThreadKey(value: unknown): string | null {
-  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) return null;
-  if (typeof value !== "string") throw new CrmError("invalid_input", NOT_A_THREAD, 400, { field: "mailThreadKey" });
+export function readMailThreadKey(given: unknown): string | null {
+  if (given === null || given === undefined || (typeof given === "string" && given.trim() === "")) return null;
+  if (typeof given !== "string" || /[\u0000-\u001f\u007f]/.test(given.trim())) throw new CrmError("invalid_input", NOT_A_THREAD, 400, { field: "mailThreadKey" });
+  const value = given.trim();
   const split = value.indexOf("|");
   const sourceId = value.slice(0, split);
   const key = value.slice(split + 1);
@@ -29,7 +30,7 @@ export async function threadSubjectsInDb(db: Db, userId: string, keys: string[])
      cross join lateral (
        select m.subject from crm.mail_messages m
        where m.user_id = $1 and m.source_id = split_part(k.key, '|', 1)::uuid
-         and (m.thread_key = substr(k.key, 38) or (m.thread_key is null and 'm:' || m.id::text = substr(k.key, 38)))
+         and m.thread_key = substr(k.key, 38)
        order by m.is_draft, coalesce(m.received_at, m.sent_at, m.created_at) desc
        limit 1
      ) s`,
@@ -71,7 +72,7 @@ export async function emailThreadKey(actor: UserActor, emailId: string) {
   if (!isUuid(emailId)) throw new CrmError("not_found", NOT_IN_MAIL, 404, { field: "emailId" });
   return withActor(actor, async (db) => {
     const result = await db.query<{ key: string }>(
-      "select source_id::text || '|' || coalesce(thread_key, 'm:' || id::text) as key from crm.mail_messages where id = $1 and user_id = $2",
+      "select source_id::text || '|' || thread_key as key from crm.mail_messages where id = $1 and user_id = $2 and thread_key is not null",
       [emailId, actor.userId],
     );
     const key = result.rows[0]?.key;

@@ -360,6 +360,7 @@ describe("mail follow-ups carry their thread", () => {
     const task = (await listTasks(owner, { companyId: company })).data[0];
     assert.equal(task.title, "Reply to Ada Lovell: Pilot draft");
     assert.equal(task.mailThreadKey, `${sourceId}|conv-links`);
+    assert.deepEqual(task.mailThread, { subject: null, readable: false });
     assert.doesNotMatch(task.description ?? "", /\/mail\?thread=/);
 
     const other = (await createCompany(owner, { name: "Fernhill", domain: "fernhill-links.test" })).body.company.id;
@@ -371,6 +372,14 @@ describe("mail follow-ups carry their thread", () => {
       )
     )[0].id;
     const at = new Date(Date.now() - 3_600_000).toISOString();
+    await sql(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet,
+         from_email, to_recipients, cc_recipients, sent_at, received_at)
+       values ($1, $2, $3, $4, 'links-1', '<links-1@links.test>', 'conv-links', 'Pilot [draft]', 'Hello', 'ada@northwind-links.test',
+         '[{"name":"","address":"fran@orbit-links.test"}]'::jsonb, '[]'::jsonb, $5, $5)`,
+      [owner.workspaceId, owner.userId, sourceId, folder, new Date(Date.now() - 7_200_000).toISOString()],
+    );
+    assert.deepEqual((await getTask(owner, task.id)).mailThread, { subject: "Pilot [draft]", readable: true });
     await sql(
       `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet,
          from_email, to_recipients, cc_recipients, sent_at, received_at)

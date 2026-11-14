@@ -10,6 +10,11 @@ import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { mailThreadSubject } from "@/lib/crm/task-mail";
 import { createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
+import type { WorkflowDefinition } from "@/lib/workflows/definition";
+import { runWorkflowTick } from "@/lib/workflows/engine";
+import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
+import { createWorkflow, saveWorkflow, setWorkflowStatus } from "@/lib/workflows/store";
 import type { Actor, AgentActor, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -18,6 +23,7 @@ import { createAgent, createUser, resetDatabase } from "./helpers";
 type Box = { sourceId: string; inbox: string };
 
 const MIGRATION = "supabase/migrations/20270127100000_task_mail_thread.sql";
+const AGAIN = "supabase/migrations/20270127200000_task_mail_thread_again.sql";
 const SUBJECT = "Renewal terms for Northwind";
 
 let mark: UserActor;
@@ -132,7 +138,9 @@ describe("the thread link migration", () => {
         ["middle", `Ask about price.\n  [Pricing](/mail?thread=${encoded("mid")})  \r\nThen book a call.`, `${source}|mid`, "Ask about price.\nThen book a call."],
         ["upper case and more params", `Note\n[Deck](/mail?thread=${encodeURIComponent(`${source.toUpperCase()}|Up`)}&compose=reply)`, `${source}|Up`, "Note"],
         ["unicode", `[Café](/mail?thread=${encoded("café-ü")})`, `${source}|café-ü`, null],
-        ["two links", `[First](/mail?thread=${encoded("one")})\n[Second](/mail?thread=${encoded("two")})`, `${source}|one`, `[Second](/mail?thread=${encoded("two")})`],
+        ["two links", `[First](/mail?thread=${encoded("one")})\nKeep me\n[Second](/mail?thread=${encoded("two")})`, `${source}|one`, "Keep me"],
+        ["nbsp", `Note\n\u00a0\u00a0[Pricing](/mail?thread=${encoded("nbsp")})\u00a0`, `${source}|nbsp`, "Note"],
+        ["bad first, good second", `[Odd](/mail?thread=not-a-uuid%7Ckey)\n[Good](/mail?thread=${encoded("good")})`, `${source}|good`, "[Odd](/mail?thread=not-a-uuid%7Ckey)"],
         ["inline", `See [this](/mail?thread=${encoded("inline")}) first`, null, `See [this](/mail?thread=${encoded("inline")}) first`],
         ["bad source", "[Odd](/mail?thread=not-a-uuid%7Ckey)", null, "[Odd](/mail?thread=not-a-uuid%7Ckey)"],
         ["no key", `[Odd](/mail?thread=${encodeURIComponent(`${source}|`)})`, null, `[Odd](/mail?thread=${encodeURIComponent(`${source}|`)})`],
@@ -172,7 +180,23 @@ describe("the thread link migration", () => {
       const enabled = await client.query<{ tgenabled: string }>("select tgenabled from pg_trigger where tgname = 'tasks_set_updated_at' and tgrelid = 'crm.tasks'::regclass");
       assert.equal(enabled.rows[0].tgenabled, "O");
       const moved = (await client.query<{ total: number }>("select count(*)::int as total from crm.tasks where workspace_id = $1 and mail_thread_key is not null", [mark.workspaceId])).rows[0];
-      assert.equal(moved.total, 6);
+      assert.equal(moved.total, 8);
+      const late = await insert("written by the old code after the first migration", `Suggested after an email arrived.\n\n[Late](/mail?thread=${encoded("late")})`);
+      const lateBefore = (await client.query<{ updated_at: Date }>("select updated_at from crm.tasks where id = $1", [late])).rows[0].updated_at.toISOString();
+      const again = readFileSync(AGAIN, "utf8");
+      await client.query(again);
+      await client.query(again);
+      const lateRow = (await client.query<{ mail_thread_key: string | null; description: string | null; updated_at: Date }>("select mail_thread_key, description, updated_at from crm.tasks where id = $1", [late])).rows[0];
+      assert.equal(lateRow.mail_thread_key, `${source}|late`);
+      assert.equal(lateRow.description, "Suggested after an email arrived.");
+      assert.equal(lateRow.updated_at.toISOString(), lateBefore);
+      const unchanged = (await client.query<{ id: string; mail_thread_key: string | null; description: string | null; updated_at: Date }>(
+        "select id, mail_thread_key, description, updated_at from crm.tasks where workspace_id = $1 and id <> $2 order by id",
+        [mark.workspaceId, late],
+      )).rows;
+      assert.deepEqual(unchanged, first);
+      const checks = await client.query("select 1 from pg_constraint where conname = 'tasks_mail_thread_key_check' and conrelid = 'crm.tasks'::regclass");
+      assert.equal(checks.rowCount, 1);
       const queued = await client.query("select 1 from crm.task_outlook_queue q join crm.tasks t on t.id = q.task_id where t.workspace_id = $1", [mark.workspaceId]);
       assert.equal(queued.rowCount, 0);
     } finally {
@@ -260,9 +284,14 @@ describe("a task's email thread, read by each viewer", () => {
     assert.equal(await mailThreadSubject(sam, `${markBox.sourceId}|renewal`), null);
     await assert.rejects(mailThreadSubject(mark, "nonsense"), invalid("mailThreadKey"));
 
+    assert.deepEqual(await mailThreadSubject(mark, `  ${markBox.sourceId}|renewal  `), { key: `${markBox.sourceId}|renewal`, subject: `Re: ${SUBJECT}` });
+    await assert.rejects(mailThreadSubject(mark, `${markBox.sourceId}|renewal\u0000`), invalid("mailThreadKey"));
+    await assert.rejects(createTask(mark, { title: "Control character", mailThreadKey: `${markBox.sourceId}|re\nnewal` }), invalid("mailThreadKey"));
+
     const lone = await message(mark, markBox, null, "No conversation id");
-    const pad = (await createTask(mark, { title: "Answer the lone email", mailThreadKey: `${markBox.sourceId}|m:${lone}` })).body.task;
-    assert.deepEqual(pad.mailThread, { subject: "No conversation id", readable: true });
+    const loneTool = (await runTool(mark, "create_task", { title: "Answer the lone email", emailId: lone, sendToClickUp: false })) as { task: { mailThreadKey: string; mailThread: unknown } };
+    assert.equal(loneTool.task.mailThreadKey, `${markBox.sourceId}|m:${lone}`);
+    assert.deepEqual(loneTool.task.mailThread, { subject: "No conversation id", readable: true });
 
     const result = (await runTool(mark, "create_task", { title: "Reply to Jane on the renewal", emailId: markEmail, sendToClickUp: false })) as { task: { id: string; mailThreadKey: string; mailThread: unknown } };
     assert.equal(result.task.mailThreadKey, `${markBox.sourceId}|renewal`);
@@ -270,6 +299,78 @@ describe("a task's email thread, read by each viewer", () => {
     const cleared = (await runTool(mark, "update_task", { taskId: result.task.id, emailId: null })) as { task: { mailThreadKey: string | null } };
     assert.equal(cleared.task.mailThreadKey, null);
     const refused = (await runTool(sam, "create_task", { title: "Not Sam's", emailId: markEmail, sendToClickUp: false })) as { error?: string };
-    assert.equal(refused.error, "That email isn't in Mail. Search for it again.");
+    assert.equal(refused.error, "That email isn\'t in your own Mail. Only emails in your mailbox can be pinned to a task, not ones in a thread shared with you.");
+  });
+
+  it("undoes a change to the title and the pinned thread together", async () => {
+    const task = (await createTask(mark, { title: "Chase the renewal" })).body.task;
+    await updateTask(mark, task.id, { title: "Chase the renewal with Jane", mailThreadKey: `${markBox.sourceId}|renewal` });
+    const change = (await listRecentChanges(mark, { entityType: "task" })).find((item) => item.entityId === task.id && item.type === "task.updated");
+    assert.ok(change, "the update is listed");
+    assert.equal(change.canUndo, true, change.reason);
+    await undoAuditEvent(mark, change.id, { operation: "undo_change", source: "web" });
+    const restored = await getTask(mark, task.id);
+    assert.equal(restored.title, "Chase the renewal");
+    assert.equal(restored.mailThreadKey, null);
+    assert.equal(restored.mailThread, null);
+
+    const unpin = (await createTask(mark, { title: "Reply on the renewal", mailThreadKey: `${markBox.sourceId}|renewal` })).body.task;
+    await updateTask(mark, unpin.id, { mailThreadKey: null });
+    const unpinned = (await listRecentChanges(mark, { entityType: "task" })).find((item) => item.entityId === unpin.id && item.type === "task.updated");
+    assert.ok(unpinned?.canUndo, unpinned?.reason);
+    await undoAuditEvent(mark, unpinned.id, { operation: "undo_change", source: "web" });
+    assert.deepEqual((await getTask(mark, unpin.id)).mailThread, { subject: `Re: ${SUBJECT}`, readable: true });
+  });
+});
+
+describe("a workflow task from an email", () => {
+  async function emailWorkflow(name: string, delay: boolean) {
+    const definition: WorkflowDefinition = {
+      version: 2,
+      trigger: { type: "email_received", kind: "any", fromContactsOnly: false },
+      triggerPosition: { x: 0, y: 0 },
+      nodes: [
+        ...(delay ? [{ id: "delay_1", type: "delay" as const, config: { amount: 1, unit: "hours" }, position: { x: 0, y: 0 } }] : []),
+        { id: "create_task_1", type: "create_task", config: { title: `${name}: {{email.subject}}`, link: "none" }, position: { x: 0, y: 0 } },
+      ],
+      edges: delay
+        ? [
+            { source: "trigger", handle: "out", target: "delay_1" },
+            { source: "delay_1", handle: "out", target: "create_task_1" },
+          ]
+        : [{ source: "trigger", handle: "out", target: "create_task_1" }],
+    };
+    const workflow = await createWorkflow(mark, { name });
+    await saveWorkflow(mark, workflow.id, { definition });
+    await setWorkflowStatus(mark, workflow.id, "active");
+    return workflow.id;
+  }
+
+  async function workflowTask(prefix: string) {
+    return (await listTasks(mark, { view: "all", query: prefix })).data.find((task) => task.title.startsWith(prefix));
+  }
+
+  it("pins the email's thread, and still creates the task when the email has gone from Mail", async () => {
+    const pinning = await emailWorkflow("Pinned", false);
+    const email = await message(mark, markBox, "workflow-thread", "Order form question");
+    assert.equal(await queueMailWorkflowEvents(mark, [email]), 1);
+    await runWorkflowTick({ budgetMs: 15_000 });
+    const pinned = await workflowTask("Pinned");
+    assert.ok(pinned, "the workflow made a task");
+    assert.equal(pinned.mailThreadKey, `${markBox.sourceId}|workflow-thread`);
+    assert.deepEqual(pinned.mailThread, { subject: "Order form question", readable: true });
+    await setWorkflowStatus(mark, pinning, "paused");
+
+    await emailWorkflow("Later", true);
+    const gone = await message(mark, markBox, "gone-thread", "Soon deleted");
+    assert.equal(await queueMailWorkflowEvents(mark, [gone]), 1);
+    await runWorkflowTick({ budgetMs: 15_000 });
+    await sql("delete from crm.mail_messages where id = $1", [gone]);
+    await sql("update crm.workflow_runs set resume_at = now() - interval '1 minute' where status = 'waiting' and workspace_id = $1", [mark.workspaceId]);
+    await runWorkflowTick({ budgetMs: 15_000 });
+    const later = await workflowTask("Later");
+    assert.ok(later, "the workflow still made a task");
+    assert.equal(later.mailThreadKey, null);
+    assert.equal(later.mailThread, null);
   });
 });
