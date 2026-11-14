@@ -251,7 +251,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
               <span className="caption-style text-subtle truncate">{created}</span>
             </div>
             <SheetDescription className="sr-only">{task.title}</SheetDescription>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2 [@media(pointer:coarse)]:gap-3">
               <TaskAskButton
                 taskId={task.id}
                 variant="secondary"

@@ -920,7 +920,7 @@ export default function TaskFields({
     <>
       {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
       {extra}
-      <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-2.5 max-md:grid-cols-[5.5rem_minmax(0,1fr)]">
+      <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-2.5 max-md:grid-cols-[5.5rem_minmax(0,1fr)] [@media(pointer:coarse)]:gap-y-4">
         <Field label="Assignee">
           <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />
         </Field>

@@ -413,6 +413,31 @@ for (const [device, viewport] of [
         return { height, owns };
       })
       .catch(() => null);
+  const hitOverlaps = (locator) =>
+    locator
+      .evaluate((root) => {
+        const areas = [...root.querySelectorAll(".hit")]
+          .map((element) => {
+            const box = element.getBoundingClientRect();
+            const after = getComputedStyle(element, "::after");
+            const width = after.position === "absolute" ? Math.max(box.width, parseFloat(after.width)) : box.width;
+            const height = after.position === "absolute" ? Math.max(box.height, parseFloat(after.height)) : box.height;
+            const x = box.left + box.width / 2;
+            const y = box.top + box.height / 2;
+            return { name: (element.getAttribute("aria-label") || element.textContent || "").trim().slice(0, 24), shown: box.width > 0, left: x - width / 2, right: x + width / 2, top: y - height / 2, bottom: y + height / 2 };
+          })
+          .filter((area) => area.shown);
+        const overlaps = [];
+        areas.forEach((area, index) =>
+          areas.slice(index + 1).forEach((other) => {
+            const across = Math.min(area.right, other.right) - Math.max(area.left, other.left);
+            const down = Math.min(area.bottom, other.bottom) - Math.max(area.top, other.top);
+            if (across > 0.5 && down > 0.5) overlaps.push(`${area.name} and ${other.name}`);
+          }),
+        );
+        return { count: areas.length, overlaps };
+      })
+      .catch(() => null);
   const noHorizontalScroll = async () => page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1);
   const fitsHeight = async () => page.evaluate(() => document.scrollingElement.scrollHeight <= window.innerHeight + 2);
 
@@ -556,6 +581,12 @@ for (const [device, viewport] of [
     check(`${device} task expands in place`, await visible(row.getByRole("button", { name: "Open", exact: true })));
     check(`${device} expanded task no overflow`, await noHorizontalScroll());
     check(`${device} expanded task shows its duration`, await visible(row.getByRole("button", { name: /^Duration / })));
+    const rowTargets = await hitOverlaps(row);
+    check(
+      `${device} expanded task's touch areas don't overlap`,
+      Boolean(rowTargets && rowTargets.count >= 3 && rowTargets.overlaps.length === 0),
+      rowTargets ? rowTargets.overlaps.join(", ") || `${rowTargets.count} controls` : "missing",
+    );
     await row.getByRole("button", { name: /^Duration / }).tap();
     await page.waitForTimeout(500);
     await page.getByRole("group", { name: "Duration" }).getByRole("button", { name: "30m" }).tap();
@@ -612,6 +643,18 @@ for (const [device, viewport] of [
     check(`${device} task panel opens as a modal`, (await visible(panel)) && (await panel.getAttribute("aria-modal")) === "true");
     check(`${device} task panel shows the saved description`, (await panel.getByRole("textbox", { name: "Description" }).inputValue()) === note);
     await shot("task-panel");
+    const panelFields = await hitOverlaps(panel.locator("dl").first());
+    check(
+      `${device} task panel fields' touch areas don't overlap`,
+      Boolean(panelFields && panelFields.count >= 3 && panelFields.overlaps.length === 0),
+      panelFields ? panelFields.overlaps.join(", ") || `${panelFields.count} controls` : "missing",
+    );
+    const panelHeader = await hitOverlaps(panel.locator('[data-slot="sheet-header"]').first());
+    check(
+      `${device} task panel header's touch areas don't overlap`,
+      Boolean(panelHeader && panelHeader.count >= 2 && panelHeader.overlaps.length === 0),
+      panelHeader ? panelHeader.overlaps.join(", ") || `${panelHeader.count} controls` : "missing",
+    );
     await panel.getByRole("button", { name: "Close" }).tap();
     await page.waitForTimeout(600);
     check(`${device} task panel closes`, !(await visible(panel)));
