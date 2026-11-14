@@ -6,7 +6,6 @@ export const maxDuration = 30;
 
 export async function POST(request: Request) {
   const user = await getUserActor();
-  const input = await request.json().catch(() => ({}));
-  const result = await readPadRequest(user, input);
+  const result = await readPadRequest(user, request);
   return Response.json(result.body, { status: result.status, headers: { "cache-control": "private, no-store" } });
 }

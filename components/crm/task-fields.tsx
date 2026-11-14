@@ -186,6 +186,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const sent = useRef({ title: source.title, text: source.text });
+  const timingError = useRef(false);
   const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
   const visible = useRef(shown);
   useEffect(() => {
@@ -238,6 +239,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     if (result.error) {
       const restore = timed ? timing.fail(ticket) : null;
       if (restore) show(restore);
+      timingError.current = timed;
       setError(result.error);
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
       return false;
@@ -246,6 +248,10 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     if (timed && !result.saved) timing.fail(ticket);
     if (applied && result.saved) {
       show(applied);
+      if (timingError.current) {
+        timingError.current = false;
+        setError(null);
+      }
       if (asksForTime(write) && result.saved.dueAt && !result.saved.dueHasTime) {
         const note = dayOnlyNote(task.ownerName);
         setNotice(note);

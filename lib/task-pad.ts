@@ -22,6 +22,27 @@ const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|t
 const WEEKEND_SHORT = "(sat|sun)";
 const MEETING_CUE = "(?:call|ring|phone|meet|meeting|chat|catch\\s+up|catch-up|demo|interview|lunch|coffee)";
 const MEETING_ANYWHERE = new RegExp(`\\b${MEETING_CUE}\\b`, "i");
+const CUE_WORD = new RegExp(`^${MEETING_CUE}$`, "i");
+
+function cuedNumber(before: string) {
+  const words = before.trim().split(/\s+/).filter(Boolean);
+  let names = 0;
+  let joined = false;
+  for (let index = words.length - 1; index >= 0; index -= 1) {
+    const word = words[index].replace(/[,;:]+$/, "");
+    if (CUE_WORD.test(word) || (index > 0 && CUE_WORD.test(`${words[index - 1]} ${word}`))) return true;
+    if (names > 0 && !joined && word.toLowerCase() === "with") {
+      joined = true;
+      continue;
+    }
+    if (!joined && names < 3 && /^\p{Lu}[\p{L}'’-]*$/u.test(word)) {
+      names += 1;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
 const COUNTED = /\b(?:room|rooms|top|chapter|chapters|no|nos|number|version|page|pages|step|steps|level|floor|flat|unit|suite|gate|table|platform|row|seat|section|part|lesson|week|day|item|items|slide|slides|issue|ticket)\s*$/i;
 const CLOCK = "(?:\\d{1,2}(?:[:.]\\d{2})?\\s*(?:am|pm)\\b|\\d{1,2}:\\d{2}\\b|noon\\b|midday\\b|midnight\\b)";
 const DAY_WORD = "(?:today|tonight|tomorrow|tmrw|tmr|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri|sat|sun)";
@@ -146,6 +167,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     duration: number | null;
   } = { date: null, time: null, exact: null, remind: null, duration: null };
   let ambiguous = false;
+  let evening = false;
   const clock = (hour: string, minute: number, meridiem: string | undefined) => {
     if (guessable(hour, meridiem)) return toHour(Number(hour), minute, meridiem);
     ambiguous = true;
@@ -153,6 +175,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   };
   const bareHour = (hour: string) => {
     const value = Number(hour);
+    if (evening) return value >= 1 && value <= 11 ? { hour: value + 12, minute: 0 } : value >= 12 && value <= 23 ? { hour: value, minute: 0 } : null;
     if (value < 1 || value > 23) return null;
     if (value <= 12) ambiguous = true;
     return { hour: value <= 6 ? value + 12 : value, minute: 0 };
@@ -201,7 +224,10 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(new RegExp(`${LEAD}\\b(today|tonight|tomorrow|tmrw|tmr)\\b`, "i"), (match) => {
     const word = match[1].toLowerCase();
     found.date = word === "today" || word === "tonight" ? today : addDays(today, 1);
-    if (word === "tonight") found.time = found.time ?? { hour: 19, minute: 0 };
+    if (word === "tonight" && !found.time) {
+      found.time = { hour: 19, minute: 0 };
+      evening = true;
+    }
   });
   take(new RegExp(`${LEAD}\\b(?:end\\s+of\\s+(?:the\\s+)?week|eow)\\b`, "i"), () => {
     found.date = addDays(today, (5 - weekday(today) + 7) % 7);
@@ -284,28 +310,30 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(
     new RegExp(`(?:(?<=\\b${DAY_WORD}\\s+)(?:at\\s+)?|\\bat\\s+)${NOT_MONEY}(\\d{1,2})(?=\\s*(?:$|[,;!?]|\\.(?!\\d)|and\\b|remind|(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b))`, "i"),
     (match) => {
-      if (found.time) return false;
+      if (found.time && !evening) return false;
       const parsed = bareHour(match[1]);
       if (!parsed) return false;
       found.time = parsed;
+      evening = false;
     },
   );
   take(
     new RegExp(`(?<![\\d£$€.,:/]\\s?)\\b${NOT_MONEY}(\\d{1,2})(?=\\s+(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b)`, "i"),
     (match) => {
       const before = text.slice(0, match.index);
-      if (found.time || COUNTED.test(before)) return false;
-      if (!new RegExp(`\\b${MEETING_CUE}\\s*$`, "i").test(before)) {
+      if ((found.time && !evening) || COUNTED.test(before)) return false;
+      if (!cuedNumber(before)) {
         if (MEETING_ANYWHERE.test(before)) ambiguous = true;
         return false;
       }
       const parsed = bareHour(match[1]);
       if (!parsed) return false;
       found.time = parsed;
+      evening = false;
     },
   );
   take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2})\\s*o['’]?clock\\b`, "i"), (match) => {
-    if (found.time) return false;
+    if (found.time && !evening) return false;
     const parsed = bareHour(match[1]);
     if (!parsed) return false;
     found.time = parsed;

@@ -5,7 +5,7 @@ import { actorForTask } from "@/lib/crm/workspaces";
 
 const MAX_IDS = 50;
 
-function sameOrigin(request: Request) {
+export function sameOrigin(request: Request) {
   const origin = request.headers.get("origin");
   if (!origin) return request.headers.get("sec-fetch-site") === "same-origin";
   let host: string;

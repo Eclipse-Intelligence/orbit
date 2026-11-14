@@ -474,8 +474,9 @@ export default function TaskPad({
   const [highlight, setHighlight] = useState(0);
   const [detected, setDetected] = useState<{ text: string; scope: string | null; value: PadDetection } | null>(null);
   const [ai, setAi] = useState<{ text: string; value: PadAiParse } | null>(null);
-  const [readingTexts, setReadingTexts] = useState<string[]>([]);
-  const reading = readingTexts.includes(text);
+  const [readingTexts, setReadingTexts] = useState<{ id: number; text: string }[]>([]);
+  const reading = readingTexts.some((entry) => entry.text === text);
+  const readIds = useRef(0);
   const aiReads = useRef(new Map<string, { promise: Promise<PadAiParse | null>; controller: AbortController }>());
   const answers = useRef(new Map<string, PadAiParse>());
   const latestRead = useRef<(value: string) => Promise<PadAiParse | null>>(async () => null);
@@ -554,7 +555,9 @@ export default function TaskPad({
     const known = aiReads.current.get(key);
     if (known) return known.promise.then(apply);
     const controller = new AbortController();
-    setReadingTexts((current) => [...current, value]);
+    readIds.current += 1;
+    const id = readIds.current;
+    setReadingTexts((current) => [...current, { id, text: value }]);
     const promise = fetch(AI_READ_PATH, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -565,10 +568,7 @@ export default function TaskPad({
       .catch(() => null)
       .then((body) => {
         if (aiReads.current.get(key)?.controller === controller) aiReads.current.delete(key);
-        setReadingTexts((current) => {
-          const index = current.indexOf(value);
-          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)];
-        });
+        setReadingTexts((current) => current.filter((entry) => entry.id !== id));
         if (body?.available === false) padAi.available = false;
         const found = controller.signal.aborted ? null : (body?.value ?? null);
         if (found) answers.current.set(key, found);
@@ -627,6 +627,14 @@ export default function TaskPad({
   useEffect(() => {
     latestRead.current = readWithAi;
   });
+
+  useEffect(() => {
+    const reads = aiReads.current;
+    return () => {
+      for (const read of reads.values()) read.controller.abort();
+      reads.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (!parsed.unsure || text.trim().length < 4 || padAi.available === false) return;

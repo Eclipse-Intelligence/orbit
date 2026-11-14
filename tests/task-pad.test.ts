@@ -4,7 +4,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { detectPadRecords, parsePadWithAi, readPadRequest, searchPadRecords } from "@/lib/crm/task-pad";
+import { detectPadRecords, parsePadWithAi, searchPadRecords } from "@/lib/crm/task-pad";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -126,32 +126,6 @@ describe("task pad parser", () => {
     assert.doesNotMatch(prompts[0], /09:00/);
   });
 
-  it("reads unsure wording through its own route, and says when no AI is set up without calling it", async () => {
-    const user = { type: "user" } as unknown as UserActor;
-    let calls = 0;
-    const fetchImpl: typeof fetch = async () => {
-      calls += 1;
-      const content = JSON.stringify({ title: "Call Sam", due: "2026-10-16T15:00", remindMinutes: null });
-      return Response.json({ model: "test", choices: [{ message: { content }, finish_reason: "stop" }] });
-    };
-    const previous = process.env.LLM_API_KEY;
-    try {
-      delete process.env.LLM_API_KEY;
-      assert.deepEqual(await readPadRequest(user, { text: "Call Sam at 3" }, { fetchImpl, now: FRIDAY_10AM }), { status: 200, body: { value: null, available: false } });
-      assert.equal(calls, 0);
-      process.env.LLM_API_KEY = "llm-test";
-      assert.equal((await readPadRequest(null, { text: "Call Sam at 3" }, { fetchImpl })).status, 401);
-      assert.deepEqual(await readPadRequest(user, { text: "Call Sam at 3" }, { fetchImpl, now: FRIDAY_10AM }), {
-        status: 200,
-        body: { value: { title: "Call Sam", due: "2026-10-16T15:00", remindMinutes: null }, available: true },
-      });
-      assert.equal(calls, 1);
-    } finally {
-      if (previous === undefined) delete process.env.LLM_API_KEY;
-      else process.env.LLM_API_KEY = previous;
-    }
-  });
-
   it("doesn't mistake names and words for dates", () => {
     for (const text of ["Send Monica the deck", "I sat down with Sunil", "Call Jane", "Fix the deck"]) {
       const result = parse(text);
@@ -233,7 +207,11 @@ describe("task pad parser", () => {
     assert.deepEqual(read("I sat down with Sunil"), plain("I sat down with Sunil"));
     assert.deepEqual(read("Call Sam tomorrow 9"), at("Call Sam", "2026-11-17T09:00", null, true));
     assert.deepEqual(read("Call Sam tomorrow at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam 9 tomorrow"), at("Call Sam 9", "2026-11-17", null, true));
+    assert.deepEqual(read("Call Sam 9 tomorrow"), at("Call Sam", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Call Sam Reid 9 tomorrow"), at("Call Sam Reid", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Catch up with Jane Doe 3 friday"), at("Catch up with Jane Doe", "2026-11-20T15:00", null, true));
+    assert.deepEqual(read("Call 7 tonight"), at("Call", "2026-11-16T19:00"));
+    assert.deepEqual(read("Call Sam tonight at 8"), at("Call Sam", "2026-11-16T20:00"));
     assert.deepEqual(read("Call 9 tomorrow"), at("Call", "2026-11-17T09:00", null, true));
     assert.deepEqual(read("Call Sam 9 o'clock tomorrow"), at("Call Sam", "2026-11-17T09:00", null, true));
     assert.deepEqual(read("Call Sam at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
@@ -243,7 +221,7 @@ describe("task pad parser", () => {
     assert.deepEqual(read("Call Sam at 3"), at("Call Sam", "2026-11-16T15:00", null, true));
     assert.deepEqual(read("Call Sam 1:30"), at("Call Sam", "2026-11-16T13:30", null, true));
     assert.deepEqual(read("Call Sam at 3 sat"), at("Call Sam", "2026-11-21T15:00", null, true));
-    assert.deepEqual(read("Lunch with Sam 1 friday"), at("Lunch with Sam 1", "2026-11-20", null, true));
+    assert.deepEqual(read("Lunch with Sam 1 friday"), at("Lunch with Sam", "2026-11-20T13:00", null, true));
     assert.deepEqual(read("Meet 3 friday"), at("Meet", "2026-11-20T15:00", null, true));
     assert.deepEqual(read("Meet in Room 12 Monday"), at("Meet in Room 12", "2026-11-23"));
     assert.deepEqual(read("Look at Room 12 Monday"), at("Look at Room 12", "2026-11-23"));

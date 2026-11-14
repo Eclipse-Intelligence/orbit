@@ -6,6 +6,7 @@ import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { snoozeTask } from "@/lib/crm/action-needed";
 import { relinkTask } from "@/lib/crm/task-act";
+import { PAD_READS_PER_WINDOW, readPadRequest } from "@/lib/crm/task-pad";
 import { createTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -95,6 +96,41 @@ describe("task UI fixes", () => {
     assert.equal(movedMessage({ dueHasTime: true, ownerName: "Mark" }, "2026-11-23T09:00:00Z", { dueAt: "2026-11-23T09:00:00.000Z", dueHasTime: true }, now), "Due Mon 23 Nov, 09:00.");
   });
 
+  it("reads unsure wording through its own same-origin route, within a rate limit, and skips the AI when none is set up", async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      calls += 1;
+      const content = JSON.stringify({ title: "Call Sam", due: "2026-10-16T15:00", remindMinutes: null });
+      return Response.json({ model: "test", choices: [{ message: { content }, finish_reason: "stop" }] });
+    };
+    const read = (headers: Record<string, string> = { origin: "http://orbit.test", "content-type": "application/json" }, text = "Call Sam at 3") =>
+      new Request("http://orbit.test/api/tasks/read", { method: "POST", headers: { host: "orbit.test", ...headers }, body: JSON.stringify({ text }) });
+    const now = new Date("2026-10-16T09:00:00Z");
+    const previous = process.env.LLM_API_KEY;
+    try {
+      delete process.env.LLM_API_KEY;
+      assert.deepEqual(await readPadRequest(mark, read(), { fetchImpl, now }), { status: 200, body: { value: null, available: false } });
+      assert.equal(calls, 0);
+      process.env.LLM_API_KEY = "llm-test";
+      assert.equal((await readPadRequest(null, read(), { fetchImpl })).status, 401);
+      assert.equal((await readPadRequest(mark, read({ origin: "https://other.example", "content-type": "application/json" }), { fetchImpl })).status, 403);
+      assert.equal((await readPadRequest(mark, read({ "sec-fetch-site": "cross-site", "content-type": "application/json" }), { fetchImpl })).status, 403);
+      assert.equal((await readPadRequest(mark, read({ origin: "http://orbit.test", "content-type": "text/plain" }), { fetchImpl })).status, 415);
+      assert.equal(calls, 0);
+      assert.deepEqual(await readPadRequest(mark, read(), { fetchImpl, now }), {
+        status: 200,
+        body: { value: { title: "Call Sam", due: "2026-10-16T15:00", remindMinutes: null }, available: true },
+      });
+      for (let index = 1; index < PAD_READS_PER_WINDOW; index += 1) await readPadRequest(mark, read(), { fetchImpl, now });
+      assert.equal(calls, PAD_READS_PER_WINDOW);
+      assert.deepEqual(await readPadRequest(mark, read(), { fetchImpl, now }), { status: 200, body: { value: null, available: true } }, "over the limit the card keeps its own guess, with no error");
+      assert.equal(calls, PAD_READS_PER_WINDOW);
+    } finally {
+      if (previous === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = previous;
+    }
+  });
+
   it("puts back the last saved timing when the latest edit fails, and ignores stale answers", () => {
     const base = { due: "2026-11-17", reminder: null, duration: 15 };
     const twoFailures = timingSaves(base);
@@ -127,6 +163,13 @@ describe("task UI fixes", () => {
     assert.deepEqual(quiet.succeed(saving, { due: "2026-11-18", reminder: null, duration: 15 }), { due: "2026-11-18", reminder: null, duration: 15 });
     const after = quiet.start();
     assert.deepEqual(quiet.fail(after), { due: "2026-11-18", reminder: null, duration: 15 }, "a successful save is newer than data read before it finished");
+
+    const overlap = timingSaves(base);
+    const older = overlap.start();
+    const newer = overlap.start();
+    overlap.observe({ due: "2026-11-21", reminder: null, duration: 15 });
+    assert.equal(overlap.succeed(older, { due: "2026-11-19", reminder: null, duration: 45 }), null);
+    assert.deepEqual(overlap.fail(newer), { due: "2026-11-19", reminder: null, duration: 45 }, "the latest successful save wins over data read before it");
   });
 
   it("shows a done task again once fresh data says it was reopened", () => {
