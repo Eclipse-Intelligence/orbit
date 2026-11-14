@@ -18,7 +18,10 @@ export function cleanSubject(subject: string | null | undefined) {
 
 function clipTitle(value: string) {
   const text = value.replace(/\s+/g, " ").replace(/\s*[\u2013\u2014]\s*/g, ", ").trim().replace(/[.\s]+$/, "");
-  return text.length > TITLE_MAX ? `${text.slice(0, TITLE_MAX - 1).trimEnd()}…` : text;
+  if (text.length <= TITLE_MAX) return text;
+  const cut = text.slice(0, TITLE_MAX);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > TITLE_MAX / 2 ? cut.slice(0, space) : cut.slice(0, TITLE_MAX - 1)).replace(/[\s,;:.]+$/, "")}…`;
 }
 
 export function subjectTitle(email: Pick<FollowUpEmail, "who" | "subject">) {
@@ -26,7 +29,9 @@ export function subjectTitle(email: Pick<FollowUpEmail, "who" | "subject">) {
   return clipTitle(topic ? `Reply to ${email.who}: ${topic}` : `Follow up with ${email.who}`);
 }
 
-export async function followUpTitle(email: FollowUpEmail, options: { fetchImpl?: typeof fetch; deadline?: number } = {}) {
+export const USER_WAIT_TITLE_MS = 2_500;
+
+export async function followUpTitle(email: FollowUpEmail, options: { fetchImpl?: typeof fetch; deadline?: number; timeoutMs?: number } = {}) {
   const fallback = subjectTitle(email);
   const text = (email.text ?? "").replace(/\s+/g, " ").trim().slice(0, TEXT_MAX);
   if (!process.env.LLM_API_KEY?.trim() || (!text && !cleanSubject(email.subject))) return fallback;
@@ -42,7 +47,7 @@ export async function followUpTitle(email: FollowUpEmail, options: { fetchImpl?:
       user: `Subject: ${cleanSubject(email.subject) || "(none)"}\n\n${text || "(no text)"}`,
       schema: TITLE,
       maxTokens: 200,
-      timeoutMs: TITLE_TIMEOUT_MS,
+      timeoutMs: Math.min(options.timeoutMs ?? TITLE_TIMEOUT_MS, TITLE_TIMEOUT_MS),
       attempts: 1,
       deadline: options.deadline,
       fetchImpl: options.fetchImpl,

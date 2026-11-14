@@ -1033,6 +1033,16 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     });
   }
 
+  function sendPrompt(text: string) {
+    if (busy || working) return;
+    pinned.current = true;
+    setMessages((current) => [
+      ...current,
+      { id: `local-${Date.now()}`, role: "user", content: text, tools: [], actions: [], sources: [], files: [], createdAt: new Date().toISOString() },
+    ]);
+    void run({ conversationId: conversation?.id ?? null, message: text, model: active.model, reasoning: active.reasoning, webSearch, files: [], page: pageSnapshot() });
+  }
+
   const resumeOnLoad = useEffectEvent((list: DisplayMessage[], id: string) => resumeWaiting(list, id));
 
   useEffect(() => {
@@ -1387,7 +1397,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               )}
               {offersCreateThose({ messages, busy, working: Boolean(working) }) && (
                 <div>
-                  <Button variant="secondary" size="sm" className="hit" onClick={() => send(CREATE_THOSE)}>
+                  <Button variant="secondary" size="sm" className="hit" onClick={() => sendPrompt(CREATE_THOSE)}>
                     {CREATE_THOSE}
                   </Button>
                 </div>

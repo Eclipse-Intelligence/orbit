@@ -15,9 +15,10 @@ import { latestBrief, runUnit } from "@/lib/learning/nightly";
 import { cleanSubject, followUpTitle, subjectTitle } from "@/lib/mail/follow-up-title";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { runWorkflowTick } from "@/lib/workflows/engine";
-import { createWorkflow, decideApproval, getRunSteps, listApprovals, setWorkflowStatus } from "@/lib/workflows/store";
+import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
+import type { WorkflowDefinition } from "@/lib/workflows/definition";
 import { dayWindow } from "@/lib/time";
-import { createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, resetDatabase } from "./helpers";
 
 const DAY = 86_400_000;
 
@@ -179,7 +180,7 @@ describe("tasks, proactive", () => {
     const { steps } = await getRunSteps(owner, approval.runId);
     assert.deepEqual(
       steps.filter((step) => step.status === "succeeded").map((step) => step.stepId),
-      ["ai_1", "filter_1", "approval_1", "create_task_1"],
+      ["filter_1", "ai_1", "filter_2", "approval_1", "create_task_1"],
     );
     await setWorkflowStatus(owner, workflow.id, "paused");
   });
@@ -196,6 +197,75 @@ describe("tasks, proactive", () => {
     assert.equal((await listApprovals(owner)).length, waiting);
     await setWorkflowStatus(owner, workflow.id, "paused");
   });
+
+  it("runs Next step only for the workflow owner's own completions, and skips unlinked tasks without a model call", async () => {
+    const workflow = await createWorkflow(owner, { template: "next-step" });
+    await setWorkflowStatus(owner, workflow.id, "active");
+    const agent = (await createAgent(owner.workspaceId, ["crm:read", "tasks:write"], "Closer")).actor;
+    const llm = scripted(() => ({ nextTask: "", dueOn: "", why: "" }));
+    const runs = async () => (await listRuns(owner, workflow.id)).length;
+
+    const samsTask = (await createTask(owner, { title: "Sam calls Gavin", contactId, ownerId: sam.userId })).body.task;
+    await completeTask(agent, samsTask.id);
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    assert.equal(await runs(), 0, "an agent completing a teammate's task");
+
+    const samsOwn = (await createTask(sam, { title: "Sam emails Gavin", contactId, ownerId: sam.userId })).body.task;
+    await completeTask(sam, samsOwn.id);
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    assert.equal(await runs(), 0, "a teammate completing their own task");
+
+    const mine = (await createTask(owner, { title: "Mark emails Gavin", contactId, ownerId: owner.userId })).body.task;
+    await completeTask(agent, mine.id);
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    assert.equal(await runs(), 1, "an agent completing the owner's task");
+    assert.equal(llm.seen.length, 1);
+
+    const unlinked = (await createTask(owner, { title: "Tidy the desk", ownerId: owner.userId })).body.task;
+    await completeTask(owner, unlinked.id);
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    assert.equal(await runs(), 2);
+    assert.equal(llm.seen.length, 1, "no model call for a task with no links");
+    await setWorkflowStatus(owner, workflow.id, "paused");
+  });
+
+  it("refuses Same as the task outside a task trigger", async () => {
+    const workflow = await createWorkflow(owner, { name: "Wrong link" });
+    const definition: WorkflowDefinition = {
+      version: 2,
+      trigger: { type: "manual", object: "company" },
+      triggerPosition: { x: 0, y: 0 },
+      nodes: [{ id: "create_task_1", type: "create_task", config: { title: "Call {{company.name}}", link: "task" }, position: { x: 300, y: 0 } }],
+      edges: [{ source: "trigger", handle: "out", target: "create_task_1" }],
+    };
+    await saveWorkflow(owner, workflow.id, { definition });
+    await setWorkflowStatus(owner, workflow.id, "active");
+    const started = await startRun(owner, workflow.id, { test: false, record: { type: "company", id: companyId } });
+    assert.equal(started.status, "failed");
+    const { steps } = await getRunSteps(owner, started.runId);
+    assert.match(JSON.stringify(steps), /Same as the task only works when a task is completed/);
+    assert.equal((await listTasks(owner, { companyId })).data.some((task) => task.title === "Call Hooli"), false);
+  });
+
+  it("keeps the tasks sections when the model fails, and offers Create those only on today's brief", async () => {
+    await getAdminPool().query("update crm.tasks set archived_at = now() where company_id = $1 and archived_at is null", [companyId]);
+    const failing: typeof fetch = async () => new Response("down", { status: 400 });
+    const result = await runUnit(owner, "brief", { deadline: Date.now() + 120_000, fetchImpl: failing, trigger: "manual", rebuildBrief: true });
+    assert.equal(result.brief, true, JSON.stringify(result));
+    const body = (await latestBrief(owner))?.body ?? "";
+    assert.match(body, /^### Due today\n/);
+    assert.match(body, /### Opportunities gone quiet\n- \[Hooli renewal\]/);
+    assert.match(body, /Suggested task: Check in with Hooli$/);
+
+    const admin = getAdminPool();
+    const brief = (await admin.query<{ id: string }>("select id from crm.daily_briefs where user_id = $1 and workspace_id = $2", [owner.userId, owner.workspaceId])).rows[0];
+    const opened = await openBrief(owner, brief.id, { model: "claude-sonnet-5-5", reasoning: "low" });
+    assert.equal(opened.messages[0].suggestsTasks, true);
+    await admin.query("update crm.daily_briefs set day = day - 1 where id = $1", [brief.id]);
+    const later = await getConversation(owner, opened.conversation.id);
+    assert.equal(later.messages[0].suggestsTasks, undefined);
+    assert.equal(offersCreateThose({ messages: later.messages, busy: false, working: false }), false);
+  });
 });
 
 describe("follow-up titles from the email", () => {
@@ -203,6 +273,9 @@ describe("follow-up titles from the email", () => {
     assert.equal(cleanSubject("RE: Fwd: [EXTERNAL] Q1 [pricing]"), "Q1 pricing");
     assert.equal(subjectTitle({ who: "Ada Lovell", subject: "Re: Pilot plan." }), "Reply to Ada Lovell: Pilot plan");
     assert.equal(subjectTitle({ who: "Ada Lovell", subject: "  Re:  " }), "Follow up with Ada Lovell");
+    const long = subjectTitle({ who: "Ada Lovell", subject: `Quarterly ${"planning ".repeat(20)}review` });
+    assert.ok(long.length <= 120, long);
+    assert.match(long, / planning…$/);
   });
 
   it("asks the model for a title from the email and keeps the subject one when it fails", async () => {

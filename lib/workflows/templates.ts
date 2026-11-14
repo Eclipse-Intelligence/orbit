@@ -59,6 +59,19 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
       { type: "task_completed", mine: true },
       [
         {
+          id: "filter_1",
+          type: "filter",
+          label: "Linked to someone?",
+          config: {
+            match: "any",
+            conditions: [
+              { left: "{{task.contactId}}", op: "is_not_empty" },
+              { left: "{{task.companyId}}", op: "is_not_empty" },
+              { left: "{{task.opportunityId}}", op: "is_not_empty" },
+            ],
+          },
+        },
+        {
           id: "ai_1",
           type: "ai",
           label: "Suggest the next step",
@@ -75,7 +88,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
           },
         },
         {
-          id: "filter_1",
+          id: "filter_2",
           type: "filter",
           label: "Anything to do?",
           config: { match: "all", conditions: [{ left: "{{steps.ai_1.nextTask}}", op: "is_not_empty" }] },
@@ -102,9 +115,10 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
         },
       ],
       [
-        { source: "trigger", handle: "out", target: "ai_1" },
-        { source: "ai_1", handle: "out", target: "filter_1" },
-        { source: "filter_1", handle: "out", target: "approval_1" },
+        { source: "trigger", handle: "out", target: "filter_1" },
+        { source: "filter_1", handle: "out", target: "ai_1" },
+        { source: "ai_1", handle: "out", target: "filter_2" },
+        { source: "filter_2", handle: "out", target: "approval_1" },
         { source: "approval_1", handle: "out", target: "create_task_1" },
       ],
     ),

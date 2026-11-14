@@ -43,6 +43,7 @@ const MARKET_FINAL_HOUR = 3;
 const BRIEF_STALLED_DAYS = 7;
 const BRIEF_STALLED_LIMIT = 8;
 const BRIEF_TASK_LIMIT = 10;
+const BRIEF_MAX_CHARS = 8_000;
 const BRIEF_RESEARCH_LIMIT = 20;
 const BRIEF_RESEARCH_CHARS = 8_000;
 const TIDY_LIMITS: Record<MemoryScope, number> = { personal: 100, business: 150, market: 150 };
@@ -489,6 +490,13 @@ async function dueTasksInDb(db: Db, actor: UserActor, now: Date) {
   return { tasks: result.rows, total: result.rows[0]?.total ?? 0, start: window.start };
 }
 
+function wholeLines(text: string, max: number) {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const end = cut.lastIndexOf("\n");
+  return (end > 0 ? cut.slice(0, end) : cut).trimEnd();
+}
+
 function timeOfDay(value: Date) {
   return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Europe/London" }).format(value);
 }
@@ -538,8 +546,14 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
   });
   const needsWriting = gathered.notes.length > 0 || gathered.learned.length > 0 || gathered.stalled.length > 0 || research.length > 0;
   if (!needsWriting && !gathered.due.tasks.length) return { skipped: "Nothing new for a brief." };
-  const written = needsWriting ? await writtenBrief(actor, { ...gathered, research }, options) : { brief: "", suggestions: new Map<string, string>() };
-  const body = [dueSection(gathered.due), quietSection(gathered.stalled, written.suggestions), written.brief].filter(Boolean).join("\n\n").slice(0, 8_000);
+  const written = needsWriting
+    ? await writtenBrief(actor, { ...gathered, research }, options).catch((error) => {
+        if (!gathered.due.tasks.length && !gathered.stalled.length) throw error;
+        console.error("Writing the brief failed", error instanceof Error ? error.message : error);
+        return { brief: "", suggestions: new Map<string, string>() };
+      })
+    : { brief: "", suggestions: new Map<string, string>() };
+  const body = wholeLines([dueSection(gathered.due), quietSection(gathered.stalled, written.suggestions), written.brief].filter(Boolean).join("\n\n"), BRIEF_MAX_CHARS);
   if (!body) return { skipped: "The brief came back empty." };
   await withActor(actor, (db) =>
     db.query(

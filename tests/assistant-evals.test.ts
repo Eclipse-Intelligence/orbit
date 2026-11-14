@@ -334,6 +334,34 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(failed(wrong), ["proposes create_task"]);
   });
 
+  it("turns Create those under a morning brief into one create_task per suggestion", async () => {
+    let seen = "";
+    const created = (world: World) => [
+      { name: "create_task", args: { title: "Call Bram Kettle to ask where the retainer stands", opportunityId: world.id("deal:Larkspur content retainer"), dueDate: londonDay({ days: 0 }) } },
+      { name: "create_task", args: { title: "Email Odile Marsh the review outline", opportunityId: world.id("deal:Fernhill content review"), dueDate: londonDay({ days: 0 }) } },
+    ];
+    const result = await runOnce(
+      byId("create-those-from-brief"),
+      settings(
+        scripted([
+          ({ body }) => {
+            seen = JSON.stringify(body.messages);
+            return { calls: [{ name: "list_tasks", args: { mine: true } }] };
+          },
+          ({ world }) => ({ calls: created(world) }),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(seen, /Orbit wrote the user's morning brief overnight/);
+    assert.match(seen, /skip any opportunity that already has an open task/);
+    assert.match(seen, /call create_task once for each remaining suggestion, all in one round/);
+    assert.deepEqual(result.cards.map((item) => item.name), ["create_task", "create_task"]);
+
+    const one = await runOnce(byId("create-those-from-brief"), settings(scripted([({ world }) => ({ calls: created(world).slice(0, 1) })])));
+    assert.deepEqual(failed(one), ["proposes exactly create_task, create_task", "creates the Fernhill task for today"]);
+  });
+
   it("shows the open task and passes a call outcome proposed as three cards in one turn", async () => {
     const outcome = (next: Record<string, unknown>, complete = true): Step => ({ world }) => ({
       content: "I'll log the call, close the task and set the next one.",

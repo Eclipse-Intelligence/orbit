@@ -52,7 +52,7 @@ import { actorFor, companionOfflineMessage, companionOnline, listCompanions, typ
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
-import { BRIEF_MESSAGE_MODEL, latestBrief } from "@/lib/learning/nightly";
+import { BRIEF_MESSAGE_MODEL, latestBrief, londonDay } from "@/lib/learning/nightly";
 import { CREATE_THOSE, QUIET_HEADING, SUGGESTED_TASK, suggestsTasks } from "@/lib/learning/brief-format";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
@@ -420,9 +420,14 @@ export async function getConversation(actor: UserActor, id: string) {
     const shown = messages
       .filter((row) => row.role !== "tool")
       .filter((row) => row.role === "user" || row.content || (row.tool_calls ?? []).length > 0 || (row.actions ?? []).length > 0);
+    const briefToday = shown.some((row) => row.model === BRIEF_MESSAGE_MODEL)
+      ? (await db.query("select 1 from crm.daily_briefs where conversation_id = $1 and day = $2::date", [id, londonDay(new Date())])).rowCount !== 0
+      : false;
     return {
       conversation: summary(conversation),
-      messages: [...shown.filter((row) => row.steering !== "waiting"), ...shown.filter((row) => row.steering === "waiting")].map(display),
+      messages: [...shown.filter((row) => row.steering !== "waiting"), ...shown.filter((row) => row.steering === "waiting")]
+        .map(display)
+        .map((message) => (message.suggestsTasks && !briefToday ? { ...message, suggestsTasks: undefined } : message)),
       working: workingState(messages, conversation, job.rows[0] ?? null),
     };
   });
@@ -534,7 +539,7 @@ export function history(all: MessageRow[], budget = HISTORY_BUDGET, context = ""
 
 const BRIEF_PREFACE =
   "(Orbit wrote the user's morning brief overnight and opened this conversation with it. The next message is that brief, not something the user wrote. " +
-  `Each line under ${QUIET_HEADING} ends with "${SUGGESTED_TASK}" and a task. When the user says "${CREATE_THOSE}" or asks for those tasks, call create_task once for each suggested task, all in one round so each gets its own approval card: the suggested text as title, the id from the opportunity's /opportunities/<id> link as opportunityId, and today as dueDate unless the user says otherwise. Don't search first.)`;
+  `Each line under ${QUIET_HEADING} ends with "${SUGGESTED_TASK}" and a task. When the user says "${CREATE_THOSE}" or asks for those tasks, first call list_tasks once with mine true and skip any opportunity that already has an open task. Then call create_task once for each remaining suggestion, all in one round so each gets its own approval card: the suggested text as title, the id from the opportunity's /opportunities/<id> link as opportunityId, and today as dueDate unless the user says otherwise. Don't search for the records.)`;
 
 export function briefTitle(day: string) {
   const date = new Date(`${day}T12:00:00Z`);

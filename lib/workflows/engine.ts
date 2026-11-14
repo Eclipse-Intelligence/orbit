@@ -36,7 +36,6 @@ import { mentionsIn, splitMentions } from "@/lib/mentions";
 import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX } from "@/lib/chat/types";
 import { appTimeZone } from "@/lib/time";
 import { dayKeyAt, dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
-import { directTaskSql } from "@/lib/crm/task-access";
 import { splitDescription } from "@/lib/crm/task-description";
 import {
   nextNode,
@@ -312,6 +311,7 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
   } else if (trigger.type === "task_completed") {
     const task = event.entityId ? await maybe(() => getTask(actor, event.entityId!, { direct: true })) : null;
     if (!task) return { vars, matches: false };
+    if ("mine" in trigger && trigger.mine && !event.actorUserId && !ownTask(task, actor.userId)) return { vars, matches: false };
     vars.task = {
       id: task.id,
       title: task.title,
@@ -344,16 +344,21 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
   return { vars, matches };
 }
 
+function ownTask(task: { ownerId: string | null; createdByUserId: string | null }, userId: string) {
+  return task.ownerId === userId || (task.ownerId === null && task.createdByUserId === userId);
+}
+
 async function openTasksBeside(actor: UserActor, task: { id: string; companyId: string | null; contactId: string | null; opportunityId: string | null }) {
   if (!task.companyId && !task.contactId && !task.opportunityId) return [];
   return withActor(actor, async (db) => {
     const result = await db.query<{ title: string; due_at: Date | null }>(
       `select t.title, t.due_at from crm.tasks t
-       where t.workspace_id = $1 and t.id <> $2 and t.completed_at is null and t.archived_at is null and ${directTaskSql("t")}
+       where t.workspace_id = $1 and t.id <> $2 and t.completed_at is null and t.archived_at is null
+         and (t.owner_id = $6 or (t.owner_id is null and t.created_by_user_id = $6))
          and (t.company_id = $3 or t.contact_id = $4 or t.opportunity_id = $5)
        order by t.due_at asc nulls last, t.created_at desc
        limit ${OPEN_TASKS_BESIDE}`,
-      [actor.workspaceId, task.id, task.companyId, task.contactId, task.opportunityId],
+      [actor.workspaceId, task.id, task.companyId, task.contactId, task.opportunityId, actor.userId],
     );
     return result.rows.map((row) => (row.due_at ? `${row.title} (due ${dayKeyAt(row.due_at)})` : row.title));
   });
@@ -912,12 +917,13 @@ async function chatStep(ctx: Ctx, step: Step): Promise<StepResult> {
 
 function createTaskLinks(linkTo: string, vars: Vars) {
   const task = vars.task as { companyId?: string | null; contactId?: string | null; opportunityId?: string | null } | undefined;
-  if (linkTo === "task" && task) {
+  if (linkTo === "task") {
+    if (!task) throw new CrmError("invalid_input", "Same as the task only works when a task is completed. Choose another link.", 400);
     return { companyId: task.companyId ?? null, contactId: task.contactId ?? null, opportunityId: task.opportunityId ?? null };
   }
   const companyId = linkTo !== "none" ? ((vars.company as { id?: string } | undefined)?.id ?? null) : null;
-  const contactId = linkTo === "contact" || linkTo === "task" ? ((vars.contact as { id?: string } | undefined)?.id ?? null) : null;
-  if (linkTo === "contact" || linkTo === "task") return contactId ? { contactId } : companyId ? { companyId, contactId: null } : {};
+  const contactId = linkTo === "contact" ? ((vars.contact as { id?: string } | undefined)?.id ?? null) : null;
+  if (linkTo === "contact") return contactId ? { contactId } : companyId ? { companyId, contactId: null } : {};
   return { companyId: linkTo === "none" ? null : companyId, contactId: null, opportunityId: null };
 }
 

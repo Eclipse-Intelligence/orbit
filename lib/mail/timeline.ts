@@ -210,7 +210,7 @@ async function sendFollowUpsToClickUp(actor: UserActor, taskIds: string[]) {
 
 export async function fileMailOnTimeline(
   actor: UserActor,
-  options: { days?: number; limit?: number; now?: number; filter?: MailFilter; actors?: UserActor[]; fetchImpl?: typeof fetch } = {},
+  options: { days?: number; limit?: number; now?: number; filter?: MailFilter; actors?: UserActor[]; fetchImpl?: typeof fetch; deadline?: number; titleTimeoutMs?: number } = {},
 ) {
   const now = options.now ?? Date.now();
   const actors = options.actors ?? (await workspaceActors(actor));
@@ -251,9 +251,6 @@ export async function fileMailOnTimeline(
     }
     try {
       const followUp = await needsFollowUp(target, row, at);
-      const title = followUp
-        ? await followUpTitle({ who: await withActor(target, (db) => followUpWho(db, row)), subject: row.subject, text: bodyOf(row) }, { fetchImpl: options.fetchImpl })
-        : null;
       const outcome = await withActor(target, async (db) => {
         const saved = await createEmailActivityOnce(
           db,
@@ -278,11 +275,17 @@ export async function fileMailOnTimeline(
           { mailMessageId: row.message_id, internetMessageId: row.internet_message_id },
           { operation: "file_mail", source: "microsoft", catchUp: now - at.getTime() > FRESH_MS },
         );
-        return { created: saved.created, taskId: saved.created && title ? await suggestFollowUp(db, target, row, title) : null };
+        return { created: saved.created, who: saved.created && followUp ? await followUpWho(db, row) : null };
       });
       if (!outcome.created) continue;
       filed += 1;
-      if (outcome.taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), outcome.taskId]);
+      if (outcome.who === null) continue;
+      const title = await followUpTitle(
+        { who: outcome.who, subject: row.subject, text: bodyOf(row) },
+        { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs },
+      );
+      const taskId = await withActor(target, (db) => suggestFollowUp(db, target, row, title));
+      if (taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), taskId]);
     } catch (error) {
       console.error("Filing an email on the timeline failed", error);
     }
