@@ -401,6 +401,11 @@ async function workspaceOwner(db: Db, workspaceId: string) {
   return result.rows[0]?.user_id ?? null;
 }
 
+async function ownerForAgent(db: Db, actor: Actor, current: TaskRow) {
+  if (actor.type !== "agent" || current.owner_id || current.created_by_agent_id !== actor.agentId) return null;
+  return workspaceOwner(db, actor.workspaceId);
+}
+
 async function assertAssignee(db: Db, workspaceId: string, ownerId: string | null | undefined) {
   try {
     await assertOwner(db, workspaceId, ownerId);
@@ -552,7 +557,11 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   if (current.archived_at && !options.restoring) throw notFound("task");
-  if (actor.type === "agent" && (write.ownerId === null || (write.ownerId === undefined && !current.owner_id))) {
+  if (
+    actor.type === "agent" &&
+    (write.ownerId === null || (write.ownerId === undefined && !current.owner_id)) &&
+    canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })
+  ) {
     write.ownerId = await workspaceOwner(db, actor.workspaceId);
   }
   await assertAssignee(db, actor.workspaceId, write.ownerId);
@@ -1011,11 +1020,12 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+  const keeper = await ownerForAgent(db, actor, current);
   const archived = await db.query(
-    `update crm.tasks set archived_at = now(),
+    `update crm.tasks set archived_at = now(), owner_id = coalesce(owner_id, $3::uuid),
        clickup_sync = case when $2::boolean then clickup_sync || '{"goneFromClickUp": true}'::jsonb else clickup_sync end
      where id = $1 and archived_at is null`,
-    [id, Boolean(options.goneFromClickUp)],
+    [id, Boolean(options.goneFromClickUp), keeper],
   );
   if ((archived.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
@@ -1023,8 +1033,8 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
   await recordAudit(db, actor, "task.archived", "task", task.id, provenance, {
-    before: { archivedAt: null },
-    after: { archivedAt: task.archivedAt },
+    before: { archivedAt: null, ...(keeper ? { ownerId: null } : {}) },
+    after: { archivedAt: task.archivedAt, ...(keeper ? { ownerId: task.ownerId } : {}) },
   });
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
 }
@@ -1033,15 +1043,16 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (!current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+  const keeper = await ownerForAgent(db, actor, current);
   const restored = await db.query(
-    `update crm.tasks set archived_at = null,
+    `update crm.tasks set archived_at = null, owner_id = coalesce(owner_id, $2::uuid),
        clickup_task_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_task_id end,
        clickup_list_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_list_id end,
        clickup_url = case when clickup_sync ? 'goneFromClickUp' then null else clickup_url end,
        clickup_error = case when clickup_sync ? 'goneFromClickUp' then null else clickup_error end,
        clickup_sync = case when clickup_sync ? 'goneFromClickUp' then '{}'::jsonb else clickup_sync end
      where id = $1 and archived_at is not null`,
-    [id],
+    [id, keeper],
   );
   if ((restored.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
@@ -1050,9 +1061,9 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   const task = mapTask(saved);
   const unlinked = current.clickup_task_id !== null && saved.clickup_task_id === null;
   await recordAudit(db, actor, "task.updated", "task", task.id, provenance, {
-    fields: ["archivedAt"],
-    before: { archivedAt: iso(current.archived_at) },
-    after: { archivedAt: null },
+    fields: keeper ? ["archivedAt", "ownerId"] : ["archivedAt"],
+    before: { archivedAt: iso(current.archived_at), ...(keeper ? { ownerId: null } : {}) },
+    after: { archivedAt: null, ...(keeper ? { ownerId: task.ownerId } : {}) },
     ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };

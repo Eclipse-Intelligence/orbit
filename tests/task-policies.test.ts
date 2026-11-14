@@ -9,7 +9,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { countTaskViews, getDueActions } from "@/lib/crm/relationships";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
 import { readPlanner } from "@/lib/crm/task-blocks";
-import { addTaskParticipantsInDb, completeTask, createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { addTaskParticipantsInDb, archiveTaskInDb, completeTask, createTask, getTask, listTasks, unarchiveTaskInDb, updateTask } from "@/lib/crm/tasks";
 import { removeMember } from "@/lib/crm/team";
 import { createWebhook } from "@/lib/crm/webhooks";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
@@ -335,6 +335,28 @@ describe("agents and webhooks under task privacy", () => {
     await admin().query("update crm.tasks set owner_id = null where id = $1", [task.id]);
     const reopened = (await updateTask(agent, task.id, { completed: false })).body.task;
     assert.equal(reopened.ownerId, mark.userId);
+  });
+
+  it("gives the workspace owner an agent's ownerless task when the agent archives or unarchives it", async () => {
+    const task = (await createTask(agent, { title: "Agent task to archive" })).body.task;
+    await admin().query("update crm.tasks set owner_id = null where id = $1", [task.id]);
+    const archived = await withActor(agent, (db) => archiveTaskInDb(db, agent, task.id, { operation: "archive_task" }));
+    assert.equal(archived.task.ownerId, mark.userId);
+    await admin().query("update crm.tasks set owner_id = null where id = $1", [task.id]);
+    const restored = await withActor(agent, (db) => unarchiveTaskInDb(db, agent, task.id, { operation: "unarchive_task" }));
+    assert.equal(restored.task.ownerId, mark.userId);
+    assert.equal(restored.task.archivedAt, null);
+  });
+
+  it("keeps a title-only change by another agent a plain not found, never a reassign error", async () => {
+    const task = (await createTask(agent, { title: "First agent's task" })).body.task;
+    await admin().query("update crm.tasks set owner_id = null where id = $1", [task.id]);
+    const other = (await createAgent(mark.workspaceId, [...SCOPES].filter((scope) => scope !== "admin"), "Other agent")).actor;
+    await assert.rejects(updateTask(other, task.id, { title: "Renamed by the other agent" }), (error: unknown) => {
+      return error instanceof CrmError && error.status === 404 && !/reassign/i.test(error.message);
+    });
+    const owner = await admin().query<{ owner_id: string | null; title: string }>("select owner_id, title from crm.tasks where id = $1", [task.id]);
+    assert.deepEqual(owner.rows[0], { owner_id: null, title: "First agent's task" });
   });
 
   it("sends an endpoint subscribed to every event only the tasks its creator can see", async () => {
