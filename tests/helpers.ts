@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { after, afterEach, before, beforeEach } from "node:test";
 import { applyMigrationSql } from "@/lib/db/migration-sql";
+import type { Pool } from "pg";
 import { getAdminPool, getPool, takeNestedConnections } from "@/lib/db/pool";
 import { scopesForRole, type Scope } from "@/lib/crm/scopes";
 import { generateAgentToken } from "@/lib/crm/tokens";
@@ -41,29 +42,34 @@ function restoreEnv(name: string, value: string | undefined) {
 
 export function useServerlessPool() {
   const saved = { vercel: process.env.VERCEL, strict: process.env.ORBIT_STRICT_POOL };
+  let serverless: Pool | null = null;
   let nestingAllowed = false;
   before(async () => {
     await getPool().end();
     process.env.VERCEL = "1";
     process.env.ORBIT_STRICT_POOL = "1";
-    if (getPool().options.max !== 2) throw new Error("The serverless pool should hold two connections.");
+    serverless = getPool();
+    if (serverless.options.max !== 2) throw new Error("The serverless pool should hold two connections.");
   });
   beforeEach(() => {
     nestingAllowed = false;
+    process.env.ORBIT_STRICT_POOL = "1";
     takeNestedConnections();
   });
   afterEach(() => {
     const nested = takeNestedConnections();
+    process.env.ORBIT_STRICT_POOL = "1";
     if (!nestingAllowed) assert.deepEqual(nested, [], "A transaction started a second pool connection.");
   });
   after(async () => {
-    await getPool().end();
+    if (serverless && !serverless.ending && !serverless.ended) await serverless.end();
     restoreEnv("VERCEL", saved.vercel);
     restoreEnv("ORBIT_STRICT_POOL", saved.strict);
   });
   return {
     allowNestedConnections() {
       nestingAllowed = true;
+      process.env.ORBIT_STRICT_POOL = "0";
     },
   };
 }

@@ -5,7 +5,8 @@ import { createContact } from "@/lib/crm/contacts";
 import { recordCommunication } from "@/lib/crm/communications";
 import { fileInboundMessages, saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
-import { getAdminPool } from "@/lib/db/pool";
+import { withActor } from "@/lib/crm/context";
+import { getAdminPool, query } from "@/lib/db/pool";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -40,7 +41,6 @@ function heldTitleModel(title: string) {
 }
 
 describe("follow-up tasks on the serverless pool", () => {
-  useServerlessPool();
   let owner: UserActor;
   let sourceId: string;
   let inboxFolder: string;
@@ -84,6 +84,14 @@ describe("follow-up tasks on the serverless pool", () => {
   after(async () => {
     delete process.env.LLM_API_KEY;
     await getAdminPool().end();
+  });
+
+  const pool = useServerlessPool();
+
+  it("lets a test nest a connection on purpose", async () => {
+    pool.allowNestedConnections();
+    const nested = await withActor(owner, async () => (await query<{ one: number }>("select 1 as one")).rows[0].one);
+    assert.equal(nested, 1);
   });
 
   it("logs two emails at once on two connections and adds one follow-up", async () => {

@@ -74,7 +74,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 - Before every commit: `npx tsc --noEmit`, `npx eslint .` and the test files related to the change (see `docs/working-notes.md` for the command). Run the full `npm test` (10 to 15 minutes, needs the local `crm_test` database, see Test database in `README.md`) when a change is broad.
 - Add tests in `tests/*.test.ts` for new behaviour in `lib/`. Fake outside APIs by passing `fetchImpl`, never by calling real services.
-- Call `useServerlessPool()` from `tests/helpers.ts` in a `describe` to run it on Vercel's two-connection pool: any `query()`, `withActor` or `appTransaction` started inside another transaction fails the test, even when a `catch` swallowed it, unless the test calls `allowNestedConnections()` because it nests on purpose. `withStrictPool(fn)` checks a single call the same way.
+- Call `useServerlessPool()` from `tests/helpers.ts` in a `describe`, after the suite's own hooks, to run it on Vercel's two-connection pool: any `query()`, `withActor` or `appTransaction` started inside another transaction fails the test, even when a `catch` swallowed it. A test that nests on purpose calls `allowNestedConnections()` first, which turns the check off until that test ends. `withStrictPool(fn)` checks a single call the same way.
 - After a change to the assistant's prompt, tools or models, check it with the offline harness in `tests/assistant-evals.test.ts`. Real-model runs (`npm run eval`) aren't part of the workflow. Add a task to `evals/tasks` when a chat shows a new kind of request or failure.
 - For UI changes, run the production build locally, check the page in a browser at desktop and mobile sizes, and run `npm run sweep` for the phone and tablet sweep.
 
