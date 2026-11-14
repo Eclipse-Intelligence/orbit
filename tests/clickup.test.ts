@@ -200,6 +200,7 @@ function clickup(fake: Fake) {
         description: body.description ?? "",
         text_content: body.description ?? "",
         status: statusOf(list, body.status ?? list.statuses[0].status),
+        date_created: String(Date.now()),
         date_updated: String(Date.now()),
         due_date: body.due_date === undefined || body.due_date === null ? null : String(body.due_date),
         url: `https://app.clickup.com/t/${id}`,
@@ -753,6 +754,37 @@ describe("clickup sync", () => {
     assert.equal(poll.imported, 0);
     const copies = await getAdminPool().query("select count(*)::int as total from crm.tasks where title = 'Flaky push'");
     assert.equal(copies.rows[0].total, 1);
+  });
+
+  it("links the ClickUp task instead of making a second one when ClickUp's reply to a create is lost", async () => {
+    const lost: typeof fetch = async (input, init) => {
+      const response = await fetchImpl(input, init);
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return response;
+    };
+    const remoteCopies = (name: string) => [...fake.tasks.values()].filter((task) => task.name === name);
+    const orbitCopies = async (name: string) =>
+      (await getAdminPool().query<{ id: string; clickup_task_id: string | null }>("select id, clickup_task_id from crm.tasks where title = $1", [name])).rows;
+
+    for (const [name, listId] of [
+      ["Lost reply on a watched list", RELATIONSHIPS],
+      ["Lost reply on another list", TODOIST],
+    ] as const) {
+      const created = await createTaskWithClickUp(owner, { title: name, contactId: janeId }, listId, { fetchImpl: lost });
+      assert.ok(created.clickupError);
+      assert.equal(remoteCopies(name).length, 1);
+      await syncClickUp({ actor: owner, force: true, fetchImpl });
+      await syncClickUp({ actor: owner, force: true, fetchImpl });
+      assert.equal(remoteCopies(name).length, 1, name);
+      const rows = await orbitCopies(name);
+      assert.equal(rows.length, 1, name);
+      assert.equal(rows[0].clickup_task_id, remoteCopies(name)[0].id);
+      const row = await taskRow(rows[0].id);
+      assert.equal(row.clickup_error, null);
+      assert.equal(row.clickup_sync.unconfirmed, undefined);
+    }
   });
 
   it("sends follow-up tasks suggested after an email to the default list", async () => {

@@ -43,6 +43,7 @@ export type ClickUpTask = {
   markdown_description?: string | null;
   text_content?: string | null;
   status: { status: string; type: string } | null;
+  date_created?: string | null;
   date_updated: string | null;
   due_date: string | null;
   due_date_time?: boolean | null;
