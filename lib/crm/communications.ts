@@ -1,4 +1,4 @@
-import { withActor } from "@/lib/crm/context";
+import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
 import { createActivityInDb } from "@/lib/crm/activities";
 import { readCompanyInDb } from "@/lib/crm/companies";
 import { readContactInDb } from "@/lib/crm/contacts";
@@ -8,7 +8,7 @@ import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Activity, Actor, Company, Contact, Task } from "@/lib/crm/types";
-import { query } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 import { followUpTitle, USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
 
 const RECENT_MS = 48 * 60 * 60 * 1000;
@@ -108,9 +108,22 @@ export function isRecent(at: string | null | undefined) {
   return age <= RECENT_MS && age >= -5 * 60 * 1000;
 }
 
-export async function companyHasOpenTask(workspaceId: string, companyId: string) {
-  const result = await query<{ open: boolean }>("select private.company_has_open_task($1, $2) as open", [workspaceId, companyId]);
+export async function companyHasOpenTask(workspaceId: string, companyId: string, appDb?: Db) {
+  const sql = "select private.company_has_open_task($1, $2) as open";
+  const result = appDb ? await appDb.query<{ open: boolean }>(sql, [workspaceId, companyId]) : await query<{ open: boolean }>(sql, [workspaceId, companyId]);
   return result.rows[0]?.open === true;
+}
+
+export async function createFollowUpUnlessOpen<T>(actor: Actor, companyId: string, create: (db: Db) => Promise<T | null>): Promise<T | null> {
+  let open = false;
+  return withActorAfterAppStep(
+    actor,
+    async (db) => {
+      await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`follow-up|${actor.workspaceId}|${companyId}`]);
+      open = await companyHasOpenTask(actor.workspaceId, companyId, db);
+    },
+    async (db) => (open ? null : create(db)),
+  );
 }
 
 type CommunicationInput = {
@@ -200,14 +213,14 @@ export async function recordCommunication(
 
     const company = companyId ? await readCompanyInDb(db, companyId, actor.workspaceId) : null;
     const followUp =
-      company && isRecent(activity.occurredAt) && hasScope(actor.scopes, "tasks:write") && !(await companyHasOpenTask(actor.workspaceId, company.id))
+      company && isRecent(activity.occurredAt) && hasScope(actor.scopes, "tasks:write")
         ? { who: contacts.find((contact) => contact.id === contactId)?.name || company.name, companyId: company.id, contactId }
         : null;
     return { activity, company, contacts, followUp };
   });
 
   const { followUp, ...filed } = recorded;
-  if (!followUp) return { ...filed, task: null, suggested: false };
+  if (!followUp || (await companyHasOpenTask(actor.workspaceId, followUp.companyId))) return { ...filed, task: null, suggested: false };
   const task = await suggestFollowUp(actor, input.kind, followUp, { title, body }, options);
   if (task && actor.type === "user") {
     try {
@@ -236,10 +249,8 @@ async function suggestFollowUp(
           )
         : `Follow up with ${followUp.who}`;
     const due = await scheduleTaskDue(actor, { days: 2 });
-    return await withActor(actor, async (db) => {
-      await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`follow-up|${actor.workspaceId}|${followUp.companyId}`]);
-      if (await companyHasOpenTask(actor.workspaceId, followUp.companyId)) return null;
-      return createTaskInDb(
+    return await createFollowUpUnlessOpen(actor, followUp.companyId, (db) =>
+      createTaskInDb(
         db,
         actor,
         {
@@ -251,8 +262,8 @@ async function suggestFollowUp(
           priority: "normal",
         },
         { operation: "suggest_follow_up", source: "communication" },
-      );
-    });
+      ),
+    );
   } catch (error) {
     console.error("Could not suggest a follow-up task", error);
     return null;

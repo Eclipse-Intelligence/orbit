@@ -32,6 +32,15 @@ export async function resetDatabase() {
   await admin.query(statement.rows[0].sql);
 }
 
+export async function useServerlessPool() {
+  await getPool().end();
+  process.env.VERCEL = "1";
+  process.env.ORBIT_STRICT_POOL = "1";
+  const pool = getPool();
+  if (pool.options.max !== 2) throw new Error("The serverless pool should hold two connections.");
+  return pool;
+}
+
 export async function createUser(email: string, name = "Test User") {
   const admin = getAdminPool();
   const user = await admin.query<{ id: string }>(

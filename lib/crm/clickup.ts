@@ -13,7 +13,7 @@ import {
   timeLeft,
   type IntegrationKey,
 } from "@/lib/crm/conversations";
-import { withActor } from "@/lib/crm/context";
+import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
 import { CrmError, notSetUp, tooMany } from "@/lib/crm/errors";
 import { unreachable } from "@/lib/upstream";
 import { contactHref, companyHref } from "@/lib/crm/hrefs";
@@ -417,8 +417,8 @@ async function readSyncRow(db: Db, workspaceId: string, id: string, lock = false
   return result.rows[0] ?? null;
 }
 
-async function linkedElsewhere(workspaceId: string, clickupTaskId: string) {
-  const result = await query<{ linked: boolean }>("select private.clickup_task_linked($1, $2) as linked", [workspaceId, clickupTaskId]);
+async function linkedElsewhere(appDb: Db, workspaceId: string, clickupTaskId: string) {
+  const result = await appDb.query<{ linked: boolean }>("select private.clickup_task_linked($1, $2) as linked", [workspaceId, clickupTaskId]);
   return Boolean(result.rows[0]?.linked);
 }
 
@@ -785,8 +785,12 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
   }
   const remote = remoteFields(task);
   const changedAt = remoteTime(task);
-  return withActor(s.actor, async (db) => {
+  let elsewhere = false;
+  const lockAndCheck = async (db: Db) => {
     await lockClickUpTask(db, s.actor.workspaceId, taskId);
+    elsewhere = await linkedElsewhere(db, s.actor.workspaceId, taskId);
+  };
+  return withActorAfterAppStep(s.actor, lockAndCheck, async (db) => {
     const linked = await linkedRow(db, s.actor.workspaceId, taskId);
     if (linked) {
       if (linked.archived_at) return "unchanged";
@@ -821,7 +825,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
       return changed ? "updated" : "unchanged";
     }
     if (!listId || !watched.has(listId)) return "ignored";
-    if (await linkedElsewhere(s.actor.workspaceId, taskId)) return "ignored";
+    if (elsewhere) return "ignored";
     const creating = await db.query<{ id: string }>(
       `select id from crm.tasks
        where workspace_id = $1 and clickup_task_id is null and clickup_list_id = $2 and title = $3

@@ -30,7 +30,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import { completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
-import { getAdminPool, getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool, takeNestedConnections } from "@/lib/db/pool";
 import { createUser, resetDatabase } from "./helpers";
 
 const TOKEN = "pk_101_TESTTOKEN";
@@ -945,7 +945,10 @@ describe("clickup sync", () => {
     const remote = fake.tasks.get(clickupId)!;
     remote.date_updated = String(Date.now() + 1_000);
     remote.custom_fields = remote.custom_fields?.map((field) => ({ ...field, value: "jane@acme.com" }));
-    const result = await syncClickUp({ actor: priya, force: true, fetchImpl });
+    takeNestedConnections();
+    process.env.ORBIT_STRICT_POOL = "1";
+    const result = await syncClickUp({ actor: priya, force: true, fetchImpl }).finally(() => delete process.env.ORBIT_STRICT_POOL);
+    assert.deepEqual(takeNestedConnections(), []);
     assert.equal(result.failed, 0);
     assert.equal(result.imported, 0);
     const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [clickupId]);

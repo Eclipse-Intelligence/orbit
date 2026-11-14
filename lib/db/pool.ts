@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Client, Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 
 const globalPools = globalThis as typeof globalThis & {
@@ -60,20 +61,41 @@ export async function openClient() {
   return client;
 }
 
+const heldClient = new AsyncLocalStorage<boolean>();
+const nestedConnections: string[] = [];
+
+export function holdingClient<T>(fn: () => Promise<T>): Promise<T> {
+  return heldClient.run(true, fn);
+}
+
+export function assertNoHeldClient() {
+  if (process.env.ORBIT_STRICT_POOL === "1" && heldClient.getStore()) {
+    const error = new Error("Nested database connection: this needs a second pool connection while a transaction holds one.");
+    nestedConnections.push(error.stack ?? error.message);
+    throw error;
+  }
+}
+
+export function takeNestedConnections() {
+  return nestedConnections.splice(0);
+}
+
 export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
   values: unknown[] = [],
 ): Promise<QueryResult<T>> {
+  assertNoHeldClient();
   return getPool().query<T>(text, values);
 }
 
 export type Db = PoolClient;
 
 export async function appTransaction<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  assertNoHeldClient();
   const client = await getPool().connect();
   try {
     await client.query("begin");
-    const result = await fn(client);
+    const result = await holdingClient(() => fn(client));
     await client.query("commit");
     return result;
   } catch (error) {
