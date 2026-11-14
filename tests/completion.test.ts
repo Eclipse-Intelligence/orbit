@@ -286,6 +286,38 @@ describe("imports, pipeline, communications, and webhooks", () => {
     });
   });
 
+  it("counts completed tasks from the last 14 days and every open task however old", async () => {
+    const owner = await createUser("view-counts@example.com", "View Counts");
+    const today = dayWindow();
+    const add = async (title: string, dueAt: string | null) => (await createTask(owner, { title, dueAt })).body.task;
+    const day = 86_400_000;
+    await add("Long overdue", new Date(today.start.getTime() - 400 * day).toISOString());
+    await add("Undated", null);
+    await add("Upcoming", new Date(today.end.getTime() + 5 * day).toISOString());
+    const completedAgo = async (title: string, days: number) => {
+      const task = await add(title, new Date(today.start.getTime() - 30 * day).toISOString());
+      await completeTask(owner, task.id);
+      await getAdminPool().query("update crm.tasks set completed_at = now() - make_interval(days => $2) where id = $1", [task.id, days]);
+    };
+    await completedAgo("Done 15 days ago", 15);
+    await completedAgo("Done 400 days ago", 400);
+    await completedAgo("Done 13 days ago", 13);
+    const doneToday = await add("Done today", null);
+    await completeTask(owner, doneToday.id);
+    const archived = await add("Archived done", null);
+    await completeTask(owner, archived.id);
+    await archiveTask(owner, archived.id);
+
+    const counts = await countTaskViews(owner);
+    assert.deepEqual(counts, { all: 3, overdue: 1, today: 1, upcoming: 1, completed: 2, none: 0 });
+    assert.deepEqual(await countTaskViews(owner, { mine: true }), counts);
+    for (const view of ["all", "overdue", "today", "upcoming", "completed"] as const) {
+      assert.equal((await listTasks(owner, { view })).total, counts[view], view);
+    }
+    const completed = await listTasks(owner, { view: "completed" });
+    assert.deepEqual(completed.data.map((task) => task.title).sort(), ["Done 13 days ago", "Done today"]);
+  });
+
   it("files an email on the company domain and suggests a follow-up", async () => {
     const owner = await createUser("mail@example.com", "Mail");
     const company = await createCompany(owner, { name: "Mail Co", domain: "mailco.example" });
