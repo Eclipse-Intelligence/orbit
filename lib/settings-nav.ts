@@ -4,6 +4,7 @@ export const SETTINGS_PATHS = {
   general: "/settings/general",
   email: "/settings/email",
   calendars: "/settings/calendars",
+  tasks: "/settings/tasks",
   connections: "/settings/connections",
   memory: "/settings/memory",
   apiTokens: "/settings/api-tokens",
@@ -27,6 +28,7 @@ export const SETTINGS_LABELS: Record<SettingsPage, string> = {
   general: "General",
   email: "Email",
   calendars: "Calendars",
+  tasks: "Tasks",
   connections: "Connections",
   memory: "Memory",
   apiTokens: "API tokens",
@@ -44,7 +46,7 @@ export const SETTINGS_LABELS: Record<SettingsPage, string> = {
   activity: "Activity log",
 };
 
-export const YOU_PAGES: SettingsPage[] = ["general", "email", "calendars", "connections", "memory", "apiTokens"];
+export const YOU_PAGES: SettingsPage[] = ["general", "email", "calendars", "tasks", "connections", "memory", "apiTokens"];
 
 export const WORKSPACE_PAGES: SettingsPage[] = [
   "aboutYou",
@@ -65,6 +67,7 @@ const SINGLE_PAGES: SettingsPage[] = [
   "general",
   "email",
   "calendars",
+  "tasks",
   "bookingPage",
   "connections",
   "apiTokens",
@@ -119,6 +122,8 @@ const HASH_TARGETS: Record<string, string> = {
   "read-statuses": SETTINGS_PATHS.email,
   calendars: SETTINGS_PATHS.calendars,
   calendar: SETTINGS_PATHS.calendars,
+  tasks: SETTINGS_PATHS.tasks,
+  prepare: SETTINGS_PATHS.tasks,
   integrations: SETTINGS_PATHS.connections,
   connections: SETTINGS_PATHS.connections,
   teams: SETTINGS_PATHS.connections,

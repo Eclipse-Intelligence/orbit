@@ -42,7 +42,7 @@ if (env.CRM_AGENT_TOKEN) {
 
 const sweepContacts = [];
 const sweepCallTasks = [];
-async function seedCallTask(label) {
+async function seedCallTask(label, verb = "Call") {
   if (!env.CRM_AGENT_TOKEN) return null;
   const stamp = `${label}${Date.now().toString(36)}`;
   const contact = await api("/contacts", {
@@ -55,7 +55,7 @@ async function seedCallTask(label) {
   }
   const contactId = (await contact.json()).contact.id;
   sweepContacts.push(contactId);
-  const title = `Call Sweep Caller ${stamp}`;
+  const title = `${verb} Sweep Caller ${stamp}`;
   const task = await api("/tasks", { method: "POST", body: JSON.stringify({ title, contactId, dueAt: new Date(Date.now() + 3_600_000).toISOString() }) });
   if (!task?.ok) return null;
   const id = (await task.json()).task.id;
@@ -113,7 +113,7 @@ async function seedBlock(page, device) {
 }
 
 let adminDb = null;
-async function ownTimedTask(id, ownerId) {
+async function localAdmin(why) {
   const host = (() => {
     try {
       return new URL(env.DATABASE_ADMIN_URL ?? "").hostname;
@@ -122,14 +122,40 @@ async function ownTimedTask(id, ownerId) {
     }
   })();
   if (host !== "localhost" && host !== "127.0.0.1") {
-    console.log("set DATABASE_ADMIN_URL to a local database to seed timed blocks: an agent can't set a time on someone's task");
-    return false;
+    console.log(`set DATABASE_ADMIN_URL to a local database to ${why}`);
+    return null;
   }
   if (!adminDb) {
     const { default: pg } = await import("pg");
     adminDb = new pg.Pool({ connectionString: env.DATABASE_ADMIN_URL, max: 1 });
   }
-  const updated = await adminDb.query("update crm.tasks set owner_id = $2 where id = $1 and due_has_time", [id, ownerId]).catch(() => null);
+  return adminDb;
+}
+
+async function seedPreparation(taskId) {
+  const db = await localAdmin("seed a prepared draft: only the person who prepares one can see it");
+  if (!db) return false;
+  const content = {
+    to: [{ address: "sweep-draft@example.com", name: "Sweep Caller" }],
+    subject: "Sweep prepared draft",
+    body: "Hi Sweep,\n\nHere is the case study we talked about.\n\nFounder",
+  };
+  const seeded = await db
+    .query(
+      `insert into crm.task_preparations (task_id, user_id, workspace_id, kind, state, content, prepared_at)
+       select t.id, u.id, t.workspace_id, 'draft', 'ready', $3::jsonb, now()
+       from crm.tasks t, auth.users u where t.id = $1 and lower(u.email) = lower($2)
+       on conflict (task_id, user_id) do update set content = excluded.content, state = 'ready', prepared_at = now()`,
+      [taskId, env.DEV_USER_EMAIL, JSON.stringify(content)],
+    )
+    .catch(() => null);
+  return seeded?.rowCount === 1;
+}
+
+async function ownTimedTask(id, ownerId) {
+  const db = await localAdmin("seed timed blocks: an agent can't set a time on someone's task");
+  if (!db) return false;
+  const updated = await db.query("update crm.tasks set owner_id = $2 where id = $1 and due_has_time", [id, ownerId]).catch(() => null);
   return updated?.rowCount === 1;
 }
 
@@ -352,6 +378,7 @@ async function resetLearned(page, device) {
   check(`${device} holding Reset starts every kind from scratch`, (captions.match(/Not enough yet \(0 of about 10\)/g) ?? []).length === 3, captions.slice(0, 160));
 }
 
+try {
 for (const [device, viewport] of [
   ["iphone", { width: 390, height: 844 }],
   ["ipad", { width: 820, height: 1180 }],
@@ -742,6 +769,56 @@ for (const [device, viewport] of [
     check(`${device} Skip in the panel leaves the task done`, !(await visible(inPanel)) && (await page.locator(`li[data-task-id="${panelTask.id}"]`).count()) === 0);
   } else check(`${device} panel outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
+  const prepareTask = await seedCallTask(`${device}e`, "Email");
+  if (prepareTask) {
+    try {
+    await goto(page, `${base}/tasks`);
+    await page.waitForTimeout(1500);
+    const row = page.locator(`li[data-task-id="${prepareTask.id}"]`);
+    await row.locator("button[aria-expanded]").first().tap({ position: { x: 3, y: 8 } });
+    await page.waitForTimeout(1500);
+    const prepare = row.getByRole("button", { name: "Prepare", exact: true });
+    check(`${device} Prepare sits in an open email task`, await visible(prepare));
+    await prepare.evaluate((button) => button.scrollIntoView({ block: "center" })).catch(() => undefined);
+    await page.waitForTimeout(300);
+    const prepareArea = await tapArea(prepare);
+    check(`${device} Prepare is easy to tap`, Boolean(prepareArea && prepareArea.height >= 43 && prepareArea.owns), prepareArea ? `${Math.round(prepareArea.height)}px${prepareArea.owns ? "" : ", covered"}` : "missing");
+    await prepare.tap().catch(() => undefined);
+    await page.waitForTimeout(1500);
+    check(`${device} Prepare without AI says what's wrong`, await visible(row.getByRole("alert").filter({ hasText: /isn't set up|Try again/ })));
+    check(`${device} open task with Prepare no overflow`, await noHorizontalScroll());
+    if (await seedPreparation(prepareTask.id)) {
+      await goto(page, `${base}/tasks`);
+      await page.waitForTimeout(1500);
+      await row.locator("button[aria-expanded]").first().tap({ position: { x: 3, y: 8 } });
+      await page.waitForTimeout(1800);
+      const card = row.locator("[data-task-preparation]");
+      check(`${device} a prepared draft shows in the open task`, await visible(card));
+      check(`${device} "Only you see this" is visible on the prepared draft`, await visible(card.locator("[data-preparation-private]")));
+      check(`${device} the draft shows its subject and body`, (await visible(card.getByText("Sweep prepared draft"))) && (await visible(card.getByText(/Here is the case study/))));
+      check(`${device} Prepare again replaces Prepare`, (await visible(card.getByRole("button", { name: "Prepare again" }))) && !(await visible(row.getByRole("button", { name: "Prepare", exact: true }))));
+      check(`${device} prepared draft no overflow`, await noHorizontalScroll());
+      await card.evaluate((element) => element.scrollIntoView({ block: "center" })).catch(() => undefined);
+      await shot("task-prepared");
+      const sends = [];
+      const watch = (request) => {
+        if (request.method() === "POST" && /\/api\/mail\/drafts\/(send|schedule)/.test(request.url())) sends.push(request.url());
+      };
+      page.on("request", watch);
+      await card.getByRole("button", { name: "Open in compose" }).tap();
+      await page.waitForTimeout(1800);
+      const compose = page.getByRole("dialog", { name: "Sweep prepared draft" });
+      check(`${device} Open in compose opens the draft in a compose card`, await visible(compose));
+      await shot("task-prepared-compose");
+      await page.waitForTimeout(1200);
+      page.off("request", watch);
+      check(`${device} opening the draft sends nothing`, sends.length === 0, sends.join(", "));
+    } else check(`${device} prepared draft checks ran`, false, "set DATABASE_ADMIN_URL to a local database so the sweep can seed a draft");
+    } finally {
+      await dropTasks([prepareTask.id]);
+    }
+  } else check(`${device} Prepare checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
+
   const recordTask = sweepTask?.companyId ? await seedCallTask(`${device}r`) : null;
   if (recordTask) {
     await goto(page, `${base}/companies/${sweepTask.companyId}`);
@@ -1071,7 +1148,7 @@ for (const width of [1100, 1280, 1440]) {
     await context.close();
     continue;
   }
-  await first.locator("button[aria-expanded]").first().click();
+  await first.locator("button[aria-expanded]").first().click({ position: { x: 3, y: 8 } });
   await page.waitForTimeout(400);
   await first.getByRole("button", { name: "Open", exact: true }).click();
   await page.waitForTimeout(900);
@@ -1100,6 +1177,29 @@ for (const width of [1100, 1280, 1440]) {
     : false;
   check(`${device} open Ask Orbit is usable with the panel open`, Boolean(dockBox) && (clear(dockBox) || onTop) && dockBox.width >= 300, dockBox ? `${Math.round(dockBox.width)}px wide` : "didn't open");
   await page.screenshot({ path: path.join(out, `desktop-${width}-assistant.png`) });
+
+  const deskPrepare = width === 1280 ? await seedCallTask("deske", "Email") : null;
+  if (deskPrepare) {
+    try {
+      await goto(page, `${base}/tasks`);
+      await page.waitForTimeout(1500);
+      const row = page.locator(`li[data-task-id="${deskPrepare.id}"]`);
+      await row.locator("button[aria-expanded]").first().click({ position: { x: 3, y: 8 } });
+      await page.waitForTimeout(1500);
+      check(`${device} Prepare sits in the open row's footer`, await row.getByRole("button", { name: "Prepare", exact: true }).isVisible().catch(() => false));
+      if (await seedPreparation(deskPrepare.id)) {
+        await goto(page, `${base}/tasks`);
+        await page.waitForTimeout(1500);
+        await row.locator("button[aria-expanded]").first().click({ position: { x: 3, y: 8 } });
+        await page.waitForTimeout(1800);
+        const card = row.locator("[data-task-preparation]");
+        check(`${device} a prepared draft shows with "Only you see this"`, (await card.isVisible().catch(() => false)) && (await card.locator("[data-preparation-private]").isVisible().catch(() => false)));
+        await page.screenshot({ path: path.join(out, `desktop-${width}-task-prepared.png`) });
+      } else check(`${device} prepared draft checks ran`, false, "set DATABASE_ADMIN_URL to a local database so the sweep can seed a draft");
+    } finally {
+      await dropTasks([deskPrepare.id]);
+    }
+  } else if (width === 1280) check(`${device} Prepare checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
   const callTask = width === 1280 ? await seedCallTask("desk") : null;
   if (callTask) {
@@ -1360,9 +1460,11 @@ for (const width of [1100, 1280, 1440]) {
   await context.close();
 }
 
+} finally {
 if (sweepTask) await api(`/tasks/${sweepTask.id}`, { method: "DELETE" });
 for (const id of sweepCallTasks) if (id) await api(`/tasks/${id}`, { method: "DELETE" });
 for (const id of sweepContacts) await api(`/contacts/${id}`, { method: "DELETE" });
+}
 
 check("the browser stayed on this machine", blocked.size === 0, [...blocked].join(", "));
 console.log(problems.length ? `\n${problems.length} problems. Screenshots are in ${out}` : `\nall checks passed. Screenshots are in ${out}`);

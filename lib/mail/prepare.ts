@@ -99,7 +99,7 @@ async function usedToday(db: Db, actor: UserActor) {
   return result.rows[0]?.count ?? 0;
 }
 
-async function editExamples(db: Db, actor: UserActor) {
+export async function editExamples(db: Db, actor: UserActor) {
   const result = await db.query<{ body: string; sent_body: string }>(
     `select body, sent_body from crm.mail_prepared
      where user_id = $1 and workspace_id = $2 and state = 'sent' and body is not null and sent_body is not null and kind in ('reply', 'nudge')

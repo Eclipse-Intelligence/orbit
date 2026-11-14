@@ -13,7 +13,7 @@ describe("settings navigation", () => {
     );
     assert.deepEqual(
       groups[0].items.map((item) => item.label),
-      ["General", "Email", "Calendars", "Connections", "Memory", "API tokens"],
+      ["General", "Email", "Calendars", "Tasks", "Connections", "Memory", "API tokens"],
     );
     assert.deepEqual(
       groups[1].items.map((item) => item.label),

@@ -10,6 +10,7 @@ import type { AssignableMember } from "@/components/crm/assignee-picker";
 import { activateRow } from "@/components/shortcuts/keyboard-list";
 import { TaskAct } from "@/components/crm/task-actions";
 import TaskAskButton from "@/components/crm/task-ask";
+import { TaskPrepare } from "@/components/crm/task-prepare";
 import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
@@ -292,7 +293,10 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                       onLeave={() => outcomeHandlers.leave(task)}
                     />
                   ) : (
-                    <TaskAct task={task} canChange={canChange} />
+                    <>
+                      <TaskAct task={task} canChange={canChange} />
+                      <TaskPrepare task={task}>{(prepare) => (prepare ? <div className="flex">{prepare}</div> : null)}</TaskPrepare>
+                    </>
                   )}
                   <TaskFields
                     details={details}

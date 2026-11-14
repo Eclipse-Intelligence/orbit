@@ -9,6 +9,7 @@ import { pushClickUpTask } from "@/lib/crm/clickup";
 import { getInviteSetup, type InviteSetup } from "@/lib/crm/invites";
 import { isUuid } from "@/lib/crm/mutate";
 import { completeTaskWithOutcome, relinkTask, taskContext, type LinkChange, type TaskContext, type TaskOutcome } from "@/lib/crm/task-act";
+import { setTaskPrepareSettings, type TaskPrepareSettings } from "@/lib/crm/task-prepare";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { UserActor } from "@/lib/crm/types";
 import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
@@ -91,6 +92,16 @@ export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOut
     pushLater(user, saved.next?.clickupListId ? [id, saved.next.id] : [id]);
     refresh();
     return { ok: true, next: Boolean(saved.next), logged: Boolean(saved.activityId), completed: Boolean(saved.task.completedAt) };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function setTaskPrepareAction(input: { prepareEachMorning: boolean }): Promise<{ settings?: TaskPrepareSettings; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: SIGN_IN };
+  try {
+    return { settings: await setTaskPrepareSettings(user, { prepareEachMorning: input?.prepareEachMorning }) };
   } catch (error) {
     return actionError(error);
   }
