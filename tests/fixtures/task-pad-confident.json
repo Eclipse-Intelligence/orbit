@@ -743,7 +743,8 @@
     "monAM": "2026-11-16T14:00 | - | - | Call Bob",
     "sunSpring": "2027-03-28T14:00 | - | - | Call Bob",
     "sunAutumn": "2026-10-25T14:00 | - | - | Call Bob",
-    "sat14": "2026-11-14T14:00 | - | - | Call Bob"
+    "sat14": "2026-11-14T14:00 | - | - | Call Bob",
+    "wed18": "2026-11-18T14:00 | - | - | Call Bob"
   },
   "Call Bob this evening": {
     "monAM": "2026-11-16T18:00 | - | - | Call Bob",
@@ -827,7 +828,7 @@
     "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob",
     "sat14": "2026-11-14T16:00 | - | - | Call Bob",
     "wed18": "2026-11-18T16:00 | - | - | Call Bob",
-    "dec31": "2027-01-01T16:00 | - | - | Call Bob"
+    "dec31": "2026-12-31T16:00 | - | - | Call Bob"
   },
   "Call Bob 8am": {
     "monAM": "2026-11-17T08:00 | - | - | Call Bob",
@@ -851,7 +852,7 @@
     "sunAutumn": "2026-10-25T16:00 | - | - | Call Bob",
     "sat14": "2026-11-14T16:00 | - | - | Call Bob",
     "wed18": "2026-11-18T16:00 | - | - | Call Bob",
-    "dec31": "2027-01-01T16:00 | - | - | Call Bob"
+    "dec31": "2026-12-31T16:00 | - | - | Call Bob"
   },
   "Call Bob at 1:30am tomorrow": {
     "monAM": "2026-11-17T01:30 | - | - | Call Bob",
@@ -877,7 +878,6 @@
     "monAM": "2026-11-22T01:30 | - | - | Call Bob",
     "friPM": "2026-11-22T01:30 | - | - | Call Bob",
     "sunNight": "2026-11-29T01:30 | - | - | Call Bob",
-    "sunAutumn": "2026-11-01T01:30 | - | - | Call Bob",
     "sat14": "2026-11-15T01:30 | - | - | Call Bob",
     "wed18": "2026-11-22T01:30 | - | - | Call Bob",
     "dec31": "2027-01-03T01:30 | - | - | Call Bob"
@@ -1494,7 +1494,7 @@
     "sunAutumn": "2026-10-29T16:00 | - | - | Call Jo",
     "sat14": "2026-11-19T16:00 | - | - | Call Jo",
     "wed18": "2026-11-19T16:00 | - | - | Call Jo",
-    "dec31": "2027-01-07T16:00 | - | - | Call Jo"
+    "dec31": "2026-12-31T16:00 | - | - | Call Jo"
   },
   "Call Jo thur": {
     "monAM": "2026-11-19 | - | - | Call Jo",
@@ -1778,7 +1778,7 @@
     "sunAutumn": "2026-10-29T16:00 | - | - | Deploy v1.2.3",
     "sat14": "2026-11-19T16:00 | - | - | Deploy v1.2.3",
     "wed18": "2026-11-19T16:00 | - | - | Deploy v1.2.3",
-    "dec31": "2027-01-07T16:00 | - | - | Deploy v1.2.3"
+    "dec31": "2026-12-31T16:00 | - | - | Deploy v1.2.3"
   },
   "Call Jo tomorrow remind me 10 mins before": {
     "monAM": "2026-11-17 | - | 10 | Call Jo",
@@ -2272,17 +2272,6 @@
     "sat14": "2026-11-15 | - | - | Send deck",
     "wed18": "2026-11-19 | - | - | Send deck",
     "dec31": "2027-01-01 | - | - | Send deck"
-  },
-  "Book flights for 3 Dec": {
-    "monAM": "2026-12-03 | - | - | Book flights",
-    "friPM": "2026-12-03 | - | - | Book flights",
-    "sunNight": "2026-12-03 | - | - | Book flights",
-    "satBeforeSpring": "2027-12-03 | - | - | Book flights",
-    "sunSpring": "2027-12-03 | - | - | Book flights",
-    "satBeforeAutumn": "2026-12-03 | - | - | Book flights",
-    "sunAutumn": "2026-12-03 | - | - | Book flights",
-    "sat14": "2026-12-03 | - | - | Book flights",
-    "wed18": "2026-12-03 | - | - | Book flights"
   },
   "Call Jo this Tues": {
     "monAM": "2026-11-17 | - | - | Call Jo",

@@ -227,23 +227,38 @@ describe("task area UI", () => {
     assert.deepEqual(confirmedReading(sure, null), { title: "Call Sam", due: "2026-11-17T15:00", remindMinutes: null, durationMinutes: null });
   });
 
-  it("only takes the AI's date when its phrase is really in the text and the date is real and near", () => {
+  it("only takes the AI's date when its phrase is really in the text, holds only date words, and the date is real and near", () => {
     const now = new Date("2026-11-16T09:15:00Z");
-    const typed = "ring jane re the Q3 deck sometime tmrw arvo";
+    const typed = "ring jane re the Q3 deck tmrw afternoon";
     const kept = { title: typed, due: null, remindMinutes: null, durationMinutes: null };
     const read = (phrases: string[], due: string | null, remindMinutes: number | null = null, durationMinutes: number | null = null) =>
       acceptAiReading(typed, { phrases, due, remindMinutes, durationMinutes }, now);
-    assert.deepEqual(read(["sometime tmrw arvo"], "2026-11-17T14:00"), { title: "Ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(read(["tmrw afternoon"], "2026-11-17T14:00"), { title: "Ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: null });
     assert.deepEqual(read(["tomorrow afternoon"], "2026-11-17T14:00"), kept, "the phrase must be typed");
     assert.deepEqual(read([], "2026-11-17"), kept, "a due needs its phrase");
     assert.deepEqual(read(["tmrw"], "2026-11-31"), kept, "not a calendar date");
-    assert.deepEqual(read(["tmrw"], "2026-11-17T24:10"), kept, "not a clock time");
+    assert.deepEqual(read(["tmrw afternoon"], "2026-11-17T24:10"), kept, "not a clock time");
     assert.deepEqual(read(["tmrw"], "2026-11-15"), kept, "in the past");
-    assert.deepEqual(read(["tmrw"], "2026-11-16T08:00"), kept, "earlier today");
+    assert.deepEqual(read(["afternoon"], "2026-11-16T08:00"), kept, "earlier today");
     assert.deepEqual(read(["tmrw"], "2028-12-01"), kept, "more than two years out");
-    assert.deepEqual(read(["tmrw"], "2026-11-17", 7), kept, "a reminder that is not an option");
-    assert.deepEqual(read(["tmrw"], "2026-11-17T10:00", null, -5), kept, "a duration that is not real");
-    assert.deepEqual(read(["tmrw"], "2027-03-28T01:30"), kept, "a clock time that doesn't exist in London");
+    assert.deepEqual(read(["tmrw"], "2026-11-17T10:00"), kept, "a time with no time words in the phrase");
+    assert.deepEqual(read(["tmrw afternoon"], "2027-03-28T01:30"), kept, "a clock time that doesn't exist in London");
+    assert.deepEqual(read(["tmrw afternoon"], "2026-11-17T14:00", 7, -5), { title: "Ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: 5, durationMinutes: null }, "a reminder snaps and a bad duration is dropped");
+
+    const check = (text: string, phrases: string[], due: string) => acceptAiReading(text, { phrases, due, remindMinutes: null, durationMinutes: null }, now);
+    const untouched = (text: string) => ({ title: text, due: null, remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(check("Email Tom tomorrow", ["tom"], "2026-11-17"), untouched("Email Tom tomorrow"), "part of a word");
+    assert.deepEqual(check("Call Sam tomorrow", ["a"], "2026-11-17"), untouched("Call Sam tomorrow"), "a letter");
+    assert.deepEqual(check("Call Jo tomorrow tomorrow", ["tomorrow"], "2026-11-17"), untouched("Call Jo tomorrow tomorrow"), "a phrase that appears twice");
+    assert.deepEqual(check("Call Friday Media tomorrow", ["Friday Media"], "2026-11-20"), untouched("Call Friday Media tomorrow"));
+    assert.deepEqual(check("ring jane tomorrow", ["ring jane"], "2026-11-17"), untouched("ring jane tomorrow"));
+    assert.deepEqual(check("Call Sam tomorrow", ["Sam", "tomorrow"], "2026-11-17"), untouched("Call Sam tomorrow"));
+    assert.deepEqual(check("Ping Raj about pricing tomorrow", ["about pricing tomorrow"], "2026-11-17"), untouched("Ping Raj about pricing tomorrow"));
+    assert.deepEqual(check("Call April May on 3 June", ["April May on 3 June"], "2027-06-03"), untouched("Call April May on 3 June"));
+    assert.deepEqual(check("Call April May on 3 June", ["on 3 June"], "2027-06-03"), { title: "Call April May", due: "2027-06-03", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(check("Pay £300 tomorrow", ["£300 tomorrow"], "2026-11-17"), untouched("Pay £300 tomorrow"));
+    assert.deepEqual(check("Send the Monday report by Friday", ["the Monday report by Friday"], "2026-11-20"), untouched("Send the Monday report by Friday"));
+    assert.deepEqual(check("Call Jo tmrw and email sam", ["tmrw and email sam"], "2026-11-17"), untouched("Call Jo tmrw and email sam"));
   });
 
   it("reads a weekday as a date only when it clearly is one, and otherwise hands the whole text to the AI", () => {
@@ -347,6 +362,22 @@ describe("task area UI", () => {
       ["Send NDA tomorrow.", monday, ["Send NDA", "2026-11-17"]],
       ["Drinks Friday evening", "2026-11-20T18:30:00Z", asked],
       ["Drinks Friday night", "2026-11-20T18:30:00Z", asked],
+      ["Order cake for 20 Nov tomorrow", monday, asked],
+      ["Sign lease starting 1 Jan by Friday", monday, asked],
+      ["Call Jo Mon 23", monday, asked],
+      ["Call Jo Tuesday 17", monday, asked],
+      ["Call Jo Fri 20", monday, asked],
+      ["Call Jo next next Friday", monday, asked],
+      ["Call Jo 3pmish tomorrow", monday, asked],
+      ["Book flights for 3 Dec", monday, asked],
+      ["Call Jo 2day", monday, asked],
+      ["Call Jo ~3pm tomorrow", monday, asked],
+      ["Call Jo approx 3pm tomorrow", monday, asked],
+      ["Send deck by 5pm tomorrow at the latest", monday, asked],
+      ["Pay invoice dated 3 Dec", monday, asked],
+      ["Call Bob 4pm", "2026-11-16T16:00:00Z", ["Call Bob", "2026-11-16T16:00"]],
+      ["Call Bob today at 4pm", "2026-11-16T16:00:00Z", ["Call Bob", "2026-11-16T16:00"]],
+      ["Call Bob 4pm", "2026-11-16T16:01:00Z", ["Call Bob", "2026-11-17T16:00"]],
     ];
     for (const [text, at, expected] of cases) {
       const parsed = parseTaskText(text, new Date(at));

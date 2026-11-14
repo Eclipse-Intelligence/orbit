@@ -11,6 +11,7 @@ type PadParse = {
   durationMinutes: number | null;
   unsure: boolean;
   marks: PadMark[];
+  guess: string | null;
 };
 
 type Day = { year: number; month: number; day: number };
@@ -180,16 +181,25 @@ const FREE_AFTER = new RegExp(`^\\s*(?:$|[,.;:!?)]|(?:${FREE_WORDS})\\b)`, "i");
 const NOUN_AFTER = new RegExp(`^\\s+(?!(?:${FREE_WORDS})\\b)[a-z]`, "i");
 const NAMED_TIME = /\b(?:Today|Tonight|Tomorrow|Noon|Midday|Midnight|Morning|Afternoon|Evening|Night|Day|After|Weekend|Week|Month|End|Eod)\b/;
 
+const EXTRA_DOUBT = new RegExp(
+  [
+    `\\b${WEEKDAY_ANY}\\s+(?:1[3-9]|2\\d|3[01])\\b(?!\\s*(?:[:.]\\d|am\\b|pm\\b|st\\b|nd\\b|rd\\b|th\\b|${MONTH}))`,
+    "\\bnext\\s+next\\b",
+    `\\bfor\\s+(?:the\\s+)?(?:\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}|${MONTH}\\s+\\d|\\d{1,2}\\/\\d{1,2}|${WEEKDAY_ANY}\\b)`,
+  ].join("|"),
+  "i",
+);
+
 const TIME_ZONE = /\b(?:gmt|bst|utc|est|edt|pst|pdt|cet|cest|ist|aest)\b|\b(?:their|our|your|local|uk|us)\s+time\b/i;
 const UNREAD_DATE = /\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[.-]\d{1,2}[.-]\d{2,4}\b|\b2moro\b/i;
 const BARE_NUMBER_END = new RegExp(`(?<!\\b(?:room|rooms|top|chapter|chapters|no|nos|number|version|page|pages|step|steps|level|floor|flat|unit|suite|gate|table|platform|row|seat|section|part|lesson|item|items|slide|slides|issue|ticket|phase|stage|round|team|year|grade|v)\\s+)(?<![£$€#.,/\\d-])\\b(?:[1-9]|1[0-9]|2[0-3])$`, "i");
 const LEFTOVER = new RegExp(
-  `${TEMPORAL.source}|(?<=\\d|\\s|^)ish\\b|\\b(?:am|pm|eod|eow|cob|cop|tmrw|tmr|daily|weekly|fortnightly|weeks?|days?|hours?|hrs?|mins?|minutes?|lunchtime|first\\s+thing|close\\s+of\\s+(?:play|business)|asap|later|now|tonight|half|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|sharp|sometime|someday|soon|months?|years?|yesterday|q[1-4]|20\\d\\d|next|dawn|dusk|sunrise|sunset|tom+or+o?w+|tom+o?r+ow|tmw|tomoz|2mor+ow|2moro|tonite|2nite|tdy|todya|tody|tonigh|tonihgt|tomrrow|tmrrw|tommorrow|morrow|christmas|xmas|easter|new\\s+year|bank\\s+holiday|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\\b|\\b(?:at|by|before|after|around|from|until|till)\\s+\\d|\\b\\d{1,2}\\s+(?:to|past)\\s+\\d|\\b(?:half|quarter)\\s+(?:past|to|\\d)|\\bin\\s+${MONTH}\\b|(?<![\\d/])\\b(?!24\\/7\\b)(?:[12]?\\d|3[01])\\/(?:0?[1-9]|1[0-2])\\b(?!\\/\\d)|\\d\\s*(?:am|pm)\\b|${NOT_MONEY}(?<![\\d.])(?<!\\b(?:v|ver|version|release|ios|android)\\s*)\\b\\d{1,2}[:.]\\d{2}\\b(?![.\\d])${NOT_CURRENCY_AFTER}`,
+  `${TEMPORAL.source}|(?<=\\d|\\d\\s?(?:am|pm)|\\s|^)ish\\b|~|\\bapprox(?:imately)?\\b|\\bat\\s+the\\s+latest\\b|\\b(?:am|pm|eod|eow|cob|cop|tmrw|tmr|daily|weekly|fortnightly|weeks?|days?|hours?|hrs?|mins?|minutes?|lunchtime|first\\s+thing|close\\s+of\\s+(?:play|business)|asap|later|now|tonight|half|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|sharp|sometime|someday|soon|months?|years?|yesterday|q[1-4]|20\\d\\d|next|dawn|dusk|sunrise|sunset|tom+or+o?w+|tom+o?r+ow|tmw|tomoz|2mor+ow|2moro|tonite|2nite|2day|2morrow|tdy|todya|tody|tonigh|tonihgt|tomrrow|tmrrw|tommorrow|morrow|christmas|xmas|easter|new\\s+year|bank\\s+holiday|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\\b|\\b(?:at|by|before|after|around|from|until|till)\\s+\\d|\\b\\d{1,2}\\s+(?:to|past)\\s+\\d|\\b(?:half|quarter)\\s+(?:past|to|\\d)|\\bin\\s+${MONTH}\\b|(?<![\\d/])\\b(?!24\\/7\\b)(?:[12]?\\d|3[01])\\/(?:0?[1-9]|1[0-2])\\b(?!\\/\\d)|\\d\\s*(?:am|pm)\\b|${NOT_MONEY}(?<![\\d.])(?<!\\b(?:v|ver|version|release|ios|android)\\s*)\\b\\d{1,2}[:.]\\d{2}\\b(?![.\\d])${NOT_CURRENCY_AFTER}`,
   "i",
 );
 const DANGLING_BEFORE =
-  /(?:\b(?:before|from|at|the|to|last|every|by|on|until|till|of|end|start|early|mid|late|after|since|around|about|re|or|between|than|this|next|in|off|w\/c)|['’]s|[-–/:+&@(["'“”‘’[])\s*$/i;
-const DANGLING_AFTER = /^\s*(?:['’]s\b|[-–/:+&@)\]"'“”‘’]|\.\d|to\b|or\b|ish\b|o['’]?clock\b|am\b|pm\b|\d)/i;
+  /(?:\b(?:before|from|at|the|to|last|every|by|on|until|till|of|end|start|early|mid|late|after|since|around|about|re|or|between|than|this|next|in|off|w\/c|dated|starting|not|approx|approximately|around|circa|~)|['’]s|[-–/:+&@(["'“”‘’[])\s*$/i;
+const DANGLING_AFTER = /^\s*(?:at\s+the\s+latest\b|latest\b|['’]s\b|[-–/:+&@)\]"'“”‘’]|\.\d|to\b|or\b|ish\b|o['’]?clock\b|am\b|pm\b|\d)/i;
 
 function debris(text: string, spans: Span[]) {
   const sorted = [...spans].sort((a, b) => a.start - b.start);
@@ -253,6 +263,8 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   let evening = false;
   let sameWeekday = false;
   let dateSource: "explicit" | "relative" | "week" | null = null;
+  let dateHits = 0;
+  let hardDoubt = false;
   let weekAnchor: Day | null = null;
   let weekSpan = null as { start: number; end: number; weeks: number } | null;
   let endOfDay = false;
@@ -293,9 +305,12 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
 
   const setDate = (candidate: Day, explicitYear: boolean) => {
     if (!valid(candidate)) return false;
-    if (!explicitYear && compare(candidate, today) < 0 && compare({ ...candidate, year: candidate.year + 1 }, addDays(today, 92)) > 0) doubt = true;
+    if (!explicitYear && compare(candidate, today) < 0 && compare({ ...candidate, year: candidate.year + 1 }, addDays(today, 92)) > 0) {
+      doubt = true;
+      hardDoubt = true;
+    }
     found.date = !explicitYear && compare(candidate, today) < 0 ? { ...candidate, year: candidate.year + 1 } : candidate;
-    dateSource = "explicit";
+    dateSource = "explicit"; dateHits += 1;
   };
 
   take(
@@ -309,19 +324,19 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     const minutes = amount(match[1]) * unitMinutes(match[2]);
     if (minutes >= 24 * 60) {
       found.date = addDays(today, Math.round(minutes / (24 * 60)));
-      dateSource = /^w/i.test(match[2]) ? "week" : "relative";
+      dateSource = /^w/i.test(match[2]) ? "week" : "relative"; dateHits += 1;
       weekAnchor = dateSource === "week" ? found.date : null;
       if (dateSource === "week") weekSpan = { start: match.index, end: match.index + match[0].length, weeks: amount(match[1]) };
     } else found.exact = minutes;
   });
   take(new RegExp(`${LEAD}\\b(?:the\\s+)?day\\s+after\\s+tomorrow\\b`, "i"), () => {
     found.date = addDays(today, 2);
-    dateSource = "relative";
+    dateSource = "relative"; dateHits += 1;
   });
   take(new RegExp(`${LEAD}\\b(today|tonight|tomorrow|tmrw|tmr)\\b`, "i"), (match) => {
     const word = match[1].toLowerCase();
     found.date = word === "today" || word === "tonight" ? today : addDays(today, 1);
-    dateSource = "relative";
+    dateSource = "relative"; dateHits += 1;
     if (word === "tonight" && !found.time) {
       found.time = { hour: 19, minute: 0 };
       evening = true;
@@ -340,22 +355,22 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(new RegExp(`${LEAD}\\b(?:end\\s+of\\s+(?:the\\s+)?week|eow)\\b`, "i"), () => {
     found.date = addDays(today, (5 - weekday(today) + 7) % 7);
     found.time = found.time ?? { hour: 17, minute: 0 };
-    dateSource = "relative";
+    dateSource = "relative"; dateHits += 1;
   });
   take(new RegExp(`${LEAD}\\bnext\\s+week\\b`, "i"), (match) => {
     found.date = addDays(today, ((1 - weekday(today) + 7) % 7) || 7);
-    dateSource = "week";
+    dateSource = "week"; dateHits += 1;
     weekAnchor = found.date;
     weekSpan = { start: match.index, end: match.index + match[0].length, weeks: 0 };
   });
   take(new RegExp(`${LEAD}\\b(?:this\\s+)?weekend\\b`, "i"), () => {
     if (weekday(today) === 0 || weekday(today) === 6) doubt = true;
     found.date = addDays(today, ((6 - weekday(today) + 7) % 7) || 7);
-    dateSource = "relative";
+    dateSource = "relative"; dateHits += 1;
   });
   take(new RegExp(`${LEAD}\\bnext\\s+month\\b`, "i"), () => {
     found.date = { year: today.month === 12 ? today.year + 1 : today.year, month: today.month === 12 ? 1 : today.month + 1, day: 1 };
-    dateSource = "relative";
+    dateSource = "relative"; dateHits += 1;
   });
   take(new RegExp(`${LEAD}\\b(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+${MONTH}\\b(?:\\s+(\\d{4}))?`, "i"), (match) =>
     setDate({ year: match[3] ? Number(match[3]) : today.year, month: monthIndex(match[2]) + 1, day: Number(match[1]) }, Boolean(match[3])),
@@ -529,20 +544,26 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   } else if (found.date || found.time) {
     const time = found.time;
     let day = found.date ?? today;
-    const passed = time !== null && (time.hour < wall.hour || (time.hour === wall.hour && time.minute <= wall.minute));
+    const passed = time !== null && (time.hour < wall.hour || (time.hour === wall.hour && time.minute < wall.minute));
     if (time && !found.date && passed) day = addDays(today, 1);
     if (time && sameWeekday && !passed) day = today;
     const date = `${day.year}-${pad(day.month)}-${pad(day.day)}`;
     due = time ? `${date}T${pad(time.hour)}:${pad(time.minute)}` : date;
     if (time && wallTimeCount(day, time) !== 1) ambiguous = true;
     if (sameWeekday && (!time || slot)) doubt = true;
-    if (time && slot && !found.date && passed) doubt = true;
+    if (time && slot && !found.date && passed) {
+      doubt = true;
+      hardDoubt = true;
+    }
     const dueAt = time ? Date.UTC(day.year, day.month - 1, day.day, time.hour, time.minute) : Date.UTC(day.year, day.month - 1, day.day, 23, 59);
     const wallNow = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute);
-    if (dueAt < wallNow) doubt = true;
+    if (dueAt < wallNow) {
+      doubt = true;
+      hardDoubt = true;
+    }
   }
 
-  if (TIME_ZONE.test(text) || UNREAD_DATE.test(text)) doubt = true;
+  if (TIME_ZONE.test(text) || UNREAD_DATE.test(text) || dateHits > 1 || EXTRA_DOUBT.test(text)) doubt = true;
   const kept = due ? spans : spans.filter((span) => span.kind !== "reminder");
   const title = cleanTitle(text, kept);
   if (new RegExp(`(?<![£$€\\d.]\\s*)(?<!\\b(?:gbp|usd|eur)\\s*)\\b\\d{1,2}\\.[0-5]\\d\\b(?!\\s*(?:gbp|usd|eur)\\b)`, "i").test(title) &&!/\b(?:v|ver|version|release)\s*\d/i.test(title)) ambiguous = true;
@@ -558,7 +579,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   if (/\?\s*$/.test(text)) doubt = true;
   const plainTitle = explicitTime ? title.replace(/\blunch\b/gi, "") : title;
   if (kept.length > 0 && (doubt || !title || LEFTOVER.test(plainTitle) || debris(text, kept))) {
-    return { title: text.replace(/\s+/g, " ").trim(), due: null, remindMinutes: null, durationMinutes: null, unsure: true, marks: marks.filter((mark) => mark.kind === "when") };
+    return { title: text.replace(/\s+/g, " ").trim(), due: null, remindMinutes: null, durationMinutes: null, unsure: true, marks: marks.filter((mark) => mark.kind === "when"), guess: hardDoubt ? null : due };
   }
   const unsure = ambiguous || doubt || LEFTOVER.test(plainTitle) || BARE_NUMBER_END.test(title);
   const lastEnd = Math.max(0, ...kept.map((span) => span.end));
@@ -570,11 +591,39 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     durationMinutes: due && found.time ? found.duration : null,
     unsure,
     marks,
+    guess: hardDoubt ? null : due,
   };
 }
 
 export type PadAiAnswer = { phrases: string[]; due: string | null; remindMinutes: number | null; durationMinutes: number | null };
 export type PadAiParse = { title: string; due: string | null; remindMinutes: number | null; durationMinutes: number | null };
+
+const MONTH_WORD = new RegExp(`\\b${MONTH}\\b`, "gi");
+const WEEKDAY_WORD = new RegExp(`\\b${WEEKDAY_ANY}\\b`, "gi");
+const TIME_WORD = /\b(?:morning|afternoon|evening|tonight|night|noon|midday|midnight|lunch\s*time|eod|eow|end\s+of\s+(?:the\s+)?(?:day|week)|o'?clock)\b/i;
+const PHRASE_WORD = new RegExp(
+  [
+    `^${MONTH}$`,
+    `^${WEEKDAY_ANY}s?$`,
+    "^(?:today|tonight|tomorrow|tmrw|tmr|morning|afternoon|evening|night|noon|midday|midnight|lunchtime|lunch|eod|eow|cob|end|day|days|week|weeks|weekend|month|months|year|fortnight|hour|hours|hr|hrs|min|mins|minute|minutes|am|pm|a|an|and|the|of|on|at|by|in|next|this|coming|from|for|before|after|until|till|due|remind|reminder|me|half|quarter|past|to|first|thing|early|late|mid|start|o'clock|oclock|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|forty-five|sixty|ninety)$",
+    "^\\d{1,4}(?:st|nd|rd|th|am|pm|h|m|hrs?|mins?)?$",
+    "^\\d{1,2}[:.]\\d{2}(?:am|pm)?$",
+    "^\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?$",
+    "^\\d{1,2}-\\d{1,2}(?:am|pm)?$",
+  ].join("|"),
+  "i",
+);
+
+function phraseWords(phrase: string) {
+  return phrase
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .every((word) => PHRASE_WORD.test(word.replace(/[.!?]+$/, "")));
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const AI_DUE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/;
 const AI_REACH_DAYS = 730;
@@ -584,29 +633,32 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
   const kept: PadAiParse = { title: text, due: null, remindMinutes: null, durationMinutes: null };
   if (!answer.due) return kept;
   const spans: Span[] = [];
-  let from = 0;
   for (const raw of answer.phrases) {
     const phrase = raw.trim();
-    const at = phrase ? text.indexOf(phrase, from) : -1;
-    if (at < 0) return kept;
-    spans.push({ start: at, end: at + phrase.length, kind: "when" });
-    from = at + phrase.length;
+    if (!phrase || !phraseWords(phrase)) return kept;
+    const found = [...text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}])`, "gu"))];
+    if (found.length !== 1) return kept;
+    const start = found[0].index;
+    const span: Span = { start, end: start + phrase.length, kind: "when" };
+    if (spans.some((other) => span.start < other.end && span.end > other.start)) return kept;
+    spans.push(span);
   }
   if (spans.length === 0) return kept;
+  const said = answer.phrases.join(" ");
+  if ((said.match(MONTH_WORD) ?? []).length > 1 || (said.match(WEEKDAY_WORD) ?? []).length > 1) return kept;
   const match = AI_DUE.exec(answer.due);
   if (!match) return kept;
   const day: Day = { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
   if (!valid(day)) return kept;
   const time = match[4] === undefined ? null : { hour: Number(match[4]), minute: Number(match[5]) };
   if (time && (time.hour > 23 || time.minute > 59 || wallTimeCount(day, time) !== 1)) return kept;
+  if (time && !/\d/.test(said) && !TIME_WORD.test(said)) return kept;
   const wall = londonParts(now);
   const today: Day = { year: wall.year, month: wall.month, day: wall.day };
   if (compare(day, today) < 0 || compare(day, addDays(today, AI_REACH_DAYS)) > 0) return kept;
   if (time && compare(day, today) === 0 && (time.hour < wall.hour || (time.hour === wall.hour && time.minute < wall.minute))) return kept;
-  const reminder = answer.remindMinutes;
-  if (reminder !== null && !REMINDER_MINUTES.includes(reminder)) return kept;
-  const duration = answer.durationMinutes;
-  if (duration !== null && (!Number.isInteger(duration) || duration <= 0 || duration > MAX_TASK_DURATION)) return kept;
+  const reminder = answer.remindMinutes === null || !Number.isFinite(answer.remindMinutes) || answer.remindMinutes < 0 ? null : nearestReminder(answer.remindMinutes);
+  const duration = answer.durationMinutes !== null && Number.isInteger(answer.durationMinutes) && answer.durationMinutes > 0 && answer.durationMinutes <= MAX_TASK_DURATION ? answer.durationMinutes : null;
   const title = cleanTitle(text, spans);
   return {
     title: title && !debris(text, spans) ? title : text,

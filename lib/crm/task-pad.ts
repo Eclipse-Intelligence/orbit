@@ -3,6 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import { likePattern } from "@/lib/crm/normalize";
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
+import { MAX_TASK_DURATION } from "@/lib/crm/task-time";
 import { assertScope } from "@/lib/crm/scopes";
 import { sameOrigin } from "@/lib/crm/task-beacon";
 import { detectTaskRecordsInDb, folded, memberNames, mentionsName, quotesFoldedSql, TEXT_LIMIT, type DetectedTaskLinks, type LinkedRecord } from "@/lib/crm/task-detect";
@@ -269,7 +270,8 @@ const PAD_AI_RULES = [
   "A weekday on its own is the next time that day comes round; typed on that same day it means today only if its time is still ahead, otherwise next week. this Monday typed on a Monday is today. next Friday is the Friday of next week when said early in the week, and the coming Friday otherwise; if you cannot tell, use null. Tuesday week and a week on Tuesday are the Tuesday after the coming one. A weekday with in N weeks is that weekday N weeks after the coming one.",
   "A weekday or date word that names or describes something (Black Friday, Friday Media, Monday report, Noon Ltd, The Day After Tomorrow) is not when the task is due.",
   `remindMinutes is how many minutes before the due time to remind, only when a reminder is asked for, and must be one of ${REMINDER_MINUTES.join(", ")}. Otherwise null.`,
-  "durationMinutes is how long the task takes when the text says so (for 30 mins, 2-3pm), otherwise null.",
+  `durationMinutes is how long the task takes when the text says so (for 30 mins, 2-3pm), at most ${MAX_TASK_DURATION}, otherwise null.`,
+  "Each phrase must appear exactly once in the text and contain only date, time and reminder words; an answer with a phrase that is repeated, reworded or holds other words is thrown away.",
 ];
 
 export async function parsePadWithAi(text: string, now = new Date(), options: { fetchImpl?: typeof fetch } = {}): Promise<PadAiParse | null> {
