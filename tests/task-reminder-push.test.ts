@@ -214,6 +214,55 @@ describe("task reminder pushes", () => {
     assert.equal(forTask(next.sent, task.id).length, 1);
   });
 
+  it("does not retry a push refused for a reason other than the network", async () => {
+    const now = Date.now();
+    const task = (await createTask(owner, { title: "Malformed subscription", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
+    const invalid: PushSender = async () => {
+      throw new Error("You must pass in a subscription with at least an endpoint.");
+    };
+    await processTaskReminders({ deadline: later.deadline(), now, send: invalid });
+    assert.notEqual((await sentAt(task.id)).reminder_sent_at, null);
+  });
+
+  it("stops retrying a reminder after three failed pushes, and tries reminders that never failed first", async () => {
+    const now = Date.now();
+    const failing = (await createTask(owner, { title: "Keeps timing out", companyId, dueAt: at(9, now), remindMinutes: 10 })).body.task;
+    const timedOut: PushSender = async () => {
+      throw Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+    };
+    await processTaskReminders({ deadline: later.deadline(), now, send: timedOut });
+    const fresh = (await createTask(owner, { title: "Never tried", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
+    const first = await getAdminPool().query<{ task_id: string }>("select task_id from private.claim_task_reminders($1, 1, '{}')", [new Date(now + MINUTE).toISOString()]);
+    assert.equal(first.rows[0].task_id, fresh.id);
+    await getAdminPool().query("update crm.tasks set reminder_sent_at = null where id = $1", [fresh.id]);
+    await processTaskReminders({ deadline: later.deadline(), now: now + MINUTE, send: timedOut });
+    await processTaskReminders({ deadline: later.deadline(), now: now + 2 * MINUTE, send: timedOut });
+    const attempts = await getAdminPool().query<{ reminder_attempts: number; updated_at: Date }>("select reminder_attempts, updated_at from crm.tasks where id = $1", [failing.id]);
+    assert.equal(attempts.rows[0].reminder_attempts, 3);
+    assert.equal(attempts.rows[0].updated_at.getTime(), new Date(failing.updatedAt).getTime());
+    const next = pusher();
+    await processTaskReminders({ deadline: later.deadline(), now: now + 3 * MINUTE, send: next.send });
+    assert.equal(forTask(next.sent, failing.id).length, 0);
+    await updateTask(owner, failing.id, { remindMinutes: 5, dueAt: at(8, now + 3 * MINUTE) });
+    const reset = await getAdminPool().query<{ reminder_attempts: number }>("select reminder_attempts from crm.tasks where id = $1", [failing.id]);
+    assert.equal(reset.rows[0].reminder_attempts, 0);
+  });
+
+  it("pushes a batch of reminders at once, so slow pushes don't hold the others back", async () => {
+    const now = Date.now();
+    const ids: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      ids.push((await createTask(owner, { title: `Slow push ${index}`, companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task.id);
+    }
+    const sent: string[] = [];
+    const slow: PushSender = async (_subscription, payload) => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      sent.push(JSON.parse(payload).url);
+    };
+    await processTaskReminders({ deadline: Date.now() + 1_000, now, send: slow });
+    for (const id of ids) assert.equal(sent.filter((url) => url.includes(id)).length, 1);
+  });
+
   it("does not keep retrying a reminder for a browser that can't get notifications", async () => {
     const now = Date.now();
     await getAdminPool().query("update crm.push_subscriptions set endpoint = 'https://unsupported.example/mark' where endpoint = 'https://web.push.apple.com/mark-phone'");

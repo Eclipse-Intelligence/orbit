@@ -8,7 +8,7 @@ import { HEALTH_LABELS } from "@/lib/companies";
 import { membershipsFor } from "@/lib/auth/user";
 import { createActivity, getActivity } from "@/lib/crm/activities";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
-import { createTaskWithClickUp, getClickUpPicker } from "@/lib/crm/clickup";
+import { createTaskWithClickUp, getClickUpPicker, pushClickUpTask } from "@/lib/crm/clickup";
 import { getCompany, updateCompany } from "@/lib/crm/companies";
 import { getContact, updateContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -98,7 +98,7 @@ export type RunEvent = {
 };
 
 type StepResult =
-  | { kind: "next"; output?: unknown }
+  | { kind: "next"; output?: unknown; replayed?: Effect }
   | { kind: "branch"; branch: "true" | "false"; output?: unknown }
   | { kind: "loop"; items: unknown[]; output?: unknown }
   | { kind: "wait"; until: Date; output?: unknown }
@@ -832,7 +832,7 @@ async function postWebhook(ctx: Ctx, step: Step) {
       headers: {
         "content-type": json ? "application/json" : "text/plain; charset=utf-8",
         "user-agent": "Orbit-Workflows",
-        "idempotency-key": chatPostKey(ctx.run.id, step.id, ctx.state.frames ?? []),
+        "idempotency-key": runStepKey(ctx.run.id, step.id, ctx.state.frames ?? []),
       },
       body: payload.slice(0, 100_000),
       redirect: "manual",
@@ -881,15 +881,41 @@ async function startOnlyOnce(ctx: Ctx, step: Step) {
   if (await startEffect(ctx, step)) throw new CrmError("conflict", UNSURE_EFFECT, 409);
 }
 
-async function taskMadeEarlier(ctx: Ctx, title: string, effect: Effect) {
+function stepSourceUrl(ctx: Ctx, key: string) {
+  return `/workflows/${ctx.run.workflow_id}?run=${ctx.run.id}&step=${encodeURIComponent(key)}`;
+}
+
+async function taskMadeEarlier(ctx: Ctx, effect: Effect) {
   return withActor(ctx.actor, async (db) => {
-    const result = await db.query<{ id: string; title: string }>(
-      `select id, title from crm.tasks
-       where workspace_id = $1 and created_by_user_id = $2 and title = $3 and created_at >= to_timestamp($4::double precision / 1000) - interval '5 seconds'
-       order by created_at asc limit 1`,
-      [ctx.actor.workspaceId, ctx.actor.userId, title, effect.at],
+    const result = await db.query<{ id: string; title: string; clickup_list_id: string | null }>(
+      `select t.id, t.title, t.clickup_list_id
+       from crm.audit_events e
+       join crm.tasks t on t.id = e.entity_id
+       where e.workspace_id = $1 and e.actor_user_id = $2 and e.entity_type = 'task' and e.event_type = 'task.created' and e.source_url = $3
+       order by e.created_at asc limit 1`,
+      [ctx.actor.workspaceId, ctx.actor.userId, stepSourceUrl(ctx, effect.key)],
     );
     return result.rows[0] ?? null;
+  });
+}
+
+async function sendMadeTaskToClickUp(ctx: Ctx, taskId: string, listId: string) {
+  await withActor(ctx.actor, (db) => db.query("update crm.tasks set clickup_list_id = $2 where id = $1 and clickup_list_id is null", [taskId, listId]));
+  const outcome = await pushClickUpTask(ctx.actor, taskId, { fetchImpl: ctx.fetchImpl });
+  if (outcome !== "failed") return null;
+  const row = await withActor(ctx.actor, (db) => db.query<{ clickup_error: string | null }>("select clickup_error from crm.tasks where id = $1", [taskId]));
+  return row.rows[0]?.clickup_error ?? "Couldn't create the ClickUp task.";
+}
+
+async function loggedEarlier(ctx: Ctx, step: Step, effect: Effect) {
+  return withActor(ctx.actor, async (db) => {
+    const result = await db.query(
+      `select 1 from crm.workflow_run_steps
+       where run_id = $1 and step_id = $2 and status = 'succeeded' and finished_at >= to_timestamp($3::double precision / 1000)
+       limit 1`,
+      [ctx.run.id, step.id, effect.at],
+    );
+    return (result.rowCount ?? 0) > 0;
   });
 }
 
@@ -905,7 +931,7 @@ async function noteMadeEarlier(ctx: Ctx, effect: Effect) {
   });
 }
 
-export function chatPostKey(runId: string, stepId: string, frames: Pick<LoopFrame, "id" | "index">[] = []) {
+export function runStepKey(runId: string, stepId: string, frames: Pick<LoopFrame, "id" | "index">[] = []) {
   const key = ["wf", runId, stepId, ...frames.map((frame) => `${frame.id}.${frame.index}`)].join(":");
   return key.length <= CHAT_CLIENT_KEY_MAX ? key : `wf:${createHash("sha256").update(key).digest("base64url")}`;
 }
@@ -956,7 +982,7 @@ async function chatStep(ctx: Ctx, step: Step): Promise<StepResult> {
   const room = await chatRoom(ctx, roomId, roomName);
   const posted = await postMessage(
     ctx.actor,
-    { conversationId: room.id, body, clientKey: chatPostKey(ctx.run.id, step.id, ctx.state.frames ?? []) },
+    { conversationId: room.id, body, clientKey: runStepKey(ctx.run.id, step.id, ctx.state.frames ?? []) },
     { viaWorkflowId: ctx.run.workflow_id },
   );
   return {
@@ -1029,8 +1055,12 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const due = await scheduleTaskDue(ctx.actor, { days, on: dueDayFrom(render(config.dueDate, ctx.vars)), ownerId });
       const picker = config.clickup ? await getClickUpPicker(ctx.actor).catch(() => null) : null;
       const earlier = await startEffect(ctx, step);
-      const made = earlier ? await taskMadeEarlier(ctx, title, earlier) : null;
-      if (made) return { kind: "next", output: { id: made.id, title: made.title, clickupError: null } };
+      const made = earlier ? await taskMadeEarlier(ctx, earlier) : null;
+      if (made && earlier) {
+        const clickupError = picker?.listId && !made.clickup_list_id ? await sendMadeTaskToClickUp(ctx, made.id, picker.listId) : null;
+        return { kind: "next", output: { id: made.id, title: made.title, clickupError }, replayed: earlier };
+      }
+      const key = effectKey(step.id, ctx.state.frames ?? []);
       const created = await createTaskWithClickUp(
         ctx.actor,
         {
@@ -1043,7 +1073,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
           priority: "normal",
         },
         picker?.listId ?? null,
-        { provenance: provenance(ctx, step), fetchImpl: ctx.fetchImpl },
+        { provenance: { ...provenance(ctx, step), sourceUrl: stepSourceUrl(ctx, key) }, fetchImpl: ctx.fetchImpl },
       );
       return { kind: "next", output: { id: created.task.id, title: created.task.title, clickupError: created.clickupError } };
     }
@@ -1055,7 +1085,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       if (!companyId && !contactId) throw new CrmError("invalid_input", "This run has no company or contact to add a note to.", 400);
       const earlier = await startEffect(ctx, step);
       const made = earlier ? await noteMadeEarlier(ctx, earlier) : null;
-      if (made) return { kind: "next", output: { id: made.id } };
+      if (made && earlier) return { kind: "next", output: { id: made.id }, replayed: earlier };
       const created = await createActivity(
         ctx.actor,
         {
@@ -1118,6 +1148,8 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const company = ctx.vars.company as { id?: string } | undefined;
       const contact = ctx.vars.contact as { id?: string } | undefined;
       const href = company?.id ? companyHref(company.id) : contact?.id ? contactHref(contact.id) : `/workflows/${ctx.run.workflow_id}`;
+      const earlier = await startEffect(ctx, step);
+      if (earlier) return { kind: "next", output: { to, title }, replayed: earlier };
       await notify(ctx.actor, to, { title, body: render(config.body, ctx.vars).trim().slice(0, 4000) || null, href, source: "workflow" });
       return { kind: "next", output: { to, title } };
     }
@@ -1441,7 +1473,9 @@ export async function executeRun(
       return "waiting" as const;
     }
     (vars.steps as Record<string, unknown>)[step.id] = result.output ?? null;
-    await logStep(ctx, step, "succeeded", input, result.output ?? null, null, started);
+    if (!(result.kind === "next" && result.replayed && (await loggedEarlier(ctx, step, result.replayed)))) {
+      await logStep(ctx, step, "succeeded", input, result.output ?? null, null, started);
+    }
     if (result.kind === "stop") {
       at = follow(definition, step.id, "stopped", state, vars);
       continue;

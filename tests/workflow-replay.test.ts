@@ -3,6 +3,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { listActivities } from "@/lib/crm/activities";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
+import { createTask, getTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -111,14 +112,11 @@ describe("workflow runs picked up again after the server stopped", () => {
     assert.equal(notes.length, 1);
   });
 
-  it("finds the task it already made when a run stopped part way through creating it", async () => {
-    const workflowId = await flow(
-      "Task only",
-      graph("company", [delay, { id: "create_task_1", type: "create_task", config: { title: "Send {{company.name}} the deck", link: "company" }, position: { x: 600, y: 0 } }, ai]),
-    );
+  async function stoppedAt(workflowId: string, stepId: string, fetchImpl?: typeof fetch) {
     const started = await startRun(owner, workflowId, { test: false, record: { type: "company", id: companyId } });
     let saved: RunRow | null = null;
-    const llm: typeof fetch = async () => {
+    const llm: typeof fetch = async (input, init) => {
+      if (String(input).includes("clickup") && fetchImpl) return fetchImpl(input, init);
       saved ??= await runRow(started.runId);
       return Response.json({ model: "test", choices: [{ message: { role: "assistant", content: JSON.stringify({ answer: "No." }) }, finish_reason: "stop" }] });
     };
@@ -126,10 +124,89 @@ describe("workflow runs picked up again after the server stopped", () => {
     await resumeDelay(started.runId, llm);
     const midway = saved as unknown as RunRow;
     const state = midway.state as Record<string, unknown>;
-    await dieAndReclaim(started.runId, { status: "running", state: { ...state, at: "create_task_1", effect: { key: "create_task_1", at: before } } });
+    const replay = () => dieAndReclaim(started.runId, { status: "running", state: { ...state, at: stepId, effect: { key: stepId, at: before } } });
+    return { runId: started.runId, llm, replay };
+  }
+
+  async function succeededLogs(runId: string, stepId: string) {
+    return (await getAdminPool().query<{ n: number }>("select count(*)::int as n from crm.workflow_run_steps where run_id = $1 and step_id = $2 and status = 'succeeded'", [runId, stepId])).rows[0].n;
+  }
+
+  const taskStep = (title: string, extra: Record<string, unknown> = {}) =>
+    ({ id: "create_task_1", type: "create_task", config: { title, link: "company", ...extra }, position: { x: 600, y: 0 } }) as const;
+
+  it("finds the task it already made when a run stopped part way through creating it, and logs the step once", async () => {
+    const workflowId = await flow("Task only", graph("company", [delay, taskStep("Send {{company.name}} the deck"), ai]));
+    const { runId, llm, replay } = await stoppedAt(workflowId, "create_task_1");
+    await replay();
     await runWorkflowTick({ budgetMs: 15_000, fetchImpl: llm });
-    assert.equal((await getRunSteps(owner, started.runId)).run.status, "succeeded");
+    assert.equal((await getRunSteps(owner, runId)).run.status, "succeeded");
     assert.equal(await taskCount("Send Replay Co the deck"), 1);
+    assert.equal(await succeededLogs(runId, "create_task_1"), 1);
+  });
+
+  it("never takes another task with the same title for its own", async () => {
+    const workflowId = await flow("Same title", graph("company", [delay, taskStep("Send the pricing"), ai]));
+    const { runId, llm, replay } = await stoppedAt(workflowId, "create_task_1");
+    await getAdminPool().query("delete from crm.tasks where title = 'Send the pricing'");
+    const otherCompany = (await createCompany(owner, { name: "Other Co", domain: "other-co-replay.test" })).body.company.id;
+    const unrelated = (await createTask(owner, { title: "Send the pricing", companyId: otherCompany })).body.task;
+    await replay();
+    await runWorkflowTick({ budgetMs: 15_000, fetchImpl: llm });
+    assert.equal(await taskCount("Send the pricing"), 2);
+    const step = (await getRunSteps(owner, runId)).steps.filter((item) => item.stepId === "create_task_1").at(-1)!;
+    const made = (step.output as { id: string }).id;
+    assert.notEqual(made, unrelated.id);
+    assert.equal((await getTask(owner, made)).companyId, companyId);
+  });
+
+  it("sends the task it already made to ClickUp when the run stopped before the list was set", async () => {
+    process.env.CLICKUP_API_TOKEN = "pk_replay";
+    await getAdminPool().query(
+      `insert into crm.integration_state (workspace_id, source, user_id, team_id, external_user_id, default_list_id, watched_list_ids, list_choices)
+       values ($1, 'clickup', $2, '900', '101', '700', '{}', '[{"id":"700","name":"Replay list"}]'::jsonb)`,
+      [owner.workspaceId, owner.userId],
+    );
+    const created: string[] = [];
+    const clickup: typeof fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/field")) return Response.json({ fields: [] });
+      if (path.endsWith("/list/700/task") && init?.method === "POST") {
+        const id = `cu-replay-${created.length + 1}`;
+        created.push(id);
+        return Response.json({ id, name: JSON.parse(String(init.body)).name, status: null, date_updated: String(Date.now()), due_date: null, url: `https://app.clickup.com/t/${id}`, list: { id: "700" } });
+      }
+      return Response.json({ err: "Unexpected" }, { status: 500 });
+    };
+    try {
+      const workflowId = await flow("Task to ClickUp", graph("company", [delay, taskStep("Book the {{company.name}} review", { clickup: true }), ai]));
+      const { llm, replay } = await stoppedAt(workflowId, "create_task_1", clickup);
+      assert.equal(created.length, 1);
+      await getAdminPool().query("update crm.tasks set clickup_list_id = null, clickup_task_id = null, clickup_sync = '{}'::jsonb where title = 'Book the Replay Co review'");
+      created.length = 0;
+      await replay();
+      await runWorkflowTick({ budgetMs: 15_000, fetchImpl: llm });
+      assert.equal(await taskCount("Book the Replay Co review"), 1);
+      assert.equal(created.length, 1);
+      const row = await getAdminPool().query<{ clickup_list_id: string; clickup_task_id: string }>("select clickup_list_id, clickup_task_id from crm.tasks where title = 'Book the Replay Co review'");
+      assert.deepEqual({ ...row.rows[0] }, { clickup_list_id: "700", clickup_task_id: created[0] });
+    } finally {
+      delete process.env.CLICKUP_API_TOKEN;
+      await getAdminPool().query("delete from crm.integration_state where workspace_id = $1 and source = 'clickup'", [owner.workspaceId]);
+    }
+  });
+
+  it("never sends a notification twice", async () => {
+    const workflowId = await flow(
+      "Notify me",
+      graph("company", [delay, { id: "notify_1", type: "notify", config: { to: "owner", title: "Replay ping" }, position: { x: 600, y: 0 } }, ai]),
+    );
+    const { runId, llm, replay } = await stoppedAt(workflowId, "notify_1");
+    await replay();
+    await runWorkflowTick({ budgetMs: 15_000, fetchImpl: llm });
+    const pings = await getAdminPool().query<{ n: number }>("select count(*)::int as n from crm.notifications where title = 'Replay ping'");
+    assert.equal(pings.rows[0].n, 1);
+    assert.equal(await succeededLogs(runId, "notify_1"), 1);
   });
 
   it("never sends an email twice when a run stopped while sending it", async () => {

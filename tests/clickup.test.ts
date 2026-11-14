@@ -237,8 +237,14 @@ function clickup(fake: Fake) {
       const since = Number(url.searchParams.get("date_updated_gt") ?? 0);
       const page = Number(url.searchParams.get("page") ?? 0);
       assert.equal(url.searchParams.get("include_closed"), "true");
+      const createdAfter = Number(url.searchParams.get("date_created_gt") ?? Number.NEGATIVE_INFINITY);
+      const createdBefore = Number(url.searchParams.get("date_created_lt") ?? Number.POSITIVE_INFINITY);
       const all = [...fake.tasks.values()].filter(
-        (task) => ids.includes(task.list!.id) && Number(task.date_updated) > since,
+        (task) =>
+          ids.includes(task.list!.id) &&
+          Number(task.date_updated) > since &&
+          Number(task.date_created ?? 0) > createdAfter &&
+          Number(task.date_created ?? 0) < createdBefore,
       );
       const slice = all.slice(page * 2, page * 2 + 2);
       return Response.json({ tasks: slice, last_page: page * 2 + 2 >= all.length });
@@ -785,6 +791,66 @@ describe("clickup sync", () => {
       assert.equal(row.clickup_error, null);
       assert.equal(row.clickup_sync.unconfirmed, undefined);
     }
+  });
+
+  it("links each of two lost creates with the same title to its own ClickUp task", async () => {
+    const lost: typeof fetch = async (input, init) => {
+      const response = await fetchImpl(input, init);
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return response;
+    };
+    const name = "Twice lost";
+    const first = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const remote = [...fake.tasks.values()].filter((task) => task.name === name).sort((a, b) => Number(a.date_created) - Number(b.date_created));
+    assert.equal(remote.length, 2);
+    assert.equal((await taskRow(first.id)).clickup_task_id, remote[0].id);
+    assert.equal((await taskRow(second.id)).clickup_task_id, remote[1].id);
+    const copies = await getAdminPool().query<{ n: number }>("select count(*)::int as n from crm.tasks where title = $1", [name]);
+    assert.equal(copies.rows[0].n, 2);
+  });
+
+  it("doesn't take a same-titled ClickUp task made well after a create that never arrived", async () => {
+    const unsent: typeof fetch = async (input, init) => {
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return fetchImpl(input, init);
+    };
+    const name = "Never arrived";
+    const task = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: unsent })).task;
+    assert.ok((await taskRow(task.id)).clickup_sync.unconfirmed);
+    const later = remoteTask(fake, { id: "madebyhand", listId: RELATIONSHIPS, name, date_created: String(Date.now() + 10 * 60 * 1000) });
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const linked = (await taskRow(task.id)).clickup_task_id;
+    assert.ok(linked);
+    assert.notEqual(linked, later.id);
+    assert.equal([...fake.tasks.values()].filter((item) => item.name === name).length, 2);
+  });
+
+  it("links a lost create in the list it was sent to, even when the Orbit task's list changed before the next sync", async () => {
+    const lost: typeof fetch = async (input, init) => {
+      const response = await fetchImpl(input, init);
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return response;
+    };
+    const name = "Moved before sync";
+    const task = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
+    await getAdminPool().query("update crm.tasks set clickup_list_id = $2 where id = $1", [task.id, ZEUS]);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const remote = [...fake.tasks.values()].filter((item) => item.name === name);
+    assert.equal(remote.length, 1);
+    const row = await taskRow(task.id);
+    assert.equal(row.clickup_task_id, remote[0].id);
+    assert.equal(row.clickup_list_id, RELATIONSHIPS);
   });
 
   it("sends follow-up tasks suggested after an email to the default list", async () => {

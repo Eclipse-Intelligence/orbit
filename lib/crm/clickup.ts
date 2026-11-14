@@ -53,7 +53,7 @@ const VERIFY_BATCH = 5;
 const VERIFY_AFTER_MS = 6 * 60 * 60 * 1000;
 const CREATE_CLAIM_MS = 2 * 60 * 1000;
 const CREATE_CLOCK_SKEW_MS = 60 * 1000;
-const UNCONFIRMED_LOOKUP_PAGES = 5;
+const UNCONFIRMED_LOOKUP_PAGES = 20;
 const STEP_RESERVE_MS = 3_000;
 const INLINE_BUDGET_MS = 10_000;
 const WEBHOOK_BUDGET_MS = 50_000;
@@ -125,7 +125,7 @@ type Snapshot = {
   unconfirmed?: Unconfirmed;
 };
 
-type Unconfirmed = Fields & { at: number };
+type Unconfirmed = Fields & { at: number; listId: string };
 
 type StateRow = {
   user_id: string | null;
@@ -450,11 +450,20 @@ function refusedByClickUp(error: unknown) {
   return error instanceof ClickUpError && error.status >= 400 && error.status < 500;
 }
 
-function matchesUnconfirmed(task: ClickUpTask, listId: string, unconfirmed: Unconfirmed) {
-  if (String(task.list?.id ?? "") !== listId) return false;
+function createdAt(task: ClickUpTask) {
+  const value = Number(task.date_created);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function matchesUnconfirmed(task: ClickUpTask, unconfirmed: Unconfirmed) {
+  if (String(task.list?.id ?? "") !== unconfirmed.listId) return false;
   if (remoteFields(task).title !== unconfirmed.title) return false;
-  const createdAt = Number(task.date_created);
-  return !Number.isFinite(createdAt) || createdAt <= 0 || createdAt >= unconfirmed.at - CREATE_CLOCK_SKEW_MS;
+  const created = createdAt(task);
+  return created !== null && created >= unconfirmed.at - CREATE_CLOCK_SKEW_MS && created <= unconfirmed.at + CREATE_CLAIM_MS + CREATE_CLOCK_SKEW_MS;
+}
+
+function distance(task: ClickUpTask, unconfirmed: Unconfirmed) {
+  return Math.abs((createdAt(task) ?? 0) - unconfirmed.at);
 }
 
 async function linkUnconfirmed(db: Db, row: SyncRow, task: ClickUpTask, unconfirmed: Unconfirmed) {
@@ -468,16 +477,26 @@ async function linkUnconfirmed(db: Db, row: SyncRow, task: ClickUpTask, unconfir
   );
 }
 
-async function findUnconfirmed(s: Session, listId: string, unconfirmed: Unconfirmed) {
+async function findUnconfirmed(s: Session, unconfirmed: Unconfirmed) {
   if (!s.state.teamId) return null;
+  const matches: ClickUpTask[] = [];
   for (let page = 0; page < UNCONFIRMED_LOOKUP_PAGES; page += 1) {
-    const body = await s.api.teamTasks({ teamId: s.state.teamId, listIds: [listId], updatedAfter: unconfirmed.at - CREATE_CLOCK_SKEW_MS, page });
+    const body = await s.api.teamTasks({
+      teamId: s.state.teamId,
+      listIds: [unconfirmed.listId],
+      updatedAfter: unconfirmed.at - CREATE_CLOCK_SKEW_MS,
+      createdAfter: unconfirmed.at - CREATE_CLOCK_SKEW_MS,
+      createdBefore: unconfirmed.at + CREATE_CLAIM_MS + CREATE_CLOCK_SKEW_MS,
+      page,
+    });
     for (const task of body.tasks) {
-      if (!task?.id || !isClickUpId(String(task.id)) || !matchesUnconfirmed(task, listId, unconfirmed)) continue;
-      if (await linkedElsewhere(s.actor.workspaceId, String(task.id))) continue;
-      return task;
+      if (task?.id && isClickUpId(String(task.id)) && matchesUnconfirmed(task, unconfirmed)) matches.push(task);
     }
     if (body.lastPage) break;
+  }
+  matches.sort((a, b) => distance(a, unconfirmed) - distance(b, unconfirmed));
+  for (const task of matches) {
+    if (!(await linkedElsewhere(s.actor.workspaceId, String(task.id)))) return task;
   }
   return null;
 }
@@ -485,22 +504,24 @@ async function findUnconfirmed(s: Session, listId: string, unconfirmed: Unconfir
 async function adoptUnconfirmed(db: Db, workspaceId: string, task: ClickUpTask, listId: string) {
   const candidates = await db.query<{ id: string }>(
     `select t.id from crm.tasks t
-     where t.workspace_id = $1 and t.clickup_task_id is null and t.clickup_list_id = $2 and t.archived_at is null
+     where t.workspace_id = $1 and t.clickup_task_id is null and t.archived_at is null
+       and t.clickup_sync->'unconfirmed'->>'listId' = $2
        and t.clickup_sync->'unconfirmed'->>'title' = $3 and ${directTaskSql("t")}
        and coalesce((t.clickup_sync->>'creatingAt')::bigint, 0) < $4::bigint
-     order by (t.clickup_sync->'unconfirmed'->>'at')::bigint asc
      for update of t`,
     [workspaceId, listId, remoteFields(task).title, Date.now() - CREATE_CLAIM_MS],
   );
-  if (candidates.rows.length === 0 || (await linkedElsewhere(workspaceId, String(task.id)))) return null;
+  if (candidates.rows.length === 0 || createdAt(task) === null) return null;
+  const rows: { row: SyncRow; unconfirmed: Unconfirmed }[] = [];
   for (const candidate of candidates.rows) {
     const row = await readSyncRow(db, workspaceId, candidate.id);
     const unconfirmed = row ? snapshotOf(row).unconfirmed : undefined;
-    if (!row || !unconfirmed || !matchesUnconfirmed(task, listId, unconfirmed)) continue;
-    await linkUnconfirmed(db, row, task, unconfirmed);
-    return row.id;
+    if (row && unconfirmed && matchesUnconfirmed(task, unconfirmed)) rows.push({ row, unconfirmed });
   }
-  return null;
+  if (rows.length === 0 || (await linkedElsewhere(workspaceId, String(task.id)))) return null;
+  rows.sort((a, b) => distance(task, a.unconfirmed) - distance(task, b.unconfirmed));
+  await linkUnconfirmed(db, rows[0].row, task, rows[0].unconfirmed);
+  return rows[0].row.id;
 }
 
 async function listInfo(s: Session, listId: string) {
@@ -595,15 +616,15 @@ async function createRemote(s: Session, taskId: string) {
   const row = claimed;
   const listId = row.clickup_list_id!;
   const earlier = snapshotOf(row).unconfirmed;
-  if (earlier) {
+  if (earlier?.listId) {
     try {
-      const found = await findUnconfirmed(s, listId, earlier);
+      const found = await findUnconfirmed(s, earlier);
       if (found) {
         await withActor(s.actor, async (db) => {
           await lockClickUpTask(db, s.actor.workspaceId, String(found.id));
           await linkUnconfirmed(db, row, found, earlier);
         });
-        await setLinkField(s, row, listId, String(found.id));
+        await setLinkField(s, row, earlier.listId, String(found.id));
         return "pushed" as const;
       }
     } catch (error) {
@@ -612,10 +633,6 @@ async function createRemote(s: Session, taskId: string) {
     }
   }
   const local = localFields(row);
-  const unconfirmed: Unconfirmed = { ...local, at: Date.now() };
-  await withActor(s.actor, (db) =>
-    db.query("update crm.tasks set clickup_sync = clickup_sync || jsonb_build_object('unconfirmed', $2::jsonb) where id = $1", [row.id, JSON.stringify(unconfirmed)]),
-  );
   try {
     const body: ClickUpTaskWrite = {
       name: local.title,
@@ -627,6 +644,10 @@ async function createRemote(s: Session, taskId: string) {
       const status = statusFor(await listInfo(s, listId), true);
       if (status) body.status = status;
     }
+    const unconfirmed: Unconfirmed = { ...local, at: Date.now(), listId };
+    await withActor(s.actor, (db) =>
+      db.query("update crm.tasks set clickup_sync = clickup_sync || jsonb_build_object('unconfirmed', $2::jsonb) where id = $1", [row.id, JSON.stringify(unconfirmed)]),
+    );
     const created = await s.api.createTask(listId, body);
     await setLinkField(s, row, listId, created.id);
     const pushedAt = Date.now();
