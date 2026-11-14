@@ -316,12 +316,12 @@ describe("task reminder pushes", () => {
     assert.equal((await sentAt(dayOnly.id)).reminder_sent_at, null);
   });
 
-  it("does not push an unowned task an agent made, or one whose creator left the workspace", async () => {
+  it("does not push an agent's task, which goes to the workspace owner day only, or one whose creator left the workspace", async () => {
     const now = Date.now();
     const agent = (await createAgent(owner.workspaceId, ["crm:read", "tasks:write"])).actor;
     const agentTask = (await createTask(agent, { title: "Agent's call", companyId, dueAt: at(10, now), remindMinutes: 10, ownerId: null })).body.task;
-    assert.equal(agentTask.ownerId, null);
-    assert.equal(agentTask.remindMinutes, 10);
+    assert.equal(agentTask.ownerId, owner.userId);
+    assert.equal(agentTask.remindMinutes, null);
     const ria = await createUser("ria-push@orbit.test", "Ria Leaver");
     await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, ria.userId]);
     const riaHere: UserActor = { ...ria, workspaceId: owner.workspaceId, role: "member" };
@@ -333,7 +333,6 @@ describe("task reminder pushes", () => {
     assert.equal(forTask(sent.sent, agentTask.id).length, 0);
     assert.equal(forTask(sent.sent, leftBehind.id).length, 0);
     assert.equal(sent.sent.filter((item) => item.endpoint === "https://web.push.apple.com/ria-phone").length, 0);
-    assert.ok((await sentAt(agentTask.id)).reminder_sent_at);
   });
 
   it("claims due reminders from the every-minute cron", async () => {

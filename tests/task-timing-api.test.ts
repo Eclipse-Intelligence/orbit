@@ -85,13 +85,12 @@ describe("task due day or time over REST", () => {
     assert.equal(body.task.scheduledBy, null);
   });
 
-  it("makes dueAt with a time timed, placed by a person, and a bare date date only", async () => {
+  it("keeps only the day of an agent's dueAt, since its task belongs to the workspace owner, and a bare date date only", async () => {
     const timed = await rest({ title: "Ring Ashby Freight", dueAt: "2038-01-12T14:30", remindMinutes: 15 });
     assert.equal(timed.status, 201);
-    assert.equal(timed.body.task.dueAt, "2038-01-12T14:30:00.000Z");
-    assert.equal(timed.body.task.dueHasTime, true);
-    assert.equal(timed.body.task.scheduledBy, "person");
-    assert.equal(timed.body.task.remindMinutes, 15);
+    assert.equal(timed.body.task.dueDate, "2038-01-12");
+    assert.equal(timed.body.task.dueHasTime, false);
+    assert.equal(timed.body.task.remindMinutes, null);
     assert.equal(timed.body.task.durationMinutes, 15);
     const bare = await rest({ title: "Book a demo", dueAt: "2038-01-13" });
     assert.equal(bare.body.task.dueHasTime, false);
@@ -158,9 +157,8 @@ describe("task due day or time over MCP", () => {
     assert.equal(dayTask.durationMinutes, 10);
     const timed = await mcp("update_next_action", { id: dayTask.id, dueAt: "2038-03-30T11:00" });
     const timedTask = (JSON.parse(timed.text) as { task: TaskBody }).task;
-    assert.equal(timedTask.dueHasTime, true);
-    assert.equal(timedTask.scheduledBy, "person");
-    assert.equal(timedTask.dueAt, "2038-03-30T10:00:00.000Z");
+    assert.equal(timedTask.dueHasTime, false, "an agent never times the workspace owner's task");
+    assert.equal(timedTask.dueDate, "2038-03-30");
     const both = await mcp("create_next_action", { title: "Both", dueDate: "2038-03-30", dueAt: "2038-03-30T11:00" });
     assert.equal(both.error, true);
     const tooLong = await mcp("create_next_action", { title: "Too long", durationMinutes: 600 });

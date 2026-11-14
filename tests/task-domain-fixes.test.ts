@@ -332,16 +332,11 @@ describe("a task can't be created done", () => {
 describe("a reminder that can never go off", () => {
   it("is refused on create and update over REST, and in the app, with what to do instead", async () => {
     const past = await rest({ title: "Past reminder", dueAt: "2026-11-01T10:00", remindMinutes: 15 });
-    assert.equal(past.status, 400);
-    assert.equal(past.body.error.details?.field, "remindMinutes");
-    assert.match(past.body.error.message, /That time has passed/);
+    assert.equal(past.status, 201, "an agent's task belongs to the workspace owner, so it keeps the day and no reminder");
+    assert.equal(past.body.task.remindMinutes, null);
     const soon = londonWall(Date.now() + 2 * HOUR);
-    const fine = await rest({ title: "Fine reminder", dueAt: soon, remindMinutes: 1440 });
-    assert.equal(fine.status, 201);
-    assert.equal(fine.body.task.remindMinutes, 1440);
-    const moved = await restPatch(fine.body.task.id, { dueAt: "2026-11-02T09:00", remindMinutes: 30 });
-    assert.equal(moved.status, 400);
-    assert.match(moved.body.error.message, /That time has passed/);
+    const moved = await restPatch(past.body.task.id, { dueAt: "2026-11-02T09:00", remindMinutes: 30 });
+    assert.equal(moved.status, 200);
     const timed = (await createTask(mark, { title: "Yesterday's call", dueAt: "2026-11-10T09:00" })).body.task;
     await assert.rejects(() => updateTask(mark, timed.id, { remindMinutes: 0 }), /That time has passed/);
     const kept = (await createTask(mark, { title: "Reminder kept", dueAt: soon, remindMinutes: 15 })).body.task;
