@@ -172,7 +172,9 @@ export async function countTaskViews(actor: Actor, options: { mine?: boolean; ta
              )
          ) as none
        from crm.tasks t
-       where t.workspace_id = $1 and t.archived_at is null and ${scope}`,
+       where t.workspace_id = $1 and t.archived_at is null
+         and (t.completed_at is null or t.completed_at >= $4)
+         and ${scope}`,
       values,
     );
     const row = result.rows[0];
