@@ -479,7 +479,6 @@ grant execute on function private.delay_series_roll(uuid, timestamptz) to crm_ap
 create or replace function private.tasks_bind_series()
 returns trigger
 language plpgsql
-security definer
 set search_path = ''
 as $$
 declare
@@ -498,8 +497,8 @@ begin
   if tg_op = 'UPDATE' and (
     v_series.current_task_id is not null and v_series.current_task_id <> new.id
     or not (
-      v_series.owner_id = (select private.session_user_id())
-      or v_series.created_by_user_id = (select private.session_user_id())
+      v_series.owner_id = (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid
+      or v_series.created_by_user_id = (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid
       or (v_series.created_by_agent_id is not null and v_series.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid)
     )
   ) then
@@ -510,6 +509,7 @@ end;
 $$;
 
 revoke all on function private.tasks_bind_series() from public;
+grant execute on function private.tasks_bind_series() to authenticated, crm_agent;
 
 drop trigger if exists tasks_bind_series on crm.tasks;
 create trigger tasks_bind_series
@@ -520,7 +520,6 @@ create trigger tasks_bind_series
 create or replace function private.task_series_bind_current()
 returns trigger
 language plpgsql
-security definer
 set search_path = ''
 as $$
 begin
@@ -543,6 +542,7 @@ end;
 $$;
 
 revoke all on function private.task_series_bind_current() from public;
+grant execute on function private.task_series_bind_current() to authenticated, crm_agent;
 
 drop trigger if exists task_series_bind_current on crm.task_series;
 create trigger task_series_bind_current
