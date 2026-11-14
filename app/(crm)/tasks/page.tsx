@@ -9,6 +9,7 @@ import { countTaskViews, getDueActions } from "@/lib/crm/relationships";
 import { DEFAULT_TASK_VIEW, TASKS_PATH, taskViewFromParam } from "@/lib/crm/task-views";
 import { isUuid } from "@/lib/crm/mutate";
 import { getTask, listTaskParticipants } from "@/lib/crm/tasks";
+import { actorForTask } from "@/lib/crm/workspaces";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ export default async function TasksPage({
   ]);
   const askedTask = resolved[TASK_PARAM];
   const wanted = typeof askedTask === "string" && isUuid(askedTask) ? askedTask.toLowerCase() : null;
-  const openTask = wanted && !due.tasks.some((task) => task.id === wanted) ? await getTask(user, wanted).catch(() => null) : null;
+  const openTask = wanted && !due.tasks.some((task) => task.id === wanted) ? await actorForTask(user, wanted).then((home) => getTask(home, wanted)).catch(() => null) : null;
   const elsewhere = openTask && openTask.workspaceId !== user.workspaceId ? openTask : null;
   const original = new URLSearchParams();
   for (const [key, value] of Object.entries(resolved)) {

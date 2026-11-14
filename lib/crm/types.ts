@@ -120,16 +120,9 @@ export type CompanyWrite = {
   healthReason?: string | null;
 };
 
-export type ProvenanceSource =
-  | "web"
-  | "mcp"
-  | "csv"
-  | "assistant"
-  | "email"
-  | "microsoft"
-  | "parallel"
-  | "linkedin_extension"
-  | (string & {});
+export const NAMED_PROVENANCE_SOURCES = ["web", "mcp", "csv", "assistant", "email", "microsoft", "parallel", "linkedin_extension"] as const;
+
+export type ProvenanceSource = (typeof NAMED_PROVENANCE_SOURCES)[number] | (string & {});
 
 export type Provenance = {
   operation: string;
@@ -139,6 +132,8 @@ export type Provenance = {
   depth?: number;
   catchUp?: boolean;
   automatic?: boolean;
+  synced?: boolean;
+  workflowStep?: string;
 };
 
 export type CompanyListQuery = {

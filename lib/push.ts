@@ -102,10 +102,37 @@ export async function removePushSubscription(actor: UserActor, endpoint: string)
   await withActor(actor, (db) => db.query("delete from crm.push_subscriptions where user_id = $1 and endpoint = $2", [actor.userId, endpoint]));
 }
 
-type PushFailure = { status: number | null; reason: string };
+type PushFailure = { status: number | null; reason: string; network?: true };
+
+const NETWORK_CODES = new Set([
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function networkFailure(error: unknown, depth = 0): boolean {
+  if (!error || typeof error !== "object" || depth > 3) return false;
+  const item = error as { code?: unknown; name?: unknown; message?: unknown; cause?: unknown };
+  if (typeof item.code === "string" && NETWORK_CODES.has(item.code)) return true;
+  if (item.name === "TimeoutError") return true;
+  if (typeof item.message === "string" && /^socket timeout$/i.test(item.message.trim())) return true;
+  return networkFailure(item.cause, depth + 1);
+}
 
 function failureReason(error: unknown): PushFailure {
   const status = (error as { statusCode?: number }).statusCode ?? null;
+  if (status === null && networkFailure(error)) return { status, reason: "Couldn't reach the push service.", network: true };
   const body = String((error as { body?: unknown }).body ?? "").slice(0, 300);
   let reason = "";
   try {

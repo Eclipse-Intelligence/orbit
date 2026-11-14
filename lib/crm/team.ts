@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import { announceRemoval, roomsLostOnLeaving } from "@/lib/crm/chat";
 import { announceShareRemoval, sharesLostOnLeaving } from "@/lib/mail/shares";
-import { withActor } from "@/lib/crm/context";
+import { scheduleWebhooks, withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
-import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
+import type { Provenance, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
 type InviteRole = "member" | "admin";
@@ -136,7 +136,7 @@ export async function setMemberRole(actor: UserActor, userId: string, role: stri
   }
 }
 
-export async function removeMember(actor: UserActor, userId: string) {
+export async function removeMember(actor: UserActor, userId: string, provenance: Provenance = { operation: "remove_member" }) {
   const rooms = isUuid(userId)
     ? await roomsLostOnLeaving(actor.workspaceId, userId).catch((error) => {
         console.error("Couldn't read the Chat rooms they leave", error);
@@ -150,7 +150,15 @@ export async function removeMember(actor: UserActor, userId: string) {
       })
     : [];
   try {
-    await query("select private.team_remove($1, $2, $3)", [actor.workspaceId, actor.userId, userId]);
+    const handed = await query("select * from private.team_remove_records($1, $2, $3, $4, $5, $6)", [
+      actor.workspaceId,
+      actor.userId,
+      userId,
+      provenance.source ?? null,
+      provenance.operation,
+      provenance.sourceUrl ?? null,
+    ]);
+    if ((handed.rowCount ?? 0) > 0) scheduleWebhooks();
   } catch (error) {
     teamError(error);
   }

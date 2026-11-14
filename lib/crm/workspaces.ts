@@ -3,7 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure, tooLong } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { scopesForRole } from "@/lib/crm/scopes";
-import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
+import type { Actor, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { safeOpenTarget, workspaceLink } from "@/lib/open-link";
 
@@ -83,6 +83,29 @@ export async function actorsForTasks(actor: UserActor, taskIds: string[]) {
 }
 
 export const TASK_LOOKUP_FAILED = "Couldn't find that task. Try again.";
+
+async function taskElsewhere(actor: Actor, taskId: string) {
+  if (actor.type !== "user" || !isUuid(taskId)) return null;
+  const found = await withActor(actor, (db) => db.query<{ workspace_id: string }>("select workspace_id from crm.tasks where id = $1", [taskId]));
+  const workspaceId = found.rows[0]?.workspace_id;
+  if (!workspaceId || workspaceId === actor.workspaceId) return null;
+  return (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId) ?? null;
+}
+
+export async function withTaskWorkspaceHint<T>(actor: Actor, taskId: string, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (!(error instanceof CrmError) || error.status !== 404) throw error;
+    const home = await taskElsewhere(actor, taskId).catch(() => null);
+    if (!home || actor.type !== "user") throw error;
+    throw new CrmError(
+      "not_found",
+      `That task is in ${home.workspaceName}, and this token works in ${actor.workspaceName}. Use a personal token made in ${home.workspaceName}.`,
+      404,
+    );
+  }
+}
 
 export async function taskActorOrError(actor: UserActor, taskId: unknown): Promise<{ actor: UserActor; error?: undefined } | { actor?: undefined; error: string }> {
   try {

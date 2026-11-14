@@ -26,7 +26,7 @@ export async function enqueueWorkflowEvent(
       entityType,
       /^[0-9a-f-]{36}$/i.test(entityId) ? entityId : null,
       JSON.stringify(provenance?.automatic ? { ...changes, automatic: true } : changes),
-      actor.type === "user" && !provenance?.automatic ? actor.userId : null,
+      actor.type === "user" && !provenance?.automatic && !provenance?.synced ? actor.userId : null,
       provenance?.workflowId ?? null,
       provenance?.depth ?? 0,
     ],

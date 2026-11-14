@@ -90,7 +90,7 @@ export async function recordAudit(
       provenance?.source ?? null,
       provenance?.sourceUrl ?? null,
       provenance?.operation ?? eventType,
-      JSON.stringify(changes),
+      JSON.stringify(provenance?.workflowStep ? { ...changes, workflowStep: provenance.workflowStep } : changes),
     ],
   );
   const eventId = inserted.rows[0]?.id;

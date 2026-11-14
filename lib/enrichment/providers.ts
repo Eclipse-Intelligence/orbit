@@ -1,7 +1,9 @@
 import { ShownError } from "@/lib/crm/errors";
 import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 
-export type ProviderId = "context" | "hunter" | "enrow" | "icypeas";
+export const PROVIDER_IDS = ["context", "hunter", "enrow", "icypeas"] as const;
+
+export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export type ContactField = "email" | "linkedin" | "phone";
 

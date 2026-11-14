@@ -2,7 +2,8 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
-import { detectedIds, detectTaskRecordsInDb, folded, memberNames, mentionsName, MIN_NAME, TEXT_LIMIT, type DetectedLinkIds } from "@/lib/crm/task-detect";
+import { detectedIds, detectTaskRecordsInDb, folded, memberNames, mentionsName, MIN_NAME, quotesFoldedSql, TEXT_LIMIT, type DetectedLinkIds } from "@/lib/crm/task-detect";
+import { straightQuotes } from "@/lib/task-pad";
 import { canChangeTask, updateTaskInDb } from "@/lib/crm/tasks";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 
@@ -18,13 +19,13 @@ export type LinkCandidates = { candidates: LinkCandidate[]; reason: string | nul
 const LINK_FIELDS = ["companyId", "contactId", "opportunityId"];
 
 function titleWords(title: string) {
-  const words = (title.match(/[\p{L}][\p{L}'’-]*/gu) ?? []).map((word) => word.replace(/['’]s$/iu, "").replace(/['’-]+$/u, ""));
+  const words = (title.match(/[\p{L}][\p{L}'’‘ʼ‛-]*/gu) ?? []).map((word) => word.replace(/['’‘ʼ‛]s$/iu, "").replace(/['’‘ʼ‛-]+$/u, ""));
   return [...new Set(words.filter((word) => word.length >= 2).map((word) => folded(word)))];
 }
 
 function displayWord(title: string, word: string) {
-  const found = (title.match(/[\p{L}][\p{L}'’-]*/gu) ?? []).find((item) => folded(item.replace(/['’]s$/iu, "")) === word);
-  return found ? found.replace(/['’]s$/iu, "") : word;
+  const found = (title.match(/[\p{L}][\p{L}'’‘ʼ‛-]*/gu) ?? []).find((item) => folded(item.replace(/['’‘ʼ‛]s$/iu, "")) === word);
+  return found ? found.replace(/['’‘ʼ‛]s$/iu, "") : word;
 }
 
 export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<LinkCandidates> {
@@ -42,28 +43,28 @@ export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<
     const members = await memberNames(db, actor.workspaceId);
     const words = titleWords(title);
     const contacts = await db.query<{ id: string; name: string; first: string | null; last: string | null; job_title: string | null; company_name: string | null; full: boolean }>(
-      `select c.id, trim(concat_ws(' ', c.first_name, c.last_name)) as name, lower(trim(c.first_name)) as first, lower(trim(c.last_name)) as last,
+      `select c.id, trim(concat_ws(' ', c.first_name, c.last_name)) as name, lower(${quotesFoldedSql("trim(c.first_name)")}) as first, lower(${quotesFoldedSql("trim(c.last_name)")}) as last,
          c.job_title, co.name as company_name,
-         strpos(lower($2), lower(trim(concat_ws(' ', c.first_name, c.last_name)))) > 0 as full
+         strpos(lower($2), lower(${quotesFoldedSql("trim(concat_ws(' ', c.first_name, c.last_name))")})) > 0 as full
        from crm.contacts c
        left join crm.companies co on co.id = c.company_id
        where c.workspace_id = $1 and c.archived_at is null
          and char_length(trim(concat_ws(' ', c.first_name, c.last_name))) >= 2
          and (
-           strpos(lower($2), lower(trim(concat_ws(' ', c.first_name, c.last_name)))) > 0
-           or lower(trim(c.first_name)) = any($3::text[])
-           or lower(trim(c.last_name)) = any($3::text[])
+           strpos(lower($2), lower(${quotesFoldedSql("trim(concat_ws(' ', c.first_name, c.last_name))")})) > 0
+           or lower(${quotesFoldedSql("trim(c.first_name)")}) = any($3::text[])
+           or lower(${quotesFoldedSql("trim(c.last_name)")}) = any($3::text[])
          )
        order by 7 desc, c.updated_at desc
        limit 40`,
-      [actor.workspaceId, title, words],
+      [actor.workspaceId, straightQuotes(title), words],
     );
     const companies = await db.query<{ id: string; name: string; domain: string | null }>(
       `select id, name, domain from crm.companies
        where workspace_id = $1 and archived_at is null and char_length(name) >= $3
-         and strpos(lower($2), lower(name)) > 0
+         and strpos(lower($2), lower(${quotesFoldedSql("name")})) > 0
        order by char_length(name) desc, updated_at desc limit 20`,
-      [actor.workspaceId, title, MIN_NAME],
+      [actor.workspaceId, straightQuotes(title), MIN_NAME],
     );
     const named = contacts.rows
       .filter((contact) => !members.has(folded(contact.name)))
@@ -83,8 +84,8 @@ export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<
       ? await db.query<{ word: string; count: number }>(
           `select word, count(c.id)::int as count
            from unnest($2::text[]) as word
-           join crm.contacts c on c.workspace_id = $1 and c.archived_at is null and (lower(trim(c.first_name)) = word or lower(trim(c.last_name)) = word)
-             and lower(regexp_replace(trim(concat_ws(' ', c.first_name, c.last_name)), '\s+', ' ', 'g')) <> all($3::text[])
+           join crm.contacts c on c.workspace_id = $1 and c.archived_at is null and (lower(${quotesFoldedSql("trim(c.first_name)")}) = word or lower(${quotesFoldedSql("trim(c.last_name)")}) = word)
+             and lower(regexp_replace(${quotesFoldedSql("trim(concat_ws(' ', c.first_name, c.last_name))")}, '\s+', ' ', 'g')) <> all($3::text[])
            group by word order by min(array_position($2::text[], word))`,
           [actor.workspaceId, partial.sort((left, right) => words.indexOf(left) - words.indexOf(right)), [...members]],
         )

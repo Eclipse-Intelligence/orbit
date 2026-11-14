@@ -6,7 +6,7 @@ import { takeWebhooksQueued } from "@/lib/crm/webhook-queue";
 import { deliverDueWebhooks } from "@/lib/crm/webhooks";
 import type { Actor } from "@/lib/crm/types";
 
-function scheduleWebhooks() {
+export function scheduleWebhooks() {
   const run = () => {
     void deliverDueWebhooks().catch((error) => console.error("Webhook delivery failed", error));
   };

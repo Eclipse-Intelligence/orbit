@@ -50,15 +50,18 @@ function utc(iso: string) {
   return { dateTime: iso.replace("Z", "").replace(/\.\d{3}$/, ".0000000"), timeZone: "UTC" };
 }
 
+function londonOffset(at: number) {
+  const name = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", timeZoneName: "shortOffset" })
+    .formatToParts(new Date(at))
+    .find((part) => part.type === "timeZoneName")!.value;
+  return name === "GMT" ? 0 : Number(name.replace("GMT", "")) * HOUR;
+}
+
 function fromGraph(value: unknown) {
   const item = value as { dateTime: string; timeZone: string };
   if (item.timeZone === "UTC") return new Date(`${item.dateTime}Z`).toISOString();
-  const local = new Date(`${item.dateTime}Z`);
-  const offset = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", timeZoneName: "shortOffset" })
-    .formatToParts(local)
-    .find((part) => part.type === "timeZoneName")!.value;
-  const hours = offset === "GMT" ? 0 : Number(offset.replace("GMT", ""));
-  return new Date(local.getTime() - hours * HOUR).toISOString();
+  const wall = Date.parse(`${item.dateTime}Z`);
+  return new Date(wall - londonOffset(wall - londonOffset(wall))).toISOString();
 }
 
 class FakeOutlook {
@@ -107,7 +110,12 @@ class FakeOutlook {
       if (this.failPatchWith) return json({ error: { code: "Nope", message: "Nope" } }, this.failPatchWith);
       const event = this.events.get(id);
       if (!event) return json({ error: { code: "ErrorItemNotFound", message: "Not found" } }, 404);
-      this.events.set(id, { ...event, subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end) });
+      this.events.set(id, {
+        ...event,
+        subject: String(body!.subject),
+        start: body!.start === undefined ? event.start : fromGraph(body!.start),
+        end: body!.end === undefined ? event.end : fromGraph(body!.end),
+      });
       return json(this.graphEvent(id));
     }
     if (one && method === "GET") {
@@ -244,6 +252,9 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
     calendar_event_ref: null,
     pending_at: "2026-11-13 09:00:00.123456+00",
     attempts: 0,
+    create_key: null,
+    create_user_id: null,
+    create_sent_at: null,
     event_id: null,
     event_user_id: null,
     provider_event_id: null,
@@ -251,6 +262,8 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
     event_ends_at: null,
     event_subject: null,
     event_workspace_id: null,
+    block_starts_at: null,
+    block_ends_at: null,
     ...overrides,
   };
 }
@@ -277,6 +290,7 @@ describe("task block event shape", () => {
       timeZone: "Europe/London",
       link: "https://orbit.example/open?workspace=w&to=%2Ftasks%3Ftask%3Dt",
       transactionId: "tx",
+      key: "key",
     });
     assert.equal(draft.subject, "Call Jane");
     assert.equal(draft.showAs, "busy");

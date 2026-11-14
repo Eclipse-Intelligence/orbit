@@ -43,6 +43,7 @@ export type ClickUpTask = {
   markdown_description?: string | null;
   text_content?: string | null;
   status: { status: string; type: string } | null;
+  date_created?: string | null;
   date_updated: string | null;
   due_date: string | null;
   due_date_time?: boolean | null;
@@ -325,10 +326,12 @@ export function clickupClient(options: ClickUpClientOptions) {
     });
   }
 
-  async function teamTasks(query: { teamId: string; listIds: string[]; updatedAfter: number; page: number }) {
+  async function teamTasks(query: { teamId: string; listIds: string[]; updatedAfter: number; page: number; createdAfter?: number; createdBefore?: number }) {
     const params = new URLSearchParams();
     for (const id of query.listIds) params.append("list_ids[]", id);
     params.set("date_updated_gt", String(Math.max(0, Math.floor(query.updatedAfter))));
+    if (query.createdAfter !== undefined) params.set("date_created_gt", String(Math.max(0, Math.floor(query.createdAfter))));
+    if (query.createdBefore !== undefined) params.set("date_created_lt", String(Math.max(0, Math.floor(query.createdBefore))));
     params.set("include_closed", "true");
     params.set("subtasks", "true");
     params.set("include_markdown_description", "true");

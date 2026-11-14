@@ -17,10 +17,13 @@ import {
   CalendarWriteScopeError,
   createGraphEvent,
   deleteGraphEvent,
+  findTaskBlockEvents,
+  graphInstant,
   patchGraphEvent,
   taskBlockDraft,
   taskBlockPatch,
   type CalendarEvent,
+  type GraphEvent,
 } from "@/lib/microsoft/calendar";
 import { grantsCalendarWrite, MICROSOFT_REJECTED, MicrosoftError, microsoftConfigured, type MicrosoftToken } from "@/lib/microsoft/oauth";
 import { openLink } from "@/lib/open-link";
@@ -33,6 +36,8 @@ const RUN_ROUNDS = 4;
 const RESERVE_MS = 4_000;
 const MIN_MINUTES = 5;
 const MAX_MINUTES = 480;
+const CREATE_GRACE_MS = 2 * MINUTE_MS;
+const SURPLUS_ATTEMPTS = 5;
 
 export const CALENDAR_SYNC: Provenance = { operation: "calendar_sync", source: "microsoft" };
 
@@ -49,6 +54,9 @@ export type BlockRow = {
   calendar_event_ref: string | null;
   pending_at: string;
   attempts: number;
+  create_key: string | null;
+  create_user_id: string | null;
+  create_sent_at: Date | string | null;
   event_id: string | null;
   event_user_id: string | null;
   provider_event_id: string | null;
@@ -56,6 +64,8 @@ export type BlockRow = {
   event_ends_at: Date | string | null;
   event_subject: string | null;
   event_workspace_id: string | null;
+  block_starts_at: Date | string | null;
+  block_ends_at: Date | string | null;
 };
 
 export type BlockPlan =
@@ -82,7 +92,7 @@ export function blockRef(row: Pick<BlockRow, "calendar_event_ref" | "provider_ev
 
 export function planBlock(row: BlockRow, now: number): BlockPlan {
   const ref = blockRef(row);
-  const eventUser = ref ? (row.event_user_id ?? row.owner_id) : null;
+  const eventUser = ref ? (row.event_user_id ?? (row.create_key ? row.create_user_id : null) ?? row.owner_id) : null;
   if (ref && !eventUser) return { kind: "forget" };
   if (ref && eventUser && eventUser !== row.owner_id) return { kind: "remove", userId: eventUser, requeue: true };
   const due = time(row.due_at);
@@ -102,8 +112,8 @@ export function planBlock(row: BlockRow, now: number): BlockPlan {
   return { kind: "write", userId: row.owner_id, start: new Date(start), end: new Date(end), create: false };
 }
 
-export function blockTransactionId(taskId: string, pendingAt: string) {
-  const hex = createHash("sha256").update(`${taskId}|${pendingAt}`).digest("hex");
+export function blockTransactionId(taskId: string, createKey: string) {
+  const hex = createHash("sha256").update(`${taskId}|${createKey}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
@@ -202,7 +212,9 @@ async function release(row: BlockRow) {
   await query("select private.release_task_block($1)", [row.task_id]).catch((error) => console.error("Releasing a task block failed", error));
 }
 
-async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: string, window: { start: Date; end: Date }) {
+type Window = { start: Date; end: Date };
+
+async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: string, window: Window, planned: Window) {
   await withActor(outlook.actor, async (db) => {
     const calendarId = await ensureDefaultCalendar(db, outlook.actor, outlook.connectionId);
     await db.query("delete from crm.calendar_events where task_id = $1 and not (provider_event_id = $2 and calendar_id = $3)", [
@@ -214,8 +226,8 @@ async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: stri
       `insert into crm.calendar_events (
          workspace_id, calendar_id, connection_id, user_id, provider_event_id, subject, starts_at, ends_at,
          is_all_day, is_cancelled, organizer, attendees, show_as, response_status, created_by_orbit, task_id, block_written_at,
-         block_workspace_id
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, false, false, $9::jsonb, '[]'::jsonb, 'busy', 'organizer', true, $10, clock_timestamp(), $11)
+         block_workspace_id, block_starts_at, block_ends_at
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, false, false, $9::jsonb, '[]'::jsonb, 'busy', 'organizer', true, $10, clock_timestamp(), $11, $12, $13)
        on conflict (calendar_id, provider_event_id) do update set
          subject = excluded.subject,
          starts_at = excluded.starts_at,
@@ -223,7 +235,9 @@ async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: stri
          is_cancelled = false,
          task_id = excluded.task_id,
          block_written_at = excluded.block_written_at,
-         block_workspace_id = excluded.block_workspace_id`,
+         block_workspace_id = excluded.block_workspace_id,
+         block_starts_at = excluded.block_starts_at,
+         block_ends_at = excluded.block_ends_at`,
       [
         outlook.actor.workspaceId,
         calendarId,
@@ -236,19 +250,21 @@ async function storeEvent(outlook: Outlook, row: BlockRow, providerEventId: stri
         JSON.stringify({ name: outlook.actor.fullName, email: outlook.email }),
         row.task_id,
         row.workspace_id,
+        planned.start.toISOString(),
+        planned.end.toISOString(),
       ],
     );
   });
 }
 
-function sameWrite(row: BlockRow, plan: Extract<BlockPlan, { kind: "write" }>) {
-  return (
-    row.event_id !== null &&
-    time(row.event_starts_at) === plan.start.getTime() &&
-    time(row.event_ends_at) === plan.end.getTime() &&
-    row.event_subject === row.title &&
-    row.event_workspace_id === row.workspace_id
-  );
+function sameWindow(start: Date | string | null, end: Date | string | null, window: Window) {
+  return time(start) === window.start.getTime() && time(end) === window.end.getTime();
+}
+
+function eventWindow(event: Pick<GraphEvent, "start" | "end"> | null | undefined): Window | null {
+  const start = graphInstant(event?.start);
+  const end = graphInstant(event?.end);
+  return start && end ? { start: new Date(start), end: new Date(end) } : null;
 }
 
 function failed(failure: Failure): BlockOutcome {
@@ -257,7 +273,33 @@ function failed(failure: Failure): BlockOutcome {
   return "deferred";
 }
 
+function ownerChanged(error: unknown) {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "42501";
+}
+
+async function dropCreated(outlook: Outlook, row: BlockRow, id: string, fetchImpl: typeof fetch): Promise<BlockOutcome> {
+  try {
+    await deleteGraphEvent(outlook.token.accessToken, id, fetchImpl);
+  } catch (error) {
+    const failure = graphFailure(error);
+    if (failure !== "gone") {
+      await query("select private.link_task_block($1, null)", [row.task_id]);
+      await defer(row);
+      return failed(failure);
+    }
+  }
+  await settle(row, null, { requeue: true, dropEvent: true });
+  await defer(row);
+  return "removed";
+}
+
 async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockPlan, { kind: "write" }>, fetchImpl: typeof fetch): Promise<BlockOutcome> {
+  const begun = await query<{ key: string | null }>("select private.begin_task_block_create($1, $2)::text as key", [row.task_id, plan.userId]);
+  const key = begun.rows[0]?.key;
+  if (!key) {
+    await defer(row);
+    return "deferred";
+  }
   let created;
   try {
     created = await createGraphEvent(
@@ -268,7 +310,8 @@ async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockP
         end: plan.end,
         timeZone: appTimeZone(),
         link: taskBlockLink(row.task_id, row.workspace_id),
-        transactionId: blockTransactionId(row.task_id, row.pending_at),
+        transactionId: blockTransactionId(row.task_id, key),
+        key,
       }),
       { fetchImpl },
     );
@@ -287,7 +330,21 @@ async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockP
     return "deferred";
   }
   await query("select private.link_task_block($1, $2)", [row.task_id, id]);
-  await storeEvent(outlook, row, id, plan);
+  const written = eventWindow(created);
+  if (written && !sameWindow(written.start, written.end, plan)) {
+    return writeBlock(
+      outlook,
+      { ...row, calendar_event_ref: id, provider_event_id: id, event_id: null, event_starts_at: written.start, event_ends_at: written.end, block_starts_at: null, block_ends_at: null },
+      { ...plan, create: false },
+      fetchImpl,
+    );
+  }
+  try {
+    await storeEvent(outlook, row, id, plan, plan);
+  } catch (error) {
+    if (!ownerChanged(error)) throw error;
+    return dropCreated(outlook, row, id, fetchImpl);
+  }
   await settle(row, id);
   return "created";
 }
@@ -295,15 +352,25 @@ async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockP
 async function writeBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockPlan, { kind: "write" }>, fetchImpl: typeof fetch): Promise<BlockOutcome> {
   const ref = blockRef(row);
   if (plan.create || !ref) return createBlock(outlook, row, plan, fetchImpl);
-  if (sameWrite(row, plan)) {
+  const agreed = row.block_starts_at && row.block_ends_at ? sameWindow(row.block_starts_at, row.block_ends_at, plan) : false;
+  const inOutlook = sameWindow(row.event_starts_at, row.event_ends_at, plan);
+  const moveTimes = !agreed && !inOutlook;
+  if (row.event_id !== null && !moveTimes && row.event_subject === row.title && row.event_workspace_id === row.workspace_id) {
+    if (!agreed) await agreeWindow(outlook, row, plan);
     await settle(row, ref);
     return "unchanged";
   }
+  let patched;
   try {
-    await patchGraphEvent(
+    patched = await patchGraphEvent(
       outlook.token.accessToken,
       ref,
-      taskBlockPatch({ title: row.title, start: plan.start, end: plan.end, timeZone: appTimeZone(), link: taskBlockLink(row.task_id, row.workspace_id) }),
+      taskBlockPatch({
+        title: row.title,
+        ...(moveTimes ? { start: plan.start, end: plan.end } : {}),
+        timeZone: appTimeZone(),
+        link: taskBlockLink(row.task_id, row.workspace_id),
+      }),
       fetchImpl,
     );
   } catch (error) {
@@ -319,9 +386,26 @@ async function writeBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockPl
     await defer(row);
     return failed(failure);
   }
-  await storeEvent(outlook, row, ref, plan);
+  const shown = moveTimes ? plan : (eventWindow(patched) ?? (row.event_starts_at && row.event_ends_at ? { start: new Date(row.event_starts_at), end: new Date(row.event_ends_at) } : plan));
+  try {
+    await storeEvent(outlook, row, ref, shown, plan);
+  } catch (error) {
+    if (!ownerChanged(error)) throw error;
+    return dropCreated(outlook, row, ref, fetchImpl);
+  }
   await settle(row, ref);
   return "updated";
+}
+
+async function agreeWindow(outlook: Outlook, row: BlockRow, plan: Window) {
+  await withActor(outlook.actor, (db) =>
+    db.query("update crm.calendar_events set block_starts_at = $3, block_ends_at = $4 where id = $1 and user_id = $2", [
+      row.event_id,
+      outlook.actor.userId,
+      plan.start.toISOString(),
+      plan.end.toISOString(),
+    ]),
+  );
 }
 
 async function removeBlock(outlook: Outlook, row: BlockRow, requeue: boolean, fetchImpl: typeof fetch): Promise<BlockOutcome> {
@@ -369,6 +453,137 @@ async function runRow(row: BlockRow, plan: BlockPlan, access: Access, fetchImpl:
   return writeBlock(access, row, plan, fetchImpl);
 }
 
+async function hold(row: BlockRow) {
+  await query("select private.hold_task_block($1, $2::interval)", [row.task_id, `${CREATE_GRACE_MS / 1000} seconds`]).catch((error) =>
+    console.error("Holding a task block failed", error),
+  );
+}
+
+function recently(row: BlockRow, now: number) {
+  const sent = time(row.create_sent_at);
+  return sent !== null && now - sent < CREATE_GRACE_MS;
+}
+
+async function recoverCreates(
+  rows: BlockRow[],
+  fetchImpl: typeof fetch,
+  result: BlockRun,
+  deadline: number,
+  throttledUsers: Set<string>,
+): Promise<BlockRow[]> {
+  const uncertain = new Map<string, BlockRow[]>();
+  for (const row of rows) {
+    if (!row.create_key || !row.create_user_id || blockRef(row)) continue;
+    uncertain.set(row.create_user_id, [...(uncertain.get(row.create_user_id) ?? []), row]);
+  }
+  if (uncertain.size === 0) return rows;
+  const recovered = new Map<string, BlockRow | null>();
+  const skip = async (row: BlockRow, outcome: "deferred" | "throttled" | null) => {
+    if (outcome) {
+      await defer(row);
+      result[outcome] += 1;
+    } else {
+      await release(row);
+    }
+    recovered.set(row.task_id, null);
+  };
+  for (const [userId, items] of uncertain) {
+    if (deadline - Date.now() < RESERVE_MS) {
+      for (const row of items) await skip(row, null);
+      continue;
+    }
+    if (throttledUsers.has(userId)) {
+      for (const row of items) await skip(row, "throttled");
+      continue;
+    }
+    let access: Access = "retry";
+    try {
+      const actor = await actingActor(userId, items[0].workspace_id, true);
+      access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
+    } catch (error) {
+      console.error("Opening Outlook for task blocks failed", error);
+    }
+    if (access === "orbit_only" || access === "retry") {
+      console.error("Couldn't look up an unconfirmed Outlook block", { userId, access });
+      for (const row of items) {
+        if (access === "orbit_only" && row.owner_id !== userId) {
+          await settle(row, null, { requeue: true, dropEvent: true });
+          result.orbit_only += 1;
+          recovered.set(row.task_id, null);
+          continue;
+        }
+        await skip(row, "deferred");
+      }
+      continue;
+    }
+    for (const row of items) {
+      if (deadline - Date.now() < RESERVE_MS) {
+        await skip(row, null);
+        continue;
+      }
+      if (throttledUsers.has(userId)) {
+        await skip(row, "throttled");
+        continue;
+      }
+      let events: GraphEvent[];
+      try {
+        events = await findTaskBlockEvents(access.token.accessToken, row.create_key!, fetchImpl);
+      } catch (error) {
+        console.error("Looking up an unconfirmed Outlook block failed", error);
+        const failure = graphFailure(error);
+        if (failure === "throttled") throttledUsers.add(userId);
+        await skip(row, failure === "throttled" ? "throttled" : "deferred");
+        continue;
+      }
+      const [found, ...extra] = events;
+      if (!found) {
+        if (recently(row, Date.now())) {
+          await hold(row);
+          result.deferred += 1;
+          recovered.set(row.task_id, null);
+        }
+        continue;
+      }
+      let surplusLeft = false;
+      for (const event of extra) {
+        if (throttledUsers.has(userId)) {
+          surplusLeft = true;
+          break;
+        }
+        await deleteGraphEvent(access.token.accessToken, event.id!.trim(), fetchImpl).catch((error) => {
+          console.error("Removing a second Outlook block failed", error);
+          surplusLeft = true;
+          if (graphFailure(error) === "throttled") throttledUsers.add(userId);
+        });
+      }
+      if (surplusLeft && row.attempts < SURPLUS_ATTEMPTS) {
+        await skip(row, throttledUsers.has(userId) ? "throttled" : "deferred");
+        continue;
+      }
+      const id = found.id!.trim();
+      const shown = eventWindow(found);
+      if (userId === row.owner_id) await query("select private.link_task_block($1, $2)", [row.task_id, id]);
+      recovered.set(row.task_id, {
+        ...row,
+        calendar_event_ref: id,
+        provider_event_id: id,
+        event_id: null,
+        event_user_id: userId,
+        event_starts_at: shown?.start ?? null,
+        event_ends_at: shown?.end ?? null,
+        event_subject: found.subject ?? null,
+        block_starts_at: null,
+        block_ends_at: null,
+      });
+    }
+  }
+  return rows.flatMap((row) => {
+    if (!recovered.has(row.task_id)) return [row];
+    const next = recovered.get(row.task_id);
+    return next ? [next] : [];
+  });
+}
+
 function emptyRun(): BlockRun {
   return { created: 0, updated: 0, removed: 0, unchanged: 0, deferred: 0, throttled: 0, orbit_only: 0 };
 }
@@ -380,6 +595,7 @@ export async function syncTaskBlocks(
   const deadline = options.deadline ?? Date.now() + 25_000;
   const result = emptyRun();
   if (options.taskIds && options.taskIds.length === 0) return result;
+  const throttledUsers = new Set<string>();
   for (let round = 0; round < RUN_ROUNDS; round += 1) {
     if (deadline - Date.now() < RESERVE_MS) break;
     const claimed = await query<BlockRow>("select * from private.claim_task_blocks($1::uuid[], $2::uuid, $3)", [
@@ -389,17 +605,17 @@ export async function syncTaskBlocks(
     ]);
     if (claimed.rows.length === 0) break;
     const now = options.now ?? Date.now();
+    const rows = await recoverCreates(claimed.rows, fetchImpl, result, deadline, throttledUsers);
     const groups = new Map<string, { row: BlockRow; plan: BlockPlan }[]>();
-    for (const row of claimed.rows) {
+    for (const row of rows) {
       const plan = planBlock(row, now);
       const key = plan.kind === "write" || plan.kind === "remove" ? `${plan.kind}:${plan.userId}` : "";
       groups.set(key, [...(groups.get(key) ?? []), { row, plan }]);
     }
-    let requeued = false;
     for (const [key, items] of groups) {
       let access: Access = "orbit_only";
-      if (key) {
-        const [kind, userId] = key.split(":");
+      const [kind, userId] = key ? key.split(":") : [null, null];
+      if (kind && userId && !throttledUsers.has(userId)) {
         try {
           const actor = await actingActor(userId, items[0].row.workspace_id, kind === "remove");
           access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
@@ -408,13 +624,12 @@ export async function syncTaskBlocks(
           access = "retry";
         }
       }
-      let throttled = false;
       for (const { row, plan } of items) {
         if (deadline - Date.now() < RESERVE_MS) {
           await release(row);
           continue;
         }
-        if (throttled) {
+        if (userId && throttledUsers.has(userId)) {
           await defer(row);
           result.throttled += 1;
           continue;
@@ -427,13 +642,10 @@ export async function syncTaskBlocks(
           await defer(row);
           outcome = "deferred";
         }
-        if (outcome === "throttled") throttled = true;
-        if (plan.kind === "remove" && plan.requeue && (outcome === "removed" || outcome === "orbit_only")) requeued = true;
+        if (outcome === "throttled" && userId) throttledUsers.add(userId);
         result[outcome] += 1;
       }
     }
-    if (!requeued && !options.taskIds) continue;
-    if (!requeued) break;
   }
   return result;
 }

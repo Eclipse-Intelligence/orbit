@@ -1,4 +1,5 @@
 import type { Db } from "@/lib/db/pool";
+import { namePattern, straightQuotes } from "@/lib/task-pad";
 
 export type LinkedRecord = { id: string; name: string };
 
@@ -16,16 +17,16 @@ const SCAN_LIMIT = 50;
 
 export const NO_DETECTION: DetectedTaskLinks = { company: null, contact: null, opportunity: null };
 
-function escape(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export function quotesFoldedSql(expression: string) {
+  return `regexp_replace(${expression}, '[\u2019\u2018\u02bc\u201b]', '''', 'g')`;
 }
 
 export function mentionsName(text: string, name: string, options: { exact?: boolean } = {}) {
-  return new RegExp(`(^|[^\\p{L}\\p{N}-])${escape(name)}($|[^\\p{L}\\p{N}-])`, options.exact ? "u" : "iu").test(text);
+  return new RegExp(`(^|[^\\p{L}\\p{N}-])${namePattern(name)}($|[^\\p{L}\\p{N}-])`, options.exact ? "u" : "iu").test(text);
 }
 
 export function folded(value: string) {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-GB");
+  return straightQuotes(value).trim().replace(/\s+/g, " ").toLocaleLowerCase("en-GB");
 }
 
 type Named = { name: string };
@@ -69,9 +70,9 @@ export async function detectTaskRecordsInDb(
   const companies = await db.query<{ id: string; name: string }>(
     `select id, name from crm.companies
      where workspace_id = $1 and archived_at is null and char_length(name) >= $3
-       and strpos(lower($2), lower(name)) > 0
+       and strpos(lower($2), lower(${quotesFoldedSql("name")})) > 0
      order by char_length(name) desc limit ${SCAN_LIMIT}`,
-    [workspaceId, clean, MIN_NAME],
+    [workspaceId, straightQuotes(clean), MIN_NAME],
   );
   const contacts = await db.query<{ id: string; name: string; company_id: string | null; company_name: string | null }>(
     `select c.id, trim(c.first_name) || ' ' || trim(c.last_name) as name, c.company_id, co.name as company_name
@@ -79,18 +80,18 @@ export async function detectTaskRecordsInDb(
      left join crm.companies co on co.id = c.company_id
      where c.workspace_id = $1 and c.archived_at is null
        and nullif(trim(c.first_name), '') is not null and nullif(trim(c.last_name), '') is not null
-       and strpos(lower($2), lower(trim(c.first_name) || ' ' || trim(c.last_name))) > 0
+       and strpos(lower($2), lower(${quotesFoldedSql("trim(c.first_name) || ' ' || trim(c.last_name)")})) > 0
      order by char_length(trim(c.first_name) || ' ' || trim(c.last_name)) desc limit ${SCAN_LIMIT}`,
-    [workspaceId, clean],
+    [workspaceId, straightQuotes(clean)],
   );
   const opportunities = await db.query<{ id: string; name: string; company_id: string; company_name: string }>(
     `select o.id, o.name, o.company_id, co.name as company_name
      from crm.opportunities o
      join crm.companies co on co.id = o.company_id
      where o.workspace_id = $1 and o.archived_at is null and char_length(o.name) >= $3
-       and strpos(lower($2), lower(o.name)) > 0
+       and strpos(lower($2), lower(${quotesFoldedSql("o.name")})) > 0
      order by char_length(o.name) desc limit ${SCAN_LIMIT}`,
-    [workspaceId, clean, MIN_NAME],
+    [workspaceId, straightQuotes(clean), MIN_NAME],
   );
   const contactHits = mentioned(contacts.rows, clean, members);
   const companyHits = mentioned(

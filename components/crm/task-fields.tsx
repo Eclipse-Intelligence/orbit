@@ -154,7 +154,7 @@ function sourceOf(task: Task): Source {
 
 function dueWrite(value: string): TaskDetails {
   if (!value) return { dueAt: null, remindMinutes: null };
-  return padDueHasTime(value) ? { dueAt: localInstant(value) } : { dueDate: value };
+  return padDueHasTime(value) ? { dueAt: localInstant(value), dueHasTime: true } : { dueDate: value };
 }
 
 const drafts = new Map<string, { title?: string; text?: string }>();
@@ -340,7 +340,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const day = due ? due.slice(0, 10) : null;
     if (!day) return;
     const value = `${day}T${time}`;
-    writeDue(value, { dueAt: localInstant(value), remindMinutes: minutes }, minutes);
+    writeDue(value, { dueAt: localInstant(value), dueHasTime: true, remindMinutes: minutes }, minutes);
   }
 
   function changeDuration(minutes: number) {

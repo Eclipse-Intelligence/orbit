@@ -13,6 +13,7 @@ import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { listTags } from "@/lib/crm/tags";
 import { createTask } from "@/lib/crm/tasks";
+import { dayStartIso, taskDueDay } from "@/lib/crm/task-time";
 import type { UserActor } from "@/lib/crm/types";
 import { createWebhook } from "@/lib/crm/webhooks";
 import { describeUndo } from "@/lib/crm/undo";
@@ -1127,6 +1128,45 @@ describe("moving records to another workspace", () => {
     const copying = await previewMoveToWorkspace(eclipse, { companyIds: [archive.id], workspaceId: ridgeon.workspaceId, copy: true });
     assert.equal(copying.companyContacts, 1);
     assert.equal(copying.contacts, 1);
+  });
+
+  it("hands a colleague's timed task to the mover as date only, with no reminder", async () => {
+    const harbour = await company(eclipse, "Harbour", { domain: "harbour-move.test" });
+    const at = new Date(Math.floor((Date.now() + 2 * 86_400_000) / 60_000) * 60_000).toISOString();
+    const theirs = (await createTask(priya, { title: "Call Harbour", companyId: harbour.id, dueAt: at, durationMinutes: 60, remindMinutes: 15 }, { provenance: PROVENANCE })).body.task;
+    const mine = (await createTask(eclipse, { title: "Send Harbour notes", companyId: harbour.id, dueAt: at, durationMinutes: 30, remindMinutes: 15 }, { provenance: PROVENANCE })).body.task;
+    assert.equal(theirs.dueHasTime, true);
+    assert.equal(theirs.ownerId, priya.userId);
+    await moveRecordsToWorkspace(eclipse, { companyIds: [harbour.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    const rows = await admin<{ id: string; owner_id: string; due_has_time: boolean; due_at: Date; remind_minutes: number | null; scheduled_by: string | null; workspace_id: string }>(
+      "select id, owner_id, due_has_time, due_at, remind_minutes, scheduled_by, workspace_id from crm.tasks where id = any($1::uuid[])",
+      [[theirs.id, mine.id]],
+    );
+    const handed = rows.find((item) => item.id === theirs.id)!;
+    assert.equal(handed.workspace_id, ridgeon.workspaceId);
+    assert.equal(handed.owner_id, eclipse.userId);
+    assert.equal(handed.due_has_time, false);
+    assert.equal(new Date(handed.due_at).toISOString(), dayStartIso(taskDueDay(at)!));
+    assert.equal(handed.remind_minutes, null);
+    assert.equal(handed.scheduled_by, null);
+    const kept = rows.find((item) => item.id === mine.id)!;
+    assert.equal(kept.owner_id, eclipse.userId);
+    assert.equal(kept.due_has_time, true);
+    assert.equal(new Date(kept.due_at).toISOString(), at);
+    assert.equal(kept.remind_minutes, 15);
+  });
+
+  it("puts a handed-over task on its London day in summer and winter", async () => {
+    const quay = await company(eclipse, "Quay", { domain: "quay-move.test" });
+    const summer = (await createTask(priya, { title: "Call Quay late", companyId: quay.id, dueAt: "2030-07-10T23:30:00.000Z" }, { provenance: PROVENANCE })).body.task;
+    const winter = (await createTask(priya, { title: "Call Quay early", companyId: quay.id, dueAt: "2030-01-15T00:30:00.000Z" }, { provenance: PROVENANCE })).body.task;
+    await moveRecordsToWorkspace(eclipse, { companyIds: [quay.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    const rows = await admin<{ id: string; due_at: Date; due_has_time: boolean }>("select id, due_at, due_has_time from crm.tasks where id = any($1::uuid[])", [[summer.id, winter.id]]);
+    const day = (id: string) => rows.find((item) => item.id === id)!;
+    assert.equal(new Date(day(summer.id).due_at).toISOString(), "2030-07-10T23:00:00.000Z");
+    assert.equal(new Date(day(winter.id).due_at).toISOString(), "2030-01-15T00:00:00.000Z");
+    assert.equal(day(summer.id).due_has_time, false);
+    assert.equal(day(winter.id).due_has_time, false);
   });
 
   it("turns timeouts, deadlocks and missed matches into messages a person can act on", () => {

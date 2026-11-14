@@ -543,12 +543,22 @@ export function personalDraft(input: PersonalEventInput) {
 
 export const TASK_BLOCK_NOTE = "From Orbit.";
 
+export const TASK_BLOCK_PROPERTY = "String {6f1e3c52-8a4d-4b7e-9c21-5d0a7b3e8f14} Name OrbitTaskBlockKey";
+
 export function taskBlockBodyHtml(link: string | null) {
   if (!link) return `<p>${TASK_BLOCK_NOTE}</p>`;
   return `<p>${TASK_BLOCK_NOTE} <a href="${escapeHtml(link)}">Open the task</a></p>`;
 }
 
-export function taskBlockDraft(input: { title: string; start: Date; end: Date; timeZone: string; link: string | null; transactionId: string }) {
+export function taskBlockDraft(input: {
+  title: string;
+  start: Date;
+  end: Date;
+  timeZone: string;
+  link: string | null;
+  transactionId: string;
+  key: string;
+}) {
   return {
     subject: input.title,
     body: { contentType: "HTML" as const, content: taskBlockBodyHtml(input.link) },
@@ -559,18 +569,34 @@ export function taskBlockDraft(input: { title: string; start: Date; end: Date; t
     isReminderOn: false,
     responseRequested: false,
     transactionId: input.transactionId,
+    singleValueExtendedProperties: [{ id: TASK_BLOCK_PROPERTY, value: input.key }],
   };
 }
 
-export function taskBlockPatch(input: { title: string; start: Date; end: Date; timeZone: string; link: string | null }) {
+export function taskBlockPatch(input: { title: string; start?: Date; end?: Date; timeZone: string; link: string | null }) {
   return {
     subject: input.title,
     body: { contentType: "HTML" as const, content: taskBlockBodyHtml(input.link) },
-    ...graphDateTimes(input.start, input.end, input.timeZone),
+    ...(input.start && input.end ? graphDateTimes(input.start, input.end, input.timeZone) : {}),
     showAs: "busy",
     sensitivity: "private",
     isReminderOn: false,
   };
+}
+
+export function taskBlockSearchUrl(key: string) {
+  const filter = `singleValueExtendedProperties/Any(ep: ep/id eq '${TASK_BLOCK_PROPERTY.replace(/'/g, "''")}' and ep/value eq '${key.replace(/'/g, "''")}')`;
+  return `https://graph.microsoft.com/v1.0/me/events?$filter=${encodeURIComponent(filter)}&$select=${encodeURIComponent("id,subject,start,end")}&$top=10`;
+}
+
+export async function findTaskBlockEvents(accessToken: string, key: string, fetchImpl: typeof fetch = fetch) {
+  const response = await fetchImpl(taskBlockSearchUrl(key), {
+    headers: { authorization: `Bearer ${accessToken}`, prefer: PLAIN_PREFER },
+    signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+  });
+  if (!response.ok) throw await writeError(response, "find");
+  const body = (await response.json().catch(() => ({}))) as { value?: GraphEvent[] };
+  return (body.value ?? []).filter((event) => Boolean(event.id?.trim()));
 }
 
 function eventsUrl(calendarId?: string | null) {
@@ -585,13 +611,14 @@ function retryAfter(response: Response) {
   return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : null;
 }
 
-type WriteAction = "create" | "cancel" | "move" | "respond";
+type WriteAction = "create" | "cancel" | "move" | "respond" | "find";
 
 const WRITE_FALLBACK: Record<WriteAction, string> = {
   create: "Couldn't create the meeting. Try again.",
   cancel: "Couldn't cancel the meeting. Try again.",
   move: "Couldn't move the meeting. Try again.",
   respond: "Couldn't send your response. Try again.",
+  find: "Couldn't look up the Outlook block. Try again.",
 };
 
 async function writeError(response: Response, action: WriteAction) {

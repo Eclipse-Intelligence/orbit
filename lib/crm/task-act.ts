@@ -240,7 +240,7 @@ export async function taskContext(actor: UserActor, taskId: string): Promise<Tas
   if (!isUuid(taskId)) throw notFound("task");
   const [found, booking] = await Promise.all([
     withActor(actor, async (db) => {
-      const task = await readTaskInDb(db, taskId);
+      const task = await readTaskInDb(db, actor, taskId);
       if (!task || task.workspaceId !== actor.workspaceId) throw notFound("task");
       return taskContextInDb(db, actor, task);
     }),
@@ -251,7 +251,7 @@ export async function taskContext(actor: UserActor, taskId: string): Promise<Tas
 
 async function lockedTask(db: Db, actor: UserActor, taskId: string) {
   await db.query("select 1 from crm.tasks where id = $1 for update", [taskId]);
-  const task = await readTaskInDb(db, taskId);
+  const task = await readTaskInDb(db, actor, taskId);
   if (!task || task.workspaceId !== actor.workspaceId || task.archivedAt) throw notFound("task");
   if (!canChangeTask(actor, task)) throw cannotChange();
   return task;
@@ -319,7 +319,7 @@ export async function completeTaskWithOutcome(actor: UserActor, taskId: string, 
     );
     if (earlier.rows[0]) {
       if (earlier.rows[0].task_id !== task.id) throw new CrmError("invalid_input", "Couldn't save. Try again.", 400);
-      const next = earlier.rows[0].next_task_id ? await readTaskInDb(db, earlier.rows[0].next_task_id) : null;
+      const next = earlier.rows[0].next_task_id ? await readTaskInDb(db, actor, earlier.rows[0].next_task_id) : null;
       return { task, activityId: earlier.rows[0].activity_id, next, replayed: true };
     }
     const links = { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId };

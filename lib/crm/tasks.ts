@@ -21,7 +21,7 @@ import {
   type MutationOutcome,
 } from "@/lib/crm/mutate";
 import { cleanText, likePattern } from "@/lib/crm/normalize";
-import { assertScope } from "@/lib/crm/scopes";
+import { assertScope, hasScope, scopesForRole } from "@/lib/crm/scopes";
 import {
   TASK_PRIORITIES,
   type Actor,
@@ -138,6 +138,7 @@ type PreparedTask = {
   description?: string | null;
   dueAt?: string | null;
   dueHasTime?: boolean;
+  wallTime?: boolean;
   scheduledBy?: TaskScheduledBy | null;
   durationMinutes?: number;
   remindMinutes?: number | null;
@@ -199,7 +200,7 @@ function blank(value: string | null | undefined) {
   return value === null || (typeof value === "string" && value.trim() === "");
 }
 
-function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean } | undefined {
+function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean; wallTime?: boolean } | undefined {
   const input = { ...given };
   if (input.dueAt !== undefined && input.dueDate !== undefined) {
     if (blank(input.dueAt)) input.dueAt = undefined;
@@ -225,7 +226,7 @@ function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean 
     const day = taskDueDay(reading.date.toISOString());
     return { dueAt: day ? dayStartIso(day) : reading.date.toISOString(), dueHasTime: false };
   }
-  return { dueAt: reading.date.toISOString(), dueHasTime: true };
+  return { dueAt: reading.date.toISOString(), dueHasTime: true, wallTime: input.dueHasTime === true };
 }
 
 function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
@@ -242,6 +243,7 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   if (due) {
     next.dueAt = due.dueAt;
     next.dueHasTime = due.dueHasTime;
+    if (due.wallTime) next.wallTime = true;
     next.scheduledBy = due.dueHasTime ? (input.scheduledBy ?? "person") : null;
   }
   if (input.durationMinutes !== undefined) {
@@ -296,6 +298,8 @@ function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { owne
   const ownerChanges = write.ownerId !== undefined && (write.ownerId ?? null) !== (current?.ownerId ?? null);
   return ownerChanges || write.dueAt !== undefined;
 }
+
+export const NO_TIME_FOR_REMINDER = "This task has no time. Send dueHasTime: true to set one, then a reminder.";
 
 export const OWNER_SETS_LENGTH = "Only the owner can change the length of a timed task.";
 
@@ -401,8 +405,8 @@ async function keepAssignerTagged(
   return (await tagInDb(db, actor, task, [actor.userId], provenance)).length > 0;
 }
 
-async function readTask(db: Db, id: string) {
-  const result = await db.query<TaskRow>(`${TASK_SQL} where t.id = $1`, [id]);
+async function readTask(db: Db, actor: Actor, id: string) {
+  const result = await db.query<TaskRow>(`${TASK_SQL} where t.id = $1 and t.workspace_id = $2`, [id, actor.workspaceId]);
   return result.rows[0] ?? null;
 }
 
@@ -467,7 +471,7 @@ export async function createTaskInDb(
         write.mailThreadKey ?? null,
       ],
     );
-    const saved = await readTask(db, inserted.rows[0].id);
+    const saved = await readTask(db, actor, inserted.rows[0].id);
     if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     queueTaskBlock(db, saved.id);
     const task = mapTask(saved);
@@ -501,9 +505,14 @@ async function applyTask(
   provenance: Provenance | undefined,
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
+  if (current.archived_at && !options.restoring) throw notFound("task");
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const restoresTime = Boolean(options.restoring && write.dueAt !== undefined && write.ownerId !== undefined);
-  if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule)) {
+  const echoesDay = write.dueAt !== undefined && Boolean(write.dueHasTime) && !current.due_has_time && !options.claimSchedule && !write.wallTime && sameDue(write, current);
+  if (echoesDay && write.remindMinutes !== undefined && write.remindMinutes !== null) {
+    throw new CrmError("invalid_input", NO_TIME_FOR_REMINDER, 400, { field: "dueHasTime" });
+  }
+  if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule || write.wallTime)) {
     delete write.dueAt;
     delete write.dueHasTime;
     if (!options.claimSchedule || write.scheduledBy === (current.scheduled_by ?? null)) delete write.scheduledBy;
@@ -578,7 +587,7 @@ async function applyTask(
   }
   if (updated === 0) throw cannotChange(write);
   queueTaskBlock(db, current.id);
-  const saved = await readTask(db, current.id);
+  const saved = await readTask(db, actor, current.id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
   if (reassigning && options.restoring && options.undoing && actor.type === "user" && canChangeTask(actor, task) && !silent(provenance)) {
@@ -630,7 +639,7 @@ export async function updateTaskInDb(
   input: TaskWrite,
   provenance?: Provenance,
 ) {
-  const current = await readTask(db, id);
+  const current = await readTask(db, actor, id);
   if (!current) throw notFound("task");
   return applyTask(db, actor, current, preparedUpdate(current, input), provenance);
 }
@@ -685,7 +694,7 @@ export async function placeTask(
   if (!isUuid(id) || !placement || typeof placement !== "object") throw notFound("task");
   const provenance = options.provenance ?? { operation: "drag_task", source: "web" };
   return withActor(actor, async (db) => {
-    const current = await readTask(db, id);
+    const current = await readTask(db, actor, id);
     if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
     if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
     if (current.completed_at) throw new CrmError("invalid_input", "This task is done. Reopen it to move it.", 400);
@@ -706,7 +715,7 @@ export async function scheduleTaskInDb(
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(id)) throw notFound("task");
   await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-  const current = await readTask(db, id);
+  const current = await readTask(db, actor, id);
   if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
   if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
   const refusal = refuse(mapTask(current));
@@ -839,8 +848,8 @@ export async function getTask(actor: Actor, id: string, options: { direct?: bool
   if (!isUuid(id)) throw notFound("task");
   return withActor(actor, async (db) => {
     const row = options.direct
-      ? (await db.query<TaskRow>(`${TASK_SQL} where t.id = $1 and ${directTaskSql("t")}`, [id])).rows[0]
-      : await readTask(db, id);
+      ? (await db.query<TaskRow>(`${TASK_SQL} where t.id = $1 and t.workspace_id = $2 and ${directTaskSql("t")}`, [id, actor.workspaceId])).rows[0]
+      : await readTask(db, actor, id);
     if (!row) throw notFound("task");
     return (await withMailThreadsInDb(db, actor, [mapTask(row)]))[0];
   });
@@ -874,7 +883,7 @@ export async function updateTask(
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       if (input.completed !== undefined) await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-      const current = await readTask(db, id);
+      const current = await readTask(db, actor, id);
       if (!current) throw notFound("task");
       const updated = await applyTask(db, actor, current, preparedUpdate(current, input), provenance);
       return { task: updated.task };
@@ -895,8 +904,8 @@ export async function completeTask(
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-      const current = await readTask(db, id);
-      if (!current) throw notFound("task");
+      const current = await readTask(db, actor, id);
+      if (!current || current.archived_at) throw notFound("task");
       if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
         return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
       }
@@ -918,7 +927,7 @@ export async function reopenTask(
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-      const current = await readTask(db, id);
+      const current = await readTask(db, actor, id);
       if (!current) throw notFound("task");
       if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
       if (!current.completed_at || current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
@@ -943,13 +952,13 @@ export async function archiveTask(
 }
 
 export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
-  const current = await readTask(db, id);
+  const current = await readTask(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
   const archived = await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
   if ((archived.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
-  const saved = await readTask(db, id);
+  const saved = await readTask(db, actor, id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
   await recordAudit(db, actor, "task.archived", "task", task.id, provenance, {
@@ -960,13 +969,13 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
 }
 
 export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
-  const current = await readTask(db, id);
+  const current = await readTask(db, actor, id);
   if (!current) throw notFound("task");
   if (!current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
   const restored = await db.query("update crm.tasks set archived_at = null where id = $1", [id]);
   if ((restored.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
-  const saved = await readTask(db, id);
+  const saved = await readTask(db, actor, id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
   await recordAudit(db, actor, "task.updated", "task", task.id, provenance, {
@@ -977,10 +986,9 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
 }
 
-export async function readTaskInDb(db: Db, id: string, viewer?: Actor) {
-  const row = await readTask(db, id);
-  if (!row) return null;
-  return viewer ? (await withMailThreadsInDb(db, viewer, [mapTask(row)]))[0] : mapTask(row);
+export async function readTaskInDb(db: Db, actor: Actor, id: string) {
+  const row = await readTask(db, actor, id);
+  return row ? mapTask(row) : null;
 }
 
 export async function restoreTaskInDb(
@@ -992,7 +1000,7 @@ export async function restoreTaskInDb(
   provenance: Provenance,
   undoing: string | null = null,
 ) {
-  const current = await readTask(db, id);
+  const current = await readTask(db, actor, id);
   if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;
@@ -1085,9 +1093,26 @@ export async function listTaskParticipants(actor: UserActor, taskIds: string[]):
   });
 }
 
-export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: string, userIds: string[], provenance?: Provenance, options: { alert?: boolean } = {}) {
-  const task = await readTask(db, taskId);
+async function actorInTaskWorkspace(db: Db, actor: UserActor, workspaceId: string): Promise<UserActor> {
+  if (workspaceId === actor.workspaceId) return actor;
+  const found = await db.query<{ role: UserActor["role"]; name: string }>(
+    `select m.role, w.name from crm.workspace_members m
+     join crm.workspaces w on w.id = m.workspace_id
+     where m.workspace_id = $1 and m.user_id = $2`,
+    [workspaceId, actor.userId],
+  );
+  const row = found.rows[0];
+  if (!row) throw notFound("task");
+  const scopes = scopesForRole(row.role).filter((scope) => hasScope(actor.scopes, scope));
+  const home: UserActor = { ...actor, workspaceId, workspaceName: row.name, role: row.role, scopes };
+  assertScope(home.scopes, "tasks:write");
+  return home;
+}
+
+export async function addTaskParticipantsInDb(db: Db, caller: UserActor, taskId: string, userIds: string[], provenance?: Provenance, options: { alert?: boolean } = {}) {
+  const task = (await db.query<TaskRow>(`${TASK_SQL} where t.id = $1`, [taskId])).rows[0];
   if (!task) throw notFound("task");
+  const actor = await actorInTaskWorkspace(db, caller, task.workspace_id);
   const wanted = [...new Set(userIds.filter(isUuid).map((id) => id.toLowerCase()))].filter((id) => id !== task.owner_id);
   if (wanted.length === 0) return [];
   const members = await db.query<{ user_id: string }>(
@@ -1115,7 +1140,10 @@ export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: 
 export async function addTaskParticipants(actor: UserActor, taskId: string, userIds: string[]) {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(taskId)) throw notFound("task");
-  return withActor(actor, (db) => addTaskParticipantsInDb(db, actor, taskId, userIds));
+  return withActor(actor, async (db) => {
+    if (!(await readTask(db, actor, taskId))) throw notFound("task");
+    return addTaskParticipantsInDb(db, actor, taskId, userIds);
+  });
 }
 
 export async function removeTaskParticipant(actor: UserActor, taskId: string, userId: string, provenance?: Provenance) {
@@ -1123,7 +1151,7 @@ export async function removeTaskParticipant(actor: UserActor, taskId: string, us
   if (!isUuid(taskId)) throw notFound("task");
   if (!isUuid(userId)) return false;
   return withActor(actor, async (db) => {
-    const task = await readTask(db, taskId);
+    const task = await readTask(db, actor, taskId);
     if (!task) throw notFound("task");
     if (task.owner_id === userId) return false;
     const listed = await db.query("select 1 from crm.task_participants where task_id = $1 and user_id = $2", [taskId, userId]);
