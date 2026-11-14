@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { CrmError } from "@/lib/crm/errors";
@@ -181,70 +183,99 @@ describe("task area UI", () => {
     assert.equal(panelTaskFor("t1", listed, kept, () => false), listed);
   });
 
-  it("reads a weekday with a time later today as today, and as next week once that time has passed", () => {
-    const mondayMorning = new Date("2026-11-16T10:30:00Z");
-    const mondayEvening = new Date("2026-11-16T16:00:00Z");
-    assert.equal(parseTaskText("Call Jane Monday 3pm", mondayMorning).due, "2026-11-16T15:00");
-    assert.equal(parseTaskText("Call Jane this Monday at 3pm", mondayMorning).due, "2026-11-16T15:00");
-    assert.equal(parseTaskText("Call Jane mon 15:00", mondayMorning).due, "2026-11-16T15:00");
-    assert.equal(parseTaskText("Call Jane Monday 3pm", mondayEvening).due, "2026-11-23T15:00");
-    assert.equal(parseTaskText("Call Jane Monday 10am", mondayMorning).due, "2026-11-23T10:00");
-    assert.equal(parseTaskText("Call Jane next Monday 3pm", mondayMorning).due, "2026-11-23T15:00");
-    assert.equal(parseTaskText("Call Jane Monday", mondayMorning).due, "2026-11-23");
-    assert.equal(parseTaskText("Call Jane Tuesday 3pm", mondayMorning).due, "2026-11-17T15:00");
-    const springSaturday = new Date("2027-03-27T12:00:00Z");
-    const gap = parseTaskText("Call Jane Sunday 1:30am", springSaturday);
-    assert.equal(gap.due, "2027-03-28T01:30");
-    assert.equal(gap.unsure, true);
-    assert.equal(parseTaskText("Call Jane Sunday 2:30am", springSaturday).unsure, false);
-    const saturday = new Date("2026-11-21T09:00:00Z");
-    assert.equal(parseTaskText("Call Sam sat 3pm", saturday).due, "2026-11-21T15:00");
-    assert.equal(parseTaskText("Call Sam next sat 3pm", saturday).due, "2026-11-28T15:00");
+  it("either reads a title from the review corpus with confidence and gets it right, or hands the whole text to the AI", () => {
+    const nows: Record<string, string> = {
+      monAM: "2026-11-16T09:15:00Z",
+      friPM: "2026-11-20T18:30:00Z",
+      sunNight: "2026-11-22T23:30:00Z",
+      satBeforeSpring: "2027-03-27T20:00:00Z",
+      sunSpring: "2027-03-28T00:30:00Z",
+      satBeforeAutumn: "2026-10-24T19:00:00Z",
+      sunAutumn: "2026-10-25T00:30:00Z",
+    };
+    const fixtures = path.join(import.meta.dirname, "fixtures");
+    const titles = ["task-pad-titles.txt", "task-pad-titles-2.txt"].flatMap((file) => readFileSync(path.join(fixtures, file), "utf8").split("\n")).filter(Boolean);
+    const confident = JSON.parse(readFileSync(path.join(fixtures, "task-pad-confident.json"), "utf8")) as Record<string, Record<string, string>>;
+    assert.ok(titles.length >= 389);
+    for (const [moment, iso] of Object.entries(nows)) {
+      for (const text of titles) {
+        const parsed = parseTaskText(text, new Date(iso));
+        const label = `${moment}: ${text}`;
+        if (parsed.unsure) {
+          assert.equal(parsed.title, text.replace(/\s+/g, " ").trim(), label);
+          continue;
+        }
+        assert.equal([parsed.due ?? "-", parsed.durationMinutes ?? "-", parsed.remindMinutes ?? "-", parsed.title].join(" | "), confident[text]?.[moment], label);
+      }
+    }
   });
 
-  it("reads a weekday as a date only when it is clearly a date phrase, and asks the AI when signals disagree", () => {
-    const read = (text: string, at = "2026-11-16T10:30:00Z") => {
+  it("reads a weekday as a date only when it clearly is one, and otherwise hands the whole text to the AI", () => {
+    const monday = "2026-11-16T10:30:00Z";
+    const asked = "asked";
+    const cases: [string, string, [string, string | null] | typeof asked][] = [
+      ["Call Jane Monday 3pm", monday, ["Call Jane", "2026-11-16T15:00"]],
+      ["Call Jane this Monday at 3pm", monday, ["Call Jane", "2026-11-16T15:00"]],
+      ["Call Jane mon 15:00", monday, ["Call Jane", "2026-11-16T15:00"]],
+      ["Call Jane Monday 3pm", "2026-11-16T16:00:00Z", ["Call Jane", "2026-11-23T15:00"]],
+      ["Call Jane Monday 10am", monday, ["Call Jane", "2026-11-23T10:00"]],
+      ["Call Jane next Monday 3pm", monday, ["Call Jane", "2026-11-23T15:00"]],
+      ["Call Jane Monday", monday, asked],
+      ["Call Jane Tuesday 3pm", monday, ["Call Jane", "2026-11-17T15:00"]],
+      ["Call Jane Sunday 1:30am", "2027-03-27T12:00:00Z", asked],
+      ["Call Jane Sunday 2:30am", "2027-03-27T12:00:00Z", ["Call Jane", "2027-03-28T02:30"]],
+      ["Call Sam sat 3pm", "2026-11-21T09:00:00Z", ["Call Sam", "2026-11-21T15:00"]],
+      ["Call Sam next sat 3pm", "2026-11-21T09:00:00Z", ["Call Sam", "2026-11-28T15:00"]],
+      ["Call Sam this Monday", monday, ["Call Sam", "2026-11-16"]],
+      ["Call Sam on Friday", monday, ["Call Sam", "2026-11-20"]],
+      ["Call Sam by Friday", monday, ["Call Sam", "2026-11-20"]],
+      ["Call Jane next week Monday 3pm", monday, ["Call Jane", "2026-11-23T15:00"]],
+      ["Call Jane Monday next week 3pm", monday, ["Call Jane", "2026-11-23T15:00"]],
+      ["Call Jane next week sat", monday, ["Call Jane", "2026-11-28"]],
+      ["Call Jane Monday week 3pm", monday, asked],
+      ["Call Jane Monday 30 Nov 3pm", monday, ["Call Jane", "2026-11-30T15:00"]],
+      ["Call Sam in 2 weeks", monday, ["Call Sam", "2026-11-30"]],
+      ["Call Sam in 2 weeks Friday", monday, ["Call Sam", "2026-12-04"]],
+      ["Call Sam Friday in 2 weeks", monday, ["Call Sam", "2026-12-04"]],
+      ["Call Jane Monday in 2 weeks 3pm", monday, asked],
+      ["Call Sam Monday in 2 weeks", "2026-11-22T10:30:00Z", ["Call Sam", "2026-12-07"]],
+      ["Call Sam in 2 weeks Monday", "2026-11-22T10:30:00Z", ["Call Sam", "2026-12-07"]],
+      ["Call Jane tomorrow 3pm re Monday meeting", monday, asked],
+      ["Send Monday report Tuesday 3pm", monday, asked],
+      ["Call Jane 20 Nov re Monday meeting", monday, asked],
+      ["Send Friday report next week", monday, asked],
+      ["Chase Friday Media next week", monday, asked],
+      ["Call Sam next week re Friday Media", monday, asked],
+      ["Call Sam in 2 hours re Monday report", monday, asked],
+      ["Call Sam Tuesday 23 Nov", monday, asked],
+      ["Call Sam Mon 16 Nov 3pm", "2026-11-18T10:30:00Z", asked],
+      ["Call Sam today Friday 5pm", "2026-11-14T10:30:00Z", asked],
+      ["Call Sam tomorrow Friday", "2026-11-14T10:30:00Z", asked],
+      ["Call Sam tomorrow Sunday", "2026-11-14T10:30:00Z", ["Call Sam", "2026-11-15"]],
+      ["Black Friday campaign plan", monday, asked],
+      ["Chase Monday.com invoice", monday, asked],
+      ["Chase Friday Media invoice", monday, asked],
+      ["Call Monday re Friday Media", monday, asked],
+      ["Call Sam Monday night", monday, ["Call Sam", "2026-11-16T19:00"]],
+      ["Dinner Monday night 8", monday, ["Dinner", "2026-11-16T20:00"]],
+      ["Drinks Friday night 9", monday, ["Drinks", "2026-11-20T21:00"]],
+      ["Call client tomorrow night 8", monday, ["Call client", "2026-11-17T20:00"]],
+      ["Call Sam lunchtime", monday, asked],
+      ["Call Sam half past 3", monday, asked],
+      ["Call Sam before 3pm", monday, asked],
+      ["Night shift rota", monday, asked],
+      ["Send notes from Monday's call", monday, asked],
+      ["Friday", monday, asked],
+      ["Monday 9am", monday, asked],
+    ];
+    for (const [text, at, expected] of cases) {
       const parsed = parseTaskText(text, new Date(at));
-      return [parsed.title, parsed.due, parsed.unsure];
-    };
-    assert.deepEqual(read("Call Sam this Monday"), ["Call Sam", "2026-11-16", false]);
-    assert.deepEqual(read("Call Sam on Friday"), ["Call Sam", "2026-11-20", false]);
-    assert.deepEqual(read("Call Sam by Friday"), ["Call Sam", "2026-11-20", false]);
-    assert.deepEqual(read("Call Jane next week Monday 3pm"), ["Call Jane", "2026-11-23T15:00", false]);
-    assert.deepEqual(read("Call Jane Monday next week 3pm"), ["Call Jane", "2026-11-23T15:00", false]);
-    assert.deepEqual(read("Call Jane next week sat"), ["Call Jane", "2026-11-28", false]);
-    assert.deepEqual(read("Call Jane Monday week 3pm"), ["Call Jane", "2026-11-30T15:00", true]);
-    assert.deepEqual(read("Call Jane Monday 30 Nov 3pm"), ["Call Jane", "2026-11-30T15:00", false]);
-    assert.deepEqual(read("Call Sam in 2 weeks"), ["Call Sam", "2026-11-30", false]);
-    assert.deepEqual(read("Call Sam in 2 weeks Friday"), ["Call Sam", "2026-12-04", false]);
-    assert.deepEqual(read("Call Sam Friday in 2 weeks"), ["Call Sam", "2026-12-04", false]);
-    assert.deepEqual(read("Call Jane Monday in 2 weeks 3pm"), ["Call Jane", "2026-12-07T15:00", true]);
-    assert.deepEqual(read("Call Sam Monday in 2 weeks", "2026-11-22T10:30:00Z"), ["Call Sam", "2026-12-07", false]);
-    assert.deepEqual(read("Call Sam in 2 weeks Monday", "2026-11-22T10:30:00Z"), ["Call Sam", "2026-12-07", false]);
-
-    assert.deepEqual(read("Call Jane tomorrow 3pm re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-17T15:00", true]);
-    assert.deepEqual(read("Send Monday report Tuesday 3pm"), ["Send Monday report", "2026-11-17T15:00", true]);
-    assert.deepEqual(read("Call Jane 20 Nov re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-20", true]);
-    assert.deepEqual(read("Send Friday report next week"), ["Send Friday report", "2026-11-23", true]);
-    assert.deepEqual(read("Chase Friday Media next week"), ["Chase Friday Media", "2026-11-23", true]);
-    assert.deepEqual(read("Call Sam next week re Friday Media"), ["Call Sam re Friday Media", "2026-11-23", true]);
-    assert.deepEqual(read("Call Sam in 2 hours re Monday report"), ["Call Sam re Monday report", "2026-11-16T12:30", true]);
-    assert.deepEqual(read("Call Sam Tuesday 23 Nov"), ["Call Sam Tuesday", "2026-11-23", true]);
-    assert.deepEqual(read("Call Sam Mon 16 Nov 3pm", "2026-11-18T10:30:00Z"), ["Call Sam Mon", "2027-11-16T15:00", true]);
-    assert.deepEqual(read("Call Sam today Friday 5pm", "2026-11-14T10:30:00Z"), ["Call Sam Friday", "2026-11-14T17:00", true]);
-    assert.deepEqual(read("Call Sam tomorrow Friday", "2026-11-14T10:30:00Z"), ["Call Sam Friday", "2026-11-15", true]);
-    assert.deepEqual(read("Call Sam tomorrow Sunday", "2026-11-14T10:30:00Z"), ["Call Sam", "2026-11-15", false]);
-
-    assert.deepEqual(read("Black Friday campaign plan"), ["Black Friday campaign plan", null, true]);
-    assert.deepEqual(read("Chase Monday.com invoice"), ["Chase Monday.com invoice", null, true]);
-    assert.deepEqual(read("Chase Friday Media invoice"), ["Chase Friday Media invoice", null, true]);
-    assert.deepEqual(read("Call Monday re Friday Media"), ["Call re Friday Media", "2026-11-23", true]);
-
-    assert.deepEqual(read("Call Sam Monday night"), ["Call Sam", "2026-11-16T19:00", false]);
-    assert.deepEqual(read("Call Sam lunchtime"), ["Call Sam", "2026-11-16T12:30", true]);
-    assert.deepEqual(read("Call Sam half past 3"), ["Call Sam", "2026-11-16T15:30", true]);
-    assert.deepEqual(read("Call Sam before 3pm"), ["Call Sam", "2026-11-16T15:00", true]);
-    assert.deepEqual(read("Night shift rota"), ["Night shift rota", null, false]);
+      if (expected === asked) {
+        assert.deepEqual({ unsure: parsed.unsure, title: parsed.title }, { unsure: true, title: text }, text);
+      } else {
+        assert.deepEqual({ unsure: parsed.unsure, title: parsed.title, due: parsed.due }, { unsure: false, title: expected[0], due: expected[1] }, text);
+      }
+    }
   });
 });
 

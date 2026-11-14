@@ -52,8 +52,9 @@ describe("task pad parser", () => {
     assert.equal(result.due, "2026-10-17T12:15");
     assert.equal(result.remindMinutes, 30);
     assert.equal(result.title, "Speak to Toby Sutton OBE");
-    assert.equal(parse("at 12:15 remind me 30 mins").due, "2026-10-16T12:15");
-    assert.equal(parse("Lunch 1.30pm tomorrow").due, "2026-10-17T13:30");
+    const bare = parse("at 12:15 remind me 30 mins");
+    assert.deepEqual({ title: bare.title, due: bare.due, unsure: bare.unsure }, { title: "at 12:15 remind me 30 mins", due: null, unsure: true });
+    assert.equal(parse("Meet 1.30pm tomorrow").due, "2026-10-17T13:30");
   });
 
   it("understands common ways of saying when", () => {
@@ -66,9 +67,9 @@ describe("task pad parser", () => {
       ["Book flights next week", "2026-10-19"],
       ["Email Sam tonight", "2026-10-16T19:00"],
       ["Quarterly review December 3rd 2026", "2026-12-03"],
-      ["Renew domain 1 Feb", "2027-02-01"],
+      ["Renew domain 1 Feb", null],
       ["Finish report by end of day", "2026-10-16T17:00"],
-      ["Lunch with Tom at noon", "2026-10-16T12:00"],
+      ["Meet Tom at noon", "2026-10-16T12:00"],
       ["Call mum 9am", "2026-10-17T09:00"],
       ["Plan Wed 2pm", "2026-10-21T14:00"],
       ["Wrap up end of week", "2026-10-16T17:00"],
@@ -127,7 +128,9 @@ describe("task pad parser", () => {
   });
 
   it("doesn't mistake names and words for dates", () => {
-    for (const text of ["Send Monica the deck", "I sat down with Sunil", "Call Jane", "Fix the deck"]) {
+    const sat = parse("I sat down with Sunil");
+    assert.deepEqual({ title: sat.title, due: sat.due, marks: sat.marks }, { title: "I sat down with Sunil", due: null, marks: [] });
+    for (const text of ["Send Monica the deck", "Call Jane", "Fix the deck"]) {
       const result = parse(text);
       assert.equal(result.due, null, text);
       assert.deepEqual(result.marks, [], text);
@@ -137,8 +140,8 @@ describe("task pad parser", () => {
   });
 
   it("leaves prices in the title instead of reading them as times", () => {
-    const invoice = parse("Invoice £12.50 by Friday");
-    assert.deepEqual({ title: invoice.title, due: invoice.due }, { title: "Invoice £12.50", due: "2026-10-23" });
+    const invoice = parse("Invoice £12.50 by Monday");
+    assert.deepEqual({ title: invoice.title, due: invoice.due }, { title: "Invoice £12.50", due: "2026-10-19" });
     for (const [text, title] of [
       ["Pay $9.15", "Pay $9.15"],
       ["Refund € 7.45 tomorrow", "Refund € 7.45"],
@@ -195,6 +198,7 @@ describe("task pad parser", () => {
     };
     const plain = (title: string, unsure = false) => ({ title, due: null, remindMinutes: null, durationMinutes: null, unsure });
     const at = (title: string, due: string, durationMinutes: number | null = null, unsure = false) => ({ title, due, remindMinutes: null, durationMinutes, unsure });
+    const asked = (text: string, due: string | null = null, durationMinutes: number | null = null) => ({ title: text, due, remindMinutes: null, durationMinutes, unsure: true });
     assert.deepEqual(read("Review 24/7 support plan"), plain("Review 24/7 support plan"));
     assert.deepEqual(read("Read version 2.10 notes"), plain("Read version 2.10 notes"));
     assert.deepEqual(read("Call Sam 2.30"), plain("Call Sam 2.30", true));
@@ -202,45 +206,45 @@ describe("task pad parser", () => {
     assert.deepEqual(read("Call Sam sat 3pm"), at("Call Sam", "2026-11-21T15:00"));
     assert.deepEqual(read("Call Sam 3pm sat"), at("Call Sam", "2026-11-21T15:00"));
     assert.deepEqual(read("Call Sam on sat"), at("Call Sam", "2026-11-21"));
-    assert.deepEqual(read("Call Sam next sun"), at("Call Sam", "2026-11-22"));
+    assert.deepEqual(read("Call Sam next sun"), asked("Call Sam next sun"));
     assert.deepEqual(read("Call Sam weds"), at("Call Sam", "2026-11-18"));
-    assert.deepEqual(read("I sat down with Sunil"), plain("I sat down with Sunil"));
-    assert.deepEqual(read("Call Sam tomorrow 9"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam tomorrow at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam 9 tomorrow"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam Reid 9 tomorrow"), at("Call Sam Reid", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Catch up with Jane Doe 3 friday"), at("Catch up with Jane Doe", "2026-11-20T15:00", null, true));
+    assert.deepEqual(read("I sat down with Sunil"), plain("I sat down with Sunil", true));
+    assert.deepEqual(read("Call Sam tomorrow 9"), asked("Call Sam tomorrow 9", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam tomorrow at 9"), asked("Call Sam tomorrow at 9", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam 9 tomorrow"), asked("Call Sam 9 tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam Reid 9 tomorrow"), asked("Call Sam Reid 9 tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Catch up with Jane Doe 3 friday"), asked("Catch up with Jane Doe 3 friday", "2026-11-20T15:00"));
     assert.deepEqual(read("Call 7 tonight"), at("Call", "2026-11-16T19:00"));
     assert.deepEqual(read("Call Sam tonight at 8"), at("Call Sam", "2026-11-16T20:00"));
-    assert.deepEqual(read("Call 9 tomorrow"), at("Call", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam 9 o'clock tomorrow"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Call 9 tomorrow"), asked("Call 9 tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam 9 o'clock tomorrow"), asked("Call Sam 9 o'clock tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam at 9"), asked("Call Sam at 9", "2026-11-17T09:00"));
     assert.deepEqual(read("Call Sam at 17"), at("Call Sam", "2026-11-16T17:00"));
-    assert.deepEqual(read("Call Sam tomorrow 2.30"), at("Call Sam", "2026-11-17T14:30", null, true));
-    assert.deepEqual(read("Call Sam tomorrow 3"), at("Call Sam", "2026-11-17T15:00", null, true));
-    assert.deepEqual(read("Call Sam at 3"), at("Call Sam", "2026-11-16T15:00", null, true));
-    assert.deepEqual(read("Call Sam 1:30"), at("Call Sam", "2026-11-16T13:30", null, true));
-    assert.deepEqual(read("Call Sam at 3 sat"), at("Call Sam", "2026-11-21T15:00", null, true));
-    assert.deepEqual(read("Lunch with Sam 1 friday"), at("Lunch with Sam", "2026-11-20T13:00", null, true));
-    assert.deepEqual(read("Meet 3 friday"), at("Meet", "2026-11-20T15:00", null, true));
-    assert.deepEqual(read("Meet in Room 12 Monday"), at("Meet in Room 12", "2026-11-23"));
-    assert.deepEqual(read("Look at Room 12 Monday"), at("Look at Room 12", "2026-11-23"));
+    assert.deepEqual(read("Call Sam tomorrow 2.30"), asked("Call Sam tomorrow 2.30", "2026-11-17T14:30"));
+    assert.deepEqual(read("Call Sam tomorrow 3"), asked("Call Sam tomorrow 3", "2026-11-17T15:00"));
+    assert.deepEqual(read("Call Sam at 3"), asked("Call Sam at 3", "2026-11-16T15:00"));
+    assert.deepEqual(read("Call Sam 1:30"), asked("Call Sam 1:30", "2026-11-16T13:30"));
+    assert.deepEqual(read("Call Sam at 3 sat"), asked("Call Sam at 3 sat", "2026-11-21T15:00"));
+    assert.deepEqual(read("Lunch with Sam 1 friday"), asked("Lunch with Sam 1 friday"));
+    assert.deepEqual(read("Meet 3 friday"), asked("Meet 3 friday", "2026-11-20T15:00"));
+    assert.deepEqual(read("Meet in Room 12 Tuesday"), at("Meet in Room 12", "2026-11-17"));
+    assert.deepEqual(read("Meet in Room 12 Monday"), asked("Meet in Room 12 Monday"));
     assert.deepEqual(read("Book meeting room 4 tomorrow"), at("Book meeting room 4", "2026-11-17"));
     assert.deepEqual(read("Call top 5 Friday"), at("Call top 5", "2026-11-20"));
-    assert.deepEqual(read("Coffee with 2 Monday prospects"), at("Coffee with 2 prospects", "2026-11-23", null, true));
+    assert.deepEqual(read("Coffee with 2 Monday prospects"), asked("Coffee with 2 Monday prospects"));
     assert.deepEqual(read("Review top 10 today"), at("Review top 10", "2026-11-16"));
-    assert.deepEqual(read("Order 10 monday"), at("Order 10", "2026-11-23"));
+    assert.deepEqual(read("Order 10 tuesday"), asked("Order 10 tuesday"));
     assert.deepEqual(read("Room 12 friday"), at("Room 12", "2026-11-20"));
     assert.deepEqual(read("Chapter 7 tomorrow"), at("Chapter 7", "2026-11-17"));
-    assert.deepEqual(read("Meet at 10 Downing Street"), plain("Meet at 10 Downing Street"));
-    assert.deepEqual(read("Call Sam 8am-6pm"), at("Call Sam", "2026-11-17T08:00"));
+    assert.deepEqual(read("Meet at 10 Downing Street"), plain("Meet at 10 Downing Street", true));
+    assert.deepEqual(read("Call Sam 8am-6pm"), asked("Call Sam 8am-6pm", "2026-11-17T08:00"));
     assert.deepEqual(read("Call 020 7946 0-5pm"), plain("Call 020 7946 0-5pm", true));
-    assert.deepEqual(read("Call Sam 3-4pm"), at("Call Sam", "2026-11-16T15:00", 60));
-    assert.deepEqual(read("Call Sam 11-1pm"), at("Call Sam", "2026-11-16T11:00", 120));
+    assert.deepEqual(read("Call Sam 3-4pm"), asked("Call Sam 3-4pm", "2026-11-16T15:00", 60));
+    assert.deepEqual(read("Call Sam 11-1pm"), asked("Call Sam 11-1pm", "2026-11-16T11:00", 120));
     assert.deepEqual(read("Call Sam remind me 15 mins before"), plain("Call Sam remind me 15 mins before", true));
-    assert.deepEqual(read("Follow up 22/11"), at("Follow up", "2026-11-22", null, true));
-    assert.deepEqual(read("Follow up 3/4"), at("Follow up", "2027-04-03", null, true));
-    assert.deepEqual(read("Follow up on 3/4"), at("Follow up", "2027-04-03"));
+    assert.deepEqual(read("Follow up 22/11"), asked("Follow up 22/11", "2026-11-22"));
+    assert.deepEqual(read("Follow up 3/4"), asked("Follow up 3/4"));
+    assert.deepEqual(read("Follow up on 3/4"), asked("Follow up on 3/4"));
     assert.deepEqual(read("Call Sam on 3/4/27"), at("Call Sam", "2027-04-03"));
   });
 

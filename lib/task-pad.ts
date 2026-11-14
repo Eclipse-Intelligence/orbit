@@ -51,7 +51,7 @@ const NOT_MONEY = "(?<![£$€]\\s*)(?<!\\b(?:gbp|usd|eur)\\s*)";
 const NOT_CURRENCY_AFTER = "(?!\\s*(?:gbp|usd|eur)\\b)";
 
 const TEMPORAL =
-  /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri)\b|\b(january|february|march|april|june|july|august|september|october|november|december|jan|feb|apr|jun|jul|aug|sept?|oct|nov|dec)\b|\b(today|tomorrow|tonight|morning|afternoon|evening|noon|midday|week|weekend|month|fortnight|remind|reminder|after next|fortnight)\b|\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b\d{1,2}(st|nd|rd|th)\b/i;
+  /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri)\b|\b(january|february|march|april|june|july|august|september|october|november|december|jan|feb|apr|jun|jul|aug|sept?|oct|nov|dec)\b|\b(today|tomorrow|tonight|morning|afternoon|evening|noon|midday|week|weekend|month|fortnight|remind|reminder|after next|fortnight|night|lunch|last)\b|\b(sat|sun)\b|\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b\d{1,2}(st|nd|rd|th)\b/i;
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
@@ -110,12 +110,12 @@ function toHour(hour: number, minute: number, meridiem: string | undefined) {
   return { hour: h, minute };
 }
 
-function wallTimeExists(day: Day, time: { hour: number; minute: number }) {
+function wallTimeCount(day: Day, time: { hour: number; minute: number }) {
   const wall = Date.UTC(day.year, day.month - 1, day.day, time.hour, time.minute);
-  return [0, 60, -60].some((offset) => {
+  return [0, 60, -60].filter((offset) => {
     const parts = londonParts(new Date(wall - offset * 60_000));
     return parts.year === day.year && parts.month === day.month && parts.day === day.day && parts.hour === time.hour && parts.minute === time.minute;
-  });
+  }).length;
 }
 
 export function londonParts(now: Date) {
@@ -168,10 +168,40 @@ function readWeekdays(text: string, spans: Span[]): WeekdayWord[] {
       weekLater: Boolean(match[4]),
       short: word === "sat" || word === "sun",
       name: /^\.[a-z]/i.test(after) || /^\s+[A-Z][a-z]/.test(after) || DAY_PREFIX.test(before),
-      compound: DAY_COMPOUND.test(after),
+      compound: DAY_COMPOUND.test(after) || !FREE_AFTER.test(after),
     });
   }
   return found.filter((item) => item.target >= 0);
+}
+
+const FREE_AFTER = /^\s*(?:$|[,.;:!?)]|(?:about|re|regarding|with|for|and|to|at|in|via|on|by|then|if|please)\b)/i;
+
+const TIME_ZONE = /\b(?:gmt|bst|utc|est|edt|pst|pdt|cet|cest|ist|aest)\b/i;
+const UNREAD_DATE = /\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[.-]\d{1,2}[.-]\d{2,4}\b|\b2moro\b/i;
+const BARE_NUMBER_END = new RegExp(`(?<!\\b(?:room|rooms|top|chapter|chapters|no|nos|number|version|page|pages|step|steps|level|floor|flat|unit|suite|gate|table|platform|row|seat|section|part|lesson|item|items|slide|slides|issue|ticket|phase|stage|round|team|year|grade|v)\\s+)(?<![£$€#.,/\\d-])\\b(?:[1-9]|1[0-9]|2[0-3])$`, "i");
+const LEFTOVER = new RegExp(
+  `${TEMPORAL.source}|\\b(?:am|pm|eod|eow|cob|cop|ish|tmrw|tmr|daily|weekly|fortnightly|weeks?|days?|hours?|hrs?|mins?|minutes?|lunchtime|first\\s+thing|close\\s+of\\s+(?:play|business)|asap|later|now|tonight|christmas|xmas|easter|new\\s+year|bank\\s+holiday|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\\b|\\b(?:at|by|before|after|around|from|until|till)\\s+\\d|\\b\\d{1,2}\\s+(?:to|past)\\s+\\d|\\b(?:half|quarter)\\s+(?:past|to|\\d)|\\bin\\s+${MONTH}\\b|(?<![\\d/])\\b(?!24\\/7\\b)(?:[12]?\\d|3[01])\\/(?:0?[1-9]|1[0-2])\\b(?!\\/\\d)|\\d\\s*(?:am|pm)\\b|${NOT_MONEY}(?<![\\d.])(?<!\\b(?:v|ver|version|release|ios|android)\\s*)\\b\\d{1,2}[:.]\\d{2}\\b(?![.\\d])${NOT_CURRENCY_AFTER}`,
+  "i",
+);
+const DANGLING_BEFORE =
+  /(?:\b(?:before|from|at|the|to|last|every|by|on|until|till|of|end|start|early|mid|late|after|since|around|about|re|or|between|than|this|next|in)|['’]s|[-–/:+&])\s*$/i;
+const DANGLING_AFTER = /^\s*(?:['’]s\b|[-–/:+&]|\.\d|to\b|or\b|ish\b|o['’]?clock\b|am\b|pm\b|\d)/i;
+
+function debris(text: string, spans: Span[]) {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const runs: { start: number; end: number }[] = [];
+  for (const span of sorted) {
+    const last = runs.at(-1);
+    if (last && (span.start < last.end || /^[\s,;]*$/.test(text.slice(last.end, span.start)))) last.end = Math.max(last.end, span.end);
+    else runs.push({ start: span.start, end: span.end });
+  }
+  return runs.some((run) => {
+    const before = text.slice(0, run.start);
+    const after = text.slice(run.end);
+    if (DANGLING_BEFORE.test(before) || DANGLING_AFTER.test(after)) return true;
+    const number = /(?:^|\s)(\d{1,4})\s*$/.exec(before);
+    return Boolean(number) && !COUNTED.test(before.slice(0, number!.index));
+  });
 }
 
 function cleanTitle(text: string, spans: Span[]) {
@@ -210,6 +240,9 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     duration: number | null;
   } = { date: null, time: null, exact: null, remind: null, duration: null };
   let ambiguous = false;
+  let doubt = false;
+  let slot = false;
+  let eveningClock = false;
   let evening = false;
   let sameWeekday = false;
   let dateSource: "explicit" | "relative" | "week" | null = null;
@@ -251,6 +284,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
 
   const setDate = (candidate: Day, explicitYear: boolean) => {
     if (!valid(candidate)) return false;
+    if (!explicitYear && compare(candidate, today) < 0) doubt = true;
     found.date = !explicitYear && compare(candidate, today) < 0 ? { ...candidate, year: candidate.year + 1 } : candidate;
     dateSource = "explicit";
   };
@@ -283,6 +317,16 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
       found.time = { hour: 19, minute: 0 };
       evening = true;
     }
+  });
+  take(/(?<=\b(?:tonight|night|evening)\s+)(?:at\s+)?(\d{1,2})(?:[:.]([0-5]\d))?(?:\s*(am|pm))?\b(?![:.]?\d)/i, (match) => {
+    const hour = Number(match[1]);
+    if (match[3]?.toLowerCase() === "am" || hour === 0 || hour === 12 || hour > 23) {
+      doubt = true;
+      return false;
+    }
+    found.time = { hour: hour < 12 ? hour + 12 : hour, minute: Number(match[2] ?? 0) };
+    eveningClock = true;
+    evening = false;
   });
   take(new RegExp(`${LEAD}\\b(?:end\\s+of\\s+(?:the\\s+)?week|eow)\\b`, "i"), () => {
     found.date = addDays(today, (5 - weekday(today) + 7) % 7);
@@ -334,6 +378,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
       if (minutes <= 0) return false;
       found.time = start;
       found.duration = minutes <= MAX_TASK_DURATION ? minutes : null;
+      ambiguous = true;
     },
   );
   take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2}):(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}`, "i"), (match) => {
@@ -407,15 +452,18 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     ambiguous = true;
   });
   take(new RegExp(`(?<=\\b${DAY_WORD}\\s+)night\\b`, "i"), () => {
-    if (found.time) return false;
-    found.time = { hour: 19, minute: 0 };
+    if (found.time && !eveningClock) return false;
+    found.time = found.time ?? { hour: 19, minute: 0 };
   });
   take(/\b(?:in\s+the\s+|this\s+)?(morning|afternoon|evening)\b/i, (match) => {
-    if (found.time) return false;
     const key = match[1].toLowerCase();
+    if (eveningClock && key === "evening") return;
+    if (found.time) return false;
     found.time = key === "morning" ? { hour: 9, minute: 0 } : key === "afternoon" ? { hour: 14, minute: 0 } : { hour: 18, minute: 0 };
+    slot = true;
   });
   take(/\b(?:by\s+)?(?:eod|end\s+of\s+(?:the\s+)?day)\b/i, () => {
+    slot = true;
     endOfDay = true;
     found.time = found.time ?? { hour: 17, minute: 0 };
   });
@@ -452,6 +500,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     } else {
       found.date = chosen.cue === "this" && ahead === 0 ? today : addDays(today, (ahead || 7) + (chosen.weekLater ? 7 : 0));
       sameWeekday = ahead === 0 && !chosen.weekLater && chosen.cue !== "next" && chosen.cue !== "this";
+      if (chosen.cue === "next" && ahead > 0 && (weekday(today) + 6) % 7 + ahead <= 6) doubt = true;
       if (chosen.weekLater && ahead === 0) ambiguous = true;
       consume();
     }
@@ -462,6 +511,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   if (found.exact !== null) {
     const parts = londonParts(new Date(now.getTime() + found.exact * 60_000));
     due = `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`;
+    if (wallTimeCount({ year: parts.year, month: parts.month, day: parts.day }, { hour: parts.hour, minute: parts.minute }) !== 1) ambiguous = true;
   } else if (found.date || found.time) {
     const time = found.time;
     let day = found.date ?? today;
@@ -470,12 +520,18 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (time && sameWeekday && !passed) day = today;
     const date = `${day.year}-${pad(day.month)}-${pad(day.day)}`;
     due = time ? `${date}T${pad(time.hour)}:${pad(time.minute)}` : date;
-    if (time && !wallTimeExists(day, time)) ambiguous = true;
+    if (time && wallTimeCount(day, time) !== 1) ambiguous = true;
+    if (sameWeekday && !time) doubt = true;
+    if (time && slot && !found.date && passed) doubt = true;
+    const dueAt = time ? Date.UTC(day.year, day.month - 1, day.day, time.hour, time.minute) : Date.UTC(day.year, day.month - 1, day.day, 23, 59);
+    const wallNow = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute);
+    if (dueAt < wallNow) doubt = true;
   }
 
+  if (TIME_ZONE.test(text) || UNREAD_DATE.test(text)) doubt = true;
   const kept = due ? spans : spans.filter((span) => span.kind !== "reminder");
   const title = cleanTitle(text, kept);
-  if (/(?<![£$€\d.]\s*)\b\d{1,2}\.[0-5]\d\b(?!\s*(?:gbp|usd|eur)\b)/i.test(title) && !/\b(?:v|ver|version|release)\s*\d/i.test(title)) ambiguous = true;
+  if (new RegExp(`(?<![£$€\\d.]\\s*)(?<!\\b(?:gbp|usd|eur)\\s*)\\b\\d{1,2}\\.[0-5]\\d\\b(?!\\s*(?:gbp|usd|eur)\\b)`, "i").test(title) &&!/\b(?:v|ver|version|release)\s*\d/i.test(title)) ambiguous = true;
   const marks = kept
     .filter((span) => span.kind === "when" || due)
     .map((span) => {
@@ -485,12 +541,16 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     })
     .filter((mark) => mark.end > mark.start)
     .sort((a, b) => a.start - b.start);
+  if (kept.length > 0 && (doubt || !title || LEFTOVER.test(title) || debris(text, kept))) {
+    return { title: text.replace(/\s+/g, " ").trim(), due: null, remindMinutes: null, durationMinutes: null, unsure: true, marks: marks.filter((mark) => mark.kind === "when") };
+  }
+  const unsure = ambiguous || doubt || LEFTOVER.test(title) || BARE_NUMBER_END.test(title);
   return {
-    title,
+    title: unsure ? text.replace(/\s+/g, " ").trim() : title,
     due,
     remindMinutes: due ? found.remind : null,
     durationMinutes: due && found.time ? found.duration : null,
-    unsure: ambiguous || TEMPORAL.test(title),
+    unsure,
     marks,
   };
 }
