@@ -1,5 +1,5 @@
 import { createEmailActivityOnce } from "@/lib/crm/activities";
-import { companyHasOpenTask, isRecent } from "@/lib/crm/communications";
+import { companyHasOpenTask, createFollowUpUnlessOpen, isRecent } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
 import { hasScope } from "@/lib/crm/scopes";
@@ -168,29 +168,32 @@ async function followUpWho(db: Db, row: Candidate) {
   return names.rows[0]?.contact || names.rows[0]?.company || "them";
 }
 
-async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate, title: string) {
-  if (!row.company_id) return null;
-  const thread = await db.query<{ source_id: string; thread_key: string | null }>(
-    "select source_id, thread_key from crm.mail_messages where id = $1",
-    [row.message_id],
-  );
-  const mail = thread.rows[0];
+async function suggestFollowUp(actor: UserActor, row: Candidate, title: string) {
+  const companyId = row.company_id;
+  if (!companyId) return null;
   const due = await scheduleTaskDue(actor, { days: 2 });
-  const task = await createTaskInDb(
-    db,
-    actor,
-    {
-      title: title.slice(0, 200),
-      description: withDueNote("Suggested after an email arrived.", due),
-      mailThreadKey: mail?.thread_key ? `${mail.source_id}|${mail.thread_key}` : null,
-      dueDate: due?.dueDate ?? null,
-      companyId: row.company_id,
-      contactId: row.contact_id,
-      priority: "normal",
-    },
-    { operation: "suggest_follow_up", source: "microsoft" },
-    { ownThread: true },
-  );
+  const task = await createFollowUpUnlessOpen(actor, companyId, async (db) => {
+    const thread = await db.query<{ source_id: string; thread_key: string | null }>(
+      "select source_id, thread_key from crm.mail_messages where id = $1",
+      [row.message_id],
+    );
+    const mail = thread.rows[0];
+    return createTaskInDb(
+      db,
+      actor,
+      {
+        title: title.slice(0, 200),
+        description: withDueNote("Suggested after an email arrived.", due),
+        mailThreadKey: mail?.thread_key ? `${mail.source_id}|${mail.thread_key}` : null,
+        dueDate: due?.dueDate ?? null,
+        companyId,
+        contactId: row.contact_id,
+        priority: "normal",
+      },
+      { operation: "suggest_follow_up", source: "microsoft" },
+      { ownThread: true },
+    );
+  });
   return task?.id ?? null;
 }
 
@@ -282,7 +285,7 @@ export async function fileMailOnTimeline(
         { who: outcome.who, subject: row.subject, text: bodyOf(row) },
         { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs },
       );
-      const taskId = await withActor(target, (db) => suggestFollowUp(db, target, row, title));
+      const taskId = await suggestFollowUp(target, row, title);
       if (taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), taskId]);
     } catch (error) {
       console.error("Filing an email on the timeline failed", error);
