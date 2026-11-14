@@ -31,7 +31,7 @@ import { completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, resetDatabase, withStrictPool } from "./helpers";
 
 const TOKEN = "pk_101_TESTTOKEN";
 const SITE = "https://orbit.example.com";
@@ -945,7 +945,7 @@ describe("clickup sync", () => {
     const remote = fake.tasks.get(clickupId)!;
     remote.date_updated = String(Date.now() + 1_000);
     remote.custom_fields = remote.custom_fields?.map((field) => ({ ...field, value: "jane@acme.com" }));
-    const result = await syncClickUp({ actor: priya, force: true, fetchImpl });
+    const result = await withStrictPool(() => syncClickUp({ actor: priya, force: true, fetchImpl }));
     assert.equal(result.failed, 0);
     assert.equal(result.imported, 0);
     const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [clickupId]);

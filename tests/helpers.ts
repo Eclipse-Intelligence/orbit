@@ -1,6 +1,9 @@
+import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
+import { after, afterEach, before, beforeEach } from "node:test";
 import { applyMigrationSql } from "@/lib/db/migration-sql";
-import { getAdminPool, getPool } from "@/lib/db/pool";
+import type { Pool } from "pg";
+import { getAdminPool, getPool, takeNestedConnections } from "@/lib/db/pool";
 import { scopesForRole, type Scope } from "@/lib/crm/scopes";
 import { generateAgentToken } from "@/lib/crm/tokens";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
@@ -30,6 +33,58 @@ export async function resetDatabase() {
     [password],
   );
   await admin.query(statement.rows[0].sql);
+}
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+export function useServerlessPool() {
+  const saved = { vercel: process.env.VERCEL, strict: process.env.ORBIT_STRICT_POOL };
+  let serverless: Pool | null = null;
+  let nestingAllowed = false;
+  before(async () => {
+    await getPool().end();
+    process.env.VERCEL = "1";
+    process.env.ORBIT_STRICT_POOL = "1";
+    serverless = getPool();
+    if (serverless.options.max !== 2) throw new Error("The serverless pool should hold two connections.");
+  });
+  beforeEach(() => {
+    nestingAllowed = false;
+    process.env.ORBIT_STRICT_POOL = "1";
+    takeNestedConnections();
+  });
+  afterEach(() => {
+    const nested = takeNestedConnections();
+    process.env.ORBIT_STRICT_POOL = "1";
+    if (!nestingAllowed) assert.deepEqual(nested, [], "A transaction started a second pool connection.");
+  });
+  after(async () => {
+    if (serverless && !serverless.ending && !serverless.ended) await serverless.end();
+    restoreEnv("VERCEL", saved.vercel);
+    restoreEnv("ORBIT_STRICT_POOL", saved.strict);
+  });
+  return {
+    allowNestedConnections() {
+      nestingAllowed = true;
+      process.env.ORBIT_STRICT_POOL = "0";
+    },
+  };
+}
+
+export async function withStrictPool<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = process.env.ORBIT_STRICT_POOL;
+  takeNestedConnections();
+  process.env.ORBIT_STRICT_POOL = "1";
+  try {
+    const result = await fn();
+    assert.deepEqual(takeNestedConnections(), [], "A transaction started a second pool connection.");
+    return result;
+  } finally {
+    restoreEnv("ORBIT_STRICT_POOL", saved);
+  }
 }
 
 export async function createUser(email: string, name = "Test User") {
