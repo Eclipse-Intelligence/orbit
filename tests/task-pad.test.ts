@@ -119,8 +119,8 @@ describe("task pad parser", () => {
     };
     const nothing = (title: string) => ({ title, due: null, remindMinutes: null, durationMinutes: null });
     try {
-      assert.deepEqual(await ask("ring jane after the weekend, remind me 15 mins before"), { title: "Ring jane", due: "2026-10-19", remindMinutes: 15, durationMinutes: null });
-      assert.deepEqual(await ask("ring jane monday 11:15, remind me 30 mins before"), { title: "Ring jane", due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null });
+      assert.deepEqual(await ask("ring jane after the weekend, remind me 15 mins before"), { title: "ring jane", due: "2026-10-19", remindMinutes: 15, durationMinutes: null });
+      assert.deepEqual(await ask("ring jane monday 11:15, remind me 30 mins before"), { title: "ring jane", due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null });
       assert.deepEqual(await ask("ring jane, nudge me"), nothing("ring jane, nudge me"));
       assert.deepEqual(await ask("ring jane next monday"), nothing("ring jane next monday"), "a due that is not a date");
       assert.deepEqual(await ask("ring jane at some point"), nothing("ring jane at some point"), "a phrase that is not in the text");
@@ -128,8 +128,8 @@ describe("task pad parser", () => {
       assert.deepEqual(await ask("ring jane tomorrow"), nothing("ring jane tomorrow"), "a date in the past");
       assert.deepEqual(await ask("ring jane at 8"), nothing("ring jane at 8"), "a time already gone today");
       assert.deepEqual(await ask("ring jane in 2029"), nothing("ring jane in 2029"), "more than two years out");
-      assert.deepEqual(await ask("ring jane tomorrow at 10, remind me 7 mins before for 900 mins"), { title: "Ring jane", due: "2026-10-17T10:00", remindMinutes: 5, durationMinutes: null }, "a reminder snaps to an option and a duration past the cap is dropped");
-      assert.deepEqual(await ask("ring jane tomorrow 10am for 30 mins"), { title: "Ring jane", due: "2026-10-17T10:00", remindMinutes: null, durationMinutes: 30 });
+      assert.deepEqual(await ask("ring jane tomorrow at 10, remind me 7 mins before for 900 mins"), { title: "ring jane", due: "2026-10-17T10:00", remindMinutes: 5, durationMinutes: null }, "a reminder snaps to an option and a duration past the cap is dropped");
+      assert.deepEqual(await ask("ring jane tomorrow 10am for 30 mins"), { title: "ring jane", due: "2026-10-17T10:00", remindMinutes: null, durationMinutes: 30 });
     } finally {
       if (previous === undefined) delete process.env.LLM_API_KEY;
       else process.env.LLM_API_KEY = previous;

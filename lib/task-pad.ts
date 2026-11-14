@@ -291,13 +291,7 @@ function cleanTitle(text: string, spans: Span[]) {
   }
   const rest = text.slice(last).trim();
   if (rest) result = !result ? rest : /^[,.;:!?]/.test(rest) ? `${result}${rest}` : `${result} ${rest}`;
-  return capitalise(typedTitle(result));
-}
-
-function capitalise(title: string) {
-  if (!title) return "";
-  const first = title.split(/\s/)[0];
-  return /[A-Z]/.test(first.slice(1)) ? title : title.charAt(0).toUpperCase() + title.slice(1);
+  return typedTitle(result);
 }
 
 export function parseTaskText(text: string, now = new Date()): PadParse {
@@ -906,19 +900,45 @@ export function confirmedReading(parsed: Pick<PadParse, "title" | "due" | "remin
   };
 }
 
-export function readPhrase(text: string, marks: PadMark[]) {
-  return typedTitle(
-    marks
-      .map((mark) => text.slice(mark.start, mark.end).trim())
-      .filter(Boolean)
-      .join(" "),
-  )
+function coreWords(piece: string) {
+  return typedTitle(piece)
     .replace(/^(?:[,;:\-–—]\s*|and\s+)+/i, "")
     .replace(/(?:\s*[,;:.!…\-–—]|\s+and)+$/i, "");
 }
 
+export function readPhrase(text: string, marks: PadMark[]) {
+  return coreWords(marks.map((mark) => text.slice(mark.start, mark.end).trim()).filter(Boolean).join(" "));
+}
+
 export function readingKey(text: string, marks: PadMark[]) {
-  return marks.map((mark) => `${mark.kind}:${text.slice(mark.start, mark.end)}`).join("\u0000");
+  return marks.map((mark) => `${mark.kind}:${coreWords(text.slice(mark.start, mark.end))}`).join("\u0000");
+}
+
+export type KeptReading = { key: string; words: string[] };
+
+export function keptReading(text: string, marks: PadMark[]): KeptReading {
+  return { key: readingKey(text, marks), words: marks.map((mark) => coreWords(text.slice(mark.start, mark.end))).filter(Boolean) };
+}
+
+function wordsAt(text: string, words: string[]) {
+  const found: { start: number; end: number }[] = [];
+  let from = 0;
+  for (const word of words) {
+    const match = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(word)}(?![\\p{L}\\p{N}])`, "u").exec(text.slice(from));
+    if (!match) return null;
+    found.push({ start: from + match.index, end: from + match.index + word.length });
+    from += match.index + word.length;
+  }
+  return found;
+}
+
+export function keptAfterTyping(kept: readonly KeptReading[], text: string, produced: Pick<PadReading, "key" | "marks">): KeptReading[] {
+  return kept.filter((entry) => {
+    const at = wordsAt(text, entry.words);
+    if (!at) return false;
+    if (!produced.key || produced.key === entry.key) return true;
+    return !produced.marks.some((mark) => at.some((word) => mark.start < word.end && mark.end > word.start));
+  });
 }
 
 export type PadReading = PadAiParse & { phrase: string; key: string };

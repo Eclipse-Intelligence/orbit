@@ -8,7 +8,7 @@ import { missingOrFailed, panelTaskFor, stillOpenIds } from "@/lib/task-done";
 import { alertRenderKey, keyboardUp, restingView, shownAlert, typingInto } from "@/lib/reminder-alerts";
 import { draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
 import { applyDraftNews, clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
-import { acceptAiReading as acceptWithMarks, AI_SETTLE_MS, backspaceKeeps, confirmedReading, padReading, parseTaskText, readingToSave, type PadAiParse, type PadMark, type PadReading } from "@/lib/task-pad";
+import { acceptAiReading as acceptWithMarks, AI_SETTLE_MS, backspaceKeeps, confirmedReading, keptAfterTyping, keptReading, padReading, parseTaskText, readingToSave, type KeptReading, type PadAiParse, type PadMark, type PadReading } from "@/lib/task-pad";
 
 const plain = (reading: PadAiParse) => ({ title: reading.title, due: reading.due, remindMinutes: reading.remindMinutes, durationMinutes: reading.durationMinutes });
 const acceptAiReading = (...args: Parameters<typeof acceptWithMarks>) => plain(acceptWithMarks(...args));
@@ -42,7 +42,6 @@ function withoutMarks(text: string, marks: PadMark[]) {
   if (rest) result = !result ? rest : /^[,.;:!?]/.test(rest) ? result + rest : `${result} ${rest}`;
   return collapse(result);
 }
-const lowerFirst = (title: string) => title.charAt(0).toLowerCase() + title.slice(1);
 function holdsTheRule(text: string, reading: PadReading, keep: (key: string) => PadReading, label: string) {
   if (!reading.due) {
     assert.equal(reading.title, collapse(text), `${label}: no date, so the title is the text as typed`);
@@ -50,7 +49,7 @@ function holdsTheRule(text: string, reading: PadReading, keep: (key: string) => 
     return;
   }
   assert.ok(reading.marks.length > 0 && reading.key, `${label}: a date is only saved with words lit up`);
-  assert.equal(lowerFirst(reading.title), lowerFirst(withoutMarks(text, reading.marks)), `${label}: the title is the text minus the lit words`);
+  assert.equal(reading.title, withoutMarks(text, reading.marks), `${label}: the title is the text minus the lit words`);
   const kept = keep(reading.key);
   assert.deepEqual({ title: kept.title, due: kept.due, marks: kept.marks }, { title: collapse(text), due: null, marks: [] }, `${label}: Keep as text saves the text as typed`);
 }
@@ -355,7 +354,7 @@ describe("task area UI", () => {
     };
     assert.deepEqual(lit("Call Bob, tomorrow"), { title: "Call Bob", lit: [", tomorrow"] });
     assert.deepEqual(lit("Call Bob tomorrow."), { title: "Call Bob", lit: ["tomorrow."] });
-    assert.deepEqual(lit("Tomorrow, call Bob"), { title: "Call Bob", lit: ["Tomorrow,"] });
+    assert.deepEqual(lit("Tomorrow, call Bob"), { title: "call Bob", lit: ["Tomorrow,"] });
     assert.deepEqual(lit("Call Bob, tomorrow, about pricing"), { title: "Call Bob, about pricing", lit: ["tomorrow,"] });
     assert.deepEqual(lit("Call Bob tomorrow, and"), { title: "Call Bob", lit: ["tomorrow, and"] });
   });
@@ -384,13 +383,59 @@ describe("task area UI", () => {
     assert.equal(padReading(typed, parsed, null, []).key, "", "without the AI's answer there is no reading to keep");
   });
 
+  it("keeps a kept reading as text while you type on, one key at a time, and drops it only when its words go", () => {
+    const now = new Date(CORPUS_NOWS.monAM);
+    const typeOn = (start: string, more: string, ai: (text: string) => PadAiParse | null = () => null) => {
+      const first = padReading(start, parseTaskText(start, now), ai(start), []);
+      assert.ok(first.key, start);
+      let kept: KeptReading[] = [keptReading(start, first.marks)];
+      for (let index = 1; index <= more.length; index += 1) {
+        const text = start + more.slice(0, index);
+        const parsed = parseTaskText(text, now);
+        kept = keptAfterTyping(kept, text, padReading(text, parsed, ai(text), []));
+        assert.equal(kept.length, 1, `${JSON.stringify(text)}: still kept`);
+        const shown = padReading(text, parsed, ai(text), kept.map((entry) => entry.key));
+        assert.deepEqual({ title: shown.title, due: shown.due }, { title: collapse(text), due: null }, JSON.stringify(text));
+      }
+      return kept;
+    };
+    typeOn("Call Bob tomorrow", " about pricing");
+    typeOn("Call Bob tomorrow", " about 3 things");
+    typeOn("Call Bob tomorrow", " at the office");
+    typeOn("Call Bob tomorrow", " re the 2 decks");
+    typeOn("Call Bob tomorrow 3pm", " in room 4 please");
+    typeOn("Call Bob, tomorrow", " about pricing");
+    const answers = new Map([["Call Sam at 3", ["at 3"]], ["Call Sam at 3 about pricing", ["at 3"]]]);
+    typeOn("Call Sam at 3", " about pricing", (text) => {
+      const phrases = answers.get(text);
+      return phrases ? acceptWithMarks(text, { phrases, due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now) : null;
+    });
+
+    const start = "Call Bob tomorrow";
+    const kept = [keptReading(start, padReading(start, parseTaskText(start, now), null, []).marks)];
+    const gone = "Call Bob tomor";
+    assert.deepEqual(keptAfterTyping(kept, gone, padReading(gone, parseTaskText(gone, now), null, [])), [], "deleting the kept words forgets them");
+    const moved = "tomorrow call Bob";
+    assert.equal(keptAfterTyping(kept, moved, padReading(moved, parseTaskText(moved, now), null, [])).length, 1, "the kept words can move");
+    const newer = "Call Bob tomorrow 3pm";
+    assert.deepEqual(keptAfterTyping(kept, newer, padReading(newer, parseTaskText(newer, now), null, [])), [], "a different reading of the same words shows instead");
+  });
+
+  it("never changes the letters you typed", () => {
+    const now = new Date(CORPUS_NOWS.monAM);
+    for (const [typed, title] of [["call bob tomorrow", "call bob"], ["Tomorrow, call Bob", "call Bob"], ["iPhone repair friday", "iPhone repair"], ["CALL BOB TOMORROW", "CALL BOB"]]) {
+      assert.equal(padReading(typed, parseTaskText(typed, now), null, []).title, title, typed);
+    }
+    assert.equal(acceptWithMarks("ring jane at 3", { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now).title, "ring jane");
+  });
+
   it("only takes the AI's date when its phrase is really in the text, holds only date words, and the date is real and near", () => {
     const now = new Date("2026-11-16T09:15:00Z");
     const typed = "ring jane re the Q3 deck tmrw afternoon";
     const kept = { title: typed, due: null, remindMinutes: null, durationMinutes: null };
     const read = (phrases: string[], due: string | null, remindMinutes: number | null = null, durationMinutes: number | null = null) =>
       acceptAiReading(typed, { phrases, due, remindMinutes, durationMinutes }, now);
-    assert.deepEqual(read(["tmrw afternoon"], "2026-11-17T14:00"), { title: "Ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(read(["tmrw afternoon"], "2026-11-17T14:00"), { title: "ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: null });
     assert.deepEqual(read(["tomorrow afternoon"], "2026-11-17T14:00"), kept, "the phrase must be typed");
     assert.deepEqual(read([], "2026-11-17"), kept, "a due needs its phrase");
     assert.deepEqual(read(["tmrw"], "2026-11-31"), kept, "not a calendar date");
@@ -400,7 +445,7 @@ describe("task area UI", () => {
     assert.deepEqual(read(["tmrw"], "2028-12-01"), kept, "more than two years out");
     assert.deepEqual(read(["tmrw"], "2026-11-17T10:00"), kept, "a time with no time words in the phrase");
     assert.deepEqual(read(["tmrw afternoon"], "2027-03-28T01:30"), kept, "a clock time that doesn't exist in London");
-    assert.deepEqual(read(["tmrw afternoon"], "2026-11-17T14:00", 15, 30), { title: "Ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: null }, "no reminder or length unless the text asks for one");
+    assert.deepEqual(read(["tmrw afternoon"], "2026-11-17T14:00", 15, 30), { title: "ring jane re the Q3 deck", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: null }, "no reminder or length unless the text asks for one");
 
     const check = (text: string, phrases: string[], due: string) => acceptAiReading(text, { phrases, due, remindMinutes: null, durationMinutes: null }, now);
     const untouched = (text: string) => ({ title: text, due: null, remindMinutes: null, durationMinutes: null });

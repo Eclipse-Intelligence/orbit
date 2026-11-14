@@ -18,6 +18,8 @@ import { requestReminderPermission } from "@/lib/reminder-alerts";
 import {
   backspaceKeeps,
   mergeMarks,
+  keptAfterTyping,
+  keptReading,
   padReading,
   readingToSave,
   nameMarks,
@@ -37,6 +39,7 @@ import {
   docQueryAt,
   withoutDocQuery,
   type DocQuery,
+  type KeptReading,
   type PadMark,
 } from "@/lib/task-pad";
 import { DocPickHeader, DocPickNotice, DocPickOptions, DocPickPopover, useDocPicks } from "@/components/crm/task-doc-picker";
@@ -514,7 +517,7 @@ export default function TaskPad({
   const [unpinned, setUnpinned] = useState<string | null>(null);
   const pinned = thread && unpinned !== thread.key ? thread : null;
   const [dismissed, setDismissed] = useState<string[]>([]);
-  const [keptAsText, setKeptAsText] = useState<string[]>([]);
+  const [keptAsText, setKeptAsText] = useState<KeptReading[]>([]);
   const [justKept, setJustKept] = useState(false);
   const [picked, setPicked] = useState<{ id: string; word: string } | null>(null);
   const [askOpen, setAskOpen] = useState(true);
@@ -537,8 +540,10 @@ export default function TaskPad({
   const aiValue = aiFits ? ai.value : null;
   const read = derive(aiValue);
   const { title, chosenDue, chosenReminder, finalDue, finalReminder, duration, needsTime, dateMarks, phrase, key } = read;
-  const producedKey = padReading(text, parsed, aiValue, []).key;
-  if (keptAsText.length > 0 && !keptAsText.includes(producedKey)) setKeptAsText([]);
+  if (keptAsText.length > 0) {
+    const stillKept = keptAfterTyping(keptAsText, text, padReading(text, parsed, aiValue, []));
+    if (stillKept.length !== keptAsText.length) setKeptAsText(stillKept);
+  }
   const fromAi = aiValue !== null && key !== "";
   const aiShown = useRef<{ id: string; at: number } | null>(null);
   const aiShownId = fromAi ? `${text}\u0000${key}` : null;
@@ -549,7 +554,7 @@ export default function TaskPad({
 
   function keepAsText() {
     if (!key) return;
-    setKeptAsText((current) => (current.includes(key) ? current : [...current, key]));
+    setKeptAsText((current) => (current.some((entry) => entry.key === key) ? current : [...current, keptReading(text, dateMarks)]));
     setDue(unset());
     setReminder(unset());
     setAddedTime(null);
@@ -594,8 +599,9 @@ export default function TaskPad({
   const docWarn = assignable && owner !== viewerId;
 
   function derive(value: PadAiParse | null) {
-    const shown = padReading(text, parsed, value, keptAsText);
-    const confirmed = due.set && shown.key ? padReading(text, parsed, value, [...keptAsText, shown.key]) : shown;
+    const keptKeys = keptAsText.map((entry) => entry.key);
+    const shown = padReading(text, parsed, value, keptKeys);
+    const confirmed = due.set && shown.key ? padReading(text, parsed, value, [...keptKeys, shown.key]) : shown;
     const timed = addedTime && confirmed.due === addedTime.date ? `${addedTime.date}T${addedTime.time}` : confirmed.due;
     const chosenDue = due.set ? due.value : timed;
     const autoReminder = confirmed.remindMinutes;
