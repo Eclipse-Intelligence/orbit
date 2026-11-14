@@ -990,6 +990,7 @@ export type DueReminder = {
   remindMinutes: number;
   companyName: string | null;
   contactName: string | null;
+  pushed: boolean;
 };
 
 export async function listDueReminders(actor: Actor, now = new Date()): Promise<DueReminder[]> {
@@ -1020,6 +1021,7 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
         remindMinutes: task.remindMinutes ?? 0,
         companyName: task.companyName,
         contactName: task.contactName,
+        pushed: actor.type === "user" && (task.ownerId ?? task.createdByUserId) === actor.userId,
       };
     });
   });
