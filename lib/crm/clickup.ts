@@ -13,7 +13,7 @@ import {
   timeLeft,
   type IntegrationKey,
 } from "@/lib/crm/conversations";
-import { withActor } from "@/lib/crm/context";
+import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
 import { CrmError, notSetUp, tooMany } from "@/lib/crm/errors";
 import { unreachable } from "@/lib/upstream";
 import { contactHref, companyHref } from "@/lib/crm/hrefs";
@@ -422,8 +422,15 @@ async function readSyncRow(db: Db, workspaceId: string, id: string, lock = false
   return result.rows[0] ?? null;
 }
 
-async function linkedElsewhere(workspaceId: string, clickupTaskId: string) {
-  const result = await query<{ linked: boolean }>("select private.clickup_task_linked($1, $2) as linked", [workspaceId, clickupTaskId]);
+const LINKED_SQL = "select private.clickup_task_linked($1, $2) as linked";
+
+export async function linkedElsewhere(workspaceId: string, clickupTaskId: string) {
+  const result = await query<{ linked: boolean }>(LINKED_SQL, [workspaceId, clickupTaskId]);
+  return Boolean(result.rows[0]?.linked);
+}
+
+async function linkedElsewhereInAppDb(appDb: Db, workspaceId: string, clickupTaskId: string) {
+  const result = await appDb.query<{ linked: boolean }>(LINKED_SQL, [workspaceId, clickupTaskId]);
   return Boolean(result.rows[0]?.linked);
 }
 
@@ -518,7 +525,7 @@ async function adoptUnconfirmed(db: Db, workspaceId: string, task: ClickUpTask, 
     const unconfirmed = row ? snapshotOf(row).unconfirmed : undefined;
     if (row && unconfirmed && matchesUnconfirmed(task, unconfirmed)) rows.push({ row, unconfirmed });
   }
-  if (rows.length === 0 || (await linkedElsewhere(workspaceId, String(task.id)))) return null;
+  if (rows.length === 0) return null;
   rows.sort((a, b) => distance(task, a.unconfirmed) - distance(task, b.unconfirmed));
   await linkUnconfirmed(db, rows[0].row, task, rows[0].unconfirmed);
   return rows[0].row.id;
@@ -893,10 +900,14 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
   }
   const remote = remoteFields(task);
   const changedAt = remoteTime(task);
-  return withActor(s.actor, async (db) => {
+  let linkedAnywhere = false;
+  const lockAndCheck = async (db: Db) => {
     await lockClickUpTask(db, s.actor.workspaceId, taskId);
-    let linked = await linkedRow(db, s.actor.workspaceId, taskId);
-    if (!linked && listId && (await adoptUnconfirmed(db, s.actor.workspaceId, task, listId))) {
+    linkedAnywhere = await linkedElsewhereInAppDb(db, s.actor.workspaceId, taskId);
+  };
+  return withActorAfterAppStep(s.actor, lockAndCheck, async (db) => {
+    let linked = linkedAnywhere ? await linkedRow(db, s.actor.workspaceId, taskId) : null;
+    if (!linkedAnywhere && listId && (await adoptUnconfirmed(db, s.actor.workspaceId, task, listId))) {
       linked = await linkedRow(db, s.actor.workspaceId, taskId);
     }
     if (linked) {
@@ -932,7 +943,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
       return changed ? "updated" : "unchanged";
     }
     if (!listId || !watched.has(listId)) return "ignored";
-    if (await linkedElsewhere(s.actor.workspaceId, taskId)) return "ignored";
+    if (linkedAnywhere) return "ignored";
     const creating = await db.query<{ id: string }>(
       `select id from crm.tasks
        where workspace_id = $1 and clickup_task_id is null and clickup_list_id = $2 and title = $3

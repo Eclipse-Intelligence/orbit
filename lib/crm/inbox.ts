@@ -5,6 +5,7 @@ import { createActivityInDb, createEmailActivityOnce } from "@/lib/crm/activitie
 import { discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
 import {
   companyHasOpenTask,
+  createFollowUpUnlessOpen,
   FREE_MAIL_DOMAINS,
   isFreeMailDomain,
   isRecent,
@@ -785,7 +786,7 @@ export async function fileInboundMessages(
 
 type FollowUpCandidate = { companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null; text: string | null };
 
-type TitleOptions = { deadline?: number; titleTimeoutMs?: number };
+type TitleOptions = { deadline?: number; titleTimeoutMs?: number; fetchImpl?: typeof fetch };
 
 async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[], options: TitleOptions = {}) {
   const taskIds: string[] = [];
@@ -796,8 +797,8 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
     try {
       if (await companyHasOpenTask(actor.workspaceId, candidate.companyId)) continue;
       const due = await scheduleTaskDue(actor, { days: 2 });
-      const title = await followUpTitle({ who: candidate.who, subject: candidate.subject, text: candidate.text }, { deadline: options.deadline, timeoutMs: options.titleTimeoutMs });
-      const task = await withActor(actor, async (db) => {
+      const title = await followUpTitle({ who: candidate.who, subject: candidate.subject, text: candidate.text }, { deadline: options.deadline, timeoutMs: options.titleTimeoutMs, fetchImpl: options.fetchImpl });
+      const task = await createFollowUpUnlessOpen(actor, candidate.companyId, async (db) => {
         const source = candidate.threadKey
           ? (await db.query<{ id: string }>("select id from crm.mail_sources where connection_id = $1 and user_id = $2 limit 1", [candidate.connectionId, actor.userId])).rows[0]
           : null;

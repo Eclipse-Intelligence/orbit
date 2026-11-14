@@ -33,7 +33,7 @@ import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, listRuns, setWorkflowStatus } from "@/lib/workflows/store";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, resetDatabase, withStrictPool } from "./helpers";
 
 const TOKEN = "pk_101_TESTTOKEN";
 const SITE = "https://orbit.example.com";
@@ -781,8 +781,8 @@ describe("clickup sync", () => {
       const created = await createTaskWithClickUp(owner, { title: name, contactId: janeId }, listId, { fetchImpl: lost });
       assert.ok(created.clickupError);
       assert.equal(remoteCopies(name).length, 1);
-      await syncClickUp({ actor: owner, force: true, fetchImpl });
-      await syncClickUp({ actor: owner, force: true, fetchImpl });
+      await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+      await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
       assert.equal(remoteCopies(name).length, 1, name);
       const rows = await orbitCopies(name);
       assert.equal(rows.length, 1, name);
@@ -805,8 +805,8 @@ describe("clickup sync", () => {
     const first = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
     await new Promise((resolve) => setTimeout(resolve, 20));
     const second = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
-    await syncClickUp({ actor: owner, force: true, fetchImpl });
-    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
     const remote = [...fake.tasks.values()].filter((task) => task.name === name).sort((a, b) => Number(a.date_created) - Number(b.date_created));
     assert.equal(remote.length, 2);
     assert.equal((await taskRow(first.id)).clickup_task_id, remote[0].id);
@@ -826,7 +826,7 @@ describe("clickup sync", () => {
     const task = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: unsent })).task;
     assert.ok((await taskRow(task.id)).clickup_sync.unconfirmed);
     const later = remoteTask(fake, { id: "madebyhand", listId: RELATIONSHIPS, name, date_created: String(Date.now() + 10 * 60 * 1000) });
-    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
     const linked = (await taskRow(task.id)).clickup_task_id;
     assert.ok(linked);
     assert.notEqual(linked, later.id);
@@ -844,8 +844,8 @@ describe("clickup sync", () => {
     const name = "Moved before sync";
     const task = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
     await getAdminPool().query("update crm.tasks set clickup_list_id = $2 where id = $1", [task.id, ZEUS]);
-    await syncClickUp({ actor: owner, force: true, fetchImpl });
-    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
     const remote = [...fake.tasks.values()].filter((item) => item.name === name);
     assert.equal(remote.length, 1);
     const row = await taskRow(task.id);
@@ -1045,7 +1045,7 @@ describe("clickup sync", () => {
     const remote = fake.tasks.get(clickupId)!;
     remote.date_updated = String(Date.now() + 1_000);
     remote.custom_fields = remote.custom_fields?.map((field) => ({ ...field, value: "jane@acme.com" }));
-    const result = await syncClickUp({ actor: priya, force: true, fetchImpl });
+    const result = await withStrictPool(() => syncClickUp({ actor: priya, force: true, fetchImpl }));
     assert.equal(result.failed, 0);
     assert.equal(result.imported, 0);
     const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [clickupId]);
