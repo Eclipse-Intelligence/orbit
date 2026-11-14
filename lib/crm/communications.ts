@@ -9,6 +9,7 @@ import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Activity, Actor, Company, Contact, Task } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
+import { followUpTitle, USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
 
 const RECENT_MS = 48 * 60 * 60 * 1000;
 
@@ -133,6 +134,7 @@ type CommunicationResult = {
 export async function recordCommunication(
   actor: Actor,
   input: CommunicationInput,
+  options: { fetchImpl?: typeof fetch } = {},
 ): Promise<CommunicationResult> {
   assertScope(actor.scopes, "activities:write");
   const title = input.title?.trim() || null;
@@ -144,7 +146,7 @@ export async function recordCommunication(
   }
   const emails = [...new Set((input.participantEmails ?? []).map((email) => canonicalEmail(email)).filter(Boolean))] as string[];
 
-  const result = await withActor(actor, async (db) => {
+  const recorded = await withActor(actor, async (db) => {
     const contacts: Contact[] = [];
     for (const email of emails) {
       const found = await db.query<{ id: string }>(
@@ -197,38 +199,62 @@ export async function recordCommunication(
     );
 
     const company = companyId ? await readCompanyInDb(db, companyId, actor.workspaceId) : null;
-    let task: Task | null = null;
-    let suggested = false;
-    if (company && isRecent(activity.occurredAt) && hasScope(actor.scopes, "tasks:write")) {
-      if (!(await companyHasOpenTask(actor.workspaceId, company.id))) {
-        const due = await scheduleTaskDue(actor, { days: 2 });
-        const who = contacts.find((contact) => contact.id === contactId)?.name || company.name;
-        task = await createTaskInDb(
-          db,
-          actor,
-          {
-            title: `Follow up with ${who}`,
-            description: withDueNote(`Suggested after a ${input.kind}.`, due),
-            dueDate: due?.dueDate ?? null,
-            companyId: company.id,
-            contactId,
-            priority: "normal",
-          },
-          { operation: "suggest_follow_up", source: "communication" },
-        );
-        suggested = true;
-      }
-    }
-
-    return { activity, company, contacts, task, suggested };
+    const followUp =
+      company && isRecent(activity.occurredAt) && hasScope(actor.scopes, "tasks:write") && !(await companyHasOpenTask(actor.workspaceId, company.id))
+        ? { who: contacts.find((contact) => contact.id === contactId)?.name || company.name, companyId: company.id, contactId }
+        : null;
+    return { activity, company, contacts, followUp };
   });
-  if (result.task && actor.type === "user") {
+
+  const { followUp, ...filed } = recorded;
+  if (!followUp) return { ...filed, task: null, suggested: false };
+  const task = await suggestFollowUp(actor, input.kind, followUp, { title, body }, options);
+  if (task && actor.type === "user") {
     try {
       const { sendTaskToDefaultList } = await import("@/lib/crm/clickup");
-      await sendTaskToDefaultList(actor, result.task.id);
+      await sendTaskToDefaultList(actor, task.id);
     } catch (error) {
       console.error("Could not send the follow-up task to ClickUp", error);
     }
   }
-  return result;
+  return { ...filed, task, suggested: task !== null };
+}
+
+async function suggestFollowUp(
+  actor: Actor,
+  kind: CommunicationInput["kind"],
+  followUp: { who: string; companyId: string; contactId: string | null },
+  email: { title: string | null; body: string | null },
+  options: { fetchImpl?: typeof fetch },
+) {
+  try {
+    const title =
+      kind === "email"
+        ? await followUpTitle(
+            { who: followUp.who, subject: email.title, text: email.body },
+            { logged: true, timeoutMs: USER_WAIT_TITLE_MS, fetchImpl: options.fetchImpl },
+          )
+        : `Follow up with ${followUp.who}`;
+    const due = await scheduleTaskDue(actor, { days: 2 });
+    return await withActor(actor, async (db) => {
+      await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`follow-up|${actor.workspaceId}|${followUp.companyId}`]);
+      if (await companyHasOpenTask(actor.workspaceId, followUp.companyId)) return null;
+      return createTaskInDb(
+        db,
+        actor,
+        {
+          title: title.slice(0, 200),
+          description: withDueNote(kind === "email" ? "Suggested after an email." : "Suggested after a meeting.", due),
+          dueDate: due?.dueDate ?? null,
+          companyId: followUp.companyId,
+          contactId: followUp.contactId,
+          priority: "normal",
+        },
+        { operation: "suggest_follow_up", source: "communication" },
+      );
+    });
+  } catch (error) {
+    console.error("Could not suggest a follow-up task", error);
+    return null;
+  }
 }
