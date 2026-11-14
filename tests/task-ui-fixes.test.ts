@@ -121,7 +121,9 @@ describe("task UI fixes", () => {
         status: 200,
         body: { value: { title: "Call Sam", due: "2026-10-16T15:00", remindMinutes: null, durationMinutes: null, marks: [{ start: 9, end: 13, kind: "when" }] }, available: true },
       });
-      for (let index = 1; index < PAD_READS_PER_WINDOW; index += 1) await readPadRequest(mark, read(), { fetchImpl, now });
+      const padded = await readPadRequest(mark, read(undefined, "\n  Call Sam at 3"), { fetchImpl, now });
+      assert.deepEqual(padded.body.value?.marks, [{ start: 12, end: 16, kind: "when" }], "the highlight lines up with the text as typed");
+      for (let index = 2; index < PAD_READS_PER_WINDOW; index += 1) await readPadRequest(mark, read(), { fetchImpl, now });
       assert.equal(calls, PAD_READS_PER_WINDOW);
       assert.deepEqual(await readPadRequest(mark, read(), { fetchImpl, now }), { status: 200, body: { value: null, available: true } }, "over the limit the card keeps its own guess, with no error");
       assert.equal(calls, PAD_READS_PER_WINDOW);

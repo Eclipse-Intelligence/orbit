@@ -228,6 +228,30 @@ describe("task area UI", () => {
     assert.deepEqual(plain(confirmedReading(sure, null)), { title: "Call Sam", due: "2026-11-17T15:00", remindMinutes: null, durationMinutes: null });
   });
 
+  it("lights up the glue words and punctuation that will be removed with the date", () => {
+    const now = new Date("2026-11-16T09:15:00Z");
+    const lit = (text: string) => {
+      const reading = padReading(text, parseTaskText(text, now), null, []);
+      return [reading.title, reading.marks.map((mark) => text.slice(mark.start, mark.end))];
+    };
+    assert.deepEqual(lit("Call Bob and tomorrow"), ["Call Bob", ["and tomorrow"]]);
+    assert.deepEqual(lit("Call Bob tomorrow, and remind me 15 mins before"), ["Call Bob", ["tomorrow", ", and remind me 15 mins before"]]);
+    assert.deepEqual(lit("Send deck tomorrow."), ["Send deck", ["tomorrow."]]);
+    assert.deepEqual(lit("Call Bob, Friday"), ["Call Bob", [", Friday"]]);
+    assert.deepEqual(lit("Call Bob tomorrow. Then email Jo"), ["Call Bob. Then email Jo", ["tomorrow"]]);
+    const asked = parseTaskText("Call Bob, Friday?", now);
+    assert.deepEqual({ unsure: asked.unsure, title: asked.title }, { unsure: true, title: "Call Bob, Friday?" });
+  });
+
+  it("keeps the AI's highlight in step with the text as typed, leading spaces and line breaks included", () => {
+    const now = new Date("2026-11-16T09:15:00Z");
+    for (const typed of ["  Call Sam at 3", "\nCall Sam at 3", " \n Call Sam at 3"]) {
+      const reading = acceptWithMarks(typed, { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now);
+      assert.deepEqual(reading.marks.map((mark) => typed.slice(mark.start, mark.end)), ["at 3"], JSON.stringify(typed));
+      assert.equal(reading.title, "Call Sam");
+    }
+  });
+
   it("shows what was read so it can be kept as text, for the fast reader and the AI alike", () => {
     const now = new Date("2026-11-16T09:15:00Z");
     const typed = "Call Sam tomorrow 3pm";
@@ -256,6 +280,25 @@ describe("task area UI", () => {
     assert.equal(backspaceKeeps(marks, typed.length, typed.length), true, "Backspace right after the phrase keeps it");
     assert.equal(backspaceKeeps(marks, 8, 8), false);
     assert.equal(backspaceKeeps(marks, typed.length - 3, typed.length), false, "not with a selection");
+  });
+
+  it("saves on Enter only the reading the card shows at that moment, and treats a hand-set Due chip as keeping the words", () => {
+    const source = readFileSync("components/crm/task-pad.tsx", "utf8");
+    const submit = source.slice(source.indexOf("async function submit()"), source.indexOf("addPadTaskAction(", source.indexOf("async function submit()")));
+    assert.match(submit, /const saving = read;/, "the reading on screen is taken before anything is awaited");
+    assert.ok(submit.indexOf("const saving = read;") < submit.indexOf("await "), "nothing is awaited before the reading is taken");
+    assert.doesNotMatch(submit, /readWithAi|aiReads|AI_WAIT|setTimeout/, "Enter never waits for or applies an answer that hasn't been shown");
+    assert.doesNotMatch(source, /AI_WAIT_MS|settledAnswer/);
+    const saved = source.slice(source.indexOf("addPadTaskAction({"), source.indexOf("})", source.indexOf("addPadTaskAction({")));
+    for (const field of ["title: saving.title", "saving.finalDue", "remindMinutes: saving.finalReminder", "durationMinutes: saving.duration"]) assert.ok(saved.includes(field), field);
+    assert.match(source, /due\.set && shown\.phrase \? padReading\(text, parsed, value, \[\.\.\.keptAsText, shown\.phrase\]\)/, "a hand-set Due chip keeps the highlighted words in the title");
+
+    const now = new Date("2026-11-16T09:15:00Z");
+    const pending = "Call Sam at 3";
+    assert.deepEqual(plain(padReading(pending, parseTaskText(pending, now), null, [])), { title: pending, due: null, remindMinutes: null, durationMinutes: null }, "an unconfirmed reading saves the text as typed");
+    const typed = "Call Sam tomorrow 3pm";
+    const shown = padReading(typed, parseTaskText(typed, now), null, []);
+    assert.deepEqual(padReading(typed, parseTaskText(typed, now), null, [shown.phrase]).title, typed, "changing the chip keeps the words");
   });
 
   it("only takes the AI's date when its phrase is really in the text, holds only date words, and the date is real and near", () => {
@@ -331,8 +374,8 @@ describe("task area UI", () => {
     assert.deepEqual(full("Call Sam tomorrow at 3 o'clock", ["tomorrow at 3 o'clock"], "2026-11-17T04:00"), untouched("Call Sam tomorrow at 3 o'clock"));
     assert.deepEqual(full("Call Sam next week", ["next week"], "2026-11-30"), untouched("Call Sam next week"), "next week is the coming Monday's week");
     assert.deepEqual(full("Call Sam next week", ["next week"], "2026-11-23"), { title: "Call Sam", due: "2026-11-23", remindMinutes: null, durationMinutes: null });
-    assert.deepEqual(check("Tell Sam to log in on Friday", ["on Friday"], friday), { title: "Tell Sam to log in on Friday", due: friday, remindMinutes: null, durationMinutes: null }, "a cut after a dangling word keeps the typed title");
-    assert.deepEqual(check("Tomorrow send NDA", ["Tomorrow"], "2026-11-17"), { title: "Tomorrow send NDA", due: "2026-11-17", remindMinutes: null, durationMinutes: null }, "a cut at the start that leaves a dangling word keeps the typed title");
+    assert.deepEqual(check("Tell Sam to log in on Friday", ["on Friday"], friday), untouched("Tell Sam to log in on Friday"), "a cut that would leave a dangling word is dropped");
+    assert.deepEqual(check("Tomorrow send NDA", ["Tomorrow"], "2026-11-17"), untouched("Tomorrow send NDA"), "so is a cut at the start that leaves a dangling word");
 
     assert.deepEqual(check("Call Sam on Friday", ["on Friday"], "2026-11-19"), untouched("Call Sam on Friday"), "the weekday must match");
     assert.deepEqual(check("Call Sam on 3 Dec", ["on 3 Dec"], "2026-12-04"), untouched("Call Sam on 3 Dec"), "the day must match");

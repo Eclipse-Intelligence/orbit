@@ -524,6 +524,41 @@ for (const [device, viewport] of [
     await page.waitForTimeout(300);
     await pad.fill("");
     await page.waitForTimeout(300);
+
+    const saved = await localAdmin("check what Add task saved: an agent only sees tasks it created");
+    const savedTask = async (stamp) =>
+      saved ? ((await saved.query("select title, due_at from crm.tasks where title like $1 order by created_at desc limit 1", [`%${stamp}%`]).catch(() => null))?.rows[0] ?? null) : null;
+    const keepStamp = `${device}${Date.now().toString(36)}`;
+    const keepText = `Draft keep ${keepStamp} tomorrow 3pm`;
+    await pad.tap();
+    await pad.fill(keepText);
+    await page.waitForTimeout(700);
+    const lit = await page.evaluate(() => [...document.querySelectorAll('mark[class*="tag-blue"]')].map((mark) => mark.textContent).join(" "));
+    check(`${device} Add task lights up the words it read as the date`, lit === "tomorrow 3pm", lit);
+    const keep = page.getByRole("button", { name: "Keep as text: tomorrow 3pm" });
+    check(`${device} Add task offers Keep as text`, await visible(keep));
+    await shot("task-pad-highlight");
+    if (await visible(keep)) {
+      await keep.tap();
+      await page.waitForTimeout(400);
+      const status = await page.locator('[role="status"]').filter({ hasText: "Kept as text. No date." }).count();
+      check(`${device} Keep as text drops the highlight and the date`, (await page.evaluate(() => document.querySelectorAll('mark[class*="tag-blue"]').length)) === 0 && status > 0);
+      await pad.focus();
+      await pad.press("Enter");
+      await page.waitForTimeout(2500);
+      const kept = await savedTask(keepStamp);
+      if (saved) check(`${device} Keep as text saves the words with no date`, kept?.title === keepText && kept?.due_at === null, JSON.stringify(kept));
+    }
+    const pendingStamp = `${device}p${Date.now().toString(36)}`;
+    const pendingText = `Draft pending ${pendingStamp} at 3`;
+    await pad.fill(pendingText);
+    await pad.press("Enter");
+    await page.waitForTimeout(2500);
+    const pending = await savedTask(pendingStamp);
+    if (saved) check(`${device} Enter on an unconfirmed reading saves the text as typed`, pending?.title === pendingText && pending?.due_at === null, JSON.stringify(pending));
+    if (saved) await saved.query("update crm.tasks set archived_at = now() where title like $1 or title like $2", [`%${keepStamp}%`, `%${pendingStamp}%`]).catch(() => null);
+    await pad.fill("");
+    await page.waitForTimeout(300);
   } else console.log(`skip ${device} Add task card (not found)`);
   const sweepRow = sweepTask ? page.locator(`li[data-task-id="${sweepTask.id}"]`) : page.locator("li[data-task-id]").first();
   check(`${device} tasks has the sweep task to check`, (await sweepRow.count()) > 0, (await sweepRow.count()) > 0 ? "" : "set CRM_AGENT_TOKEN so the sweep can add one");

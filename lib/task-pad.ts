@@ -226,6 +226,23 @@ function debris(text: string, spans: Span[], strict = false) {
   });
 }
 
+function withGlue(text: string, spans: Span[]): Span[] {
+  if (spans.length === 0) return spans;
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const last = sorted[sorted.length - 1];
+  return sorted.map((span) => {
+    if (span !== last) return span;
+    let { start, end } = span;
+    const ending = text.slice(end);
+    if (/^\s*[.!]+\s*$/.test(ending)) end = text.length - (/\s*$/.exec(text)?.[0].length ?? 0);
+    if (/^\s*$/.test(text.slice(end))) {
+      const glue = /(?:\s*,\s*(?:and\s+)?|\s+and\s+)$/i.exec(text.slice(0, start));
+      if (glue && glue.index > 0) start = glue.index + (/^\s*/.exec(glue[0])?.[0].length ?? 0);
+    }
+    return { ...span, start, end };
+  });
+}
+
 function cleanTitle(text: string, spans: Span[]) {
   let result = "";
   let last = 0;
@@ -580,13 +597,14 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   const readable = text.replace(DOC_REFERENCE, (found) => " ".repeat(found.length));
   if (TIME_ZONE.test(readable) || UNREAD_DATE.test(readable) || dateHits > 1 || EXTRA_DOUBT.test(readable)) doubt = true;
   const kept = (due ? spans : spans.filter((span) => span.kind !== "reminder")).filter((span) => span.kind !== "keep");
-  const title = cleanTitle(text, kept);
+  const glued = withGlue(text, kept);
+  const title = cleanTitle(text, glued);
   const docFree = title.replace(DOC_REFERENCE, " ");
   if (new RegExp(`(?<![£$€\\d.]\\s*)(?<!\\b(?:gbp|usd|eur)\\s*)\\b\\d{1,2}\\.[0-5]\\d\\b(?!\\s*(?:gbp|usd|eur)\\b)`, "i").test(docFree) && !/\b(?:v|ver|version|release)\s*\d/i.test(docFree)) ambiguous = true;
-  const marks = kept
+  const marks = glued
     .filter((span) => span.kind === "when" || due)
     .map((span) => {
-      const lead = /^[\s,;]*(?:and\s+)?/i.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
+      const lead = /^\s*/.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
       const tail = /\s*$/.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
       return { start: span.start + lead, end: span.end - tail, kind: span.kind } as PadMark;
     })
@@ -850,8 +868,9 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
   const reminder =
     !asksReminder || answer.remindMinutes === null || !Number.isFinite(answer.remindMinutes) || answer.remindMinutes < 0 ? null : nearestReminder(answer.remindMinutes);
   const title = cleanTitle(text, spans);
+  if (!title || debris(text, spans, true)) return kept;
   return {
-    title: title && !debris(text, spans, true) ? title : text,
+    title,
     due: answer.due,
     remindMinutes: reminder,
     durationMinutes: time ? duration : null,

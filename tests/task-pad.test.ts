@@ -197,7 +197,7 @@ describe("task pad parser", () => {
         ["record", "Toby Sutton OBE"],
         ["when", "at 3pm"],
         ["when", "on Wednesday"],
-        ["reminder", "remind me 15 mins"],
+        ["reminder", "and remind me 15 mins"],
       ],
     );
     assert.deepEqual(nameMarks("Visit Acme and acme again", ["Acme"]).length, 2);

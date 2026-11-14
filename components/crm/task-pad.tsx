@@ -61,7 +61,6 @@ type PadContact = PadRecord & { company: PadRecord | null };
 type Variant = "card" | "inline";
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
-const AI_WAIT_MS = 1_500;
 const AI_READ_PATH = "/api/tasks/read";
 const padAi: { available: boolean | null } = { available: null };
 
@@ -514,6 +513,7 @@ export default function TaskPad({
   const pinned = thread && unpinned !== thread.key ? thread : null;
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [keptAsText, setKeptAsText] = useState<string[]>([]);
+  const [justKept, setJustKept] = useState(false);
   const [picked, setPicked] = useState<{ id: string; word: string } | null>(null);
   const [askOpen, setAskOpen] = useState(true);
   const [choice, setChoice] = useState(0);
@@ -540,7 +540,26 @@ export default function TaskPad({
     setKeptAsText((current) => (current.includes(phrase) ? current : [...current, phrase]));
     setDue(unset());
     setReminder(unset());
+    setJustKept(true);
   }
+
+  const latestKeep = useRef({ phrase, dateMarks, keepAsText });
+  useEffect(() => {
+    latestKeep.current = { phrase, dateMarks, keepAsText };
+  });
+  useEffect(() => {
+    const field = input.current;
+    if (!field) return;
+    const onBeforeInput = (event: InputEvent) => {
+      if (event.inputType !== "deleteContentBackward") return;
+      const { phrase: current, dateMarks: shownMarks, keepAsText: keep } = latestKeep.current;
+      if (!current || !backspaceKeeps(shownMarks, field.selectionStart, field.selectionEnd)) return;
+      event.preventDefault();
+      keep();
+    };
+    field.addEventListener("beforeinput", onBeforeInput);
+    return () => field.removeEventListener("beforeinput", onBeforeInput);
+  }, []);
   const droppedTime = forTeammate && (padDueHasTime(chosenDue) || chosenReminder !== null);
   const anchor = fixedCompany ?? (company.set ? company.value : null);
   const scope = anchor?.id ?? null;
@@ -562,7 +581,8 @@ export default function TaskPad({
   const docWarn = assignable && owner !== viewerId;
 
   function derive(value: PadAiParse | null) {
-    const confirmed = padReading(text, parsed, value, keptAsText);
+    const shown = padReading(text, parsed, value, keptAsText);
+    const confirmed = due.set && shown.phrase ? padReading(text, parsed, value, [...keptAsText, shown.phrase]) : shown;
     const chosenDue = due.set ? due.value : confirmed.due;
     const autoReminder = confirmed.remindMinutes;
     const chosenReminder = chosenDue ? (reminder.set ? reminder.value : autoReminder) : null;
@@ -614,10 +634,6 @@ export default function TaskPad({
       });
     aiReads.current.set(key, { promise, controller });
     return promise.then(apply);
-  }
-
-  function settledAnswer(value: string) {
-    return answers.current.get(readKey(value)) ?? null;
   }
 
   function forgetAiReads() {
@@ -843,16 +859,7 @@ export default function TaskPad({
       return;
     }
     setBusy(true);
-    let saving = read;
-    if (parsed.unsure && !aiFits && text.trim().length >= 4) {
-      const answer = await Promise.race([readWithAi(text), new Promise<null>((resolve) => window.setTimeout(() => resolve(null), AI_WAIT_MS))]);
-      if (answer) saving = derive(answer);
-      if (saving.needsTime) {
-        setBusy(false);
-        setAskingTime(true);
-        return;
-      }
-    }
+    const saving = read;
     setError(null);
     setWarning(null);
     const fresh = await freshDetection();
@@ -878,15 +885,6 @@ export default function TaskPad({
       setBusy(false);
       focusAt();
       return;
-    }
-    if (parsed.unsure && saving === read && !aiFits) {
-      const late = settledAnswer(text);
-      if (late) saving = derive(late);
-      if (saving.needsTime) {
-        setBusy(false);
-        setAskingTime(true);
-        return;
-      }
     }
     const result = await addPadTaskAction({
       title: saving.title,
@@ -1053,7 +1051,7 @@ export default function TaskPad({
           keepAsText();
           focusAt();
         }}
-        aria-label={`Keep “${phrase}” as text`}
+        aria-label={`Keep as text: ${phrase}`}
         title="Keep these words in the title and drop the date"
         className={cn(chipClass("empty", variant), "hit")}
       >
@@ -1180,7 +1178,7 @@ export default function TaskPad({
           </div>
         </div>
         <p role="status" className="sr-only">
-          {phrase && !due.set ? `Due date read from “${phrase}”.` : ""}
+          {phrase && !due.set ? `Due date read from “${phrase}”.` : justKept ? "Kept as text. No date." : ""}
         </p>
         <textarea
           id={`${id}-text`}
@@ -1196,6 +1194,8 @@ export default function TaskPad({
           enterKeyHint="done"
           onChange={(event) => {
             setText(event.target.value);
+            setJustKept(false);
+            setKeptAsText((current) => (current.some((kept) => !event.target.value.includes(kept)) ? current.filter((kept) => event.target.value.includes(kept)) : current));
             setError(null);
             forgetSideClears();
             if (!event.target.value.trim()) {
