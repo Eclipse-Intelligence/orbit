@@ -171,6 +171,7 @@ export default function RecordTasks({
               onToggle={onToggle}
               onComplete={onComplete}
               onRemind={onRemind}
+              onReopen={reopen}
               canComplete={canChangeTaskAs(viewer, task) && !task.completedAt}
               onOpen={onOpen}
               canLink={canChangeTaskAs(viewer, task) && !task.completedAt}

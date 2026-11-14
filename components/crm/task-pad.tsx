@@ -26,7 +26,6 @@ import {
   padSaveIds,
   ownerSetsTime,
   dayOnlyHint,
-  dayOnlyNote,
   parseTaskText,
   reminderClock,
   resolvePadLinks,
@@ -746,13 +745,13 @@ export default function TaskPad({
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
-    }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined, dayOnly: false }));
+    }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
       return;
     }
-    const notes = [result.dayOnly ? dayOnlyNote(assignee?.name) : null, result.warning ?? null].filter(Boolean).join(" ") || undefined;
+    const notes = result.warning ?? undefined;
     reset();
     router.refresh();
     if (onAdded) {

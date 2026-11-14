@@ -707,7 +707,7 @@ export default function MailScreen({
       archive: `Archived ${count}.`,
       trash: `Moved ${count} to Trash.`,
       inbox: `Moved ${count} to Inbox.`,
-      snooze: `Reminder set for ${count}, ${detail ?? "later"}.`,
+      snooze: `Reminders set for ${count} ${count === 1 ? "conversation" : "conversations"}, ${detail ?? "later"}.`,
     };
     const pending = runAll((thread) => postAction(thread.key, action, from, until));
     const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";

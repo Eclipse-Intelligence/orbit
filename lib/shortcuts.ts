@@ -187,7 +187,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-prev-split", label: "Previous split", group: "Mail", combos: [{ key: "Tab", shift: true }] },
   { id: "mail-archive", label: "Archive", group: "Mail", combos: [{ key: "e" }] },
   { id: "mail-ai-write", label: "Write with AI (in an email)", group: "Mail", combos: [{ key: "j", mod: true }], whileTyping: true, inOverlay: true },
-  { id: "mail-snooze", label: "Remind me (snooze)", group: "Mail", combos: [{ key: "h" }] },
+  { id: "mail-snooze", label: "Remind me", group: "Mail", combos: [{ key: "h" }] },
   { id: "mail-trash", label: "Move to Trash", group: "Mail", combos: [{ key: "#" }, { key: "#", shift: true }, { key: "#", alt: true }, { key: "Backspace" }, { key: "Delete" }] },
   { id: "mail-read", label: "Mark read or unread", group: "Mail", combos: [{ key: "u" }] },
   { id: "mail-unsubscribe", label: "Unsubscribe", group: "Mail", combos: [{ key: "u", mod: true }] },

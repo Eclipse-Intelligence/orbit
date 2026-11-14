@@ -265,7 +265,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                     </span>
                     <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} />
                   </div>
-                  {done && canChange && onReopen && (
+                  {done && canChange && onReopen && !outcome && (
                     <div className="flex">
                       <Button variant="secondary" size="sm" onClick={() => onReopen(task)} className="hit">
                         Reopen

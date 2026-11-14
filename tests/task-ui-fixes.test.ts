@@ -10,7 +10,7 @@ import { createTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { reconcileDone } from "@/lib/task-done";
-import { dayOnlyHint, dayOnlyNote, movedMessage, ownerSetsTime, relinkChange } from "@/lib/task-pad";
+import { dayOnlyHint, dayOnlyNote, movedMessage, ownerSetsTime, relinkChange, relinkNote } from "@/lib/task-pad";
 import { createUser, resetDatabase } from "./helpers";
 
 let mark: UserActor;
@@ -45,8 +45,10 @@ describe("task UI fixes", () => {
   it("changes a task's company from Edit links by dropping the person and opportunity that don't fit", async () => {
     const task = (await createTask(mark, { title: "Check in", contactId: jane, opportunityId: renewal })).body.task;
     await assert.rejects(() => relinkTask(mark, task.id, { companyId: beta }, web), /different company/);
+    assert.deepEqual(relinkChange(task, "company", null), { companyId: null }, "Don't link on Company leaves the person and opportunity");
     const change = relinkChange(task, "company", { id: beta });
     assert.deepEqual(change, { companyId: beta, opportunityId: null, contactId: null });
+    assert.equal(relinkNote(task, "company", change), "Removed Jane Doe and Acme renewal, linked to another company.");
     const moved = await relinkTask(mark, task.id, change, web);
     assert.deepEqual([moved.companyId, moved.contactId, moved.opportunityId], [beta, null, null]);
 
@@ -55,6 +57,16 @@ describe("task UI fixes", () => {
     assert.deepEqual([person.companyId, person.contactId, person.opportunityId], [beta, bob, null]);
     const back = await relinkTask(mark, again.id, relinkChange(person, "opportunity", { id: renewal, company: { id: acme, name: "Acme" } }), web);
     assert.deepEqual([back.companyId, back.contactId, back.opportunityId], [acme, null, renewal]);
+
+    const loner = (await createContact(mark, { firstName: "Lena", lastName: "Fox", email: "lena@fox-ui.test" })).body.contact.id;
+    const free = (await createTask(mark, { title: "Ring Lena", contactId: loner, companyId: acme, opportunityId: renewal })).body.task;
+    assert.equal(free.contactCompanyId, null);
+    const kept = relinkChange(free, "company", { id: beta });
+    assert.deepEqual(kept, { companyId: beta, opportunityId: null }, "a person with no company stays");
+    assert.equal(relinkNote(free, "company", kept), "Removed Acme renewal, linked to another company.");
+    const keptPerson = await relinkTask(mark, free.id, kept, web);
+    assert.deepEqual([keptPerson.companyId, keptPerson.contactId, keptPerson.opportunityId], [beta, loner, null]);
+    assert.equal(relinkNote(keptPerson, "opportunity", relinkChange(keptPerson, "opportunity", { id: renewal, company: { id: acme, name: "Acme" } })), null);
 
     const lone = (await createTask(mark, { title: "Ring Acme", companyId: acme })).body.task;
     assert.deepEqual(relinkChange(lone, "company", { id: acme }), { companyId: acme });
@@ -83,14 +95,20 @@ describe("task UI fixes", () => {
   });
 
   it("shows a done task again once fresh data says it was reopened", () => {
-    const empty = new Set<string>();
-    const marked = { done: new Set(["a", "b"]), awaiting: new Set(["a"]), confirmed: empty };
-    const settled = reconcileDone(new Set(["b", "c"]), marked);
-    assert.deepEqual([[...settled.done], [...settled.awaiting], [...settled.confirmed]], [["a", "b"], [], ["a"]]);
-    const reopened = reconcileDone(new Set(["a", "b", "c"]), settled);
-    assert.deepEqual([...reopened.done], ["b"], "a task reopened elsewhere shows again, one still in its Undo window stays hidden");
+    const none = () => new Set<string>();
+    const marked = { done: new Set(["a", "b", "c"]), awaiting: new Set(["a"]), confirmed: none(), sent: new Set(["c"]) };
+    const settled = reconcileDone(new Set(["b", "d"]), marked);
+    assert.deepEqual([[...settled.done], [...settled.awaiting], [...settled.confirmed].sort(), [...settled.sent]], [["a", "b", "c"], [], ["a", "c"], []]);
+    const viewSwitch = reconcileDone(new Set(["d"]), settled);
+    assert.ok(!viewSwitch.confirmed.has("b"), "a task in its Undo window that leaves the list isn't counted as done on the server");
+    const back = reconcileDone(new Set(["b", "d"]), viewSwitch);
+    assert.ok(back.done.has("b"), "so it stays hidden when the view comes back");
+    const reopened = reconcileDone(new Set(["a", "b", "c", "d"]), settled);
+    assert.deepEqual([...reopened.done], ["b"], "tasks reopened elsewhere show again, one still in its Undo window stays hidden");
     assert.deepEqual([...reopened.confirmed], []);
-    const failed = reconcileDone(new Set(["a"]), { done: new Set(["a"]), awaiting: new Set(["a"]), confirmed: empty });
+    const pending = reconcileDone(new Set(["e"]), { done: new Set(["e"]), awaiting: none(), confirmed: none(), sent: new Set(["e"]) });
+    assert.deepEqual([[...pending.done], [...pending.sent], [...pending.confirmed]], [["e"], ["e"], []], "a completion still on its way keeps the task hidden");
+    const failed = reconcileDone(new Set(["a"]), { done: new Set(["a"]), awaiting: new Set(["a"]), confirmed: none(), sent: none() });
     assert.deepEqual([...failed.done], []);
   });
 });

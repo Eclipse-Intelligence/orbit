@@ -2712,7 +2712,7 @@ const TOOL_LIST: AssistantTool[] = [
       };
       return {
         title: `${verb[str(args.action)] ?? "Update"} ${count} ${count === 1 ? "conversation" : "conversations"}`,
-        lines: [str(args.until) ? `Until ${formatDateTimeLabel(str(args.until))}` : "", ...shown, ...more, str(args.summary) ? `Why: ${str(args.summary)}` : ""],
+        lines: [str(args.until) ? `${str(args.action) === "snooze" ? "On" : "Until"} ${formatDateTimeLabel(str(args.until))}` : "", ...shown, ...more, str(args.summary) ? `Why: ${str(args.summary)}` : ""],
       };
     },
     run: async (actor, args, context) => {

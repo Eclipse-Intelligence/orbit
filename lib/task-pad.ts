@@ -1,4 +1,5 @@
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
+import { MAX_TASK_DURATION } from "@/lib/crm/task-time";
 import { onWorkingDay, snoozeDetail } from "@/lib/crm/task-snooze";
 
 export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" | "ask" };
@@ -101,14 +102,9 @@ export function londonParts(now: Date) {
   return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute") };
 }
 
-function clock(hour: string, minute: number, meridiem: string | undefined) {
+function guessable(hour: string, meridiem: string | undefined) {
   const value = Number(hour);
-  return toHour(!meridiem && hour.length === 1 && value >= 1 && value <= 6 ? value + 12 : value, minute, meridiem);
-}
-
-function bareHour(hour: number) {
-  if (hour < 1 || hour > 23) return null;
-  return { hour: hour <= 6 ? hour + 12 : hour, minute: 0 };
+  return Boolean(meridiem) || hour.length === 2 || value === 0 || value > 6;
 }
 
 function cleanTitle(text: string, spans: Span[]) {
@@ -147,6 +143,19 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     duration: number | null;
   } = { date: null, time: null, exact: null, remind: null, duration: null };
   let ambiguous = false;
+  const clock = (hour: string, minute: number, meridiem: string | undefined) => {
+    if (!guessable(hour, meridiem)) {
+      ambiguous = true;
+      return null;
+    }
+    return toHour(Number(hour), minute, meridiem);
+  };
+  const bareHour = (hour: string) => {
+    const value = Number(hour);
+    if (value < 1 || value > 23) return null;
+    if (value <= 12) ambiguous = true;
+    return value <= 6 ? null : { hour: value, minute: 0 };
+  };
 
   const take = (
     pattern: RegExp,
@@ -218,10 +227,8 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     const led = /^\s*(?:on|by|due|for|this)\s/i.test(match[0]);
     const after = text.slice(match.index + match[0].length);
     const closing = /^\s*(?:$|[,;.!?]|(?:at\s+)?\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?\b|at\b|remind)/i.test(after);
-    if (!match[3] && !led && !closing) {
-      if (valid({ year, month: Number(match[2]), day: Number(match[1]) })) ambiguous = true;
-      return false;
-    }
+    if (!match[3] && !led && valid({ year, month: Number(match[2]), day: Number(match[1]) })) ambiguous = true;
+    if (!match[3] && !led && !closing) return false;
     return setDate({ year, month: Number(match[2]), day: Number(match[1]) }, Boolean(match[3]));
   });
   take(new RegExp(`${LEAD}\\b(?:(next|this|coming)\\s+)?${WEEKDAY}\\b`, "i"), (match) => {
@@ -233,14 +240,15 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     found.date = addDays(today, ((weekdayIndex(match[1]) - weekday(today) + 7) % 7) || 7);
   };
   take(new RegExp(`\\b(?:on|by|due|for|until|this|next|coming)\\s+${WEEKEND_SHORT}\\b`, "i"), weekendDay);
-  take(new RegExp(`${LEAD}\\b${WEEKEND_SHORT}\\b(?=\\s*,?\\s*(?:at\\s+)?${CLOCK})`, "i"), weekendDay);
-  take(new RegExp(`(?<=${CLOCK}\\s*,?\\s*)(?:on\\s+)?\\b${WEEKEND_SHORT}\\b`, "i"), weekendDay);
+  take(new RegExp(`${LEAD}\\b${WEEKEND_SHORT}\\b(?=\\s*,?\\s*(?:(?:at\\s+)?${CLOCK}|at\\s+\\d{1,2}\\b))`, "i"), weekendDay);
+  take(new RegExp(`(?<=(?:${CLOCK}|\\bat\\s+\\d{1,2})\\s*,?\\s*)(?:on\\s+)?\\b${WEEKEND_SHORT}\\b`, "i"), weekendDay);
   take(
     new RegExp(`\\b(?:at\\s+|from\\s+)?${NOT_MONEY}(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*-\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)\\b`, "i"),
     (match) => {
       const end = toHour(Number(match[4]), Number(match[5] ?? 0), match[6]);
       if (!end) return false;
       const startHour = Number(match[1]);
+      if (startHour < 1) return false;
       const startMinute = Number(match[2] ?? 0);
       const later = toHour(startHour, startMinute, match[3] ?? match[6]);
       const start = match[3] || (later && later.hour * 60 + later.minute < end.hour * 60 + end.minute) ? later : toHour(startHour, startMinute, "am");
@@ -248,7 +256,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
       const minutes = end.hour * 60 + end.minute - (start.hour * 60 + start.minute);
       if (minutes <= 0) return false;
       found.time = start;
-      found.duration = minutes;
+      found.duration = minutes <= MAX_TASK_DURATION ? minutes : null;
     },
   );
   take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2}):(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}`, "i"), (match) => {
@@ -267,7 +275,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
       found.time = parsed;
     },
   );
-  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2})\\s*(am|pm)\\b`, "i"), (match) => {
+  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(?<!\\d\\s*-\\s*)(\\d{1,2})\\s*(am|pm)\\b`, "i"), (match) => {
     const parsed = toHour(Number(match[1]), 0, match[2]);
     if (!parsed) return false;
     found.time = parsed;
@@ -275,8 +283,18 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(
     new RegExp(`(?:(?<=\\b${DAY_WORD}\\s+)(?:at\\s+)?|\\bat\\s+)${NOT_MONEY}(\\d{1,2})(?=\\s*(?:$|[,;!?]|\\.(?!\\d)|and\\b|remind|(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b))`, "i"),
     (match) => {
-      const parsed = bareHour(Number(match[1]));
-      if (!parsed || found.time) return false;
+      if (found.time) return false;
+      const parsed = bareHour(match[1]);
+      if (!parsed) return false;
+      found.time = parsed;
+    },
+  );
+  take(
+    new RegExp(`(?<![\\d£$€.,:/]\\s?)\\b${NOT_MONEY}(\\d{1,2})(?=\\s+(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b)`, "i"),
+    (match) => {
+      if (found.time) return false;
+      const parsed = bareHour(match[1]);
+      if (!parsed) return false;
       found.time = parsed;
     },
   );
@@ -488,14 +506,22 @@ export function padDueHasTime(due: string | null | undefined) {
   return Boolean(due && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(due));
 }
 
-type LinkedTask = { companyId: string | null; contactId: string | null; opportunityId: string | null };
+type LinkedTask = {
+  companyId: string | null;
+  contactId: string | null;
+  contactCompanyId?: string | null;
+  contactName?: string | null;
+  opportunityId: string | null;
+  opportunityName?: string | null;
+};
 type LinkPick = { id: string; company?: PadRef | null } | null;
+type Relink = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
 
-export function relinkChange(task: LinkedTask, kind: "company" | "contact" | "opportunity", option: LinkPick) {
-  const contactCompany = task.contactId ? task.companyId : null;
+export function relinkChange(task: LinkedTask, kind: "company" | "contact" | "opportunity", option: LinkPick): Relink {
+  const contactCompany = task.contactId ? (task.contactCompanyId === undefined ? task.companyId : task.contactCompanyId) : null;
   if (kind === "company") {
     const companyId = option?.id ?? null;
-    if (companyId === task.companyId) return { companyId };
+    if (!companyId || companyId === task.companyId) return { companyId };
     return {
       companyId,
       ...(task.opportunityId ? { opportunityId: null } : {}),
@@ -508,7 +534,20 @@ export function relinkChange(task: LinkedTask, kind: "company" | "contact" | "op
   if (kind === "contact") {
     return { contactId: option.id, ...(companyId ? { companyId } : {}), ...(moves && task.opportunityId ? { opportunityId: null } : {}) };
   }
-  return { opportunityId: option.id, ...(companyId ? { companyId } : {}), ...(moves && contactCompany ? { contactId: null } : {}) };
+  return {
+    opportunityId: option.id,
+    ...(companyId ? { companyId } : {}),
+    ...(contactCompany && companyId && contactCompany !== companyId ? { contactId: null } : {}),
+  };
+}
+
+export function relinkNote(task: LinkedTask, kind: "company" | "contact" | "opportunity", change: Relink) {
+  const names = [
+    kind !== "contact" && change.contactId === null && task.contactId ? (task.contactName ?? "the person") : null,
+    kind !== "opportunity" && change.opportunityId === null && task.opportunityId ? (task.opportunityName ?? "the opportunity") : null,
+  ].filter((name): name is string => Boolean(name));
+  if (names.length === 0) return null;
+  return `Removed ${names.join(" and ")}, linked to another company.`;
 }
 
 export function ownerSetsTime(viewerId: string | null | undefined, ownerId: string | null | undefined) {

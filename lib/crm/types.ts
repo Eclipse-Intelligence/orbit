@@ -406,6 +406,7 @@ export type Task = {
   companyName: string | null;
   companyPhone: string | null;
   contactId: string | null;
+  contactCompanyId?: string | null;
   contactName: string | null;
   contactFirstName: string | null;
   contactLastName: string | null;

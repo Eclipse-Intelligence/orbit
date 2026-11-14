@@ -422,7 +422,7 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     assert.deepEqual([last.state, last.attempts], ["due", REMINDER_ATTEMPTS]);
     const quiet = await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: ORIGIN });
     assert.equal(quiet.reminderErrors, 0);
-    assert.ok((await listNotifications(owner, 20)).some((note) => note.title === "Still snoozed: Gone missing"));
+    assert.ok((await listNotifications(owner, 20)).some((note) => note.title === "Still in Reminders: Gone missing"));
   });
 
   it("names the account and the fix when Microsoft refuses", async () => {

@@ -185,6 +185,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const sent = useRef({ title: source.title, text: source.text });
+  const timingSaves = useRef(0);
   const visible = useRef(shown);
   useEffect(() => {
     visible.current = shown;
@@ -216,10 +217,12 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     setDue(next.due);
     setReminder(next.reminder);
     setDuration(next.duration);
-    setSeen((current) => ({ ...current, ...next }));
   }
 
   async function save(write: TaskDetails) {
+    const timing = touchesTiming(write);
+    const ticket = timing ? ++timingSaves.current : timingSaves.current;
+    const latest = () => !timing || ticket === timingSaves.current;
     setError(null);
     setNotice(null);
     let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
@@ -231,9 +234,9 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     if (result.error) {
       setError(result.error);
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
-      return false;
+      return latest() ? false : "stale";
     }
-    if (result.saved && touchesTiming(write)) {
+    if (result.saved && timing && latest()) {
       settle(result.saved);
       if (asksForTime(write) && result.saved.dueAt && !result.saved.dueHasTime) {
         const note = dayOnlyNote(task.ownerName);
@@ -313,7 +316,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     setDue(value);
     setReminder(nextReminder);
     void save(write).then((ok) => {
-      if (ok) return;
+      if (ok !== false) return;
       setDue(before.due);
       setReminder(before.reminder);
     });
@@ -340,7 +343,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const before = duration;
     setDuration(minutes);
     void save({ durationMinutes: minutes }).then((ok) => {
-      if (!ok) setDuration(before);
+      if (ok === false) setDuration(before);
     });
   }
 
@@ -348,7 +351,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const before = reminder;
     setReminder(minutes);
     void save({ remindMinutes: minutes }).then((ok) => {
-      if (!ok) setReminder(before);
+      if (ok === false) setReminder(before);
     });
   }
 

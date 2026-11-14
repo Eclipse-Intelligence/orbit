@@ -196,7 +196,7 @@ export async function failReminder(actor: UserActor, id: string, message: string
 async function flagReminder(actor: UserActor, reminder: ReminderRow, message: string, send?: PushSender) {
   const subject = reminder.subject?.trim() || "(no subject)";
   const href = mailHref(reminder.source_id, reminder.thread_key);
-  const title = reminder.kind === "snooze" ? `Still snoozed: ${subject}` : `Follow-up not checked: ${subject}`;
+  const title = reminder.kind === "snooze" ? `Still in Reminders: ${subject}` : `Follow-up not checked: ${subject}`;
   const body =
     reminder.kind === "snooze"
       ? `Move it back yourself. ${message}`
