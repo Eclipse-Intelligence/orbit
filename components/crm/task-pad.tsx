@@ -38,6 +38,7 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
+import MailIcon from "@/public/assets/images/mail/mail-open.svg";
 import ClockIcon from "@/public/assets/images/tasks/clock.svg";
 import UserCircleIcon from "@/public/assets/images/tasks/user-circle.svg";
 import UserIcon from "@/public/assets/images/tasks/user.svg";
@@ -410,6 +411,19 @@ function StaticChip({ icon: ChipIcon, label, name, variant }: { icon: Icon; labe
   );
 }
 
+export type PadThread = { key: string; subject: string | null };
+
+function ThreadChip({ thread, variant, onRemove }: { thread: PadThread; variant: Variant; onRemove: () => void }) {
+  const label = thread.subject?.trim() || "Email";
+  return (
+    <button type="button" aria-label={`Email: ${label}. Remove`} onClick={onRemove} className={cn(chipClass("on", variant), "max-w-[18em]")}>
+      <MailIcon aria-hidden />
+      <span className="truncate">{label}</span>
+      <XIcon aria-hidden />
+    </button>
+  );
+}
+
 export default function TaskPad({
   clickup,
   company: fixedCompany = null,
@@ -417,6 +431,7 @@ export default function TaskPad({
   placeholder = "Call Jane Monday 3pm",
   initialContact = null,
   initialCompany = null,
+  thread = null,
   autoFocus = false,
   members = [],
   viewerId = null,
@@ -429,6 +444,7 @@ export default function TaskPad({
   placeholder?: string;
   initialContact?: PadRecord | null;
   initialCompany?: PadRecord | null;
+  thread?: PadThread | null;
   autoFocus?: boolean;
   members?: AssignableMember[];
   viewerId?: string | null;
@@ -457,6 +473,8 @@ export default function TaskPad({
   const [opportunity, setOpportunity] = useState<Override<PadRecord | null>>(unset);
   const [list, setList] = useState<Override<string | null>>(unset);
   const [owner, setOwner] = useState<string | null>(viewerId);
+  const [unpinned, setUnpinned] = useState<string | null>(null);
+  const pinned = thread && unpinned !== thread.key ? thread : null;
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [picked, setPicked] = useState<{ id: string; word: string } | null>(null);
   const [askOpen, setAskOpen] = useState(true);
@@ -718,6 +736,7 @@ export default function TaskPad({
       ...padSaveIds(links, { fixedCompany, contact, company, opportunity }),
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
+      mailThreadKey: pinned?.key ?? null,
     });
     setBusy(false);
     if (result.error) {
@@ -866,6 +885,19 @@ export default function TaskPad({
       onClosed={() => focusAt()}
     />,
   ];
+  if (pinned) {
+    chips.push(
+      <ThreadChip
+        key="thread"
+        thread={pinned}
+        variant={variant}
+        onRemove={() => {
+          setUnpinned(pinned.key);
+          focusAt();
+        }}
+      />,
+    );
+  }
   if (assignable && viewerId) {
     const someoneElse = owner !== viewerId && assignee;
     chips.push(

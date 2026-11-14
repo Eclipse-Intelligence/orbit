@@ -341,7 +341,7 @@ describe("linking tasks on creation", () => {
 });
 
 describe("mail follow-ups carry their thread", () => {
-  it("adds the thread link to follow-ups from the inbox and the Mail mirror", async () => {
+  it("pins the thread to follow-ups from the inbox and the Mail mirror", async () => {
     const owner = await createUser("follow@links.test", "Fran Follow");
     const company = (await createCompany(owner, { name: "Northwind", domain: "northwind-links.test" })).body.company.id;
     await createContact(owner, { companyId: company, firstName: "Ada", lastName: "Lovell", email: "ada@northwind-links.test" });
@@ -359,7 +359,8 @@ describe("mail follow-ups carry their thread", () => {
     assert.equal(filed.followUps, 1);
     const task = (await listTasks(owner, { companyId: company })).data[0];
     assert.equal(task.title, "Reply to Ada Lovell: Pilot draft");
-    assert.ok(task.description?.endsWith(`[Pilot draft](/mail?thread=${encodeURIComponent(`${sourceId}|conv-links`)})`), task.description ?? "");
+    assert.equal(task.mailThreadKey, `${sourceId}|conv-links`);
+    assert.doesNotMatch(task.description ?? "", /\/mail\?thread=/);
 
     const other = (await createCompany(owner, { name: "Fernhill", domain: "fernhill-links.test" })).body.company.id;
     await createContact(owner, { companyId: other, firstName: "Emma", lastName: "Lowe", email: "emma@fernhill-links.test" });
@@ -381,7 +382,9 @@ describe("mail follow-ups carry their thread", () => {
     const mirrored = (await listTasks(owner, { companyId: other })).data[0];
     assert.ok(mirrored, "a follow-up task");
     assert.equal(mirrored.title, "Reply to Emma Lowe: Intro to the CFO");
-    assert.ok(mirrored.description?.endsWith(`[Intro to the CFO](/mail?thread=${encodeURIComponent(`${sourceId}|thread-emma`)})`), mirrored.description ?? "");
+    assert.equal(mirrored.mailThreadKey, `${sourceId}|thread-emma`);
+    assert.deepEqual(mirrored.mailThread, { subject: "Intro to the CFO", readable: true });
+    assert.doesNotMatch(mirrored.description ?? "", /\/mail\?thread=/);
   });
 });
 

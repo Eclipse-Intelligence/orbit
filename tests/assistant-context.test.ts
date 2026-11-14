@@ -24,7 +24,6 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { logActivity } from "@/lib/crm/activities";
-import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
 import { createTask } from "@/lib/crm/tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { createWorkspace } from "@/lib/crm/workspaces";
@@ -269,8 +268,7 @@ describe("page context", () => {
     const stage = (await listPipeline(owner)).stages[0];
     const deal = (await createOpportunity(owner, { companyId, name: "Initech renewal", stageId: stage.id, value: 4600 })).body.opportunity;
     await logActivity(owner, { contactId }, "call", "Walked through pricing", "Wants a three-year price.");
-    const description = withMailThread("Ask about the pilot start date.", mailThreadLine(mail.sourceId, "conv-1", "Pilot terms"));
-    const task = (await createTask(owner, { title: "Call Peter about the renewal", description, dueDate: "2026-11-20", ownerId: member.userId, contactId, opportunityId: deal.id })).body.task;
+    const task = (await createTask(owner, { title: "Call Peter about the renewal", description: "Ask about the pilot start date.", mailThreadKey: `${mail.sourceId}|conv-1`, dueDate: "2026-11-20", ownerId: member.userId, contactId, opportunityId: deal.id })).body.task;
     const focus = (actor: UserActor, path: string) => pageContext(actor, readPageInput({ path, focus: { kind: "task", id: task.id } }));
 
     const text = await focus(owner, "/tasks");
@@ -458,8 +456,7 @@ describe("page context", () => {
   });
 
   it("gives the model a tagged task's full detail, read as the sender, and keeps it out of the stored message", async () => {
-    const description = withMailThread("Confirm the pilot start date.", mailThreadLine(mail.sourceId, "conv-1", "Pilot terms"));
-    const tagged = (await createTask(owner, { title: "Call Peter about the pilot", description, ownerId: member.userId, contactId })).body.task;
+    const tagged = (await createTask(owner, { title: "Call Peter about the pilot", description: "Confirm the pilot start date.", mailThreadKey: `${mail.sourceId}|conv-1`, ownerId: member.userId, contactId })).body.task;
     const open = (await createTask(owner, { title: "Tidy the Initech notes", ownerId: owner.userId, companyId, contactId: null, opportunityId: null })).body.task;
     const message = `Spoke to him about @[Call Peter about the pilot](task:${tagged.id}), he wants the terms Friday.`;
     const gateway = fake(() => chatReply({ content: "I'll log it." }));

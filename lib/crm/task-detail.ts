@@ -3,10 +3,10 @@ import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { linkedThread, sharedTaskContextInDb, viewerLastEmailInDb, type TaskPerson } from "@/lib/crm/task-act";
-import { splitDescription } from "@/lib/crm/task-description";
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb, type CurrentBasis } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, readTaskInDb } from "@/lib/crm/tasks";
+import { withMailThreadsInDb } from "@/lib/crm/task-mail";
 import type { Actor, ActivityType, Task, UserActor } from "@/lib/crm/types";
 import { actorForTask } from "@/lib/crm/workspaces";
 import { parseThreadKey } from "@/lib/mail/threads";
@@ -61,7 +61,7 @@ async function leadSources(db: Db, task: Task) {
 }
 
 async function viewerMail(db: Db, actor: UserActor, task: Task) {
-  const thread = linkedThread(task.description);
+  const thread = linkedThread(task);
   const summary = thread ? await threadSummaryInDb(db, actor.userId, thread.value) : null;
   const last = await viewerLastEmailInDb(db, actor, task);
   return { mail: { lastEmail: last.lastEmail, thread: summary }, emailKnown: last.known };
@@ -78,7 +78,7 @@ export async function taskDetailWithBasisInDb(db: Db, home: Actor, task: Task, v
   const readOnly = home.workspaceId !== viewer.workspaceId;
   const deal = shared.opportunity;
   const detail: TaskDetail = {
-    task: { ...task, description: splitDescription(task.description).text || null },
+    task: (await withMailThreadsInDb(db, home, [task]))[0],
     workspace: { id: home.workspaceId, name: home.type === "user" ? home.workspaceName : null, current: !readOnly },
     readOnly,
     canChange: !readOnly && !task.archivedAt && hasScope(home.scopes, "tasks:write") && canChangeTask(home, task),

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { iso } from "@/lib/crm/mutate";
-import { splitDescription } from "@/lib/crm/task-description";
 import type { CallBrief, PreparationBasis, PreparationKind, PreparedEmail, TaskPreparation } from "@/lib/crm/task-preparation";
 import type { Task } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -30,7 +29,7 @@ export async function currentBasisInDb(db: Db, task: Task, parts: BasisParts, em
     emailKnown,
     basis: {
       title: task.title,
-      description: splitDescription(task.description).text || null,
+      description: task.description?.trim() || null,
       dueDate: task.dueDate,
       contact: task.contactId
         ? {

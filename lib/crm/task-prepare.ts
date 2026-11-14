@@ -247,7 +247,7 @@ async function emailLines(db: Db, actor: UserActor, address: string | null): Pro
 
 async function threadMaterial(db: Db, actor: UserActor, task: Task, detail: TaskDetail) {
   if (!detail.mail?.thread) return null;
-  const thread = linkedThread(task.description);
+  const thread = linkedThread(task);
   if (!thread) return null;
   const text = await threadText(db, actor, thread.sourceId, thread.key);
   return text.messages.length ? formatThread(text.messages, text.subject) : null;

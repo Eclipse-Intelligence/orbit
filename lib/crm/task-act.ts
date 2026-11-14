@@ -7,7 +7,6 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound, tooLong } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
-import { splitDescription } from "@/lib/crm/task-description";
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
@@ -50,16 +49,13 @@ function cannotChange() {
   return new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner or an admin can change it.", 403);
 }
 
-export function linkedThread(description: string | null) {
-  for (const link of splitDescription(description).links) {
-    const value = new URLSearchParams(link.href.split("?")[1] ?? "").get("thread");
-    if (!value) continue;
-    const split = value.indexOf("|");
-    const sourceId = value.slice(0, split);
-    const key = value.slice(split + 1);
-    if (split > 0 && isUuid(sourceId) && key && key.length <= 450) return { value, sourceId, key };
-  }
-  return null;
+export function linkedThread(task: Pick<Task, "mailThreadKey">) {
+  const value = task.mailThreadKey;
+  if (!value) return null;
+  const split = value.indexOf("|");
+  const sourceId = value.slice(0, split);
+  const key = value.slice(split + 1);
+  return split > 0 && isUuid(sourceId) && key && key.length <= 450 ? { value, sourceId, key } : null;
 }
 
 async function opportunityFor(db: Db, workspaceId: string, task: Task) {
@@ -155,15 +151,15 @@ async function lastEmailAnywhere(db: Db, actor: UserActor, address: string | nul
   }
 }
 
-async function threadFor(db: Db, actor: UserActor, description: string | null) {
-  const thread = linkedThread(description);
+async function threadFor(db: Db, actor: UserActor, task: Task) {
+  const thread = linkedThread(task);
   if (!thread) return null;
   const result = await db.query<{ subject: string | null; at: Date | null; latest: Date | null }>(
     `select (array_agg(m.subject order by coalesce(m.sent_at, m.received_at, m.created_at) desc))[1] as subject,
        max(coalesce(m.sent_at, m.received_at, m.created_at)) as at,
        max(coalesce(m.received_at, m.sent_at, m.created_at)) as latest
      from crm.mail_messages m
-     where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
+     where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
      having count(*) > 0`,
     [actor.userId, thread.sourceId, thread.key],
   );
@@ -224,7 +220,7 @@ export async function taskContextInDb(db: Db, actor: UserActor, task: Task): Pro
     sharedTaskContextInDb(db, actor.workspaceId, task),
     contactLookupsFor(db, actor.workspaceId, task.contactId),
     lastEmailFor(db, actor, task.contactEmail),
-    threadFor(db, actor, task.description),
+    threadFor(db, actor, task),
   ]);
   const anywhere = recent ?? (await lastEmailAnywhere(db, actor, task.contactEmail));
   const lastEmail = anywhere ?? null;

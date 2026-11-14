@@ -36,7 +36,6 @@ import { mentionsIn, splitMentions } from "@/lib/mentions";
 import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX } from "@/lib/chat/types";
 import { appTimeZone } from "@/lib/time";
 import { dayKeyAt, dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
-import { splitDescription } from "@/lib/crm/task-description";
 import {
   nextNode,
   nextScheduleRun,
@@ -315,7 +314,7 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
     vars.task = {
       id: task.id,
       title: task.title,
-      notes: splitDescription(task.description).text || null,
+      notes: task.description?.trim() || null,
       completedAt: task.completedAt,
       dueAt: task.dueAt,
       dueDate: task.dueDate,
@@ -378,7 +377,7 @@ async function emailVars(actor: UserActor, messageId: string) {
       body_text: string | null;
       at: Date | string | null;
     }>(
-      `select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.from_name, m.to_recipients,
+      `select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.from_name, m.to_recipients,
          m.snippet, m.body_text, coalesce(m.received_at, m.created_at) as at
        from crm.mail_messages m where m.id = $1 and m.user_id = $2`,
       [messageId, actor.userId],
@@ -395,6 +394,7 @@ async function emailVars(actor: UserActor, messageId: string) {
       text: (row.body_text ?? row.snippet ?? "").slice(0, EMAIL_TEXT_LIMIT),
       receivedAt: row.at ? new Date(row.at).toISOString() : null,
       url: link(`/mail?thread=${encodeURIComponent(`${row.source_id}|${row.tk}`)}`),
+      threadKey: `${row.source_id}|${row.tk}`,
     };
   });
 }
@@ -927,6 +927,11 @@ function createTaskLinks(linkTo: string, vars: Vars) {
   return { companyId: linkTo === "none" ? null : companyId, contactId: null, opportunityId: null };
 }
 
+function emailThread(vars: Vars) {
+  const key = (vars.email as { threadKey?: unknown } | undefined)?.threadKey;
+  return typeof key === "string" && key ? { mailThreadKey: key } : {};
+}
+
 async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
   const config = step.config;
   if (ctx.run.test && (SIDE_EFFECTS.has(step.type) || step.type === "delay" || step.type === "approval")) {
@@ -974,6 +979,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
           description: withDueNote(render(config.notes, ctx.vars).trim() || null, due),
           dueDate: due?.dueDate ?? null,
           ...links,
+          ...emailThread(ctx.vars),
           ownerId,
           priority: "normal",
         },

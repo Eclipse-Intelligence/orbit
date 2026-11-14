@@ -199,7 +199,9 @@ describe("not now replies", () => {
     assert.equal(task.dueHasTime, false);
     assert.equal(task.dueAt, dayStartIso(task.dueDate!));
     assert.equal(task.remindMinutes, null);
-    assert.equal(task.description, `Asked to pick this up in January.\n\n[Acme pilot: proposal and next steps](/mail?thread=${encodeURIComponent(thread)})`);
+    assert.equal(task.description, "Asked to pick this up in January.");
+    assert.equal(task.mailThreadKey, thread);
+    assert.equal(task.mailThread?.readable, true);
     const audit = await getAdminPool().query<{ operation: string; source: string }>("select operation, source from crm.audit_events where entity_id = $1 and event_type = 'task.created'", [task.id]);
     assert.deepEqual(audit.rows, [{ operation: "defer_follow_up", source: "mail" }]);
 
