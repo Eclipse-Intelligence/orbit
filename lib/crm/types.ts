@@ -2,6 +2,7 @@ import type { Relationship } from "@/lib/crm/relationship-score";
 import type { Scope } from "@/lib/crm/scopes";
 import type { AiFilter } from "@/lib/ai-fields/params";
 import type { AiCell } from "@/lib/ai-fields/types";
+import type { RepeatEnds, RepeatRule } from "@/lib/task-repeat";
 
 export const LIFECYCLES = ["lead", "prospect", "customer", "churned"] as const;
 export type BuiltInLifecycle = (typeof LIFECYCLES)[number];
@@ -420,8 +421,28 @@ export type Task = {
   inOutlook: boolean;
   mailThreadKey: string | null;
   mailThread: TaskMailThread | null;
+  seriesId: string | null;
+  occursOn: string | null;
+  repeat: TaskRepeat | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type TaskRepeat = {
+  seriesId: string;
+  startsOn: string;
+  at: string | null;
+  rule: RepeatRule;
+  ends: RepeatEnds;
+  current: boolean;
+  ended: boolean;
+  next: { occursOn: string; dueAt: string; dueHasTime: boolean } | null;
+  text: string;
+  phrase: string;
+  short: string;
+  end: string;
+  rrule: string;
+  changedDates: number;
 };
 
 export type TaskMailThread = { subject: string | null; readable: boolean };

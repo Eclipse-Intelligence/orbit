@@ -20,7 +20,8 @@ import { contactHref, companyHref } from "@/lib/crm/hrefs";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
-import { archiveTaskInDb, createTask, createTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
+import { archiveTaskInDb, createTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
+import { createTaskFromApi, skipDeletedOccurrenceInDb } from "@/lib/crm/task-series";
 import type { Provenance, Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
@@ -609,11 +610,14 @@ async function archiveDeleted(s: Session, row: SyncRow, gone = true) {
     return "unchanged" as const;
   }
   assertScope(s.actor.scopes, "tasks:write");
-  await withActor(s.actor, async (db) => {
-    await archiveTaskInDb(db, s.actor, row.id, { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true }, { goneFromClickUp: gone });
+  const provenance = { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true };
+  const skipped = await withActor(s.actor, async (db) => {
+    if (gone && (await skipDeletedOccurrenceInDb(db, s.actor, row.id, provenance))) return true;
+    await archiveTaskInDb(db, s.actor, row.id, provenance, { goneFromClickUp: gone });
     await db.query("update crm.tasks set clickup_error = null, clickup_synced_at = now() where id = $1", [row.id]);
+    return false;
   });
-  return "archived" as const;
+  return skipped ? ("unchanged" as const) : ("archived" as const);
 }
 
 async function createRemote(s: Session, taskId: string) {
@@ -1068,6 +1072,20 @@ async function pushQueue(actor: UserActor) {
   });
 }
 
+async function remoteDeletes(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; clickup_task_id: string }>(
+      `select t.id, t.clickup_task_id from crm.tasks t
+       where t.workspace_id = $1 and t.archived_at is not null and t.clickup_task_id is not null
+         and t.clickup_sync ? 'deleteRemote' and ${directTaskSql("t")}
+       order by t.archived_at
+       limit $2`,
+      [actor.workspaceId, PUSH_BATCH],
+    );
+    return result.rows;
+  });
+}
+
 async function staleLinks(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<SyncRow>(
@@ -1193,6 +1211,23 @@ export async function syncClickUp(
         fail(error, "Couldn't update ClickUp.");
       }
     }
+    for (const row of await remoteDeletes(actor)) {
+      if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
+      try {
+        await s.api.deleteTask(row.clickup_task_id);
+        await withActor(actor, (db) =>
+          db.query(
+            `update crm.tasks set clickup_task_id = null, clickup_url = null, clickup_error = null, clickup_synced_at = now(),
+               clickup_sync = clickup_sync - 'deleteRemote'
+             where id = $1 and archived_at is not null`,
+            [row.id],
+          ),
+        );
+        result.archived += 1;
+      } catch (error) {
+        fail(error, "Couldn't remove a task from ClickUp.");
+      }
+    }
     for (const row of await staleLinks(actor)) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
       try {
@@ -1291,7 +1326,7 @@ export async function getClickUpPicker(actor: UserActor): Promise<ClickUpPicker 
 
 export async function createTaskWithClickUp(
   actor: UserActor,
-  input: TaskWrite,
+  input: TaskWrite & { repeat?: unknown },
   clickupListId: string | null,
   options: ClickUpOptions & { provenance?: Provenance } = {},
 ): Promise<{ task: Task; clickupError: string | null }> {
@@ -1306,7 +1341,7 @@ export async function createTaskWithClickUp(
     }
     listId = clickupListId;
   }
-  const created = await createTask(actor, input, {
+  const created = await createTaskFromApi(actor, input, {
     provenance: options.provenance ?? { operation: "create_task", source: "web" },
   });
   const task = created.body.task;

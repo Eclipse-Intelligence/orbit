@@ -324,6 +324,28 @@ export const taskMutationSchema = taskWriteSchema
   .extend({ provenance: provenanceSchema.optional() })
   .strict();
 
+export const repeatSchema = z
+  .object({
+    every: z.enum(["day", "weekday", "week", "month", "year"]),
+    interval: z.number().int().optional(),
+    days: z.array(z.string()).max(7).optional(),
+    monthDay: z.number().int().optional(),
+    monthWeek: z.object({ n: z.number().int(), weekday: z.string() }).strict().optional(),
+    ends: z.union([z.object({ after: z.number().int() }).strict(), z.object({ on: z.string() }).strict()]).nullable().optional(),
+  })
+  .strict();
+
+export const taskCreateSchema = taskMutationSchema.extend({ repeat: repeatSchema.optional() }).strict();
+
+export const taskUpdateSchema = taskMutationSchema
+  .extend({
+    repeat: repeatSchema.nullable().optional(),
+    repeatScope: z.enum(["this", "following", "all"]).optional(),
+    skip: z.boolean().optional(),
+    occursOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  .strict();
+
 export const leadSchema = z
   .object({
     company: companyWriteSchema.optional(),

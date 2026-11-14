@@ -19,6 +19,7 @@ import { runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import type { WorkflowDefinition } from "@/lib/workflows/definition";
 import { dayWindow } from "@/lib/time";
+import { createRepeatingTask } from "@/lib/crm/task-series";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
 const DAY = 86_400_000;
@@ -182,7 +183,7 @@ describe("tasks, proactive", () => {
     const { steps } = await getRunSteps(owner, approval.runId);
     assert.deepEqual(
       steps.filter((step) => step.status === "succeeded").map((step) => step.stepId),
-      ["filter_1", "ai_1", "filter_2", "approval_1", "create_task_1"],
+      ["filter_repeat", "filter_1", "ai_1", "filter_2", "approval_1", "create_task_1"],
     );
     await setWorkflowStatus(owner, workflow.id, "paused");
   });
@@ -228,6 +229,12 @@ describe("tasks, proactive", () => {
     await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
     assert.equal(await runs(), 2);
     assert.equal(llm.seen.length, 1, "no model call for a task with no links");
+
+    const walk = (await createRepeatingTask(owner, { title: "Weekly call with Gavin", contactId, ownerId: owner.userId }, { every: "week" })).body.task;
+    await completeTask(owner, walk.id);
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    assert.equal(await runs(), 3);
+    assert.equal(llm.seen.length, 1, "no model call for a repeating task");
     await setWorkflowStatus(owner, workflow.id, "paused");
   });
 

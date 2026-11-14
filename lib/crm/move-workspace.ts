@@ -514,6 +514,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         await lockNamespace(db, workspaceId, name);
       }
       plan = await runPlan(db, source, target, input, false);
+      if (input.copy !== true) await db.query("select private.task_series_follow_move($1, $2)", [source.workspaceId, target.workspaceId]);
     },
     async (db) => {
       const done = plan as Plan | null;

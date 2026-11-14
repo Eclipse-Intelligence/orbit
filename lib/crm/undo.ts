@@ -22,6 +22,7 @@ import { isRelationshipLabel, RELATIONSHIP_META } from "@/lib/crm/relationship-s
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
+import { restoreOccurrenceInDb, restoreSeriesInDb } from "@/lib/crm/task-series";
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { dateTimeInputValue } from "@/lib/time";
 import type { AccountHealth, Actor, CompanyWrite, ContactWrite, OpportunityWrite, Provenance, TaskWrite } from "@/lib/crm/types";
@@ -143,6 +144,7 @@ const DATE_FIELDS = new Set(["dueAt", "completedAt", "archivedAt", "expectedClos
 const DATE_TIME_FIELDS = new Set(["occurredAt"]);
 const TIMING_DETAILS = new Set(["dueHasTime", "scheduledBy"]);
 const AUTOMATIC_SOURCES = ["microsoft", "microsoft_teams", "granola", "communication"];
+const REPEAT_MOVES = new Set(["repeat_roll", "repeat_task"]);
 const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Activity" };
 
 type AuditRow = {
@@ -353,7 +355,17 @@ function changedSince(label: string, value: unknown, field: string, names: Map<s
   return `Can't undo: ${label} has changed since (now ${shownValue(field, value, names)}).`;
 }
 
-function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, before: Record<string, unknown>, fields: string[], provenance: Provenance, undoing: string | null = null) {
+function restoreFields(
+  db: Db,
+  actor: Actor,
+  entity: RecordType,
+  id: string,
+  before: Record<string, unknown>,
+  fields: string[],
+  provenance: Provenance,
+  undoing: string | null = null,
+  repeat: Record<string, unknown> | null = null,
+) {
   const plain = fields.filter((field) => !RELATIONSHIP_FIELDS.has(field) && field !== "completedAt");
   const write = Object.fromEntries(plain.map((field) => [field, before[field] ?? null]));
   return async () => {
@@ -365,6 +377,7 @@ function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, bef
     if (entity === "task" && (plain.length > 0 || fields.includes("completedAt"))) {
       const completedAt = fields.includes("completedAt") ? ((before.completedAt as string | null) ?? null) : undefined;
       await restoreTaskInDb(db, actor, id, write as TaskWrite, completedAt, provenance, undoing);
+      if (repeat) await restoreOccurrenceInDb(db, actor, id, repeat);
     }
     if ((entity === "company" || entity === "contact") && fields.some((field) => RELATIONSHIP_FIELDS.has(field))) {
       const label = before.relationshipOverride;
@@ -462,6 +475,28 @@ async function describeEvent(
   const fallback = `${event.event_type.replace(/[._]/g, " ")}: ${entityName}`;
 
   if (event.event_type.endsWith(".undone")) return refuse(`Undid a change to ${entityName}`, "This is already an undo.");
+  if (entity === "task" && REPEAT_MOVES.has(event.operation)) {
+    return refuse(event.operation === "repeat_roll" ? `Moved ${entityName} on to its next date` : `Made the next ${entityName}`, "Can't undo a repeat. Undo the Done, or change or skip the task instead.");
+  }
+  if (entity === "task" && event.event_type.startsWith("task_series.")) {
+    const kind = event.event_type.slice("task_series.".length);
+    const seriesChanges = record(event.changes) ?? {};
+    const made = kind === "created";
+    const summary =
+      kind === "created"
+        ? `Made task ${entityName} repeat`
+        : kind === "ended"
+          ? `Stopped task ${entityName} repeating`
+          : kind === "deleted"
+            ? `Deleted the series ${entityName}`
+            : `Changed how task ${entityName} repeats`;
+    const restores =
+      made ? (seriesChanges.withTask ? `Archives ${entityName}.` : `Stops ${entityName} repeating.`) : kind === "deleted" ? `Restores ${entityName} and its series.` : `Puts back how ${entityName} repeated.`;
+    if (undone) return refuse(summary, "This change has already been undone.");
+    if (!current) return refuse(summary, notFoundMessage(noun));
+    if (!hasScope(actor.scopes, SCOPES.task)) return refuse(summary, `You don't have permission to change this ${noun}.`);
+    return { entityName, summary, plan: { ok: true, restores, run: () => restoreSeriesInDb(db, actor, seriesChanges, provenance) } };
+  }
 
   const changes = record(event.changes);
   const before = record(changes?.before);
@@ -514,7 +549,17 @@ async function describeEvent(
       if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
     }
-    run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance, changes?.taggedAssigner === true ? event.id : null);
+    run = restoreFields(
+      db,
+      actor,
+      updateEntity,
+      event.entity_id,
+      fields.before,
+      fields.fields,
+      provenance,
+      changes?.taggedAssigner === true ? event.id : null,
+      updateEntity === "task" ? record(changes?.repeat) : null,
+    );
   } else if (updateEntity) {
     return refuse(`Changed ${noun} ${entityName}`, "This change can't be undone.");
   } else if (event.event_type === "opportunity.stage_changed" && before && after && typeof before.stageId === "string") {

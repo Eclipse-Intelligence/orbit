@@ -319,6 +319,13 @@ export function clickupClient(options: ClickUpClientOptions) {
     return (await response.json()) as ClickUpTask;
   }
 
+  async function deleteTask(taskId: string) {
+    const response = await request(`/task/${idPart(taskId)}`, { method: "DELETE" });
+    if (response.status === 404) return false;
+    if (!response.ok) throw new ClickUpError(await errorMessage(response), response.status);
+    return true;
+  }
+
   async function setCustomField(taskId: string, fieldId: string, value: unknown) {
     await json<unknown>(`/task/${idPart(taskId)}/field/${idPart(fieldId)}`, {
       method: "POST",
@@ -384,6 +391,7 @@ export function clickupClient(options: ClickUpClientOptions) {
     createTask,
     updateTask,
     getTask,
+    deleteTask,
     setCustomField,
     teamTasks,
     createWebhook,

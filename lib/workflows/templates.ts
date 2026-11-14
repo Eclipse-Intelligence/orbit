@@ -59,6 +59,12 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
       { type: "task_completed", mine: true },
       [
         {
+          id: "filter_repeat",
+          type: "filter",
+          label: "Not a repeating task?",
+          config: { match: "all", conditions: [{ left: "{{task.seriesId}}", op: "is_empty" }] },
+        },
+        {
           id: "filter_1",
           type: "filter",
           label: "Linked to someone?",
@@ -115,7 +121,8 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
         },
       ],
       [
-        { source: "trigger", handle: "out", target: "filter_1" },
+        { source: "trigger", handle: "out", target: "filter_repeat" },
+        { source: "filter_repeat", handle: "out", target: "filter_1" },
         { source: "filter_1", handle: "out", target: "ai_1" },
         { source: "ai_1", handle: "out", target: "filter_2" },
         { source: "filter_2", handle: "out", target: "approval_1" },

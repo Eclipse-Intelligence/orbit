@@ -42,6 +42,8 @@ import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { assertOwnThreadInDb, readMailThreadKey, withMailThreadsInDb, withoutViewerMail } from "@/lib/crm/task-mail";
 import { dayWindow, readDateTime } from "@/lib/time";
+import { describeRepeat, type OccurrenceChange, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
+import { seriesAfterArchive, seriesAfterTaskChange, seriesAfterUnarchive, seriesBeforeReopen } from "@/lib/crm/task-series";
 
 const TASK_SQL = `
   select
@@ -84,6 +86,15 @@ const TASK_SQL = `
     t.clickup_error,
     t.calendar_event_ref,
     t.mail_thread_key,
+    t.series_id,
+    t.occurs_on::text as occurs_on,
+    rs.starts_on::text as series_starts_on,
+    to_char(rs.at, 'HH24:MI') as series_at,
+    rs.rule as series_rule,
+    rs.ends as series_ends,
+    rs.current_task_id as series_current_task_id,
+    (rs.ended_at is not null or rs.archived_at is not null) as series_stopped,
+    rc.rows as series_changes,
     t.created_at,
     t.updated_at
   from crm.tasks t
@@ -91,6 +102,19 @@ const TASK_SQL = `
   left join crm.companies co on co.id = t.company_id
   left join crm.contacts ct on ct.id = t.contact_id
   left join crm.opportunities op on op.id = t.opportunity_id
+  left join crm.task_series rs on rs.id = t.series_id
+  left join lateral (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'occursOn', c.occurs_on::text, 'skip', c.skip, 'dueAt', c.due_at, 'dueHasTime', c.due_has_time,
+      'durationMinutes', c.duration_minutes, 'title', c.title, 'description', c.description
+    ) order by c.occurs_on), '[]'::jsonb) as rows
+    from (
+      select * from crm.task_occurrence_changes c
+      where c.series_id = rs.id and c.occurs_on > t.occurs_on
+      order by c.occurs_on
+      limit 200
+    ) c
+  ) rc on rs.id is not null
 `;
 
 type TaskRow = {
@@ -129,9 +153,33 @@ type TaskRow = {
   clickup_error: string | null;
   calendar_event_ref: string | null;
   mail_thread_key: string | null;
+  series_id: string | null;
+  occurs_on: string | null;
+  series_starts_on: string | null;
+  series_at: string | null;
+  series_rule: RepeatRule | null;
+  series_ends: RepeatEnds | null;
+  series_current_task_id: string | null;
+  series_stopped: boolean | null;
+  series_changes: OccurrenceChange[] | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
+
+function repeatOf(row: TaskRow) {
+  if (!row.series_id || !row.series_rule || !row.series_ends || !row.series_starts_on) return null;
+  return describeRepeat({
+    seriesId: row.series_id,
+    startsOn: row.series_starts_on,
+    at: row.series_at,
+    rule: row.series_rule,
+    ends: row.series_ends,
+    current: row.series_current_task_id === row.id,
+    stopped: Boolean(row.series_stopped),
+    occursOn: row.occurs_on,
+    changes: (row.series_changes ?? []).map((change) => ({ ...change, dueAt: change.dueAt ? new Date(change.dueAt).toISOString() : null })),
+  });
+}
 
 type PreparedTask = {
   title?: string;
@@ -191,6 +239,9 @@ function mapTask(row: TaskRow): Task {
     inOutlook: Boolean(row.calendar_event_ref),
     mailThreadKey: row.mail_thread_key,
     mailThread: row.mail_thread_key ? { subject: null, readable: false } : null,
+    seriesId: row.series_id,
+    occursOn: row.occurs_on,
+    repeat: repeatOf(row),
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
   };
@@ -444,7 +495,7 @@ export async function createTaskInDb(
   actor: Actor,
   input: TaskWrite,
   provenance?: Provenance,
-  options: { detectedLinks?: DetectedLinkIds; detection?: DetectedTaskLinks; ownThread?: boolean } = {},
+  options: { detectedLinks?: DetectedLinkIds; detection?: DetectedTaskLinks; ownThread?: boolean; series?: { id: string; occursOn: string } } = {},
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
@@ -478,9 +529,9 @@ export async function createTaskInDb(
       `insert into crm.tasks (
         workspace_id, title, description, due_at, completed_at, priority, owner_id,
         company_id, contact_id, opportunity_id, created_by_user_id, created_by_agent_id, remind_minutes,
-        due_has_time, scheduled_by, duration_minutes, mail_thread_key
+        due_has_time, scheduled_by, duration_minutes, mail_thread_key, series_id, occurs_on
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
       ) returning id`,
       [
         actor.workspaceId,
@@ -500,6 +551,8 @@ export async function createTaskInDb(
         write.scheduledBy ?? null,
         write.durationMinutes ?? DEFAULT_TASK_DURATION,
         write.mailThreadKey ?? null,
+        options.series?.id ?? null,
+        options.series?.occursOn ?? null,
       ],
     );
     const saved = await readTask(db, actor, inserted.rows[0].id);
@@ -534,7 +587,7 @@ async function applyTask(
   current: TaskRow,
   write: PreparedTask,
   provenance: Provenance | undefined,
-  options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
+  options: TaskApplyOptions = {},
 ) {
   if (current.archived_at && !options.restoring) throw notFound("task");
   await assertAssignee(db, actor.workspaceId, write.ownerId);
@@ -615,6 +668,9 @@ async function applyTask(
   if (reassigning && !options.restoring && !silent(provenance)) {
     taggedAssigner = await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
   }
+  if (current.series_id && current.completed_at && completedAt === null && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
+    await seriesBeforeReopen(db, actor, mapTask(current), provenance);
+  }
   change.values.push(current.id);
   let updated = 0;
   try {
@@ -668,11 +724,15 @@ async function applyTask(
         change.fields,
       ),
       ...(taggedAssigner ? { taggedAssigner: true } : {}),
+      ...options.auditExtra,
     },
   );
   taskAlerts(db, actor, before, task, provenance);
-  return { task: (await withMailThreadsInDb(db, actor, [task]))[0], changed: true };
+  const settledTask = task.seriesId ? ((await seriesAfterTaskChange(db, actor, before, task, provenance)) ?? task) : task;
+  return { task: (await withMailThreadsInDb(db, actor, [settledTask]))[0], changed: true };
 }
+
+export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown> };
 
 export async function updateTaskInDb(
   db: Db,
@@ -680,10 +740,11 @@ export async function updateTaskInDb(
   id: string,
   input: TaskWrite,
   provenance?: Provenance,
+  options: Pick<TaskApplyOptions, "auditExtra"> = {},
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
-  return applyTask(db, actor, current, preparedUpdate(current, input), provenance);
+  return applyTask(db, actor, current, preparedUpdate(current, input), provenance, options);
 }
 
 function preparedUpdate(current: TaskRow, input: TaskWrite) {
@@ -989,7 +1050,7 @@ export async function archiveTask(
   );
 }
 
-export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean } = {}) {
+export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean; keepSeries?: boolean } = {}) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
@@ -1008,6 +1069,7 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
     before: { archivedAt: null },
     after: { archivedAt: task.archivedAt },
   });
+  if (task.seriesId && !options.keepSeries) await seriesAfterArchive(db, actor, task, provenance);
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
 }
 
@@ -1037,6 +1099,7 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
     after: { archivedAt: null },
     ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
+  if (task.seriesId) await seriesAfterUnarchive(db, actor, task);
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
 }
 

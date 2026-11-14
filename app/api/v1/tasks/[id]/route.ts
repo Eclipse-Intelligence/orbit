@@ -1,8 +1,9 @@
 import { requireAgent } from "@/lib/api/agent";
 import { idempotencyKey, readJson, withApi } from "@/lib/api/http";
 import { detailOfTask } from "@/lib/crm/task-detail";
-import { archiveTask, getTask, updateTask } from "@/lib/crm/tasks";
-import { parseInput, takeProvenance, taskMutationSchema } from "@/lib/crm/validation";
+import { archiveTask, getTask } from "@/lib/crm/tasks";
+import { updateTaskFromApi } from "@/lib/crm/task-series";
+import { parseInput, takeProvenance, taskUpdateSchema } from "@/lib/crm/validation";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -19,9 +20,9 @@ export async function PATCH(request: Request, context: Context) {
   return withApi(async () => {
     const actor = await requireAgent(request);
     const { id } = await context.params;
-    const parsed = parseInput(taskMutationSchema, await readJson(request));
+    const parsed = parseInput(taskUpdateSchema, await readJson(request));
     const { write, provenance } = takeProvenance(parsed, "update_task");
-    const result = await updateTask(actor, id, write, {
+    const result = await updateTaskFromApi(actor, { taskId: id, occursOn: write.occursOn }, write, {
       idempotencyKey: idempotencyKey(request),
       provenance,
     });
