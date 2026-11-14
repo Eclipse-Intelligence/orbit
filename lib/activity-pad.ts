@@ -21,7 +21,7 @@ const TYPE_PATTERNS: { type: PadActivityType; pattern: RegExp }[] = [
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)";
 const FOLLOW_WHEN =
-  "((?:next\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|tomorrow|end of (?:the )?(?:day|week|month)|eod|eow|next week|next month|in \\d+ (?:days?|weeks?)|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\s+\\d{1,2}(?:st|nd|rd|th)?)";
+  "((?:next\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\\s+week)?|tomorrow|end of (?:the )?(?:day|week|month)|eod|eow|next week|next month|in \\d+ (?:days?|weeks?)|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\s+\\d{1,2}(?:st|nd|rd|th)?)";
 const FOLLOW_PATTERN = new RegExp(
   `\\b(?:by|before|due|follow(?:ing)?[- ]?up(?:\\s+(?:on|with \\S+))?|chase(?:\\s+(?:up|her|him|them))?|get back to (?:her|him|them)|send (?:it|them|that)?)\\s+${FOLLOW_WHEN}\\b`,
   "i",
@@ -59,7 +59,8 @@ export function parseActivityText(text: string, now = new Date()): ActivityParse
   let followUp: ActivityParse["followUp"] = null;
   const follow = FOLLOW_PATTERN.exec(text);
   if (follow) {
-    const due = parseTaskText(follow[1], now).due;
+    const read = parseTaskText(`Follow up ${follow[1]}`, now);
+    const due = read.unsure ? read.guess : read.due;
     if (due) {
       followUp = { due };
       marks.push({ start: follow.index, end: follow.index + follow[0].length, kind: "followup" });

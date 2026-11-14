@@ -1,0 +1,351 @@
+{
+ "now": "2026-11-16T09:15:00Z",
+ "fast": [
+  "Call Bob tomorrow",
+  "Call Bob and tomorrow",
+  "Call Bob, tomorrow",
+  "Call Bob tomorrow.",
+  "Call Bob tomorrow!",
+  "Call Bob tomorrow ...",
+  "Call Bob - tomorrow",
+  "Call Bob – tomorrow",
+  "Call Bob; tomorrow",
+  "Call Bob: tomorrow",
+  "Call Bob (tomorrow)",
+  "Call Bob tomorrow, 3pm",
+  "Call Bob tomorrow and 3pm",
+  "Tomorrow, call Bob",
+  "tomorrow: call Bob",
+  "Tomorrow - call Bob",
+  "Friday, send deck to Jo",
+  "On Friday send the deck",
+  "By Friday, send the deck",
+  "3pm call Bob",
+  "At 3pm, call Bob",
+  "Call Bob tomorrow, and email Jo",
+  "Call Bob tomorrow and email Jo",
+  "Call Bob, tomorrow, about pricing",
+  "Call Bob and, tomorrow, Jo",
+  "Send deck on Friday; chase invoice",
+  "Send deck Friday, please",
+  "Call Bob tomorrow, and remind me 15 mins before",
+  "Call Bob tomorrow 3pm, remind me 15 mins before.",
+  "Call Bob tomorrow 3pm and remind me 1 hour before",
+  "Remind me 15 mins before, call Bob tomorrow 3pm",
+  "  Call Bob tomorrow",
+  "Call Bob tomorrow   ",
+  "\nCall Bob tomorrow\n",
+  "Call Bob\ntomorrow 3pm",
+  "Call Bob,\ntomorrow",
+  "Call  Bob   tomorrow",
+  " \t Call Bob tomorrow 3pm \n",
+  "Review [[Q3 plan]] tomorrow",
+  "Review [[Friday notes]] tomorrow",
+  "Review [[plan]], tomorrow",
+  "Tomorrow review [[plan]]",
+  "Review [[plan tomorrow",
+  "[[Monday]] review Friday",
+  "Review [[a]] and [[b]] tomorrow 3pm.",
+  "Review [[plan]] and tomorrow",
+  "Call Bob tomorrow 3pm for 30 mins",
+  "Call Bob tomorrow 2-3pm",
+  "Call Bob 3pm tomorrow, for 1 hour",
+  "Lunch with Jo Friday 1pm",
+  "Call Bob on 3 Dec",
+  "Call Bob on the 3rd of December, 10am",
+  "Call Bob 3/12",
+  "Call Bob in 2 hours",
+  "Call Bob in 3 days.",
+  "call bob tomorrow",
+  "iPhone order tomorrow",
+  "Call Bob today, and Jo",
+  "Call Bob and Jo, today",
+  "Email Jo, and call Bob, and tomorrow",
+  "Email Jo and Bob and Friday",
+  "Call Bob, , tomorrow",
+  "Call Bob tomorrow,",
+  "Call Bob tomorrow and",
+  "Call Bob tomorrow, and",
+  "Call Bob tomorrow;",
+  "Call Bob tomorrow:",
+  "Call Bob tomorrow -",
+  "Send deck (Friday)",
+  "Send deck \"Friday\"",
+  "Send deck tomorrow!!",
+  "Send deck tomorrow. ",
+  "Send deck. Tomorrow.",
+  "Send deck, eod",
+  "Send deck and eod",
+  "Send, tomorrow, deck",
+  "And tomorrow call Bob",
+  ", tomorrow call Bob",
+  "Pay £50 tomorrow",
+  "Call Bob tomorrow re: pricing, and Jo",
+  "Call Bob Friday 3pm and Monday",
+  "Check and tomorrow",
+  "A, tomorrow",
+  "Rock and roll tomorrow",
+  "Pick and mix, Friday 3pm",
+  "Tom and Jerry and tomorrow at 4pm.",
+  "Call Bob and tomorrow 3pm",
+  "Lunch with Sam, Friday 1pm",
+  "Email Jo, tomorrow 3pm",
+  "Call Bob Friday about the deck 3pm",
+  "Call Bob tomorrow\n3pm",
+  "Call Bob tomorrow  3pm",
+  "Draft keep iPhonemhk3x9ab tomorrow 3pm",
+  "Draft pending iPadpmhk3x9ab at 3",
+  "Call Sweep Monday remind me 15 mins before"
+ ],
+ "ai": [
+  {
+   "text": "Call Sam at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "  Call Sam at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam at 3  \n",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam, at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam and at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam at 3.",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam at 3!",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam - at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam; tmrw afternoon",
+   "phrases": [
+    "tmrw afternoon"
+   ],
+   "due": "2026-11-17T14:00"
+  },
+  {
+   "text": "ring jane re the Q3 deck tmrw afternoon",
+   "phrases": [
+    "tmrw afternoon"
+   ],
+   "due": "2026-11-17T14:00"
+  },
+  {
+   "text": "ring jane, tmrw afternoon, re the deck",
+   "phrases": [
+    "tmrw afternoon"
+   ],
+   "due": "2026-11-17T14:00"
+  },
+  {
+   "text": "ring jane and tmrw afternoon",
+   "phrases": [
+    "tmrw afternoon"
+   ],
+   "due": "2026-11-17T14:00"
+  },
+  {
+   "text": "ring jane tmrw afternoon and",
+   "phrases": [
+    "tmrw afternoon"
+   ],
+   "due": "2026-11-17T14:00"
+  },
+  {
+   "text": "Email Jo, call Sam, Friday morning",
+   "phrases": [
+    "Friday morning"
+   ],
+   "due": "2026-11-20T09:00"
+  },
+  {
+   "text": "Email Jo and Sam: Friday morning",
+   "phrases": [
+    "Friday morning"
+   ],
+   "due": "2026-11-20T09:00"
+  },
+  {
+   "text": "Friday morning, email Jo",
+   "phrases": [
+    "Friday morning"
+   ],
+   "due": "2026-11-20T09:00"
+  },
+  {
+   "text": "tmrw afternoon: ring jane",
+   "phrases": [
+    "tmrw afternoon"
+   ],
+   "due": "2026-11-17T14:00"
+  },
+  {
+   "text": "Review [[plan]] at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Review [[plan at 3]] at 4",
+   "phrases": [
+    "at 4"
+   ],
+   "due": "2026-11-16T16:00"
+  },
+  {
+   "text": "Review [[plan]], and at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam at 3, and remind me 15 mins before",
+   "phrases": [
+    "at 3",
+    "remind me 15 mins before"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam at 3 and remind me 15 mins before",
+   "phrases": [
+    "at 3",
+    "remind me 15 mins before"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam tmrw, 3 o'clock",
+   "phrases": [
+    "tmrw",
+    "3 o'clock"
+   ],
+   "due": "2026-11-17T15:00"
+  },
+  {
+   "text": "Call Sam tmrw and 3 o'clock",
+   "phrases": [
+    "tmrw",
+    "3 o'clock"
+   ],
+   "due": "2026-11-17T15:00"
+  },
+  {
+   "text": "Call Sam (at 3)",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call\nSam\nat 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam,\n at 3\n",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Call Sam at 3 ,",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Sam and at 3",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Black and at 3 white",
+   "phrases": [
+    "at 3"
+   ],
+   "due": "2026-11-16T15:00"
+  },
+  {
+   "text": "Send Jo the deck, Friday",
+   "phrases": [
+    "Friday"
+   ],
+   "due": "2026-11-20"
+  },
+  {
+   "text": "Send Jo the deck and, Friday",
+   "phrases": [
+    "Friday"
+   ],
+   "due": "2026-11-20"
+  },
+  {
+   "text": "Send Jo the deck Friday, and",
+   "phrases": [
+    "Friday"
+   ],
+   "due": "2026-11-20"
+  },
+  {
+   "text": "Send Jo the deck — Friday",
+   "phrases": [
+    "Friday"
+   ],
+   "due": "2026-11-20"
+  },
+  {
+   "text": "Send Jo the deck - Friday",
+   "phrases": [
+    "Friday"
+   ],
+   "due": "2026-11-20"
+  }
+ ]
+}
