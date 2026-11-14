@@ -31,6 +31,8 @@ import { completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { runWorkflowTick } from "@/lib/workflows/engine";
+import { createWorkflow, listRuns, setWorkflowStatus } from "@/lib/workflows/store";
 import { createUser, resetDatabase, withStrictPool } from "./helpers";
 
 const TOKEN = "pk_101_TESTTOKEN";
@@ -198,6 +200,7 @@ function clickup(fake: Fake) {
         description: body.description ?? "",
         text_content: body.description ?? "",
         status: statusOf(list, body.status ?? list.statuses[0].status),
+        date_created: String(Date.now()),
         date_updated: String(Date.now()),
         due_date: body.due_date === undefined || body.due_date === null ? null : String(body.due_date),
         url: `https://app.clickup.com/t/${id}`,
@@ -234,8 +237,14 @@ function clickup(fake: Fake) {
       const since = Number(url.searchParams.get("date_updated_gt") ?? 0);
       const page = Number(url.searchParams.get("page") ?? 0);
       assert.equal(url.searchParams.get("include_closed"), "true");
+      const createdAfter = Number(url.searchParams.get("date_created_gt") ?? Number.NEGATIVE_INFINITY);
+      const createdBefore = Number(url.searchParams.get("date_created_lt") ?? Number.POSITIVE_INFINITY);
       const all = [...fake.tasks.values()].filter(
-        (task) => ids.includes(task.list!.id) && Number(task.date_updated) > since,
+        (task) =>
+          ids.includes(task.list!.id) &&
+          Number(task.date_updated) > since &&
+          Number(task.date_created ?? 0) > createdAfter &&
+          Number(task.date_created ?? 0) < createdBefore,
       );
       const slice = all.slice(page * 2, page * 2 + 2);
       return Response.json({ tasks: slice, last_page: page * 2 + 2 >= all.length });
@@ -753,6 +762,125 @@ describe("clickup sync", () => {
     assert.equal(copies.rows[0].total, 1);
   });
 
+  it("links the ClickUp task instead of making a second one when ClickUp's reply to a create is lost", async () => {
+    const lost: typeof fetch = async (input, init) => {
+      const response = await fetchImpl(input, init);
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return response;
+    };
+    const remoteCopies = (name: string) => [...fake.tasks.values()].filter((task) => task.name === name);
+    const orbitCopies = async (name: string) =>
+      (await getAdminPool().query<{ id: string; clickup_task_id: string | null }>("select id, clickup_task_id from crm.tasks where title = $1", [name])).rows;
+
+    for (const [name, listId] of [
+      ["Lost reply on a watched list", RELATIONSHIPS],
+      ["Lost reply on another list", TODOIST],
+    ] as const) {
+      const created = await createTaskWithClickUp(owner, { title: name, contactId: janeId }, listId, { fetchImpl: lost });
+      assert.ok(created.clickupError);
+      assert.equal(remoteCopies(name).length, 1);
+      await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+      await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+      assert.equal(remoteCopies(name).length, 1, name);
+      const rows = await orbitCopies(name);
+      assert.equal(rows.length, 1, name);
+      assert.equal(rows[0].clickup_task_id, remoteCopies(name)[0].id);
+      const row = await taskRow(rows[0].id);
+      assert.equal(row.clickup_error, null);
+      assert.equal(row.clickup_sync.unconfirmed, undefined);
+    }
+  });
+
+  it("links each of two lost creates with the same title to its own ClickUp task", async () => {
+    const lost: typeof fetch = async (input, init) => {
+      const response = await fetchImpl(input, init);
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return response;
+    };
+    const name = "Twice lost";
+    const first = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+    const remote = [...fake.tasks.values()].filter((task) => task.name === name).sort((a, b) => Number(a.date_created) - Number(b.date_created));
+    assert.equal(remote.length, 2);
+    assert.equal((await taskRow(first.id)).clickup_task_id, remote[0].id);
+    assert.equal((await taskRow(second.id)).clickup_task_id, remote[1].id);
+    const copies = await getAdminPool().query<{ n: number }>("select count(*)::int as n from crm.tasks where title = $1", [name]);
+    assert.equal(copies.rows[0].n, 2);
+  });
+
+  it("doesn't take a same-titled ClickUp task made well after a create that never arrived", async () => {
+    const unsent: typeof fetch = async (input, init) => {
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return fetchImpl(input, init);
+    };
+    const name = "Never arrived";
+    const task = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: unsent })).task;
+    assert.ok((await taskRow(task.id)).clickup_sync.unconfirmed);
+    const later = remoteTask(fake, { id: "madebyhand", listId: RELATIONSHIPS, name, date_created: String(Date.now() + 10 * 60 * 1000) });
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+    const linked = (await taskRow(task.id)).clickup_task_id;
+    assert.ok(linked);
+    assert.notEqual(linked, later.id);
+    assert.equal([...fake.tasks.values()].filter((item) => item.name === name).length, 2);
+  });
+
+  it("links a lost create in the list it was sent to, even when the Orbit task's list changed before the next sync", async () => {
+    const lost: typeof fetch = async (input, init) => {
+      const response = await fetchImpl(input, init);
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return response;
+    };
+    const name = "Moved before sync";
+    const task = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
+    await getAdminPool().query("update crm.tasks set clickup_list_id = $2 where id = $1", [task.id, ZEUS]);
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+    await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
+    const remote = [...fake.tasks.values()].filter((item) => item.name === name);
+    assert.equal(remote.length, 1);
+    const row = await taskRow(task.id);
+    assert.equal(row.clickup_task_id, remote[0].id);
+    assert.equal(row.clickup_list_id, RELATIONSHIPS);
+  });
+
+  it("forgets a lost create only when ClickUp's answer to the lookup settles it", async () => {
+    const unsent: typeof fetch = async (input, init) => {
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return fetchImpl(input, init);
+    };
+    for (const [status, forgets] of [
+      [401, false],
+      [429, false],
+      [503, false],
+      [404, true],
+    ] as const) {
+      const task = (await createTaskWithClickUp(owner, { title: `Lookup answered ${status}`, contactId: janeId }, TODOIST, { fetchImpl: unsent })).task;
+      assert.ok((await taskRow(task.id)).clickup_sync.unconfirmed);
+      const answering: typeof fetch = async (input, init) => {
+        if (new URL(String(input)).searchParams.has("date_created_gt")) return Response.json({ err: "No", ECODE: "TEST" }, { status, headers: { "retry-after": "0" } });
+        return fetchImpl(input, init);
+      };
+      await syncClickUp({ actor: owner, force: true, fetchImpl: answering, sleep: async () => {} });
+      const row = await taskRow(task.id);
+      assert.equal(row.clickup_task_id, null, String(status));
+      assert.equal(row.clickup_sync.unconfirmed === undefined, forgets, String(status));
+      assert.ok(row.clickup_error, String(status));
+      await getAdminPool().query("update crm.tasks set archived_at = now() where id = $1", [task.id]);
+    }
+  });
+
   it("sends follow-up tasks suggested after an email to the default list", async () => {
     const company = (await createCompany(owner, { name: "Initech", domain: "initech-mail.test" })).body.company;
     await createContact(owner, { companyId: company.id, firstName: "Peter", lastName: "Gibbons", email: "peter@initech-mail.test" });
@@ -951,6 +1079,39 @@ describe("clickup sync", () => {
     const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [clickupId]);
     assert.equal(copies.rows[0].n, 1);
     await db.query("delete from crm.workspace_members where user_id = $1", [priyaId]);
+  });
+
+  it("runs the task owner's Next step, not the syncing person's, when a task is ticked off in ClickUp", async () => {
+    const db = getAdminPool();
+    const samId = (await db.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["sam-next@orbit.test", "Sam Next"])).rows[0].id;
+    await db.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, samId]);
+    const sam: UserActor = { ...owner, userId: samId, email: "sam-next@orbit.test", fullName: "Sam Next", role: "member", scopes: scopesForRole("member") };
+    const markFlow = await createWorkflow(owner, { template: "next-step" });
+    await setWorkflowStatus(owner, markFlow.id, "active");
+    const samFlow = await createWorkflow(sam, { template: "next-step" });
+    await setWorkflowStatus(sam, samFlow.id, "active");
+    try {
+      const task = (await createTaskWithClickUp(sam, { title: "Sam emails Jane", contactId: janeId, ownerId: samId }, RELATIONSHIPS, { fetchImpl })).task;
+      const remote = fake.tasks.get((await taskRow(task.id)).clickup_task_id!)!;
+      await db.query("delete from crm.workflow_events");
+      remote.status = { status: "done", type: "closed" };
+      remote.date_updated = String(Date.now() + 3_000);
+      await syncClickUp({ actor: owner, force: true, fetchImpl });
+      assert.ok((await getTask(sam, task.id)).completedAt);
+      const events = await db.query<{ actor_user_id: string | null }>("select actor_user_id from crm.workflow_events where entity_id = $1", [task.id]);
+      assert.deepEqual(events.rows, [{ actor_user_id: null }]);
+      process.env.LLM_API_KEY = "llm-test";
+      const llm: typeof fetch = async () =>
+        Response.json({ model: "test", choices: [{ message: { role: "assistant", content: JSON.stringify({ nextTask: "Chase Jane", dueOn: "", why: "She asked." }) }, finish_reason: "stop" }] });
+      await runWorkflowTick({ fetchImpl: llm, budgetMs: 30_000 });
+      assert.equal((await listRuns(owner, markFlow.id)).length, 0);
+      assert.equal((await listRuns(sam, samFlow.id)).length, 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+      await setWorkflowStatus(owner, markFlow.id, "paused");
+      await setWorkflowStatus(sam, samFlow.id, "paused");
+      await db.query("delete from crm.workspace_members where user_id = $1", [samId]);
+    }
   });
 
   it("adds a clickup step for the workspace in scheduled sync", async () => {

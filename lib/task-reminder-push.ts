@@ -33,14 +33,15 @@ export function taskReminderPush(reminder: { taskId: string; title: string; dueA
   };
 }
 
-async function release(row: ClaimedReminder) {
-  await query("select private.release_task_reminder($1, $2)", [row.task_id, row.claimed_at]).catch((error) =>
+async function release(row: ClaimedReminder, tried = true) {
+  const sql = tried ? "select private.release_task_reminder($1, $2)" : "select private.return_task_reminder($1, $2)";
+  await query(sql, [row.task_id, row.claimed_at]).catch((error) =>
     console.error("Task reminder release failed", error instanceof Error ? error.name : "unknown"),
   );
 }
 
-function retryable(result: { sent: number; failures: { status: number | null }[] }) {
-  return result.sent === 0 && result.failures.some((failure) => failure.status !== null && failure.status !== 404 && failure.status !== 410);
+function retryable(result: { sent: number; failures: { status: number | null; network?: true }[] }) {
+  return result.sent === 0 && result.failures.some((failure) => (failure.status === null ? failure.network === true : failure.status !== 404 && failure.status !== 410));
 }
 
 type Recipient = ClaimedReminder & { user_id: string; role: WorkspaceRole };
@@ -83,14 +84,18 @@ export async function processTaskReminders(options: { deadline: number; now?: nu
   while (Date.now() < options.deadline) {
     const batch = await query<ClaimedReminder>("select * from private.claim_task_reminders($1, $2, $3)", [new Date(now).toISOString(), CLAIM_BATCH, [...tried]]);
     claimed += batch.rows.length;
-    for (const row of batch.rows) {
-      tried.add(row.task_id);
-      if (!hasRecipient(row)) continue;
-      if (Date.now() > options.deadline) {
-        await release(row);
-        continue;
-      }
-      const delivered = await deliver(row, now, options.send);
+    const results = await Promise.all(
+      batch.rows.map(async (row) => {
+        tried.add(row.task_id);
+        if (!hasRecipient(row)) return 0;
+        if (Date.now() > options.deadline) {
+          await release(row, false);
+          return 0;
+        }
+        return deliver(row, now, options.send);
+      }),
+    );
+    for (const delivered of results) {
       sent += delivered;
       if (delivered > 0) pushed += 1;
     }
