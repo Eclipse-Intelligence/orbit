@@ -360,7 +360,7 @@ function taskAlerts(db: Db, actor: Actor, before: Task | null, task: Task, prove
 
 export function canChangeTask(actor: Actor, task: { ownerId: string | null; createdByUserId: string | null }) {
   if (actor.type !== "user") return true;
-  return actor.role === "owner" || actor.role === "admin" || task.ownerId === actor.userId || task.createdByUserId === actor.userId;
+  return task.ownerId === actor.userId || task.createdByUserId === actor.userId;
 }
 
 async function assertAssignee(db: Db, workspaceId: string, ownerId: string | null | undefined) {
@@ -491,7 +491,7 @@ function cannotChange(write: PreparedTask = {}) {
   const reassigning = write.ownerId !== undefined;
   return new CrmError(
     "forbidden",
-    `Only the assignee, the task's creator, a workspace owner or an admin can ${reassigning ? "reassign" : "change"} it.`,
+    `Only the assignee or the task's creator can ${reassigning ? "reassign" : "change"} it.`,
     403,
     reassigning ? { field: "ownerId" } : undefined,
   );

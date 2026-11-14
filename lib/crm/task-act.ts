@@ -46,7 +46,7 @@ const EMAIL_SCAN_LIMIT = 2000;
 const EMAIL_DEADLINE_MS = 800;
 
 function cannotChange() {
-  return new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner or an admin can change it.", 403);
+  return new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
 }
 
 export function linkedThread(task: Pick<Task, "mailThreadKey">) {

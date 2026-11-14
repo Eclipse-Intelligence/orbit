@@ -8,10 +8,9 @@ import { onWorkingDay } from "@/lib/crm/task-snooze";
 import { getTask, updateTask } from "@/lib/crm/tasks";
 import { atKeepingKind } from "@/lib/crm/task-time";
 import type { UserActor } from "@/lib/crm/types";
-import { addWorkingDays, dayKeyAt, nextWorkingDay, nonWorkingReason, wallClockAt } from "@/lib/crm/working-days";
-import { query, type Db } from "@/lib/db/pool";
-import { waitingMail, workingDaysSince, type WaitingNudge, type WaitingReminder, type WaitingReply } from "@/lib/mail/waiting";
-import { appTimeZone, startOfDay, zonedParts } from "@/lib/time";
+import type { Db } from "@/lib/db/pool";
+import { waitingMail, type WaitingNudge, type WaitingReminder, type WaitingReply } from "@/lib/mail/waiting";
+import { appTimeZone, startOfDay } from "@/lib/time";
 import { approvalEmail } from "@/lib/workflows/store";
 import type { RunState } from "@/lib/workflows/engine";
 import { directTaskSql } from "@/lib/crm/task-access";
@@ -52,16 +51,6 @@ export type WaitingTask = {
   arrivedAt: string;
 };
 
-export type OthersApproval = {
-  id: string;
-  workflowId: string;
-  workflowName: string;
-  title: string;
-  ownerName: string;
-  createdAt: string;
-  waitingDays: number;
-};
-
 export type Waiting = {
   approvals: WaitingApproval[];
   nudges: WaitingNudge[];
@@ -72,18 +61,6 @@ export type Waiting = {
 };
 
 export const EMPTY_WAITING: Waiting = { approvals: [], nudges: [], reminders: [], replies: [], tasks: [], failed: [] };
-
-export function pastOneWorkingDay(at: Date | string, now: Date, timeZone = appTimeZone()) {
-  const start = new Date(at);
-  let key = dayKeyAt(start, timeZone);
-  let { hour, minute } = zonedParts(start, timeZone);
-  if (nonWorkingReason(key)) {
-    key = nextWorkingDay(key);
-    hour = 0;
-    minute = 0;
-  }
-  return now.getTime() > wallClockAt(addWorkingDays(key, 1), hour, minute, timeZone);
-}
 
 type ApprovalRow = {
   id: string;
@@ -243,29 +220,6 @@ export function waitingIn(waiting: Waiting, workspaceId: string, toFile: Iterabl
     tasks: waiting.tasks.filter((item) => item.workspaceId === workspaceId),
     failed: waiting.failed,
   };
-}
-
-export async function listWaitingOnOthers(actor: UserActor, now = new Date()): Promise<OthersApproval[]> {
-  if (actor.role !== "owner" && actor.role !== "admin") return [];
-  const result = await query<{
-    id: string;
-    workflow_id: string;
-    workflow_name: string;
-    title: string | null;
-    owner_name: string | null;
-    updated_at: Date;
-  }>("select * from private.waiting_approvals_of_others($1, $2)", [actor.userId, actor.workspaceId]);
-  return result.rows
-    .filter((row) => pastOneWorkingDay(row.updated_at, now))
-    .map((row) => ({
-      id: row.id,
-      workflowId: row.workflow_id,
-      workflowName: row.workflow_name,
-      title: row.title ?? "Approve this step",
-      ownerName: row.owner_name ?? "Someone",
-      createdAt: iso(row.updated_at) ?? new Date(0).toISOString(),
-      waitingDays: Math.max(1, workingDaysSince(row.updated_at, now)),
-    }));
 }
 
 export async function snoozeTask(actor: UserActor, id: string, dueAt: string, now = Date.now()) {

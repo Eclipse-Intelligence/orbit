@@ -58,6 +58,10 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 
 ## Product decisions
 
+### Privacy
+
+- **Users only see their own data, including tasks.** A task is seen only by its assignee, its creator and people tagged on it. Owners and admins get no exception: no Everyone view, no Waiting on others, no reading or changing a colleague's task. A workspace agent token sees only tasks it created; a personal token acts as its person. Task audit rows, webhook deliveries and stored idempotent replies follow the same rule, and a task event goes only to a webhook whose creator can see that task (endpoints with no recorded creator get no task events). Work that crosses people (removing a member, moving records, reminders, Outlook, ClickUp, prepare) goes through `private.*` definer functions, never admin row-level security.
+
 ### Copy
 
 - **Terse, internal copy.** Orbit is an internal tool. Keep labels as short as or shorter than they were. No taglines or marketing lines, except on client-facing pages (`/p` proposals, `/book`). List copy changes in your summary so they can be vetoed.

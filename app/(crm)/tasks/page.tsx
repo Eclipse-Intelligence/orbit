@@ -29,8 +29,7 @@ export default async function TasksPage({
     taskViewFromParam(typeof resolved.view === "string" ? resolved.view : null) ?? DEFAULT_TASK_VIEW;
   const members = await listMembers(user);
   const team = members.length > 1;
-  const shared = team && (user.role === "owner" || user.role === "admin");
-  const who = shared && resolved.who === "everyone" ? "everyone" : team && resolved.who === "tagged" ? "tagged" : "mine";
+  const who = team && resolved.who === "tagged" ? "tagged" : "mine";
   const scope = { mine: who === "mine", tagged: who === "tagged" };
   const view = scope.tagged && asked === "none" ? DEFAULT_TASK_VIEW : asked;
   const [due, counts, clickup] = await Promise.all([
@@ -70,7 +69,6 @@ export default async function TasksPage({
       clickup={clickup}
       now={requestTime()}
       who={who}
-      shared={shared}
       members={team ? members.map((member) => ({ id: member.id, name: member.name })) : []}
       tagged={tagged}
       taggedCount={taggedCount}
@@ -78,7 +76,6 @@ export default async function TasksPage({
       openTask={elsewhere ? null : openTask}
       switchTo={switchTo}
       total={due.total}
-      admins={members.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.id)}
     />
   );
 }

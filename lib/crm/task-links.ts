@@ -111,7 +111,7 @@ export async function linkTask(actor: Actor, taskId: string, link: { contactId?:
     const row = current.rows[0];
     if (!row) throw notFound("task");
     if (!canChangeTask(actor, { ownerId: row.owner_id, createdByUserId: row.created_by_user_id })) {
-      throw new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner or an admin can change it.", 403);
+      throw new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
     }
     if (row.linked) throw new CrmError("conflict", "This task is already linked.", 409);
     const updated = await updateTaskInDb(db, actor, taskId, contactId ? { contactId } : { companyId }, provenance);

@@ -221,10 +221,18 @@ export async function createWebhook(
       enabled: boolean;
       created_at: Date;
     }>(
-      `insert into crm.webhook_endpoints (workspace_id, url, secret, description, events)
-       values ($1, $2, $3, $4, $5)
+      `insert into crm.webhook_endpoints (workspace_id, url, secret, description, events, created_by_user_id, created_by_agent_id)
+       values ($1, $2, $3, $4, $5, $6, $7)
        returning id, url, description, events, enabled, created_at`,
-      [actor.workspaceId, url, secret, input.description?.trim() || null, events],
+      [
+        actor.workspaceId,
+        url,
+        secret,
+        input.description?.trim() || null,
+        events,
+        actor.type === "user" ? actor.userId : null,
+        actor.type === "agent" ? actor.agentId : null,
+      ],
     );
     return inserted.rows[0];
   });

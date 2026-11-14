@@ -37,9 +37,9 @@ Three kinds of token reach the server. They see different tools.
 
 | Token | How it's made | Runs as | Sees |
 | --- | --- | --- | --- |
-| Workspace agent token | `npm run agent:create -- --name "Research" --scopes crm:read,companies:write` (printed once) | The agent (`crm_agent` role), with the scopes it was issued. Sees every task in the workspace, and only shared docs. | Every tool except the mail, Chat, Reader and daily note tools |
+| Workspace agent token | `npm run agent:create -- --name "Research" --scopes crm:read,companies:write` (printed once) | The agent (`crm_agent` role), with the scopes it was issued. Sees only tasks it created, and only shared docs. | Every tool except the mail, Chat, Reader and daily note tools |
 | Market-only agent token | Settings › Learning, Grok Bot (scopes exactly `market:write`) | The agent | Only `get_watchlist` and `add_market_notes`, with their own short instructions |
-| Personal token (`orbit_…`) | Settings › API tokens › Personal tokens | That person (`authenticated` role), with their role's scopes: everything for owners and admins, everything but `admin` for members. Sees only tasks they own or created unless they are an owner or admin, and their own private docs plus shared docs. | Every tool, including the mail, Chat, Reader and daily note tools; `mail_send` only when the token has Can send email |
+| Personal token (`orbit_…`) | Settings › API tokens › Personal tokens | That person (`authenticated` role), with their role's scopes: everything for owners and admins, everything but `admin` for members. Sees only tasks they own, created or are tagged on (owners and admins included), and their own private docs plus shared docs. | Every tool, including the mail, Chat, Reader and daily note tools; `mail_send` only when the token has Can send email |
 
 Every tool is listed for every non-market token whatever its scopes. A call without the scope it needs returns `forbidden: Missing scope <scope>.` with `isError: true`. Other failures return `<code>: <message>` the same way.
 
@@ -146,7 +146,7 @@ Changes to a task linked to ClickUp reach ClickUp on the next sync. `prepare_nex
 
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |
-| `create_webhook` | Registers an `https` endpoint for workspace events and returns its signing secret once. Takes named events, or `*` for every event. | `url`, `events` (from the list in `docs/api.md`), `description` | `admin` | Yes | Both |
+| `create_webhook` | Registers an `https` endpoint for workspace events and returns its signing secret once. Takes named events, or `*` for every event. Task events reach it only for tasks its creator can see. | `url`, `events` (from the list in `docs/api.md`), `description` | `admin` | Yes | Both |
 | `list_webhook_deliveries` | Recent delivery attempts, failures included, with the last error. | `limit` (up to 100, default 50) | `crm:read` | No | Both |
 
 ### Proposals and NDAs

@@ -89,7 +89,7 @@ function useAutoSize(value: string) {
 }
 
 export function canChangeTaskAs(viewer: Pick<Viewer, "id" | "role">, task: Pick<Task, "ownerId" | "createdByUserId">) {
-  return viewer.role === "owner" || viewer.role === "admin" || task.ownerId === viewer.id || task.createdByUserId === viewer.id;
+  return task.ownerId === viewer.id || task.createdByUserId === viewer.id;
 }
 
 export function canRemoveTag(viewer: Pick<Viewer, "id" | "role">, task: Pick<Task, "ownerId" | "createdByUserId">, person: string) {
@@ -98,8 +98,9 @@ export function canRemoveTag(viewer: Pick<Viewer, "id" | "role">, task: Pick<Tas
 
 export function changersLine(names: string[]) {
   const people = [...new Set(names.filter(Boolean))];
-  if (people.length === 0) return "Admins can change it.";
-  return `${people.join(", ")} and admins can change it.`;
+  if (people.length === 0) return "";
+  if (people.length === 1) return `${people[0]} can change it.`;
+  return `${people.slice(0, -1).join(", ")} and ${people[people.length - 1]} can change it.`;
 }
 
 export function firstName(name: string | null | undefined) {

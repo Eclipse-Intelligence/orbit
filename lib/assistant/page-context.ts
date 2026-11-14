@@ -293,7 +293,7 @@ export function taskDetailLines(found: TaskDetail, lead: string): Lines {
   }
   if (!found.readOnly && !found.canChange) {
     lines.push(
-      `The user can't change that task${task.archivedAt ? " (it is archived)" : ": only its assignee, its creator, an owner or an admin can"}. Don't propose update_task on it; offer what they can do instead, such as logging the activity or a new task.`,
+      `The user can't change that task${task.archivedAt ? " (it is archived)" : ": only its assignee or its creator can"}. Don't propose update_task on it; offer what they can do instead, such as logging the activity or a new task.`,
     );
   }
   const description = text(task.description);
@@ -480,7 +480,7 @@ async function pageLines(db: Db, actor: UserActor, input: PageInput): Promise<Li
     lines.push("Page: a board.", opened("board", await board(db, actor, second)));
   } else if (first === "tasks") {
     const view = word(params.get("view"));
-    const who = params.get("who") === "everyone" ? "everyone's tasks" : "their own tasks";
+    const who = params.get("who") === "tagged" ? "tasks they're tagged on" : "their own tasks";
     lines.push(`Page: Tasks${view ? `, ${view} view` : ""}, showing ${who}.`);
   } else if (first === "mail") {
     const thread = params.get("thread");

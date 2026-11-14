@@ -1,19 +1,29 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
+import { CrmError } from "@/lib/crm/errors";
+import { countTaskViews, getDueActions } from "@/lib/crm/relationships";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
-import { addTaskParticipantsInDb, createTask, updateTask } from "@/lib/crm/tasks";
+import { readPlanner } from "@/lib/crm/task-blocks";
+import { addTaskParticipantsInDb, completeTask, createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { removeMember } from "@/lib/crm/team";
+import { createWebhook } from "@/lib/crm/webhooks";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createAgent, createUser, queryAsUser, resetDatabase } from "@/tests/helpers";
+import { createCrmMcpServer } from "@/server/mcp/server";
 
 let mark: UserActor;
 let ridgeon: UserActor;
 let priya: UserActor;
 let agent: AgentActor;
+let ada: UserActor;
 
 const admin = () => getAdminPool();
 
@@ -33,7 +43,27 @@ before(async () => {
   await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, person.userId]);
   priya = { ...person, workspaceId: mark.workspaceId, workspaceName: "Eclipse", role: "member", scopes: scopesForRole("member") };
   agent = (await createAgent(mark.workspaceId, [...SCOPES].filter((scope) => scope !== "admin"), "Policy agent")).actor;
+  const person2 = await createUser("ada@policies.test", "Ada Price");
+  await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'admin')", [mark.workspaceId, person2.userId]);
+  ada = { ...person2, workspaceId: mark.workspaceId, workspaceName: "Eclipse", role: "admin", scopes: scopesForRole("admin") };
 });
+
+const hidden = (error: unknown) => error instanceof CrmError && error.status === 404;
+
+async function mcpText(actor: UserActor | AgentActor, name: string, args: Record<string, unknown>) {
+  const server = createCrmMcpServer(actor);
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: "policies", version: "1.0.0" });
+  await client.connect(clientSide);
+  try {
+    const result = (await client.callTool({ name, arguments: args })) as { content: { text: string }[] };
+    return result.content.map((part) => part.text).join("\n");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
 
 after(async () => {
   await getPool().end();
@@ -120,8 +150,8 @@ describe("idempotency keys", () => {
 describe("webhook deliveries for private tasks", () => {
   it("hides a private task's delivery payload from other members", async () => {
     await admin().query(
-      "insert into crm.webhook_endpoints (workspace_id, url, secret, events) values ($1, 'https://hooks.example.com/orbit', 'secret', array['task.created'])",
-      [mark.workspaceId],
+      "insert into crm.webhook_endpoints (workspace_id, url, secret, events, created_by_user_id) values ($1, 'https://hooks.example.com/orbit', 'secret', array['task.created'], $2)",
+      [mark.workspaceId, mark.userId],
     );
     const task = (await createTask(mark, { title: "Private pay rise" })).body.task;
     const queued = await admin().query("select 1 from crm.webhook_deliveries where payload -> 'entity' ->> 'id' = $1", [task.id]);
@@ -168,5 +198,82 @@ describe("task insert and update policies", () => {
     const row = await admin().query<{ workspace_id: string }>("select workspace_id from crm.tasks where id = $1", [task.id]);
     assert.equal(row.rows[0].workspace_id, mark.workspaceId);
     await queryAsUser(mark.userId, "update crm.tasks set title = 'Still here', workspace_id = workspace_id where id = $1", [task.id]);
+  });
+});
+
+describe("only your own tasks", () => {
+  it("never shows a member's private task to the owner or an admin", async () => {
+    const task = (await createTask(priya, { title: "Priya's private appraisal notes", dueAt: new Date(Date.now() - 3_600_000).toISOString() })).body.task;
+    for (const boss of [mark, ada]) {
+      await assert.rejects(getTask(boss, task.id), hidden);
+      assert.equal((await listTasks(boss, { limit: 100 })).data.some((item) => item.id === task.id), false);
+      assert.equal((await getDueActions(boss, "all")).tasks.some((item) => item.id === task.id), false);
+      const counts = await countTaskViews(boss);
+      const own = await queryAsUser<{ total: number }>(boss.userId, "select count(*)::int as total from crm.tasks where archived_at is null and completed_at is null and workspace_id = $1", [boss.workspaceId]);
+      assert.ok(counts.all <= own[0].total);
+      assert.equal((await readPlanner(boss)).tasks.some((item) => item.id === task.id), false);
+      assert.doesNotMatch(JSON.stringify(await runTool(boss, "list_tasks", { view: "all" })), /appraisal/);
+      assert.doesNotMatch(await mcpText(boss, "get_due_actions", { view: "all" }), /appraisal/);
+      assert.doesNotMatch(await mcpText(boss, "get_next_action", { id: task.id }), /appraisal/);
+      assert.equal((await queryAsUser(boss.userId, "select 1 from crm.tasks where id = $1", [task.id])).length, 0);
+      assert.equal((await queryAsUser(boss.userId, "select 1 from crm.audit_events where entity_id = $1", [task.id])).length, 0);
+      await assert.rejects(updateTask(boss, task.id, { title: "Changed by the boss" }), (error: unknown) => error instanceof CrmError && (error.status === 404 || error.status === 403));
+      await assert.rejects(completeTask(boss, task.id), (error: unknown) => error instanceof CrmError && (error.status === 404 || error.status === 403));
+    }
+    const event = await admin().query<{ id: string }>("select id from crm.audit_events where entity_id = $1 limit 1", [task.id]);
+    await assert.rejects(describeUndo(mark, event.rows[0].id), hidden);
+    assert.equal((await getTask(priya, task.id)).title, "Priya's private appraisal notes");
+  });
+
+  it("shows a workspace agent only the tasks it created", async () => {
+    const people = (await createTask(mark, { title: "Mark's own call" })).body.task;
+    const own = (await createTask(agent, { title: "Agent's own follow up", ownerId: mark.userId })).body.task;
+    const listed = (await listTasks(agent, { limit: 100 })).data.map((item) => item.id);
+    assert.ok(listed.includes(own.id));
+    assert.equal(listed.includes(people.id), false);
+    await assert.rejects(getTask(agent, people.id), hidden);
+    await assert.rejects(updateTask(agent, people.id, { title: "Agent rename" }), (error: unknown) => error instanceof CrmError && (error.status === 404 || error.status === 403));
+    assert.doesNotMatch(await mcpText(agent, "get_due_actions", { view: "all" }), /Mark's own call/);
+    const rows = await withActor(agent, (db) => db.query("select 1 from crm.audit_events where entity_id = $1", [people.id]));
+    assert.equal(rows.rowCount, 0);
+    assert.equal((await getTask(mark, own.id)).title, "Agent's own follow up");
+  });
+
+  it("delivers a task event only to webhooks whose creator can see the task", async () => {
+    const network = { lookup: async () => ["93.184.216.34"] };
+    const marks = (await createWebhook(mark, { url: "https://hooks.example.com/mark", events: ["task.updated", "company.created"] }, network)).endpoint;
+    const agents = (await createWebhook({ ...agent, scopes: [...SCOPES] }, { url: "https://hooks.example.com/agent", events: ["task.updated"] }, network)).endpoint;
+    const nobody = await admin().query<{ id: string }>(
+      "insert into crm.webhook_endpoints (workspace_id, url, secret, events) values ($1, 'https://hooks.example.com/legacy', 'secret', array['task.updated', 'company.created']) returning id",
+      [mark.workspaceId],
+    );
+    const theirs = (await createTask(priya, { title: "Priya's quiet task" })).body.task;
+    await updateTask(priya, theirs.id, { title: "Priya's quiet task, renamed" });
+    const mine = (await createTask(mark, { title: "Mark's loud task" })).body.task;
+    await updateTask(mark, mine.id, { title: "Mark's loud task, renamed" });
+    const robots = (await createTask(agent, { title: "Agent's task" })).body.task;
+    await updateTask(agent, robots.id, { title: "Agent's task, renamed" });
+    const company = (await createCompany(priya, { name: "Hooked Ltd" })).body.company;
+    const deliveries = await admin().query<{ endpoint_id: string; entity: string }>(
+      "select endpoint_id, payload -> 'entity' ->> 'id' as entity from crm.webhook_deliveries where endpoint_id = any($1::uuid[])",
+      [[marks.id, agents.id, nobody.rows[0].id]],
+    );
+    const to = (endpoint: string) => deliveries.rows.filter((row) => row.endpoint_id === endpoint).map((row) => row.entity).sort();
+    assert.deepEqual(to(marks.id), [mine.id, company.id].sort());
+    assert.deepEqual(to(agents.id), [robots.id]);
+    assert.deepEqual(to(nobody.rows[0].id), [company.id]);
+  });
+
+  it("hands a removed member's tasks to the person who removed them, unowned ones included", async () => {
+    const person = await createUser("leo@policies.test", "Leo Leaver");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, person.userId]);
+    const leo: UserActor = { ...person, workspaceId: mark.workspaceId, workspaceName: "Eclipse", role: "member", scopes: scopesForRole("member") };
+    const owned = (await createTask(leo, { title: "Leo's owned task" })).body.task;
+    const unowned = (await createTask(leo, { title: "Leo's unowned task", ownerId: null })).body.task;
+    await assert.rejects(getTask(ada, owned.id), hidden);
+    await removeMember(ada, leo.userId, { operation: "remove_member", source: "web" });
+    assert.equal((await getTask(ada, owned.id)).ownerId, ada.userId);
+    assert.equal((await getTask(ada, unowned.id)).ownerId, ada.userId);
+    await assert.rejects(getTask(mark, owned.id), hidden);
   });
 });

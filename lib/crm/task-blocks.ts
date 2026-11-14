@@ -9,7 +9,6 @@ export type PlannerTeam = {
   name: string;
   role: WorkspaceRole;
   members: { id: string; name: string }[];
-  admins: string[];
 };
 
 export type Planner = {
@@ -44,7 +43,6 @@ export async function readPlanner(actor: UserActor, now = Date.now()): Promise<P
           name: target.workspaceName,
           role: target.role,
           members: team ? members.map((member) => ({ id: member.id, name: member.name })) : [],
-          admins: members.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.id),
         },
         tagged,
       };

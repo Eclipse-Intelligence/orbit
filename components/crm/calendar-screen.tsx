@@ -789,7 +789,6 @@ export default function CalendarScreen({
           viewer={{ ...viewer, role: team?.role ?? viewer.role }}
           members={team?.members ?? []}
           tagged={shownTask ? (planner.tagged[shownTask.id] ?? []) : []}
-          admins={team?.admins ?? []}
           completed={shownTask ? done.has(shownTask.id) : false}
           onComplete={markDone}
           onReopen={reopen}

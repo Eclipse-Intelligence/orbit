@@ -29,7 +29,6 @@ type PanelProps = {
   viewer: Viewer;
   members: AssignableMember[];
   tagged: string[];
-  admins?: string[];
   completed?: boolean;
   onComplete: (task: Task) => void;
   onReopen?: (task: Task) => void;
@@ -102,7 +101,7 @@ function focusedElement() {
   return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed = false, onComplete, onReopen, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, completed = false, onComplete, onReopen, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -180,7 +179,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
   ]
     .filter(Boolean)
     .join(" · ");
-  const changers = [owner, creator].flatMap((person) => (person && person.id !== viewer.id && !admins.includes(person.id) ? [firstName(person.name)] : []));
+  const changers = [owner, creator].flatMap((person) => (person && person.id !== viewer.id ? [firstName(person.name)] : []));
   const colleagues = members.map((member) => ({ id: member.id, name: member.name }));
   const thread = discussion.threadId;
 
