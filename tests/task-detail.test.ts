@@ -347,8 +347,11 @@ describe("GET /api/v1/tasks/:id", () => {
       params: Promise.resolve({ id: callJane }),
     });
     assert.equal(response.status, 200);
-    const body = (await response.json()) as { task: { description: string }; detail: TaskDetail };
-    assert.match(body.task.description, /\/mail\?thread=/);
+    const body = (await response.json()) as { task: { description: string; mailThreadKey: string; mailThread: unknown }; detail: TaskDetail };
+    assert.equal(body.task.description, "Ask about the three-year price.");
+    assert.equal(body.task.mailThreadKey, `${markBox.sourceId}|renewal`);
+    assert.deepEqual(body.task.mailThread, { subject: null, readable: false });
+    assert.doesNotMatch(JSON.stringify(body), /Renewal terms/);
     assertCrmFields(body.detail);
     assert.equal(body.detail.mail, null);
   });
