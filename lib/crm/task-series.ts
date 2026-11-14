@@ -36,7 +36,13 @@ import {
   type RepeatRule,
   type Weekday,
   weekdayOf,
+  REPEAT_EVERY,
+  repeatInputOf,
+  type RepeatEvery,
+  type RepeatInput,
 } from "@/lib/task-repeat";
+
+export { REPEAT_EVERY, repeatInputOf, type RepeatEvery, type RepeatInput } from "@/lib/task-repeat";
 import type { Actor, Provenance, Task, TaskPriority, TaskWrite, WorkspaceRole } from "@/lib/crm/types";
 
 export const MAX_ACTIVE_SERIES = 200;
@@ -45,18 +51,6 @@ export const REPEAT_SAVE_FAILED = "Couldn't save the repeat. Try again.";
 export const NEEDS_SCOPE = "This task repeats. Send repeatScope: this, following or all.";
 export const REPEAT_SCOPES = ["this", "following", "all"] as const;
 export type RepeatScope = (typeof REPEAT_SCOPES)[number];
-
-export const REPEAT_EVERY = ["day", "weekday", "week", "month", "year"] as const;
-export type RepeatEvery = (typeof REPEAT_EVERY)[number];
-
-export type RepeatInput = {
-  every: RepeatEvery;
-  interval?: number;
-  days?: string[];
-  monthDay?: number;
-  monthWeek?: { n: number; weekday: string };
-  ends?: { after: number } | { on: string } | null;
-};
 
 export type OccurrenceTarget = { taskId: string } | { seriesId: string; occursOn: string };
 
@@ -231,25 +225,6 @@ export function readRepeat(input: unknown, startsOn: string, now = Date.now()): 
   const endsError = checkEnds(ends, startsOn, today(now));
   if (endsError) repeatError(endsError, "repeat.ends");
   return { rule: normalRule(rule), ends };
-}
-
-export function repeatInputOf(rule: RepeatRule, ends: RepeatEnds): RepeatInput {
-  const input: RepeatInput =
-    rule.freq === "daily"
-      ? { every: "day" }
-      : rule.freq === "weekly"
-        ? rule.interval === 1 && rule.weekdays?.length === 5 && WORKWEEK.every((day) => rule.weekdays?.includes(day))
-          ? { every: "weekday" }
-          : { every: "week", days: rule.weekdays ?? [] }
-        : rule.freq === "monthly"
-          ? rule.monthWeek
-            ? { every: "month", monthWeek: rule.monthWeek }
-            : { every: "month", monthDay: rule.monthDay }
-          : { every: "year" };
-  if (rule.interval > 1) input.interval = rule.interval;
-  if ("count" in ends) input.ends = { after: ends.count };
-  if ("until" in ends) input.ends = { on: ends.until };
-  return input;
 }
 
 async function assertRoom(db: Db, workspaceId: string, ownerId: string | null) {
@@ -566,7 +541,7 @@ export async function rollSeriesInDb(db: Db, actor: Actor, seriesId: string, now
     passed.push(target.occursOn);
     target = after;
   }
-  return moveCurrent(db, actor, row, task, target, passed, "missed", { operation: "repeat_roll", source: "repeat", automatic: true });
+  return moveCurrent(db, actor, row, task, target, passed, "missed", { operation: "repeat_roll", automatic: true });
 }
 
 async function lockOpenTask(db: Db, actor: Actor, id: string) {
@@ -886,7 +861,7 @@ async function editFollowing(db: Db, actor: Actor, row: SeriesRow, task: Task, o
 export async function updateOccurrenceInDb(db: Db, actor: Actor, target: OccurrenceTarget, input: TaskWrite, scope: RepeatScope | undefined, provenance: Provenance) {
   const found = await resolveTarget(db, actor, target);
   const { task, row } = found;
-  if (!row || !found.occursOn) return (await updateTaskInDb(db, actor, task.id, input, provenance)).task;
+  if (!row || !found.occursOn || (stopped(row) && !found.future)) return (await updateTaskInDb(db, actor, task.id, input, provenance)).task;
   if (input.dueAt === null || input.dueDate === null || input.dueAt === "" || input.dueDate === "") {
     throw new CrmError("invalid_input", "A repeating task needs a day. Stop repeating first.", 400, { field: "dueAt" });
   }
@@ -1237,4 +1212,18 @@ export async function updateTaskFromApi(
       return { task };
     }),
   );
+}
+
+export async function followSeriesLinks(actor: Actor, taskId: string, provenance: Provenance = { operation: "link_task" }) {
+  if (!isUuid(taskId)) return;
+  await withActor(actor, async (db) => {
+    const task = await readTaskInDb(db, actor, taskId);
+    if (!task?.seriesId || task.completedAt) return;
+    const row = await lockSeries(db, task.seriesId);
+    if (!row || row.current_task_id !== task.id || stopped(row)) return;
+    if (row.company_id === task.companyId && row.contact_id === task.contactId && row.opportunity_id === task.opportunityId) return;
+    await db.query("update crm.task_series set company_id = $2, contact_id = $3, opportunity_id = $4 where id = $1", [row.id, task.companyId, task.contactId, task.opportunityId]);
+    const after = await readSeries(db, row.id);
+    await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, after, { scope: "all" }));
+  });
 }

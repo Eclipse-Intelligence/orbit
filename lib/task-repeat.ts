@@ -554,3 +554,36 @@ export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): Task
     changedDates: view.changes.filter((change) => change.occursOn > after && !change.skip && change.dueAt).length,
   };
 }
+
+export const REPEAT_EVERY = ["day", "weekday", "week", "month", "year"] as const;
+export type RepeatEvery = (typeof REPEAT_EVERY)[number];
+
+export type RepeatInput = {
+  every: RepeatEvery;
+  interval?: number;
+  days?: string[];
+  monthDay?: number;
+  monthWeek?: { n: number; weekday: string };
+  ends?: { after: number } | { on: string } | null;
+};
+
+
+export function repeatInputOf(rule: RepeatRule, ends: RepeatEnds): RepeatInput {
+  const input: RepeatInput =
+    rule.freq === "daily"
+      ? { every: "day" }
+      : rule.freq === "weekly"
+        ? rule.interval === 1 && rule.weekdays?.length === 5 && WORKWEEK.every((day) => rule.weekdays?.includes(day))
+          ? { every: "weekday" }
+          : { every: "week", days: rule.weekdays ?? [] }
+        : rule.freq === "monthly"
+          ? rule.monthWeek
+            ? { every: "month", monthWeek: rule.monthWeek }
+            : { every: "month", monthDay: rule.monthDay }
+          : { every: "year" };
+  if (rule.interval > 1) input.interval = rule.interval;
+  if ("count" in ends) input.ends = { after: ends.count };
+  if ("until" in ends) input.ends = { on: ends.until };
+  return input;
+}
+

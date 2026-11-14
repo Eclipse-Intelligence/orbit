@@ -17,6 +17,7 @@ import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-out
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
 import RecordNotes from "@/components/docs/record-notes";
+import { isRepeating, RepeatEarlier, SkipButton } from "@/components/crm/task-repeat";
 import { untagTaskAction } from "@/app/(crm)/discussions";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -313,6 +314,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                       {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
                     </div>
                   )}
+                  <RepeatEarlier task={task} section={(children) => <TaskSection label="Earlier">{children}</TaskSection>} />
                   {recordNotes && <RecordNotes compact record={{ kind: "task", id: task.id, name: task.title }} />}
                   <TaskSection label="Discussion" count={discussion.count}>
                     <DiscussionMessages discussion={discussion} />
@@ -321,6 +323,15 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
               )}
             </div>
             <div className="border-line-strong flex shrink-0 flex-col gap-1.5 border-t px-4 pt-3 pb-3 max-md:px-2 max-md:pb-2">
+              {!thread && canChange && !done && isRepeating(task) && (
+                <div className="flex gap-2 pb-1 md:hidden">
+                  <SkipButton task={task} variant="secondary" size="md" className="flex-1" />
+                  <Button variant="secondary" size="md" onClick={complete} className="hit flex-1">
+                    <CheckIcon aria-hidden className="size-3.5" />
+                    Done
+                  </Button>
+                </div>
+              )}
               <DiscussionNotice discussion={discussion} />
               {thread ? (
                 <DiscussionComposer key={thread} discussion={discussion} parentId={thread} autoFocus onEscape={discussion.context.closeThread} />

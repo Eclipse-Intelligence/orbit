@@ -7,6 +7,7 @@ import { completeTaskAction, openTaskIdsAction, remindTaskAction, reopenTaskActi
 import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
 import { reconcileDone } from "@/lib/task-done";
+import { doneMessage } from "@/components/crm/task-repeat";
 import { movedMessage } from "@/lib/task-pad";
 import type { Task } from "@/lib/crm/types";
 
@@ -225,7 +226,7 @@ export function useTaskDone(tasks: Task[]) {
       undone.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));
       setMessage(null);
-      const toast = composer.showToast({ message: "Task done.", action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
+      const toast = composer.showToast({ message: doneMessage(task), action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
       const timer = options.hold ? 0 : window.setTimeout(() => commit(task.id), TASK_UNDO_MS);
       entries.current.set(task.id, { toast, timer, until: Date.now() + TASK_UNDO_MS, sent: false });
     },

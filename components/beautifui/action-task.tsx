@@ -13,6 +13,7 @@ import { TaskPrepare } from "@/components/crm/task-prepare";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskTitle from "@/components/crm/task-title";
+import { RepeatIcon, RepeatMark } from "@/components/crm/task-repeat";
 import type { Viewer } from "@/components/crm/viewer";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import { relativeWhen } from "@/lib/companies";
@@ -207,6 +208,7 @@ function ActionTask({
     wasExpanded.current = expanded;
   }, [expanded]);
   const preview = (task.description ?? "").trim().split("\n")[0]?.trim();
+  const repeats = Boolean(task.repeat?.current && !completed);
   const expansion = useExpansion(expanded);
   usePageFocus("task", task.id, expanded);
   const row = useRef<HTMLLIElement>(null);
@@ -345,7 +347,14 @@ function ActionTask({
                 <span className="pointer-events-none relative min-w-0 text-[14px] leading-5 break-words @xl:min-w-[12em] @xl:truncate">
                   <TaskTitle task={task} colleagues={colleagues} viewerId={viewer.id} here={here} />
                 </span>
-                {preview && <span className="caption-style text-subtle pointer-events-none relative hidden truncate @xl:block">{preview}</span>}
+                {repeats ? (
+                  <span className="caption-style text-subtle pointer-events-none relative hidden min-w-0 items-center gap-1 @xl:flex">
+                    {preview && <span className="hidden min-w-0 truncate @5xl:inline">{preview} ·</span>}
+                    <RepeatMark task={task} className="shrink-0" />
+                  </span>
+                ) : (
+                  preview && <span className="caption-style text-subtle pointer-events-none relative hidden truncate @xl:block">{preview}</span>
+                )}
               </div>
               <div className="flex min-w-0 flex-wrap items-center gap-1.5 @xl:max-w-[55%] @xl:shrink @xl:flex-nowrap @xl:justify-end">
                 {comments > 0 && (
@@ -361,6 +370,7 @@ function ActionTask({
                     <span className="sr-only"> duration</span>
                   </span>
                 )}
+                {repeats && <RepeatIcon aria-label={task.repeat?.phrase} role="img" className="hidden size-3 shrink-0 text-(--tag-purple-text) @xl:block" />}
                 {due ? (
                   <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="gap-1 text-[12px]">
                     {task.dueHasTime && due.kind !== "none" && <ClockIcon aria-hidden className="size-3 shrink-0" />}
@@ -369,6 +379,7 @@ function ActionTask({
                 ) : (
                   task.dueAt && <span className="text-subtle shrink-0 text-[13px]">{relativeWhen(task.dueAt, now)}</span>
                 )}
+                {repeats && <RepeatMark task={task} short className="caption-style text-subtle shrink-0 @xl:hidden" />}
                 <ClickUpBadge task={task} />
                 {task.contactId && task.contactName && here?.kind !== "contact" && (
                   <RecordChip href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} className="@xl:@max-4xl:hidden" />

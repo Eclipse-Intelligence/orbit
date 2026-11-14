@@ -20,7 +20,14 @@ import { undoAuditEvent } from "@/lib/crm/undo";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
-import { createUser, resetDatabase } from "./helpers";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { PATCH as restUpdateTask } from "@/app/api/v1/tasks/[id]/route";
+import { POST as restCreateTask } from "@/app/api/v1/tasks/route";
+import { runTool } from "@/lib/assistant/tools";
+import { SCOPES } from "@/lib/crm/scopes";
+import { createCrmMcpServer } from "@/server/mcp/server";
+import { createAgent, createUser, resetDatabase } from "./helpers";
 
 let mark: UserActor;
 let sam: UserActor;
@@ -329,6 +336,68 @@ describe("repeating tasks", () => {
       [mark.workspaceId, mark.userId],
     );
     await assert.rejects(weekly("One too many"), new RegExp(TOO_MANY_SERIES));
+  });
+});
+
+describe("repeating tasks over the API, MCP and the assistant", () => {
+  it("creates, changes, skips and stops repeats with the same fields everywhere", async () => {
+    const token = (await createAgent(mark.workspaceId, [...SCOPES].filter((scope) => scope !== "admin"), "Zapier")).token;
+    const rest = async (method: "POST" | "PATCH", body: Record<string, unknown>, id?: string) => {
+      const request = new Request(`http://crm.test/api/v1/tasks${id ? `/${id}` : ""}`, {
+        method,
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const response = method === "POST" ? await restCreateTask(request) : await restUpdateTask(request, { params: Promise.resolve({ id: id! }) });
+      return { status: response.status, body: (await response.json()) as { task?: Task; error?: { message: string } } };
+    };
+    const created = await rest("POST", { title: "Invoice", dueDate: "2027-04-01", repeat: { every: "month", monthDay: 1, ends: { after: 3 } } });
+    assert.equal(created.status, 201);
+    const invoice = created.body.task!;
+    assert.equal(invoice.repeat?.phrase, "Repeats monthly on the 1st");
+    assert.equal(invoice.repeat?.rrule, "RRULE:FREQ=MONTHLY;BYMONTHDAY=1;COUNT=3");
+    assert.equal(invoice.repeat?.end, "2 more");
+    const refused = await rest("PATCH", { title: "Send the invoice" }, invoice.id);
+    assert.equal(refused.status, 400);
+    assert.match(refused.body.error!.message, /repeatScope/);
+    const renamed = await rest("PATCH", { title: "Send the invoice", repeatScope: "all" }, invoice.id);
+    assert.equal(renamed.body.task!.title, "Send the invoice");
+    const skipped = await rest("PATCH", { skip: true, occursOn: "2027-05-01" }, invoice.id);
+    assert.equal(skipped.status, 200);
+    assert.equal(skipped.body.task!.repeat?.next?.occursOn, "2027-06-01");
+
+    const server = createCrmMcpServer(mark);
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: "task-series", version: "1.0.0" });
+    await client.connect(clientSide);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = (await client.callTool({ name, arguments: args })) as { content: { text: string }[]; isError?: boolean };
+      if (result.isError) throw new Error(result.content[0]?.text);
+      return JSON.parse(result.content[0].text) as { task: Task };
+    };
+    try {
+      const call1 = (await call("create_next_action", { title: "Team call", dueAt: "2027-04-05T10:00", repeat: { every: "week", days: ["mo"] } })).task;
+      assert.equal(call1.repeat?.text, "Every Monday at 10:00");
+      const moved = (await call("update_next_action", { id: call1.id, occursOn: "2027-04-12", dueAt: "2027-04-12T11:00", repeatScope: "this" })).task;
+      assert.equal(moved.id, call1.id);
+      assert.equal(moved.repeat?.changedDates, 1);
+      const stopped = (await call("update_next_action", { id: call1.id, repeat: null })).task;
+      assert.equal(stopped.repeat?.ended, true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    const made = (await runTool(mark, "create_task", { title: "Review", dueDate: "2027-04-02", sendToClickUp: false, repeat: { every: "week", interval: 2, days: ["fr"] } })) as { task: Task };
+    assert.equal(made.task.repeat?.phrase, "Repeats every 2 weeks on Friday");
+    const asked = (await runTool(mark, "update_task", { taskId: made.task.id, title: "Review the pipeline" })) as { error?: string; field?: string };
+    assert.equal(asked.field, "repeatScope");
+    const skippedTool = (await runTool(mark, "update_task", { taskId: made.task.id, skip: true })) as { task: Task };
+    assert.equal(skippedTool.task.occursOn, "2027-04-16");
+    const following = (await runTool(mark, "update_task", { seriesId: made.task.seriesId, occursOn: "2027-04-30", title: "Review the pipeline", repeatScope: "following" })) as { task: Task };
+    assert.equal(following.task.title, "Review the pipeline");
+    assert.equal(following.task.occursOn, "2027-04-30");
   });
 });
 

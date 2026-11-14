@@ -14,6 +14,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
+import { isRepeating, RepeatField, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
@@ -30,7 +31,7 @@ import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
-import { durationLabel, localInstant } from "@/lib/crm/task-time";
+import { clockLabel, durationLabel, localInstant, taskDueDay } from "@/lib/crm/task-time";
 import { taskDueLabel } from "@/lib/crm/task-views";
 import { appTimeZone, dateTimeInputValue, toIsoInstant } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -141,6 +142,19 @@ function touchesTiming(write: TaskDetails) {
   return write.dueAt !== undefined || write.dueDate !== undefined || write.remindMinutes !== undefined || write.durationMinutes !== undefined;
 }
 
+function scopeChange(task: Task, write: TaskDetails): ScopeChange | null {
+  if (!isRepeating(task)) return null;
+  if (write.title !== undefined) return { kind: "title" };
+  if (write.description !== undefined) return { kind: "description" };
+  if (write.dueAt) {
+    const sameDay = taskDueDay(write.dueAt) === (task.dueDate ?? taskDueDay(task.dueAt));
+    if (sameDay && (!task.dueHasTime || !task.dueAt || clockLabel(write.dueAt) !== clockLabel(task.dueAt))) return { kind: "time", to: clockLabel(write.dueAt) };
+  }
+  if (write.durationMinutes !== undefined) return { kind: "duration" };
+  if (write.remindMinutes !== undefined && write.dueAt === undefined && write.dueDate === undefined) return { kind: "reminder" };
+  return null;
+}
+
 function sourceOf(task: Task): Source {
   return {
     title: task.title,
@@ -188,6 +202,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const sent = useRef({ title: source.title, text: source.text });
   const timingError = useRef(false);
   const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
+  const repeatScope = useRepeatScope(task);
   const visible = useRef(shown);
   useEffect(() => {
     visible.current = shown;
@@ -230,9 +245,28 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const ticket = timed ? timing.start() : 0;
     setError(null);
     setNotice(null);
+    const change = scopeChange(task, write);
+    let scope: RepeatScope | undefined = task.repeat?.current && !task.completedAt ? "this" : undefined;
+    if (change) {
+      const picked = await repeatScope.ask(change);
+      if (!picked) {
+        const restore = timed ? timing.fail(ticket) : null;
+        if (restore) show(restore);
+        if (write.title !== undefined) {
+          setTitle(task.title);
+          sent.current.title = task.title;
+        }
+        if (write.description !== undefined) {
+          setText(task.description?.trim() ?? "");
+          sent.current.text = task.description?.trim() ?? "";
+        }
+        return true;
+      }
+      scope = picked;
+    }
     let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
     try {
-      result = await saveTaskDetailsAction(task.id, write);
+      result = await saveTaskDetailsAction(task.id, write, scope);
     } catch {
       result = { error: "Couldn't save. Try again." };
     }
@@ -359,9 +393,11 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   }
 
   async function assign(ownerId: string) {
+    const scope = isRepeating(task) ? await repeatScope.ask({ kind: "assignee" }) : undefined;
+    if (scope === null) return;
     setBusy(true);
     setError(null);
-    const result = await assignTaskAction(task.id, ownerId).catch(() => ({ error: "Couldn't assign the task. Try again." }));
+    const result = await assignTaskAction(task.id, ownerId, scope).catch(() => ({ error: "Couldn't assign the task. Try again." }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -394,6 +430,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     changeDuration,
     changeReminder,
     assign,
+    scopeDialog: repeatScope.dialog,
   };
 }
 
@@ -930,14 +967,17 @@ export default function TaskFields({
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
+          {!done && (details.canChange || task.repeat?.current) && <RepeatField task={task} canChange={details.canChange} layout="row" />}
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}
           {details.canChange && !done && (
             <>
               <span aria-hidden className="bg-line-strong mx-1 h-4 w-px" />
               <QuickDates details={details} />
+              <SkipButton task={task} />
             </>
           )}
         </div>
+        {details.scopeDialog}
         <Description details={details} layout="row" />
         {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label />}
         {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
@@ -962,6 +1002,11 @@ export default function TaskFields({
         <Field label="Due">
           <DueChips details={details} layout="panel" />
         </Field>
+        {!done && (details.canChange || task.repeat?.current) && (
+          <Field label="Repeat">
+            <RepeatField task={task} canChange={details.canChange} layout="panel" />
+          </Field>
+        )}
         {details.canChange && (
           <Field label="Duration">
             <DurationMenu value={details.duration} onChange={details.changeDuration} className={cn(TASK_CHIP, TOUCH)} />
@@ -983,6 +1028,7 @@ export default function TaskFields({
         <Description details={details} layout="panel" />
       </Section>
       <SavedNote details={details} />
+      {details.scopeDialog}
     </>
   );
 }

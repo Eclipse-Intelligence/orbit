@@ -19,6 +19,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
+import { followSeriesLinks, REPEAT_SCOPES, updateOccurrence, type RepeatScope } from "@/lib/crm/task-series";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 
@@ -355,12 +356,14 @@ export async function placeTaskAction(id: string, placement: TaskPlacement): Pro
   }
 }
 
-export async function assignTaskAction(id: string, ownerId: string): Promise<RecordActionState> {
+export async function assignTaskAction(id: string, ownerId: string, scope?: RepeatScope): Promise<RecordActionState> {
   const user = await taskUser(id);
   if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || !isUuid(ownerId)) return { error: "Couldn't assign the task. Try again." };
   try {
-    await updateTask(user, id, { ownerId }, { provenance: { operation: "assign_task", source: "web" } });
+    const options = { provenance: { operation: "assign_task", source: "web" } };
+    if (scope && REPEAT_SCOPES.includes(scope)) await updateOccurrence(user, { taskId: id }, { ownerId }, scope, options);
+    else await updateTask(user, id, { ownerId }, options);
     pushLater(user, id);
     refresh();
     return { ok: true };
@@ -398,6 +401,7 @@ export async function linkTaskAction(id: string, link: { contactId?: string; com
   if (!isUuid(id)) return { error: "Couldn't link the task. Try again." };
   try {
     await linkTask(user, id, { contactId: link?.contactId, companyId: link?.companyId }, { operation: "link_task", source: "web" });
+    await followSeriesLinks(user, id, { operation: "link_task", source: "web" });
     pushLater(user, id);
     refresh();
     return { ok: true };

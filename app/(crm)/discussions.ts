@@ -12,6 +12,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { getTask, listTaskParticipants, removeTaskParticipant, updateTask } from "@/lib/crm/tasks";
+import { REPEAT_SCOPES, updateOccurrence, type RepeatScope } from "@/lib/crm/task-series";
 import type { Task, TaskWrite, UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
@@ -88,7 +89,7 @@ function refresh() {
   revalidatePath(TASKS_PATH);
 }
 
-export async function saveTaskDetailsAction(id: string, input: TaskDetails): Promise<{ ok?: true; error?: string; saved?: SavedTiming }> {
+export async function saveTaskDetailsAction(id: string, input: TaskDetails, scope?: RepeatScope): Promise<{ ok?: true; error?: string; saved?: SavedTiming }> {
   const resolved = await taskActor(id);
   if (!resolved.actor) return { error: resolved.error };
   const actor = resolved.actor;
@@ -97,7 +98,10 @@ export async function saveTaskDetailsAction(id: string, input: TaskDetails): Pro
     const current = await getTask(actor, id);
     const write = changed(current, details(input));
     if (Object.keys(write).length === 0) return { ok: true, saved: timingOf(current) };
-    const updated = await updateTask(actor, id, write, { provenance: { operation: "update_task", source: "web" } });
+    const options = { provenance: { operation: "update_task", source: "web" } };
+    const updated = current.seriesId
+      ? await updateOccurrence(actor, { taskId: id }, write, REPEAT_SCOPES.includes(scope as RepeatScope) ? scope : undefined, options)
+      : await updateTask(actor, id, write, options);
     if (clickupToken()) {
       after(async () => {
         try {
