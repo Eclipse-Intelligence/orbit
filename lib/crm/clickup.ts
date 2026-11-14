@@ -52,6 +52,8 @@ const PUSH_BATCH = 20;
 const VERIFY_BATCH = 5;
 const VERIFY_AFTER_MS = 6 * 60 * 60 * 1000;
 const CREATE_CLAIM_MS = 2 * 60 * 1000;
+const CREATE_CLOCK_SKEW_MS = 60 * 1000;
+const UNCONFIRMED_LOOKUP_PAGES = 20;
 const STEP_RESERVE_MS = 3_000;
 const INLINE_BUDGET_MS = 10_000;
 const WEBHOOK_BUDGET_MS = 50_000;
@@ -120,7 +122,10 @@ type Snapshot = {
   remoteUpdatedAt?: number;
   pushedAt?: number;
   creatingAt?: number;
+  unconfirmed?: Unconfirmed;
 };
+
+type Unconfirmed = Fields & { at: number; listId: string };
 
 type StateRow = {
   user_id: string | null;
@@ -219,7 +224,7 @@ const DIRTY_SQL = `(
   or (t.completed_at is not null) is distinct from (t.clickup_sync->>'done')::boolean
 )`;
 
-const PROVENANCE: Provenance = { operation: "sync_clickup", source: "clickup" };
+const PROVENANCE: Provenance = { operation: "sync_clickup", source: "clickup", synced: true };
 
 function client(token: string, options: ClickUpOptions) {
   return clickupClient({
@@ -437,15 +442,97 @@ async function linkedRow(db: Db, workspaceId: string, clickupTaskId: string) {
   return result.rows[0] ?? null;
 }
 
-async function recordTaskError(actor: UserActor, taskId: string, message: string) {
+async function recordTaskError(actor: UserActor, taskId: string, message: string, forget: string[] = []) {
   await withActor(actor, (db) =>
     db.query(
       `update crm.tasks
-       set clickup_error = $2, clickup_sync = clickup_sync - 'creatingAt'
+       set clickup_error = $2, clickup_sync = clickup_sync - 'creatingAt' - $3::text[]
        where id = $1`,
-      [taskId, message.slice(0, 500)],
+      [taskId, message.slice(0, 500), forget],
     ),
   );
+}
+
+function refusedByClickUp(error: unknown) {
+  return error instanceof ClickUpError && error.status >= 400 && error.status < 500;
+}
+
+function listAnswered(error: unknown) {
+  return error instanceof ClickUpError && (error.status === 400 || error.status === 404);
+}
+
+function createdAt(task: ClickUpTask) {
+  const value = Number(task.date_created);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function matchesUnconfirmed(task: ClickUpTask, unconfirmed: Unconfirmed) {
+  if (String(task.list?.id ?? "") !== unconfirmed.listId) return false;
+  if (remoteFields(task).title !== unconfirmed.title) return false;
+  const created = createdAt(task);
+  return created !== null && created >= unconfirmed.at - CREATE_CLOCK_SKEW_MS && created <= unconfirmed.at + CREATE_CLAIM_MS + CREATE_CLOCK_SKEW_MS;
+}
+
+function distance(task: ClickUpTask, unconfirmed: Unconfirmed) {
+  return Math.abs((createdAt(task) ?? 0) - unconfirmed.at);
+}
+
+async function linkUnconfirmed(db: Db, row: SyncRow, task: ClickUpTask, unconfirmed: Unconfirmed) {
+  const { at, ...sent } = unconfirmed;
+  await db.query(
+    `update crm.tasks
+     set clickup_task_id = $2, clickup_url = $3, clickup_list_id = $4, clickup_synced_at = now(),
+         clickup_error = null, clickup_sync = $5::jsonb
+     where id = $1 and clickup_task_id is null`,
+    [row.id, String(task.id), clip(task.url, 500), task.list?.id ? String(task.list.id) : row.clickup_list_id, JSON.stringify({ ...sent, remoteUpdatedAt: at, pushedAt: at })],
+  );
+}
+
+async function findUnconfirmed(s: Session, unconfirmed: Unconfirmed) {
+  if (!s.state.teamId) return null;
+  const matches: ClickUpTask[] = [];
+  for (let page = 0; page < UNCONFIRMED_LOOKUP_PAGES; page += 1) {
+    const body = await s.api.teamTasks({
+      teamId: s.state.teamId,
+      listIds: [unconfirmed.listId],
+      updatedAfter: unconfirmed.at - CREATE_CLOCK_SKEW_MS,
+      createdAfter: unconfirmed.at - CREATE_CLOCK_SKEW_MS,
+      createdBefore: unconfirmed.at + CREATE_CLAIM_MS + CREATE_CLOCK_SKEW_MS,
+      page,
+    });
+    for (const task of body.tasks) {
+      if (task?.id && isClickUpId(String(task.id)) && matchesUnconfirmed(task, unconfirmed)) matches.push(task);
+    }
+    if (body.lastPage) break;
+  }
+  matches.sort((a, b) => distance(a, unconfirmed) - distance(b, unconfirmed));
+  for (const task of matches) {
+    if (!(await linkedElsewhere(s.actor.workspaceId, String(task.id)))) return task;
+  }
+  return null;
+}
+
+async function adoptUnconfirmed(db: Db, workspaceId: string, task: ClickUpTask, listId: string) {
+  const candidates = await db.query<{ id: string }>(
+    `select t.id from crm.tasks t
+     where t.workspace_id = $1 and t.clickup_task_id is null and t.archived_at is null
+       and t.clickup_sync->'unconfirmed'->>'listId' = $2
+       and t.clickup_sync->'unconfirmed'->>'title' = $3 and ${directTaskSql("t")}
+       and coalesce((t.clickup_sync->>'creatingAt')::bigint, 0) < $4::bigint
+     for update of t`,
+    [workspaceId, listId, remoteFields(task).title, Date.now() - CREATE_CLAIM_MS],
+  );
+  if (candidates.rows.length === 0 || createdAt(task) === null) return null;
+  const rows: { row: SyncRow; unconfirmed: Unconfirmed }[] = [];
+  for (const candidate of candidates.rows) {
+    const row = await readSyncRow(db, workspaceId, candidate.id);
+    const unconfirmed = row ? snapshotOf(row).unconfirmed : undefined;
+    if (row && unconfirmed && matchesUnconfirmed(task, unconfirmed)) rows.push({ row, unconfirmed });
+  }
+  if (rows.length === 0) return null;
+  rows.sort((a, b) => distance(task, a.unconfirmed) - distance(task, b.unconfirmed));
+  await linkUnconfirmed(db, rows[0].row, task, rows[0].unconfirmed);
+  return rows[0].row.id;
 }
 
 async function listInfo(s: Session, listId: string) {
@@ -512,7 +599,7 @@ async function ownerForAssignees(db: Db, workspaceId: string, task: ClickUpTask)
 async function archiveDeleted(s: Session, row: SyncRow) {
   if (row.archived_at) return "unchanged" as const;
   await archiveTask(s.actor, row.id, {
-    provenance: { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url },
+    provenance: { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true },
   });
   await withActor(s.actor, (db) =>
     db.query(
@@ -539,8 +626,25 @@ async function createRemote(s: Session, taskId: string) {
   if (!claimed || !claimed.clickup_list_id) return "unchanged" as const;
   const row = claimed;
   const listId = row.clickup_list_id!;
+  const earlier = snapshotOf(row).unconfirmed;
+  if (earlier?.listId) {
+    try {
+      const found = await findUnconfirmed(s, earlier);
+      if (found) {
+        await withActor(s.actor, async (db) => {
+          await lockClickUpTask(db, s.actor.workspaceId, String(found.id));
+          await linkUnconfirmed(db, row, found, earlier);
+        });
+        await setLinkField(s, row, earlier.listId, String(found.id));
+        return "pushed" as const;
+      }
+    } catch (error) {
+      await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."), listAnswered(error) ? ["unconfirmed"] : []);
+      throw error;
+    }
+  }
+  const local = localFields(row);
   try {
-    const local = localFields(row);
     const body: ClickUpTaskWrite = {
       name: local.title,
       description: clickupDescription(s.origin, row),
@@ -551,15 +655,12 @@ async function createRemote(s: Session, taskId: string) {
       const status = statusFor(await listInfo(s, listId), true);
       if (status) body.status = status;
     }
+    const unconfirmed: Unconfirmed = { ...local, at: Date.now(), listId };
+    await withActor(s.actor, (db) =>
+      db.query("update crm.tasks set clickup_sync = clickup_sync || jsonb_build_object('unconfirmed', $2::jsonb) where id = $1", [row.id, JSON.stringify(unconfirmed)]),
+    );
     const created = await s.api.createTask(listId, body);
-    const field = await linkField(s, listId).catch(() => null);
-    const link = recordLink(s.origin, row);
-    const value = field?.type === "email" ? (row.contact_email ? canonicalEmail(row.contact_email) : null) : link;
-    if (field && value) {
-      await s.api.setCustomField(created.id, field.id, value).catch((error: unknown) => {
-        console.error("ClickUp custom field update failed", error);
-      });
-    }
+    await setLinkField(s, row, listId, created.id);
     const pushedAt = Date.now();
     await withActor(s.actor, async (db) => {
       await lockClickUpTask(db, s.actor.workspaceId, created.id);
@@ -579,8 +680,19 @@ async function createRemote(s: Session, taskId: string) {
     });
     return "pushed" as const;
   } catch (error) {
-    await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."));
+    await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."), refusedByClickUp(error) ? ["unconfirmed"] : []);
     throw error;
+  }
+}
+
+async function setLinkField(s: Session, row: SyncRow, listId: string, clickupTaskId: string) {
+  const field = await linkField(s, listId).catch(() => null);
+  const link = recordLink(s.origin, row);
+  const value = field?.type === "email" ? (row.contact_email ? canonicalEmail(row.contact_email) : null) : link;
+  if (field && value) {
+    await s.api.setCustomField(clickupTaskId, field.id, value).catch((error: unknown) => {
+      console.error("ClickUp custom field update failed", error);
+    });
   }
 }
 
@@ -798,7 +910,10 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
     linkedAnywhere = await linkedElsewhereInAppDb(db, s.actor.workspaceId, taskId);
   };
   return withActorAfterAppStep(s.actor, lockAndCheck, async (db) => {
-    const linked = linkedAnywhere ? await linkedRow(db, s.actor.workspaceId, taskId) : null;
+    let linked = linkedAnywhere ? await linkedRow(db, s.actor.workspaceId, taskId) : null;
+    if (!linkedAnywhere && listId && (await adoptUnconfirmed(db, s.actor.workspaceId, task, listId))) {
+      linked = await linkedRow(db, s.actor.workspaceId, taskId);
+    }
     if (linked) {
       if (linked.archived_at) return "unchanged";
       const row = (await readSyncRow(db, s.actor.workspaceId, linked.id, true)) ?? linked;
@@ -856,7 +971,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
         contactId: link.contactId,
         companyId: link.contactId ? undefined : link.companyId,
       },
-      { operation: "import_clickup", source: "clickup", sourceUrl: clip(task.url, 2000) },
+      { operation: "import_clickup", source: "clickup", sourceUrl: clip(task.url, 2000), synced: true },
     );
     if (!created) return "ignored";
     const kept = keptDayOnly({ dueAt: remote.dueAt, dueHasTime: remote.dueHasTime }, created);
@@ -1100,22 +1215,23 @@ export async function createTaskWithClickUp(
   });
   const task = created.body.task;
   if (!listId) return { task, clickupError: null };
+  const clickupError = await sendTaskToClickUpList(actor, task.id, listId, options);
+  return { task: { ...task, clickupListId: listId }, clickupError };
+}
+
+export async function sendTaskToClickUpList(actor: UserActor, taskId: string, listId: string, options: ClickUpOptions & { fallback?: string } = {}) {
   await withActor(actor, async (db) => {
-    await db.query("update crm.tasks set clickup_list_id = $2 where id = $1", [task.id, listId]);
+    await db.query("update crm.tasks set clickup_list_id = $2 where id = $1 and clickup_task_id is null", [taskId, listId]);
     await db.query(
       `update crm.integration_state set last_used_list_id = $2
        where workspace_id = $1 and source = 'clickup' and connection_id is null`,
       [actor.workspaceId, listId],
     );
   });
-  const outcome = await pushClickUpTask(actor, task.id, options);
-  if (outcome === "failed") {
-    const row = await withActor(actor, (db) =>
-      db.query<{ clickup_error: string | null }>("select clickup_error from crm.tasks where id = $1", [task.id]),
-    );
-    return { task: { ...task, clickupListId: listId }, clickupError: row.rows[0]?.clickup_error ?? unreachable("ClickUp") };
-  }
-  return { task: { ...task, clickupListId: listId }, clickupError: null };
+  const outcome = await pushClickUpTask(actor, taskId, options);
+  if (outcome !== "failed") return null;
+  const row = await withActor(actor, (db) => db.query<{ clickup_error: string | null }>("select clickup_error from crm.tasks where id = $1", [taskId]));
+  return row.rows[0]?.clickup_error ?? options.fallback ?? unreachable("ClickUp");
 }
 
 export async function getClickUpSettings(

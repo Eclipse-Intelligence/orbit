@@ -6,7 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import type { WorkflowDefinition, WorkflowNode } from "@/lib/workflows/definition";
-import { chatBody, chatPostKey, runWorkflowTick } from "@/lib/workflows/engine";
+import { chatBody, runStepKey, runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, getRunSteps, getWorkflow, listNotifications, saveWorkflow, setWorkflowStatus, setWorkflowTemplate, settleChatRooms, startRun } from "@/lib/workflows/store";
 import { mentionsIn } from "@/lib/mentions";
 import { createUser, resetDatabase } from "./helpers";
@@ -92,7 +92,7 @@ describe("Post to Chat workflow step", () => {
     const stored = await sql("select via_workflow_id, via_workflow_name, client_key from crm.chat_messages where id = $1", [posted.id]);
     assert.equal(stored.rows[0].via_workflow_id, workflowId);
     assert.equal(stored.rows[0].via_workflow_name, "Won deals");
-    assert.equal(stored.rows[0].client_key, chatPostKey(started.runId, "post_to_chat_1"));
+    assert.equal(stored.rows[0].client_key, runStepKey(started.runId, "post_to_chat_1"));
     const step = (await getRunSteps(mark, started.runId)).steps.find((item) => item.stepId === "post_to_chat_1")!;
     assert.equal((step.output as { room: string }).room, "#sales");
     assert.match((step.output as { url: string }).url, new RegExp(`/chat/${roomId}\\?message=${posted.id}$`));
@@ -151,11 +151,11 @@ describe("Post to Chat workflow step", () => {
     );
     assert.deepEqual(
       rows.map((row) => row.client_key),
-      [0, 1, 2].map((index) => chatPostKey(started.runId, "post_to_chat_1", [{ id: "loop_1", index }])).concat(
-        [0, 1, 2].map((index) => chatPostKey(started.runId, "post_to_chat_1", [{ id: "loop_2", index }])),
+      [0, 1, 2].map((index) => runStepKey(started.runId, "post_to_chat_1", [{ id: "loop_1", index }])).concat(
+        [0, 1, 2].map((index) => runStepKey(started.runId, "post_to_chat_1", [{ id: "loop_2", index }])),
       ),
     );
-    const long = chatPostKey(started.runId, "a_very_long_step_identifier_of_forty_ch", Array.from({ length: 12 }, (_, index) => ({ id: "loop_1", index: index + 10 })));
+    const long = runStepKey(started.runId, "a_very_long_step_identifier_of_forty_ch", Array.from({ length: 12 }, (_, index) => ({ id: "loop_1", index: index + 10 })));
     assert.ok(long.length <= 100);
     assert.match(long, /^wf:[A-Za-z0-9_-]{43}$/);
   });

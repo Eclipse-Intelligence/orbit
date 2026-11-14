@@ -139,6 +139,8 @@ export type Provenance = {
   depth?: number;
   catchUp?: boolean;
   automatic?: boolean;
+  synced?: boolean;
+  workflowStep?: string;
 };
 
 export type CompanyListQuery = {
