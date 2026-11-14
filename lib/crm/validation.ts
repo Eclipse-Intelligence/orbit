@@ -28,8 +28,49 @@ import {
 
 const nullableText = z.string().nullable().optional();
 
+export const SYSTEM_SOURCES = [
+  "web",
+  "email",
+  "assistant",
+  "mcp",
+  "api",
+  "clickup",
+  "workflow",
+  "communication",
+  "microsoft",
+  "microsoft_teams",
+  "teams",
+  "granola",
+  "mail",
+  "mail_share",
+  "chat",
+  "task_outcome",
+  "backfill",
+  "meta_lead_ad",
+  "booking",
+  "proposal_page",
+  "meeting",
+  "parallel",
+  "readwise",
+  "activity_pad",
+  "shortcut",
+  "contact_email",
+  "csv",
+  "linkedin_extension",
+  "context.dev",
+  "enrichment",
+  "context",
+  "hunter",
+  "enrow",
+  "icypeas",
+] as const;
+
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]/g;
+
 export function agentSource(source: string | null | undefined) {
-  return source?.trim().toLowerCase() === "web" ? null : source;
+  if (typeof source !== "string") return source;
+  const plain = source.normalize("NFKC").replace(INVISIBLE, "").trim().toLowerCase();
+  return (SYSTEM_SOURCES as readonly string[]).includes(plain) ? null : source;
 }
 
 const LEADING_DATE = /^\s*(\d{4}-\d{2}-\d{2})(?![\d])/;
@@ -254,6 +295,7 @@ const taskWriteSchema = z
     description: nullableText,
     dueAt: nullableDate,
     dueDate: nullableDate,
+    dueHasTime: z.boolean().optional(),
     durationMinutes: z.number().int().optional(),
     remindMinutes: z.number().int().nullable().optional(),
     priority: z.enum(TASK_PRIORITIES).optional(),

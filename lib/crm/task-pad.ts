@@ -4,11 +4,11 @@ import { isUuid } from "@/lib/crm/mutate";
 import { likePattern } from "@/lib/crm/normalize";
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
 import { assertScope } from "@/lib/crm/scopes";
-import { detectTaskRecordsInDb, folded, memberNames, mentionsName, TEXT_LIMIT, type DetectedTaskLinks, type LinkedRecord } from "@/lib/crm/task-detect";
+import { detectTaskRecordsInDb, folded, memberNames, mentionsName, quotesFoldedSql, TEXT_LIMIT, type DetectedTaskLinks, type LinkedRecord } from "@/lib/crm/task-detect";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
-import { londonParts, parseTaskText } from "@/lib/task-pad";
+import { londonParts, namePattern, parseTaskText } from "@/lib/task-pad";
 
 export type PadRecord = { id: string; name: string };
 
@@ -38,7 +38,7 @@ export const NO_PAD_DETECTION: PadDetection = {
 };
 
 const ASK_LIMIT = 6;
-const NAME_WORD = /\p{Lu}[\p{L}'’-]*/gu;
+const NAME_WORD = /\p{Lu}[\p{L}'’‘ʼ‛-]*/gu;
 
 type Range = { start: number; end: number };
 
@@ -53,7 +53,7 @@ function nameRanges(text: string, names: Iterable<string>) {
   for (const name of names) {
     const clean = name.trim();
     if (!clean) continue;
-    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}-])(${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?=$|[^\\p{L}\\p{N}-])`, "giu");
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}-])(${namePattern(clean)})(?=$|[^\\p{L}\\p{N}-])`, "giu");
     for (const match of text.matchAll(pattern)) {
       const start = (match.index ?? 0) + match[1].length;
       ranges.push({ start, end: start + match[2].length });
@@ -65,7 +65,7 @@ function nameRanges(text: string, names: Iterable<string>) {
 export function padNameWords(text: string) {
   const words: { word: string; leading: boolean }[] = [];
   for (const match of text.matchAll(NAME_WORD)) {
-    const word = match[0].replace(/['’]s$/u, "").replace(/['’-]+$/u, "");
+    const word = match[0].replace(/['’‘ʼ‛]s$/u, "").replace(/['’‘ʼ‛-]+$/u, "");
     if (word.length < 2) continue;
     const before = text.slice(0, match.index ?? 0).trimEnd();
     const leading = before === "" || /[.!?:;]$/u.test(before);
@@ -94,7 +94,7 @@ const NAME_ROW_SQL = `select c.id, trim(concat_ws(' ', nullif(trim(c.first_name)
   left join crm.companies co on co.id = c.company_id`;
 
 const NOT_MEMBER = (members: string) =>
-  `lower(regexp_replace(trim(concat_ws(' ', c.first_name, c.last_name)), '\\s+', ' ', 'g')) <> all(${members}::text[])`;
+  `lower(regexp_replace(${quotesFoldedSql("trim(concat_ws(' ', c.first_name, c.last_name))")}, '\\s+', ' ', 'g')) <> all(${members}::text[])`;
 
 function option(row: NameRow): PadOption {
   return {
@@ -120,7 +120,7 @@ async function nameMatches(db: Db, workspaceId: string, text: string, companyId:
        from crm.contacts c
        left join crm.companies co on co.id = c.company_id
        where c.workspace_id = $1 and c.archived_at is null
-         and (trim(c.first_name) = w.word or (trim(c.last_name) = w.word and not (w.word = any($5::text[]))))
+         and (${quotesFoldedSql("trim(c.first_name)")} = ${quotesFoldedSql("w.word")} or (${quotesFoldedSql("trim(c.last_name)")} = ${quotesFoldedSql("w.word")} and not (w.word = any($5::text[]))))
          and ${NOT_MEMBER("$3")}
        order by coalesce(c.company_id = $4::uuid, false) desc, c.updated_at desc, c.id
        limit ${ASK_LIMIT + 1}

@@ -109,7 +109,7 @@ export async function taskDetail(actor: Actor, taskId: string, options: { anyWor
   if (!isUuid(taskId)) throw notFound("task");
   const home = actor.type === "user" && options.anyWorkspace ? await actorForTask(actor, taskId) : actor;
   return withActor(home, async (db) => {
-    const task = await readTaskInDb(db, taskId);
+    const task = await readTaskInDb(db, home, taskId);
     if (!task || task.workspaceId !== home.workspaceId) throw notFound("task");
     return taskDetailInDb(db, home, task, actor);
   });

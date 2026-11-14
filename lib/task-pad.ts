@@ -264,12 +264,22 @@ export function stripMention(text: string, caret: number) {
   return { start: at, end: caret, query };
 }
 
+const APOSTROPHES = /['\u2019\u2018\u02bc\u201b]/g;
+
+export function straightQuotes(value: string) {
+  return value.replace(APOSTROPHES, "'");
+}
+
+export function namePattern(name: string) {
+  return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(APOSTROPHES, "['\u2019\u2018\u02bc\u201b]");
+}
+
 export function nameMarks(text: string, names: string[], kind: "record" | "ask" = "record"): PadMark[] {
   const marks: PadMark[] = [];
   for (const name of names) {
     const clean = name.trim();
     if (clean.length < 2) continue;
-    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])(${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?=$|[^\\p{L}\\p{N}])`, "giu");
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])(${namePattern(clean)})(?=$|[^\\p{L}\\p{N}])`, "giu");
     for (const match of text.matchAll(pattern)) {
       const start = (match.index ?? 0) + match[1].length;
       marks.push({ start, end: start + match[2].length, kind });

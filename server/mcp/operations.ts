@@ -13,6 +13,7 @@ import { archiveTask, updateTask } from "@/lib/crm/tasks";
 import { WEBHOOK_EVENTS, createWebhook, listWebhookDeliveries } from "@/lib/crm/webhooks";
 import { OPPORTUNITY_STATUSES, TASK_PRIORITIES, type Actor } from "@/lib/crm/types";
 import { agentSource } from "@/lib/crm/validation";
+import { withTaskWorkspaceHint } from "@/lib/crm/workspaces";
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -133,6 +134,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         description: z.string().nullable().optional(),
         dueDate: z.string().nullable().optional().describe("Due day only, YYYY-MM-DD in London time. Use this unless the person gave a time."),
         dueAt: z.string().nullable().optional().describe("Due date and time, such as 2026-11-14T14:30 (London time) or an ISO instant. Only when the person gave a time. A bare date means date only. A time on a task owned by someone else (anyone, for an agent token) is saved as date only. Send dueDate or dueAt, not both."),
+        dueHasTime: z.boolean().optional().describe("Only true when the person asked for midnight (00:00) on a task due that day with no time. Without it, a dueAt at the same moment as a date-only task's own dueAt is read as unchanged and the task stays date only."),
         durationMinutes: z.number().int().min(5).max(480).optional().describe("How long the task takes in minutes, 5 to 480. New tasks take 15. Only the owner can change it on a timed task."),
         priority: z.enum(TASK_PRIORITIES).optional(),
         ownerId: z.uuid().nullable().optional(),
@@ -147,13 +149,14 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     async (args) =>
       run(async () =>
         (
-          await updateTask(
+          await withTaskWorkspaceHint(actor, args.id, () => updateTask(
             actor,
             args.id,
             {
               title: args.title,
               description: args.description,
               dueAt: args.dueAt,
+              dueHasTime: args.dueHasTime,
               dueDate: args.dueDate,
               durationMinutes: args.durationMinutes,
               priority: args.priority,
@@ -165,7 +168,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               mailThreadKey: args.mailThreadKey,
             },
             { provenance: provenance(args, "update_task") },
-          )
+          ))
         ).body,
       ),
   );
@@ -178,7 +181,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     },
     async (args) =>
       run(async () =>
-        (await archiveTask(actor, args.id, { provenance: provenance(args, "archive_task") })).body,
+        (await withTaskWorkspaceHint(actor, args.id, () => archiveTask(actor, args.id, { provenance: provenance(args, "archive_task") }))).body,
       ),
   );
 

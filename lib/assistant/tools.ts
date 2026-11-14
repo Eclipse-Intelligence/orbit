@@ -272,6 +272,61 @@ function taskEmailLines(args: Record<string, unknown>) {
   return [nullableStr(args.emailId) ? "Pinned to the email's thread" : "Email: none"];
 }
 
+const TASK_SELF_KEY = "task:self";
+const TASK_CLICKUP_KEY = "task:clickup";
+const TASK_ROLE_KEY = "task:role";
+
+function dueDayOf(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const reading = readDateTime(value);
+  return reading.ok ? taskDueDay(reading.date.toISOString()) : null;
+}
+
+type CurrentTask = { ownerId: string | null; timed: boolean; dueAt: string | null };
+
+function echoesDay(args: Args, current: CurrentTask | null) {
+  if (!current || current.timed || !current.dueAt || args.dueHasTime === true || typeof args.dueAt !== "string") return false;
+  const reading = readDateTime(args.dueAt);
+  return reading.ok && reading.date.getTime() === Date.parse(current.dueAt);
+}
+
+function taskTimingLines(args: Args, name: Names, current: CurrentTask | null, creating = false) {
+  const self = detail(name, TASK_SELF_KEY);
+  const owner = args.ownerId === null ? null : (optionalStr(args.ownerId) ?? current?.ownerId ?? null);
+  const ownerChanges = (args.ownerId === null || optionalStr(args.ownerId) !== undefined) && owner !== (current?.ownerId ?? null);
+  const someoneElse = Boolean(owner && self && owner !== self);
+  const timed = hasTime(args.dueAt) || (args.dueAt === undefined && args.dueDate === undefined && Boolean(current?.timed));
+  const dayOnly = someoneElse && timed && (ownerChanges || args.dueAt !== undefined);
+  if (echoesDay(args, current)) {
+    const day = dueDayOf(args.dueAt);
+    return [day ? `Due: ${formatDateLabel(day)}` : "", ...fieldLines(args, { durationMinutes: "Duration", remindMinutes: "Reminder" })];
+  }
+  if (!dayOnly) {
+    return [
+      ...fieldLines(args, { dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder" }),
+      ...(creating ? [] : clearedLines(args, { dueDate: "Due", dueAt: "Due", remindMinutes: "Reminder" })),
+    ];
+  }
+  const day = dueDayOf(args.dueAt);
+  return [
+    day ? `Due: ${formatDateLabel(day)}` : "",
+    ...fieldLines(args, { durationMinutes: "Duration" }),
+    "Date only: only the owner sets a time",
+  ];
+}
+
+function clearedLines(args: Args, labels: Record<string, string>) {
+  const given = (key: string) => args[key] !== undefined && args[key] !== null && args[key] !== "";
+  const entries = Object.entries(labels);
+  return [
+    ...new Set(
+      entries
+        .filter(([key, label]) => args[key] === null && !entries.some(([other, otherLabel]) => other !== key && otherLabel === label && given(other)))
+        .map(([, label]) => `${label}: none`),
+    ),
+  ];
+}
+
 function taskRelinkLines(args: Record<string, unknown>, name: Names) {
   return TASK_LINK_KEYS.filter((key) => args[key] !== undefined).map((key) => {
     const id = nullableStr(args[key]);
@@ -551,23 +606,31 @@ export function taskTimingRefusal(name: string, args: Args): { error: string; fi
   return null;
 }
 
+export const NO_TIME_FOR_REMINDER = "That's the task's day with no time, so it can't have a reminder. Send dueHasTime true to set midnight.";
+
 export async function taskTimingRefusalFor(actor: UserActor, name: string, args: Args) {
   const refused = taskTimingRefusal(name, args);
   if (refused || name !== "update_task" || typeof args.remindMinutes !== "number") return refused;
-  if (args.dueAt !== undefined || args.dueDate !== undefined) return null;
+  if (args.dueDate !== undefined) return null;
+  const echoing = typeof args.dueAt === "string" && args.dueHasTime !== true;
+  if (args.dueAt !== undefined && !echoing) return null;
   const id = typeof args.taskId === "string" ? args.taskId.trim() : "";
   if (!isUuid(id)) return null;
-  const timed = await withActor(actor, async (db) => {
-    const result = await db.query<{ due_has_time: boolean }>("select due_has_time from crm.tasks where id = $1 and workspace_id = $2", [id, actor.workspaceId]);
-    return result.rows[0]?.due_has_time ?? null;
+  const current = await withActor(actor, async (db) => {
+    const result = await db.query<{ due_has_time: boolean; due_at: Date | null }>("select due_has_time, due_at from crm.tasks where id = $1 and workspace_id = $2", [id, actor.workspaceId]);
+    return result.rows[0] ?? null;
   }).catch(() => null);
-  return timed === false ? { error: "Pick a time for the reminder.", field: "remindMinutes" } : null;
+  if (!current || current.due_has_time) return null;
+  if (!echoing) return { error: "Pick a time for the reminder.", field: "remindMinutes" };
+  const reading = readDateTime(String(args.dueAt));
+  if (!reading.ok || !current.due_at || reading.date.getTime() !== current.due_at.getTime()) return null;
+  return { error: NO_TIME_FOR_REMINDER, field: "dueHasTime" };
 }
 
-function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null } {
+function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null; dueHasTime?: true } {
   const refused = taskTimingRefusal("create_task", { dueDate: args.dueDate, dueAt: args.dueAt });
   if (refused) throw new CrmError("invalid_input", refused.error, 400, { field: refused.field });
-  if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null };
+  if (args.dueAt !== undefined && args.dueAt !== null) return { dueAt: nullableStr(args.dueAt) ?? null, ...(args.dueHasTime === true && hasTime(args.dueAt) ? { dueHasTime: true as const } : {}) };
   if (args.dueDate !== undefined) return { dueDate: nullableStr(args.dueDate) ?? null };
   if (args.dueAt !== undefined) return { dueAt: null };
   return {};
@@ -581,10 +644,18 @@ function pushIfLinked(actor: UserActor, task: Task) {
   );
 }
 
+function dueLabel(value: string) {
+  const reading = readDateTime(value);
+  if (!reading.ok) return value;
+  if (reading.dateOnly) return formatDateLabel(taskDueDay(reading.date.toISOString()) ?? value);
+  return formatDateTimeLabel(dateTimeInputValue(reading.date.toISOString()));
+}
+
 function shown(key: string, value: unknown) {
   if (Array.isArray(value)) return value.join(", ");
   const text = String(value);
-  if (key === "dueAt" || key === "startLocal") return formatDateTimeLabel(text);
+  if (key === "dueAt") return dueLabel(text);
+  if (key === "startLocal") return formatDateTimeLabel(text);
   if (key === "expectedCloseDate") return formatDateLabel(text);
   if (key === "dueDate") return formatDateLabel(text);
   if (key === "durationMinutes" && typeof value === "number") return durationLabel(value);
@@ -609,6 +680,27 @@ function nameList(ids: string[], name: Names, noun: string) {
 
 function scheduleItems(value: unknown) {
   return (Array.isArray(value) ? value : []).filter((item): item is Args => Boolean(item) && typeof item === "object");
+}
+
+async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
+  const id = str(value);
+  if (!isUuid(id)) return { [TASK_SELF_KEY]: actor.userId };
+  const rows = await withActor(actor, (db) =>
+    db.query<{ owner_id: string | null; created_by_user_id: string | null; timed: boolean; due_at: Date | null }>(
+      "select owner_id, created_by_user_id, (due_has_time and due_at is not null) as timed, due_at from crm.tasks where id = $1 and workspace_id = $2",
+      [id, actor.workspaceId],
+    ),
+  );
+  const row = rows.rows[0];
+  const self = { [TASK_SELF_KEY]: actor.userId, [TASK_ROLE_KEY]: actor.role };
+  if (!row) return self;
+  return {
+    ...self,
+    [`${id}:owner`]: row.owner_id ?? "none",
+    [`${id}:creator`]: row.created_by_user_id ?? "none",
+    [`${id}:timed`]: row.timed ? "yes" : "no",
+    ...(row.due_at ? { [`${id}:dueAt`]: row.due_at.toISOString() } : {}),
+  };
 }
 
 async function scheduleDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
@@ -1082,11 +1174,12 @@ const TASK_FIELDS = {
   description: { type: "string", description: "Extra detail, or null to clear it." },
   dueDate: { type: "string", description: "Due day only, as YYYY-MM-DD in London time, or null to clear. Use this unless the user gave a time." },
   dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear. Only when the user gave a time; it puts the task on their calendar. A time on a task someone else owns is saved as date only. Send dueDate or dueAt, not both." },
+  dueHasTime: { type: "boolean", description: "Only true when the user asked for midnight (00:00) on a task due that day with no time. Without it, a dueAt at the same moment as a date-only task's own dueAt is read as unchanged and the task stays date only." },
   durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15. Only the owner can change it on a timed task." },
   remindMinutes: {
     type: "integer",
     enum: REMINDER_OPTIONS.map((option) => option.minutes),
-    description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080. Needs a due time (dueAt).",
+    description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080, or null to remove it. Needs a due time (dueAt).",
   },
   priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent it is: low, normal or high. New tasks are normal unless set." },
   ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
@@ -3441,14 +3534,19 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["title"],
     },
+    details: async (actor, args) => ({
+      [TASK_SELF_KEY]: actor.userId,
+      ...(args.sendToClickUp !== false && (await getClickUpPicker(actor).catch(() => null)) ? { [TASK_CLICKUP_KEY]: "yes" } : {}),
+    }),
     describe: (args, name) => ({
       title: `Create task: ${str(args.title)}`,
       lines: [
-        ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner", dueDate: "Due", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
-        ...fieldLines(args, { durationMinutes: "Duration", remindMinutes: "Reminder" }),
+        ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner" }, name),
+        ...taskTimingLines(args, name, null, true),
+        ...fieldLines(args, { description: "Detail", priority: "Priority" }),
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
         ...taskEmailLines(args),
-        `ClickUp: ${args.sendToClickUp === false ? "no" : "yes"}`,
+        args.sendToClickUp === false ? "ClickUp: no" : detail(name, TASK_CLICKUP_KEY) ? "ClickUp: yes" : "",
       ],
     }),
     run: async (actor, args) => {
@@ -3483,6 +3581,7 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         taskId: idParam("Task id. Send this or schedule, not both."),
         ...TASK_FIELDS,
+        ownerId: { type: "string", description: "Team member id from list_team_members to assign it to, or null to unassign it." },
         completed: { type: "boolean", description: "True marks the task done; false reopens a done task." },
         contactId: { type: "string", description: "Person id the task is about, or null to take the person off." },
         companyId: { type: "string", description: "Company id the task is about, or null to take the company off." },
@@ -3504,14 +3603,26 @@ const TOOL_LIST: AssistantTool[] = [
         },
       },
     },
-    details: async (actor, args) => (args.schedule !== undefined && args.schedule !== null ? scheduleDetails(actor, args.schedule) : {}),
+    details: async (actor, args) => (args.schedule !== undefined && args.schedule !== null ? scheduleDetails(actor, args.schedule) : taskOwnerDetails(actor, args.taskId)),
     describe: (args, name) => {
       if (args.schedule !== undefined && args.schedule !== null) return describeSchedule(args.schedule, name);
+      const id = str(args.taskId);
+      const owner = detail(name, `${id}:owner`);
+      const current = owner ? { ownerId: owner === "none" ? null : owner, timed: detail(name, `${id}:timed`) === "yes", dueAt: detail(name, `${id}:dueAt`) || null } : null;
+      const self = detail(name, TASK_SELF_KEY);
+      const role = detail(name, TASK_ROLE_KEY);
+      const creator = detail(name, `${id}:creator`);
+      const losesChange = args.ownerId === null && Boolean(self) && owner === self && role === "member" && creator !== self;
       return {
         title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
         lines: [
-          ...fieldLines(args, { title: "Title", dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
+          ...fieldLines(args, { title: "Title" }),
+          ...taskTimingLines(args, name, current),
+          ...fieldLines(args, { priority: "Priority", description: "Detail" }),
+          ...clearedLines(args, { description: "Detail" }),
           ...fieldLines(args, { ownerId: "Owner" }, name),
+          ...clearedLines(args, { ownerId: "Owner" }),
+          losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
         ],
@@ -3538,7 +3649,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(args.durationMinutes !== undefined && typeof args.durationMinutes === "number" ? { durationMinutes: args.durationMinutes } : {}),
           ...(args.remindMinutes !== undefined ? { remindMinutes: typeof args.remindMinutes === "number" ? args.remindMinutes : null } : {}),
           ...(args.priority !== undefined ? { priority: oneOf(args.priority, ["low", "normal", "high"] as const) } : {}),
-          ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
+          ...(args.ownerId === null ? { ownerId: null } : optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
           ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
           ...taskRelinkArgs(args),
           ...(await taskEmailArgs(actor, args)),

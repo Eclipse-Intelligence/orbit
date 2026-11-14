@@ -202,7 +202,7 @@ describe("date-only and timed tasks", () => {
     const echoed = (await updateTask(mark, task.id, { dueAt: task.dueAt, title: "Echoed day, renamed" })).body.task;
     assert.equal(echoed.dueHasTime, false);
     assert.equal(echoed.scheduledBy, null);
-    await assert.rejects(updateTask(mark, task.id, { dueAt: task.dueAt, remindMinutes: 15 }), /Pick a time for the reminder\./);
+    await assert.rejects(updateTask(mark, task.id, { dueAt: task.dueAt, remindMinutes: 15 }), /This task has no time\. Send dueHasTime: true to set one, then a reminder\./);
     const moved = (await updateTask(mark, task.id, { dueAt: "2026-12-10T16:00" })).body.task;
     assert.equal(moved.dueHasTime, true);
   });

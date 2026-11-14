@@ -1163,7 +1163,7 @@ describe("clickup per workspace", () => {
       ],
     );
 
-    await updateTask(eclipse, there.body.task.id, { title: "Consultancy follow-up, renamed" });
+    await updateTask(ridgeon, there.body.task.id, { title: "Consultancy follow-up, renamed" });
     assert.equal(await pushClickUpTask(eclipse, there.body.task.id, { fetchImpl }), "pushed");
     const remote = fake.tasks.get((await taskRow(there.body.task.id)).clickup_task_id!)!;
     assert.equal(remote.name, "Consultancy follow-up, renamed");

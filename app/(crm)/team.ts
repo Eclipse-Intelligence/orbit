@@ -78,7 +78,7 @@ export async function setRoleAction(userId: string, role: string): Promise<{ err
 export async function removeMemberAction(userId: string): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
-    await removeMember(user, userId);
+    await removeMember(user, userId, { operation: "remove_member", source: "web" });
     revalidatePath("/", "layout");
     return {};
   } catch (error) {

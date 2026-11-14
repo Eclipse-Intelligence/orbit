@@ -453,7 +453,7 @@ export async function prepareTask(actor: UserActor, taskId: string, options: { d
   if (typeof taskId !== "string" || !isUuid(taskId)) throw notFound("task");
   if (!aiReady()) throw new CrmError("unavailable", notSetUp("AI", "LLM_API_KEY", actor), 503);
   const found = await withActor(actor, async (db) => {
-    const task = await readTaskInDb(db, taskId);
+    const task = await readTaskInDb(db, actor, taskId);
     if (!task || task.workspaceId !== actor.workspaceId) throw notFound("task");
     const refused = cannotPrepare(task);
     if (refused) throw refused;
@@ -535,7 +535,7 @@ async function noteFailure(actor: UserActor, taskId: string, kind: PreparationKi
 
 async function morningMaterial(actor: UserActor, taskId: string, checkedAt: Date) {
   return withActor(actor, async (db) => {
-    const task = await readTaskInDb(db, taskId);
+    const task = await readTaskInDb(db, actor, taskId);
     if (!task || task.workspaceId !== actor.workspaceId || task.ownerId !== actor.userId || cannotPrepare(task)) return null;
     const { kind, detail, current } = await materialInDb(db, actor, task);
     if (detail.preparation && !detail.preparation.stale && detail.preparation.kind === kind) {
