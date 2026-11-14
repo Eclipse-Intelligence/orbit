@@ -1,6 +1,6 @@
 import { after } from "next/server";
 import type { Db } from "@/lib/db/pool";
-import { getPool } from "@/lib/db/pool";
+import { assertNoHeldClient, getPool, holdingClient } from "@/lib/db/pool";
 import { takeAfterCommit } from "@/lib/crm/after-commit";
 import { takeWebhooksQueued } from "@/lib/crm/webhook-queue";
 import { deliverDueWebhooks } from "@/lib/crm/webhooks";
@@ -50,16 +50,17 @@ async function inActorTransaction<T>(
   appStep: ((db: Db) => Promise<void>) | null,
   fn: (db: Db) => Promise<T>,
 ): Promise<T> {
+  assertNoHeldClient();
   const client = await getPool().connect();
   try {
     if (appStep) {
       await client.query("begin");
-      await appStep(client);
+      await holdingClient(() => appStep(client));
       await client.query(actorSession(client, actor));
     } else {
       await client.query(`begin; ${actorSession(client, actor)}`);
     }
-    const result = await fn(client);
+    const result = await holdingClient(() => fn(client));
     await client.query("commit");
     if (takeWebhooksQueued(client)) scheduleWebhooks();
     runAfterCommit(takeAfterCommit(client));
