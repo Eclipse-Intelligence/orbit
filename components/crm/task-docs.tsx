@@ -27,6 +27,10 @@ const MOVE_SLOP = 10;
 
 const CHIP = "bg-secondary text-foreground inline-flex max-w-full items-center gap-1.5 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 hit [@media(pointer:coarse)]:h-7 [@media(pointer:coarse)]:pr-2.5 [@media(pointer:coarse)]:pl-2";
 
+export function linksDocsAs(viewerId: string, task: Pick<Task, "ownerId" | "createdByUserId">) {
+  return task.ownerId === viewerId || task.createdByUserId === viewerId;
+}
+
 export function othersSeeTask(task: Pick<Task, "ownerId" | "createdByUserId">, viewerId: string, tagged: string[]) {
   return Boolean((task.ownerId && task.ownerId !== viewerId) || (task.createdByUserId && task.createdByUserId !== viewerId) || tagged.some((person) => person !== viewerId));
 }

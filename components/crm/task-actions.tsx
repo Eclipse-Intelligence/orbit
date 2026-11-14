@@ -561,7 +561,7 @@ export function TaskAct({ task, here, canChange }: { task: Task; here?: TitleHer
   );
 }
 
-export function EditLinks({ task, warn }: { task: Task; warn: boolean }) {
+export function EditLinks({ task, warn, docs }: { task: Task; warn: boolean; docs: boolean }) {
   const router = useRouter();
   const group = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
@@ -630,7 +630,7 @@ export function EditLinks({ task, warn }: { task: Task; warn: boolean }) {
           onClosed={() => refocus("opportunity")}
         />
       </span>
-      <EditTaskDocs task={task} warn={warn} />
+      {docs && <EditTaskDocs task={task} warn={warn} />}
       {busy && (
         <span role="status" className="caption-style text-subtle">
           Saving…

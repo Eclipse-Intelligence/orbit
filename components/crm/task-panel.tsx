@@ -16,7 +16,7 @@ import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
-import TaskDocs, { othersSeeTask } from "@/components/crm/task-docs";
+import TaskDocs, { linksDocsAs, othersSeeTask } from "@/components/crm/task-docs";
 import { untagTaskAction } from "@/app/(crm)/discussions";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -313,7 +313,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
                       {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
                     </div>
                   )}
-                  {recordNotes && <TaskDocs task={task} canChange={canChange && !done} warn={othersSeeTask(task, viewer.id, tagged)} />}
+                  {recordNotes && <TaskDocs task={task} canChange={canChange && !done && linksDocsAs(viewer.id, task)} warn={othersSeeTask(task, viewer.id, tagged)} />}
                   <TaskSection label="Discussion" count={discussion.count}>
                     <DiscussionMessages discussion={discussion} />
                   </TaskSection>

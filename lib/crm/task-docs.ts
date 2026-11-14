@@ -58,17 +58,29 @@ export async function linkableDocIdsInDb(db: Db, actor: Actor, workspaceId: stri
   return ids.filter((id) => linkable.has(id));
 }
 
+export const DOCS_OWNER_ONLY = "Only the task's assignee or creator can change its docs.";
+
+export type TaskDocRights = { ownerId: string | null; createdByUserId: string | null; createdByAgentId: string | null };
+
+export function canLinkTaskDocs(actor: Actor, task: TaskDocRights) {
+  if (actor.type === "agent") return task.createdByAgentId === actor.agentId;
+  return task.ownerId === actor.userId || task.createdByUserId === actor.userId;
+}
+
 export async function planTaskDocsInDb(
   db: Db,
   actor: Actor,
   workspaceId: string,
   current: string[],
   wanted: string[] | undefined,
-  options: { lenient?: boolean } = {},
+  options: { lenient?: boolean; task?: TaskDocRights } = {},
 ): Promise<TaskDocsPlan | null> {
   if (wanted === undefined) return null;
   let add = wanted.filter((id) => !current.includes(id));
   const remove = current.filter((id) => !wanted.includes(id));
+  if ((add.length > 0 || remove.length > 0) && options.task && !canLinkTaskDocs(actor, options.task)) {
+    throw new CrmError("forbidden", DOCS_OWNER_ONLY, 403, { field: "docIds" });
+  }
   if (add.length > 0 && !options.lenient && !hasScope(actor.scopes, "docs:read")) {
     throw new CrmError("forbidden", "This token can't read docs, so it can't link them to a task.", 403, { field: "docIds" });
   }
@@ -86,7 +98,8 @@ export async function planTaskDocsInDb(
 
 export async function writeTaskDocsInDb(db: Db, actor: Actor, task: { id: string; workspaceId: string }, plan: TaskDocsPlan) {
   if (plan.remove.length > 0) {
-    await db.query("delete from crm.task_docs where task_id = $1 and page_id = any($2::uuid[])", [task.id, plan.remove]);
+    const removed = await db.query("delete from crm.task_docs where task_id = $1 and page_id = any($2::uuid[]) returning page_id", [task.id, plan.remove]);
+    if ((removed.rowCount ?? 0) < plan.remove.length) throw new CrmError("forbidden", DOCS_OWNER_ONLY, 403, { field: "docIds" });
   }
   if (plan.add.length > 0) {
     const by = actorIds(actor);

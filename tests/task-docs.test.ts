@@ -214,12 +214,15 @@ describe("linking docs to a task", () => {
     await archiveDoc(mark, archived);
     await assert.rejects(updateTask(mark, task.id, { docIds: [archived] }), invalid("docIds"));
     await assert.rejects(updateTask(readOnlyAgent, task.id, { docIds: [shared] }), forbidden);
-    await assert.rejects(updateTask(agent, task.id, { docIds: [privateDoc] }), invalid("docIds"));
-    const viaAgent = (await updateTask(agent, task.id, { docIds: [shared] })).body.task;
+    await assert.rejects(updateTask(agent, task.id, { docIds: [shared] }), forbidden);
+    const agentTask = (await createTask(agent, { title: "Agent's own task" })).body.task;
+    await assert.rejects(updateTask(agent, agentTask.id, { docIds: [privateDoc] }), invalid("docIds"));
+    const viaAgent = (await updateTask(agent, agentTask.id, { docIds: [shared] })).body.task;
     assert.deepEqual(viaAgent.docIds, [shared]);
-    const agentRow = await sql<{ created_by: string | null; created_by_agent_id: string | null }>("select created_by, created_by_agent_id from crm.task_docs where task_id = $1", [task.id]);
+    const agentRow = await sql<{ created_by: string | null; created_by_agent_id: string | null }>("select created_by, created_by_agent_id from crm.task_docs where task_id = $1", [agentTask.id]);
     assert.deepEqual(agentRow, [{ created_by: null, created_by_agent_id: agent.agentId }]);
-    assert.deepEqual((await updateTask(readOnlyAgent, task.id, { docIds: [] })).body.task.docIds, []);
+    await assert.rejects(updateTask(readOnlyAgent, agentTask.id, { docIds: [] }), forbidden);
+    assert.deepEqual((await updateTask(agent, agentTask.id, { docIds: [] })).body.task.docIds, []);
   });
 
   it("needs the same rights as editing the task's links, and keeps a private doc a teammate can't read when they change other links", async () => {
@@ -519,6 +522,22 @@ describe("task docs under review", () => {
     assert.equal((await sql("select 1 from pg_trigger where tgname = 'pages_task_docs_move'")).length, 0);
   });
 
+  it("lets only the task's owner or creator change its docs, never an admin who is neither", async () => {
+    const ada = await join(await createUser("ada@docs-tasks.test", "Ada Admin"), mark, "admin");
+    const task = (await createTask(mark, { title: "Admin can't link", docIds: [shared] })).body.task;
+    await assert.rejects(updateTask(ada, task.id, { docIds: [shared, privateDoc] }), forbidden);
+    await assert.rejects(updateTask(ada, task.id, { docIds: [] }), forbidden);
+    await assert.rejects(changeTaskDoc(ada, task.id, shared, "unlink", WEB), forbidden);
+    await assert.rejects(
+      queryAsUser(ada.userId, "insert into crm.task_docs (task_id, page_id, workspace_id, created_by) values ($1, $2, $3, $4)", [task.id, privateDoc, mark.workspaceId, ada.userId]),
+      /row-level security/,
+    );
+    assert.deepEqual(await queryAsUser(ada.userId, "delete from crm.task_docs where task_id = $1 returning page_id", [task.id]), []);
+    assert.deepEqual((await getTask(mark, task.id)).docIds, [shared]);
+    const renamed = (await updateTask(ada, task.id, { title: "Admin renamed it" })).body.task;
+    assert.deepEqual(renamed.docIds, [shared]);
+  });
+
   it("answers invalid_input on docIds when the link write itself fails", async () => {
     const task = (await createTask(mark, { title: "Write failure" })).body.task;
     await assert.rejects(
@@ -606,19 +625,21 @@ describe("task docs under review", () => {
     await addTaskParticipants(mark, task.id, [priya.userId]);
     await assert.rejects(updateTask(priya, task.id, { docIds: [shared] }), forbidden);
     const readOnly = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"], "No docs");
+    const own = (await createTask(readOnly.actor, { title: "No docs agent's task" })).body.task;
     const patched = await restPatchTask(
-      new Request(`http://crm.test/api/v1/tasks/${task.id}`, {
+      new Request(`http://crm.test/api/v1/tasks/${own.id}`, {
         method: "PATCH",
         headers: { authorization: `Bearer ${readOnly.token}`, "content-type": "application/json" },
         body: JSON.stringify({ docIds: [shared] }),
       }),
-      { params: Promise.resolve({ id: task.id }) },
+      { params: Promise.resolve({ id: own.id }) },
     );
     assert.equal(patched.status, 403);
-    const viaMcp = await mcpCall(readOnly.actor, "update_next_action", { id: task.id, docIds: [shared] });
+    assert.match(await patched.text(), /can't read docs/);
+    const viaMcp = await mcpCall(readOnly.actor, "update_next_action", { id: own.id, docIds: [shared] });
     assert.equal(viaMcp.error, true);
     assert.match(viaMcp.text, /can't read docs/);
-    assert.deepEqual((await getTask(mark, task.id)).docIds, []);
+    assert.deepEqual((await getTask(mark, own.id)).docIds, []);
   });
 
   it("scopes a doc's task list to the caller's workspace and names daily notes by their day", async () => {

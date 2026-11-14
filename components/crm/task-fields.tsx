@@ -14,7 +14,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
-import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
+import { linksDocsAs, othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
 import LinkedText from "@/components/_ui/linked-text";
 import { showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
 import type { Viewer } from "@/components/crm/viewer";
@@ -503,7 +503,7 @@ export function taskIsLinked(task: Task) {
   return Boolean(task.companyId || task.contactId || task.opportunityId || task.mailThreadKey || task.docs.length > 0);
 }
 
-function LinksEditor({ task, canEdit, label, warn }: { task: Task; canEdit: boolean; label?: boolean; warn: boolean }) {
+function LinksEditor({ task, canEdit, label, warn, docs }: { task: Task; canEdit: boolean; label?: boolean; warn: boolean; docs: boolean }) {
   const [editing, setEditing] = useState(false);
   return (
     <div className="flex flex-col gap-2">
@@ -516,7 +516,7 @@ function LinksEditor({ task, canEdit, label, warn }: { task: Task; canEdit: bool
           </Button>
         )}
       </div>
-      {editing && canEdit && <EditLinks task={task} warn={warn} />}
+      {editing && canEdit && <EditLinks task={task} warn={warn} docs={docs} />}
     </div>
   );
 }
@@ -976,7 +976,7 @@ export default function TaskFields({
           )}
         </div>
         <Description details={details} layout="row" />
-        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} />}
+        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} docs={linksDocsAs(viewer.id, task)} />}
         {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
         {details.error && (
           <p role="alert" className="caption-style text-danger">
@@ -1013,7 +1013,7 @@ export default function TaskFields({
       </dl>
       {taskIsLinked(task) && (
         <Section label="Linked">
-          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} warn={othersSeeTask(task, viewer.id, tagged)} />
+          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} warn={othersSeeTask(task, viewer.id, tagged)} docs={linksDocsAs(viewer.id, task)} />
         </Section>
       )}
       <Section label="Description">

@@ -613,7 +613,10 @@ async function applyTask(
     [write.mailThreadKey !== undefined, "mail_thread_key", "mailThreadKey", write.mailThreadKey ?? null],
     [completedAt !== undefined && !sameInstant(completedAt ?? null, iso(current.completed_at)), "completed_at", "completedAt", completedAt ?? null],
   ]);
-  const docs = await planTaskDocsInDb(db, actor, current.workspace_id, current.doc_ids ?? [], write.docIds, { lenient: options.restoring });
+  const docs = await planTaskDocsInDb(db, actor, current.workspace_id, current.doc_ids ?? [], write.docIds, {
+    lenient: options.restoring,
+    task: { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id },
+  });
   if (docs) {
     change.fields.push("docIds");
     if (change.sets.length === 0) change.sets.push("updated_at = now()");

@@ -113,7 +113,6 @@ create policy task_docs_insert on crm.task_docs
         and (
           t.owner_id = (select private.session_user_id())
           or t.created_by_user_id = (select private.session_user_id())
-          or private.is_workspace_admin(t.workspace_id)
         )
     )
     and exists (
@@ -133,7 +132,6 @@ create policy task_docs_delete on crm.task_docs
         and (
           t.owner_id = (select private.session_user_id())
           or t.created_by_user_id = (select private.session_user_id())
-          or private.is_workspace_admin(t.workspace_id)
         )
     )
   );
@@ -153,7 +151,12 @@ create policy task_docs_agent_insert on crm.task_docs
     workspace_id = (select private.request_workspace_id())
     and created_by is null
     and created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
-    and exists (select 1 from crm.tasks t where t.id = task_docs.task_id and t.workspace_id = task_docs.workspace_id)
+    and exists (
+      select 1 from crm.tasks t
+      where t.id = task_docs.task_id
+        and t.workspace_id = task_docs.workspace_id
+        and t.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+    )
     and exists (
       select 1 from crm.pages p
       where p.id = task_docs.page_id and p.workspace_id = task_docs.workspace_id and p.kind = 'note' and p.archived_at is null
@@ -165,7 +168,11 @@ create policy task_docs_agent_delete on crm.task_docs
   for delete to crm_agent
   using (
     workspace_id = (select private.request_workspace_id())
-    and task_id in (select t.id from crm.tasks t)
+    and exists (
+      select 1 from crm.tasks t
+      where t.id = task_docs.task_id
+        and t.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+    )
   );
 
 revoke all on crm.task_docs from public, anon, authenticated, crm_agent;
