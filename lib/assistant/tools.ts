@@ -90,6 +90,7 @@ import type { AiFilter } from "@/lib/ai-fields/params";
 import { displayAiValue, likelihoodText, type AiCell, type AiField } from "@/lib/ai-fields/types";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
+import { clickupUnlinkedLine } from "@/lib/crm/move-lines";
 import { MOVE_LIMIT, moveRecordsToWorkspace, moveTargetNamed, previewMoveToWorkspace, type MovePreview } from "@/lib/crm/move-workspace";
 import { createContactAndFile, fileImport, getConversationImport, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
@@ -1705,6 +1706,7 @@ function moveCardDetails(key: string, preview: MovePreview, copy: boolean, copyD
     [`${key}:merges`]: preview.merges.map((merge) => `${merge.name} merges into existing ${merge.into}`).join("; "),
     [`${key}:deals`]: deals > 0 ? `Opportunities go to ${where ?? "the pipeline"}, ${preview.stageName ?? "the stage with the same name"}` : "",
     [`${key}:boards`]: !copy && preview.boards.length > 0 ? `Comes off ${preview.boards.join(", ")}` : "",
+    [`${key}:clickup`]: !copy ? clickupUnlinkedLine(preview.clickupUnlinked).replace(/\.$/, "") : "",
     [`${key}:behind`]: preview.aiFields.length > 0 ? `Not carried over: AI fields ${preview.aiFields.join(", ")}` : "",
     [`${key}:proposals`]: preview.proposalContacts.length > 0 ? `Goes too, named on a proposal: ${preview.proposalContacts.join(", ")}` : "",
     [`${key}:stays`]: staying ? (copy ? `Not copied: ${staying}` : `Stay here without a company: ${staying}`) : "",
@@ -4157,6 +4159,7 @@ const TOOL_LIST: AssistantTool[] = [
           detail("merges"),
           detail("deals"),
           detail("boards"),
+          detail("clickup"),
           detail("proposals"),
           detail("stays"),
           detail("primary"),

@@ -453,7 +453,8 @@ describe("Link a person and the backfill", () => {
     const unlinked = (await createTask(owner, { title: "Call Lucy Hart again" })).body.task.id;
     await updateTask(owner, unlinked, { contactId: null, companyId: null });
     const fromWorkflow = (await createTask(owner, { title: "Workflow Lucy Hart", contactId: null }, { provenance: { operation: "workflow_create_task", source: "workflow" } })).body.task.id;
-    const reopened = (await createTask(owner, { title: "Reopened Lucy Hart", completed: true })).body.task.id;
+    const reopened = (await createTask(owner, { title: "Reopened Lucy Hart" })).body.task.id;
+    await sql("update crm.tasks set completed_at = now() where id = $1", [reopened]);
     await updateTask(owner, reopened, { completed: false, contactId: null, companyId: null });
     const reopenEvent = await sql<{ event_type: string }>("select event_type from crm.audit_events where entity_id = $1 and event_type <> 'task.created'", [reopened]);
     assert.deepEqual(reopenEvent.map((row) => row.event_type), ["task.reopened"]);

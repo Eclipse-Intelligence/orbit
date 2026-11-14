@@ -301,6 +301,30 @@ function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { owne
 
 export const NO_TIME_FOR_REMINDER = "This task has no time. Send dueHasTime: true to set one, then a reminder.";
 
+export const REMINDER_TIME_PASSED = "That time has passed. Move the task to a later time first, then set the reminder.";
+
+export const CREATE_OPEN = "Create the task, then complete it.";
+
+function assertReminderCanFire(dueAt: string | null | undefined, remindMinutes: number | null | undefined, now = Date.now()) {
+  if (typeof remindMinutes !== "number" || !dueAt || new Date(dueAt).getTime() > now) return;
+  throw new CrmError("invalid_input", REMINDER_TIME_PASSED, 400, { field: "remindMinutes" });
+}
+
+function taskConstraintError(error: unknown): never {
+  if (isPgError(error) && error.code === "23514" && error.constraint === "tasks_reminder_needs_time") {
+    throw new CrmError("invalid_input", "Pick a time for the reminder.", 400, { field: "remindMinutes" });
+  }
+  constraintError(error, "duplicate_task", "A matching task already exists.");
+}
+
+function sameInstant(a: string | null, b: string | null) {
+  return a === null || b === null ? a === b : new Date(a).getTime() === new Date(b).getTime();
+}
+
+function sameId(a: string | null | undefined, b: string | null) {
+  return (a ?? null)?.toLowerCase() === (b ?? null)?.toLowerCase();
+}
+
 export const OWNER_SETS_LENGTH = "Only the owner can change the length of a timed task.";
 
 function resizesSomeoneElsesBlock(actor: Actor, write: PreparedTask, current: TaskRow) {
@@ -410,6 +434,11 @@ async function readTask(db: Db, actor: Actor, id: string) {
   return result.rows[0] ?? null;
 }
 
+async function readTaskForWrite(db: Db, actor: Actor, id: string) {
+  await db.query("select 1 from crm.tasks where id = $1 for no key update", [id]);
+  return readTask(db, actor, id);
+}
+
 export async function createTaskInDb(
   db: Db,
   actor: Actor,
@@ -419,9 +448,11 @@ export async function createTaskInDb(
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
+  if (write.completed && !silent(provenance)) throw new CrmError("invalid_input", CREATE_OPEN, 400, { field: "completed" });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
   if (setsSomeoneElsesTime(actor, write, null)) keepDayOnly(write, { dueAt: null, dueHasTime: false });
   settleReminder(write, { dueHasTime: false });
+  assertReminderCanFire(write.dueAt, write.remindMinutes);
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   if (!options.ownThread) await assertOwnThreadInDb(db, actor, write.mailThreadKey);
   let detectedLinks = Object.keys(options.detectedLinks ?? {});
@@ -483,7 +514,7 @@ export async function createTaskInDb(
     taskAlerts(db, actor, null, task, provenance);
     return (await withMailThreadsInDb(db, actor, [task]))[0];
   } catch (error) {
-    constraintError(error, "duplicate_task", "A matching task already exists.");
+    taskConstraintError(error);
   }
 }
 
@@ -525,6 +556,9 @@ async function applyTask(
     throw new CrmError("forbidden", OWNER_SETS_LENGTH, 403, { field: "durationMinutes" });
   }
   settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
+  if (!options.restoring && typeof write.remindMinutes === "number" && (write.remindMinutes !== current.remind_minutes || write.dueAt !== undefined)) {
+    assertReminderCanFire(write.dueAt === undefined ? iso(current.due_at) : write.dueAt, write.remindMinutes);
+  }
   if (write.mailThreadKey !== undefined && write.mailThreadKey === current.mail_thread_key) delete write.mailThreadKey;
   if (!options.restoring) await assertOwnThreadInDb(db, actor, write.mailThreadKey);
   const links = await resolveLinks(
@@ -549,24 +583,32 @@ async function applyTask(
         : write.completed
           ? new Date().toISOString()
           : null;
+  const relinks = write.companyId !== undefined || write.contactId !== undefined || write.opportunityId !== undefined;
+  const retimes =
+    (write.dueAt !== undefined && !sameInstant(write.dueAt ?? null, iso(current.due_at))) ||
+    (write.dueHasTime !== undefined && write.dueHasTime !== Boolean(current.due_has_time)) ||
+    (write.scheduledBy !== undefined && (write.scheduledBy ?? null) !== (current.scheduled_by ?? null));
   const change = assignColumns([
-    [write.title !== undefined, "title", "title", write.title ?? null],
-    [write.description !== undefined, "description", "description", write.description ?? null],
-    [write.dueAt !== undefined, "due_at", "dueAt", write.dueAt ?? null],
-    [write.dueHasTime !== undefined, "due_has_time", "dueHasTime", write.dueHasTime ?? false],
-    [write.scheduledBy !== undefined, "scheduled_by", "scheduledBy", write.scheduledBy ?? null],
-    [write.durationMinutes !== undefined, "duration_minutes", "durationMinutes", write.durationMinutes ?? DEFAULT_TASK_DURATION],
-    [write.remindMinutes !== undefined, "remind_minutes", "remindMinutes", write.remindMinutes ?? null],
-    [write.priority !== undefined, "priority", "priority", write.priority ?? null],
-    [write.ownerId !== undefined, "owner_id", "ownerId", write.ownerId ?? null],
-    [write.companyId !== undefined || write.contactId !== undefined || write.opportunityId !== undefined, "company_id", "companyId", links.companyId],
-    [write.contactId !== undefined, "contact_id", "contactId", links.contactId],
-    [write.opportunityId !== undefined, "opportunity_id", "opportunityId", links.opportunityId],
+    [write.title !== undefined && write.title !== current.title, "title", "title", write.title ?? null],
+    [write.description !== undefined && (write.description ?? null) !== current.description, "description", "description", write.description ?? null],
+    [retimes && write.dueAt !== undefined, "due_at", "dueAt", write.dueAt ?? null],
+    [retimes && write.dueHasTime !== undefined, "due_has_time", "dueHasTime", write.dueHasTime ?? false],
+    [retimes && write.scheduledBy !== undefined, "scheduled_by", "scheduledBy", write.scheduledBy ?? null],
+    [write.durationMinutes !== undefined && write.durationMinutes !== current.duration_minutes, "duration_minutes", "durationMinutes", write.durationMinutes ?? DEFAULT_TASK_DURATION],
+    [write.remindMinutes !== undefined && (write.remindMinutes ?? null) !== current.remind_minutes, "remind_minutes", "remindMinutes", write.remindMinutes ?? null],
+    [write.priority !== undefined && write.priority !== current.priority, "priority", "priority", write.priority ?? null],
+    [write.ownerId !== undefined && !sameId(write.ownerId, current.owner_id), "owner_id", "ownerId", write.ownerId ?? null],
+    [relinks && !sameId(links.companyId, current.company_id), "company_id", "companyId", links.companyId],
+    [write.contactId !== undefined && !sameId(links.contactId, current.contact_id), "contact_id", "contactId", links.contactId],
+    [write.opportunityId !== undefined && !sameId(links.opportunityId, current.opportunity_id), "opportunity_id", "opportunityId", links.opportunityId],
     [write.mailThreadKey !== undefined, "mail_thread_key", "mailThreadKey", write.mailThreadKey ?? null],
-    [completedAt !== undefined, "completed_at", "completedAt", completedAt ?? null],
+    [completedAt !== undefined && !sameInstant(completedAt ?? null, iso(current.completed_at)), "completed_at", "completedAt", completedAt ?? null],
   ]);
   const before = mapTask(current);
-  if (change.sets.length === 0) return { task: (await withMailThreadsInDb(db, actor, [before]))[0], changed: false };
+  if (change.sets.length === 0) {
+    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
+    return { task: (await withMailThreadsInDb(db, actor, [before]))[0], changed: false };
+  }
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
   const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
   let taggedAssigner = false;
@@ -583,7 +625,7 @@ async function applyTask(
     updated = result.rowCount ?? 0;
   } catch (error) {
     if (isPgError(error) && error.code === "42501") throw cannotChange(write);
-    constraintError(error, "duplicate_task", "A matching task already exists.");
+    taskConstraintError(error);
   }
   if (updated === 0) throw cannotChange(write);
   queueTaskBlock(db, current.id);
@@ -639,7 +681,7 @@ export async function updateTaskInDb(
   input: TaskWrite,
   provenance?: Provenance,
 ) {
-  const current = await readTask(db, actor, id);
+  const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   return applyTask(db, actor, current, preparedUpdate(current, input), provenance);
 }
@@ -694,7 +736,7 @@ export async function placeTask(
   if (!isUuid(id) || !placement || typeof placement !== "object") throw notFound("task");
   const provenance = options.provenance ?? { operation: "drag_task", source: "web" };
   return withActor(actor, async (db) => {
-    const current = await readTask(db, actor, id);
+    const current = await readTaskForWrite(db, actor, id);
     if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
     if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
     if (current.completed_at) throw new CrmError("invalid_input", "This task is done. Reopen it to move it.", 400);
@@ -714,8 +756,7 @@ export async function scheduleTaskInDb(
 ): Promise<{ task: Task; changed: boolean }> {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(id)) throw notFound("task");
-  await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-  const current = await readTask(db, actor, id);
+  const current = await readTaskForWrite(db, actor, id);
   if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
   if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
   const refusal = refuse(mapTask(current));
@@ -882,8 +923,7 @@ export async function updateTask(
   const hash = requestHash("update_task", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      if (input.completed !== undefined) await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-      const current = await readTask(db, actor, id);
+      const current = await readTaskForWrite(db, actor, id);
       if (!current) throw notFound("task");
       const updated = await applyTask(db, actor, current, preparedUpdate(current, input), provenance);
       return { task: updated.task };
@@ -903,8 +943,7 @@ export async function completeTask(
   const hash = requestHash("update_task", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-      const current = await readTask(db, actor, id);
+      const current = await readTaskForWrite(db, actor, id);
       if (!current || current.archived_at) throw notFound("task");
       if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
         return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
@@ -926,8 +965,7 @@ export async function reopenTask(
   const hash = requestHash("reopen_task", { id, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-      const current = await readTask(db, actor, id);
+      const current = await readTaskForWrite(db, actor, id);
       if (!current) throw notFound("task");
       if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
       if (!current.completed_at || current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
@@ -951,11 +989,16 @@ export async function archiveTask(
   );
 }
 
-export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
-  const current = await readTask(db, actor, id);
+export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean } = {}) {
+  const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
-  const archived = await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
+  const archived = await db.query(
+    `update crm.tasks set archived_at = now(),
+       clickup_sync = case when $2::boolean then clickup_sync || '{"goneFromClickUp": true}'::jsonb else clickup_sync end
+     where id = $1 and archived_at is null`,
+    [id, Boolean(options.goneFromClickUp)],
+  );
   if ((archived.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
   const saved = await readTask(db, actor, id);
@@ -969,19 +1012,30 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
 }
 
 export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
-  const current = await readTask(db, actor, id);
+  const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (!current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
-  const restored = await db.query("update crm.tasks set archived_at = null where id = $1", [id]);
+  const restored = await db.query(
+    `update crm.tasks set archived_at = null,
+       clickup_task_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_task_id end,
+       clickup_list_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_list_id end,
+       clickup_url = case when clickup_sync ? 'goneFromClickUp' then null else clickup_url end,
+       clickup_error = case when clickup_sync ? 'goneFromClickUp' then null else clickup_error end,
+       clickup_sync = case when clickup_sync ? 'goneFromClickUp' then '{}'::jsonb else clickup_sync end
+     where id = $1 and archived_at is not null`,
+    [id],
+  );
   if ((restored.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
   const saved = await readTask(db, actor, id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
+  const unlinked = current.clickup_task_id !== null && saved.clickup_task_id === null;
   await recordAudit(db, actor, "task.updated", "task", task.id, provenance, {
     fields: ["archivedAt"],
     before: { archivedAt: iso(current.archived_at) },
     after: { archivedAt: null },
+    ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
 }
@@ -1000,7 +1054,7 @@ export async function restoreTaskInDb(
   provenance: Provenance,
   undoing: string | null = null,
 ) {
-  const current = await readTask(db, actor, id);
+  const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;

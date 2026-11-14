@@ -123,17 +123,17 @@ describe("date-only and timed tasks", () => {
   });
 
   it("asks for a time before a reminder, and drops the reminder with the time", async () => {
-    await assert.rejects(createTask(mark, { title: "Remind without time", dueDate: "2026-12-01", remindMinutes: 15 }), /Pick a time for the reminder\./);
-    const plain = (await createTask(mark, { title: "Plain day", dueDate: "2026-12-01" })).body.task;
+    await assert.rejects(createTask(mark, { title: "Remind without time", dueDate: "2036-12-01", remindMinutes: 15 }), /Pick a time for the reminder\./);
+    const plain = (await createTask(mark, { title: "Plain day", dueDate: "2036-12-01" })).body.task;
     await assert.rejects(updateTask(mark, plain.id, { remindMinutes: 15 }), /Pick a time for the reminder\./);
-    const timed = (await updateTask(mark, plain.id, { dueAt: "2026-12-01T14:00", remindMinutes: 15 })).body.task;
+    const timed = (await updateTask(mark, plain.id, { dueAt: "2036-12-01T14:00", remindMinutes: 15 })).body.task;
     assert.equal(timed.dueHasTime, true);
     assert.equal(timed.remindMinutes, 15);
-    const removed = (await updateTask(mark, plain.id, { dueDate: "2026-12-01" })).body.task;
+    const removed = (await updateTask(mark, plain.id, { dueDate: "2036-12-01" })).body.task;
     assert.equal(removed.dueHasTime, false);
     assert.equal(removed.remindMinutes, null);
     assert.equal(removed.scheduledBy, null);
-    assert.equal(removed.dueAt, dayStartIso("2026-12-01"));
+    assert.equal(removed.dueAt, dayStartIso("2036-12-01"));
     const cleared = (await updateTask(mark, timed.id, { dueAt: null })).body.task;
     assert.equal(cleared.dueAt, null);
     assert.equal(cleared.dueDate, null);
@@ -143,7 +143,8 @@ describe("date-only and timed tasks", () => {
   it("only reminds about timed tasks", async () => {
     const soon = new Date(Date.now() + 10 * 60_000);
     const timed = (await createTask(mark, { title: "Timed reminder", dueAt: soon.toISOString(), remindMinutes: 15 })).body.task;
-    await sql("update crm.tasks set due_has_time = false, scheduled_by = null where id = $1", [timed.id]);
+    await assert.rejects(sql("update crm.tasks set due_has_time = false, scheduled_by = null where id = $1", [timed.id]), /tasks_reminder_needs_time/);
+    await sql("update crm.tasks set due_has_time = false, scheduled_by = null, remind_minutes = null where id = $1", [timed.id]);
     const reminders = await listDueReminders(mark);
     assert.ok(!reminders.some((item) => item.id === timed.id));
     const second = (await createTask(mark, { title: "Timed reminder two", dueAt: soon.toISOString(), remindMinutes: 15 })).body.task;
@@ -208,13 +209,13 @@ describe("date-only and timed tasks", () => {
   });
 
   it("undoes Remove the time, bringing back the time and the reminder", async () => {
-    const task = (await createTask(mark, { title: "Undo the removal", dueAt: "2026-12-03T15:00", remindMinutes: 30 })).body.task;
-    await updateTask(mark, task.id, { dueDate: "2026-12-03" });
+    const task = (await createTask(mark, { title: "Undo the removal", dueAt: "2036-12-03T15:00", remindMinutes: 30 })).body.task;
+    await updateTask(mark, task.id, { dueDate: "2036-12-03" });
     const event = (await sql<{ id: string }>("select id from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at desc limit 1", [task.id]))[0];
     await undoAuditEvent(mark, event.id, { operation: "undo", source: "web" });
     const back = await getTask(mark, task.id);
     assert.equal(back.dueHasTime, true);
-    assert.equal(back.dueAt, "2026-12-03T15:00:00.000Z");
+    assert.equal(back.dueAt, "2036-12-03T15:00:00.000Z");
     assert.equal(back.remindMinutes, 30);
     assert.equal(back.scheduledBy, "person");
   });
@@ -222,16 +223,16 @@ describe("date-only and timed tasks", () => {
 
 describe("routes that set a day only", () => {
   it("keeps a lead task with a time timed with its reminder, and drops the reminder from a day-only one", async () => {
-    const timed = await ingestLead(mark, { contact: { firstName: "Lena", email: "lena@lead.test" }, task: { title: "Call Lena", dueAt: "2026-12-04T15:30", remindMinutes: 15 } });
+    const timed = await ingestLead(mark, { contact: { firstName: "Lena", email: "lena@lead.test" }, task: { title: "Call Lena", dueAt: "2036-12-04T15:30", remindMinutes: 15 } });
     assert.equal(timed.body.task?.dueHasTime, true);
-    assert.equal(timed.body.task?.dueAt, "2026-12-04T15:30:00.000Z");
+    assert.equal(timed.body.task?.dueAt, "2036-12-04T15:30:00.000Z");
     assert.equal(timed.body.task?.remindMinutes, 15);
-    const bare = await ingestLead(mark, { contact: { firstName: "Leo", email: "leo@lead.test" }, task: { title: "Call Leo", dueAt: "2026-12-04", remindMinutes: 15 } });
-    assert.equal(bare.body.task?.dueDate, "2026-12-04");
+    const bare = await ingestLead(mark, { contact: { firstName: "Leo", email: "leo@lead.test" }, task: { title: "Call Leo", dueAt: "2036-12-04", remindMinutes: 15 } });
+    assert.equal(bare.body.task?.dueDate, "2036-12-04");
     assert.equal(bare.body.task?.dueHasTime, false);
     assert.equal(bare.body.task?.remindMinutes, null);
-    const day = await ingestLead(mark, { contact: { firstName: "Lou", email: "lou@lead.test" }, task: { title: "Call Lou", dueDate: "2026-12-05", remindMinutes: 60 } });
-    assert.equal(day.body.task?.dueAt, dayStartIso("2026-12-05"));
+    const day = await ingestLead(mark, { contact: { firstName: "Lou", email: "lou@lead.test" }, task: { title: "Call Lou", dueDate: "2036-12-05", remindMinutes: 60 } });
+    assert.equal(day.body.task?.dueAt, dayStartIso("2036-12-05"));
     assert.equal(day.body.task?.remindMinutes, null);
     await assert.rejects(ingestLead(mark, { contact: { firstName: "Lia", email: "lia@lead.test" }, task: { title: "Call Lia", dueDate: "2026-02-30" } }), /task\.dueDate: enter a real calendar date/);
     await assert.rejects(ingestLead(mark, { contact: { firstName: "Lim", email: "lim@lead.test" }, task: { title: "Call Lim", dueDate: "2026-12-05", remindMinutes: 7 } }), /task\.remindMinutes: choose a reminder/);

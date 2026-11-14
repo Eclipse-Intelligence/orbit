@@ -5,6 +5,7 @@ import { readContactInDb } from "@/lib/crm/contacts";
 import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure, tooMany } from "@/lib/crm/errors";
 import { fillCompanyGaps, fillContactGaps, type GapFill } from "@/lib/crm/merge";
+import { clickupUnlinkedLine } from "@/lib/crm/move-lines";
 import { isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { readOpportunityInDb } from "@/lib/crm/opportunities";
 import { assertScope, type Scope } from "@/lib/crm/scopes";
@@ -38,6 +39,8 @@ type PlanCompanyChoice = { id: string; name: string; others: number };
 
 type PlanLeftBehind = { id: string; name: string; companyId: string | null; archived: boolean };
 
+type PlanTaskChange = { id: string; before: Record<string, unknown>; after: Record<string, unknown> };
+
 type Plan = {
   source: WorkspaceRef;
   target: WorkspaceRef;
@@ -67,6 +70,9 @@ type Plan = {
   notCopied?: string[];
   proposalContacts?: string[];
   dealsLosingContact?: number;
+  clickupTasks?: number;
+  taskMoves?: PlanTaskChange[];
+  tasksLeft?: PlanTaskChange[];
 };
 
 export type MoveRequest = {
@@ -125,7 +131,9 @@ export type MovePreview = {
   notCopied: string[];
   proposalContacts: string[];
   dealsLosingContact: number;
+  clickupUnlinked: number;
 };
+
 
 export type MovedRecord = { id: string; name: string; targetId: string; merged: boolean };
 
@@ -139,6 +147,7 @@ export type MoveResult = {
   activities: number;
   tasks: number;
   leftBehind: { id: string; name: string }[];
+  clickupUnlinked: number;
   message: string;
 };
 
@@ -326,6 +335,7 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     notCopied: plan.notCopied ?? [],
     proposalContacts: plan.proposalContacts ?? [],
     dealsLosingContact: plan.dealsLosingContact ?? 0,
+    clickupUnlinked: plan.copy ? 0 : (plan.clickupTasks ?? 0),
   };
 }
 
@@ -351,7 +361,9 @@ function alongPhrase(plan: Plan) {
 function resultMessage(plan: Plan) {
   const names = selectedNames(plan);
   const what = names.length === 1 ? names[0] : counted(names.length, "record", "records");
-  return `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
+  const moved = `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
+  const unlinked = plan.copy ? "" : clickupUnlinkedLine(plan.clickupTasks ?? 0);
+  return unlinked ? `${moved} ${unlinked}` : moved;
 }
 
 type CopiedFrom = { workspaceId: string; workspaceName: string; id: string };
@@ -397,6 +409,21 @@ function dealDetails(record: PlanRecord) {
   return record.deals ?? [];
 }
 
+const TASK_MOVE_FIELDS = ["ownerId", "dueAt", "dueHasTime", "scheduledBy", "remindMinutes", "companyId", "opportunityId", "clickupTaskId", "clickupListId", "clickupUrl"];
+
+async function auditTaskChanges(db: Db, actor: UserActor, changes: PlanTaskChange[], provenance: Provenance, context: Record<string, unknown>) {
+  for (const change of changes) {
+    const fields = TASK_MOVE_FIELDS.filter((field) => field in change.after).filter((field) => JSON.stringify(change.before[field] ?? null) !== JSON.stringify(change.after[field] ?? null));
+    if (fields.length === 0) continue;
+    await recordAudit(db, actor, "task.updated", "task", change.id, provenance, {
+      fields,
+      before: Object.fromEntries(fields.map((field) => [field, change.before[field] ?? null])),
+      after: Object.fromEntries(fields.map((field) => [field, change.after[field] ?? null])),
+      ...context,
+    });
+  }
+}
+
 async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Plan, fills: Map<string, GapFill>, provenance: Provenance) {
   for (const [entity, records] of [
     ["company", plan.companies],
@@ -424,6 +451,8 @@ async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Pla
     }
   }
   await auditLinks(db, source, target, plan, fills, provenance);
+  await auditTaskChanges(db, target, plan.taskMoves ?? [], provenance, { movedFrom: plan.source });
+  await auditTaskChanges(db, source, plan.tasksLeft ?? [], provenance, { companyMovedTo: plan.target });
   for (const contact of plan.leftBehind ?? []) {
     await recordAudit(db, source, "contact.updated", "contact", contact.id, provenance, {
       fields: ["companyId"],
@@ -515,6 +544,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         activities: done.activities,
         tasks: done.tasks,
         leftBehind: (done.leftBehind ?? []).map((item) => ({ id: item.id, name: item.name })),
+        clickupUnlinked: done.copy ? 0 : (done.clickupTasks ?? 0),
         message: resultMessage(done),
       };
     },

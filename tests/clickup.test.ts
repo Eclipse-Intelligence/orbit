@@ -27,7 +27,8 @@ import { createContact } from "@/lib/crm/contacts";
 import { fileInboundMessages, saveMailbox } from "@/lib/crm/inbox";
 import { syncTargets } from "@/lib/crm/scheduler";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
+import { withActor } from "@/lib/crm/context";
+import { completeTask, createTask, getTask, unarchiveTaskInDb, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -291,6 +292,15 @@ function remoteTask(fake: Fake, input: Partial<ClickUpTask> & { id: string; list
   };
   fake.tasks.set(input.id, task);
   return task;
+}
+
+async function settleLostCreate(id: string) {
+  await getAdminPool().query(
+    `update crm.tasks
+     set clickup_sync = jsonb_set(clickup_sync, '{unconfirmed,at}', to_jsonb((clickup_sync->'unconfirmed'->>'at')::bigint - 180000))
+     where id = $1 and clickup_sync ? 'unconfirmed'`,
+    [id],
+  );
 }
 
 async function taskRow(id: string) {
@@ -751,6 +761,7 @@ describe("clickup sync", () => {
     assert.equal(failed.clickup_error, "Couldn't reach ClickUp. Try again.");
     assert.doesNotMatch(failed.clickup_error ?? "", /Internal error|ITEM_500/);
     assert.equal((await getTask(owner, created.task.id)).clickupError, failed.clickup_error);
+    await settleLostCreate(created.task.id);
     const retried = await syncClickUp({ actor: owner, force: true, fetchImpl });
     assert.equal(retried.pushed, 1);
     const fixed = await taskRow(created.task.id);
@@ -826,6 +837,7 @@ describe("clickup sync", () => {
     const task = (await createTaskWithClickUp(owner, { title: name, contactId: janeId }, RELATIONSHIPS, { fetchImpl: unsent })).task;
     assert.ok((await taskRow(task.id)).clickup_sync.unconfirmed);
     const later = remoteTask(fake, { id: "madebyhand", listId: RELATIONSHIPS, name, date_created: String(Date.now() + 10 * 60 * 1000) });
+    await settleLostCreate(task.id);
     await withStrictPool(() => syncClickUp({ actor: owner, force: true, fetchImpl }));
     const linked = (await taskRow(task.id)).clickup_task_id;
     assert.ok(linked);
@@ -1185,5 +1197,204 @@ describe("clickup per workspace", () => {
     assert.match(saved.warning ?? "", /Eclipse also uses Relationships/);
     const view = await getClickUpSettings(ridgeon, { fetchImpl });
     assert.deepEqual(view.shared, [{ workspaceId: eclipse.workspaceId, workspaceName: "Eclipse", listNames: ["Relationships"] }]);
+  });
+});
+
+describe("clickup sync edge cases", () => {
+  const RELATIONSHIPS = "901223313517";
+  let owner: UserActor;
+  let fake: Fake;
+  let fetchImpl: typeof fetch;
+  let acmeId: string;
+  let janeId: string;
+
+  before(async () => {
+    owner = await createUser("mark@clickup-edges.test", "Mark Ridgeon");
+    fake = makeFake();
+    fetchImpl = clickup(fake);
+    acmeId = (await createCompany(owner, { name: "Acme Edges", domain: "acme-edges.test" })).body.company.id;
+    janeId = (await createContact(owner, { companyId: acmeId, firstName: "Jane", lastName: "Edge", email: "jane@acme-edges.test" })).body.contact.id;
+    await saveClickUpSettings(owner, { teamId: TEAM, defaultListId: RELATIONSHIPS, watchedListIds: [] }, { fetchImpl });
+  });
+
+  it("keeps a task restored after it was deleted in ClickUp, as an Orbit task", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Deleted remotely", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const remoteId = (await taskRow(created.task.id)).clickup_task_id!;
+    fake.tasks.delete(remoteId);
+    assert.equal(await processClickUpEvent(owner, { event: "taskDeleted", taskId: remoteId, newestAt: null }, { fetchImpl }), "archived");
+    await withActor(owner, (db) => unarchiveTaskInDb(db, owner, created.task.id, { operation: "undo", source: "web" }));
+    const restored = await taskRow(created.task.id);
+    assert.equal(restored.archived_at, null);
+    assert.deepEqual([restored.clickup_task_id, restored.clickup_list_id, restored.clickup_url], [null, null, null]);
+    await getAdminPool().query("update crm.tasks set clickup_synced_at = now() - interval '7 hours' where id = $1", [created.task.id]);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    await updateTask(owner, created.task.id, { title: "Deleted remotely, kept" });
+    assert.equal(await pushClickUpTask(owner, created.task.id, { fetchImpl }), "unchanged");
+    assert.equal((await taskRow(created.task.id)).archived_at, null);
+    assert.equal(fake.tasks.size, 0);
+  });
+
+  it("unlinks a task archived in Orbit and then deleted in ClickUp when it is restored, and records what it cleared", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Archived first", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const remoteId = (await taskRow(created.task.id)).clickup_task_id!;
+    await getAdminPool().query("update crm.tasks set archived_at = now() where id = $1", [created.task.id]);
+    fake.tasks.delete(remoteId);
+    await processClickUpEvent(owner, { event: "taskDeleted", taskId: remoteId, newestAt: null }, { fetchImpl });
+    await withActor(owner, (db) => unarchiveTaskInDb(db, owner, created.task.id, { operation: "undo", source: "web" }));
+    const restored = await taskRow(created.task.id);
+    assert.deepEqual([restored.archived_at, restored.clickup_task_id, restored.clickup_list_id], [null, null, null]);
+    const audit = await getAdminPool().query<{ changes: { clickupUnlinked?: { clickupTaskId: string } } }>(
+      "select changes from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at desc limit 1",
+      [created.task.id],
+    );
+    assert.equal(audit.rows[0].changes.clickupUnlinked?.clickupTaskId, remoteId);
+  });
+
+  it("keeps the link on a task archived, not deleted, in ClickUp when it is restored", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Archived remotely", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const remoteId = (await taskRow(created.task.id)).clickup_task_id!;
+    fake.tasks.get(remoteId)!.archived = true;
+    assert.equal(await processClickUpEvent(owner, { event: "taskUpdated", taskId: remoteId, newestAt: null }, { fetchImpl }), "archived");
+    await withActor(owner, (db) => unarchiveTaskInDb(db, owner, created.task.id, { operation: "undo", source: "web" }));
+    assert.equal((await taskRow(created.task.id)).clickup_task_id, remoteId);
+    delete fake.tasks.get(remoteId)!.archived;
+  });
+
+  it("claims a push without changing when the task was last edited", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Quiet push", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const before = (await taskRow(created.task.id)).updated_at;
+    assert.equal(await pushClickUpTask(owner, created.task.id, { fetchImpl }), "unchanged");
+    const after = await taskRow(created.task.id);
+    assert.equal(after.updated_at.getTime(), before.getTime());
+    assert.equal(after.clickup_sync.pushingAt, undefined);
+  });
+
+  it("ends with ClickUp matching Orbit when a done push and a reopen push cross", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Crossed pushes", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const id = created.task.id;
+    const remoteId = (await taskRow(id)).clickup_task_id!;
+    let releaseDone: () => void = () => {};
+    let releaseOpen: () => void = () => {};
+    const doneHeld = new Promise<void>((resolve) => (releaseDone = resolve));
+    const openHeld = new Promise<void>((resolve) => (releaseOpen = resolve));
+    let doneArrived: () => void = () => {};
+    const arrived = new Promise<void>((resolve) => (doneArrived = resolve));
+    const gated: typeof fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if ((init?.method ?? "GET") === "PUT" && path.endsWith(`/task/${remoteId}`)) {
+        const body = JSON.parse(String(init?.body)) as { status?: string };
+        if (body.status === "done") {
+          doneArrived();
+          await doneHeld;
+          return fetchImpl(input, init);
+        }
+        const answer = await fetchImpl(input, init);
+        await openHeld;
+        return answer;
+      }
+      return fetchImpl(input, init);
+    };
+    await completeTask(owner, id);
+    const donePush = pushClickUpTask(owner, id, { fetchImpl: gated });
+    await arrived;
+    await updateTask(owner, id, { completed: false });
+    const openPush = pushClickUpTask(owner, id, { fetchImpl: gated });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    releaseDone();
+    releaseOpen();
+    await Promise.all([donePush, openPush]);
+    await pushClickUpTask(owner, id, { fetchImpl });
+    assert.equal(fake.tasks.get(remoteId)?.status?.type, "open");
+  });
+
+  it("ends with ClickUp showing the latest title when two renames' pushes cross", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "First title", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const id = created.task.id;
+    const remoteId = (await taskRow(id)).clickup_task_id!;
+    const isPut = (input: RequestInfo | URL, init?: RequestInit) => (init?.method ?? "GET") === "PUT" && new URL(String(input)).pathname.endsWith(`/task/${remoteId}`);
+    let releaseFirst: () => void = () => {};
+    let releaseSecond: () => void = () => {};
+    let firstArrived: () => void = () => {};
+    const firstHeld = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const secondHeld = new Promise<void>((resolve) => (releaseSecond = resolve));
+    const arrived = new Promise<void>((resolve) => (firstArrived = resolve));
+    let held = false;
+    const slowToArrive: typeof fetch = async (input, init) => {
+      if (isPut(input, init) && !held) {
+        held = true;
+        firstArrived();
+        await firstHeld;
+      }
+      return fetchImpl(input, init);
+    };
+    const slowToAnswer: typeof fetch = async (input, init) => {
+      const answer = await fetchImpl(input, init);
+      if (isPut(input, init)) await secondHeld;
+      return answer;
+    };
+    await updateTask(owner, id, { title: "Second title" });
+    const first = pushClickUpTask(owner, id, { fetchImpl: slowToArrive });
+    await arrived;
+    await updateTask(owner, id, { title: "Third title" });
+    const second = pushClickUpTask(owner, id, { fetchImpl: slowToAnswer });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    releaseFirst();
+    await first;
+    releaseSecond();
+    await second;
+    await pushClickUpTask(owner, id, { fetchImpl });
+    assert.equal(fake.tasks.get(remoteId)?.name, "Third title");
+  });
+
+  it("waits for ClickUp's search to catch up before sending a lost create again", async () => {
+    const lost: typeof fetch = async (input, init) => {
+      const answer = await fetchImpl(input, init);
+      if ((init?.method ?? "GET") === "POST" && /\/list\/\d+\/task$/.test(new URL(String(input)).pathname)) {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return answer;
+    };
+    const slowSearch: typeof fetch = async (input, init) => {
+      if (new URL(String(input)).searchParams.has("date_created_gt")) return Response.json({ tasks: [], last_page: true });
+      return fetchImpl(input, init);
+    };
+    const task = (await createTaskWithClickUp(owner, { title: "Lost create", contactId: janeId }, RELATIONSHIPS, { fetchImpl: lost })).task;
+    assert.equal((await taskRow(task.id)).clickup_task_id, null);
+    await pushClickUpTask(owner, task.id, { fetchImpl: slowSearch });
+    const named = () => [...fake.tasks.values()].filter((item) => item.name === "Lost create").length;
+    assert.equal(named(), 1);
+    const waiting = await taskRow(task.id);
+    assert.deepEqual([waiting.clickup_task_id, waiting.clickup_error], [null, null]);
+    assert.equal(typeof waiting.clickup_sync.waitingSince, "number");
+    await pushClickUpTask(owner, task.id, { fetchImpl });
+    assert.equal(named(), 1);
+    assert.ok((await taskRow(task.id)).clickup_task_id);
+  });
+
+  it("carries on from the page it reached when a poll stops early", async () => {
+    const SOLO = "901219833963";
+    await saveClickUpSettings(owner, { teamId: TEAM, defaultListId: RELATIONSHIPS, watchedListIds: [SOLO] }, { fetchImpl });
+    for (let index = 0; index < 45; index += 1) {
+      remoteTask(fake, { id: `page${index}`, listId: SOLO, name: `Paged ${index}`, text_content: "jane@acme-edges.test", date_updated: String(Date.now() - (45 - index) * 1000) });
+    }
+    const first = await syncClickUp({ actor: owner, force: true, fetchImpl });
+    assert.equal(first.complete, false);
+    const stored = await getAdminPool().query<{ clickup_poll: Record<string, { page: number }> }>(
+      "select clickup_poll from crm.integration_state where workspace_id = $1 and source = 'clickup' and connection_id is null",
+      [owner.workspaceId],
+    );
+    assert.equal(stored.rows[0].clickup_poll[owner.userId].page, 19);
+    const second = await syncClickUp({ actor: owner, force: true, fetchImpl });
+    assert.equal(second.complete, true);
+    const cleared = await getAdminPool().query<{ clickup_poll: unknown }>(
+      "select clickup_poll from crm.integration_state where workspace_id = $1 and source = 'clickup' and connection_id is null",
+      [owner.workspaceId],
+    );
+    assert.equal(cleared.rows[0].clickup_poll, null);
+    const imported = await getAdminPool().query<{ total: number }>(
+      "select count(*)::int as total from crm.tasks where workspace_id = $1 and clickup_task_id like 'page%'",
+      [owner.workspaceId],
+    );
+    assert.equal(imported.rows[0].total, 45);
   });
 });
