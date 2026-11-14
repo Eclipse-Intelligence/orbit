@@ -1,3 +1,5 @@
+import { CrmError } from "@/lib/crm/errors";
+
 export type DoneState = { done: Set<string>; awaiting: Set<string>; confirmed: Set<string>; sent: Set<string> };
 
 export function reconcileDone(open: Set<string>, state: DoneState): DoneState {
@@ -6,4 +8,21 @@ export function reconcileDone(open: Set<string>, state: DoneState): DoneState {
   const sent = new Set([...state.sent].filter((id) => open.has(id) && !state.awaiting.has(id)));
   const done = new Set([...state.done].filter((id) => !back.has(id)));
   return { done, awaiting: new Set(), confirmed, sent };
+}
+
+export async function stillOpenIds(wanted: string[], check: (ids: string[]) => Promise<{ open?: string[] }>) {
+  try {
+    return (await check(wanted)).open ?? wanted;
+  } catch {
+    return wanted;
+  }
+}
+
+export function panelTaskFor<T extends { id: string }>(openId: string | null, listed: T | null, kept: T | null, keep: (id: string) => boolean) {
+  if (listed) return listed;
+  return kept && kept.id === openId && keep(kept.id) ? kept : null;
+}
+
+export function missingOrFailed(error: unknown) {
+  return error instanceof CrmError && error.status < 500 ? null : undefined;
 }

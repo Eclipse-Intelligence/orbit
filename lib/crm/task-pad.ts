@@ -3,13 +3,14 @@ import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import { likePattern } from "@/lib/crm/normalize";
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
+import { MAX_TASK_DURATION } from "@/lib/crm/task-time";
 import { assertScope } from "@/lib/crm/scopes";
 import { sameOrigin } from "@/lib/crm/task-beacon";
 import { detectTaskRecordsInDb, folded, memberNames, mentionsName, quotesFoldedSql, TEXT_LIMIT, type DetectedTaskLinks, type LinkedRecord } from "@/lib/crm/task-detect";
 import type { UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
-import { londonParts, namePattern, parseTaskText } from "@/lib/task-pad";
+import { acceptAiReading, londonParts, namePattern, parseTaskText, type PadAiParse } from "@/lib/task-pad";
 
 export type PadRecord = { id: string; name: string };
 
@@ -248,17 +249,30 @@ export async function searchPadRecords(actor: UserActor, kind: PadSearchKind, qu
 }
 
 const AI_SCHEMA = z.object({
-  title: z.string(),
+  phrases: z.array(z.string()).nullable(),
   due: z.string().nullable(),
   remindMinutes: z.number().nullable(),
+  durationMinutes: z.number().nullable().optional(),
 });
 
-export type PadAiParse = { title: string; due: string | null; remindMinutes: number | null };
+export type { PadAiParse };
 
-function snapReminder(value: number | null) {
-  if (value === null || !Number.isFinite(value) || value < 0) return null;
-  return REMINDER_MINUTES.reduce((best, option) => (Math.abs(option - value) < Math.abs(best - value) ? option : best));
-}
+const PAD_AI_RULES = [
+  "You read when a short to-do written in UK English is due. You never rewrite the to-do. Reply with JSON only:",
+  '{"phrases": [string], "due": "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" or null, "remindMinutes": number or null, "durationMinutes": number or null}.',
+  "phrases lists the exact pieces of the to-do that say when or ask for a reminder, in the order they appear, each copied character for character as an unbroken piece of the text (keep case and spacing; include a leading on, by, at or due that belongs to it). Use an empty list when nothing says when. Never add, fix or reorder words.",
+  "due is Europe/London local time. If nothing says when, or you are not sure, due is null and phrases is empty.",
+  "Give a time only when the text gives one. A day with no time is the day alone as YYYY-MM-DD.",
+  "Times: morning is 09:00, afternoon 14:00, evening 18:00, tonight and night 19:00, lunchtime 12:30, noon and midday 12:00, midnight 00:00 of the next day, end of day and eod 17:00, end of week and eow Friday 17:00.",
+  "A bare hour with no am or pm means working hours: 1 to 6 is the afternoon (3 means 15:00) and 7 to 12 is as written. A number that is a count, a price, a quantity, a version, a room, an address or a chapter is not a time.",
+  "Dates are day first: 3/4 is 3 April. A date without a year is the next time it comes round; never give a due in the past. A time with no day that has already passed today means tomorrow.",
+  "today is today. tomorrow is the next day. next week is the Monday of next week. the weekend and this weekend are the coming Saturday. next month is the 1st of next month. in N days or weeks counts from today.",
+  "A weekday on its own is the next time that day comes round; typed on that same day it means today only if its time is still ahead, otherwise next week. this Monday typed on a Monday is today. next Friday is the Friday of next week when said early in the week, and the coming Friday otherwise; if you cannot tell, use null. Tuesday week and a week on Tuesday are the Tuesday after the coming one. A weekday with in N weeks is that weekday N weeks after the coming one.",
+  "A weekday or date word that names or describes something (Black Friday, Friday Media, Monday report, Noon Ltd, The Day After Tomorrow) is not when the task is due.",
+  `remindMinutes is how many minutes before the due time to remind, only when a reminder is asked for, and must be one of ${REMINDER_MINUTES.join(", ")}. Otherwise null.`,
+  `durationMinutes is how long the task takes when the text says so (for 30 mins, 2-3pm), at most ${MAX_TASK_DURATION}, otherwise null.`,
+  "Each phrase must appear exactly once in the text and contain only date, time and reminder words; an answer with a phrase that is repeated, reworded or holds other words is thrown away.",
+];
 
 export async function parsePadWithAi(text: string, now = new Date(), options: { fetchImpl?: typeof fetch } = {}): Promise<PadAiParse | null> {
   const clean = text.trim().slice(0, 500);
@@ -267,27 +281,23 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
   const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "long", timeZone: "Europe/London" }).format(now);
   const today = `${weekday} ${wall.year}-${String(wall.month).padStart(2, "0")}-${String(wall.day).padStart(2, "0")} ${String(wall.hour).padStart(2, "0")}:${String(wall.minute).padStart(2, "0")}`;
   const result = await completeJson({
-    system:
-      "You turn a short to-do written in UK English into JSON. Reply with JSON only: " +
-      '{"title": string, "due": "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" or null, "remindMinutes": number or null}. ' +
-      "title is the task without the date, time and reminder words, starting with a capital letter. " +
-      "due is in Europe/London local time. Give a time only when the text gives one (a clock time, or words like morning, noon, tonight or end of day). " +
-      "If a day is given without a time, due is the day alone as YYYY-MM-DD. If nothing says when, due is null. " +
-      "A bare hour with no am or pm means working hours: 1 to 6 is the afternoon (3 means 15:00) and 7 to 12 is as written (9 means nine in the morning). A number that is a count, a quantity, a version, a room or a chapter is not a time. " +
-      "remindMinutes is how many minutes before the due time to remind, or null if no reminder is asked for. Keep it even when due has no time. " +
-      `Now is ${today} in London.`,
+    system: `${PAD_AI_RULES.join(" ")} Now is ${today} in London.`,
     user: clean,
     schema: AI_SCHEMA,
     maxTokens: 300,
     timeoutMs: 12_000,
     fetchImpl: options.fetchImpl,
   });
-  const due = result.data.due && /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$/.test(result.data.due) ? result.data.due : null;
-  return {
-    title: result.data.title.trim().slice(0, 200) || clean,
-    due,
-    remindMinutes: due ? snapReminder(result.data.remindMinutes) : null,
-  };
+  return acceptAiReading(
+    text,
+    {
+      phrases: result.data.phrases ?? [],
+      due: result.data.due,
+      remindMinutes: result.data.remindMinutes,
+      durationMinutes: result.data.durationMinutes ?? null,
+    },
+    now,
+  );
 }
 
 export type PadReadBody = { value: PadAiParse | null; available: boolean; error?: string };

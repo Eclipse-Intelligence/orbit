@@ -30,6 +30,8 @@ import type { Task } from "@/lib/crm/types";
 import { pageHref, recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
+import { draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
+import { applyDraftNews, clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { durationLabel, localInstant } from "@/lib/crm/task-time";
@@ -159,24 +161,15 @@ function dueWrite(value: string): TaskDetails {
   return padDueHasTime(value) ? { dueAt: localInstant(value), dueHasTime: true } : { dueDate: value };
 }
 
-const drafts = new Map<string, { title?: string; text?: string }>();
-
-function keepDraft(id: string, change: { title?: string; text?: string }) {
-  drafts.set(id, { ...drafts.get(id), ...change });
-}
-
-function dropDraft(id: string, field: "title" | "text") {
-  const draft = drafts.get(id);
-  if (!draft) return;
-  delete draft[field];
-  if (draft.title === undefined && draft.text === undefined) drafts.delete(id);
-}
+const drafts = taskDrafts();
 
 export function useTaskDetails(task: Task, canChange: boolean, shown = true, viewerId: string | null = null) {
   const router = useRouter();
   const composer = useComposer();
   const source = sourceOf(task);
   const [draft] = useState(() => drafts.get(task.id));
+  const latestDraftChange = useRef<(change: DraftChange) => void>(() => undefined);
+  const [self] = useState(() => (change: DraftChange) => latestDraftChange.current(change));
   const [seen, setSeen] = useState(source);
   const [title, setTitle] = useState(draft?.title ?? source.title);
   const [text, setText] = useState(draft?.text ?? source.text);
@@ -184,11 +177,17 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const [reminder, setReminder] = useState<number | null>(source.reminder);
   const [duration, setDuration] = useState(source.duration);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldErrors>(() => {
+    const message = unsavedDraftError(draft);
+    return message ? failFields([], draftFields(draft), message) : [];
+  });
+  const error = fieldError(errors);
+  const setError = useCallback((message: string | null) => {
+    setErrors((current) => (message ? failFields(current, ["other"], message) : clearFields(current, ["other"])));
+  }, []);
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const sent = useRef({ title: source.title, text: source.text });
-  const timingError = useRef(false);
   const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
   const visible = useRef(shown);
   useEffect(() => {
@@ -230,30 +229,27 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   async function save(write: TaskDetails) {
     const timed = touchesTiming(write);
     const ticket = timed ? timing.start() : 0;
-    setError(null);
+    const fields = fieldsOf(write);
     setNotice(null);
     let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
     try {
       result = await saveTaskDetailsAction(task.id, write);
     } catch {
-      result = { error: "Couldn't save. Try again." };
+      result = { error: saveFailedMessage(fields) };
     }
     if (result.error) {
       const restore = timed ? timing.fail(ticket) : null;
       if (restore) show(restore);
-      timingError.current = timed;
-      setError(result.error);
+      const message = result.error;
+      setErrors((current) => failFields(current, fields, message));
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
       return false;
     }
+    setErrors((current) => clearFields(current, [...fields, "other"]));
     const applied = timed && result.saved ? timing.succeed(ticket, { due: dueValue(result.saved), reminder: result.saved.remindMinutes, duration: result.saved.durationMinutes }) : null;
     if (timed && !result.saved) timing.fail(ticket);
     if (applied && result.saved) {
       show(applied);
-      if (timingError.current) {
-        timingError.current = false;
-        setError(null);
-      }
       if (asksForTime(write) && result.saved.dueAt && !result.saved.dueHasTime) {
         const note = dayOnlyNote(task.ownerName);
         setNotice(note);
@@ -266,53 +262,58 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     return true;
   }
 
-  function saveTitle() {
+  function saveDraft(field: DraftField) {
     if (!canChange) return;
-    const next = title.trim();
-    if (!next) {
-      setTitle(sent.current.title);
-      dropDraft(task.id, "title");
+    const previous = sent.current[field];
+    const commit = draftCommit(field, field === "title" ? title : text, previous);
+    if (!commit.save) {
+      if (field === "title" && commit.value !== title) setTitle(commit.value);
+      setErrors((current) => clearFields(current, [field]));
+      drafts.drop(self, task.id, field, previous);
       return;
     }
-    const previous = sent.current.title;
-    if (next === previous) {
-      dropDraft(task.id, "title");
-      return;
-    }
-    sent.current.title = next;
-    void save({ title: next }).then((ok) => {
+    const next = commit.value;
+    sent.current[field] = next;
+    void save(field === "title" ? { title: next } : { description: next || null }).then((ok) => {
       if (ok) {
-        dropDraft(task.id, "title");
+        drafts.drop(self, task.id, field, next);
         return;
       }
-      if (sent.current.title === next) sent.current.title = previous;
-      keepDraft(task.id, { title: next });
+      if (sent.current[field] === next) sent.current[field] = previous;
+      drafts.keep(self, task.id, field, next, sent.current[field]);
     });
   }
 
+  function saveTitle() {
+    saveDraft("title");
+  }
+
   function saveText() {
-    if (!canChange) return;
-    const next = text.trim();
-    const previous = sent.current.text;
-    if (next === previous) {
-      dropDraft(task.id, "text");
-      return;
-    }
-    sent.current.text = next;
-    void save({ description: next || null }).then((ok) => {
-      if (ok) {
-        dropDraft(task.id, "text");
-        return;
-      }
-      if (sent.current.text === next) sent.current.text = previous;
-      keepDraft(task.id, { text: next });
-    });
+    saveDraft("text");
   }
 
   function flush() {
     saveTitle();
     saveText();
   }
+
+  function onDraftChange(change: DraftChange) {
+    if (change.id !== task.id) return;
+    const field = change.field;
+    const next = applyDraftNews(change, field === "title" ? title.trim() : text.trim(), sent.current[field]);
+    sent.current[field] = next.sent;
+    if (next.show !== null) {
+      if (field === "title") setTitle(next.show);
+      else setText(next.show);
+    }
+    if (next.error === "fail") setErrors((current) => failFields(current, [field], saveFailedMessage([field])));
+    if (next.error === "clear") setErrors((current) => clearFields(current, [field]));
+  }
+
+  useEffect(() => {
+    latestDraftChange.current = onDraftChange;
+  });
+  useEffect(() => drafts.watch(self), [self]);
 
   const latestFlush = useRef(flush);
   useEffect(() => {

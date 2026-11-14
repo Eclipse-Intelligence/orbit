@@ -6,7 +6,7 @@ import { useComposer } from "@/components/mail/compose-dock";
 import { completeTaskAction, openTaskIdsAction, remindTaskAction, reopenTaskAction } from "@/app/(crm)/records";
 import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
-import { reconcileDone } from "@/lib/task-done";
+import { reconcileDone, stillOpenIds } from "@/lib/task-done";
 import { movedMessage } from "@/lib/task-pad";
 import type { Task } from "@/lib/crm/types";
 
@@ -133,7 +133,7 @@ export function useTaskDone(tasks: Task[]) {
     if (ids.length === 0 && entries.current.size === 0) return;
     router.refresh();
     if (ids.length === 0) return;
-    const stillOpen = async (wanted: string[]) => (await openTaskIdsAction(wanted).catch(() => ({ open: [] as string[] }))).open ?? [];
+    const stillOpen = (wanted: string[]) => stillOpenIds(wanted, openTaskIdsAction);
     void (async () => {
       await wait(RECHECK_MS);
       let open = await stillOpen(ids);

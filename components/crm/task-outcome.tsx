@@ -339,7 +339,7 @@ export default function TaskOutcomeForm({
         rows={2}
         maxLength={10000}
         autoFocus={focusNote}
-        placeholder="What happened"
+        placeholder="What happened (optional)"
         onChange={(event) => change({ note: event.target.value })}
         className="min-h-16 resize-y"
       />
