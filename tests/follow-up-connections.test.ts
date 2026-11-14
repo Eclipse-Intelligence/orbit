@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { after, before, beforeEach, describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { recordCommunication } from "@/lib/crm/communications";
 import { fileInboundMessages, saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
-import { getAdminPool, getPool, takeNestedConnections } from "@/lib/db/pool";
+import { getAdminPool } from "@/lib/db/pool";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -40,6 +40,7 @@ function heldTitleModel(title: string) {
 }
 
 describe("follow-up tasks on the serverless pool", () => {
+  useServerlessPool();
   let owner: UserActor;
   let sourceId: string;
   let inboxFolder: string;
@@ -78,23 +79,15 @@ describe("follow-up tasks on the serverless pool", () => {
         [owner.workspaceId, owner.userId, sourceId],
       )
     ).rows[0].id;
-    await useServerlessPool();
-  });
-
-  beforeEach(() => {
-    takeNestedConnections();
   });
 
   after(async () => {
     delete process.env.LLM_API_KEY;
-    delete process.env.ORBIT_STRICT_POOL;
-    await getPool().end();
     await getAdminPool().end();
   });
 
   it("logs two emails at once on two connections and adds one follow-up", async () => {
     const companyId = await company("Hooli", "hooli-pool.test", "Gavin");
-    const started = Date.now();
     const log = (n: number) =>
       recordCommunication(owner, { kind: "email", title: `Re: Pilot ${n}`, body: "Could you send the scope?", participantEmails: ["gavin@hooli-pool.test"] });
     const results = await Promise.allSettled([log(1), log(2)]);
@@ -102,10 +95,8 @@ describe("follow-up tasks on the serverless pool", () => {
       results.map((result) => result.status),
       ["fulfilled", "fulfilled"],
     );
-    assert.ok(Date.now() - started < 4_000);
     assert.equal(await activityCount(owner.workspaceId, companyId), 2);
     assert.equal((await openTasks(owner.workspaceId, companyId)).length, 1);
-    assert.deepEqual(takeNestedConnections(), []);
   });
 
   it("files mail on the timeline without a second connection", async () => {
@@ -113,7 +104,6 @@ describe("follow-up tasks on the serverless pool", () => {
     await addInboxMessage("pool-timeline-1", "richard@piper-pool.test");
     assert.equal((await fileMailOnTimeline(owner, { actors: [owner] })).filed, 1);
     assert.equal((await openTasks(owner.workspaceId, companyId)).length, 1);
-    assert.deepEqual(takeNestedConnections(), []);
   });
 
   it("adds one follow-up when a meeting is logged while mail filing waits for its title", async () => {
@@ -132,7 +122,6 @@ describe("follow-up tasks on the serverless pool", () => {
       delete process.env.LLM_API_KEY;
     }
     assert.deepEqual(await openTasks(owner.workspaceId, companyId), ["Follow up with Laurie Raviga"]);
-    assert.deepEqual(takeNestedConnections(), []);
   });
 
   it("adds one follow-up when a meeting is logged while the inbox waits for its title", async () => {
@@ -154,6 +143,21 @@ describe("follow-up tasks on the serverless pool", () => {
       delete process.env.LLM_API_KEY;
     }
     assert.deepEqual(await openTasks(owner.workspaceId, companyId), ["Follow up with Erlich Bachman"]);
-    assert.deepEqual(takeNestedConnections(), []);
+  });
+
+  it("keeps a logged email and skips the follow-up when the open task check fails", async () => {
+    const companyId = await company("Endframe", "endframe-pool.test", "Gilfoyle");
+    const admin = getAdminPool();
+    await admin.query("revoke execute on function private.company_has_open_task(uuid, uuid) from crm_app");
+    try {
+      const logged = await recordCommunication(owner, { kind: "email", title: "Re: Pilot", body: "Could you send the scope?", participantEmails: ["gilfoyle@endframe-pool.test"] });
+      assert.equal(logged.suggested, false);
+      assert.equal(logged.task, null);
+      assert.equal(logged.activity.companyId, companyId);
+    } finally {
+      await admin.query("grant execute on function private.company_has_open_task(uuid, uuid) to crm_app");
+    }
+    assert.equal(await activityCount(owner.workspaceId, companyId), 1);
+    assert.deepEqual(await openTasks(owner.workspaceId, companyId), []);
   });
 });

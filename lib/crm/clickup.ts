@@ -417,8 +417,15 @@ async function readSyncRow(db: Db, workspaceId: string, id: string, lock = false
   return result.rows[0] ?? null;
 }
 
-async function linkedElsewhere(appDb: Db, workspaceId: string, clickupTaskId: string) {
-  const result = await appDb.query<{ linked: boolean }>("select private.clickup_task_linked($1, $2) as linked", [workspaceId, clickupTaskId]);
+const LINKED_SQL = "select private.clickup_task_linked($1, $2) as linked";
+
+export async function linkedElsewhere(workspaceId: string, clickupTaskId: string) {
+  const result = await query<{ linked: boolean }>(LINKED_SQL, [workspaceId, clickupTaskId]);
+  return Boolean(result.rows[0]?.linked);
+}
+
+async function linkedElsewhereInAppDb(appDb: Db, workspaceId: string, clickupTaskId: string) {
+  const result = await appDb.query<{ linked: boolean }>(LINKED_SQL, [workspaceId, clickupTaskId]);
   return Boolean(result.rows[0]?.linked);
 }
 
@@ -785,13 +792,13 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
   }
   const remote = remoteFields(task);
   const changedAt = remoteTime(task);
-  let elsewhere = false;
+  let linkedAnywhere = false;
   const lockAndCheck = async (db: Db) => {
     await lockClickUpTask(db, s.actor.workspaceId, taskId);
-    elsewhere = await linkedElsewhere(db, s.actor.workspaceId, taskId);
+    linkedAnywhere = await linkedElsewhereInAppDb(db, s.actor.workspaceId, taskId);
   };
   return withActorAfterAppStep(s.actor, lockAndCheck, async (db) => {
-    const linked = await linkedRow(db, s.actor.workspaceId, taskId);
+    const linked = linkedAnywhere ? await linkedRow(db, s.actor.workspaceId, taskId) : null;
     if (linked) {
       if (linked.archived_at) return "unchanged";
       const row = (await readSyncRow(db, s.actor.workspaceId, linked.id, true)) ?? linked;
@@ -825,7 +832,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
       return changed ? "updated" : "unchanged";
     }
     if (!listId || !watched.has(listId)) return "ignored";
-    if (elsewhere) return "ignored";
+    if (linkedAnywhere) return "ignored";
     const creating = await db.query<{ id: string }>(
       `select id from crm.tasks
        where workspace_id = $1 and clickup_task_id is null and clickup_list_id = $2 and title = $3

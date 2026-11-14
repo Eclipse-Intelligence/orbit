@@ -108,9 +108,15 @@ export function isRecent(at: string | null | undefined) {
   return age <= RECENT_MS && age >= -5 * 60 * 1000;
 }
 
-export async function companyHasOpenTask(workspaceId: string, companyId: string, appDb?: Db) {
-  const sql = "select private.company_has_open_task($1, $2) as open";
-  const result = appDb ? await appDb.query<{ open: boolean }>(sql, [workspaceId, companyId]) : await query<{ open: boolean }>(sql, [workspaceId, companyId]);
+const OPEN_TASK_SQL = "select private.company_has_open_task($1, $2) as open";
+
+export async function companyHasOpenTask(workspaceId: string, companyId: string) {
+  const result = await query<{ open: boolean }>(OPEN_TASK_SQL, [workspaceId, companyId]);
+  return result.rows[0]?.open === true;
+}
+
+async function companyHasOpenTaskInAppDb(appDb: Db, workspaceId: string, companyId: string) {
+  const result = await appDb.query<{ open: boolean }>(OPEN_TASK_SQL, [workspaceId, companyId]);
   return result.rows[0]?.open === true;
 }
 
@@ -120,7 +126,7 @@ export async function createFollowUpUnlessOpen<T>(actor: Actor, companyId: strin
     actor,
     async (db) => {
       await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`follow-up|${actor.workspaceId}|${companyId}`]);
-      open = await companyHasOpenTask(actor.workspaceId, companyId, db);
+      open = await companyHasOpenTaskInAppDb(db, actor.workspaceId, companyId);
     },
     async (db) => (open ? null : create(db)),
   );
@@ -220,7 +226,7 @@ export async function recordCommunication(
   });
 
   const { followUp, ...filed } = recorded;
-  if (!followUp || (await companyHasOpenTask(actor.workspaceId, followUp.companyId))) return { ...filed, task: null, suggested: false };
+  if (!followUp) return { ...filed, task: null, suggested: false };
   const task = await suggestFollowUp(actor, input.kind, followUp, { title, body }, options);
   if (task && actor.type === "user") {
     try {
@@ -241,6 +247,7 @@ async function suggestFollowUp(
   options: { fetchImpl?: typeof fetch },
 ) {
   try {
+    if (await companyHasOpenTask(actor.workspaceId, followUp.companyId)) return null;
     const title =
       kind === "email"
         ? await followUpTitle(

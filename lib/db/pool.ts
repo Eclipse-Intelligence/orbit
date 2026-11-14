@@ -71,7 +71,7 @@ export function holdingClient<T>(fn: () => Promise<T>): Promise<T> {
 export function assertNoHeldClient() {
   if (process.env.ORBIT_STRICT_POOL === "1" && heldClient.getStore()) {
     const error = new Error("Nested database connection: this needs a second pool connection while a transaction holds one.");
-    nestedConnections.push(error.stack ?? error.message);
+    if (nestedConnections.length < 50) nestedConnections.push(error.stack ?? error.message);
     throw error;
   }
 }
