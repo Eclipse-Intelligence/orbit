@@ -10,6 +10,7 @@ import { createTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { reconcileDone } from "@/lib/task-done";
+import { timingSaves } from "@/lib/timing-saves";
 import { dayOnlyHint, dayOnlyNote, movedMessage, ownerSetsTime, relinkChange, relinkNote } from "@/lib/task-pad";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -48,7 +49,7 @@ describe("task UI fixes", () => {
     assert.deepEqual(relinkChange(task, "company", null), { companyId: null }, "Don't link on Company leaves the person and opportunity");
     const change = relinkChange(task, "company", { id: beta });
     assert.deepEqual(change, { companyId: beta, opportunityId: null, contactId: null });
-    assert.equal(relinkNote(task, "company", change), "Removed Jane Doe and Acme renewal, linked to another company.");
+    assert.equal(relinkNote(task, "company", change), "Removed Jane Doe and Acme renewal. They belong to another company.");
     const moved = await relinkTask(mark, task.id, change, web);
     assert.deepEqual([moved.companyId, moved.contactId, moved.opportunityId], [beta, null, null]);
 
@@ -63,7 +64,7 @@ describe("task UI fixes", () => {
     assert.equal(free.contactCompanyId, null);
     const kept = relinkChange(free, "company", { id: beta });
     assert.deepEqual(kept, { companyId: beta, opportunityId: null }, "a person with no company stays");
-    assert.equal(relinkNote(free, "company", kept), "Removed Acme renewal, linked to another company.");
+    assert.equal(relinkNote(free, "company", kept), "Removed Acme renewal. It belongs to another company.");
     const keptPerson = await relinkTask(mark, free.id, kept, web);
     assert.deepEqual([keptPerson.companyId, keptPerson.contactId, keptPerson.opportunityId], [beta, loner, null]);
     assert.equal(relinkNote(keptPerson, "opportunity", relinkChange(keptPerson, "opportunity", { id: renewal, company: { id: acme, name: "Acme" } })), null);
@@ -92,6 +93,33 @@ describe("task UI fixes", () => {
     assert.equal(moved.dueHasTime, false);
     assert.equal(movedMessage(timed, "2026-11-23T09:00:00Z", { dueAt: moved.dueAt, dueHasTime: moved.dueHasTime }, now), "Due Mon 23 Nov. Only Sam can set a time.");
     assert.equal(movedMessage({ dueHasTime: true, ownerName: "Mark" }, "2026-11-23T09:00:00Z", { dueAt: "2026-11-23T09:00:00.000Z", dueHasTime: true }, now), "Due Mon 23 Nov, 09:00.");
+  });
+
+  it("puts back the last saved timing when the latest edit fails, and ignores stale answers", () => {
+    const base = { due: "2026-11-17", reminder: null, duration: 15 };
+    const twoFailures = timingSaves(base);
+    const first = twoFailures.start();
+    const second = twoFailures.start();
+    assert.equal(twoFailures.fail(first), null, "an older failure changes nothing");
+    assert.deepEqual(twoFailures.fail(second), base, "the latest failure goes back to what the server last confirmed");
+
+    const thenFail = timingSaves(base);
+    const saved = { due: "2026-11-17", reminder: null, duration: 30 };
+    const one = thenFail.start();
+    const two = thenFail.start();
+    assert.equal(thenFail.succeed(one, saved), null, "an older success isn't shown over a newer edit");
+    assert.deepEqual(thenFail.fail(two), saved, "but it is what a later failure goes back to");
+
+    const dayOnly = timingSaves({ due: "2026-11-17", reminder: null, duration: 15 });
+    const timed = dayOnly.start();
+    assert.deepEqual(dayOnly.succeed(timed, { due: "2026-11-17", reminder: null, duration: 15 }), { due: "2026-11-17", reminder: null, duration: 15 }, "a day kept by the server replaces the time typed");
+    assert.equal(dayOnly.pending(), false);
+    const late = dayOnly.start();
+    dayOnly.confirm({ due: "2026-11-20", reminder: null, duration: 15 });
+    assert.deepEqual(dayOnly.fail(late), { due: "2026-11-17", reminder: null, duration: 15 }, "fresh data while a save is out doesn't count as confirmed");
+    dayOnly.confirm({ due: "2026-11-20", reminder: null, duration: 15 });
+    const after = dayOnly.start();
+    assert.deepEqual(dayOnly.fail(after), { due: "2026-11-20", reminder: null, duration: 15 });
   });
 
   it("shows a done task again once fresh data says it was reopened", () => {

@@ -20,6 +20,7 @@ const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "frida
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri)";
 const WEEKEND_SHORT = "(sat|sun)";
+const MEETING_CUE = /\b(?:call|ring|phone|meet|meeting|chat|catch\s+up|catch-up|demo|interview|lunch|coffee|at)\b/i;
 const CLOCK = "(?:\\d{1,2}(?:[:.]\\d{2})?\\s*(?:am|pm)\\b|\\d{1,2}:\\d{2}\\b|noon\\b|midday\\b|midnight\\b)";
 const DAY_WORD = "(?:today|tonight|tomorrow|tmrw|tmr|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|weds?|thu(?:rs?)?|fri|sat|sun)";
 const MONTH = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
@@ -144,17 +145,15 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   } = { date: null, time: null, exact: null, remind: null, duration: null };
   let ambiguous = false;
   const clock = (hour: string, minute: number, meridiem: string | undefined) => {
-    if (!guessable(hour, meridiem)) {
-      ambiguous = true;
-      return null;
-    }
-    return toHour(Number(hour), minute, meridiem);
+    if (guessable(hour, meridiem)) return toHour(Number(hour), minute, meridiem);
+    ambiguous = true;
+    return toHour(Number(hour) + 12, minute, undefined);
   };
   const bareHour = (hour: string) => {
     const value = Number(hour);
     if (value < 1 || value > 23) return null;
     if (value <= 12) ambiguous = true;
-    return value <= 6 ? null : { hour: value, minute: 0 };
+    return { hour: value <= 6 ? value + 12 : value, minute: 0 };
   };
 
   const take = (
@@ -292,7 +291,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   take(
     new RegExp(`(?<![\\d£$€.,:/]\\s?)\\b${NOT_MONEY}(\\d{1,2})(?=\\s+(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b)`, "i"),
     (match) => {
-      if (found.time) return false;
+      if (found.time || !MEETING_CUE.test(text.slice(0, match.index))) return false;
       const parsed = bareHour(match[1]);
       if (!parsed) return false;
       found.time = parsed;
@@ -547,7 +546,7 @@ export function relinkNote(task: LinkedTask, kind: "company" | "contact" | "oppo
     kind !== "opportunity" && change.opportunityId === null && task.opportunityId ? (task.opportunityName ?? "the opportunity") : null,
   ].filter((name): name is string => Boolean(name));
   if (names.length === 0) return null;
-  return `Removed ${names.join(" and ")}, linked to another company.`;
+  return `Removed ${names.join(" and ")}. ${names.length === 1 ? "It belongs" : "They belong"} to another company.`;
 }
 
 export function ownerSetsTime(viewerId: string | null | undefined, ownerId: string | null | undefined) {

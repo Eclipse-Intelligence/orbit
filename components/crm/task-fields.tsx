@@ -19,7 +19,7 @@ import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLink
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
 import type { LinkCandidate } from "@/lib/crm/task-links";
 import { TaskRecordLink } from "@/components/crm/task-workspace";
-import { saveTaskDetailsAction, type SavedTiming, type TaskDetails } from "@/app/(crm)/discussions";
+import { saveTaskDetailsAction, type TaskDetails } from "@/app/(crm)/discussions";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { reminderLabel } from "@/lib/crm/reminder-options";
 import { taskSnoozeChoices } from "@/lib/crm/task-snooze";
@@ -27,6 +27,7 @@ import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
+import { timingSaves, type TimingValues } from "@/lib/timing-saves";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { durationLabel, localInstant } from "@/lib/crm/task-time";
@@ -185,7 +186,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const sent = useRef({ title: source.title, text: source.text });
-  const timingSaves = useRef(0);
+  const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
   const visible = useRef(shown);
   useEffect(() => {
     visible.current = shown;
@@ -204,25 +205,28 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     setSeen(source);
     if (title.trim() === seen.title) setTitle(source.title);
     if (text.trim() === seen.text) setText(source.text);
-    if (due === seen.due) setDue(source.due);
-    if (reminder === seen.reminder) setReminder(source.reminder);
-    if (duration === seen.duration) setDuration(source.duration);
+    if (!timing.pending()) {
+      if (due === seen.due) setDue(source.due);
+      if (reminder === seen.reminder) setReminder(source.reminder);
+      if (duration === seen.duration) setDuration(source.duration);
+    }
   }
+  useEffect(() => {
+    timing.confirm({ due: source.due, reminder: source.reminder, duration: source.duration });
+  }, [timing, source.due, source.reminder, source.duration]);
   useEffect(() => {
     sent.current = { title: source.title, text: source.text };
   }, [source.title, source.text]);
 
-  function settle(timing: SavedTiming) {
-    const next = { due: dueValue(timing), reminder: timing.remindMinutes, duration: timing.durationMinutes };
-    setDue(next.due);
-    setReminder(next.reminder);
-    setDuration(next.duration);
+  function show(values: TimingValues) {
+    setDue(values.due);
+    setReminder(values.reminder);
+    setDuration(values.duration);
   }
 
   async function save(write: TaskDetails) {
-    const timing = touchesTiming(write);
-    const ticket = timing ? ++timingSaves.current : timingSaves.current;
-    const latest = () => !timing || ticket === timingSaves.current;
+    const timed = touchesTiming(write);
+    const ticket = timed ? timing.start() : 0;
     setError(null);
     setNotice(null);
     let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
@@ -232,12 +236,17 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
       result = { error: "Couldn't save. Try again." };
     }
     if (result.error) {
+      const restore = timed ? timing.fail(ticket) : null;
+      if (timed && !restore) return true;
+      if (restore) show(restore);
       setError(result.error);
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
-      return latest() ? false : "stale";
+      return false;
     }
-    if (result.saved && timing && latest()) {
-      settle(result.saved);
+    const applied = timed && result.saved ? timing.succeed(ticket, { due: dueValue(result.saved), reminder: result.saved.remindMinutes, duration: result.saved.durationMinutes }) : null;
+    if (timed && !result.saved) timing.fail(ticket);
+    if (applied && result.saved) {
+      show(applied);
       if (asksForTime(write) && result.saved.dueAt && !result.saved.dueHasTime) {
         const note = dayOnlyNote(task.ownerName);
         setNotice(note);
@@ -312,14 +321,9 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   }, []);
 
   function writeDue(value: string, write: TaskDetails, nextReminder: number | null) {
-    const before = { due, reminder };
     setDue(value);
     setReminder(nextReminder);
-    void save(write).then((ok) => {
-      if (ok !== false) return;
-      setDue(before.due);
-      setReminder(before.reminder);
-    });
+    void save(write);
   }
 
   function changeDue(value: string) {
@@ -340,19 +344,13 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   }
 
   function changeDuration(minutes: number) {
-    const before = duration;
     setDuration(minutes);
-    void save({ durationMinutes: minutes }).then((ok) => {
-      if (ok === false) setDuration(before);
-    });
+    void save({ durationMinutes: minutes });
   }
 
   function changeReminder(minutes: number | null) {
-    const before = reminder;
     setReminder(minutes);
-    void save({ remindMinutes: minutes }).then((ok) => {
-      if (ok === false) setReminder(before);
-    });
+    void save({ remindMinutes: minutes });
   }
 
   async function assign(ownerId: string) {

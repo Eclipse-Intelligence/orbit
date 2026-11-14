@@ -272,6 +272,7 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
       "title is the task without the date, time and reminder words, starting with a capital letter. " +
       "due is in Europe/London local time. Give a time only when the text gives one (a clock time, or words like morning, noon, tonight or end of day). " +
       "If a day is given without a time, due is the day alone as YYYY-MM-DD. If nothing says when, due is null. " +
+      "A bare hour with no am or pm means working hours: 1 to 6 is the afternoon (3 means 15:00) and 7 to 12 is as written (9 means nine in the morning). A number that is a count, a quantity, a version, a room or a chapter is not a time. " +
       "remindMinutes is how many minutes before the due time to remind, or null if no reminder is asked for. Keep it even when due has no time. " +
       `Now is ${today} in London.`,
     user: clean,

@@ -53,7 +53,7 @@ export function useTaskDone(tasks: Task[]) {
   const [awaiting, setAwaiting] = useState<Set<string>>(() => new Set());
   const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set());
   const [sent, setSent] = useState<Set<string>>(() => new Set());
-  const inflight = useRef(new Map<string, Promise<unknown>>());
+  const inflight = useRef(new Map<string, Promise<boolean>>());
   const reopening = useRef(new Set<string>());
   const [message, setMessage] = useState<string | null>(null);
   const entries = useRef(new Map<string, Entry>());
@@ -97,10 +97,11 @@ export function useTaskDone(tasks: Task[]) {
             setDone((current) => without(current, [id]));
             setMessage(result.error);
             composer.showToast({ message: result.error, tone: "alert" });
-            return;
+            return false;
           }
           setAwaiting((current) => new Set(current).add(id));
           router.refresh();
+          return true;
         });
       inflight.current.set(id, request);
     },
@@ -296,7 +297,11 @@ export function useTaskDone(tasks: Task[]) {
         setSent((current) => without(current, [id]));
       };
       void (async () => {
-        await inflight.current.get(task.id);
+        const committed = await inflight.current.get(task.id);
+        if (committed === false) {
+          reopening.current.delete(task.id);
+          return;
+        }
         const result: Outcome = await reopenTaskAction(task.id).catch((): Outcome => ({ error: NOT_REOPENED }));
         reopening.current.delete(task.id);
         if (result.error) {
