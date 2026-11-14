@@ -392,6 +392,25 @@ export const CORE_TASKS: EvalTask[] = [
     checks: [card("update_task", arg.all(arg.is("taskId", "task:Chase Ansel if he's gone quiet"), dueOn("dueDate", { weekday: 1 }, { weekday: 1, weeks: 1 }))), noCard("create_task")],
   }),
   task({
+    id: "create-those-from-brief",
+    suite: "core",
+    category: "propose_write",
+    origin: "Phase 6: Create those under a morning brief makes one task per quiet opportunity through approval cards.",
+    earlier: [
+      {
+        role: "assistant",
+        content:
+          "### Opportunities gone quiet\n- [Larkspur content retainer](/opportunities/{{id:deal:Larkspur content retainer}}) (Larkspur Media, Working, quiet 9 days). Suggested task: Call Bram Kettle to ask where the retainer stands\n- [Fernhill content review](/opportunities/{{id:deal:Fernhill content review}}) (Fernhill Capital, New, quiet 12 days). Suggested task: Email Odile Marsh the review outline",
+      },
+    ],
+    message: "Create those",
+    checks: [
+      exactlyCards(["create_task", "create_task"]),
+      card("create_task", arg.all(arg.is("opportunityId", "deal:Larkspur content retainer"), dueOn("dueDate", { days: 0 })), "creates the Larkspur task for today"),
+      card("create_task", arg.all(arg.is("opportunityId", "deal:Fernhill content review"), dueOn("dueDate", { days: 0 })), "creates the Fernhill task for today"),
+    ],
+  }),
+  task({
     id: "write-note-on-contact",
     suite: "core",
     category: "propose_write",

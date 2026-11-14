@@ -52,6 +52,78 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     ),
   },
   {
+    key: "next-step",
+    name: "Next step",
+    description: "When you complete a task, suggests the next one and creates it after you approve.",
+    definition: graph(
+      { type: "task_completed", mine: true },
+      [
+        {
+          id: "filter_1",
+          type: "filter",
+          label: "Linked to someone?",
+          config: {
+            match: "any",
+            conditions: [
+              { left: "{{task.contactId}}", op: "is_not_empty" },
+              { left: "{{task.companyId}}", op: "is_not_empty" },
+              { left: "{{task.opportunityId}}", op: "is_not_empty" },
+            ],
+          },
+        },
+        {
+          id: "ai_1",
+          type: "ai",
+          label: "Suggest the next step",
+          config: {
+            model: "claude-sonnet-5-5",
+            context: true,
+            prompt:
+              "I've just completed this task: {{task.title}}\nIts notes: {{task.notes}}\nIts opportunity: {{task.opportunityName}}\nWho it is with: {{contact.name}} at {{company.name}}\n\nOpen tasks on the same records:\n{{task.openTasks}}\n\nSuggest the one next task that moves this on, from what was agreed, promised or asked for in what Orbit knows below. Leave nextTask empty when an open task already covers it, when nothing clearly follows, or when the task wasn't about anyone.",
+            outputs: [
+              { key: "nextTask", type: "text", description: "The next task as a short instruction naming who it is with, such as \"Send Jane the signed order form\". Empty if none." },
+              { key: "dueOn", type: "text", description: "The day it should be done by, as YYYY-MM-DD, from today on. Empty if no day fits." },
+              { key: "why", type: "text", description: "One sentence on why this is the next step." },
+            ],
+          },
+        },
+        {
+          id: "filter_2",
+          type: "filter",
+          label: "Anything to do?",
+          config: { match: "all", conditions: [{ left: "{{steps.ai_1.nextTask}}", op: "is_not_empty" }] },
+        },
+        {
+          id: "approval_1",
+          type: "approval",
+          label: "Check with me",
+          config: { title: "Next step: {{steps.ai_1.nextTask}}", details: "{{steps.ai_1.why}}\n\nAfter: {{task.title}}\nDue: {{steps.ai_1.dueOn}}" },
+        },
+        {
+          id: "create_task_1",
+          type: "create_task",
+          label: "Create it",
+          config: {
+            title: "{{steps.ai_1.nextTask}}",
+            notes: "After {{task.title}}. {{steps.ai_1.why}}",
+            dueInDays: "1",
+            dueDate: "{{steps.ai_1.dueOn}}",
+            assignee: "owner",
+            link: "task",
+            clickup: false,
+          },
+        },
+      ],
+      [
+        { source: "trigger", handle: "out", target: "filter_1" },
+        { source: "filter_1", handle: "out", target: "ai_1" },
+        { source: "ai_1", handle: "out", target: "filter_2" },
+        { source: "filter_2", handle: "out", target: "approval_1" },
+        { source: "approval_1", handle: "out", target: "create_task_1" },
+      ],
+    ),
+  },
+  {
     key: "requests-to-linear",
     name: "Product requests to Linear",
     description: "Turns product requests from calls into Linear issues, after you approve.",

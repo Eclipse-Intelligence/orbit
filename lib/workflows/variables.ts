@@ -219,6 +219,9 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
   if (type === "task_completed") {
     options.push(
       { path: "task.title", label: "Title", group: "Task" },
+      { path: "task.notes", label: "Notes", group: "Task" },
+      { path: "task.opportunityName", label: "Opportunity", group: "Task" },
+      { path: "task.openTasks", label: "Open tasks on the same records", group: "Task" },
       { path: "task.completedAt", label: "Completed", group: "Task" },
       { path: "task.dueDate", label: "Due day", group: "Task" },
       { path: "task.dueHasTime", label: "Has a due time", group: "Task" },

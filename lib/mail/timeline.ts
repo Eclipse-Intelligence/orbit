@@ -6,6 +6,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
 import { createTaskInDb } from "@/lib/crm/tasks";
+import { followUpTitle } from "@/lib/mail/follow-up-title";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
@@ -159,14 +160,17 @@ async function needsFollowUp(actor: UserActor, row: Candidate, at: Date) {
   return !(await companyHasOpenTask(actor.workspaceId, row.company_id));
 }
 
-async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate) {
-  if (!row.company_id) return null;
+async function followUpWho(db: Db, row: Candidate) {
   const names = await db.query<{ contact: string | null; company: string | null }>(
     `select (select coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email) from crm.contacts c where c.id = $1) as contact,
        (select co.name from crm.companies co where co.id = $2) as company`,
     [row.contact_id, row.company_id],
   );
-  const who = names.rows[0]?.contact || names.rows[0]?.company || "them";
+  return names.rows[0]?.contact || names.rows[0]?.company || "them";
+}
+
+async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate, title: string) {
+  if (!row.company_id) return null;
   const thread = await db.query<{ source_id: string; thread_key: string | null; subject: string | null }>(
     "select source_id, thread_key, subject from crm.mail_messages where id = $1",
     [row.message_id],
@@ -177,7 +181,7 @@ async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate) {
     db,
     actor,
     {
-      title: `Follow up with ${who}`.slice(0, 200),
+      title: title.slice(0, 200),
       description: withMailThread(
         withDueNote("Suggested after an email arrived.", due),
         mail?.thread_key ? mailThreadLine(mail.source_id, mail.thread_key, mail.subject) : null,
@@ -206,7 +210,7 @@ async function sendFollowUpsToClickUp(actor: UserActor, taskIds: string[]) {
 
 export async function fileMailOnTimeline(
   actor: UserActor,
-  options: { days?: number; limit?: number; now?: number; filter?: MailFilter; actors?: UserActor[] } = {},
+  options: { days?: number; limit?: number; now?: number; filter?: MailFilter; actors?: UserActor[]; fetchImpl?: typeof fetch; deadline?: number; titleTimeoutMs?: number } = {},
 ) {
   const now = options.now ?? Date.now();
   const actors = options.actors ?? (await workspaceActors(actor));
@@ -271,11 +275,17 @@ export async function fileMailOnTimeline(
           { mailMessageId: row.message_id, internetMessageId: row.internet_message_id },
           { operation: "file_mail", source: "microsoft", catchUp: now - at.getTime() > FRESH_MS },
         );
-        return { created: saved.created, taskId: saved.created && followUp ? await suggestFollowUp(db, target, row) : null };
+        return { created: saved.created, who: saved.created && followUp ? await followUpWho(db, row) : null };
       });
       if (!outcome.created) continue;
       filed += 1;
-      if (outcome.taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), outcome.taskId]);
+      if (outcome.who === null) continue;
+      const title = await followUpTitle(
+        { who: outcome.who, subject: row.subject, text: bodyOf(row) },
+        { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs },
+      );
+      const taskId = await withActor(target, (db) => suggestFollowUp(db, target, row, title));
+      if (taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), taskId]);
     } catch (error) {
       console.error("Filing an email on the timeline failed", error);
     }

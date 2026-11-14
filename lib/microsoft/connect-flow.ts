@@ -2,6 +2,7 @@ import { resetCalendarSync } from "@/lib/crm/calendar";
 import { calendarConnectError, calendarConnectFailure, connectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { CrmError } from "@/lib/crm/errors";
 import { getMailbox, saveMailbox, syncMailbox } from "@/lib/crm/inbox";
+import { USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import {
@@ -79,7 +80,7 @@ export async function finishMicrosoftConnect(
       aliases: identity.aliases,
     });
     await resetCalendarSync(user, token.scope);
-    await syncMailbox(user, fetchImpl);
+    await syncMailbox(user, fetchImpl, { titleTimeoutMs: USER_WAIT_TITLE_MS });
     return {};
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, add: addOffer(error) };

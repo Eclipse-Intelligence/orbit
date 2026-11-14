@@ -675,7 +675,7 @@ export async function syncMail(
       })
     : [];
   report.routed = routed.length;
-  report.filed = await fileMailOnTimeline(actor)
+  report.filed = await fileMailOnTimeline(actor, { deadline, fetchImpl: options.fetchImpl })
     .then((result) => result.filed)
     .catch((error) => {
       console.error("Filing mail on contacts failed", error);

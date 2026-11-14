@@ -27,6 +27,7 @@ import {
 } from "@/lib/mail/routing";
 import { splitCase, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
+import { USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
 import { captureCutoff, ownAddressesSql } from "@/lib/mail/waiting";
 import { markSenderThreadsBusiness, neverAskLabel, recordFiledInDb, ruleTarget, setSenderRule, storeThreadDecision } from "@/lib/mail/relevance";
 import type { ThreadFiling } from "@/lib/mail/view";
@@ -198,7 +199,7 @@ export async function setThreadFiling(actor: UserActor, threadKey: string, works
     const keepContact = !route?.contact_id || (contact !== undefined && chosen.includes(contact.workspace_id));
     await upsertRoute(db, actor, sourceId, key, { filedIn: chosen, ignored: false, ...(keepContact ? {} : { contactId: null }) });
   });
-  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors });
+  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors, titleTimeoutMs: USER_WAIT_TITLE_MS });
   const dropped = (before?.filedIn ?? []).filter((id) => !chosen.includes(id));
   const kept = await threadMessagesFiledIn(actor, sourceId, key, dropped);
   return {
@@ -253,7 +254,7 @@ export async function addPersonHere(actor: UserActor, threadKey: string, emailVa
     );
     return { contactId: saved.contactId, companyId: row.rows[0]?.company_id ?? null, companyName: row.rows[0]?.company_name ?? null, title: row.rows[0]?.job_title ?? null };
   });
-  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors });
+  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors, titleTimeoutMs: USER_WAIT_TITLE_MS });
   return { ...added, filing: await filingFor(actor, actors, sourceId, key) };
 }
 
@@ -438,7 +439,7 @@ export async function createAndFileUnknown(actor: UserActor, threadKey: string) 
     );
     return { contactId: result.contactId, contactName: name.rows[0]?.name ?? info.counterpart.email };
   });
-  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors });
+  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors, titleTimeoutMs: USER_WAIT_TITLE_MS });
   return saved;
 }
 
@@ -458,6 +459,6 @@ export async function fileUnknownTo(actor: UserActor, threadKey: string, contact
     if (info.counterpart) await recordFiledInDb(db, actor, actor.workspaceId, info.counterpart.email);
     return { contactId, contactName: contact.rows[0].name };
   });
-  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors });
+  await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors, titleTimeoutMs: USER_WAIT_TITLE_MS });
   return saved;
 }

@@ -19,6 +19,7 @@ import {
   type Sender,
   syncMailbox,
 } from "@/lib/crm/inbox";
+import { USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { actionError } from "@/lib/companies";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -52,7 +53,7 @@ function settingsWith(path: string, key: "error" | "info", message: string): nev
 
 export async function syncInboxAction() {
   const user = await requireUser();
-  const result = await syncMailbox(user);
+  const result = await syncMailbox(user, fetch, { titleTimeoutMs: USER_WAIT_TITLE_MS });
   refreshRecords();
   if (result.error) settingsWith(SETTINGS_PATHS.email, "error", result.error);
   redirect(SETTINGS_PATHS.email);

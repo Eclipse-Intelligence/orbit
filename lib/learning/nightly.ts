@@ -9,7 +9,9 @@ import { query, type Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
 import { businessNamesInDb, insertMemory, lessTrusted, mayApplyEverywhere, reviseMemory, searchTerms, visibleMemorySql, type Memory, type MemoryScope, type NoteOrigin } from "@/lib/learning/memories";
 import { mapNote, NOTE_SELECT } from "@/lib/learning/market";
-import { stalledDealsInDb } from "@/lib/crm/pipeline-history";
+import { stalledDealsInDb, type StalledDeal } from "@/lib/crm/pipeline-history";
+import { DUE_HEADING, markdownText, QUIET_HEADING, SUGGESTED_TASK } from "@/lib/learning/brief-format";
+import { dayWindow } from "@/lib/time";
 import { noSensitivePeopleSql, notSensitiveThreadSql, sensitiveAddress } from "@/lib/mail/relevance";
 import { researchMail } from "@/lib/mail/subscriptions";
 import { writingStyle } from "@/lib/writing-style";
@@ -40,6 +42,8 @@ const AI_TOKENS = 6_000;
 const MARKET_FINAL_HOUR = 3;
 const BRIEF_STALLED_DAYS = 7;
 const BRIEF_STALLED_LIMIT = 8;
+const BRIEF_TASK_LIMIT = 10;
+const BRIEF_MAX_CHARS = 8_000;
 const BRIEF_RESEARCH_LIMIT = 20;
 const BRIEF_RESEARCH_CHARS = 8_000;
 const TIDY_LIMITS: Record<MemoryScope, number> = { personal: 100, business: 150, market: 150 };
@@ -463,21 +467,76 @@ async function learnMarket(actor: UserActor, options: Options): Promise<UnitResu
   return result;
 }
 
-const BRIEF = z.object({ brief: z.string() });
+const BRIEF = z.object({
+  brief: z.string(),
+  suggestions: z.array(z.object({ opportunityId: z.string(), task: z.string() })).nullish(),
+});
+
+type DueTask = { id: string; title: string; due_at: Date; due_has_time: boolean; company_name: string | null; total: number };
+type LearnedRow = { scope: string; kind: string; title: string; body: string; company_id: string | null; created_at: Date; updated_at: Date };
+
+async function dueTasksInDb(db: Db, actor: UserActor, now: Date) {
+  const window = dayWindow(now);
+  const result = await db.query<DueTask>(
+    `select t.id, t.title, t.due_at, t.due_has_time, co.name as company_name, count(*) over ()::int as total
+     from crm.tasks t
+     left join crm.companies co on co.id = t.company_id
+     where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null and t.due_at is not null and t.due_at < $3
+       and (t.owner_id = $2 or (t.owner_id is null and t.created_by_user_id = $2))
+     order by t.due_at asc, t.id
+     limit $4`,
+    [actor.workspaceId, actor.userId, window.end, BRIEF_TASK_LIMIT],
+  );
+  return { tasks: result.rows, total: result.rows[0]?.total ?? 0, start: window.start };
+}
+
+function wholeLines(text: string, max: number) {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const end = cut.lastIndexOf("\n");
+  return (end > 0 ? cut.slice(0, end) : cut).trimEnd();
+}
+
+function timeOfDay(value: Date) {
+  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Europe/London" }).format(value);
+}
+
+function dueSection(due: Awaited<ReturnType<typeof dueTasksInDb>>) {
+  if (!due.tasks.length) return "";
+  const lines = due.tasks.map((task) => {
+    const when = task.due_at < due.start ? `overdue, due ${shortDate(task.due_at)}` : task.due_has_time ? timeOfDay(task.due_at) : "";
+    const notes = [when, task.company_name ? markdownText(task.company_name) : ""].filter(Boolean).join(", ");
+    return `- [${markdownText(task.title) || "Task"}](/tasks?task=${task.id})${notes ? ` (${notes})` : ""}`;
+  });
+  const more = due.total - due.tasks.length;
+  return [`### ${DUE_HEADING}`, ...lines, ...(more > 0 ? [`- And ${more} more on [Tasks](/tasks).`] : [])].join("\n");
+}
+
+function quietSection(stalled: StalledDeal[], suggested: Map<string, string>) {
+  if (!stalled.length) return "";
+  const lines = stalled.map((deal) => {
+    const details = [deal.companyName ? markdownText(deal.companyName) : "", markdownText(deal.stageName), `quiet ${deal.daysQuiet} days`].filter(Boolean).join(", ");
+    const task = suggested.get(deal.opportunityId) || `Check in with ${deal.companyName ?? deal.name}`;
+    return `- [${markdownText(deal.name) || "Opportunity"}](${deal.href}) (${details}). ${SUGGESTED_TASK} ${markdownText(task)}`;
+  });
+  return [`### ${QUIET_HEADING}`, ...lines].join("\n");
+}
 
 async function writeBrief(actor: UserActor, since: Date, options: Options & { day: string }): Promise<UnitResult> {
+  const now = options.now ?? new Date();
   const gathered = await withActor(actor, async (db) => {
     const notes = await db.query<Parameters<typeof mapNote>[0]>(`${NOTE_SELECT} where n.workspace_id = $1 and n.created_at > $2 order by n.created_at desc limit 25`, [actor.workspaceId, since]);
-    const learned = await db.query<{ scope: string; kind: string; title: string; body: string; company_id: string | null; created_at: Date; updated_at: Date }>(
+    const learned = await db.query<LearnedRow>(
       `select scope, kind, title, body, company_id, created_at, updated_at from crm.memories
        where ${visibleMemorySql("$1", "$3")} and archived_at is null and updated_at > $2 and (user_id is null or user_id = $3)
        order by (kind = 'signal') desc, updated_at desc limit 30`,
       [actor.workspaceId, since, actor.userId],
     );
-    const stalled = await stalledDealsInDb(db, actor, { days: BRIEF_STALLED_DAYS, forMember: actor.userId, limit: BRIEF_STALLED_LIMIT, now: options.now });
-    return { notes: notes.rows.map(mapNote), learned: learned.rows, stalled };
+    const stalled = await stalledDealsInDb(db, actor, { days: BRIEF_STALLED_DAYS, forMember: actor.userId, limit: BRIEF_STALLED_LIMIT, now });
+    const due = await dueTasksInDb(db, actor, now);
+    return { notes: notes.rows.map(mapNote), learned: learned.rows, stalled, due };
   });
-  const hours = Math.min(72, Math.max(1, Math.ceil(((options.now ?? new Date()).getTime() - since.getTime()) / 3_600_000)));
+  const hours = Math.min(72, Math.max(1, Math.ceil((now.getTime() - since.getTime()) / 3_600_000)));
   const workspaceIds = await workspaceActors(actor)
     .then((list) => list.map((item) => item.workspaceId))
     .catch(() => [actor.workspaceId]);
@@ -485,35 +544,16 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     console.error("Reading research mail failed", error instanceof Error ? error.message : error);
     return [];
   });
-  if (!gathered.notes.length && !gathered.learned.length && !gathered.stalled.length && !research.length) return { skipped: "Nothing new for a brief." };
-  const name = actor.fullName || actor.email;
-  const material = [
-    "MATERIAL",
-    gathered.learned.length
-      ? `What Orbit learned or updated:\n${gathered.learned.map((row) => `- [${row.scope}, ${row.kind}${row.created_at.getTime() === row.updated_at.getTime() ? ", new" : ", updated"}] ${row.title}: ${clip(row.body, 300)}${row.company_id ? ` (link /companies/${row.company_id})` : ""}`).join("\n")}`
-      : "",
-    gathered.stalled.length
-      ? `Open deals gone quiet (no activity, email or dated task for ${BRIEF_STALLED_DAYS}+ days in their stage):\n${gathered.stalled.map((deal) => `- ${deal.name} (${deal.companyName ?? "no company"}, ${deal.stageName}${deal.value ? `, ${deal.currency} ${deal.value}` : ""}, link ${deal.href}): ${deal.reason}`).join("\n")}`
-      : "",
-    gathered.notes.length ? `Market notes received:\n${gathered.notes.map((note) => `- ${note.kind}: ${clip(note.headline, 200)}${note.url ? ` (${note.url})` : ""}`).join("\n")}` : "",
-    research.length
-      ? `Research mail (newsletters ${name} keeps for research, private to ${name}):\n${research.map((email) => `- ${email.receivedAt ? shortDate(email.receivedAt) : ""}, ${email.name ?? email.from}: ${clip(email.subject, 160)}. ${clip(email.text, BRIEF_RESEARCH_CHARS)}`).join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  const result = await completeJson({
-    system:
-      `Write ${name}'s morning brief in Orbit, ${businessName(actor)}'s CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
-      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${writingStyle()} ${brandToneNote(await brandOrEmpty(actor))} ${UNTRUSTED}`,
-    user: material,
-    schema: BRIEF,
-    maxTokens: AI_TOKENS,
-    timeoutMs: 60_000,
-    deadline: options.deadline,
-    fetchImpl: options.fetchImpl,
-  });
-  const body = result.data.brief.trim().slice(0, 8_000);
+  const needsWriting = gathered.notes.length > 0 || gathered.learned.length > 0 || gathered.stalled.length > 0 || research.length > 0;
+  if (!needsWriting && !gathered.due.tasks.length) return { skipped: "Nothing new for a brief." };
+  const written = needsWriting
+    ? await writtenBrief(actor, { ...gathered, research }, options).catch((error) => {
+        if (!gathered.due.tasks.length && !gathered.stalled.length) throw error;
+        console.error("Writing the brief failed", error instanceof Error ? error.message : error);
+        return { brief: "", suggestions: new Map<string, string>() };
+      })
+    : { brief: "", suggestions: new Map<string, string>() };
+  const body = wholeLines([dueSection(gathered.due), quietSection(gathered.stalled, written.suggestions), written.brief].filter(Boolean).join("\n\n"), BRIEF_MAX_CHARS);
   if (!body) return { skipped: "The brief came back empty." };
   await withActor(actor, (db) =>
     db.query(
@@ -528,6 +568,51 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     ),
   );
   return { brief: true };
+}
+
+async function writtenBrief(
+  actor: UserActor,
+  gathered: { notes: ReturnType<typeof mapNote>[]; learned: LearnedRow[]; stalled: StalledDeal[]; research: Awaited<ReturnType<typeof researchMail>> },
+  options: Options,
+) {
+  const { research } = gathered;
+  const name = actor.fullName || actor.email;
+  const material = [
+    "MATERIAL",
+    gathered.learned.length
+      ? `What Orbit learned or updated:\n${gathered.learned.map((row) => `- [${row.scope}, ${row.kind}${row.created_at.getTime() === row.updated_at.getTime() ? ", new" : ", updated"}] ${row.title}: ${clip(row.body, 300)}${row.company_id ? ` (link /companies/${row.company_id})` : ""}`).join("\n")}`
+      : "",
+    gathered.stalled.length
+      ? `Open opportunities gone quiet (no activity, email or dated task for ${BRIEF_STALLED_DAYS}+ days in their stage):\n${gathered.stalled.map((deal) => `- id ${deal.opportunityId}: ${deal.name} (${deal.companyName ?? "no company"}, ${deal.stageName}${deal.value ? `, ${deal.currency} ${deal.value}` : ""}): ${deal.reason}`).join("\n")}`
+      : "",
+    gathered.notes.length ? `Market notes received:\n${gathered.notes.map((note) => `- ${note.kind}: ${clip(note.headline, 200)}${note.url ? ` (${note.url})` : ""}`).join("\n")}` : "",
+    research.length
+      ? `Research mail (newsletters ${name} keeps for research, private to ${name}):\n${research.map((email) => `- ${email.receivedAt ? shortDate(email.receivedAt) : ""}, ${email.name ?? email.from}: ${clip(email.subject, 160)}. ${clip(email.text, BRIEF_RESEARCH_CHARS)}`).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const result = await completeJson({
+    system:
+      `Write ${name}'s morning brief in Orbit, ${businessName(actor)}'s CRM. Reply with JSON only: {"brief": string, "suggestions": [{"opportunityId": string, "task": string}]}. ` +
+      `brief is markdown of at most 180 words with up to three short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), and "What Orbit learned" (the most useful new or changed notes). ` +
+      `Orbit lists ${name}'s tasks and the opportunities gone quiet above the brief itself, so leave them out of brief, and leave brief empty when nothing else is worth saying. ` +
+      `suggestions has one entry for each opportunity gone quiet, with its id and the one next task most likely to move it on: a short instruction under 90 characters naming who it is with, such as "Call Jane Doe to ask whether the order form is signed". Base it on the stage and what is given, and never invent facts. ` +
+      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${writingStyle()} ${brandToneNote(await brandOrEmpty(actor))} ${UNTRUSTED}`,
+    user: material,
+    schema: BRIEF,
+    maxTokens: AI_TOKENS,
+    timeoutMs: 60_000,
+    deadline: options.deadline,
+    fetchImpl: options.fetchImpl,
+  });
+  const known = new Set(gathered.stalled.map((deal) => deal.opportunityId));
+  const suggestions = new Map<string, string>();
+  for (const item of result.data.suggestions ?? []) {
+    const task = item.task.replace(/\s+/g, " ").trim().slice(0, 120);
+    if (known.has(item.opportunityId) && task && !suggestions.has(item.opportunityId)) suggestions.set(item.opportunityId, task);
+  }
+  return { brief: result.data.brief.trim(), suggestions };
 }
 
 const TIDY = z.object({

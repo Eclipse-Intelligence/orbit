@@ -14,6 +14,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
 import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
+import { followUpTitle } from "@/lib/mail/follow-up-title";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
@@ -656,6 +657,7 @@ export async function disconnectMailbox(actor: UserActor) {
 export async function syncMailbox(
   actor: UserActor,
   fetchImpl: typeof fetch = fetch,
+  options: TitleOptions = {},
 ): Promise<SyncCounts> {
   const stored = await withActor(actor, async (db) => readStored(db, actor));
   if (
@@ -709,7 +711,7 @@ export async function syncMailbox(
       );
       return counts;
     });
-    const followUpIds = await suggestFollowUps(owner, candidates);
+    const followUpIds = await suggestFollowUps(owner, candidates, options);
     counts.followUps = followUpIds.length;
     await sendFollowUpsToClickUp(owner, followUpIds);
     return counts;
@@ -760,6 +762,7 @@ function syncWatermark(
 export async function fileInboundMessages(
   actor: UserActor,
   messages: InboundEmail[],
+  options: TitleOptions = {},
 ): Promise<SyncCounts> {
   const stored = await withActor(actor, (db) => readStored(db, actor));
   if (!stored) {
@@ -775,15 +778,17 @@ export async function fileInboundMessages(
     await lockMailbox(db, stored.id);
     return fileMessages(db, owner, stored, messages, candidates);
   });
-  const followUpIds = await suggestFollowUps(owner, candidates);
+  const followUpIds = await suggestFollowUps(owner, candidates, options);
   counts.followUps = followUpIds.length;
   await sendFollowUpsToClickUp(owner, followUpIds);
   return counts;
 }
 
-type FollowUpCandidate = { companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null };
+type FollowUpCandidate = { companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null; text: string | null };
 
-async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[]) {
+type TitleOptions = { deadline?: number; titleTimeoutMs?: number };
+
+async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[], options: TitleOptions = {}) {
   const taskIds: string[] = [];
   const checked = new Set<string>();
   for (const candidate of candidates) {
@@ -792,6 +797,7 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
     try {
       if (await companyHasOpenTask(actor.workspaceId, candidate.companyId)) continue;
       const due = await scheduleTaskDue(actor, { days: 2 });
+      const title = await followUpTitle({ who: candidate.who, subject: candidate.subject, text: candidate.text }, { deadline: options.deadline, timeoutMs: options.titleTimeoutMs });
       const task = await withActor(actor, async (db) => {
         const source = candidate.threadKey
           ? (await db.query<{ id: string }>("select id from crm.mail_sources where connection_id = $1 and user_id = $2 limit 1", [candidate.connectionId, actor.userId])).rows[0]
@@ -801,7 +807,7 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
           db,
           actor,
           {
-            title: `Follow up with ${candidate.who}`.slice(0, 200),
+            title: title.slice(0, 200),
             description: withMailThread(withDueNote("Suggested after an email arrived.", due), thread),
             dueDate: due?.dueDate ?? null,
             companyId: candidate.companyId,
@@ -1021,6 +1027,7 @@ async function fileMessages(
           connectionId: mailbox.id,
           threadKey: message.conversationId?.slice(0, 400) || null,
           subject: message.subject ?? null,
+          text: message.preview ?? null,
         });
       }
     }

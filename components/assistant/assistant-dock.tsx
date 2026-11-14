@@ -41,7 +41,8 @@ import { relativeWhen } from "@/lib/companies";
 import { pageHref, TEAM_HREF } from "@/lib/docs/routes";
 import type { DocDiffLine } from "@/lib/docs/types";
 import type { UnreadBrief } from "@/lib/learning/nightly";
-import { briefKey, opensBriefOnExpand, pendingBrief as unhandledBrief } from "@/lib/assistant/brief-dock";
+import { briefKey, offersCreateThose, opensBriefOnExpand, pendingBrief as unhandledBrief } from "@/lib/assistant/brief-dock";
+import { CREATE_THOSE } from "@/lib/learning/brief-format";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
@@ -1032,6 +1033,16 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     });
   }
 
+  function sendPrompt(text: string) {
+    if (busy || working) return;
+    pinned.current = true;
+    setMessages((current) => [
+      ...current,
+      { id: `local-${Date.now()}`, role: "user", content: text, tools: [], actions: [], sources: [], files: [], createdAt: new Date().toISOString() },
+    ]);
+    void run({ conversationId: conversation?.id ?? null, message: text, model: active.model, reasoning: active.reasoning, webSearch, files: [], page: pageSnapshot() });
+  }
+
   const resumeOnLoad = useEffectEvent((list: DisplayMessage[], id: string) => resumeWaiting(list, id));
 
   useEffect(() => {
@@ -1383,6 +1394,13 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                 ) : (
                   <ToolTrail key={item.key} tools={item.tools} />
                 ),
+              )}
+              {offersCreateThose({ messages, busy, working: Boolean(working) }) && (
+                <div>
+                  <Button variant="secondary" size="sm" className="hit" onClick={() => sendPrompt(CREATE_THOSE)}>
+                    {CREATE_THOSE}
+                  </Button>
+                </div>
               )}
               {busy && (live.length > 0 || !streamed) && <LiveSteps tools={live} thinking={live.every((tool) => tool.status === "done") && !streamed} />}
               {busy && streamed && (

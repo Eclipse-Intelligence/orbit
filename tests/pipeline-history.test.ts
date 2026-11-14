@@ -10,7 +10,7 @@ import { pipelineReport, stageHistory, stalledDeals } from "@/lib/crm/pipeline-h
 import { completeTask, createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { runUnit } from "@/lib/learning/nightly";
+import { latestBrief, runUnit } from "@/lib/learning/nightly";
 import { createUser, resetDatabase } from "./helpers";
 
 const DAY = 86_400_000;
@@ -250,13 +250,15 @@ describe("pipeline history", () => {
       const fetchImpl: typeof fetch = async (_input, init) => {
         const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
         seen.push({ system: body.messages[0].content, user: body.messages[1].content });
-        return Response.json({ model: "test", choices: [{ message: { content: JSON.stringify({ brief: "### Deals gone quiet\n- Hooli deal needs a nudge." }) }, finish_reason: "stop" }] });
+        return Response.json({ model: "test", choices: [{ message: { content: JSON.stringify({ brief: "", suggestions: [{ opportunityId: deals.hooli.id, task: "Call Hooli about the pricing" }] }) }, finish_reason: "stop" }] });
       };
       const result = await runUnit(owner, "brief", { deadline: Date.now() + 120_000, fetchImpl, trigger: "manual" });
       assert.equal(result.brief, true);
-      assert.match(seen[0].system, /Deals gone quiet/);
-      assert.match(seen[0].user, /Open deals gone quiet/);
-      assert.match(seen[0].user, new RegExp(`- Hooli deal \\(Hooli, New, link /opportunities/${deals.hooli.id}\\): No activity or email since moving to New 9 days ago`));
+      assert.match(seen[0].system, /opportunities gone quiet/);
+      assert.match(seen[0].user, /Open opportunities gone quiet/);
+      assert.match(seen[0].user, new RegExp(`- id ${deals.hooli.id}: Hooli deal \\(Hooli, New\\): No activity or email since moving to New 9 days ago`));
+      const brief = await latestBrief(owner);
+      assert.match(brief?.body ?? "", new RegExp(`### Opportunities gone quiet\\n- \\[Hooli deal\\]\\(/opportunities/${deals.hooli.id}\\) \\(Hooli, New, quiet 9 days\\)\\. Suggested task: Call Hooli about the pricing`));
       assert.doesNotMatch(seen[0].user, /Initech deal/);
     } finally {
       delete process.env.LLM_API_KEY;

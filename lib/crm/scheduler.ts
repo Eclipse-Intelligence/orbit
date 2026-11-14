@@ -90,7 +90,7 @@ export const DEFAULT_STEPS: SyncStep[] = [
     name: "mail",
     minMs: 15_000,
     applies: microsoftStep,
-    run: (target, context) => syncMailbox(target.actor, context.fetchImpl ?? fetch),
+    run: (target, context) => syncMailbox(target.actor, context.fetchImpl ?? fetch, { deadline: context.deadline }),
   },
   {
     name: "mail_store",

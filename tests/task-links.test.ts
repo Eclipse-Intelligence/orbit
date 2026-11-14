@@ -358,6 +358,7 @@ describe("mail follow-ups carry their thread", () => {
     ]);
     assert.equal(filed.followUps, 1);
     const task = (await listTasks(owner, { companyId: company })).data[0];
+    assert.equal(task.title, "Reply to Ada Lovell: Pilot draft");
     assert.ok(task.description?.endsWith(`[Pilot draft](/mail?thread=${encodeURIComponent(`${sourceId}|conv-links`)})`), task.description ?? "");
 
     const other = (await createCompany(owner, { name: "Fernhill", domain: "fernhill-links.test" })).body.company.id;
@@ -379,6 +380,7 @@ describe("mail follow-ups carry their thread", () => {
     await fileMailOnTimeline(owner, {});
     const mirrored = (await listTasks(owner, { companyId: other })).data[0];
     assert.ok(mirrored, "a follow-up task");
+    assert.equal(mirrored.title, "Reply to Emma Lowe: Intro to the CFO");
     assert.ok(mirrored.description?.endsWith(`[Intro to the CFO](/mail?thread=${encodeURIComponent(`${sourceId}|thread-emma`)})`), mirrored.description ?? "");
   });
 });
