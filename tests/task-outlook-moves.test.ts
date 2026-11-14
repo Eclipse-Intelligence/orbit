@@ -53,6 +53,7 @@ class FakeOutlook {
   hiddenFromSearch = new Set<string>();
   failPatches = 0;
   failDeletes = new Set<string>();
+  deleteStatus = 503;
 
   token(owner: string) {
     const token = `token-${owner}`;
@@ -133,7 +134,7 @@ class FakeOutlook {
         return json(this.graphEvent(id));
       }
       if (method === "DELETE") {
-        if (this.failDeletes.has(id)) return json({ error: { code: "ServiceUnavailable", message: "Busy" } }, 503);
+        if (this.failDeletes.has(id)) return json({ error: { code: "ServiceUnavailable", message: "Busy" } }, this.deleteStatus);
         this.events.delete(id);
         return json(null, 204);
       }
@@ -534,6 +535,35 @@ describe("looking up a block whose create never confirmed", () => {
     assert.equal(await ref(tasks[0].id), id);
     assert.equal(await queued(tasks[0].id), null);
     assert.equal(outlook.created, 1);
+  });
+
+  it("still defers at four attempts when the second event won't go", async () => {
+    const { tasks } = await lost();
+    const [, first] = [...outlook.events.entries()][0];
+    outlook.events.set("block-copy", { ...first });
+    outlook.failDeletes.add("block-copy");
+    await admin().query("update crm.task_outlook_queue set attempts = 4 where task_id = $1", [tasks[0].id]);
+    const run = await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(run.deferred, 1);
+    assert.equal(await ref(tasks[0].id), null);
+    assert.ok(await key(tasks[0].id));
+    assert.equal(outlook.events.size, 2);
+  });
+
+  it("stops that person's lookups and writes in the run after a 429 on removing a second event", async () => {
+    const { tasks } = await lost(2);
+    const [, first] = [...outlook.events.entries()][0];
+    outlook.events.set("block-copy", { ...first });
+    outlook.failDeletes.add("block-copy");
+    outlook.deleteStatus = 429;
+    const fresh = await timed(mark, "Call Zoe", Date.now() + 4 * DAY);
+    outlook.searches = [];
+    const run = await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(outlook.searches.length, 1);
+    assert.equal(run.throttled, 3);
+    assert.equal(outlook.created, 2);
+    for (const task of tasks) assert.ok(await key(task.id));
+    assert.ok(await queued(fresh.id));
   });
 
   it("trusts an empty search when it doesn't know when the create was sent", async () => {

@@ -492,6 +492,10 @@ async function recoverCreates(
       for (const row of items) await skip(row, null);
       continue;
     }
+    if (throttledUsers.has(userId)) {
+      for (const row of items) await skip(row, "throttled");
+      continue;
+    }
     let access: Access = "retry";
     try {
       const actor = await actingActor(userId, items[0].workspace_id, true);
@@ -542,13 +546,18 @@ async function recoverCreates(
       }
       let surplusLeft = false;
       for (const event of extra) {
+        if (throttledUsers.has(userId)) {
+          surplusLeft = true;
+          break;
+        }
         await deleteGraphEvent(access.token.accessToken, event.id!.trim(), fetchImpl).catch((error) => {
           console.error("Removing a second Outlook block failed", error);
           surplusLeft = true;
+          if (graphFailure(error) === "throttled") throttledUsers.add(userId);
         });
       }
       if (surplusLeft && row.attempts < SURPLUS_ATTEMPTS) {
-        await skip(row, "deferred");
+        await skip(row, throttledUsers.has(userId) ? "throttled" : "deferred");
         continue;
       }
       const id = found.id!.trim();
@@ -606,7 +615,7 @@ export async function syncTaskBlocks(
     for (const [key, items] of groups) {
       let access: Access = "orbit_only";
       const [kind, userId] = key ? key.split(":") : [null, null];
-      if (kind && userId) {
+      if (kind && userId && !throttledUsers.has(userId)) {
         try {
           const actor = await actingActor(userId, items[0].row.workspace_id, kind === "remove");
           access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
