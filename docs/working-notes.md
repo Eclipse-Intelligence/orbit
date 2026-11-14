@@ -33,7 +33,7 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 - **Send fixes back to the agent that built the branch.** Re-review until there are no blockers. Several features needed three rounds.
 - **Review the whole area once it's finished.** After the last PR for a feature area, run one review across the whole area, not just the per-PR diffs: workspaces, concurrent requests, retries, and every route that writes the record (web, API, MCP, assistant, workflows, background jobs).
 - **Close every review point before merging.** Each point is either fixed or explicitly accepted by Mark. Never leave one as a nit or an open question. Every round of fixes gets re-reviewed.
-- **At most two review rounds per PR.** After two rounds, merge unless a round found a real blocker (a data leak, data loss or a broken feature). Set the finish line before the first review; open-ended areas (free-text parsing, heuristics) get a measurable bar, such as a test corpus, and later edge cases go on a backlog instead of another round.
+- **Keep reviewing until clean, with a clear finish line.** There is no cap on rounds: genuine bugs are always fixed and re-reviewed. For open-ended areas (free-text parsing, heuristics), set a measurable bar before the first review, such as a test corpus that must never save a wrong result silently, so reviews check against that bar rather than finding endless new phrasings.
 
 ### Migrations
 
