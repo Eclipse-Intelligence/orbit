@@ -342,6 +342,14 @@ begin
     and s.current_task_id is distinct from new.id
     and p.user_id is distinct from new.owner_id
   on conflict (task_id, user_id) do nothing;
+  insert into crm.task_docs (task_id, page_id, workspace_id, created_by, created_by_agent_id, page_archived)
+  select new.id, d.page_id, new.workspace_id, d.created_by, d.created_by_agent_id, d.page_archived
+  from crm.task_series s
+  join crm.task_docs d on d.task_id = s.current_task_id
+  where s.id = new.series_id
+    and s.current_task_id is distinct from new.id
+    and d.workspace_id = new.workspace_id
+  on conflict (task_id, page_id) do nothing;
   update crm.task_series
   set current_task_id = new.id, roll_pending = true
   where id = new.series_id and current_task_id is distinct from new.id;

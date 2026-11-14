@@ -67,6 +67,7 @@ export async function addPadTaskAction(input: {
   ownerId?: string | null;
   durationMinutes?: number | null;
   mailThreadKey?: string | null;
+  docIds?: string[];
 }): Promise<{ ok?: boolean; error?: string; warning?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
@@ -83,6 +84,7 @@ export async function addPadTaskAction(input: {
         ...padLinks(input),
         ownerId: typeof input.ownerId === "string" && isUuid(input.ownerId) ? input.ownerId : user.userId,
         ...(typeof input.mailThreadKey === "string" && input.mailThreadKey ? { mailThreadKey: input.mailThreadKey } : {}),
+        ...(Array.isArray(input.docIds) && input.docIds.length > 0 ? { docIds: input.docIds } : {}),
         priority: "normal",
       },
       input.clickupListId || null,

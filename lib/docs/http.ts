@@ -1,4 +1,5 @@
 import { CrmError } from "@/lib/crm/errors";
+import { listDocTasks } from "@/lib/crm/task-docs";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { CreateInput, Folder, Page, PageFilter, PageSort, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
@@ -152,6 +153,7 @@ export const docsReads = {
   versions: ({ actor, params }: DocsCall) => docsVersions(actor, params.id),
   version: ({ actor, params }: DocsCall) => docsVersionBody(actor, params.id, params.versionId),
   backlinks: ({ actor, params }: DocsCall) => docsBacklinks(actor, params.id),
+  tasks: ({ actor, params }: DocsCall) => listDocTasks(actor, params.id),
   linkTargets: ({ actor, request }: DocsCall) => docsLinkTargets(actor, search(request).get("q") ?? "", search(request).get("from")),
   titles: ({ actor }: DocsCall) => docsTitles(actor),
   noteTitles: ({ actor }: DocsCall) => docsNoteTitles(actor),

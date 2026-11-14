@@ -6,7 +6,7 @@ import { linkedThread, sharedTaskContextInDb, viewerLastEmailInDb, type TaskPers
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb, type CurrentBasis } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, readTaskInDb } from "@/lib/crm/tasks";
-import { withMailThreadsInDb } from "@/lib/crm/task-mail";
+import { listTaskDocsInDb, withViewerLinksInDb, type TaskDocEntry } from "@/lib/crm/task-docs";
 import type { Actor, ActivityType, Task, UserActor } from "@/lib/crm/types";
 import { actorForTask } from "@/lib/crm/workspaces";
 import { parseThreadKey } from "@/lib/mail/threads";
@@ -26,6 +26,7 @@ export type TaskDetail = {
   people: TaskPerson[];
   lastActivity: { type: ActivityType; title: string | null; occurredAt: string } | null;
   mail: { lastEmail: { subject: string | null; at: string } | null; thread: TaskThread | null } | null;
+  docs: TaskDocEntry[];
   preparation: TaskPreparation | null;
 };
 
@@ -78,7 +79,7 @@ export async function taskDetailWithBasisInDb(db: Db, home: Actor, task: Task, v
   const readOnly = home.workspaceId !== viewer.workspaceId;
   const deal = shared.opportunity;
   const detail: TaskDetail = {
-    task: (await withMailThreadsInDb(db, home, [task]))[0],
+    task: (await withViewerLinksInDb(db, home, [task]))[0],
     workspace: { id: home.workspaceId, name: home.type === "user" ? home.workspaceName : null, current: !readOnly },
     readOnly,
     canChange: !readOnly && !task.archivedAt && hasScope(home.scopes, "tasks:write") && canChangeTask(home, task),
@@ -91,6 +92,7 @@ export async function taskDetailWithBasisInDb(db: Db, home: Actor, task: Task, v
     people: shared.people,
     lastActivity: shared.lastActivity,
     mail,
+    docs: await listTaskDocsInDb(db, home, task),
     preparation: null,
   };
   if (home.type !== "user" || !viewed) return { detail, current: null };

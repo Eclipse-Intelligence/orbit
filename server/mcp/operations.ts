@@ -148,6 +148,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         repeatScope: z.enum(["this", "following", "all"]).optional().describe("Required when the task repeats and you change its time, title, description, links, assignee, duration or reminder. this: only this one. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope."),
         skip: z.boolean().optional().describe("true skips this date of a repeating task: the open one moves to its next date, or an upcoming date (occursOn) is left out. Send it on its own."),
         occursOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "occursOn takes a day, such as 2027-03-04.").optional().describe("An upcoming date of this repeating task, YYYY-MM-DD, to change or skip just that date instead of the open one."),
+        docIds: z.array(z.uuid()).max(20).nullable().optional().describe("Docs linked to the task: the whole list of doc ids from search_docs or list_docs, in this workspace. [] or null takes them all off. You can only link docs you can read; agent tokens only see shared docs. Docs can also mention a task with @[Title](task:id)."),
         ...provenanceFields,
       },
     },
@@ -174,6 +175,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               contactId: args.contactId,
               opportunityId: args.opportunityId,
               mailThreadKey: args.mailThreadKey,
+              docIds: args.docIds,
             },
             { provenance: provenance(args, "update_task") },
           ))

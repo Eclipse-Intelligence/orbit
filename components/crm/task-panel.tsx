@@ -16,8 +16,8 @@ import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
-import RecordNotes from "@/components/docs/record-notes";
 import { isRepeating, RepeatEarlier, SkipButton } from "@/components/crm/task-repeat";
+import TaskDocs, { othersSeeTask } from "@/components/crm/task-docs";
 import { untagTaskAction } from "@/app/(crm)/discussions";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -314,7 +314,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                     </div>
                   )}
                   <RepeatEarlier task={task} section={(children) => <TaskSection label="Earlier">{children}</TaskSection>} />
-                  {recordNotes && <RecordNotes compact record={{ kind: "task", id: task.id, name: task.title }} />}
+                  {recordNotes && <TaskDocs task={task} canChange={canChange && !done && task.canLinkDocs} warn={othersSeeTask(task, viewer.id, tagged)} />}
                   <TaskSection label="Discussion" count={discussion.count}>
                     <DiscussionMessages discussion={discussion} />
                   </TaskSection>

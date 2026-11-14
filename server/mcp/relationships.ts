@@ -400,6 +400,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         opportunityId: z.uuid().nullable().optional(),
         mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
         repeat: repeatSchema.optional().describe("Makes the task repeat on a fixed schedule from its due day (today when it has none). every: day, weekday (Monday to Friday), week, month or year; interval for every 2 weeks and so on; days for weekly (mo, tu, we, th, fr, sa, su); monthDay (1 to 31, the last day in shorter months) or monthWeek ({ n: 1 to 4 or -1 for last, weekday }) for monthly; ends { after: N } or { on: YYYY-MM-DD }. Only the open one is a task; the next is made when it is done, and a missed one moves to the latest date."),
+        docIds: z.array(z.uuid()).max(20).nullable().optional().describe("Docs linked to the task: the whole list of doc ids from search_docs or list_docs, in this workspace. [] or null takes them all off. You can only link docs you can read; agent tokens only see shared docs. Docs can also mention a task with @[Title](task:id)."),
         idempotency_key: z
           .string()
           .max(200)
@@ -426,6 +427,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
             contactId: args.contactId,
             opportunityId: args.opportunityId,
             mailThreadKey: args.mailThreadKey,
+            docIds: args.docIds,
           },
           { provenance: provenance(args, "create_task"), idempotencyKey: mcpIdempotencyKey(args.idempotency_key) },
         );
@@ -455,8 +457,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     {
       description:
         actor.type === "user"
-          ? "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, and in mail the person's own last email with them and the email thread the task is pinned to. Use it instead of looking up the contact, opportunity and mail one by one."
-          : "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, and the last activity. mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
+          ? "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, docs linked to it or mentioning it (a linked doc you can't read has no title), and in mail the person's own last email with them and the email thread the task is pinned to. Use it instead of looking up the contact, opportunity and mail one by one."
+          : "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, and docs linked to it or mentioning it (only shared docs show a title). mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
       inputSchema: { id: z.uuid() },
     },
     async (args) => run(() => withTaskWorkspaceHint(actor, args.id, () => taskDetail(actor, args.id))),

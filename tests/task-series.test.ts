@@ -27,6 +27,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { PATCH as restUpdateTask } from "@/app/api/v1/tasks/[id]/route";
 import { POST as restCreateTask } from "@/app/api/v1/tasks/route";
 import { runTool } from "@/lib/assistant/tools";
+import { createDoc } from "@/lib/docs/store";
 import { clickupClient } from "@/lib/clickup";
 import { SCOPES } from "@/lib/crm/scopes";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -515,6 +516,17 @@ describe("repeating task review fixes", () => {
       (await import("./helpers")).queryAsUser(mark.userId, "update crm.task_series set current_task_id = $2 where id = $1", [marks.seriesId, own.id]),
       /must belong to it|row-level/,
     );
+  });
+});
+
+describe("repeating tasks and docs", () => {
+  it("carries the open one's doc links to the next one", async () => {
+    const doc = (await createDoc(mark, { title: "Weekly agenda", content: "Points to cover." })).id;
+    const task = (await createRepeatingTask(mark, { title: "Agenda call", dueDate: "2027-05-10", docIds: [doc] }, { every: "week" })).body.task;
+    assert.deepEqual(task.docIds, [doc]);
+    await completeTask(mark, task.id);
+    const next = (await occurrences(task.seriesId!)).find((row) => !row.completed)!;
+    assert.deepEqual((await getTask(mark, next.id)).docIds, [doc]);
   });
 });
 

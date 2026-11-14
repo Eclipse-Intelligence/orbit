@@ -14,7 +14,9 @@ type PadParse = {
 };
 
 type Day = { year: number; month: number; day: number };
-type Span = { start: number; end: number; kind: "when" | "reminder" };
+type Span = { start: number; end: number; kind: "when" | "reminder" | "keep" };
+
+const DOC_REFERENCE = /\[\[[^\]\n]*(?:\]\])?/g;
 
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
@@ -156,7 +158,7 @@ function cleanTitle(text: string, spans: Span[]) {
 }
 
 export function parseTaskText(text: string, now = new Date()): PadParse {
-  const spans: Span[] = [];
+  const spans: Span[] = [...text.matchAll(DOC_REFERENCE)].map((match) => ({ start: match.index, end: match.index + match[0].length, kind: "keep" as const }));
   const wall = londonParts(now);
   const today: Day = { year: wall.year, month: wall.month, day: wall.day };
   const found: {
@@ -365,9 +367,10 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     due = time ? `${date}T${pad(time.hour)}:${pad(time.minute)}` : date;
   }
 
-  const kept = due ? spans : spans.filter((span) => span.kind !== "reminder");
+  const kept = (due ? spans : spans.filter((span) => span.kind !== "reminder")).filter((span) => span.kind !== "keep");
   const title = cleanTitle(text, kept);
-  if (/(?<![£$€\d.]\s*)\b\d{1,2}\.[0-5]\d\b(?!\s*(?:gbp|usd|eur)\b)/i.test(title) && !/\b(?:v|ver|version|release)\s*\d/i.test(title)) ambiguous = true;
+  const plainTitle = title.replace(DOC_REFERENCE, " ");
+  if (/(?<![£$€\d.]\s*)\b\d{1,2}\.[0-5]\d\b(?!\s*(?:gbp|usd|eur)\b)/i.test(plainTitle) && !/\b(?:v|ver|version|release)\s*\d/i.test(title)) ambiguous = true;
   const marks = kept
     .filter((span) => span.kind === "when" || due)
     .map((span) => {
@@ -382,7 +385,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     due,
     remindMinutes: due ? found.remind : null,
     durationMinutes: due && found.time ? found.duration : null,
-    unsure: ambiguous || TEMPORAL.test(title),
+    unsure: ambiguous || TEMPORAL.test(plainTitle),
     marks,
   };
 }
@@ -395,6 +398,29 @@ export function stripMention(text: string, caret: number) {
   if (/\s{2,}|\n/.test(query) || query.length > 40) return null;
   if (at > 0 && !/\s/.test(before[at - 1])) return null;
   return { start: at, end: caret, query };
+}
+
+export type DocQuery = { start: number; end: number; query: string };
+
+export function docQueryAt(text: string, caret: number): DocQuery | null {
+  const before = text.slice(0, caret);
+  const open = before.lastIndexOf("[[");
+  if (open < 0) return null;
+  const rest = /^[^\s\]]*/.exec(text.slice(caret))?.[0] ?? "";
+  const query = before.slice(open + 2) + rest;
+  if (/[\]\n]/.test(query) || query.length > 80) return null;
+  return { start: open, end: caret + rest.length, query };
+}
+
+export function withoutDocQuery(text: string, found: Pick<DocQuery, "start" | "end">) {
+  const before = text.slice(0, found.start).replace(/\s+$/, "");
+  const after = text.slice(found.end).replace(/^\]\]/, "").replace(/^\s+/, "");
+  if (!after) {
+    const next = before ? `${before} ` : "";
+    return { text: next, caret: next.length };
+  }
+  const next = before ? `${before} ${after}` : after;
+  return { text: next, caret: before ? before.length + 1 : 0 };
 }
 
 const APOSTROPHES = /['\u2019\u2018\u02bc\u201b]/g;

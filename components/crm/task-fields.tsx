@@ -15,6 +15,9 @@ import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
 import { isRepeating, RepeatField, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
+import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
+import LinkedText from "@/components/_ui/linked-text";
+import { showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
@@ -535,10 +538,10 @@ function LinkChip({ href, label, icon: Icon, mark, record }: { href: string; lab
 }
 
 export function taskIsLinked(task: Task) {
-  return Boolean(task.companyId || task.contactId || task.opportunityId || task.mailThreadKey);
+  return Boolean(task.companyId || task.contactId || task.opportunityId || task.mailThreadKey || task.docs.length > 0);
 }
 
-function LinksEditor({ task, canEdit, label }: { task: Task; canEdit: boolean; label?: boolean }) {
+function LinksEditor({ task, canEdit, label, warn, docs }: { task: Task; canEdit: boolean; label?: boolean; warn: boolean; docs: boolean }) {
   const [editing, setEditing] = useState(false);
   return (
     <div className="flex flex-col gap-2">
@@ -551,7 +554,7 @@ function LinksEditor({ task, canEdit, label }: { task: Task; canEdit: boolean; l
           </Button>
         )}
       </div>
-      {editing && canEdit && <EditLinks task={task} />}
+      {editing && canEdit && <EditLinks task={task} warn={warn} docs={docs} />}
     </div>
   );
 }
@@ -579,6 +582,7 @@ export function TaskLinks({ task }: { task: Task }) {
       )}
       {task.opportunityId && task.opportunityName && <LinkChip record href={recordHref("opportunity", task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} />}
       <MailChip task={task} />
+      <TaskDocChips task={task} />
     </div>
   );
 }
@@ -908,18 +912,68 @@ function QuickDates({ details }: { details: TaskDetailsState }) {
 
 function Description({ details, layout }: { details: TaskDetailsState; layout: "panel" | "row" }) {
   const field = useAutoSize(details.text);
+  const own = useRef<HTMLTextAreaElement | null>(null);
+  const attach = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      own.current = node;
+      field(node);
+    },
+    [field],
+  );
+  const [editing, setEditing] = useState<number | null>(null);
+  useEffect(() => {
+    if (editing === null) return;
+    const settle = () => {
+      if (document.activeElement !== own.current) setEditing(null);
+    };
+    const later = () => window.setTimeout(settle, 0);
+    window.addEventListener("focus", later);
+    return () => window.removeEventListener("focus", later);
+  }, [editing]);
   if (!details.canChange) {
     if (layout === "row" && !details.text) return null;
-    return <p className="text-soft whitespace-pre-wrap">{details.text || "No description"}</p>;
+    return <p className="text-soft break-words whitespace-pre-wrap">{details.text ? <LinkedText text={details.text} /> : "No description"}</p>;
+  }
+  if (showsDescriptionLinks(details.text, layout, editing !== null)) {
+    return (
+      <div className="relative min-w-0">
+        <button
+          type="button"
+          aria-label="Edit description"
+          onClick={() => setEditing(details.text.length)}
+          className="pointer-events-none absolute inset-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
+        />
+        <p
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest("a")) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed && selection.anchorNode && event.currentTarget.contains(selection.anchorNode)) return;
+            const shown = caretAt(event.currentTarget, event.clientX, event.clientY);
+            setEditing(shown === null ? details.text.length : sourceOffset(details.text, shown));
+          }}
+          className="border-line-strong bg-secondary text-foreground relative min-h-16 cursor-text rounded-lg border px-3 py-2 text-[14px] leading-5 break-words whitespace-pre-wrap"
+        >
+          <LinkedText text={details.text} />
+        </p>
+      </div>
+    );
   }
   return (
     <Textarea
-      ref={field}
+      ref={attach}
       aria-label="Description"
       value={details.text}
       placeholder="Add a description"
+      autoFocus={editing !== null}
+      onFocus={(event) => {
+        if (editing !== null) event.currentTarget.setSelectionRange(editing, editing);
+        else setEditing(event.currentTarget.selectionStart ?? details.text.length);
+      }}
       onChange={(event) => details.setText(event.target.value)}
-      onBlur={() => details.saveText(true)}
+      onBlur={() => {
+        details.saveText(true);
+        if (document.hasFocus()) setEditing(null);
+      }}
       className={cn(
         "resize-none overflow-hidden",
         layout === "panel" ? "min-h-16" : "min-h-0 rounded-lg border-transparent bg-transparent px-2 py-1.5 text-[13.5px] leading-[1.5] shadow-none hover:bg-white/[0.04] focus-visible:bg-white/[0.04] -mx-2",
@@ -979,7 +1033,7 @@ export default function TaskFields({
           )}
         </div>
         <Description details={details} layout="row" />
-        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label />}
+        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} docs={task.canLinkDocs} />}
         {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
         {details.error && (
           <p role="alert" className="caption-style text-danger">
@@ -1021,7 +1075,7 @@ export default function TaskFields({
       </dl>
       {taskIsLinked(task) && (
         <Section label="Linked">
-          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} />
+          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} warn={othersSeeTask(task, viewer.id, tagged)} docs={task.canLinkDocs} />
         </Section>
       )}
       <Section label="Description">

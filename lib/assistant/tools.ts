@@ -158,7 +158,7 @@ import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { taskDetail } from "@/lib/crm/task-detail";
-import type { Scope } from "@/lib/crm/scopes";
+import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { appTimeZone, dateTimeInputValue, parseDateTime, readDateTime, zonedParts } from "@/lib/time";
 import {
@@ -269,6 +269,32 @@ async function taskEmailArgs(actor: UserActor, args: Record<string, unknown>): P
   if (args.emailId === undefined) return {};
   const id = nullableStr(args.emailId);
   return { mailThreadKey: id ? await emailThreadKey(actor, id) : null };
+}
+
+function taskDocArgs(args: Record<string, unknown>): { docIds?: string[] } {
+  if (args.docIds === undefined) return {};
+  if (args.docIds === null) return { docIds: [] };
+  if (!Array.isArray(args.docIds)) throw new CrmError("invalid_input", "docIds takes a list of doc ids, or null to take them all off.", 400, { field: "docIds" });
+  return { docIds: args.docIds.map((id) => str(id)) };
+}
+
+const TASK_DOCS_KEY = "docs";
+
+function docLabels(ids: string[], name: Names) {
+  const readable = ids.filter((id) => !detail(name, `${id}:private`) && name(id) !== "Unknown record").map((id) => name(id));
+  const hidden = ids.length - readable.length;
+  return [...readable, ...(hidden === 1 ? ["1 private doc"] : hidden > 1 ? [`${hidden} private docs`] : [])].join(", ");
+}
+
+function taskDocLines(args: Record<string, unknown>, name: Names, taskId?: string) {
+  if (args.docIds === undefined) return [];
+  const wanted = Array.isArray(args.docIds) ? [...new Set(args.docIds.map((id) => str(id).toLowerCase()).filter(Boolean))] : [];
+  const known = taskId ? detail(name, `${taskId}:${TASK_DOCS_KEY}`) : "";
+  if (!taskId || !known) return [wanted.length > 0 ? `Docs: ${docLabels(wanted, name)}` : "Docs: none"];
+  const current = known === "none" ? [] : known.split(",");
+  const added = wanted.filter((id) => !current.includes(id));
+  const removed = current.filter((id) => !wanted.includes(id));
+  return [added.length > 0 ? `Link: ${docLabels(added, name)}` : "", removed.length > 0 ? `Unlink: ${docLabels(removed, name)}` : ""];
 }
 
 function taskEmailLines(args: Record<string, unknown>) {
@@ -631,6 +657,28 @@ export async function taskTimingRefusalFor(actor: UserActor, name: string, args:
   return { error: NO_TIME_FOR_REMINDER, field: "dueHasTime" };
 }
 
+export const DOCS_NOT_YOURS = "Only the task's assignee or creator can change its docs. Leave docIds out.";
+
+export async function taskDocsRefusalFor(actor: UserActor, name: string, args: Args) {
+  if (name !== "update_task" || args.docIds === undefined) return null;
+  const id = typeof args.taskId === "string" ? args.taskId.trim() : "";
+  if (!isUuid(id)) return null;
+  const current = await withActor(actor, async (db) => {
+    const result = await db.query<{ owner_id: string | null; created_by_user_id: string | null; doc_ids: string[] }>(
+      `select t.owner_id, t.created_by_user_id,
+         array(select d.page_id::text from crm.task_docs d where d.task_id = t.id and not d.page_archived) as doc_ids
+       from crm.tasks t where t.id = $1 and t.workspace_id = $2`,
+      [id, actor.workspaceId],
+    );
+    return result.rows[0] ?? null;
+  }).catch(() => null);
+  if (!current || current.owner_id === actor.userId || current.created_by_user_id === actor.userId) return null;
+  const wanted = new Set(Array.isArray(args.docIds) ? args.docIds.map((item) => str(item).toLowerCase()).filter(Boolean) : []);
+  const now = new Set(current.doc_ids ?? []);
+  if (wanted.size === now.size && [...wanted].every((item) => now.has(item))) return null;
+  return { error: DOCS_NOT_YOURS, field: "docIds" };
+}
+
 function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null; dueHasTime?: true } {
   const refused = taskTimingRefusal("create_task", { dueDate: args.dueDate, dueAt: args.dueAt });
   if (refused) throw new CrmError("invalid_input", refused.error, 400, { field: refused.field });
@@ -698,8 +746,20 @@ async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Recor
   const row = rows.rows[0];
   const self = { [TASK_SELF_KEY]: actor.userId, [TASK_ROLE_KEY]: actor.role };
   if (!row) return self;
+  const docs = await withActor(actor, async (db) => {
+    const linked = await db.query<{ page_id: string; title: string | null; readable: boolean }>(
+      `select d.page_id, p.title, p.id is not null as readable
+       from crm.task_docs d left join crm.pages p on p.id = d.page_id
+       where d.task_id = $1 and not d.page_archived order by d.created_at, d.page_id`,
+      [id],
+    );
+    return linked.rows;
+  });
+  const reads = hasScope(actor.scopes, "docs:read");
   return {
     ...self,
+    [`${id}:${TASK_DOCS_KEY}`]: docs.length > 0 ? docs.map((doc) => doc.page_id).join(",") : "none",
+    ...Object.fromEntries(docs.flatMap((doc) => (reads && doc.readable ? [[doc.page_id, doc.title?.trim() || "Untitled doc"]] : [[`${doc.page_id}:private`, "yes"]]))),
     [`${id}:owner`]: row.owner_id ?? "none",
     [`${id}:creator`]: row.created_by_user_id ?? "none",
     [`${id}:timed`]: row.timed ? "yes" : "no",
@@ -1188,6 +1248,12 @@ const TASK_FIELDS = {
   priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent it is: low, normal or high. New tasks are normal unless set." },
   ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
   emailId: { type: "string", description: "Pins the task to the thread of this email (an email id from search_email or get_email_thread), so the task links to the conversation in Mail. null unpins it." },
+  docIds: {
+    type: "array",
+    items: { type: "string" },
+    maxItems: 20,
+    description: "Docs linked to the task, by docId from search_knowledge. The whole list: it replaces the task's linked docs, so keep the ones already linked; [] or null takes them all off. Only docs the user can open in this workspace, not daily notes, and only on a task the user is assigned to or created; leave it out otherwise.",
+  },
 };
 
 const REPEAT_PARAM = {
@@ -2136,7 +2202,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_tasks",
     label: "Checking tasks",
     description:
-      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it is pinned to, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
+      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact, linked docs (docIds, and docs with each title when the user can read it) and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it is pinned to, the docs linked to it or mentioning it, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
     parameters: {
       type: "object",
       properties: {
@@ -3611,6 +3677,7 @@ const TOOL_LIST: AssistantTool[] = [
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
         ...taskEmailLines(args),
         ...repeatLines(args),
+        ...taskDocLines(args, name),
         args.sendToClickUp === false ? "ClickUp: no" : detail(name, TASK_CLICKUP_KEY) ? "ClickUp: yes" : "",
       ],
     }),
@@ -3627,6 +3694,7 @@ const TOOL_LIST: AssistantTool[] = [
           priority: oneOf(args.priority, ["low", "normal", "high"] as const) ?? "normal",
           ...taskLinkArgs(args),
           ...(await taskEmailArgs(actor, args)),
+          ...taskDocArgs(args),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
           ...repeatArg(args.repeat),
         },
@@ -3641,7 +3709,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Updating a task",
     write: true,
     description:
-      "Change a task's title, detail, due day or time, duration, reminder, priority, assignee or who it is about (contactId, companyId, opportunityId), or mark it done with completed true (false reopens it). ClickUp is updated too. To relink, find the record with search_records and pass its id; null takes that link off and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company, and opportunityId too (that company's opportunity, or null) when the task has an opportunity, since an opportunity must belong to the task's company. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
+      "Change a task's title, detail, due day or time, duration, reminder, priority, assignee, linked docs (docIds) or who it is about (contactId, companyId, opportunityId), or mark it done with completed true (false reopens it). ClickUp is updated too. To relink, find the record with search_records and pass its id; null takes that link off and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company, and opportunityId too (that company's opportunity, or null) when the task has an opportunity, since an opportunity must belong to the task's company. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
     parameters: {
       type: "object",
       properties: {
@@ -3713,6 +3781,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
           ...repeatLines(args, current?.dueAt ?? null),
+          ...taskDocLines(args, name, id),
         ],
       };
     },
@@ -3743,6 +3812,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
           ...taskRelinkArgs(args),
           ...(await taskEmailArgs(actor, args)),
+          ...taskDocArgs(args),
         },
         { provenance: { operation: completing ? "complete_task" : "update_task", ...provenanceSource() } },
       );
