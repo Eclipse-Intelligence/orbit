@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createCompany } from "@/lib/crm/companies";
 import { reminderFireAt, reminderHeadline, reminderLabel } from "@/lib/crm/reminder-options";
 import { completeTask, createTask, getTask, listDueReminders, updateTask } from "@/lib/crm/tasks";
@@ -119,7 +119,8 @@ describe("task reminders", () => {
     const soon = (await createTask(owner, { title: "Soon", companyId, dueAt: at(15), remindMinutes: 10 })).body.task;
     const missed = (await createTask(owner, { title: "Missed while closed", companyId, dueAt: at(120), remindMinutes: 1440 })).body.task;
     const later = (await createTask(owner, { title: "Later", companyId, dueAt: at(180), remindMinutes: 60 })).body.task;
-    const past = (await createTask(owner, { title: "Past", companyId, dueAt: at(-5), remindMinutes: 10 })).body.task;
+    const past = (await createTask(owner, { title: "Past", companyId, dueAt: at(60), remindMinutes: 10 })).body.task;
+    await getAdminPool().query("update crm.tasks set due_at = $2 where id = $1", [past.id, at(-5)]);
     const done = (await createTask(owner, { title: "Done", companyId, dueAt: at(12), remindMinutes: 10 })).body.task;
     const silent = (await createTask(owner, { title: "Silent", companyId, dueAt: at(8) })).body.task;
     await completeTask(owner, done.id);

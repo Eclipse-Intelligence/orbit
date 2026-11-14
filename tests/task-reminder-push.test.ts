@@ -141,7 +141,8 @@ describe("task reminder pushes", () => {
 
   it("skips reminders whose task was due a while ago", async () => {
     const now = Date.now();
-    const task = (await createTask(owner, { title: "Long gone", companyId, dueAt: at(-30, now), remindMinutes: 10 })).body.task;
+    const task = (await createTask(owner, { title: "Long gone", companyId, dueAt: at(30, now), remindMinutes: 10 })).body.task;
+    await getAdminPool().query("update crm.tasks set due_at = $2 where id = $1", [task.id, at(-30, now)]);
     const sent = pusher();
     await processTaskReminders({ deadline: later.deadline(), now, send: sent.send });
     assert.equal(forTask(sent.sent, task.id).length, 0);
@@ -305,7 +306,7 @@ describe("task reminder pushes", () => {
     const archived = (await createTask(owner, { title: "Archived", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
     await archiveTask(owner, archived.id);
     const dayOnly = (await createTask(owner, { title: "Day only", companyId, dueDate: new Date(now).toISOString().slice(0, 10) })).body.task;
-    await getAdminPool().query("update crm.tasks set remind_minutes = 1440, due_at = $2 where id = $1", [dayOnly.id, at(10, now)]);
+    await assert.rejects(getAdminPool().query("update crm.tasks set remind_minutes = 1440, due_at = $2 where id = $1", [dayOnly.id, at(10, now)]), /tasks_reminder_needs_time/);
     assert.equal(dayOnly.dueHasTime, false);
     const sent = pusher();
     await processTaskReminders({ deadline: later.deadline(), now, send: sent.send });

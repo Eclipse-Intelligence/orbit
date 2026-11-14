@@ -391,6 +391,14 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         contactId: z.uuid().nullable().optional(),
         opportunityId: z.uuid().nullable().optional(),
         mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
+        idempotency_key: z
+          .string()
+          .trim()
+          .min(1)
+          .max(200)
+          .regex(/^[\x21-\x7E]+$/)
+          .optional()
+          .describe("Up to 200 printable characters with no spaces. Reuse it when retrying a call whose answer was lost: the same key and arguments create the task once and answer with it again. A key belongs to one request."),
         ...provenanceFields,
       },
     },
@@ -412,7 +420,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
             opportunityId: args.opportunityId,
             mailThreadKey: args.mailThreadKey,
           },
-          { provenance: provenance(args, "create_task") },
+          { provenance: provenance(args, "create_task"), idempotencyKey: args.idempotency_key },
         );
         return result.body;
       }),

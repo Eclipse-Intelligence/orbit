@@ -75,7 +75,7 @@ describe("assistant tools", () => {
     owner = await createUser("assistant@orbit.test", "Mark Ridgeon");
     companyId = (await createCompany(owner, { name: "Initech", domain: "initech-ai.test" })).body.company.id;
     contactId = (await createContact(owner, { companyId, firstName: "Peter", lastName: "Gibbons", email: "peter@initech-ai.test" })).body.contact.id;
-    await createTask(owner, { title: "Send TPS report", companyId, contactId, dueAt: "2026-10-20T10:00", remindMinutes: 60 });
+    await createTask(owner, { title: "Send TPS report", companyId, contactId, dueAt: "2036-10-20T10:00", remindMinutes: 60 });
     const stage = (await listPipeline(owner)).stages[0];
     await createOpportunity(owner, { companyId, name: "Initech pilot", value: 12000, stageId: stage.id, expectedCloseDate: "2026-10-30" });
   });

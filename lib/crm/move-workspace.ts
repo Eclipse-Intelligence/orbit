@@ -38,6 +38,8 @@ type PlanCompanyChoice = { id: string; name: string; others: number };
 
 type PlanLeftBehind = { id: string; name: string; companyId: string | null; archived: boolean };
 
+type PlanTaskChange = { id: string; before: Record<string, unknown>; after: Record<string, unknown> };
+
 type Plan = {
   source: WorkspaceRef;
   target: WorkspaceRef;
@@ -67,6 +69,8 @@ type Plan = {
   notCopied?: string[];
   proposalContacts?: string[];
   dealsLosingContact?: number;
+  taskMoves?: PlanTaskChange[];
+  tasksLeft?: PlanTaskChange[];
 };
 
 export type MoveRequest = {
@@ -397,6 +401,21 @@ function dealDetails(record: PlanRecord) {
   return record.deals ?? [];
 }
 
+const TASK_MOVE_FIELDS = ["ownerId", "dueAt", "dueHasTime", "scheduledBy", "remindMinutes", "companyId", "opportunityId"];
+
+async function auditTaskChanges(db: Db, actor: UserActor, changes: PlanTaskChange[], provenance: Provenance, context: Record<string, unknown>) {
+  for (const change of changes) {
+    const fields = TASK_MOVE_FIELDS.filter((field) => field in change.after).filter((field) => JSON.stringify(change.before[field] ?? null) !== JSON.stringify(change.after[field] ?? null));
+    if (fields.length === 0) continue;
+    await recordAudit(db, actor, "task.updated", "task", change.id, provenance, {
+      fields,
+      before: Object.fromEntries(fields.map((field) => [field, change.before[field] ?? null])),
+      after: Object.fromEntries(fields.map((field) => [field, change.after[field] ?? null])),
+      ...context,
+    });
+  }
+}
+
 async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Plan, fills: Map<string, GapFill>, provenance: Provenance) {
   for (const [entity, records] of [
     ["company", plan.companies],
@@ -424,6 +443,8 @@ async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Pla
     }
   }
   await auditLinks(db, source, target, plan, fills, provenance);
+  await auditTaskChanges(db, target, plan.taskMoves ?? [], provenance, { movedFrom: plan.source });
+  await auditTaskChanges(db, source, plan.tasksLeft ?? [], provenance, { companyMovedTo: plan.target });
   for (const contact of plan.leftBehind ?? []) {
     await recordAudit(db, source, "contact.updated", "contact", contact.id, provenance, {
       fields: ["companyId"],

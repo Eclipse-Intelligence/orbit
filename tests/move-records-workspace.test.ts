@@ -1156,6 +1156,38 @@ describe("moving records to another workspace", () => {
     assert.equal(kept.remind_minutes, 15);
   });
 
+  it("records each handed-over task, keeps an unassigned task visible, drops ClickUp links and records tasks left behind", async () => {
+    const pier = await company(eclipse, "Pier", { domain: "pier-move.test" });
+    const stays = await contact(eclipse, { firstName: "Stay", lastName: "Behind", companyId: pier.id });
+    const at = new Date(Math.floor((Date.now() + 3 * 86_400_000) / 60_000) * 60_000).toISOString();
+    const handed = (await createTask(priya, { title: "Call Pier", companyId: pier.id, dueAt: at }, { provenance: PROVENANCE })).body.task;
+    const unassigned = (await createTask(priya, { title: "Pier brochure", companyId: pier.id, ownerId: null }, { provenance: PROVENANCE })).body.task;
+    const left = (await createTask(eclipse, { title: "Ask Stay about Pier", companyId: pier.id, contactId: stays.id }, { provenance: PROVENANCE })).body.task;
+    await admin("update crm.tasks set clickup_task_id = 'pier1', clickup_list_id = '901', clickup_url = 'https://app.clickup.com/t/pier1' where id = $1", [handed.id]);
+    await moveRecordsToWorkspace(eclipse, { companyIds: [pier.id], workspaceId: ridgeon.workspaceId, includeContacts: false }, PROVENANCE);
+    const rows = await admin<{ id: string; workspace_id: string; owner_id: string | null; clickup_task_id: string | null; clickup_list_id: string | null; company_id: string | null }>(
+      "select id, workspace_id, owner_id, clickup_task_id, clickup_list_id, company_id from crm.tasks where id = any($1::uuid[])",
+      [[handed.id, unassigned.id, left.id]],
+    );
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    assert.deepEqual([byId.get(handed.id)?.workspace_id, byId.get(handed.id)?.clickup_task_id, byId.get(handed.id)?.clickup_list_id], [ridgeon.workspaceId, null, null]);
+    assert.equal(byId.get(unassigned.id)?.owner_id, eclipse.userId);
+    assert.equal(byId.get(left.id)?.workspace_id, eclipse.workspaceId);
+    assert.equal(byId.get(left.id)?.company_id, null);
+    const events = await admin<{ entity_id: string; workspace_id: string; changes: { fields: string[]; before: Record<string, unknown>; after: Record<string, unknown> } }>(
+      "select entity_id, workspace_id, changes from crm.audit_events where event_type = 'task.updated' and entity_id = any($1::uuid[]) and operation = 'move_test'",
+      [[handed.id, unassigned.id, left.id]],
+    );
+    const handedEvent = events.find((event) => event.entity_id === handed.id);
+    assert.equal(handedEvent?.workspace_id, ridgeon.workspaceId);
+    assert.deepEqual(handedEvent?.changes.fields, ["ownerId", "dueAt", "dueHasTime", "scheduledBy"]);
+    assert.deepEqual([handedEvent?.changes.before.ownerId, handedEvent?.changes.after.ownerId], [priya.userId, eclipse.userId]);
+    assert.deepEqual(events.find((event) => event.entity_id === unassigned.id)?.changes.fields, ["ownerId"]);
+    const leftEvent = events.find((event) => event.entity_id === left.id);
+    assert.equal(leftEvent?.workspace_id, eclipse.workspaceId);
+    assert.deepEqual(leftEvent?.changes.fields, ["companyId"]);
+  });
+
   it("puts a handed-over task on its London day in summer and winter", async () => {
     const quay = await company(eclipse, "Quay", { domain: "quay-move.test" });
     const summer = (await createTask(priya, { title: "Call Quay late", companyId: quay.id, dueAt: "2030-07-10T23:30:00.000Z" }, { provenance: PROVENANCE })).body.task;
