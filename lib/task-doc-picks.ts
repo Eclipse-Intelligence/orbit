@@ -69,9 +69,30 @@ export function insertDocReference(text: string, found: DocQuerySpan, title: str
   return { text: before + reference + spacer + after, caret: before.length + reference.length + spacer.length };
 }
 
+export function insideClosedReference(text: string, found: DocQuerySpan) {
+  return text.startsWith("]]", found.end);
+}
+
+export function withoutReferenceNear(text: string, reference: string, at: number) {
+  let best = -1;
+  for (let index = text.indexOf(reference); index >= 0; index = text.indexOf(reference, index + 1)) {
+    if (best < 0 || Math.abs(index - at) < Math.abs(best - at)) best = index;
+  }
+  if (best < 0) return text;
+  return removeDocQuery(text, { start: best, end: best + reference.length }).text;
+}
+
+export function textEdit(before: string, after: string) {
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+  let tail = 0;
+  while (tail < before.length - start && tail < after.length - start && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail += 1;
+  return { start, end: before.length - tail, insert: after.slice(start, after.length - tail) };
+}
+
 export function pickIntoDescription(text: string, found: DocQuerySpan, doc: { title: string | null; shared: boolean }) {
-  if (doc.shared) return { ...insertDocReference(text, found, doc.title), note: null };
-  return { ...removeDocQuery(text, found), note: PRIVATE_DOC_NOTE };
+  if (doc.shared) return { ...insertDocReference(text, found, doc.title), note: null, reference: `[[${docReferenceTitle(doc.title)}]]` };
+  return { ...removeDocQuery(text, found), note: PRIVATE_DOC_NOTE, reference: null };
 }
 
 export type DescriptionPart = { kind: "text"; text: string; start: number } | { kind: "doc"; id: string; label: string; start: number };
@@ -79,7 +100,11 @@ export type DescriptionPart = { kind: "text"; text: string; start: number } | { 
 type ReferenceDoc = { id: string; title: string | null; readable: boolean };
 
 export function descriptionParts(text: string, docs: ReferenceDoc[]): DescriptionPart[] {
-  const open = new Map(docs.filter((doc) => doc.readable).map((doc) => [docReferenceTitle(doc.title).toLowerCase(), doc.id] as const));
+  const open = new Map<string, string>();
+  for (const doc of docs) {
+    const key = docReferenceTitle(doc.title).toLowerCase();
+    if (doc.readable && !open.has(key)) open.set(key, doc.id);
+  }
   const parts: DescriptionPart[] = [];
   let last = 0;
   for (const match of text.matchAll(DOC_REFERENCE)) {
@@ -103,7 +128,11 @@ export function partsSourceOffset(text: string, parts: DescriptionPart[], shown:
   let seen = 0;
   for (const part of parts) {
     const length = part.kind === "doc" ? part.label.length : shownLength(part.text);
-    if (shown <= seen + length) return part.kind === "doc" ? part.start + 2 + (shown - seen) : part.start + sourceOffset(part.text, shown - seen);
+    if (shown <= seen + length) {
+      if (part.kind === "text") return part.start + sourceOffset(part.text, shown - seen);
+      const inside = shown - seen;
+      return inside === 0 ? part.start : inside === length ? part.start + length + 4 : part.start + 2 + inside;
+    }
     seen += length;
   }
   return text.length;

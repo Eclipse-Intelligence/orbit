@@ -17,10 +17,10 @@ export type Planner = {
   tagged: Record<string, string[]>;
 };
 
-export async function readPlannerTasks(actor: UserActor, now = Date.now()) {
+export async function readPlannerTasks(actor: UserActor, now = Date.now(), options: { links?: boolean } = {}) {
   const actors = await workspaceActors(actor).catch(() => [actor]);
   const read = await Promise.all(
-    actors.map(async (target) => ({ target, tasks: await listPlannerTasks(target, now) })),
+    actors.map(async (target) => ({ target, tasks: await listPlannerTasks(target, now, options) })),
   );
   return {
     actors,
@@ -30,7 +30,7 @@ export async function readPlannerTasks(actor: UserActor, now = Date.now()) {
 }
 
 export async function readPlanner(actor: UserActor, now = Date.now()): Promise<Planner> {
-  const { workspaces, read } = await readPlannerTasks(actor, now);
+  const { workspaces, read } = await readPlannerTasks(actor, now, { links: true });
   const teams = await Promise.all(
     read.map(async ({ target, tasks }) => {
       const members = tasks.length > 0 ? await listMembers(target) : [];

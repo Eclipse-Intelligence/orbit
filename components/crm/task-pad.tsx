@@ -158,6 +158,27 @@ export function SearchChip({
     };
   }, [open, key, kind, companyId, taskId]);
 
+  function optionRow(option: PadOption, index: number) {
+    return (
+      <li
+        key={option.id}
+        id={`${id}-option-${index}`}
+        role="option"
+        aria-selected={option.id === value?.id}
+        onMouseEnter={() => setHighlight(index)}
+        onClick={() => choose(option)}
+        className={cn(
+          "flex cursor-pointer flex-col rounded-lg px-2.5 py-1.5 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:justify-center",
+          index === active && "bg-white/5",
+          index > 0 && index === named.length && "relative mt-2 before:absolute before:inset-x-2.5 before:-top-1 before:h-px before:bg-white/[0.08]",
+        )}
+      >
+        <span className="ui-style text-foreground truncate">{option.name}</span>
+        {option.detail && <span className="caption-style text-subtle truncate">{option.detail}</span>}
+      </li>
+    );
+  }
+
   function choose(option: PadOption | null) {
     setOpen(false);
     setQuery("");
@@ -217,26 +238,18 @@ export function SearchChip({
             Couldn&apos;t search. Try again.
           </p>
         )}
-        {named.length > 0 && <p className="caption-style text-subtle px-2.5 pt-1 pb-0.5">{suggested?.heading}</p>}
         <ul id={`${id}-list`} role="listbox" aria-label={noun} className="flex max-h-64 flex-col overflow-y-auto">
-          {(options ?? []).map((option, index) => (
-            <li
-              key={option.id}
-              id={`${id}-option-${index}`}
-              role="option"
-              aria-selected={option.id === value?.id}
-              onMouseEnter={() => setHighlight(index)}
-              onClick={() => choose(option)}
-              className={cn(
-                "flex cursor-pointer flex-col rounded-lg px-2.5 py-1.5 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:justify-center",
-                index === active && "bg-white/5",
-                index > 0 && index === named.length && "relative mt-2 before:absolute before:inset-x-2.5 before:-top-1 before:h-px before:bg-white/[0.08]",
-              )}
-            >
-              <span className="ui-style text-foreground truncate">{option.name}</span>
-              {option.detail && <span className="caption-style text-subtle truncate">{option.detail}</span>}
+          {named.length > 0 && (
+            <li role="group" aria-labelledby={`${id}-named`} className="flex flex-col">
+              <span id={`${id}-named`} className="caption-style text-subtle px-2.5 pt-1 pb-0.5">
+                {suggested?.heading}
+              </span>
+              <ul role="none" className="flex flex-col">
+                {(options ?? []).slice(0, named.length).map((option, index) => optionRow(option, index))}
+              </ul>
             </li>
-          ))}
+          )}
+          {(options ?? []).slice(named.length).map((option, index) => optionRow(option, index + named.length))}
         </ul>
         {options && options.length === 0 && <p className="caption-style text-subtle px-2.5 py-2">No {noun} match</p>}
         {value && (

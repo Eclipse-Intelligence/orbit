@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { SearchChip } from "@/components/crm/task-pad";
+import { useComposer } from "@/components/mail/compose-dock";
 import { EditTaskDocs, TASK_EDIT_CHIP, TaskDocChips } from "@/components/crm/task-docs";
 import { relinkTaskAction } from "@/app/(crm)/task-act";
 import { taskLinkCandidatesAction } from "@/app/(crm)/records";
@@ -21,6 +22,7 @@ import UserIcon from "@/public/assets/images/tasks/user.svg";
 
 const LINK_FAILED = "Couldn't link the task. Try again.";
 const SLOT = "inline-flex min-w-0 max-w-full [&>button]:hit";
+const EMAIL_UNDO_MS = 5000;
 
 function useNamedPeople(task: Task, wanted: boolean) {
   const [found, setFound] = useState<{ key: string; people: PadOption[] } | null>(null);
@@ -58,7 +60,15 @@ function EmailChip({ task, busy, onRemove }: { task: Task; busy: boolean; onRemo
       ) : (
         <span className="truncate">{name}</span>
       )}
-      <Button variant="ghost" size="none" disabled={busy} aria-label={readable ? `Remove link to ${name}` : "Remove link to an email"} title="Remove" onClick={onRemove} className="hit size-5 rounded-full">
+      <Button
+        variant="ghost"
+        size="none"
+        disabled={busy}
+        aria-label={readable ? `Remove link to ${name}` : "Remove link to an email"}
+        title="Remove"
+        onClick={onRemove}
+        className="hit size-5 shrink-0 rounded-full [@media(pointer:coarse)]:ml-3"
+      >
         <XIcon aria-hidden />
       </Button>
     </span>
@@ -67,31 +77,85 @@ function EmailChip({ task, busy, onRemove }: { task: Task; busy: boolean; onRemo
 
 export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolean }) {
   const router = useRouter();
+  const composer = useComposer();
   const group = useRef<HTMLDivElement>(null);
+  const saving = useRef(false);
+  const lastSlot = useRef<string | null>(null);
+  const pendingEmail = useRef<{ timer: number; taskId: string } | null>(null);
+  const [hiddenEmail, setHiddenEmail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const unlinked = !task.companyId && !task.contactId && !task.opportunityId;
   const named = useNamedPeople(task, unlinked);
 
+  useEffect(
+    () => () => {
+      const pending = pendingEmail.current;
+      if (!pending) return;
+      window.clearTimeout(pending.timer);
+      pendingEmail.current = null;
+      void relinkTaskAction(pending.taskId, { mailThreadKey: null }).catch(() => null);
+    },
+    [],
+  );
+
   async function save(next: LinkChange, message: string | null) {
-    if (busy) return;
+    if (saving.current) return false;
+    saving.current = true;
     setBusy(true);
     setError(null);
     setNote(null);
     const result = await relinkTaskAction(task.id, next).catch(() => ({ error: LINK_FAILED }));
+    saving.current = false;
     setBusy(false);
+    const slot = lastSlot.current;
+    if (slot) {
+      window.requestAnimationFrame(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        group.current?.querySelector<HTMLElement>(`[data-link-slot="${slot}"] button`)?.focus();
+      });
+    }
     if (result.error) {
       setError(result.error);
-      return;
+      return false;
     }
     setNote(message);
     router.refresh();
+    return true;
   }
 
   function change(kind: "company" | "contact" | "opportunity", option: Parameters<typeof relinkChange>[2]) {
+    lastSlot.current = kind;
     const next = relinkChange(task, kind, option);
     void save(next, relinkNote(task, kind, next));
+  }
+
+  function removeEmail() {
+    const key = task.mailThreadKey;
+    if (!key || pendingEmail.current) return;
+    setHiddenEmail(key);
+    const timer = window.setTimeout(() => {
+      pendingEmail.current = null;
+      lastSlot.current = null;
+      void save({ mailThreadKey: null }, null).then((ok) => {
+        if (!ok) setHiddenEmail(null);
+      });
+    }, EMAIL_UNDO_MS);
+    pendingEmail.current = { timer, taskId: task.id };
+    composer.showToast({
+      message: "Email link removed.",
+      duration: EMAIL_UNDO_MS,
+      action: {
+        label: "Undo",
+        run: () => {
+          const pending = pendingEmail.current;
+          if (pending) window.clearTimeout(pending.timer);
+          pendingEmail.current = null;
+          setHiddenEmail(null);
+        },
+      },
+    });
   }
 
   function refocus(slot: string) {
@@ -105,49 +169,51 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
       role="group"
       aria-label="Linked"
       aria-busy={busy || undefined}
-      className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-x-2.5 [@media(pointer:coarse)]:gap-y-3"
+      className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-x-2.5 [@media(pointer:coarse)]:gap-y-4"
     >
-      <span data-link-slot="contact" className={SLOT}>
-        <SearchChip
-          kind="contact"
-          icon={UserIcon}
-          label="Person"
-          value={record(task.contactId, task.contactName)}
-          companyId={task.companyId}
-          variant="card"
-          taskId={task.id}
-          suggested={named.length > 0 ? { heading: "Named in this task", options: named } : undefined}
-          onPick={(option) => change("contact", option)}
-          onClosed={() => refocus("contact")}
-        />
+      <span inert={busy} className="contents">
+        <span data-link-slot="contact" className={SLOT}>
+          <SearchChip
+            kind="contact"
+            icon={UserIcon}
+            label="Person"
+            value={record(task.contactId, task.contactName)}
+            companyId={task.companyId}
+            variant="card"
+            taskId={task.id}
+            suggested={named.length > 0 ? { heading: "Named in this task", options: named } : undefined}
+            onPick={(option) => change("contact", option)}
+            onClosed={() => refocus("contact")}
+          />
+        </span>
+        <span data-link-slot="company" className={SLOT}>
+          <SearchChip
+            kind="company"
+            icon={BuildingIcon}
+            label="Company"
+            value={record(task.companyId, task.companyName)}
+            companyId={null}
+            variant="card"
+            taskId={task.id}
+            onPick={(option) => change("company", option)}
+            onClosed={() => refocus("company")}
+          />
+        </span>
+        <span data-link-slot="opportunity" className={SLOT}>
+          <SearchChip
+            kind="opportunity"
+            icon={OpportunityIcon}
+            label="Opportunity"
+            value={record(task.opportunityId, task.opportunityName)}
+            companyId={null}
+            variant="card"
+            taskId={task.id}
+            onPick={(option) => change("opportunity", option)}
+            onClosed={() => refocus("opportunity")}
+          />
+        </span>
       </span>
-      <span data-link-slot="company" className={SLOT}>
-        <SearchChip
-          kind="company"
-          icon={BuildingIcon}
-          label="Company"
-          value={record(task.companyId, task.companyName)}
-          companyId={null}
-          variant="card"
-          taskId={task.id}
-          onPick={(option) => change("company", option)}
-          onClosed={() => refocus("company")}
-        />
-      </span>
-      <span data-link-slot="opportunity" className={SLOT}>
-        <SearchChip
-          kind="opportunity"
-          icon={OpportunityIcon}
-          label="Opportunity"
-          value={record(task.opportunityId, task.opportunityName)}
-          companyId={null}
-          variant="card"
-          taskId={task.id}
-          onPick={(option) => change("opportunity", option)}
-          onClosed={() => refocus("opportunity")}
-        />
-      </span>
-      <EmailChip task={task} busy={busy} onRemove={() => void save({ mailThreadKey: null }, null)} />
+      {hiddenEmail !== task.mailThreadKey && <EmailChip task={task} busy={busy} onRemove={removeEmail} />}
       {task.canLinkDocs ? <EditTaskDocs task={task} warn={warn} /> : <TaskDocChips task={task} />}
       {busy && (
         <span role="status" className="caption-style text-subtle">

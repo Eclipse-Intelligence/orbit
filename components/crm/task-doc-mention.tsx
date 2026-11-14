@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { DocPickHeader, DocPickNotice, DocPickOptions, useDocPicks } from "@/components/crm/task-doc-picker";
 import { useDocChange } from "@/components/crm/task-docs";
 import type { Task } from "@/lib/crm/types";
 import type { DocPick } from "@/lib/docs/client-types";
-import { pickIntoDescription } from "@/lib/task-doc-picks";
+import { insideClosedReference, pickIntoDescription, textEdit, withoutReferenceNear } from "@/lib/task-doc-picks";
 import { docQueryAt, withoutDocQuery, type DocQuery } from "@/lib/task-pad";
 
 type Mode = "title" | "description";
@@ -26,11 +26,11 @@ export function useDocMention({
   onChange: (value: string) => void;
 }) {
   const id = useId();
+  const listId = `${id}-docs-list`;
   const field = useRef<HTMLTextAreaElement | null>(null);
-  const attach = useCallback((node: HTMLTextAreaElement | null) => {
-    field.current = node;
-  }, []);
+  const latest = useRef(value);
   const muted = useRef<number | null>(null);
+  const closing = useRef<number | null>(null);
   const [query, setQuery] = useState<DocQuery | null>(null);
   const [highlight, setHighlight] = useState(0);
   const [note, setNote] = useState<string | null>(null);
@@ -39,37 +39,74 @@ export function useDocMention({
   const options = found.docs ? (mode === "title" ? found.docs.filter((doc) => !task.docIds.includes(doc.id)) : found.docs) : null;
   const active = options && options.length > 0 ? Math.min(highlight, options.length - 1) : -1;
 
+  useEffect(() => {
+    latest.current = value;
+  }, [value]);
+  useEffect(
+    () => () => {
+      if (closing.current !== null) window.clearTimeout(closing.current);
+    },
+    [],
+  );
+
+  const attach = useCallback((node: HTMLTextAreaElement | null) => {
+    field.current = node;
+  }, []);
+
+  function keepOpen() {
+    if (closing.current === null) return;
+    window.clearTimeout(closing.current);
+    closing.current = null;
+  }
+
   function refresh(text: string, caret: number) {
+    keepOpen();
     if (!enabled) return;
     const next = docQueryAt(text, caret);
     if (muted.current !== null && text.slice(muted.current, muted.current + 2) !== "[[") muted.current = null;
-    if (next && next.start === muted.current) {
+    if (!next || next.start === muted.current || insideClosedReference(text, next)) {
       setQuery(null);
       return;
     }
-    if (next) setNote(null);
-    setQuery((current) => (current && next && current.start === next.start && current.end === next.end && current.query === next.query ? current : next));
-    if (!next || next.query !== query?.query) setHighlight(0);
+    setNote(null);
+    setQuery((current) => (current && current.start === next.start && current.end === next.end && current.query === next.query ? current : next));
+    if (next.query !== query?.query) setHighlight(0);
   }
 
-  function focusAt(caret: number) {
+  function write(next: string, caret: number) {
+    const element = field.current;
+    const edit = textEdit(value, next);
+    if (element && document.activeElement === element) {
+      element.setSelectionRange(edit.start, edit.end);
+      const done = edit.insert ? document.execCommand("insertText", false, edit.insert) : edit.start === edit.end || document.execCommand("delete");
+      if (done && element.value === next) {
+        element.setSelectionRange(caret, caret);
+        return;
+      }
+    }
+    onChange(next);
     window.requestAnimationFrame(() => {
-      const element = field.current;
-      if (!element) return;
-      element.focus();
-      element.setSelectionRange(caret, caret);
+      const target = field.current;
+      if (!target) return;
+      target.focus();
+      target.setSelectionRange(caret, caret);
     });
   }
 
   function pick(doc: DocPick) {
     if (!query) return;
-    const next = mode === "title" ? { ...withoutDocQuery(value, query), note: null } : pickIntoDescription(value, query, doc);
-    onChange(next.text);
-    focusAt(next.caret);
+    const next = mode === "title" ? { ...withoutDocQuery(value, query), note: null, reference: null } : pickIntoDescription(value, query, doc);
+    const at = query.start;
     setQuery(null);
     setHighlight(0);
+    write(next.text, next.caret);
     setNote(next.note);
-    if (!task.docIds.includes(doc.id)) void change.link(doc);
+    if (task.docIds.includes(doc.id)) return;
+    void change.link(doc).then((linked) => {
+      if (linked || !next.reference) return;
+      setNote(null);
+      onChange(withoutReferenceNear(latest.current, next.reference, at));
+    });
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -100,27 +137,48 @@ export function useDocMention({
   }
 
   function close() {
-    window.setTimeout(() => setQuery(null), 150);
+    keepOpen();
+    closing.current = window.setTimeout(() => {
+      closing.current = null;
+      setQuery(null);
+    }, 150);
   }
 
+  const open = query !== null;
+  const listed = open && Boolean(options && options.length > 0);
+  const fieldProps = enabled
+    ? {
+        role: open ? "combobox" : undefined,
+        "aria-autocomplete": "list" as const,
+        "aria-expanded": open,
+        "aria-controls": listed ? listId : undefined,
+        "aria-activedescendant": listed && active >= 0 ? `${id}-docs-option-${active}` : undefined,
+        "data-mention-open": open ? "" : undefined,
+      }
+    : {};
+
   const menu = query ? (
-    <div role="group" aria-label="Link a doc" className="bg-popover border-line-strong shadow-overlay mt-1.5 w-full max-w-[24rem] overflow-hidden rounded-xl border p-1">
+    <div
+      role="group"
+      aria-label="Link a doc"
+      onMouseDown={(event) => event.preventDefault()}
+      className="bg-popover border-line-strong shadow-overlay mt-1.5 w-full max-w-[24rem] overflow-hidden rounded-xl border p-1"
+    >
       <DocPickHeader query={query.query} docs={options} loading={found.loading} />
       <DocPickNotice query={query.query} docs={options} failed={found.failed} />
-      {options && options.length > 0 && <DocPickOptions id={`${id}-docs`} docs={options} query={query.query} active={active} warn={warn} buttons onHover={setHighlight} onPick={pick} />}
+      {options && options.length > 0 && <DocPickOptions id={`${id}-docs`} docs={options} query={query.query} active={active} warn={warn} onHover={setHighlight} onPick={pick} />}
     </div>
   ) : null;
 
-  const status =
-    change.error ? (
-      <p role="alert" className="caption-style text-danger">
-        {change.error}
-      </p>
-    ) : note ? (
-      <p role="status" className="caption-style text-subtle">
-        {note}
-      </p>
-    ) : null;
+  const status = change.error ? (
+    <p role="alert" className="caption-style text-danger">
+      {change.error}
+    </p>
+  ) : note ? (
+    <p role="status" className="caption-style text-subtle">
+      {note}
+    </p>
+  ) : null;
 
-  return { attach, open: query !== null, refresh, onKeyDown, close, menu, status };
+  return { attach, open, refresh, onKeyDown, close, keepOpen, fieldProps, menu, status };
 }

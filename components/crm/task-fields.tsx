@@ -484,8 +484,11 @@ export function TaskTitleField({
         value={details.title}
         maxLength={200}
         autoFocus
-        data-mention-open={mention.open ? "" : undefined}
-        onFocus={(event) => event.currentTarget.setSelectionRange(editing, editing)}
+        {...mention.fieldProps}
+        onFocus={(event) => {
+          mention.keepOpen();
+          event.currentTarget.setSelectionRange(editing, editing);
+        }}
         onChange={(event) => {
           const value = event.target.value.replace(/\n/g, " ");
           details.setTitle(value);
@@ -845,8 +848,9 @@ function Description({ details, layout, warn }: { details: TaskDetailsState; lay
         value={details.text}
         placeholder="Add a description"
         autoFocus={editing !== null}
-        data-mention-open={mention.open ? "" : undefined}
+        {...mention.fieldProps}
         onFocus={(event) => {
+          mention.keepOpen();
           if (editing !== null) event.currentTarget.setSelectionRange(editing, editing);
           else setEditing(event.currentTarget.selectionStart ?? details.text.length);
         }}
@@ -910,7 +914,7 @@ export default function TaskFields({
 
   if (layout === "row") {
     return (
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3 [@media(pointer:coarse)]:gap-4">
         <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}

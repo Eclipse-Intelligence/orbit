@@ -65,7 +65,7 @@ export function TaskDocChips({ task }: { task: Pick<Task, "docs"> }) {
 
 export function useDocChange(taskId: string, onDone?: () => void) {
   const router = useRouter();
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const queue = useRef<Promise<boolean>>(Promise.resolve(true));
   const [pending, setPending] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,10 +79,11 @@ export function useDocChange(taskId: string, onDone?: () => void) {
       setPending((count) => count - 1);
       if (result.error) {
         setError(result.error);
-        return;
+        return false;
       }
       onDone?.();
       router.refresh();
+      return true;
     });
     queue.current = next;
     return next;
@@ -122,7 +123,7 @@ export function EditTaskDocs({ task, warn }: { task: Pick<Task, "id" | "docs" | 
         );
       })}
       <DocPickPopover taskId={task.id} warn={warn} exclude={task.docIds} onPick={(doc) => void change.link(doc)} onClosed={() => trigger.current?.focus()}>
-        <button ref={trigger} type="button" aria-label="Link a doc" aria-busy={change.busy || undefined} className={EMPTY_CHIP}>
+        <button ref={trigger} type="button" aria-label="Link a doc" aria-busy={change.busy || undefined} className={cn(EMPTY_CHIP, "hit")}>
           <DocIcon aria-hidden />
           Doc
         </button>

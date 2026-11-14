@@ -268,6 +268,9 @@ function linkValue(value: unknown) {
 export async function relinkTask(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(taskId)) throw notFound("task");
+  if (change.mailThreadKey !== undefined && change.mailThreadKey !== null) {
+    throw new CrmError("invalid_input", "A linked email can only be removed here.", 400, { field: "mailThreadKey" });
+  }
   const write = {
     companyId: linkValue(change.companyId),
     contactId: linkValue(change.contactId),

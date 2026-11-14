@@ -342,7 +342,7 @@ describe("relinking from the task", () => {
     assert.ok(events[0].changes.fields?.includes("mailThreadKey"));
     await relinkTask(mark, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" });
     assert.equal((await audits(task.id, "task.updated")).length, 1, "clearing an email that is already gone records nothing");
-    await assert.rejects(() => relinkTask(mark, task.id, { mailThreadKey: "someone|else" } as never, { operation: "link_task", source: "web" }), /Choose a person/);
+    await assert.rejects(() => relinkTask(mark, task.id, { mailThreadKey: "someone|else" } as never, { operation: "link_task", source: "web" }), /can only be removed here/);
   });
 });
 
