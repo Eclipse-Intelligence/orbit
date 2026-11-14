@@ -289,7 +289,7 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
     fetchImpl: options.fetchImpl,
   });
   return acceptAiReading(
-    clean,
+    text.trim(),
     {
       phrases: result.data.phrases ?? [],
       due: result.data.due,
