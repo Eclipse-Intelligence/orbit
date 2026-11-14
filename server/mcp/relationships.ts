@@ -388,6 +388,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         companyId: z.uuid().nullable().optional(),
         contactId: z.uuid().nullable().optional(),
         opportunityId: z.uuid().nullable().optional(),
+        mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
         ...provenanceFields,
       },
     },
@@ -406,6 +407,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
             companyId: args.companyId,
             contactId: args.contactId,
             opportunityId: args.opportunityId,
+            mailThreadKey: args.mailThreadKey,
           },
           { provenance: provenance(args, "create_task") },
         );
@@ -433,8 +435,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     {
       description:
         actor.type === "user"
-          ? "One task with its full picture in one call: the task (detail without mail links), workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, and in mail the person's own last email with them and the email thread the task came from. Use it instead of looking up the contact, opportunity and mail one by one."
-          : "One task with its full picture in one call: the task (detail without mail links), workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, and the last activity. mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
+          ? "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, and in mail the person's own last email with them and the email thread the task is pinned to. Use it instead of looking up the contact, opportunity and mail one by one."
+          : "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, and the last activity. mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
       inputSchema: { id: z.uuid() },
     },
     async (args) => run(() => taskDetail(actor, args.id)),

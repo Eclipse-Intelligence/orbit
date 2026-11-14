@@ -422,9 +422,13 @@ export type Task = {
   clickupUrl: string | null;
   clickupError: string | null;
   inOutlook: boolean;
+  mailThreadKey: string | null;
+  mailThread: TaskMailThread | null;
   createdAt: string;
   updatedAt: string;
 };
+
+export type TaskMailThread = { subject: string | null; readable: boolean };
 
 export const TASK_SCHEDULED_BY = ["person", "planner"] as const;
 export type TaskScheduledBy = (typeof TASK_SCHEDULED_BY)[number];
@@ -443,6 +447,7 @@ export type TaskWrite = {
   companyId?: string | null;
   contactId?: string | null;
   opportunityId?: string | null;
+  mailThreadKey?: string | null;
   completed?: boolean;
 };
 

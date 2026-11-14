@@ -4,7 +4,6 @@ import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
 import { hasScope } from "@/lib/crm/scopes";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
-import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { followUpTitle } from "@/lib/mail/follow-up-title";
 import type { UserActor } from "@/lib/crm/types";
@@ -171,8 +170,8 @@ async function followUpWho(db: Db, row: Candidate) {
 
 async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate, title: string) {
   if (!row.company_id) return null;
-  const thread = await db.query<{ source_id: string; thread_key: string | null; subject: string | null }>(
-    "select source_id, thread_key, subject from crm.mail_messages where id = $1",
+  const thread = await db.query<{ source_id: string; thread_key: string | null }>(
+    "select source_id, thread_key from crm.mail_messages where id = $1",
     [row.message_id],
   );
   const mail = thread.rows[0];
@@ -182,16 +181,15 @@ async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate, title: 
     actor,
     {
       title: title.slice(0, 200),
-      description: withMailThread(
-        withDueNote("Suggested after an email arrived.", due),
-        mail?.thread_key ? mailThreadLine(mail.source_id, mail.thread_key, mail.subject) : null,
-      ),
+      description: withDueNote("Suggested after an email arrived.", due),
+      mailThreadKey: mail?.thread_key ? `${mail.source_id}|${mail.thread_key}` : null,
       dueDate: due?.dueDate ?? null,
       companyId: row.company_id,
       contactId: row.contact_id,
       priority: "normal",
     },
     { operation: "suggest_follow_up", source: "microsoft" },
+    { ownThread: true },
   );
   return task?.id ?? null;
 }

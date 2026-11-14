@@ -31,7 +31,8 @@ import {
   QuickTaskForm,
   type QuickAddNotice,
 } from "@/components/crm/quick-add-forms";
-import { quickAddSetupAction, type QuickAddSetup } from "@/app/(crm)/quick-add";
+import { quickAddSetupAction, quickAddThreadAction, type QuickAddSetup } from "@/app/(crm)/quick-add";
+import type { PadThread } from "@/components/crm/task-pad";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import {
   QUICK_ADD_ITEMS,
@@ -201,6 +202,8 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   const [setup, setSetup] = useState<QuickAddSetup | null>(null);
   const [notice, setNotice] = useState<(QuickAddNotice & { id: number }) | null>(null);
   const [opening, setOpening] = useState(0);
+  const [thread, setThread] = useState<PadThread | null>(null);
+  const threadAsked = useRef(0);
   const choosing = useRef(false);
   const returnTo = useRef<HTMLElement | null>(null);
   const { covered, lift, tucked, beside } = useScreenState();
@@ -223,6 +226,15 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
       setMenuOpen(false);
       setNotice(null);
       setOpening((count) => count + 1);
+      const asked = (threadAsked.current += 1);
+      const key = next === "task" && pathname === "/mail" ? new URL(window.location.href).searchParams.get("thread") : null;
+      setThread(key ? { key, subject: null } : null);
+      if (key) {
+        quickAddThreadAction(key).then(
+          (found) => asked === threadAsked.current && setThread(found),
+          () => asked === threadAsked.current && setThread(null),
+        );
+      }
       setKind(next);
       setDialogOpen(true);
       loadSetup();
@@ -355,7 +367,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         {kind === "task" ? (
           <TaskSheet>
-            <QuickTaskForm key={opening} {...formProps} />
+            <QuickTaskForm key={opening} {...formProps} thread={thread} />
           </TaskSheet>
         ) : (
           <DialogContent className="max-w-[440px]" aria-describedby={undefined}>

@@ -261,6 +261,7 @@ const taskWriteSchema = z
     companyId: z.uuid().nullable().optional(),
     contactId: z.uuid().nullable().optional(),
     opportunityId: z.uuid().nullable().optional(),
+    mailThreadKey: z.string().max(500).nullable().optional(),
     completed: z.boolean().optional(),
   })
   .strict();

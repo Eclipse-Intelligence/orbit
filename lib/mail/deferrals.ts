@@ -245,7 +245,6 @@ async function recordDeferral(caller: UserActor, input: DeferralInput) {
     }
     const name = (contact?.name || input.fromName?.trim() || email).slice(0, 150);
     const href = threadHref(input.sourceId, input.threadKey);
-    const subject = (input.subject?.trim() || "The email").replace(/[[\]]/g, "").slice(0, 200);
     const dueDate = dayKeyAt(input.at);
     const task = actor.scopes.includes("tasks:write")
       ? await createTaskInDb(
@@ -253,12 +252,14 @@ async function recordDeferral(caller: UserActor, input: DeferralInput) {
           actor,
           {
             title: `Check in with ${name}`,
-            description: `${note}\n\n[${subject}](${href})`,
+            description: note,
+            mailThreadKey: threadKey(input.sourceId, input.threadKey),
             dueDate,
             contactId: contact?.id ?? null,
             ...(company ? { companyId: company.id } : {}),
           },
           { operation: "defer_follow_up", source: "mail", sourceUrl: href },
+          { ownThread: true },
         )
       : null;
     await db.query(

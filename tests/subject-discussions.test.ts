@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { discussionCount, discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
-import { replaceDescriptionText, splitDescription } from "@/lib/crm/task-description";
 import type { ChatLiveEvent, ChatMessage } from "@/lib/chat/types";
 import {
   chatWorkSettled,
@@ -475,26 +474,5 @@ describe("discussion helpers", () => {
       ]),
       5,
     );
-  });
-
-  it("keeps mail links where they were when the description text changes", () => {
-    const link = "[Re: pricing](/mail?thread=a)";
-    assert.equal(replaceDescriptionText(`Intro\n${link}\nSecond`, "Intro changed\nSecond"), `Intro changed\n${link}\nSecond`);
-    assert.equal(replaceDescriptionText(`Use v4\n\n${link}`, "Use v5"), `Use v5\n\n${link}`);
-    assert.equal(replaceDescriptionText(link, "New text"), `${link}\nNew text`);
-    assert.equal(replaceDescriptionText("A\n\nB", "A\nB"), "A\nB");
-    assert.equal(replaceDescriptionText("A", "A\n\n\n\nB"), "A\n\n\n\nB");
-    assert.equal(replaceDescriptionText(`A\n${link}\nB`, "A\nNew\nB"), `A\n${link}\nNew\nB`);
-    assert.equal(replaceDescriptionText(`A\n${link}\nB`, "Only"), `Only\n${link}`);
-    assert.equal(replaceDescriptionText(`One\n${link}`, ""), link);
-    assert.equal(replaceDescriptionText(null, ""), null);
-    let mid = `A\n\n${link}\nB`;
-    for (let round = 0; round < 3; round += 1) {
-      const { text } = splitDescription(mid);
-      mid = replaceDescriptionText(mid, text) ?? "";
-    }
-    assert.equal(mid, `A\n\n${link}\nB`);
-    const edited = replaceDescriptionText(`A\n\n${link}\nB`, "A changed\n\nB");
-    assert.equal(replaceDescriptionText(edited, splitDescription(edited).text), edited);
   });
 });

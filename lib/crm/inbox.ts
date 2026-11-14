@@ -13,7 +13,6 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
-import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
 import { followUpTitle } from "@/lib/mail/follow-up-title";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
@@ -802,19 +801,20 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
         const source = candidate.threadKey
           ? (await db.query<{ id: string }>("select id from crm.mail_sources where connection_id = $1 and user_id = $2 limit 1", [candidate.connectionId, actor.userId])).rows[0]
           : null;
-        const thread = source && candidate.threadKey ? mailThreadLine(source.id, candidate.threadKey, candidate.subject) : null;
         return createTaskInDb(
           db,
           actor,
           {
             title: title.slice(0, 200),
-            description: withMailThread(withDueNote("Suggested after an email arrived.", due), thread),
+            description: withDueNote("Suggested after an email arrived.", due),
+            mailThreadKey: source && candidate.threadKey ? `${source.id}|${candidate.threadKey.slice(0, 400)}` : null,
             dueDate: due?.dueDate ?? null,
             companyId: candidate.companyId,
             contactId: candidate.contactId,
             priority: "normal",
           },
           { operation: "suggest_follow_up", source: "microsoft" },
+          { ownThread: true },
         );
       });
       if (task) taskIds.push(task.id);

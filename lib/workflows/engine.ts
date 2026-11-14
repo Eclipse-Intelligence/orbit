@@ -13,6 +13,7 @@ import { getCompany, updateCompany } from "@/lib/crm/companies";
 import { getContact, updateContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
+import { emailThreadKey } from "@/lib/crm/task-mail";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { listSenders, sendContactEmail } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
@@ -36,7 +37,6 @@ import { mentionsIn, splitMentions } from "@/lib/mentions";
 import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX } from "@/lib/chat/types";
 import { appTimeZone } from "@/lib/time";
 import { dayKeyAt, dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
-import { splitDescription } from "@/lib/crm/task-description";
 import {
   nextNode,
   nextScheduleRun,
@@ -315,7 +315,7 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
     vars.task = {
       id: task.id,
       title: task.title,
-      notes: splitDescription(task.description).text || null,
+      notes: task.description?.trim() || null,
       completedAt: task.completedAt,
       dueAt: task.dueAt,
       dueDate: task.dueDate,
@@ -927,6 +927,17 @@ function createTaskLinks(linkTo: string, vars: Vars) {
   return { companyId: linkTo === "none" ? null : companyId, contactId: null, opportunityId: null };
 }
 
+async function emailThread(actor: UserActor, vars: Vars) {
+  const emailId = (vars.email as { id?: unknown } | undefined)?.id;
+  if (typeof emailId !== "string" || !emailId) return {};
+  try {
+    return { mailThreadKey: await emailThreadKey(actor, emailId) };
+  } catch (error) {
+    if (error instanceof CrmError && error.code === "not_found") return {};
+    throw error;
+  }
+}
+
 async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
   const config = step.config;
   if (ctx.run.test && (SIDE_EFFECTS.has(step.type) || step.type === "delay" || step.type === "approval")) {
@@ -974,6 +985,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
           description: withDueNote(render(config.notes, ctx.vars).trim() || null, due),
           dueDate: due?.dueDate ?? null,
           ...links,
+          ...(await emailThread(ctx.actor, ctx.vars)),
           ownerId,
           priority: "normal",
         },

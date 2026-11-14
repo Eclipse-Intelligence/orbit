@@ -22,11 +22,11 @@ import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { saveTaskDetailsAction, type TaskDetails } from "@/app/(crm)/discussions";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { reminderLabel } from "@/lib/crm/reminder-options";
-import { replaceDescriptionText, splitDescription } from "@/lib/crm/task-description";
 import { taskSnoozeChoices } from "@/lib/crm/task-snooze";
 import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
+import { threadHref } from "@/lib/mail/view";
 import { padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { durationLabel, localInstant } from "@/lib/crm/task-time";
@@ -135,7 +135,7 @@ export function dueValue(task: Pick<Task, "dueAt" | "dueDate" | "dueHasTime">) {
 function sourceOf(task: Task): Source {
   return {
     title: task.title,
-    text: splitDescription(task.description).text,
+    text: task.description?.trim() ?? "",
     due: dueValue(task),
     reminder: task.remindMinutes,
     duration: task.durationMinutes,
@@ -254,7 +254,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
       return;
     }
     sent.current.text = next;
-    void save({ description: replaceDescriptionText(task.description, next) }).then((ok) => {
+    void save({ description: next || null }).then((ok) => {
       if (ok) {
         dropDraft(task.id, "text");
         return;
@@ -463,7 +463,7 @@ function LinkChip({ href, label, icon: Icon, mark, record }: { href: string; lab
 }
 
 export function taskIsLinked(task: Task) {
-  return Boolean(task.companyId || task.contactId || task.opportunityId || splitDescription(task.description).links.length > 0);
+  return Boolean(task.companyId || task.contactId || task.opportunityId || task.mailThreadKey);
 }
 
 function LinksEditor({ task, canEdit, label }: { task: Task; canEdit: boolean; label?: boolean }) {
@@ -484,8 +484,21 @@ function LinksEditor({ task, canEdit, label }: { task: Task; canEdit: boolean; l
   );
 }
 
+function MailChip({ task }: { task: Task }) {
+  if (!task.mailThreadKey) return null;
+  const thread = task.mailThread;
+  if (!thread?.readable) {
+    return (
+      <span className={LINK_CHIP}>
+        <MailIcon aria-hidden className="text-subtle size-3 shrink-0" />
+        <span className="truncate">Email</span>
+      </span>
+    );
+  }
+  return <LinkChip href={threadHref(task.mailThreadKey)} label={thread.subject || "Email"} icon={MailIcon} />;
+}
+
 export function TaskLinks({ task }: { task: Task }) {
-  const links = splitDescription(task.description).links;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
       {task.contactId && task.contactName && <LinkChip record href={contactHref(task.contactId)} label={task.contactName} icon={ContactIcon} />}
@@ -493,9 +506,7 @@ export function TaskLinks({ task }: { task: Task }) {
         <LinkChip record href={companyHref(task.companyId)} label={task.companyName} mark={<Monogram name={task.companyName} className="size-4 rounded-full text-[9px]" />} />
       )}
       {task.opportunityId && task.opportunityName && <LinkChip record href={recordHref("opportunity", task.opportunityId)} label={task.opportunityName} icon={OpportunityIcon} />}
-      {links.map((link, index) => (
-        <LinkChip key={`${index}:${link.href}`} href={link.href} label={link.label} icon={MailIcon} />
-      ))}
+      <MailChip task={task} />
     </div>
   );
 }

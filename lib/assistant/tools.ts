@@ -135,6 +135,7 @@ import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
 import { archiveTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { emailThreadKey } from "@/lib/crm/task-mail";
 import { directTaskSql } from "@/lib/crm/task-access";
 import { logActivity } from "@/lib/crm/activities";
 import {
@@ -258,6 +259,17 @@ function taskRelinkArgs(args: Record<string, unknown>) {
     links[key] = value === null || value.trim() === "" ? null : value.trim();
   }
   return links;
+}
+
+async function taskEmailArgs(actor: UserActor, args: Record<string, unknown>): Promise<{ mailThreadKey?: string | null }> {
+  if (args.emailId === undefined) return {};
+  const id = nullableStr(args.emailId);
+  return { mailThreadKey: id ? await emailThreadKey(actor, id) : null };
+}
+
+function taskEmailLines(args: Record<string, unknown>) {
+  if (args.emailId === undefined) return [];
+  return [nullableStr(args.emailId) ? "Pinned to the email's thread" : "Email: none"];
 }
 
 function taskRelinkLines(args: Record<string, unknown>, name: Names) {
@@ -1078,6 +1090,7 @@ const TASK_FIELDS = {
   },
   priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent it is: low, normal or high. New tasks are normal unless set." },
   ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
+  emailId: { type: "string", description: "Pins the task to the thread of this email (an email id from search_email or get_email_thread), so the task links to the conversation in Mail. null unpins it." },
 };
 
 const LIFECYCLE_PARAM = {
@@ -1967,7 +1980,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_tasks",
     label: "Checking tasks",
     description:
-      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it came from, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
+      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it is pinned to, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
     parameters: {
       type: "object",
       properties: {
@@ -3434,6 +3447,7 @@ const TOOL_LIST: AssistantTool[] = [
         ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner", dueDate: "Due", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
         ...fieldLines(args, { durationMinutes: "Duration", remindMinutes: "Reminder" }),
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
+        ...taskEmailLines(args),
         `ClickUp: ${args.sendToClickUp === false ? "no" : "yes"}`,
       ],
     }),
@@ -3449,6 +3463,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(typeof args.remindMinutes === "number" ? { remindMinutes: args.remindMinutes } : {}),
           priority: oneOf(args.priority, ["low", "normal", "high"] as const) ?? "normal",
           ...taskLinkArgs(args),
+          ...(await taskEmailArgs(actor, args)),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
         },
         picker?.listId ?? null,
@@ -3498,6 +3513,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...fieldLines(args, { title: "Title", dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
           ...fieldLines(args, { ownerId: "Owner" }, name),
           ...taskRelinkLines(args, name),
+          ...taskEmailLines(args),
         ],
       };
     },
@@ -3525,6 +3541,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
           ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
           ...taskRelinkArgs(args),
+          ...(await taskEmailArgs(actor, args)),
         },
         { provenance: { operation: completing ? "complete_task" : "update_task", ...provenanceSource() } },
       );

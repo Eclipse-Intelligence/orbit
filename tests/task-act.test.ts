@@ -6,7 +6,6 @@ import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { completeTaskWithOutcome, relinkTask, taskContext } from "@/lib/crm/task-act";
-import { mailThreadLine } from "@/lib/crm/task-description";
 import { taskKind } from "@/lib/crm/task-kind";
 import { GET as restGetTask } from "@/app/api/v1/tasks/[id]/route";
 import { randomUUID } from "node:crypto";
@@ -182,8 +181,7 @@ describe("task context", () => {
   });
 
   it("never shows another person's mail, and a tagged teammate sees no subject from the owner's thread", async () => {
-    const description = mailThreadLine(markBox.sourceId, "renewal", "Renewal terms, v2");
-    const task = (await createTask(mark, { title: "Reply to Jane", contactId: jane, description })).body.task;
+    const task = (await createTask(mark, { title: "Reply to Jane", contactId: jane, mailThreadKey: `${markBox.sourceId}|renewal` })).body.task;
     const own = await taskContext(mark, task.id);
     assert.equal(own.thread?.key, `${markBox.sourceId}|renewal`);
     assert.equal(own.thread?.subject, "Renewal terms, v2");
@@ -232,7 +230,7 @@ describe("task context", () => {
   });
 
   it("shows an admin opening someone else's task only their own mail", async () => {
-    const task = (await createTask(mark, { title: "Reply to Jane", contactId: jane, description: mailThreadLine(markBox.sourceId, "renewal", "Renewal terms, v2") })).body.task;
+    const task = (await createTask(mark, { title: "Reply to Jane", contactId: jane, mailThreadKey: `${markBox.sourceId}|renewal` })).body.task;
     const context = await taskContext(ava, task.id);
     assert.equal(context.thread, null);
     assert.equal(context.lastEmail, null);

@@ -140,6 +140,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         companyId: z.uuid().nullable().optional(),
         contactId: z.uuid().nullable().optional(),
         opportunityId: z.uuid().nullable().optional(),
+        mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
         ...provenanceFields,
       },
     },
@@ -161,6 +162,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               companyId: args.companyId,
               contactId: args.contactId,
               opportunityId: args.opportunityId,
+              mailThreadKey: args.mailThreadKey,
             },
             { provenance: provenance(args, "update_task") },
           )

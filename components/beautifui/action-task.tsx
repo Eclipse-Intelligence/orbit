@@ -17,7 +17,6 @@ import type { Viewer } from "@/components/crm/viewer";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
-import { splitDescription } from "@/lib/crm/task-description";
 import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
 import { durationLabel, isTaskOverdue } from "@/lib/crm/task-time";
 import { taskDueLabel, taskDueState } from "@/lib/crm/task-views";
@@ -204,7 +203,7 @@ function ActionTask({
     if (wasExpanded.current && !expanded) flushDetails.current();
     wasExpanded.current = expanded;
   }, [expanded]);
-  const preview = splitDescription(task.description).text.split("\n")[0]?.trim();
+  const preview = (task.description ?? "").trim().split("\n")[0]?.trim();
   const expansion = useExpansion(expanded);
   usePageFocus("task", task.id, expanded);
   const row = useRef<HTMLLIElement>(null);

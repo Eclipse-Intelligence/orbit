@@ -12,7 +12,6 @@ import { createContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { mailThreadLine, withMailThread } from "@/lib/crm/task-description";
 import { detailOfTask, taskDetail, taskDetailOrNull, type TaskDetail } from "@/lib/crm/task-detail";
 import { addTaskParticipants, archiveTask, createTask, getTask } from "@/lib/crm/tasks";
 import type { Actor, AgentActor, UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -143,9 +142,8 @@ before(async () => {
   await message(mark, markBox, { thread: "renewal", from: "jane@northwind-detail.test", to: ["mark@detail.test"], subject: "Renewal terms", at: "2026-11-05T09:00:00Z" });
   threadEmail = await message(mark, markBox, { thread: "renewal", from: "mark@detail.test", to: ["jane@northwind-detail.test"], subject: "Re: Renewal terms", at: "2026-11-06T09:00:00Z", sent: true });
   await message(sam, samBox, { thread: "secret", from: "jane@northwind-detail.test", to: ["sam@detail.test"], subject: "Sam's private pricing", at: "2026-11-10T09:00:00Z" });
-  const description = withMailThread("Ask about the three-year price.", mailThreadLine(markBox.sourceId, "renewal", "Renewal terms"));
   callJane = (
-    await createTask(mark, { title: "Call Jane about the renewal", description, dueDate: "2026-11-20", ownerId: sam.userId, contactId: jane, opportunityId: renewal })
+    await createTask(mark, { title: "Call Jane about the renewal", description: "Ask about the three-year price.", mailThreadKey: `${markBox.sourceId}|renewal`, dueDate: "2026-11-20", ownerId: sam.userId, contactId: jane, opportunityId: renewal })
   ).body.task.id;
   await addTaskParticipants(mark, callJane, [priya.userId]);
 });
@@ -181,6 +179,8 @@ describe("the full detail of one task", () => {
     assert.equal(detail.assignedToViewer, false);
     assert.deepEqual(detail.mail?.lastEmail, { subject: "Re: Renewal terms", at: "2026-11-06T09:00:00.000Z" });
     assert.deepEqual(detail.mail?.thread, { emailId: threadEmail, subject: "Re: Renewal terms", messages: 2, latest: "2026-11-06T09:00:00.000Z", fromNames: ["jane@northwind-detail.test", "mark@detail.test"].sort() });
+    assert.equal(detail.task.mailThreadKey, `${markBox.sourceId}|renewal`);
+    assert.deepEqual(detail.task.mailThread, { subject: "Re: Renewal terms", readable: true });
   });
 
   it("offers the company's people and their open opportunity when only the company is linked", async () => {
@@ -199,6 +199,7 @@ describe("the full detail of one task", () => {
     assert.equal(theirs.assignedToViewer, true);
     assert.equal(theirs.canChange, true);
     assert.equal(theirs.mail?.thread, null);
+    assert.deepEqual(theirs.task.mailThread, { subject: null, readable: false });
     assert.equal(theirs.mail?.lastEmail?.subject, "Sam's private pricing");
     assert.doesNotMatch(JSON.stringify(theirs), /Renewal terms/);
     assert.ok(!JSON.stringify(theirs).includes(threadEmail));
@@ -214,6 +215,8 @@ describe("the full detail of one task", () => {
     const detail = await taskDetail(agent, callJane);
     assertCrmFields(detail);
     assert.equal(detail.mail, null);
+    assert.deepEqual(detail.task.mailThread, { subject: null, readable: false });
+    assert.doesNotMatch(JSON.stringify(detail), /Renewal terms/);
     assert.equal(detail.canChange, true);
     assert.equal(detail.assignedToViewer, false);
     assert.deepEqual(detail.workspace, { id: mark.workspaceId, name: null, current: true });
@@ -344,8 +347,11 @@ describe("GET /api/v1/tasks/:id", () => {
       params: Promise.resolve({ id: callJane }),
     });
     assert.equal(response.status, 200);
-    const body = (await response.json()) as { task: { description: string }; detail: TaskDetail };
-    assert.match(body.task.description, /\/mail\?thread=/);
+    const body = (await response.json()) as { task: { description: string; mailThreadKey: string; mailThread: unknown }; detail: TaskDetail };
+    assert.equal(body.task.description, "Ask about the three-year price.");
+    assert.equal(body.task.mailThreadKey, `${markBox.sourceId}|renewal`);
+    assert.deepEqual(body.task.mailThread, { subject: null, readable: false });
+    assert.doesNotMatch(JSON.stringify(body), /Renewal terms/);
     assertCrmFields(body.detail);
     assert.equal(body.detail.mail, null);
   });
