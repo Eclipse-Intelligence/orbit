@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
-import { canLinkTaskDocs, DOCS_OWNER_ONLY } from "@/lib/crm/task-docs";
+import { DOCS_OWNER_ONLY } from "@/lib/crm/task-docs";
 import { canChangeTask, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import type { Provenance, Task, UserActor } from "@/lib/crm/types";
 
@@ -18,7 +18,7 @@ export async function changeTaskDoc(actor: UserActor, taskId: string, pageId: st
     await db.query("select 1 from crm.tasks where id = $1 for no key update", [taskId]);
     const task = await readTaskInDb(db, actor, taskId);
     if (!task || task.workspaceId !== actor.workspaceId || task.archivedAt) throw notFound("task");
-    if (!canChangeTask(actor, task) || !canLinkTaskDocs(actor, task)) throw new CrmError("forbidden", DOCS_OWNER_ONLY, 403);
+    if (!canChangeTask(actor, task)) throw new CrmError("forbidden", DOCS_OWNER_ONLY, 403);
     const next = change === "link" ? [...task.docIds.filter((id) => id !== page), page] : task.docIds.filter((id) => id !== page);
     return (await updateTaskInDb(db, actor, taskId, { docIds: next }, provenance)).task;
   });

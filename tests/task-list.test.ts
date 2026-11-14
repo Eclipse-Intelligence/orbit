@@ -72,11 +72,11 @@ describe("task list", () => {
     assert.ok((await getTask(mark, task.id)).completedAt);
   });
 
-  it("lets an admin reopen someone else's task", async () => {
+  it("doesn't let an admin reopen someone else's task", async () => {
     const task = (await createTask(sam, { title: "Send Northwind the contract", ownerId: sam.userId })).body.task;
     await completeTask(sam, task.id);
-    const reopened = (await reopenTask(ada, task.id)).body.task;
-    assert.equal(reopened.completedAt, null);
+    await assert.rejects(reopenTask(ada, task.id), /not found/i);
+    assert.ok((await getTask(sam, task.id)).completedAt);
   });
 
   it("hides a task from people who can't see it and from other workspaces", async () => {

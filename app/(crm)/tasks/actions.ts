@@ -18,7 +18,7 @@ export type TaskWindow = {
   discussions: Record<string, number>;
 };
 
-export async function taskWindowAction(input: { view: TaskView; who: "mine" | "tagged" | "everyone"; pages: number }): Promise<TaskWindow | { error: string }> {
+export async function taskWindowAction(input: { view: TaskView; who: "mine" | "tagged"; pages: number }): Promise<TaskWindow | { error: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   if (!(TASK_VIEWS as readonly string[]).includes(input?.view) || !Number.isInteger(input?.pages) || input.pages < 1 || input.pages > MAX_PAGES) {
@@ -27,8 +27,7 @@ export async function taskWindowAction(input: { view: TaskView; who: "mine" | "t
   try {
     const members = await listMembers(user);
     const team = members.length > 1;
-    const shared = team && (user.role === "owner" || user.role === "admin");
-    const who = shared && input.who === "everyone" ? "everyone" : team && input.who === "tagged" ? "tagged" : "mine";
+    const who = team && input.who === "tagged" ? "tagged" : "mine";
     const view = who === "tagged" && input.view === "none" ? "all" : input.view;
     const due = await getDueActions(user, view, { mine: who === "mine", tagged: who === "tagged", pages: input.pages });
     const ids = due.tasks.map((task) => task.id);

@@ -1194,8 +1194,8 @@ describe("moving records to another workspace", () => {
     const agent = (await createAgent(eclipse.workspaceId, ["crm:read", "tasks:write"], "Dock agent")).actor;
     const fromAgent = (await createTask(agent, { title: "Dock agent task", companyId: dock.id, dueAt: at, remindMinutes: 15 }, { provenance: PROVENANCE })).body.task;
     const mine = (await createTask(eclipse, { title: "Dock unassigned", companyId: dock.id, ownerId: null }, { provenance: PROVENANCE })).body.task;
-    assert.equal(fromAgent.ownerId, null);
-    assert.equal(fromAgent.dueHasTime, true);
+    assert.equal(fromAgent.ownerId, eclipse.userId);
+    await admin("update crm.tasks set owner_id = null, due_at = $2, due_has_time = true, remind_minutes = 15 where id = $1", [fromAgent.id, at]);
     const pending = (await createTask(eclipse, { title: "Dock not yet in ClickUp", companyId: dock.id }, { provenance: PROVENANCE })).body.task;
     const archived = (await createTask(eclipse, { title: "Dock archived", companyId: dock.id }, { provenance: PROVENANCE })).body.task;
     await admin("update crm.tasks set clickup_task_id = 'dock1', clickup_list_id = '901', clickup_synced_at = now() where id = $1", [fromAgent.id]);

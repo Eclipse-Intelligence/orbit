@@ -21,7 +21,7 @@ import { readRelationshipOverride, setRelationshipOverrideInDb } from "@/lib/crm
 import { isRelationshipLabel, RELATIONSHIP_META } from "@/lib/crm/relationship-score";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
-import { canLinkTaskDocs, linkableDocIdsInDb, type TaskDocRights } from "@/lib/crm/task-docs";
+import { linkableDocIdsInDb } from "@/lib/crm/task-docs";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { dateTimeInputValue } from "@/lib/time";
@@ -475,7 +475,7 @@ async function describeEvent(
   const plain = (reason: string): Described => ({ entityName: `this ${noun}`, summary: `A change to this ${noun}`, plan: { ok: false, reason } });
   if (!ownedBy(actor, event)) return plain("You can only undo your own changes.");
   const current = await snapshot(db, actor, entity, event.entity_id);
-  if (!current && entity === "task") return plain("You can't see that task any more.");
+  if (!current && entity === "task") return plain("Can't undo: you can't see this task any more.");
   const entityName = current?.name ?? eventName(event, entity);
   const refuse = (summary: string, reason: string): Described => ({ entityName, summary, plan: { ok: false, reason } });
   const fallback = `${event.event_type.replace(/[._]/g, " ")}: ${entityName}`;
@@ -533,7 +533,6 @@ async function describeEvent(
       if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
       else if (updateEntity === "task" && fields.fields.includes("docIds") && record(changes?.movedFrom)) check = movedDocsReason(record(changes?.movedFrom));
-      else if (updateEntity === "task" && fields.fields.includes("docIds") && !canLinkTaskDocs(actor, current.values as unknown as TaskDocRights)) check = "Can't undo: only the task's assignee or creator can change its docs.";
       else if (updateEntity === "task" && fields.fields.length === 1 && fields.fields[0] === "docIds") check = await docsUndoCheck(db, actor, current.values, fields.before);
     }
     run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance, changes?.taggedAssigner === true ? event.id : null);
@@ -569,7 +568,7 @@ async function describeEvent(
   if (undone) return refuse(summary, "This change has already been undone.");
   if (!current) return refuse(summary, notFoundMessage(noun));
   if (!hasScope(actor.scopes, SCOPES[entity])) return refuse(summary, `You don't have permission to change this ${noun}.`);
-  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null })) {
+  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null })) {
     return refuse(summary, "Can't undo: you're only tagged on this task now.");
   }
   if (check) return refuse(summary, check);

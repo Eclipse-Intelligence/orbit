@@ -2146,7 +2146,7 @@ const TOOL_LIST: AssistantTool[] = [
       type: "object",
       properties: {
         taskId: { type: "string", description: "One task's id. Returns just that task with its full picture, from whichever of the user's workspaces it is in; the other parameters, workspace included, are ignored." },
-        mine: { type: "boolean", description: "Only the user's own tasks: assigned to them or unassigned. Use for \"my tasks\"." },
+        mine: { type: "boolean", description: "Only the user's own tasks: assigned to them, or unassigned and created by them. Use for \"my tasks\"." },
         view: {
           type: "string",
           enum: TASK_VIEWS.filter((view) => view !== "none"),

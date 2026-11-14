@@ -672,7 +672,7 @@ describe("LinkedIn capture records", () => {
     const visible = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/x")}&domain=privatetask.test`, { token: otherToken });
     assert.equal(inLookup(visible.data, mark.workspaceId).company?.openTasks, 1);
     const ownerView = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/x")}&domain=privatetask.test`, { token });
-    assert.equal(inLookup(ownerView.data, mark.workspaceId).company?.openTasks, 1);
+    assert.equal(inLookup(ownerView.data, mark.workspaceId).company?.openTasks, 0);
     const refused = await call(noteRoute, "/api/extension/note", { token: otherToken, workspace: ridgeon.workspaceId, body: { body: "x", companyId: company.id } });
     assert.equal(refused.status, 403);
   });

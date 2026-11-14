@@ -104,7 +104,7 @@ describe("team", () => {
     assert.deepEqual((await getTeam(admin)).invites, []);
   });
 
-  it("keeps tasks private to whoever they belong to, with oversight for the owner", async () => {
+  it("keeps tasks private to whoever they belong to, the workspace owner included", async () => {
     const mine = (await createTask(owner, { title: "Owner renewal call", companyId })).body.task;
     assert.equal(mine.ownerId, owner.userId);
     const theirs = (await createTask(member, { title: "Sam onboarding prep", companyId })).body.task;
@@ -117,7 +117,8 @@ describe("team", () => {
       (await listTasks(owner, { mine: true })).data.map((task) => task.title),
       ["Owner renewal call"],
     );
-    assert.equal((await listTasks(owner)).total, 3);
+    assert.equal((await listTasks(owner)).total, 2);
+    await assert.rejects(getTask(owner, theirs.id), /not found/i);
     assert.equal(await countOpenTasks(member, { mine: true }), 2);
     assert.equal(await countOpenTasks(owner, { mine: true }), 1);
 

@@ -4,6 +4,7 @@ import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { actorIds, iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { withMailThreadsInDb } from "@/lib/crm/task-mail";
+import { canChangeTask } from "@/lib/crm/task-rights";
 import type { Actor, Task, TaskDoc } from "@/lib/crm/types";
 import { localDate } from "@/lib/docs/daily";
 import { shortDay } from "@/lib/docs/format";
@@ -63,11 +64,6 @@ export const DOCS_OWNER_ONLY = "Only the task's assignee or creator can change i
 
 export type TaskDocRights = { ownerId: string | null; createdByUserId: string | null; createdByAgentId: string | null };
 
-export function canLinkTaskDocs(actor: Actor, task: TaskDocRights) {
-  if (actor.type === "agent") return task.createdByAgentId === actor.agentId;
-  return task.ownerId === actor.userId || task.createdByUserId === actor.userId;
-}
-
 export async function planTaskDocsInDb(
   db: Db,
   actor: Actor,
@@ -79,7 +75,7 @@ export async function planTaskDocsInDb(
   if (wanted === undefined) return null;
   let add = wanted.filter((id) => !current.includes(id));
   const remove = current.filter((id) => !wanted.includes(id));
-  if ((add.length > 0 || remove.length > 0) && options.task && !canLinkTaskDocs(actor, options.task)) {
+  if ((add.length > 0 || remove.length > 0) && options.task && !canChangeTask(actor, options.task)) {
     throw new CrmError("forbidden", DOCS_OWNER_ONLY, 403, { field: "docIds" });
   }
   if (add.length > 0 && !options.lenient && !hasScope(actor.scopes, "docs:read")) {
@@ -146,7 +142,7 @@ export async function withTaskDocsInDb<T extends Task>(db: Db, viewer: Actor, ta
       if (found?.archived) return [];
       return [found ? { id, title: found.title, readable: true } : { id, title: null, readable: false }];
     });
-    return { ...task, docs, canLinkDocs: canLinkTaskDocs(viewer, task) };
+    return { ...task, docs, canLinkDocs: canChangeTask(viewer, task) };
   });
 }
 

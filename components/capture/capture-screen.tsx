@@ -9,7 +9,6 @@ import {
   EmailItem,
   ImportItem,
   NudgeItem,
-  OthersApprovals,
   PersonItem,
   ReminderItem,
   ReplyItem,
@@ -28,7 +27,7 @@ import { useComposer } from "@/components/mail/compose-dock";
 import KeyboardList, { activateRow } from "@/components/shortcuts/keyboard-list";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { closeFollowUpAction } from "@/app/(crm)/capture/actions";
-import type { OthersApproval, WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
+import type { WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
 import type { MetPerson } from "@/lib/crm/calendar";
 import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
 import type { DismissedImport, UnfiledImport } from "@/lib/crm/conversations";
@@ -61,7 +60,6 @@ const FILED = new Set<CaptureAction["kind"]>(["email-create", "email-file", "imp
 
 export type CaptureData = {
   approvals: WaitingApproval[];
-  others: OthersApproval[];
   nudges: WaitingNudge[];
   reminders: WaitingReminder[];
   calls: FollowUpSuggestion[];
@@ -489,7 +487,6 @@ export default function CaptureScreen({
   });
 
   const showing = sections.filter((id) => view === "all" || view === id);
-  const othersShown = data.others.length > 0 && (view === "all" || view === "approvals");
   const nothing = total === 0 && unread.size === 0;
   const notShownHere = (notShownTotal > 0 || rules.length > 0 || sorting > 0) && (view === "all" || view === "toFile");
   const dismissedHere = dismissedTotal > 0 && (view === "all" || view === "toFile");
@@ -570,11 +567,9 @@ export default function CaptureScreen({
                           {rows.map((entry) => entry.node)}
                         </ul>
                       )}
-                      {id === "approvals" && othersShown && <OthersApprovals items={data.others} />}
                     </section>
                   );
                 })}
-                {othersShown && !showing.includes("approvals") && <OthersApprovals items={data.others} />}
               </KeyboardList>
               {(notShownHere || dismissedHere) && (
                 <div className="flex flex-col gap-1">

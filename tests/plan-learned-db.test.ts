@@ -134,7 +134,7 @@ describe("Learned times", () => {
     const synced = await newCall(mark, "Call Hannah Price", day);
     await updateTask(mark, synced.id, { dueAt: at(day, 9) }, { provenance: { operation: "calendar_sync", source: "microsoft" } });
     const { actor: agent } = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
-    const byAgent = await newCall(mark, "Call Olivia Grant", day);
+    const byAgent = (await createTask(agent, { title: "Call Olivia Grant", ownerId: mark.userId, dueDate: day })).body.task;
     await updateTask(agent, byAgent.id, { dueAt: at(day, 9) }, web("update_task"));
     const viaMcp = await newCall(mark, "Call Noah Patel", day);
     const server = createCrmMcpServer(mark);
@@ -327,11 +327,11 @@ describe("Learned times, guarded", () => {
   });
 
   it("drops a web source claimed over REST or MCP, and personal-token ticks don't teach", async () => {
-    const { token } = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
+    const { actor: bot, token } = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
     const request = (path: string, method: string, body?: unknown) =>
       new Request(`http://crm.test/api/v1${path}`, { method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
     const before = await spread();
-    const task = (await createTask(mark, { title: "Call Olivia Grant", dueDate: workday(2) })).body.task;
+    const task = (await createTask(bot, { title: "Call Olivia Grant", ownerId: mark.userId, dueDate: workday(2) })).body.task;
     const patched = await restUpdateTask(request(`/tasks/${task.id}`, "PATCH", { dueAt: at(workday(2), 11), provenance: { source: "web" } }), { params: Promise.resolve({ id: task.id }) });
     assert.equal(patched.status, 200);
     const done = await restCompleteTask(request(`/tasks/${task.id}/complete`, "POST"), { params: Promise.resolve({ id: task.id }) });
