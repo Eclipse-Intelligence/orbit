@@ -16,13 +16,13 @@ type ClaimedReminder = {
   contact_name: string | null;
   workspace_id: string;
   workspace_name: string;
-  user_id: string;
-  role: WorkspaceRole;
+  user_id: string | null;
+  role: WorkspaceRole | null;
   email: string | null;
   full_name: string | null;
 };
 
-const CLAIM_LIMIT = 50;
+const CLAIM_BATCH = 10;
 
 export function taskReminderPush(reminder: { taskId: string; title: string; dueAt: string; remindMinutes: number; about: string | null }, now: number) {
   return {
@@ -39,34 +39,62 @@ async function release(row: ClaimedReminder) {
   );
 }
 
+function retryable(result: { sent: number; failures: { status: number | null }[] }) {
+  return result.sent === 0 && result.failures.some((failure) => failure.status !== null && failure.status !== 404 && failure.status !== 410);
+}
+
+type Recipient = ClaimedReminder & { user_id: string; role: WorkspaceRole };
+
+function hasRecipient(row: ClaimedReminder): row is Recipient {
+  return Boolean(row.user_id && row.role);
+}
+
+async function deliver(row: Recipient, now: number, send: PushSender | undefined) {
+  const message = taskReminderPush(
+    {
+      taskId: row.task_id,
+      title: row.title,
+      dueAt: new Date(row.due_at).toISOString(),
+      remindMinutes: row.remind_minutes,
+      about: row.contact_name ?? row.company_name,
+    },
+    now,
+  );
+  try {
+    const result = await pushToUser(memberActor(row), message, { send });
+    if (retryable(result)) {
+      await release(row);
+      return 0;
+    }
+    return result.sent;
+  } catch (error) {
+    console.error("Task reminder push failed", error instanceof Error ? error.name : "unknown");
+    await release(row);
+    return 0;
+  }
+}
+
 export async function processTaskReminders(options: { deadline: number; now?: number; send?: PushSender }) {
   const now = options.now ?? Date.now();
-  const claimed = await query<ClaimedReminder>("select * from private.claim_task_reminders($1, $2)", [new Date(now).toISOString(), CLAIM_LIMIT]);
-  let sent = 0;
+  const tried = new Set<string>();
+  let claimed = 0;
   let pushed = 0;
-  for (const row of claimed.rows) {
-    if (Date.now() > options.deadline) {
-      await release(row);
-      continue;
+  let sent = 0;
+  while (Date.now() < options.deadline) {
+    const batch = await query<ClaimedReminder>("select * from private.claim_task_reminders($1, $2, $3)", [new Date(now).toISOString(), CLAIM_BATCH, [...tried]]);
+    claimed += batch.rows.length;
+    for (const row of batch.rows) {
+      tried.add(row.task_id);
+      if (!hasRecipient(row)) continue;
+      if (Date.now() > options.deadline) {
+        await release(row);
+        continue;
+      }
+      const delivered = await deliver(row, now, options.send);
+      sent += delivered;
+      if (delivered > 0) pushed += 1;
     }
-    const message = taskReminderPush(
-      {
-        taskId: row.task_id,
-        title: row.title,
-        dueAt: new Date(row.due_at).toISOString(),
-        remindMinutes: row.remind_minutes,
-        about: row.contact_name ?? row.company_name,
-      },
-      now,
-    );
-    try {
-      const result = await pushToUser(memberActor(row), message, { send: options.send });
-      sent += result.sent;
-      if (result.sent > 0) pushed += 1;
-    } catch (error) {
-      console.error("Task reminder push failed", error instanceof Error ? error.name : "unknown");
-      await release(row);
-    }
+    if (batch.rows.length < CLAIM_BATCH) break;
   }
-  return { claimed: claimed.rows.length, pushed, sent };
+  return { claimed, pushed, sent };
 }

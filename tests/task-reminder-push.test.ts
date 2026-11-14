@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
-import { completeTask, createTask, getTask, listDueReminders, updateTask } from "@/lib/crm/tasks";
+import { readFileSync } from "node:fs";
+import { archiveTask, completeTask, createTask, getTask, listDueReminders, updateTask } from "@/lib/crm/tasks";
+import { applyMigrationSql } from "@/lib/db/migration-sql";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { processTaskReminders, taskReminderPush } from "@/lib/task-reminder-push";
-import { createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, resetDatabase } from "./helpers";
 
 const MINUTE = 60 * 1000;
 
@@ -117,7 +119,7 @@ describe("task reminder pushes", () => {
     await processTaskReminders({ deadline: later.deadline(), now: now + 25 * MINUTE, send: moved.send });
     assert.deepEqual(forTask(moved.sent, task.id).map((item) => item.title), ["Task due in 5 minutes"]);
 
-    await updateTask(owner, task.id, { remindMinutes: 30 });
+    await updateTask(owner, task.id, { remindMinutes: 10 });
     const widened = pusher();
     await processTaskReminders({ deadline: later.deadline(), now: now + 25 * MINUTE, send: widened.send });
     assert.equal(forTask(widened.sent, task.id).length, 1);
@@ -166,7 +168,7 @@ describe("task reminder pushes", () => {
     assert.deepEqual(forTask(handed.sent, assigned.id).map((item) => item.endpoint), ["https://web.push.apple.com/mark-phone"]);
   });
 
-  it("hands a reminder back when the run is out of time", async () => {
+  it("leaves a reminder for the next run when the run is out of time", async () => {
     const now = Date.now();
     const task = (await createTask(owner, { title: "Out of time", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
     const late = pusher();
@@ -176,6 +178,87 @@ describe("task reminder pushes", () => {
     const next = pusher();
     await processTaskReminders({ deadline: later.deadline(), now: now + MINUTE, send: next.send });
     assert.equal(forTask(next.sent, task.id).length, 1);
+  });
+
+  it("hands a reminder back when the push service fails, without touching updated_at", async () => {
+    const now = Date.now();
+    const task = (await createTask(owner, { title: "Flaky push", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
+    const before = (await sentAt(task.id)).updated_at;
+    const tried: string[] = [];
+    const failing: PushSender = async (_subscription, payload) => {
+      tried.push(JSON.parse(payload).url);
+      throw Object.assign(new Error("Server error"), { statusCode: 500, body: "{}" });
+    };
+    const result = await processTaskReminders({ deadline: later.deadline(), now, send: failing });
+    assert.ok(tried.some((url) => url.includes(task.id)));
+    assert.equal(result.pushed, 0);
+    const released = await sentAt(task.id);
+    assert.equal(released.reminder_sent_at, null);
+    assert.equal(released.updated_at.getTime(), before.getTime());
+    const next = pusher();
+    await processTaskReminders({ deadline: later.deadline(), now: now + MINUTE, send: next.send });
+    assert.equal(forTask(next.sent, task.id).length, 1);
+    assert.equal((await sentAt(task.id)).updated_at.getTime(), before.getTime());
+  });
+
+  it("pushes every due reminder in batches", async () => {
+    const now = Date.now();
+    const tasks = [];
+    for (let index = 0; index < 23; index += 1) {
+      tasks.push((await createTask(owner, { title: `Batch ${index}`, companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task);
+    }
+    const sent = pusher();
+    await processTaskReminders({ deadline: later.deadline(), now, send: sent.send });
+    for (const task of tasks) assert.equal(forTask(sent.sent, task.id).length, 1);
+  });
+
+  it("does not push a reminder whose time passed long ago, and the migration marks those as sent", async () => {
+    const now = Date.now();
+    const old = (await createTask(owner, { title: "Week ahead", companyId, dueAt: at(6 * 24 * 60, now), remindMinutes: 10080 })).body.task;
+    const sent = pusher();
+    await processTaskReminders({ deadline: later.deadline(), now, send: sent.send });
+    assert.equal(forTask(sent.sent, old.id).length, 0);
+    assert.equal((await sentAt(old.id)).reminder_sent_at, null);
+    const before = (await sentAt(old.id)).updated_at;
+    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270126100000_task_reminder_sent.sql", "utf8"));
+    const stamped = await sentAt(old.id);
+    assert.ok(stamped.reminder_sent_at);
+    assert.equal(stamped.updated_at.getTime(), before.getTime());
+  });
+
+  it("does not push archived or date-only tasks", async () => {
+    const now = Date.now();
+    const archived = (await createTask(owner, { title: "Archived", companyId, dueAt: at(10, now), remindMinutes: 10 })).body.task;
+    await archiveTask(owner, archived.id);
+    const dayOnly = (await createTask(owner, { title: "Day only", companyId, dueDate: new Date(now).toISOString().slice(0, 10) })).body.task;
+    await getAdminPool().query("update crm.tasks set remind_minutes = 1440, due_at = $2 where id = $1", [dayOnly.id, at(10, now)]);
+    assert.equal(dayOnly.dueHasTime, false);
+    const sent = pusher();
+    await processTaskReminders({ deadline: later.deadline(), now, send: sent.send });
+    assert.equal(forTask(sent.sent, archived.id).length, 0);
+    assert.equal(forTask(sent.sent, dayOnly.id).length, 0);
+    assert.equal((await sentAt(archived.id)).reminder_sent_at, null);
+    assert.equal((await sentAt(dayOnly.id)).reminder_sent_at, null);
+  });
+
+  it("does not push an unowned task an agent made, or one whose creator left the workspace", async () => {
+    const now = Date.now();
+    const agent = (await createAgent(owner.workspaceId, ["crm:read", "tasks:write"])).actor;
+    const agentTask = (await createTask(agent, { title: "Agent's call", companyId, dueAt: at(10, now), remindMinutes: 10, ownerId: null })).body.task;
+    assert.equal(agentTask.ownerId, null);
+    assert.equal(agentTask.remindMinutes, 10);
+    const ria = await createUser("ria-push@orbit.test", "Ria Leaver");
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, ria.userId]);
+    const riaHere: UserActor = { ...ria, workspaceId: owner.workspaceId, role: "member" };
+    await savePushSubscription(riaHere, { endpoint: "https://web.push.apple.com/ria-phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+    const leftBehind = (await createTask(riaHere, { title: "Ria's call", companyId, dueAt: at(10, now), remindMinutes: 10, ownerId: null })).body.task;
+    await getAdminPool().query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [owner.workspaceId, ria.userId]);
+    const sent = pusher();
+    await processTaskReminders({ deadline: later.deadline(), now, send: sent.send });
+    assert.equal(forTask(sent.sent, agentTask.id).length, 0);
+    assert.equal(forTask(sent.sent, leftBehind.id).length, 0);
+    assert.equal(sent.sent.filter((item) => item.endpoint === "https://web.push.apple.com/ria-phone").length, 0);
+    assert.ok((await sentAt(agentTask.id)).reminder_sent_at);
   });
 
   it("claims due reminders from the every-minute cron", async () => {

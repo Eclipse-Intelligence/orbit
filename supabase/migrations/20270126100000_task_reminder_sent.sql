@@ -30,8 +30,19 @@ create trigger tasks_updated_reminder
   before update on crm.tasks
   for each row execute function private.task_reminder_marker();
 
+update crm.tasks
+set reminder_sent_at = now()
+where reminder_sent_at is null
+  and remind_minutes is not null
+  and due_has_time
+  and due_at is not null
+  and completed_at is null
+  and archived_at is null
+  and due_at - make_interval(mins => remind_minutes) <= now();
+
 drop function if exists private.claim_task_reminders(timestamptz, integer);
-create function private.claim_task_reminders(p_now timestamptz, p_limit integer)
+drop function if exists private.claim_task_reminders(timestamptz, integer, uuid[]);
+create function private.claim_task_reminders(p_now timestamptz, p_limit integer, p_skip uuid[])
 returns table (
   task_id uuid,
   claimed_at timestamptz,
@@ -61,7 +72,9 @@ as $$
       and t.completed_at is null
       and t.archived_at is null
       and t.due_at - make_interval(mins => t.remind_minutes) <= p_now
+      and t.due_at - make_interval(mins => t.remind_minutes) > p_now - interval '10 minutes'
       and t.due_at > p_now - interval '5 minutes'
+      and not (t.id = any(coalesce(p_skip, '{}'::uuid[])))
     order by t.due_at
     limit greatest(1, least(coalesce(p_limit, 50), 200))
     for update of t skip locked
@@ -77,16 +90,16 @@ as $$
          coalesce(nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''), ct.email, ct.phone),
          w.id, w.name, m.user_id, m.role, p.email, p.full_name
   from claimed c
-  join crm.workspace_members m on m.workspace_id = c.workspace_id and m.user_id = c.recipient
   join crm.workspaces w on w.id = c.workspace_id
-  join crm.profiles p on p.id = m.user_id
+  left join crm.workspace_members m on m.workspace_id = c.workspace_id and m.user_id = c.recipient
+  left join crm.profiles p on p.id = m.user_id
   left join crm.companies co on co.id = c.company_id
   left join crm.contacts ct on ct.id = c.contact_id
   order by c.due_at
 $$;
 
-revoke all on function private.claim_task_reminders(timestamptz, integer) from public;
-grant execute on function private.claim_task_reminders(timestamptz, integer) to crm_app;
+revoke all on function private.claim_task_reminders(timestamptz, integer, uuid[]) from public;
+grant execute on function private.claim_task_reminders(timestamptz, integer, uuid[]) to crm_app;
 
 create or replace function private.release_task_reminder(p_task_id uuid, p_claimed_at timestamptz)
 returns void
