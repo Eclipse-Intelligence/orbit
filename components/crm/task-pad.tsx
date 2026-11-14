@@ -36,7 +36,7 @@ import {
   type DocQuery,
   type PadMark,
 } from "@/lib/task-pad";
-import { DocPickOptions, DocPickPopover, docPickHeading, useDocPicks } from "@/components/crm/task-doc-picker";
+import { DocPickHeader, DocPickNotice, DocPickOptions, DocPickPopover, useDocPicks } from "@/components/crm/task-doc-picker";
 import type { DocPick } from "@/lib/docs/client-types";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { cn } from "@/lib/utils";
@@ -705,11 +705,11 @@ export default function TaskPad({
 
   function refreshDocQuery(value: string, caret: number) {
     const found = docQueryAt(value, caret);
+    if (docMuted.current !== null && value.slice(docMuted.current, docMuted.current + 2) !== "[[") docMuted.current = null;
     if (found && found.start === docMuted.current) {
       setDocQuery(null);
       return;
     }
-    docMuted.current = null;
     setDocQuery((current) => (current && found && current.start === found.start && current.end === found.end && current.query === found.query ? current : found));
     if (!found) setDocHighlight(0);
   }
@@ -915,10 +915,6 @@ export default function TaskPad({
         pickDoc(docOptions[docActive]);
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        return;
-      }
       if (event.key === "Escape") {
         event.preventDefault();
         docMuted.current = docQuery.start;
@@ -970,7 +966,12 @@ export default function TaskPad({
     detectedContact ? seen?.word : null,
     picked && finalContact?.id === picked.id ? picked.word : null,
   ].filter((name): name is string => Boolean(name));
-  const marks = mergeMarks([...parsed.marks, ...nameMarks(text, names), ...(ask ? nameMarks(text, [ask.word], "ask") : [])]);
+  const marks = mergeMarks([
+    ...parsed.marks,
+    ...nameMarks(text, names),
+    ...(ask ? nameMarks(text, [ask.word], "ask") : []),
+    ...(docQuery ? [{ start: docQuery.start, end: docQuery.end, kind: "record" as const }] : []),
+  ]);
   const pieces: { text: string; kind: PadMark["kind"] | null }[] = [];
   let cursor = 0;
   for (const mark of marks) {
@@ -1225,19 +1226,11 @@ export default function TaskPad({
             card ? "mt-2 w-full" : "shadow-overlay absolute top-full left-3 z-30 -mt-1 w-[min(24rem,calc(100%-1.5rem))]",
           )}
         >
-          <div className="caption-style text-subtle flex items-center gap-2 px-2.5 pt-1.5 pb-1">
-            <span>Link a doc</span>
-            <span className="ml-auto">{docPickHeading(docQuery.query, docOptions)}</span>
-          </div>
-          {docFound.failed && (
-            <p role="alert" className="caption-style text-danger px-2.5 py-2">
-              Couldn&apos;t search. Try again.
-            </p>
-          )}
+          <DocPickHeader query={docQuery.query} docs={docOptions} loading={docFound.loading} />
+          <DocPickNotice query={docQuery.query} docs={docOptions} failed={docFound.failed} />
           {docOptions && docOptions.length > 0 && (
-            <DocPickOptions id={`${id}-docs`} docs={docOptions} query={docQuery.query} active={docActive} warn={docWarn} keepFocus onHover={setDocHighlight} onPick={pickDoc} />
+            <DocPickOptions id={`${id}-docs`} docs={docOptions} query={docQuery.query} active={docActive} warn={docWarn} buttons onHover={setDocHighlight} onPick={pickDoc} />
           )}
-          {docOptions && docOptions.length === 0 && <p className="caption-style text-subtle px-2.5 py-2">No docs match</p>}
         </div>
       )}
     </div>

@@ -1,14 +1,17 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, notFound } from "@/lib/crm/errors";
+import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { actorIds, iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { withMailThreadsInDb } from "@/lib/crm/task-mail";
 import type { Actor, Task, TaskDoc } from "@/lib/crm/types";
+import { shortDay } from "@/lib/docs/format";
 
 export const MAX_TASK_DOCS = 20;
 
-const NOT_A_DOC = "Choose a doc you can open in this workspace.";
+export const NOT_A_DOC = "Choose a doc you can open in this workspace.";
+
+export const TASK_DOC_IDS_SQL = "array(select d.page_id::text from crm.task_docs d where d.task_id = t.id and not d.page_archived order by d.created_at, d.page_id)";
 
 export type TaskDocEntry = {
   id: string;
@@ -45,21 +48,38 @@ export function readDocIds(given: unknown): string[] {
 
 export type TaskDocsPlan = { add: string[]; remove: string[] };
 
-export async function planTaskDocsInDb(db: Db, actor: Actor, workspaceId: string, current: string[], wanted: string[] | undefined): Promise<TaskDocsPlan | null> {
+export async function linkableDocIdsInDb(db: Db, actor: Actor, workspaceId: string, ids: string[]) {
+  if (ids.length === 0 || !hasScope(actor.scopes, "docs:read")) return [];
+  const found = await db.query<{ id: string }>(
+    "select p.id from crm.pages p where p.id = any($1::uuid[]) and p.workspace_id = $2 and p.kind = 'note' and p.archived_at is null",
+    [ids, workspaceId],
+  );
+  const linkable = new Set(found.rows.map((row) => row.id));
+  return ids.filter((id) => linkable.has(id));
+}
+
+export async function planTaskDocsInDb(
+  db: Db,
+  actor: Actor,
+  workspaceId: string,
+  current: string[],
+  wanted: string[] | undefined,
+  options: { lenient?: boolean } = {},
+): Promise<TaskDocsPlan | null> {
   if (wanted === undefined) return null;
-  const add = wanted.filter((id) => !current.includes(id));
+  let add = wanted.filter((id) => !current.includes(id));
   const remove = current.filter((id) => !wanted.includes(id));
+  if (add.length > 0 && !options.lenient && !hasScope(actor.scopes, "docs:read")) {
+    throw new CrmError("forbidden", "This token can't read docs, so it can't link them to a task.", 403, { field: "docIds" });
+  }
+  if (add.length > 0) {
+    const linkable = await linkableDocIdsInDb(db, actor, workspaceId, add);
+    if (!options.lenient && linkable.length !== add.length) throw new CrmError("invalid_input", NOT_A_DOC, 400, { field: "docIds" });
+    add = linkable;
+  }
   if (add.length === 0 && remove.length === 0) return null;
   if (current.length - remove.length + add.length > MAX_TASK_DOCS) {
     throw new CrmError("invalid_input", `Link up to ${MAX_TASK_DOCS} docs to a task.`, 400, { field: "docIds" });
-  }
-  if (add.length > 0) {
-    if (!hasScope(actor.scopes, "docs:read")) throw new CrmError("forbidden", "This token can't read docs, so it can't link them to a task.", 403, { field: "docIds" });
-    const found = await db.query<{ id: string }>(
-      "select p.id from crm.pages p where p.id = any($1::uuid[]) and p.workspace_id = $2 and p.kind = 'note' and p.archived_at is null",
-      [add, workspaceId],
-    );
-    if (found.rows.length !== add.length) throw new CrmError("invalid_input", NOT_A_DOC, 400, { field: "docIds" });
   }
   return { add, remove };
 }
@@ -70,13 +90,18 @@ export async function writeTaskDocsInDb(db: Db, actor: Actor, task: { id: string
   }
   if (plan.add.length > 0) {
     const by = actorIds(actor);
-    await db.query(
+    try {
+      await db.query(
       `insert into crm.task_docs (task_id, page_id, workspace_id, created_by, created_by_agent_id, created_at)
        select $1, item.page, $3, $4, $5, now() + item.place * interval '1 microsecond'
        from unnest($2::uuid[]) with ordinality as item(page, place)
        on conflict (task_id, page_id) do nothing`,
-      [task.id, plan.add, task.workspaceId, by.userId, by.agentId],
-    );
+        [task.id, plan.add, task.workspaceId, by.userId, by.agentId],
+      );
+    } catch (error) {
+      if (isPgError(error) && ["23503", "23514", "42501"].includes(error.code ?? "")) throw new CrmError("invalid_input", NOT_A_DOC, 400, { field: "docIds" });
+      throw error;
+    }
   }
 }
 
@@ -181,7 +206,7 @@ export async function listTaskDocsInDb(db: Db, viewer: Actor, task: { id: string
   const pathOf = reading ? await folderPathsInDb(db, task.workspaceId) : () => null;
   const entry = (row: DocRow, reason: TaskDocEntry["reason"]): TaskDocEntry => ({
     id: row.id,
-    title: row.title ?? "",
+    title: row.kind === "daily" && row.daily_date ? shortDay(row.daily_date) : (row.title ?? ""),
     readable: true,
     reason,
     kind: row.kind === "daily" ? "daily" : "note",
@@ -206,8 +231,7 @@ export async function listTaskDocs(actor: Actor, taskId: string): Promise<TaskDo
   if (!isUuid(taskId)) throw notFound("task");
   return withActor(actor, async (db) => {
     const found = await db.query<{ id: string; workspace_id: string; doc_ids: string[] }>(
-      `select t.id, t.workspace_id,
-         array(select d.page_id::text from crm.task_docs d where d.task_id = t.id order by d.created_at, d.page_id) as doc_ids
+      `select t.id, t.workspace_id, ${TASK_DOC_IDS_SQL} as doc_ids
        from crm.tasks t where t.id = $1 and t.workspace_id = $2`,
       [taskId, actor.workspaceId],
     );
@@ -234,7 +258,7 @@ export async function listDocTasks(actor: Actor, pageId: string): Promise<DocTas
   if (!isUuid(pageId)) return [];
   const me = actor.type === "user" ? actor.userId : null;
   return withActor(actor, async (db) => {
-    const page = await db.query("select 1 from crm.pages where id = $1", [pageId]);
+    const page = await db.query("select 1 from crm.pages where id = $1 and workspace_id = $2 and kind = 'note'", [pageId, actor.workspaceId]);
     if ((page.rowCount ?? 0) === 0) throw new CrmError("not_found", "That note doesn't exist, or it's private to someone else.", 404);
     const result = await db.query<DocTaskRow>(
       `select t.id, t.title, t.due_at, t.due_has_time, t.completed_at, t.owner_id, nullif(trim(p.full_name), '') as owner_name,
@@ -243,10 +267,10 @@ export async function listDocTasks(actor: Actor, pageId: string): Promise<DocTas
        from crm.task_docs d
        join crm.tasks t on t.id = d.task_id
        left join crm.profiles p on p.id = t.owner_id
-       where d.page_id = $1 and t.archived_at is null
+       where d.page_id = $1 and t.workspace_id = $3 and d.workspace_id = $3 and t.archived_at is null
        order by (t.completed_at is not null), t.due_at asc nulls last, t.created_at asc, t.id
        limit 200`,
-      [pageId, me],
+      [pageId, me, actor.workspaceId],
     );
     return result.rows.map((row) => ({
       id: row.id,

@@ -21,6 +21,7 @@ import { readRelationshipOverride, setRelationshipOverrideInDb } from "@/lib/crm
 import { isRelationshipLabel, RELATIONSHIP_META } from "@/lib/crm/relationship-score";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
+import { linkableDocIdsInDb } from "@/lib/crm/task-docs";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { dateTimeInputValue } from "@/lib/time";
@@ -233,6 +234,17 @@ function shownValue(field: string, value: unknown, names: Map<string, string>) {
   if (DATE_TIME_FIELDS.has(field) && typeof value === "string") return formatDateTimeLabel(dateTimeInputValue(value));
   if (field === "type" && typeof value === "string") return ACTIVITY_LABELS[value] ?? value;
   return clip(String(value));
+}
+
+async function docsUndoCheck(db: Db, actor: Actor, current: Record<string, unknown>, before: Record<string, unknown>) {
+  const now = Array.isArray(current.docIds) ? current.docIds.map(String) : [];
+  const wanted = Array.isArray(before.docIds) ? before.docIds.map(String) : [];
+  const removes = now.filter((id) => !wanted.includes(id));
+  const adds = wanted.filter((id) => !now.includes(id));
+  if (removes.length > 0 || adds.length === 0) return null;
+  const workspaceId = typeof current.workspaceId === "string" ? current.workspaceId : actor.workspaceId;
+  const linkable = await linkableDocIdsInDb(db, actor, workspaceId, adds);
+  return linkable.length > 0 ? null : adds.length === 1 ? "Can't undo: you can't open that doc any more." : "Can't undo: you can't open those docs any more.";
 }
 
 const MERGE_REASON = "Merges can't be undone.";
@@ -515,6 +527,7 @@ async function describeEvent(
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
       if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
+      else if (updateEntity === "task" && fields.fields.length === 1 && fields.fields[0] === "docIds") check = await docsUndoCheck(db, actor, current.values, fields.before);
     }
     run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance, changes?.taggedAssigner === true ? event.id : null);
   } else if (updateEntity) {

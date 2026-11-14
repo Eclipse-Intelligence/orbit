@@ -6,8 +6,10 @@ create table if not exists crm.task_docs (
   workspace_id uuid not null references crm.workspaces (id) on delete cascade,
   created_by uuid references crm.profiles (id) on delete set null,
   created_by_agent_id uuid references crm.agents (id) on delete set null,
+  page_archived boolean not null default false,
   created_at timestamptz not null default now(),
-  primary key (task_id, page_id)
+  primary key (task_id, page_id),
+  constraint task_docs_one_creator check (num_nonnulls(created_by, created_by_agent_id) <= 1)
 );
 
 create index if not exists task_docs_page_idx on crm.task_docs (page_id);
@@ -31,6 +33,7 @@ begin
   if not exists (select 1 from crm.pages p where p.id = new.page_id and p.workspace_id = new.workspace_id and p.kind = 'note') then
     raise exception 'doc belongs to another workspace' using errcode = '23514';
   end if;
+  new.page_archived := exists (select 1 from crm.pages p where p.id = new.page_id and p.archived_at is not null);
   return new;
 end;
 $$;
@@ -63,26 +66,30 @@ create trigger tasks_docs_move
   when (old.workspace_id is distinct from new.workspace_id)
   execute function private.task_docs_task_moved();
 
-create or replace function private.task_docs_page_moved()
+create or replace function private.task_docs_page_archived()
 returns trigger
 language plpgsql
 security definer
 set search_path = ''
 as $$
 begin
-  delete from crm.task_docs d where d.page_id = new.id and d.workspace_id is distinct from new.workspace_id;
+  update crm.task_docs d set page_archived = (new.archived_at is not null)
+  where d.page_id = new.id and d.page_archived is distinct from (new.archived_at is not null);
   return new;
 end;
 $$;
 
-revoke all on function private.task_docs_page_moved() from public;
+revoke all on function private.task_docs_page_archived() from public;
 
 drop trigger if exists pages_task_docs_move on crm.pages;
-create trigger pages_task_docs_move
-  after update of workspace_id on crm.pages
+drop function if exists private.task_docs_page_moved();
+
+drop trigger if exists pages_task_docs_archived on crm.pages;
+create trigger pages_task_docs_archived
+  after update of archived_at on crm.pages
   for each row
-  when (old.workspace_id is distinct from new.workspace_id)
-  execute function private.task_docs_page_moved();
+  when ((old.archived_at is null) is distinct from (new.archived_at is null))
+  execute function private.task_docs_page_archived();
 
 drop policy if exists task_docs_select on crm.task_docs;
 create policy task_docs_select on crm.task_docs
@@ -145,6 +152,7 @@ create policy task_docs_agent_insert on crm.task_docs
   with check (
     workspace_id = (select private.request_workspace_id())
     and created_by is null
+    and created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
     and exists (select 1 from crm.tasks t where t.id = task_docs.task_id and t.workspace_id = task_docs.workspace_id)
     and exists (
       select 1 from crm.pages p

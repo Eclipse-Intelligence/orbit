@@ -16,6 +16,7 @@ import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm
 import { EditLinks } from "@/components/crm/task-actions";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
 import LinkedText from "@/components/_ui/linked-text";
+import { showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
@@ -871,8 +872,6 @@ function QuickDates({ details }: { details: TaskDetailsState }) {
   );
 }
 
-const WEB_ADDRESS = /\bhttps?:\/\//i;
-
 function Description({ details, layout }: { details: TaskDetailsState; layout: "panel" | "row" }) {
   const field = useAutoSize(details.text);
   const [editing, setEditing] = useState<number | null>(null);
@@ -880,7 +879,7 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
     if (layout === "row" && !details.text) return null;
     return <p className="text-soft break-words whitespace-pre-wrap">{details.text ? <LinkedText text={details.text} /> : "No description"}</p>;
   }
-  if (layout === "panel" && editing === null && WEB_ADDRESS.test(details.text)) {
+  if (showsDescriptionLinks(details.text, layout, editing !== null)) {
     return (
       <div className="relative min-w-0">
         <button
@@ -891,8 +890,11 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
         />
         <p
           onClick={(event) => {
-            if ((event.target as HTMLElement).closest("a") || window.getSelection()?.toString()) return;
-            setEditing(caretAt(event.currentTarget, event.clientX, event.clientY) ?? details.text.length);
+            if ((event.target as HTMLElement).closest("a")) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed && selection.anchorNode && event.currentTarget.contains(selection.anchorNode)) return;
+            const shown = caretAt(event.currentTarget, event.clientX, event.clientY);
+            setEditing(shown === null ? details.text.length : sourceOffset(details.text, shown));
           }}
           className="border-line-strong bg-secondary text-foreground relative min-h-16 cursor-text rounded-lg border px-3 py-2 text-[14px] leading-5 break-words whitespace-pre-wrap"
         >
@@ -908,7 +910,10 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
       value={details.text}
       placeholder="Add a description"
       autoFocus={editing !== null}
-      onFocus={editing !== null ? (event) => event.currentTarget.setSelectionRange(editing, editing) : undefined}
+      onFocus={(event) => {
+        if (editing !== null) event.currentTarget.setSelectionRange(editing, editing);
+        else setEditing(event.currentTarget.selectionStart ?? details.text.length);
+      }}
       onChange={(event) => details.setText(event.target.value)}
       onBlur={() => {
         details.saveText();
@@ -971,7 +976,7 @@ export default function TaskFields({
           )}
         </div>
         <Description details={details} layout="row" />
-        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && (!unlinked || task.docs.length > 0)} label warn={othersSeeTask(task, viewer.id, tagged)} />}
+        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} />}
         {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
         {details.error && (
           <p role="alert" className="caption-style text-danger">
@@ -1008,7 +1013,7 @@ export default function TaskFields({
       </dl>
       {taskIsLinked(task) && (
         <Section label="Linked">
-          <LinksEditor task={task} canEdit={details.canChange && !done && (!unlinked || task.docs.length > 0)} warn={othersSeeTask(task, viewer.id, tagged)} />
+          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} warn={othersSeeTask(task, viewer.id, tagged)} />
         </Section>
       )}
       <Section label="Description">

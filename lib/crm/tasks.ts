@@ -41,7 +41,7 @@ import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, 
 import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { assertOwnThreadInDb, readMailThreadKey } from "@/lib/crm/task-mail";
-import { planTaskDocsInDb, readDocIds, withoutViewerLinks, withViewerLinksInDb, writeTaskDocsInDb } from "@/lib/crm/task-docs";
+import { planTaskDocsInDb, readDocIds, TASK_DOC_IDS_SQL, withoutViewerLinks, withViewerLinksInDb, writeTaskDocsInDb } from "@/lib/crm/task-docs";
 import { dayWindow, readDateTime } from "@/lib/time";
 
 const TASK_SQL = `
@@ -85,7 +85,7 @@ const TASK_SQL = `
     t.clickup_error,
     t.calendar_event_ref,
     t.mail_thread_key,
-    array(select d.page_id::text from crm.task_docs d where d.task_id = t.id order by d.created_at, d.page_id) as doc_ids,
+    ${TASK_DOC_IDS_SQL} as doc_ids,
     t.created_at,
     t.updated_at
   from crm.tasks t
@@ -574,7 +574,7 @@ async function applyTask(
     [write.mailThreadKey !== undefined, "mail_thread_key", "mailThreadKey", write.mailThreadKey ?? null],
     [completedAt !== undefined, "completed_at", "completedAt", completedAt ?? null],
   ]);
-  const docs = await planTaskDocsInDb(db, actor, current.workspace_id, current.doc_ids ?? [], write.docIds);
+  const docs = await planTaskDocsInDb(db, actor, current.workspace_id, current.doc_ids ?? [], write.docIds, { lenient: options.restoring });
   if (docs) {
     change.fields.push("docIds");
     if (change.sets.length === 0) change.sets.push("updated_at = now()");
@@ -601,7 +601,7 @@ async function applyTask(
   }
   if (updated === 0) throw cannotChange(write);
   if (docs) await writeTaskDocsInDb(db, actor, { id: current.id, workspaceId: current.workspace_id }, docs);
-  queueTaskBlock(db, current.id);
+  if (change.fields.some((field) => field !== "docIds")) queueTaskBlock(db, current.id);
   const saved = await readTask(db, actor, current.id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
@@ -897,7 +897,7 @@ export async function updateTask(
   const hash = requestHash("update_task", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      if (input.completed !== undefined) await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
+      if (input.completed !== undefined || input.docIds !== undefined) await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
       const current = await readTask(db, actor, id);
       if (!current) throw notFound("task");
       const updated = await applyTask(db, actor, current, preparedUpdate(current, input), provenance);

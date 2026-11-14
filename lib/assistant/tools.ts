@@ -154,7 +154,7 @@ import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { taskDetail } from "@/lib/crm/task-detail";
-import type { Scope } from "@/lib/crm/scopes";
+import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { appTimeZone, dateTimeInputValue, parseDateTime, readDateTime, zonedParts } from "@/lib/time";
 import {
@@ -274,10 +274,23 @@ function taskDocArgs(args: Record<string, unknown>): { docIds?: string[] } {
   return { docIds: args.docIds.map((id) => str(id)) };
 }
 
-function taskDocLines(args: Record<string, unknown>, name: Names) {
+const TASK_DOCS_KEY = "docs";
+
+function docLabels(ids: string[], name: Names) {
+  const readable = ids.filter((id) => !detail(name, `${id}:private`) && name(id) !== "Unknown record").map((id) => name(id));
+  const hidden = ids.length - readable.length;
+  return [...readable, ...(hidden === 1 ? ["1 private doc"] : hidden > 1 ? [`${hidden} private docs`] : [])].join(", ");
+}
+
+function taskDocLines(args: Record<string, unknown>, name: Names, taskId?: string) {
   if (args.docIds === undefined) return [];
-  const ids = Array.isArray(args.docIds) ? args.docIds.map((id) => str(id)).filter(Boolean) : [];
-  return [ids.length > 0 ? `Docs: ${ids.map((id) => name(id)).join(", ")}` : "Docs: none"];
+  const wanted = Array.isArray(args.docIds) ? [...new Set(args.docIds.map((id) => str(id).toLowerCase()).filter(Boolean))] : [];
+  const known = taskId ? detail(name, `${taskId}:${TASK_DOCS_KEY}`) : "";
+  if (!taskId || !known) return [wanted.length > 0 ? `Docs: ${docLabels(wanted, name)}` : "Docs: none"];
+  const current = known === "none" ? [] : known.split(",");
+  const added = wanted.filter((id) => !current.includes(id));
+  const removed = current.filter((id) => !wanted.includes(id));
+  return [added.length > 0 ? `Link: ${docLabels(added, name)}` : "", removed.length > 0 ? `Unlink: ${docLabels(removed, name)}` : ""];
 }
 
 function taskEmailLines(args: Record<string, unknown>) {
@@ -707,8 +720,20 @@ async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Recor
   const row = rows.rows[0];
   const self = { [TASK_SELF_KEY]: actor.userId, [TASK_ROLE_KEY]: actor.role };
   if (!row) return self;
+  const docs = await withActor(actor, async (db) => {
+    const linked = await db.query<{ page_id: string; title: string | null; readable: boolean }>(
+      `select d.page_id, p.title, p.id is not null as readable
+       from crm.task_docs d left join crm.pages p on p.id = d.page_id
+       where d.task_id = $1 and not d.page_archived order by d.created_at, d.page_id`,
+      [id],
+    );
+    return linked.rows;
+  });
+  const reads = hasScope(actor.scopes, "docs:read");
   return {
     ...self,
+    [`${id}:${TASK_DOCS_KEY}`]: docs.length > 0 ? docs.map((doc) => doc.page_id).join(",") : "none",
+    ...Object.fromEntries(docs.flatMap((doc) => (reads && doc.readable ? [[doc.page_id, doc.title?.trim() || "Untitled doc"]] : [[`${doc.page_id}:private`, "yes"]]))),
     [`${id}:owner`]: row.owner_id ?? "none",
     [`${id}:creator`]: row.created_by_user_id ?? "none",
     [`${id}:timed`]: row.timed ? "yes" : "no",
@@ -2092,7 +2117,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_tasks",
     label: "Checking tasks",
     description:
-      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it is pinned to, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
+      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact, linked docs (docIds, and docs with each title when the user can read it) and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it is pinned to, the docs linked to it or mentioning it, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
     parameters: {
       type: "object",
       properties: {
@@ -3646,7 +3671,7 @@ const TOOL_LIST: AssistantTool[] = [
           losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
-          ...taskDocLines(args, name),
+          ...taskDocLines(args, name, id),
         ],
       };
     },

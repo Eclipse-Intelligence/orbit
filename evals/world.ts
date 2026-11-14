@@ -10,7 +10,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { createProof } from "@/lib/crm/proof";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { createTask } from "@/lib/crm/tasks";
+import { createTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool } from "@/lib/db/pool";
@@ -295,6 +295,10 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
     const created = await createDoc(author, { title: doc.title, content: doc.content, shared: doc.shared ?? doc.byColleague ?? false }, SEED);
     if (doc.assistantCanEdit) await setAssistantCanEdit(author, created.id, true);
     ids.set(`doc:${doc.key ?? doc.title}`, created.id);
+  }
+  for (const task of seed.tasks ?? []) {
+    if (!task.docs?.length) continue;
+    await updateTask(actor, ids.get(`task:${task.title}`)!, { docIds: task.docs.map((key) => ids.get(`doc:${key}`)!) }, { provenance: SEED });
   }
   for (const daily of seed.daily ?? []) {
     const note = await appendToDailyNote(actor, { text: daily.text, date: londonDay(daily.day, now) }, SEED);

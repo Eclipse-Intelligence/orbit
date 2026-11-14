@@ -6,12 +6,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popove
 import { searchTaskDocsAction } from "@/app/(crm)/task-docs";
 import type { DocPick } from "@/lib/docs/client-types";
 import { whenLabel } from "@/lib/docs/format";
+import { docPickHeading, docPickNotice, privateDocWarning } from "@/lib/task-doc-picks";
 import { cn } from "@/lib/utils";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 import DocIcon from "@/public/assets/images/docs/doc.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 
-export type DocPicks = { docs: DocPick[] | null; failed: boolean };
+export type DocPicks = { docs: DocPick[] | null; failed: boolean; loading: boolean };
 
 export function useDocPicks(query: string | null, taskId: string | null): DocPicks {
   const [results, setResults] = useState<{ key: string; docs: DocPick[]; failed?: boolean } | null>(null);
@@ -33,13 +34,10 @@ export function useDocPicks(query: string | null, taskId: string | null): DocPic
     };
   }, [query, text, key, taskId]);
 
-  const current = query !== null && results?.key === key ? results : null;
-  return { docs: current && !current.failed ? current.docs : null, failed: Boolean(current?.failed) };
-}
-
-export function privateDocWarning(doc: Pick<DocPick, "folderPath">) {
-  const folder = doc.folderPath?.split(" › ").pop() ?? "Top level";
-  return `${folder}, private. Teammates will see "Doc" only`;
+  if (query === null || !results) return { docs: null, failed: false, loading: query !== null };
+  const fresh = results.key === key;
+  if (fresh && results.failed) return { docs: null, failed: true, loading: false };
+  return { docs: results.failed ? null : results.docs, failed: false, loading: !fresh };
 }
 
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -62,7 +60,7 @@ export function DocVisibility({ shared, className }: { shared: boolean; classNam
   );
 }
 
-export function DocPickRow({ doc, query, warn, now }: { doc: DocPick; query: string; warn: boolean; now: string }) {
+function DocPickRow({ doc, query, warn, now }: { doc: DocPick; query: string; warn: boolean; now: string }) {
   const caution = warn && !doc.shared;
   return (
     <span className="flex min-w-0 flex-1 items-start gap-2.5">
@@ -89,11 +87,7 @@ export function DocPickRow({ doc, query, warn, now }: { doc: DocPick; query: str
   );
 }
 
-export function docPickHeading(query: string, docs: DocPick[] | null) {
-  if (!query.trim()) return "Recent";
-  if (!docs) return "";
-  return docs.length === 1 ? "1 match" : `${docs.length} matches`;
-}
+const OPTION = "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left [@media(pointer:coarse)]:min-h-11";
 
 export function DocPickOptions({
   id,
@@ -103,7 +97,7 @@ export function DocPickOptions({
   warn,
   onHover,
   onPick,
-  keepFocus,
+  buttons,
 }: {
   id: string;
   docs: DocPick[];
@@ -112,9 +106,36 @@ export function DocPickOptions({
   warn: boolean;
   onHover: (index: number) => void;
   onPick: (doc: DocPick) => void;
-  keepFocus?: boolean;
+  buttons?: boolean;
 }) {
   const [now] = useState(() => new Date().toISOString());
+  const marker = (index: number) =>
+    index === active && (
+      <kbd aria-hidden className="text-subtle font-sans text-[11px] [@media(pointer:coarse)]:hidden">
+        ↵
+      </kbd>
+    );
+  if (buttons) {
+    return (
+      <ul id={`${id}-list`} aria-label="Docs" className="flex max-h-72 flex-col overflow-y-auto">
+        {docs.map((doc, index) => (
+          <li key={doc.id}>
+            <button
+              type="button"
+              aria-current={index === active || undefined}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => onHover(index)}
+              onClick={() => onPick(doc)}
+              className={cn(OPTION, index === active ? "bg-white/[0.07]" : "hover:bg-white/5")}
+            >
+              <DocPickRow doc={doc} query={query} warn={warn} now={now} />
+              {marker(index)}
+            </button>
+          </li>
+        ))}
+      </ul>
+    );
+  }
   return (
     <ul id={`${id}-list`} role="listbox" aria-label="Docs" className="flex max-h-72 flex-col overflow-y-auto">
       {docs.map((doc, index) => (
@@ -124,22 +145,35 @@ export function DocPickOptions({
           role="option"
           aria-selected={index === active}
           onMouseEnter={() => onHover(index)}
-          onMouseDown={keepFocus ? (event) => event.preventDefault() : undefined}
           onClick={() => onPick(doc)}
-          className={cn(
-            "flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 [@media(pointer:coarse)]:min-h-11",
-            index === active ? "bg-white/[0.07]" : "hover:bg-white/5",
-          )}
+          className={cn(OPTION, index === active ? "bg-white/[0.07]" : "hover:bg-white/5")}
         >
           <DocPickRow doc={doc} query={query} warn={warn} now={now} />
-          {index === active && (
-            <kbd aria-hidden className="text-subtle font-sans text-[11px] [@media(pointer:coarse)]:hidden">
-              ↵
-            </kbd>
-          )}
+          {marker(index)}
         </li>
       ))}
     </ul>
+  );
+}
+
+export function DocPickHeader({ query, docs, loading }: { query: string; docs: DocPick[] | null; loading: boolean }) {
+  return (
+    <div className="caption-style text-subtle flex items-center gap-2 px-2.5 pt-1.5 pb-1">
+      <span>Link a doc</span>
+      <span role="status" className="ml-auto">
+        {loading && !docs ? "" : docPickHeading(query, docs)}
+      </span>
+    </div>
+  );
+}
+
+export function DocPickNotice({ query, docs, failed }: { query: string; docs: DocPick[] | null; failed: boolean }) {
+  const notice = docPickNotice(query, docs, failed);
+  if (!notice) return null;
+  return (
+    <p role={failed ? "alert" : undefined} className={cn("caption-style px-2.5 py-2", failed ? "text-danger" : "text-subtle")}>
+      {notice}
+    </p>
   );
 }
 
@@ -167,7 +201,6 @@ export function DocPickPopover({
   const found = useDocPicks(open ? query : null, taskId);
   const docs = found.docs ? found.docs.filter((doc) => !exclude.includes(doc.id)) : null;
   const active = docs && docs.length > 0 ? Math.min(highlight, docs.length - 1) : -1;
-  const heading = docPickHeading(query, docs);
 
   function choose(doc: DocPick) {
     setOpen(false);
@@ -205,7 +238,7 @@ export function DocPickPopover({
           <Input
             id={`${id}-search`}
             role="combobox"
-            aria-expanded
+            aria-expanded={Boolean(docs && docs.length > 0)}
             aria-controls={`${id}-list`}
             aria-activedescendant={active >= 0 ? `${id}-option-${active}` : undefined}
             aria-autocomplete="list"
@@ -229,14 +262,9 @@ export function DocPickPopover({
             className="h-8 px-2.5 text-[13px] max-md:h-10"
           />
         </div>
-        {heading && docs && docs.length > 0 && <p className="eyebrow-style text-subtle px-2.5 pt-1.5 pb-1 text-[11px]">{heading}</p>}
-        {found.failed && (
-          <p role="alert" className="caption-style text-danger px-2.5 py-2">
-            Couldn&apos;t search. Try again.
-          </p>
-        )}
+        <DocPickHeader query={query} docs={docs} loading={found.loading} />
+        <DocPickNotice query={query} docs={docs} failed={found.failed} />
         {docs && docs.length > 0 && <DocPickOptions id={id} docs={docs} query={query} active={active} warn={warn} onHover={setHighlight} onPick={choose} />}
-        {docs && docs.length === 0 && <p className="caption-style text-subtle px-2.5 py-2">No docs match</p>}
       </PopoverContent>
     </Popover>
   );

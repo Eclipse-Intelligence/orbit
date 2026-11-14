@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -20,7 +22,16 @@ import { appendToDailyNote, openDailyNote } from "@/lib/docs/daily-notes";
 import { docPickTargets } from "@/lib/docs/view";
 import { docQueryAt, withoutDocQuery } from "@/lib/task-pad";
 import { createCrmMcpServer } from "@/server/mcp/server";
-import { createAgent, createUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
+import { describeAction, recordNames } from "@/lib/assistant/tools";
+import { withActor } from "@/lib/crm/context";
+import { writeTaskDocsInDb } from "@/lib/crm/task-docs";
+import { archiveWebhook, createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
+import { restoreDoc } from "@/lib/docs/store";
+import { textParts } from "@/lib/text-links";
+import { docPickHeading, docPickNotice, privateDocWarning, showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
+import { parseTaskText } from "@/lib/task-pad";
+import { shortDay } from "@/lib/docs/format";
 
 const WEB = { operation: "link_task_doc", source: "web" } as const;
 
@@ -123,7 +134,7 @@ describe("linking docs to a task", () => {
     assert.deepEqual(noDocs.docs.map((doc) => doc.readable), [false, false]);
     assert.doesNotMatch(JSON.stringify(noDocs), /Northwind renewal terms/);
 
-    await assert.rejects(getTask(sam, task.id));
+    await assert.rejects(getTask(sam, task.id), (error: unknown) => error instanceof CrmError && error.code === "not_found");
     const rows = await sql<{ page_id: string; workspace_id: string; created_by: string }>("select page_id, workspace_id, created_by from crm.task_docs where task_id = $1 order by created_at", [task.id]);
     assert.equal(rows.length, 2);
     assert.ok(rows.every((row) => row.workspace_id === mark.workspaceId && row.created_by === mark.userId));
@@ -147,7 +158,7 @@ describe("linking docs to a task", () => {
         ["Both", "linked"],
         ["Northwind renewal terms", "linked"],
         ["Renewal pricing model", "linked"],
-        [daily.page.title, "mention"],
+        [shortDay(daily.date), "mention"],
         ["Mark's private plan", "mention"],
         ["Call notes: Jane Cooper", "mention"],
       ],
@@ -280,7 +291,7 @@ describe("linking docs to a task", () => {
     await sql("delete from crm.pages where id = $1", [gone]);
     await archiveDoc(mark, archived);
     const after = await getTask(mark, task.id);
-    assert.deepEqual(after.docIds, [archived, shared]);
+    assert.deepEqual(after.docIds, [shared]);
     assert.deepEqual(after.docs.map((doc) => doc.id), [shared]);
     await sql("update crm.tasks set workspace_id = $2, company_id = null, contact_id = null, opportunity_id = null, owner_id = null where id = $1", [task.id, elsewhere.workspaceId]);
     assert.deepEqual(await sql("select page_id from crm.task_docs where task_id = $1", [task.id]), []);
@@ -331,12 +342,62 @@ describe("the [[ picker in the Add task card", () => {
     assert.equal(docQueryAt("Call [[Jane\nnow", 15), null);
     assert.equal(docQueryAt("No brackets", 11), null);
     assert.deepEqual(docQueryAt("[[a]] then [[b", 14), { start: 11, end: 14, query: "b" });
+    assert.deepEqual(docQueryAt("Call [[renewal now", 10), { start: 5, end: 14, query: "renewal" });
+    assert.deepEqual(docQueryAt("Call Jane\n[[ren", 15), { start: 10, end: 15, query: "ren" });
+    assert.equal(docQueryAt("[[old]] and more", 16), null);
+    assert.deepEqual(withoutDocQuery("Call [[renewal now", { start: 5, end: 14 }), { text: "Call now", caret: 5 });
 
     assert.deepEqual(withoutDocQuery("Call Jane about the renewal terms [[renew", { start: 34, end: 41 }), { text: "Call Jane about the renewal terms ", caret: 34 });
     assert.deepEqual(withoutDocQuery("Call Jane [[renew tomorrow", { start: 10, end: 17 }), { text: "Call Jane tomorrow", caret: 10 });
     assert.deepEqual(withoutDocQuery("Call Jane [[renew]] tomorrow", { start: 10, end: 17 }), { text: "Call Jane tomorrow", caret: 10 });
     assert.deepEqual(withoutDocQuery("[[renew", { start: 0, end: 7 }), { text: "", caret: 0 });
     assert.deepEqual(withoutDocQuery("[[renew call Jane", { start: 0, end: 7 }), { text: "call Jane", caret: 0 });
+  });
+});
+
+describe("Add task card and panel helpers", () => {
+  it("doesn't read a date inside [[ ]] or an open [[ query", () => {
+    const open = parseTaskText("Read [[Monday notes", new Date("2026-11-12T09:00:00Z"));
+    assert.equal(open.due, null);
+    assert.equal(open.title, "Read [[Monday notes");
+    const closed = parseTaskText("Read [[Monday notes]] tomorrow", new Date("2026-11-12T09:00:00Z"));
+    assert.equal(closed.due, "2026-11-13");
+    assert.equal(closed.title, "Read [[Monday notes]]");
+  });
+
+  it("shows the description's links only while the field isn't focused, in the panel", () => {
+    assert.equal(showsDescriptionLinks("See https://northwind.test", "panel", false), true);
+    assert.equal(showsDescriptionLinks("See https://northwind.test", "panel", true), false);
+    assert.equal(showsDescriptionLinks("See Https://northwind.test", "panel", false), true);
+    assert.equal(showsDescriptionLinks("See https://northwind.test", "row", false), false);
+    assert.equal(showsDescriptionLinks("No address", "panel", false), false);
+    assert.equal(sourceOffset("a\u202eb c", 2), 3);
+    assert.equal(sourceOffset("plain", 3), 3);
+  });
+
+  it("links web addresses safely, keeping balanced brackets and dropping trailing quotes", () => {
+    const urls = (text: string) => textParts(text, { emails: true, markdown: true, balanced: true }).filter((part) => part.kind !== "text").map((part) => part.href);
+    assert.deepEqual(urls("See https://en.wikipedia.org/wiki/Foo_(bar) now"), ["https://en.wikipedia.org/wiki/Foo_(bar)"]);
+    assert.deepEqual(urls("(see https://acme.test/a)"), ["https://acme.test/a"]);
+    assert.deepEqual(urls("“https://acme.test/q”"), ["https://acme.test/q"]);
+    assert.deepEqual(urls("Https://acme.test/x."), ["Https://acme.test/x"]);
+    assert.deepEqual(urls("[deck](https://acme.test/d)"), ["https://acme.test/d"]);
+    assert.deepEqual(urls("https://acme.test/a[1]"), ["https://acme.test/a[1]"]);
+    assert.deepEqual(urls("javascript:alert(1) or ftp://x.test"), []);
+    assert.deepEqual(urls("jane@acme.test"), ["mailto:jane@acme.test"]);
+  });
+
+  it("names the picker's state", () => {
+    const doc = { id: "d", title: "Terms", folderPath: "Sales › Pricing", shared: false, updatedAt: "2026-11-12T09:00:00Z", updatedBy: { id: "u", name: "Mark", short: "Mark", initials: "M", color: "", kind: "person" as const } };
+    assert.equal(docPickHeading("", [doc]), "Recent");
+    assert.equal(docPickHeading("", []), "");
+    assert.equal(docPickHeading("ter", [doc]), "1 match");
+    assert.equal(docPickHeading("ter", [doc, doc, doc]), "3 matches");
+    assert.equal(docPickNotice("", [], false), null);
+    assert.equal(docPickNotice("zz", [], false), "No docs match");
+    assert.equal(docPickNotice("zz", null, true), "Couldn't search. Try again.");
+    assert.equal(privateDocWarning(doc), 'Pricing, private. Teammates will see "Doc" only');
+    assert.equal(privateDocWarning({ folderPath: null }), 'Top level, private. Teammates will see "Doc" only');
   });
 });
 
@@ -400,5 +461,171 @@ describe("docIds through the assistant, MCP and REST", () => {
     const text = await got.text();
     assert.match(text, /"reason":"linked"/);
     assert.doesNotMatch(text, /pricing model/);
+  });
+});
+
+describe("task docs under review", () => {
+  it("lets the database itself refuse daily notes, other people's tasks, someone else's name and hidden docs for a signed-in member", async () => {
+    const task = (await createTask(mark, { title: "Database checks" })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    const daily = await openDailyNote(mark);
+    const insert = (user: UserActor, page: string, by = user.userId) =>
+      queryAsUser(user.userId, "insert into crm.task_docs (task_id, page_id, workspace_id, created_by) values ($1, $2, $3, $4)", [task.id, page, mark.workspaceId, by]);
+    await assert.rejects(insert(mark, daily.page.id), /row-level security|another workspace/);
+    await assert.rejects(insert(priya, shared), /row-level security/);
+    await assert.rejects(insert(mark, shared, priya.userId), /row-level security/);
+    await assert.rejects(insert(mark, samsPrivate), /row-level security/);
+    await insert(mark, shared);
+    await assert.rejects(
+      queryAsUser(mark.userId, "insert into crm.task_docs (task_id, page_id, workspace_id, created_by, created_by_agent_id) values ($1, $2, $3, $4, $5)", [task.id, shared, mark.workspaceId, mark.userId, agent.agentId]),
+      /row-level security|task_docs_one_creator/,
+    );
+    await updateTask(mark, task.id, { docIds: [shared] });
+    const seen = await queryAsUser<{ page_id: string }>(priya.userId, "select page_id from crm.task_docs where task_id = $1", [task.id]);
+    assert.deepEqual(seen.map((row) => row.page_id), [shared]);
+    const removed = await queryAsUser(priya.userId, "delete from crm.task_docs where task_id = $1 returning page_id", [task.id]);
+    assert.deepEqual(removed, []);
+    assert.deepEqual(await queryAsUser(sam.userId, "select page_id from crm.task_docs where task_id = $1", [task.id]), []);
+  });
+
+  it("hides an archived doc's link, leaves it out of the cap, and brings it back when the doc is restored", async () => {
+    const docs: string[] = [];
+    for (let index = 0; index < 20; index += 1) docs.push((await createDoc(mark, { title: `Cap doc ${index}`, shared: true })).id);
+    const task = (await createTask(mark, { title: "Twenty docs", docIds: docs })).body.task;
+    assert.equal(task.docIds.length, 20);
+    const extra = (await createDoc(mark, { title: "One more", shared: true })).id;
+    await assert.rejects(updateTask(mark, task.id, { docIds: [...docs, extra] }), invalid("docIds"));
+    await archiveDoc(mark, docs[0]);
+    const hidden = await getTask(mark, task.id);
+    assert.deepEqual(hidden.docIds, docs.slice(1));
+    assert.ok(!hidden.docs.some((doc) => doc.id === docs[0]));
+    assert.ok(!(await listTaskDocs(mark, task.id)).some((entry) => entry.id === docs[0]));
+    const added = (await updateTask(mark, task.id, { docIds: [...docs.slice(1), extra] })).body.task;
+    assert.equal(added.docIds.length, 20);
+    await restoreDoc(mark, docs[0]);
+    const back = await getTask(mark, task.id);
+    assert.ok(back.docIds.includes(docs[0]));
+    assert.equal(back.docIds.length, 21);
+    const trimmed = (await updateTask(mark, task.id, { docIds: back.docIds.slice(0, 5) })).body.task;
+    assert.equal(trimmed.docIds.length, 5);
+  });
+
+  it("runs the migration again without changing anything", async () => {
+    const before = await sql("select task_id, page_id, page_archived from crm.task_docs order by task_id, page_id");
+    const migration = readFileSync("supabase/migrations/20270131100000_task_docs.sql", "utf8");
+    await applyMigrationSql(getAdminPool(), migration);
+    await applyMigrationSql(getAdminPool(), migration);
+    assert.deepEqual(await sql("select task_id, page_id, page_archived from crm.task_docs order by task_id, page_id"), before);
+    assert.equal((await sql("select 1 from pg_trigger where tgname = 'pages_task_docs_move'")).length, 0);
+  });
+
+  it("answers invalid_input on docIds when the link write itself fails", async () => {
+    const task = (await createTask(mark, { title: "Write failure" })).body.task;
+    await assert.rejects(
+      withActor(mark, (db) => writeTaskDocsInDb(db, mark, { id: task.id, workspaceId: mark.workspaceId }, { add: [crypto.randomUUID()], remove: [] })),
+      invalid("docIds"),
+    );
+  });
+
+  it("delivers the link change to webhooks with ids only", async () => {
+    process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS = "1";
+    const bodies: string[] = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      return new Response("ok");
+    }) as typeof fetch;
+    try {
+      const hook = await createWebhook(mark, { url: "http://127.0.0.1:9/hook", events: ["task.updated"] });
+      const task = (await createTask(mark, { title: "Hooked task" })).body.task;
+      await changeTaskDoc(mark, task.id, privateDoc, "link", WEB);
+      for (let attempt = 0; attempt < 10 && !bodies.some((body) => body.includes(task.id)); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await sql("update crm.webhook_deliveries set status = 'pending', next_attempt_at = now() where endpoint_id = $1", [hook.endpoint.id]);
+        await deliverDueWebhooks(50, { fetchImpl });
+      }
+      const body = bodies.find((item) => item.includes(task.id));
+      assert.ok(body, "the change was delivered");
+      const payload = JSON.parse(body) as { type: string };
+      assert.equal(payload.type, "task.updated");
+      assert.match(body, new RegExp(`"docIds":\\["${privateDoc}"\\]`));
+      assert.doesNotMatch(body, /pricing model/);
+      await archiveWebhook(mark, hook.endpoint.id);
+    } finally {
+      delete process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS;
+    }
+  });
+
+  it("shows only the change on the approval card, naming a doc the person can't read as private", async () => {
+    const task = (await createTask(mark, { title: "Card check", ownerId: priya.userId, docIds: [privateDoc, shared] })).body.task;
+    const third = (await createDoc(mark, { title: "Card extra", shared: true })).id;
+    const args = { taskId: task.id, docIds: [shared, third] };
+    const card = describeAction("update_task", args, await recordNames(priya, [args], ["update_task"]));
+    assert.ok(card.lines.includes("Link: Card extra"), card.lines.join(" | "));
+    assert.ok(card.lines.includes("Unlink: 1 private doc"), card.lines.join(" | "));
+    assert.doesNotMatch(card.lines.join(" "), /Unknown record|pricing model/);
+    const clear = { taskId: task.id, docIds: [] };
+    const markCard = describeAction("update_task", clear, await recordNames(mark, [clear], ["update_task"]));
+    assert.ok(markCard.lines.includes("Unlink: Renewal pricing model, Northwind renewal terms"), markCard.lines.join(" | "));
+    const fresh = { title: "New", docIds: [shared] };
+    const createCard = describeAction("create_task", fresh, await recordNames(mark, [fresh], ["create_task"]));
+    assert.ok(createCard.lines.includes("Docs: Northwind renewal terms"), createCard.lines.join(" | "));
+  });
+
+  it("keeps both of two links made at once, and a repeated link changes nothing", async () => {
+    const task = (await createTask(mark, { title: "Concurrent links" })).body.task;
+    const other = (await createDoc(mark, { title: "Concurrent other", shared: true })).id;
+    await Promise.all([changeTaskDoc(mark, task.id, shared, "link", WEB), changeTaskDoc(mark, task.id, other, "link", WEB)]);
+    assert.deepEqual([...(await getTask(mark, task.id)).docIds].sort(), [shared, other].sort());
+    await changeTaskDoc(mark, task.id, other, "link", WEB);
+    const events = await sql<{ total: number }>("select count(*)::int as total from crm.audit_events where entity_id = $1 and event_type = 'task.updated'", [task.id]);
+    assert.equal(events[0].total, 2);
+  });
+
+  it("restores what the person can still link when undoing an unlink, and refuses only when nothing can be restored", async () => {
+    const task = (await createTask(mark, { title: "Undo by Priya", docIds: [privateDoc, shared] })).body.task;
+    await updateTask(mark, task.id, { ownerId: priya.userId });
+    await changeTaskDoc(priya, task.id, privateDoc, "unlink", WEB);
+    const only = (await listRecentChanges(priya, { entityType: "task" })).find((item) => item.entityId === task.id && item.type === "task.updated");
+    assert.ok(only);
+    assert.equal(only.canUndo, false);
+    assert.equal(only.reason, "Can't undo: you can't open that doc any more.");
+
+    const both = (await createTask(mark, { title: "Undo both by Priya", docIds: [privateDoc, shared] })).body.task;
+    await updateTask(mark, both.id, { ownerId: priya.userId });
+    await updateTask(priya, both.id, { docIds: [], title: "Undo both, renamed" });
+    const change = (await listRecentChanges(priya, { entityType: "task" })).find((item) => item.entityId === both.id && item.type === "task.updated");
+    assert.ok(change?.canUndo, change?.reason);
+    await undoAuditEvent(priya, change.id, { operation: "undo_change", source: "web" });
+    const restored = await getTask(mark, both.id);
+    assert.deepEqual(restored.docIds, [shared]);
+    assert.equal(restored.title, "Undo both by Priya");
+  });
+
+  it("refuses docIds from a tagged teammate and from a token without docs:read, over the API and MCP too", async () => {
+    const task = (await createTask(mark, { title: "Tagged sends docs" })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    await assert.rejects(updateTask(priya, task.id, { docIds: [shared] }), forbidden);
+    const readOnly = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"], "No docs");
+    const patched = await restPatchTask(
+      new Request(`http://crm.test/api/v1/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${readOnly.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ docIds: [shared] }),
+      }),
+      { params: Promise.resolve({ id: task.id }) },
+    );
+    assert.equal(patched.status, 403);
+    const viaMcp = await mcpCall(readOnly.actor, "update_next_action", { id: task.id, docIds: [shared] });
+    assert.equal(viaMcp.error, true);
+    assert.match(viaMcp.text, /can't read docs/);
+    assert.deepEqual((await getTask(mark, task.id)).docIds, []);
+  });
+
+  it("scopes a doc's task list to the caller's workspace and names daily notes by their day", async () => {
+    await assert.rejects(listDocTasks(elsewhere, shared), (error: unknown) => error instanceof CrmError && error.code === "not_found");
+    const task = (await createTask(mark, { title: "Daily mention title" })).body.task;
+    const daily = await appendToDailyNote(mark, { text: `See @[Daily mention title](task:${task.id})` });
+    const entry = (await listTaskDocs(mark, task.id)).find((item) => item.id === daily.page.id);
+    assert.match(entry?.title ?? "", /^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}$/);
   });
 });

@@ -11,7 +11,7 @@ import type { Backlinks, LinkContext, Page, PageTask, RecordRef } from "@/lib/do
 import { docsData } from "@/lib/docs/connection";
 import { whenLabel } from "@/lib/docs/format";
 import { linkTitlesIn, parseMentions } from "@/lib/docs/markdown";
-import { participantInitials } from "@/lib/docs/participants";
+import { participantInitials, personParticipant } from "@/lib/docs/participants";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -149,6 +149,7 @@ function PageTaskRow({ task, now }: { task: PageTask; now: number }) {
           <span className={cn("truncate text-[13px] leading-4", task.completedAt ? "text-subtle line-through" : "text-foreground")}>{task.title}</span>
           {detail.text && <span className={cn("caption-style truncate", detail.late ? "text-danger" : "text-subtle")}>{detail.text}</span>}
         </span>
+        {task.ownerId && <ParticipantAvatar participant={personParticipant({ id: task.ownerId, name: task.ownerName ?? "Former member" }, null)} size="sm" />}
       </Link>
     </li>
   );
@@ -179,7 +180,7 @@ function PageTasks({ pageId }: { pageId: string }) {
   const open = list.filter((task) => !task.completedAt);
   const done = list.filter((task) => task.completedAt);
   return (
-    <RailSection title="Tasks" count={list.length}>
+    <RailSection title="Tasks" count={open.length}>
       {open.length > 0 && (
         <ul className="flex flex-col">
           {open.map((task) => (
@@ -297,7 +298,7 @@ export default function NoteRail({ page }: { page: Page }) {
           </>
         )}
       </RailSection>
-      <PageTasks pageId={page.id} />
+      {page.kind !== "daily" && <PageTasks pageId={page.id} />}
       {(recordList.length > 0 || linkedNotes.length > 0) && (
         <RailSection title="In this note">
           <ul className="flex flex-col">
