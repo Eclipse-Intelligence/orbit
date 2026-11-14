@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
+import { describeAction, recordNames, runTool, taskTimingRefusalFor } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { upsertContact } from "@/lib/crm/contacts";
 import { openDiscussion, postMessage } from "@/lib/crm/chat";
@@ -15,9 +15,10 @@ import { localInstant } from "@/lib/crm/task-time";
 import { detectPadRecords } from "@/lib/crm/task-pad";
 import { addTaskParticipantsInDb, archiveTask, completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import { removeMember } from "@/lib/crm/team";
-import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
+import { NAMED_PROVENANCE_SOURCES, type Actor, type AgentActor, type UserActor } from "@/lib/crm/types";
 import { agentSource, companyMutationSchema, parseInput, SYSTEM_SOURCES } from "@/lib/crm/validation";
 import { ASSISTANT_SOURCES } from "@/lib/assistant/source";
+import { PROVIDER_IDS } from "@/lib/enrichment/providers";
 import { EXTENSION_SOURCE } from "@/lib/extension/protocol";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -224,8 +225,8 @@ describe("system sources", () => {
     const declared = [
       ...ASSISTANT_SOURCES,
       EXTENSION_SOURCE,
-      ...[...readFileSync("lib/crm/types.ts", "utf8").matchAll(/^\s*\| "([^"]+)"$/gm)].map((match) => match[1]),
-      ...[...(/export type ProviderId = ([^;]+);/.exec(readFileSync("lib/enrichment/providers.ts", "utf8"))?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+      ...NAMED_PROVENANCE_SOURCES,
+      ...PROVIDER_IDS,
     ];
     const missing = [...new Set([...used.keys(), ...declared])].filter((source) => !(SYSTEM_SOURCES as readonly string[]).includes(source));
     assert.deepEqual(missing, []);
@@ -282,6 +283,23 @@ describe("midnight times", () => {
     const viaMcp = (await createTask(eclipse, { title: "Midnight MCP", dueDate: "2027-03-01" })).body.task;
     const moved = await mcp(eclipse, "update_next_action", { id: viaMcp.id, dueAt: "2027-03-01T00:00", dueHasTime: true });
     assert.equal(moved.json?.task?.dueHasTime, true);
+  });
+
+  it("refuses a reminder on a date-only task's own day start, before the card and in the API", async () => {
+    const task = (await createTask(eclipse, { title: "Echo reminder", dueDate: "2027-07-01" })).body.task;
+    const args = { taskId: task.id, dueAt: task.dueAt, remindMinutes: 15 };
+    const refusal = await taskTimingRefusalFor(eclipse, "update_task", args);
+    assert.deepEqual(refusal, { error: "That's the task's day with no time, so it can't have a reminder. Send dueHasTime true to set midnight.", field: "dueHasTime" });
+    const out = (await runTool(eclipse, "update_task", args)) as { error?: string };
+    assert.equal(out.error, refusal?.error);
+    await assert.rejects(
+      updateTask(eclipse, task.id, { dueAt: "2027-07-01T00:00+01:00", remindMinutes: 15 }),
+      (error: unknown) => error instanceof CrmError && error.status === 400 && error.message === "This task has no time. Send dueHasTime: true to set one, then a reminder.",
+    );
+    assert.equal(await taskTimingRefusalFor(eclipse, "update_task", { ...args, dueHasTime: true }), null);
+    const timed = (await runTool(eclipse, "update_task", { ...args, dueHasTime: true })) as { task?: { dueHasTime: boolean; remindMinutes: number | null } };
+    assert.equal(timed.task?.dueHasTime, true);
+    assert.equal(timed.task?.remindMinutes, 15);
   });
 
   it("keeps a date-only task date only when its own day start comes back in any format", async () => {
@@ -428,6 +446,17 @@ describe("unassign card", () => {
 });
 
 describe("tagging in another workspace", () => {
+  it("lets an admin-only token tag where its person is a member", async () => {
+    const person = await createUser("adminonly@guards.test", "Admin Only");
+    await addMember(ridgeon.workspaceId, person.userId);
+    const helper = await createUser("adminhelper@guards.test", "Admin Helper");
+    await addMember(ridgeon.workspaceId, helper.userId);
+    const task = (await createTask(ridgeon, { title: "Admin only tag", ownerId: person.userId })).body.task;
+    const token: UserActor = { ...person, scopes: ["admin"] };
+    const fresh = await withActor(token, (db) => addTaskParticipantsInDb(db, token, task.id, [helper.userId]));
+    assert.deepEqual(fresh, [helper.userId]);
+  });
+
   it("keeps the caller's own scopes rather than the role's there", async () => {
     const helper = await createUser("scoped@guards.test", "Scoped Helper");
     await addMember(ridgeon.workspaceId, helper.userId);

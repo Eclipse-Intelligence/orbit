@@ -21,7 +21,7 @@ import {
   type MutationOutcome,
 } from "@/lib/crm/mutate";
 import { cleanText, likePattern } from "@/lib/crm/normalize";
-import { assertScope, scopesForRole } from "@/lib/crm/scopes";
+import { assertScope, hasScope, scopesForRole } from "@/lib/crm/scopes";
 import {
   TASK_PRIORITIES,
   type Actor,
@@ -296,6 +296,8 @@ function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { owne
   return ownerChanges || write.dueAt !== undefined;
 }
 
+export const NO_TIME_FOR_REMINDER = "This task has no time. Send dueHasTime: true to set one, then a reminder.";
+
 export const OWNER_SETS_LENGTH = "Only the owner can change the length of a timed task.";
 
 function resizesSomeoneElsesBlock(actor: Actor, write: PreparedTask, current: TaskRow) {
@@ -503,6 +505,10 @@ async function applyTask(
   if (current.archived_at && !options.restoring) throw notFound("task");
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const restoresTime = Boolean(options.restoring && write.dueAt !== undefined && write.ownerId !== undefined);
+  const echoesDay = write.dueAt !== undefined && Boolean(write.dueHasTime) && !current.due_has_time && !options.claimSchedule && !write.wallTime && sameDue(write, current);
+  if (echoesDay && write.remindMinutes !== undefined && write.remindMinutes !== null) {
+    throw new CrmError("invalid_input", NO_TIME_FOR_REMINDER, 400, { field: "dueHasTime" });
+  }
   if (write.dueAt !== undefined && sameDue(write, current, options.claimSchedule || write.wallTime)) {
     delete write.dueAt;
     delete write.dueHasTime;
@@ -1094,7 +1100,7 @@ async function actorInTaskWorkspace(db: Db, actor: UserActor, workspaceId: strin
   );
   const row = found.rows[0];
   if (!row) throw notFound("task");
-  const scopes = scopesForRole(row.role).filter((scope) => actor.scopes.includes(scope));
+  const scopes = scopesForRole(row.role).filter((scope) => hasScope(actor.scopes, scope));
   const home: UserActor = { ...actor, workspaceId, workspaceName: row.name, role: row.role, scopes };
   assertScope(home.scopes, "tasks:write");
   return home;

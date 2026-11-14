@@ -606,17 +606,25 @@ export function taskTimingRefusal(name: string, args: Args): { error: string; fi
   return null;
 }
 
+export const NO_TIME_FOR_REMINDER = "That's the task's day with no time, so it can't have a reminder. Send dueHasTime true to set midnight.";
+
 export async function taskTimingRefusalFor(actor: UserActor, name: string, args: Args) {
   const refused = taskTimingRefusal(name, args);
   if (refused || name !== "update_task" || typeof args.remindMinutes !== "number") return refused;
-  if (args.dueAt !== undefined || args.dueDate !== undefined) return null;
+  if (args.dueDate !== undefined) return null;
+  const echoing = typeof args.dueAt === "string" && args.dueHasTime !== true;
+  if (args.dueAt !== undefined && !echoing) return null;
   const id = typeof args.taskId === "string" ? args.taskId.trim() : "";
   if (!isUuid(id)) return null;
-  const timed = await withActor(actor, async (db) => {
-    const result = await db.query<{ due_has_time: boolean }>("select due_has_time from crm.tasks where id = $1 and workspace_id = $2", [id, actor.workspaceId]);
-    return result.rows[0]?.due_has_time ?? null;
+  const current = await withActor(actor, async (db) => {
+    const result = await db.query<{ due_has_time: boolean; due_at: Date | null }>("select due_has_time, due_at from crm.tasks where id = $1 and workspace_id = $2", [id, actor.workspaceId]);
+    return result.rows[0] ?? null;
   }).catch(() => null);
-  return timed === false ? { error: "Pick a time for the reminder.", field: "remindMinutes" } : null;
+  if (!current || current.due_has_time) return null;
+  if (!echoing) return { error: "Pick a time for the reminder.", field: "remindMinutes" };
+  const reading = readDateTime(String(args.dueAt));
+  if (!reading.ok || !current.due_at || reading.date.getTime() !== current.due_at.getTime()) return null;
+  return { error: NO_TIME_FOR_REMINDER, field: "dueHasTime" };
 }
 
 function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null; dueHasTime?: true } {
@@ -1166,7 +1174,7 @@ const TASK_FIELDS = {
   description: { type: "string", description: "Extra detail, or null to clear it." },
   dueDate: { type: "string", description: "Due day only, as YYYY-MM-DD in London time, or null to clear. Use this unless the user gave a time." },
   dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear. Only when the user gave a time; it puts the task on their calendar. A time on a task someone else owns is saved as date only. Send dueDate or dueAt, not both." },
-  dueHasTime: { type: "boolean", description: "Only true when the user asked for midnight (00:00) on a task due that day with no time. Without it, a dueAt equal to the task's current day start keeps it date only." },
+  dueHasTime: { type: "boolean", description: "Only true when the user asked for midnight (00:00) on a task due that day with no time. Without it, a dueAt at the same moment as a date-only task's own dueAt is read as unchanged and the task stays date only." },
   durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "How long the task takes in minutes, 5 to 480. New tasks take 15. Only the owner can change it on a timed task." },
   remindMinutes: {
     type: "integer",
