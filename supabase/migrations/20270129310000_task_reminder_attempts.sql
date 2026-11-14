@@ -115,3 +115,5 @@ revoke all on function private.return_task_reminder(uuid, timestamptz) from publ
 grant execute on function private.return_task_reminder(uuid, timestamptz) to crm_app;
 
 reset lock_timeout;
+
+create index concurrently if not exists audit_events_workflow_step_idx on crm.audit_events ((changes->>'workflowStep')) where changes ? 'workflowStep';

@@ -457,6 +457,10 @@ function refusedByClickUp(error: unknown) {
   return error instanceof ClickUpError && error.status >= 400 && error.status < 500;
 }
 
+function listAnswered(error: unknown) {
+  return error instanceof ClickUpError && (error.status === 400 || error.status === 404);
+}
+
 function createdAt(task: ClickUpTask) {
   const value = Number(task.date_created);
   return Number.isFinite(value) && value > 0 ? value : null;
@@ -635,7 +639,7 @@ async function createRemote(s: Session, taskId: string) {
         return "pushed" as const;
       }
     } catch (error) {
-      await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."), refusedByClickUp(error) ? ["unconfirmed"] : []);
+      await recordTaskError(s.actor, row.id, errorText(error, "Couldn't create the ClickUp task."), listAnswered(error) ? ["unconfirmed"] : []);
       throw error;
     }
   }
@@ -1215,7 +1219,7 @@ export async function createTaskWithClickUp(
   return { task: { ...task, clickupListId: listId }, clickupError };
 }
 
-export async function sendTaskToClickUpList(actor: UserActor, taskId: string, listId: string, options: ClickUpOptions = {}) {
+export async function sendTaskToClickUpList(actor: UserActor, taskId: string, listId: string, options: ClickUpOptions & { fallback?: string } = {}) {
   await withActor(actor, async (db) => {
     await db.query("update crm.tasks set clickup_list_id = $2 where id = $1 and clickup_task_id is null", [taskId, listId]);
     await db.query(
@@ -1227,7 +1231,7 @@ export async function sendTaskToClickUpList(actor: UserActor, taskId: string, li
   const outcome = await pushClickUpTask(actor, taskId, options);
   if (outcome !== "failed") return null;
   const row = await withActor(actor, (db) => db.query<{ clickup_error: string | null }>("select clickup_error from crm.tasks where id = $1", [taskId]));
-  return row.rows[0]?.clickup_error ?? unreachable("ClickUp");
+  return row.rows[0]?.clickup_error ?? options.fallback ?? unreachable("ClickUp");
 }
 
 export async function getClickUpSettings(

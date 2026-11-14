@@ -892,7 +892,7 @@ async function taskMadeEarlier(ctx: Ctx, effect: Effect) {
        from crm.audit_events e
        join crm.tasks t on t.id = e.entity_id
        where e.workspace_id = $1 and e.actor_user_id = $2 and e.entity_type = 'task' and e.event_type = 'task.created'
-         and e.operation = 'workflow_create_task' and e.changes->>'workflowStep' = $3
+         and e.operation = 'workflow_create_task' and e.changes ? 'workflowStep' and e.changes->>'workflowStep' = $3
        order by e.created_at asc limit 1`,
       [ctx.actor.workspaceId, ctx.actor.userId, workflowStep(ctx, effect.key)],
     );
@@ -1038,7 +1038,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const earlier = await startEffect(ctx, step);
       const made = earlier ? await taskMadeEarlier(ctx, earlier) : null;
       if (made && earlier) {
-        const clickupError = picker?.listId && !made.clickup_list_id ? await sendTaskToClickUpList(ctx.actor, made.id, picker.listId, { fetchImpl: ctx.fetchImpl }) : null;
+        const clickupError = picker?.listId && !made.clickup_list_id ? await sendTaskToClickUpList(ctx.actor, made.id, picker.listId, { fetchImpl: ctx.fetchImpl, fallback: "Couldn't create the ClickUp task." }) : null;
         return { kind: "next", output: { id: made.id, title: made.title, clickupError }, replayed: earlier };
       }
       const key = effectKey(step.id, ctx.state.frames ?? []);
