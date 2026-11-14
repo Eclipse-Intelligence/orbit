@@ -664,6 +664,10 @@ function phraseWords(phrase: string) {
     .every((word) => PHRASE_WORD.test(word.replace(/[.!?]+$/, "")));
 }
 
+function spacedPattern(words: string) {
+  return words.split(/\s+/).filter(Boolean).map(escapeRegExp).join("\\s+");
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -844,11 +848,12 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
     const phrase = raw.trim();
     const kind = phrase ? phraseKind(phrase) : null;
     if (!kind) return kept;
-    const found = [...text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}])`, "gu"))];
+    const found = [...text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${spacedPattern(phrase)}(?![\\p{L}\\p{N}])`, "gu"))];
     if (found.length !== 1) return kept;
-    if ([...text.matchAll(DOC_REFERENCE)].some((doc) => found[0].index < doc.index + doc[0].length && found[0].index + phrase.length > doc.index)) return kept;
     const start = found[0].index;
-    const span: Span = { start, end: start + phrase.length, kind: kind === "remind" ? "reminder" : "when" };
+    const end = start + found[0][0].length;
+    if ([...text.matchAll(DOC_REFERENCE)].some((doc) => start < doc.index + doc[0].length && end > doc.index)) return kept;
+    const span: Span = { start, end, kind: kind === "remind" ? "reminder" : "when" };
     if (spans.some((other) => span.start < other.end && span.end > other.start)) return kept;
     spans.push(span);
     kinds.push(kind);
@@ -924,10 +929,10 @@ function wordsAt(text: string, words: string[]) {
   const found: { start: number; end: number }[] = [];
   let from = 0;
   for (const word of words) {
-    const match = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(word)}(?![\\p{L}\\p{N}])`, "u").exec(text.slice(from));
+    const match = new RegExp(`(?<![\\p{L}\\p{N}])${spacedPattern(word)}(?![\\p{L}\\p{N}])`, "u").exec(text.slice(from));
     if (!match) return null;
-    found.push({ start: from + match.index, end: from + match.index + word.length });
-    from += match.index + word.length;
+    found.push({ start: from + match.index, end: from + match.index + match[0].length });
+    from += match.index + match[0].length;
   }
   return found;
 }

@@ -405,6 +405,16 @@ describe("task area UI", () => {
     typeOn("Call Bob tomorrow", " re the 2 decks");
     typeOn("Call Bob tomorrow 3pm", " in room 4 please");
     typeOn("Call Bob, tomorrow", " about pricing");
+    typeOn("Call Bob on  Friday", " about pricing");
+    typeOn("Call Bob at\n3pm", " about pricing");
+    typeOn("Call Bob tomorrow  at 3pm", " about pricing");
+    typeOn("Call Bob tomorrow\tat 3pm", " about pricing");
+    for (const spaced of ["Call Bob next  Friday", "Call Bob next\tFriday", "Call Bob next\nFriday"]) {
+      const nextFriday = (text: string) => (text === spaced || text === `${spaced} about pricing` ? acceptWithMarks(text, { phrases: ["next Friday"], due: "2026-11-27", remindMinutes: null, durationMinutes: null }, now) : null);
+      const read = nextFriday(spaced);
+      assert.equal(read?.due, "2026-11-27", `${JSON.stringify(spaced)}: the AI's phrase matches across any spacing`);
+      typeOn(spaced, " about pricing", nextFriday);
+    }
     const answers = new Map([["Call Sam at 3", ["at 3"]], ["Call Sam at 3 about pricing", ["at 3"]]]);
     typeOn("Call Sam at 3", " about pricing", (text) => {
       const phrases = answers.get(text);
