@@ -291,7 +291,12 @@ function settleReminder(write: PreparedTask, current: { dueHasTime: boolean; rem
   if (write.remindMinutes === undefined && current.remindMinutes !== null && current.remindMinutes !== undefined) write.remindMinutes = null;
 }
 
-function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { ownerId: string | null; timed: boolean } | null) {
+function agentMadeIt(actor: Actor, createdByAgentId: string | null | undefined) {
+  return actor.type === "agent" && createdByAgentId === actor.agentId;
+}
+
+function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { ownerId: string | null; timed: boolean; createdByAgentId: string | null } | null) {
+  if (actor.type === "agent" && (current === null || agentMadeIt(actor, current.createdByAgentId))) return false;
   const owner = write.ownerId !== undefined ? (write.ownerId ?? null) : (current?.ownerId ?? null);
   if (!owner || (actor.type === "user" && actor.userId === owner)) return false;
   if (!(write.dueHasTime ?? current?.timed ?? false)) return false;
@@ -329,6 +334,7 @@ export const OWNER_SETS_LENGTH = "Only the owner can change the length of a time
 
 function resizesSomeoneElsesBlock(actor: Actor, write: PreparedTask, current: TaskRow) {
   if (write.durationMinutes === undefined || write.durationMinutes === current.duration_minutes) return false;
+  if (agentMadeIt(actor, current.created_by_agent_id)) return false;
   const owner = write.ownerId !== undefined ? (write.ownerId ?? null) : current.owner_id;
   if (!owner || (actor.type === "user" && actor.userId === owner)) return false;
   return write.dueHasTime ?? Boolean(current.due_has_time && current.due_at);
@@ -559,7 +565,7 @@ async function applyTask(
     if (!options.claimSchedule || write.scheduledBy === (current.scheduled_by ?? null)) delete write.scheduledBy;
   }
   const timed = Boolean(current.due_has_time && current.due_at);
-  if (!restoresTime && setsSomeoneElsesTime(actor, write, { ownerId: current.owner_id, timed })) {
+  if (!restoresTime && setsSomeoneElsesTime(actor, write, { ownerId: current.owner_id, timed, createdByAgentId: current.created_by_agent_id })) {
     keepDayOnly(write, { dueAt: iso(current.due_at), dueHasTime: timed });
   }
   if (!restoresTime && resizesSomeoneElsesBlock(actor, write, current)) {

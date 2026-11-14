@@ -567,7 +567,7 @@ describe("Outlook lifecycle", () => {
     assert.equal(await queued(task.id), null);
   });
 
-  it("only writes a time the owner set, and agents never set one on an owned task", async () => {
+  it("only writes a time the owner set, and an agent only on a task it made", async () => {
     await connect(mark);
     const setter = await createUser(`setter${seq}@outlook-blocks.test`, "Priya");
     await addMember(mark.workspaceId, setter.userId, "admin");
@@ -582,13 +582,14 @@ describe("Outlook lifecycle", () => {
     assert.equal(own.body.task.dueHasTime, true);
     const agent = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
     const owned = (await createTask(agent.actor, { title: "Agent call", dueAt: minuteAt(Date.now() + 2 * DAY), ownerId: mark.userId })).body.task;
-    assert.equal(owned.dueHasTime, false);
+    assert.equal(owned.dueHasTime, true);
     const unowned = (await createTask(agent.actor, { title: "Agent loose call", dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
     assert.equal(unowned.ownerId, mark.userId);
-    assert.equal(unowned.dueHasTime, false);
+    assert.equal(unowned.dueHasTime, true);
     await assert.rejects(updateTask(agent.actor, own.body.task.id, { dueAt: minuteAt(Date.now() + 4 * DAY) }), /not found/i);
-    const later = await updateTask(agent.actor, owned.id, { dueAt: minuteAt(Date.now() + 4 * DAY) });
-    assert.equal(later.body.task.dueHasTime, false);
+    const later = await updateTask(agent.actor, owned.id, { dueAt: minuteAt(Date.now() + 4 * DAY), durationMinutes: 45 });
+    assert.equal(later.body.task.dueHasTime, true);
+    assert.equal(later.body.task.durationMinutes, 45);
   });
 
   it("never hands a colleague a time through undoing an owner change", async () => {
@@ -684,7 +685,7 @@ describe("Outlook lifecycle", () => {
     assert.ok(wait > 5.9 * HOUR && wait <= 6 * HOUR, String(wait));
   });
 
-  it("only lets the owner change the length of a timed task", async () => {
+  it("only lets the owner, or the agent that made it, change the length of a timed task", async () => {
     const colleague = await createUser(`length${seq}@outlook-blocks.test`, "Priya");
     await addMember(mark.workspaceId, colleague.userId);
     const priya: UserActor = { ...colleague, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member" };
@@ -697,7 +698,7 @@ describe("Outlook lifecycle", () => {
     const agent = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
     const agents = (await createTask(agent.actor, { title: "Agent's call for Priya", ownerId: priya.userId })).body.task;
     await updateTask(priya, agents.id, { dueAt: minuteAt(Date.now() + 2 * DAY) });
-    await assert.rejects(updateTask(agent.actor, agents.id, { durationMinutes: 60 }), refused);
+    assert.equal((await updateTask(agent.actor, agents.id, { durationMinutes: 60 })).body.task.durationMinutes, 60);
     assert.equal((await updateTask(priya, hers.id, { durationMinutes: 45 })).body.task.durationMinutes, 45);
     const dated = (await createTask(mark, { title: "Priya's day", ownerId: priya.userId, dueDate: new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10) })).body.task;
     assert.equal((await updateTask(mark, dated.id, { durationMinutes: 30 })).body.task.durationMinutes, 30);

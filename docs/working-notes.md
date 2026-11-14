@@ -61,6 +61,7 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 ### Privacy
 
 - **Users only see their own data, including tasks.** A task is seen only by its assignee, its creator and people tagged on it. Owners and admins get no exception: no Everyone view, no Waiting on others, no reading or changing a colleague's task. A workspace agent token sees only tasks it created; a personal token acts as its person. Task audit rows, webhook deliveries and stored idempotent replies follow the same rule, and a task event goes only to a webhook whose creator can see that task (endpoints with no recorded creator get no task events). Work that crosses people (removing a member, moving records, reminders, Outlook, ClickUp, prepare) goes through `private.*` definer functions, never admin row-level security.
+- **Agent tasks belong to the workspace owner.** A task a workspace agent creates without an assignee goes to the workspace owner and keeps the agent's time and reminder, so it lands on their Outlook and reminds them like one they made. The agent can set or change the time later on tasks it created; it can't on any other task, and people keep the rule that a time set on a colleague's task saves as date only.
 
 ### Copy
 
