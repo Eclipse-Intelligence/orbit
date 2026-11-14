@@ -247,14 +247,12 @@ describe("undoing changes", () => {
     await updateTask(owner, task.id, { title: "Plan Sam's salary review for March" });
     const change = await latest(owner, task.id, "task.updated");
 
-    const described = await describeUndo(colleague, change.id);
-    assert.deepEqual(described, { summary: "A change to this task", canUndo: false, reason: "You can only undo your own changes." });
+    const hidden = (error: unknown) => error instanceof CrmError && error.code === "not_found" && !/salary/i.test(error.message);
+    await assert.rejects(describeUndo(colleague, change.id), hidden);
     const args = { changeId: change.id };
     const card = describeAction("undo_change", args, await recordNames(colleague, [args], ["undo_change"]));
     assert.doesNotMatch(JSON.stringify(card), /salary/i);
-    await assert.rejects(undoAuditEvent(colleague, change.id, UNDO), (error: unknown) => {
-      return refused(/only undo your own changes/)(error) && !/salary/i.test((error as Error).message);
-    });
+    await assert.rejects(undoAuditEvent(colleague, change.id, UNDO), hidden);
   });
 
   it("says when your own change is on a task you can't see any more", async () => {
