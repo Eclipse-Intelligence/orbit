@@ -414,7 +414,7 @@ function ActionTask({
               </div>
             )}
             {expansion.mounted && !concluding && (
-              <div className="flex flex-col gap-3 pt-1 pr-3 pb-3 pl-3 @xl:pl-[46px]">
+              <div className="flex flex-col gap-3 pt-1 pr-3 pb-3 pl-3 @xl:pl-[46px] [@media(pointer:coarse)]:pt-2">
                 <TaskAct task={task} here={here} canChange={canChange} />
                 <TaskFields details={details} viewer={viewer} members={members} tagged={tagged} layout="row" done={completed} />
                 <TaskPrepare task={task}>

@@ -581,6 +581,12 @@ for (const [device, viewport] of [
     check(`${device} task expands in place`, await visible(row.getByRole("button", { name: "Open", exact: true })));
     check(`${device} expanded task no overflow`, await noHorizontalScroll());
     check(`${device} expanded task shows its duration`, await visible(row.getByRole("button", { name: /^Duration / })));
+    const rowTargets = await hitOverlaps(row);
+    check(
+      `${device} expanded task's touch areas don't overlap`,
+      Boolean(rowTargets && rowTargets.count >= 3 && rowTargets.overlaps.length === 0),
+      rowTargets ? rowTargets.overlaps.join(", ") || `${rowTargets.count} controls` : "missing",
+    );
     await row.getByRole("button", { name: /^Duration / }).tap();
     await page.waitForTimeout(500);
     await page.getByRole("group", { name: "Duration" }).getByRole("button", { name: "30m" }).tap();
@@ -642,6 +648,12 @@ for (const [device, viewport] of [
       `${device} task panel fields' touch areas don't overlap`,
       Boolean(panelFields && panelFields.count >= 3 && panelFields.overlaps.length === 0),
       panelFields ? panelFields.overlaps.join(", ") || `${panelFields.count} controls` : "missing",
+    );
+    const panelHeader = await hitOverlaps(panel.locator('[data-slot="sheet-header"]').first());
+    check(
+      `${device} task panel header's touch areas don't overlap`,
+      Boolean(panelHeader && panelHeader.count >= 2 && panelHeader.overlaps.length === 0),
+      panelHeader ? panelHeader.overlaps.join(", ") || `${panelHeader.count} controls` : "missing",
     );
     await panel.getByRole("button", { name: "Close" }).tap();
     await page.waitForTimeout(600);
