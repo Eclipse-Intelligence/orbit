@@ -16,7 +16,7 @@ function minutesAgo(minutes: number) {
 
 async function openFollowUps(workspaceId: string, companyId: string) {
   const result = await getAdminPool().query<{ count: string }>(
-    "select count(*) from crm.tasks where workspace_id = $1 and company_id = $2 and title like 'Follow up with%' and completed_at is null and archived_at is null",
+    "select count(*) from crm.tasks where workspace_id = $1 and company_id = $2 and title like 'Reply to%' and completed_at is null and archived_at is null",
     [workspaceId, companyId],
   );
   return Number(result.rows[0].count);

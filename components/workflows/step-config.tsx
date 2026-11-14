@@ -432,6 +432,7 @@ export default function StepConfig({
             </div>
             <PersonSelect id={`${step.id}-assignee`} label="Assign to" value={str(c.assignee)} onChange={(value) => update({ ...c, assignee: value })} options={options} />
             <Select id={`${step.id}-link`} label="Link to" value={str(c.link) || "company"} onChange={(value) => update({ ...c, link: value })}>
+              {(str(c.link) === "task" || variables.some((variable) => variable.path === "task.title")) && <option value="task">Same as the task</option>}
               <option value="company">The company</option>
               <option value="contact">The contact</option>
               <option value="none">Nothing</option>

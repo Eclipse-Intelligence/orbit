@@ -780,7 +780,7 @@ describe("clickup sync", () => {
     }
     const pool = getAdminPool();
     const row = await pool.query<{ clickup_task_id: string | null; clickup_list_id: string | null }>(
-      "select clickup_task_id, clickup_list_id from crm.tasks where company_id = $1 and title = 'Follow up with Peter Gibbons'",
+      "select clickup_task_id, clickup_list_id from crm.tasks where company_id = $1 and title = 'Reply to Peter Gibbons: TPS reports'",
       [company.id],
     );
     assert.equal(row.rows[0]?.clickup_list_id, RELATIONSHIPS);

@@ -53,6 +53,7 @@ import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
 import { BRIEF_MESSAGE_MODEL, latestBrief } from "@/lib/learning/nightly";
+import { CREATE_THOSE, QUIET_HEADING, SUGGESTED_TASK, suggestsTasks } from "@/lib/learning/brief-format";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -120,6 +121,7 @@ export type DisplayMessage = {
   files: ChatFile[];
   createdAt: string;
   waiting?: boolean;
+  suggestsTasks?: boolean;
 };
 
 export type AssistantEvent =
@@ -151,6 +153,7 @@ type MessageRow = {
   page_context?: string | null;
   turn_context?: string | null;
   steering?: Steering | null;
+  model?: string | null;
   created_at: Date | string;
 };
 
@@ -193,6 +196,7 @@ function display(row: MessageRow): DisplayMessage {
     files: row.files ?? [],
     createdAt: iso(row.created_at) ?? new Date().toISOString(),
     ...(row.steering === "waiting" ? { waiting: true } : {}),
+    ...(row.role === "assistant" && row.model === BRIEF_MESSAGE_MODEL && suggestsTasks(row.content) ? { suggestsTasks: true } : {}),
   };
 }
 
@@ -209,7 +213,7 @@ function parseArgs(raw: string) {
   return argsOf(raw) ?? {};
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, turn_context, steering, created_at";
+const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, turn_context, steering, model, created_at";
 const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at, turn_until";
 const EMAIL_MARK = "exists (select 1 from crm.agent_mail_threads t where t.conversation_id = crm.assistant_conversations.id) as email";
 
@@ -529,7 +533,8 @@ export function history(all: MessageRow[], budget = HISTORY_BUDGET, context = ""
 }
 
 const BRIEF_PREFACE =
-  "(Orbit wrote the user's morning brief overnight and opened this conversation with it. The next message is that brief, not something the user wrote.)";
+  "(Orbit wrote the user's morning brief overnight and opened this conversation with it. The next message is that brief, not something the user wrote. " +
+  `Each line under ${QUIET_HEADING} ends with "${SUGGESTED_TASK}" and a task. When the user says "${CREATE_THOSE}" or asks for those tasks, call create_task once for each suggested task, all in one round so each gets its own approval card: the suggested text as title, the id from the opportunity's /opportunities/<id> link as opportunityId, and today as dueDate unless the user says otherwise. Don't search first.)`;
 
 export function briefTitle(day: string) {
   const date = new Date(`${day}T12:00:00Z`);
