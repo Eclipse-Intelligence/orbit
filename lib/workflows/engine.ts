@@ -13,6 +13,7 @@ import { getCompany, updateCompany } from "@/lib/crm/companies";
 import { getContact, updateContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
+import { currentLinksInDb } from "@/lib/crm/links";
 import { emailThreadKey } from "@/lib/crm/task-mail";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { listSenders, sendContactEmail } from "@/lib/crm/inbox";
@@ -972,11 +973,12 @@ async function chatStep(ctx: Ctx, step: Step): Promise<StepResult> {
   };
 }
 
-function createTaskLinks(linkTo: string, vars: Vars) {
+async function createTaskLinks(actor: UserActor, linkTo: string, vars: Vars) {
   const task = vars.task as { companyId?: string | null; contactId?: string | null; opportunityId?: string | null } | undefined;
   if (linkTo === "task") {
     if (!task) throw new CrmError("invalid_input", "Same as the task only works when a task is completed. Choose another link.", 400);
-    return { companyId: task.companyId ?? null, contactId: task.contactId ?? null, opportunityId: task.opportunityId ?? null };
+    const links = { companyId: task.companyId ?? null, contactId: task.contactId ?? null, opportunityId: task.opportunityId ?? null };
+    return withActor(actor, (db) => currentLinksInDb(db, actor.workspaceId, links));
   }
   const companyId = linkTo !== "none" ? ((vars.company as { id?: string } | undefined)?.id ?? null) : null;
   const contactId = linkTo === "contact" ? ((vars.contact as { id?: string } | undefined)?.id ?? null) : null;
@@ -1030,7 +1032,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     case "create_task": {
       const title = render(config.title, ctx.vars).replace(/\s+/g, " ").trim().slice(0, 200);
       if (!title) throw new CrmError("invalid_input", "The task has no title.", 400);
-      const links = createTaskLinks(str(config.link) || "company", ctx.vars);
+      const links = await createTaskLinks(ctx.actor, str(config.link) || "company", ctx.vars);
       const days = config.dueInDays === "" || config.dueInDays === undefined || config.dueInDays === null ? null : Number(config.dueInDays);
       const ownerId = await assigneeFor(ctx, config.assignee);
       const due = await scheduleTaskDue(ctx.actor, { days, on: dueDayFrom(render(config.dueDate, ctx.vars)), ownerId });

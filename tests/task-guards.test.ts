@@ -142,7 +142,7 @@ describe("archived tasks", () => {
 
 describe("assistant reminders", () => {
   it("removes a reminder when the assistant sends null, and the card says so", async () => {
-    const task = (await createTask(eclipse, { title: "Call Bob", dueAt: "2027-03-01T10:00", remindMinutes: 15 })).body.task;
+    const task = (await createTask(eclipse, { title: "Call Bob", dueAt: "2038-03-01T10:00", remindMinutes: 15 })).body.task;
     assert.equal(task.remindMinutes, 15);
     const card = describeAction("update_task", { taskId: task.id, remindMinutes: null });
     assert.ok(card.lines.includes("Reminder: none"), card.lines.join("\n"));
@@ -235,8 +235,8 @@ describe("system sources", () => {
 
 describe("task approval cards", () => {
   it("never says a due day is cleared while giving one, and shows nothing cleared on a new task", () => {
-    const update = describeAction("update_task", { taskId: "00000000-0000-4000-8000-000000000001", dueDate: "2027-03-01", dueAt: null });
-    assert.ok(update.lines.includes("Due: Mon 1 Mar 2027"), update.lines.join("\n"));
+    const update = describeAction("update_task", { taskId: "00000000-0000-4000-8000-000000000001", dueDate: "2038-03-01", dueAt: null });
+    assert.ok(update.lines.includes("Due: Mon 1 Mar 2038"), update.lines.join("\n"));
     assert.ok(!update.lines.includes("Due: none"), update.lines.join("\n"));
     const cleared = describeAction("update_task", { taskId: "00000000-0000-4000-8000-000000000001", dueDate: null, dueAt: null, remindMinutes: null });
     assert.deepEqual(cleared.lines.filter((line) => line.endsWith(": none")), ["Due: none", "Reminder: none"]);
@@ -245,55 +245,55 @@ describe("task approval cards", () => {
   });
 
   it("shows a teammate's task as date only with no reminder, and ClickUp only when it's set up", async () => {
-    const args = { title: "Call Bob", ownerId: priya.userId, dueAt: "2027-03-01T10:00", remindMinutes: 15 };
+    const args = { title: "Call Bob", ownerId: priya.userId, dueAt: "2038-03-01T10:00", remindMinutes: 15 };
     const names = await recordNames(eclipse, [args], ["create_task"]);
     const card = describeAction("create_task", args, names);
-    assert.ok(card.lines.includes("Due: Mon 1 Mar 2027"), card.lines.join("\n"));
+    assert.ok(card.lines.includes("Due: Mon 1 Mar 2038"), card.lines.join("\n"));
     assert.ok(card.lines.includes("Date only: only the owner sets a time"), card.lines.join("\n"));
     assert.ok(!card.lines.some((line) => line.startsWith("Reminder")), card.lines.join("\n"));
     assert.ok(!card.lines.some((line) => line.startsWith("ClickUp: yes")), card.lines.join("\n"));
     const created = (await runTool(eclipse, "create_task", args)) as { task: { id: string; dueHasTime: boolean; remindMinutes: number | null; dueDate: string } };
     assert.equal(created.task.dueHasTime, false);
     assert.equal(created.task.remindMinutes, null);
-    assert.equal(created.task.dueDate, "2027-03-01");
+    assert.equal(created.task.dueDate, "2038-03-01");
 
-    const own = { title: "Call Ann", dueAt: "2027-03-01T10:00", remindMinutes: 15 };
+    const own = { title: "Call Ann", dueAt: "2038-03-01T10:00", remindMinutes: 15 };
     const ownCard = describeAction("create_task", own, await recordNames(eclipse, [own], ["create_task"]));
     assert.ok(ownCard.lines.some((line) => /^Due: .*10:00$/.test(line)), ownCard.lines.join("\n"));
     assert.ok(ownCard.lines.some((line) => line.startsWith("Reminder: ")), ownCard.lines.join("\n"));
 
-    const update = { taskId: created.task.id, dueAt: "2027-03-02T11:00", remindMinutes: 30 };
+    const update = { taskId: created.task.id, dueAt: "2038-03-02T11:00", remindMinutes: 30 };
     const updateCard = describeAction("update_task", update, await recordNames(eclipse, [update], ["update_task"]));
-    assert.ok(updateCard.lines.includes("Due: Tue 2 Mar 2027"), updateCard.lines.join("\n"));
+    assert.ok(updateCard.lines.includes("Due: Tue 2 Mar 2038"), updateCard.lines.join("\n"));
     assert.ok(!updateCard.lines.some((line) => line.startsWith("Reminder")), updateCard.lines.join("\n"));
   });
 });
 
 describe("midnight times", () => {
   it("sets an explicit midnight time on a date-only task, with a reminder in the same call", async () => {
-    const task = (await createTask(eclipse, { title: "Midnight call", dueDate: "2027-03-01" })).body.task;
-    const timed = (await updateTask(eclipse, task.id, { dueAt: "2027-03-01T00:00", dueHasTime: true, remindMinutes: 15 })).body.task;
+    const task = (await createTask(eclipse, { title: "Midnight call", dueDate: "2038-03-01" })).body.task;
+    const timed = (await updateTask(eclipse, task.id, { dueAt: "2038-03-01T00:00", dueHasTime: true, remindMinutes: 15 })).body.task;
     assert.equal(timed.dueHasTime, true);
     assert.equal(timed.remindMinutes, 15);
-    const web = (await createTask(eclipse, { title: "Midnight web", dueDate: "2027-03-01" })).body.task;
-    assert.equal((await updateTask(eclipse, web.id, { dueAt: localInstant("2027-03-01T00:00"), dueHasTime: true })).body.task.dueHasTime, true);
-    const assisted = (await createTask(eclipse, { title: "Midnight assistant", dueDate: "2027-07-01" })).body.task;
-    const out = (await runTool(eclipse, "update_task", { taskId: assisted.id, dueAt: "2027-07-01T00:00", dueHasTime: true })) as { task?: { dueHasTime: boolean } };
+    const web = (await createTask(eclipse, { title: "Midnight web", dueDate: "2038-03-01" })).body.task;
+    assert.equal((await updateTask(eclipse, web.id, { dueAt: localInstant("2038-03-01T00:00"), dueHasTime: true })).body.task.dueHasTime, true);
+    const assisted = (await createTask(eclipse, { title: "Midnight assistant", dueDate: "2038-07-01" })).body.task;
+    const out = (await runTool(eclipse, "update_task", { taskId: assisted.id, dueAt: "2038-07-01T00:00", dueHasTime: true })) as { task?: { dueHasTime: boolean } };
     assert.equal(out.task?.dueHasTime, true);
-    const viaMcp = (await createTask(eclipse, { title: "Midnight MCP", dueDate: "2027-03-01" })).body.task;
-    const moved = await mcp(eclipse, "update_next_action", { id: viaMcp.id, dueAt: "2027-03-01T00:00", dueHasTime: true });
+    const viaMcp = (await createTask(eclipse, { title: "Midnight MCP", dueDate: "2038-03-01" })).body.task;
+    const moved = await mcp(eclipse, "update_next_action", { id: viaMcp.id, dueAt: "2038-03-01T00:00", dueHasTime: true });
     assert.equal(moved.json?.task?.dueHasTime, true);
   });
 
   it("refuses a reminder on a date-only task's own day start, before the card and in the API", async () => {
-    const task = (await createTask(eclipse, { title: "Echo reminder", dueDate: "2027-07-01" })).body.task;
+    const task = (await createTask(eclipse, { title: "Echo reminder", dueDate: "2038-07-01" })).body.task;
     const args = { taskId: task.id, dueAt: task.dueAt, remindMinutes: 15 };
     const refusal = await taskTimingRefusalFor(eclipse, "update_task", args);
     assert.deepEqual(refusal, { error: "That's the task's day with no time, so it can't have a reminder. Send dueHasTime true to set midnight.", field: "dueHasTime" });
     const out = (await runTool(eclipse, "update_task", args)) as { error?: string };
     assert.equal(out.error, refusal?.error);
     await assert.rejects(
-      updateTask(eclipse, task.id, { dueAt: "2027-07-01T00:00+01:00", remindMinutes: 15 }),
+      updateTask(eclipse, task.id, { dueAt: "2038-07-01T00:00+01:00", remindMinutes: 15 }),
       (error: unknown) => error instanceof CrmError && error.status === 400 && error.message === "This task has no time. Send dueHasTime: true to set one, then a reminder.",
     );
     assert.equal(await taskTimingRefusalFor(eclipse, "update_task", { ...args, dueHasTime: true }), null);
@@ -303,15 +303,15 @@ describe("midnight times", () => {
   });
 
   it("keeps a date-only task date only when its own day start comes back in any format", async () => {
-    const winter = (await createTask(eclipse, { title: "Echo winter", dueDate: "2027-03-01" })).body.task;
-    const summer = (await createTask(eclipse, { title: "Echo summer", dueDate: "2027-07-01" })).body.task;
-    assert.equal(summer.dueAt, "2027-06-30T23:00:00.000Z");
+    const winter = (await createTask(eclipse, { title: "Echo winter", dueDate: "2038-03-01" })).body.task;
+    const summer = (await createTask(eclipse, { title: "Echo summer", dueDate: "2038-07-01" })).body.task;
+    assert.equal(summer.dueAt, "2038-06-30T23:00:00.000Z");
     for (const task of [winter, summer]) {
       const out = (await runTool(eclipse, "update_task", { taskId: task.id, dueAt: task.dueAt, title: `${task.title} renamed` })) as { task?: { dueHasTime: boolean; dueDate: string } };
       assert.equal(out.task?.dueHasTime, false, task.title);
       assert.equal(out.task?.dueDate, task.dueDate);
     }
-    for (const dueAt of ["2027-07-01T00:00:00+01:00", "2027-06-30T23:00:00Z", "2027-06-30T23:00:00.000000+00:00"]) {
+    for (const dueAt of ["2038-07-01T00:00:00+01:00", "2038-06-30T23:00:00Z", "2038-06-30T23:00:00.000000+00:00"]) {
       const moved = await mcp(eclipse, "update_next_action", { id: summer.id, dueAt });
       assert.equal(moved.json?.task?.dueHasTime, false, dueAt);
     }
@@ -319,9 +319,9 @@ describe("midnight times", () => {
     assert.equal(echoed.dueHasTime, false);
     const update = { taskId: summer.id, dueAt: summer.dueAt };
     const card = describeAction("update_task", update, await recordNames(eclipse, [update], ["update_task"]));
-    assert.ok(card.lines.includes("Due: Thu 1 Jul 2027"), card.lines.join("\n"));
+    assert.ok(card.lines.includes("Due: Thu 1 Jul 2038"), card.lines.join("\n"));
     const plain = describeAction("update_task", update);
-    assert.ok(plain.lines.includes("Due: Thu 1 Jul 2027, 00:00"), plain.lines.join("\n"));
+    assert.ok(plain.lines.includes("Due: Thu 1 Jul 2038, 00:00"), plain.lines.join("\n"));
   });
 });
 
@@ -336,7 +336,7 @@ describe("removing a member", () => {
     );
     const company = (await createCompany(sam, { name: "Sam's Accounts Ltd", ownerId: sam.userId })).body.company;
     const contact = (await upsertContact(sam, { firstName: "Lee", lastName: "Handover", email: "lee@handover.test", ownerId: sam.userId })).body.contact;
-    const open = (await createTask(sam, { title: "Sam's call", dueAt: "2027-03-01T10:00", remindMinutes: 15 })).body.task;
+    const open = (await createTask(sam, { title: "Sam's call", dueAt: "2038-03-01T10:00", remindMinutes: 15 })).body.task;
     const done = (await createTask(sam, { title: "Sam's done call" })).body.task;
     await completeTask(sam, done.id);
     const bulk = await admin().query<{ id: string }>(
@@ -361,8 +361,8 @@ describe("removing a member", () => {
     const taskEvent = (await audits(open.id)).find((row) => row.event_type === "task.updated");
     assert.ok(taskEvent);
     assert.deepEqual(taskEvent.changes.fields, ["ownerId", "dueAt", "dueHasTime", "scheduledBy", "remindMinutes"]);
-    assert.deepEqual(taskEvent.changes.after, { ownerId: eclipse.userId, dueAt: "2027-03-01T00:00:00.000Z", dueHasTime: false, scheduledBy: null, remindMinutes: null });
-    assert.equal((taskEvent.changes.before as Record<string, unknown>).dueAt, "2027-03-01T10:00:00.000Z");
+    assert.deepEqual(taskEvent.changes.after, { ownerId: eclipse.userId, dueAt: "2038-03-01T00:00:00.000Z", dueHasTime: false, scheduledBy: null, remindMinutes: null });
+    assert.equal((taskEvent.changes.before as Record<string, unknown>).dueAt, "2038-03-01T10:00:00.000Z");
 
     const handedDone = await admin().query<{ owner_id: string }>("select owner_id from crm.tasks where id = $1", [done.id]);
     assert.equal(handedDone.rows[0].owner_id, eclipse.userId);

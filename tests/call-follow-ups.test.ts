@@ -224,7 +224,8 @@ describe("calls that ended with no next step", () => {
       const tasked = await seedCall(owner);
       await createTask(owner, { title: "Send Acme the import plan", companyId: tasked.company });
       const done = await seedCall(owner);
-      await createTask(owner, { title: "Sent the deck", companyId: done.company, completed: true });
+      const sent = (await createTask(owner, { title: "Sent the deck", companyId: done.company })).body.task;
+      await getAdminPool().query("update crm.tasks set completed_at = now() where id = $1", [sent.id]);
       const ids = (await callsWithoutNextStep(owner, NOW)).map((row) => row.activity_id);
       assert.ok(!ids.includes(accepted.activity));
       assert.ok(!ids.includes(tasked.activity));

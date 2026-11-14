@@ -341,6 +341,12 @@ async function activitiesFor(taskId: string) {
   );
 }
 
+async function doneTask(title: string) {
+  const task = (await createTask(mark, { title, contactId: martin })).body.task;
+  await sql("update crm.tasks set completed_at = now() where id = $1", [task.id]);
+  return getTask(mark, task.id);
+}
+
 async function tasksTitled(title: string) {
   return (await sql<{ count: number }>("select count(*)::int as count from crm.tasks where title = $1", [title]))[0].count;
 }
@@ -411,7 +417,7 @@ describe("done with an outcome", () => {
   });
 
   it("adds the outcome to a task that is already done without completing it again", async () => {
-    const task = (await createTask(mark, { title: "Call Martin about the invoice", contactId: martin, completed: true })).body.task;
+    const task = await doneTask("Call Martin about the invoice");
     const result = await completeTaskWithOutcome(mark, task.id, outcome({ note: "Paid now", kind: "call" }));
     assert.ok(result.activityId);
     assert.equal(result.task.completedAt, task.completedAt);
@@ -435,7 +441,7 @@ describe("done with an outcome", () => {
   });
 
   it("only lets people who can change the task record an outcome directly", async () => {
-    const task = (await createTask(mark, { title: "Call Martin about the van", contactId: martin, completed: true })).body.task;
+    const task = await doneTask("Call Martin about the van");
     await addTaskParticipants(mark, task.id, [priya.userId]);
     await assert.rejects(() =>
       queryAsUser(priya.userId, "insert into crm.task_outcomes (id, task_id, completed_at, created_by) values ($1, $2, now(), $3)", [randomUUID(), task.id, priya.userId]),

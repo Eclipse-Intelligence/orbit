@@ -438,6 +438,7 @@ set search_path = ''
 as $$
   select distinct t.clickup_list_id from crm.tasks t
   where t.workspace_id = p_workspace and t.clickup_task_id is not null and t.clickup_list_id is not null and t.archived_at is null
+  order by t.clickup_list_id
   limit p_limit;
 $$;
 

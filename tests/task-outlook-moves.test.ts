@@ -450,6 +450,32 @@ describe("a block moved in Outlook", () => {
     assert.equal([...outlook.events.values()][0].subject, "Call Jane Doe");
   });
 
+  it("keeps a move made in Orbit while the calendar sync was reading the block back", async () => {
+    const at = Date.now() + 2 * DAY;
+    const task = await linked("Call Jane", at);
+    drag(minuteAt(Date.now() + 3 * DAY), 30);
+    const moved = minuteAt(at + 2 * HOUR);
+    const client = await admin().connect();
+    try {
+      await client.query("begin");
+      await client.query("update crm.tasks set due_at = $2, scheduled_by = 'person' where id = $1", [task.id, moved]);
+      const syncing = syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+      for (let tries = 0; ; tries += 1) {
+        const waiting = await admin().query<{ total: number }>(
+          "select count(*)::int as total from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+        );
+        if (waiting.rows[0].total > 0) break;
+        if (tries > 400) throw new Error("The sync never reached the task.");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await client.query("commit");
+      await syncing;
+    } finally {
+      client.release();
+    }
+    assert.equal((await getTask(mark, task.id)).dueAt, moved);
+  });
+
   it("lets Orbit's new time win when both sides moved the block", async () => {
     const at = Date.now() + 2 * DAY;
     const task = await linked("Call Jane", at);

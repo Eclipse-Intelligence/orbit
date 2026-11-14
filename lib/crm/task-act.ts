@@ -5,6 +5,7 @@ import { createActivityInDb } from "@/lib/crm/activities";
 import { headline } from "@/lib/crm/activity-pad";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound, tooLong } from "@/lib/crm/errors";
+import { currentLinksInDb } from "@/lib/crm/links";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
@@ -250,7 +251,7 @@ export async function taskContext(actor: UserActor, taskId: string): Promise<Tas
 }
 
 async function lockedTask(db: Db, actor: UserActor, taskId: string) {
-  await db.query("select 1 from crm.tasks where id = $1 for update", [taskId]);
+  await db.query("select 1 from crm.tasks where id = $1 for no key update", [taskId]);
   const task = await readTaskInDb(db, actor, taskId);
   if (!task || task.workspaceId !== actor.workspaceId || task.archivedAt) throw notFound("task");
   if (!canChangeTask(actor, task)) throw cannotChange();
@@ -322,7 +323,7 @@ export async function completeTaskWithOutcome(actor: UserActor, taskId: string, 
       const next = earlier.rows[0].next_task_id ? await readTaskInDb(db, actor, earlier.rows[0].next_task_id) : null;
       return { task, activityId: earlier.rows[0].activity_id, next, replayed: true };
     }
-    const links = { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId };
+    const links = await currentLinksInDb(db, actor.workspaceId, { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId });
     if (outcome.note && !links.companyId && !links.contactId && !links.opportunityId) {
       throw new CrmError("invalid_input", "Link a person or company first.", 400, { field: "contactId" });
     }
