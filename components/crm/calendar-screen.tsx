@@ -469,7 +469,7 @@ export default function CalendarScreen({
   const proposalDrag: TaskBlockDrag | undefined = gridDrag && !planLoading && !applying ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const heldFromList = drag?.source === "list" ? drag.task.id : null;
   const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed && !planning ? drag : null;
-  const { done, complete: markDone } = useTaskDone(tasks);
+  const { done, complete: markDone, reopen } = useTaskDone(tasks);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [keptTask, setKeptTask] = useState<Task | null>(null);
   const listedTask = openTaskId ? (tasks.find((task) => task.id === openTaskId) ?? null) : null;
@@ -792,6 +792,7 @@ export default function CalendarScreen({
           admins={team?.admins ?? []}
           completed={shownTask ? done.has(shownTask.id) : false}
           onComplete={markDone}
+          onReopen={reopen}
           returnTo={opener}
           recordNotes={!shownTask || shownTask.workspaceId === viewer.workspaceId}
         />

@@ -323,15 +323,15 @@ export async function openTaskIdsAction(ids: string[]): Promise<{ open?: string[
   return { open };
 }
 
-export async function remindTaskAction(id: string, at: string): Promise<RecordActionState> {
+export async function remindTaskAction(id: string, at: string): Promise<RecordActionState & { saved?: { dueAt: string | null; dueHasTime: boolean } }> {
   const user = await taskUser(id);
   if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || typeof at !== "string") return { error: "Couldn't move the task. Try again." };
   try {
-    await snoozeTask(user, id, at);
+    const moved = await snoozeTask(user, id, at);
     pushLater(user, id);
     refresh();
-    return { ok: true };
+    return { ok: true, saved: { dueAt: moved.body.task.dueAt, dueHasTime: moved.body.task.dueHasTime } };
   } catch (error) {
     return actionError(error);
   }

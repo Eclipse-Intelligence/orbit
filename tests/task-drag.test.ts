@@ -54,6 +54,7 @@ function task(overrides: Partial<Task>): Task {
     companyName: null,
     companyPhone: null,
     contactId: null,
+    contactCompanyId: null,
     contactName: null,
     contactFirstName: null,
     contactLastName: null,

@@ -4,13 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useComposer } from "@/components/mail/compose-dock";
 import { completeTaskAction, openTaskIdsAction, remindTaskAction, reopenTaskAction } from "@/app/(crm)/records";
-import { onWorkingDay, snoozeDetail, taskRemindChoices } from "@/lib/crm/task-snooze";
+import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
+import { reconcileDone } from "@/lib/task-done";
+import { movedMessage } from "@/lib/task-pad";
 import type { Task } from "@/lib/crm/types";
 
 export const TASK_UNDO_MS = 8_000;
 const BEACON_BATCH = 50;
 const NOT_DONE = "Couldn't mark it done. Try again.";
+const NOT_REOPENED = "Couldn't reopen the task. Try again.";
 const RECHECK_MS = 1_500;
 
 function wait(ms: number) {
@@ -18,6 +21,8 @@ function wait(ms: number) {
 }
 
 type Outcome = { error?: string };
+type Moved = Outcome & { saved?: { dueAt: string | null; dueHasTime: boolean } };
+
 type Entry = { toast: number; timer: number; until: number; sent: boolean };
 
 function without(set: Set<string>, ids: string[]) {
@@ -46,6 +51,10 @@ export function useTaskDone(tasks: Task[]) {
   const composer = useComposer();
   const [done, setDone] = useState<Set<string>>(() => new Set());
   const [awaiting, setAwaiting] = useState<Set<string>>(() => new Set());
+  const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set());
+  const [sent, setSent] = useState<Set<string>>(() => new Set());
+  const inflight = useRef(new Map<string, Promise<boolean>>());
+  const reopening = useRef(new Set<string>());
   const [message, setMessage] = useState<string | null>(null);
   const entries = useRef(new Map<string, Entry>());
   const beaconed = useRef(new Set<string>());
@@ -58,12 +67,11 @@ export function useTaskDone(tasks: Task[]) {
   const [seenKey, setSeenKey] = useState(openKey);
   if (seenKey !== openKey) {
     setSeenKey(openKey);
-    if (awaiting.size > 0) {
-      const open = new Set(openKey.split(","));
-      const back = [...awaiting].filter((id) => open.has(id));
-      setAwaiting(new Set());
-      if (back.length > 0) setDone((current) => without(current, back));
-    }
+    const next = reconcileDone(new Set(openKey.split(",")), { done, awaiting, confirmed, sent });
+    setDone(next.done);
+    setAwaiting(next.awaiting);
+    setConfirmed(next.confirmed);
+    setSent(next.sent);
   }
 
   const expire = useCallback((id: string) => {
@@ -79,18 +87,23 @@ export function useTaskDone(tasks: Task[]) {
       if (!entry || entry.sent) return;
       expire(id);
       composer.dismissToast(entry.toast);
-      void completeTaskAction(id)
+      setSent((current) => new Set(current).add(id));
+      const request = completeTaskAction(id)
         .catch((): Outcome => ({ error: NOT_DONE }))
         .then((result: Outcome) => {
+          inflight.current.delete(id);
           if (result.error) {
+            setSent((current) => without(current, [id]));
             setDone((current) => without(current, [id]));
             setMessage(result.error);
             composer.showToast({ message: result.error, tone: "alert" });
-            return;
+            return false;
           }
           setAwaiting((current) => new Set(current).add(id));
           router.refresh();
+          return true;
         });
+      inflight.current.set(id, request);
     },
     [composer, expire, router],
   );
@@ -110,6 +123,7 @@ export function useTaskDone(tasks: Task[]) {
       entry.timer = window.setTimeout(() => expire(id), Math.max(0, entry.until - Date.now()));
       beaconed.current.add(id);
     }
+    setSent((current) => new Set([...current, ...ids]));
     sendBeacon(ids);
   }, [expire]);
 
@@ -175,6 +189,8 @@ export function useTaskDone(tasks: Task[]) {
       undone.current.add(id);
       expire(id);
       composer.dismissToast(entry.toast);
+      setSent((current) => without(current, [id]));
+      setConfirmed((current) => without(current, [id]));
       if (!entry.sent) {
         setDone((current) => without(current, [id]));
         return true;
@@ -268,6 +284,58 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
+  const reopen = useCallback(
+    (task: Task) => {
+      if (entries.current.has(task.id)) return undo(task.id);
+      if (reopening.current.has(task.id)) return false;
+      reopening.current.add(task.id);
+      setMessage(null);
+      const forget = (id: string) => {
+        setDone((current) => without(current, [id]));
+        setAwaiting((current) => without(current, [id]));
+        setConfirmed((current) => without(current, [id]));
+        setSent((current) => without(current, [id]));
+      };
+      void (async () => {
+        const committed = await inflight.current.get(task.id);
+        if (committed === false) {
+          reopening.current.delete(task.id);
+          return;
+        }
+        const result: Outcome = await reopenTaskAction(task.id).catch((): Outcome => ({ error: NOT_REOPENED }));
+        reopening.current.delete(task.id);
+        if (result.error) {
+          setMessage(result.error);
+          composer.showToast({ message: result.error, tone: "alert" });
+          return;
+        }
+        forget(task.id);
+        composer.showToast({
+          message: "Task reopened.",
+          duration: TASK_UNDO_MS,
+          action: {
+            label: "Undo",
+            run: () =>
+              void completeTaskAction(task.id)
+                .catch((): Outcome => ({ error: NOT_DONE }))
+                .then((done: Outcome) => {
+                  if (done.error) {
+                    composer.showToast({ message: done.error, tone: "alert" });
+                    return;
+                  }
+                  setDone((current) => new Set(current).add(task.id));
+                  setAwaiting((current) => new Set(current).add(task.id));
+                  router.refresh();
+                }),
+          },
+        });
+        router.refresh();
+      })();
+      return true;
+    },
+    [composer, router, undo],
+  );
+
   const undoLast = useCallback(() => {
     const ids = [...entries.current.keys()];
     const id = ids[ids.length - 1];
@@ -285,14 +353,14 @@ export function useTaskDone(tasks: Task[]) {
         onPick: (at) => {
           setMessage(null);
           void remindTaskAction(task.id, at)
-            .catch((): Outcome => ({ error: "Couldn't move the task. Try again." }))
-            .then((result: Outcome) => {
+            .catch((): Moved => ({ error: "Couldn't move the task. Try again." }))
+            .then((result: Moved) => {
               if (result.error) {
                 setMessage(result.error);
                 composer.showToast({ message: result.error, tone: "alert" });
                 return;
               }
-              composer.showToast({ message: `Due ${snoozeDetail(onWorkingDay(new Date(at)), task.dueHasTime, Date.now())}.` });
+              composer.showToast({ message: movedMessage(task, at, result.saved, Date.now()) });
               router.refresh();
             });
         },
@@ -301,5 +369,5 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
-  return { done, message, setMessage, complete, release, settle, abandon, undo, undoLast, remind };
+  return { done, message, setMessage, complete, release, settle, abandon, undo, undoLast, remind, reopen };
 }

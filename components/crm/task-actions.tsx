@@ -14,6 +14,7 @@ import FindDetailButton from "@/components/crm/find-detail";
 import { useFindAvailability } from "@/components/crm/find-availability";
 import type { InvitePrefill } from "@/components/crm/invite-dialog";
 import { SearchChip } from "@/components/crm/task-pad";
+import { relinkChange, relinkNote } from "@/lib/task-pad";
 import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { useComposer } from "@/components/mail/compose-dock";
 import { relinkTaskAction, taskContextAction, taskInviteSetupAction } from "@/app/(crm)/task-act";
@@ -564,17 +565,21 @@ export function EditLinks({ task }: { task: Task }) {
   const group = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
-  async function change(next: LinkChange) {
+  async function change(kind: "company" | "contact" | "opportunity", option: Parameters<typeof relinkChange>[2]) {
     if (busy) return;
+    const next: LinkChange = relinkChange(task, kind, option);
     setBusy(true);
     setError(null);
+    setNote(null);
     const result = await relinkTaskAction(task.id, next).catch(() => ({ error: "Couldn't link the task. Try again." }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
       return;
     }
+    setNote(relinkNote(task, kind, next));
     router.refresh();
   }
 
@@ -594,7 +599,7 @@ export function EditLinks({ task }: { task: Task }) {
           companyId={task.companyId}
           variant="card"
           taskId={task.id}
-          onPick={(option) => void change(option ? { contactId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { contactId: null })}
+          onPick={(option) => void change("contact", option)}
           onClosed={() => refocus("contact")}
         />
       </span>
@@ -607,7 +612,7 @@ export function EditLinks({ task }: { task: Task }) {
           companyId={null}
           variant="card"
           taskId={task.id}
-          onPick={(option) => void change({ companyId: option?.id ?? null })}
+          onPick={(option) => void change("company", option)}
           onClosed={() => refocus("company")}
         />
       </span>
@@ -620,7 +625,7 @@ export function EditLinks({ task }: { task: Task }) {
           companyId={null}
           variant="card"
           taskId={task.id}
-          onPick={(option) => void change(option ? { opportunityId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { opportunityId: null })}
+          onPick={(option) => void change("opportunity", option)}
           onClosed={() => refocus("opportunity")}
         />
       </span>
@@ -632,6 +637,11 @@ export function EditLinks({ task }: { task: Task }) {
       {error && (
         <p role="alert" className="caption-style text-danger basis-full">
           {error}
+        </p>
+      )}
+      {note && !error && (
+        <p role="status" className="caption-style text-subtle basis-full">
+          {note}
         </p>
       )}
     </div>

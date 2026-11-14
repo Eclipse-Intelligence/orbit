@@ -94,7 +94,7 @@ function afterPointerRelease(run: () => void) {
 function SnoozeItems({ choices, pick, extra }: { choices: SnoozeChoice[]; pick: (choice: SnoozeChoice) => void; extra?: MenuItem[] }) {
   return (
     <>
-      <DropdownMenuLabel>Snooze until</DropdownMenuLabel>
+      <DropdownMenuLabel>Remind me</DropdownMenuLabel>
       {choices.map((choice) => (
         <DropdownMenuItem key={choice.id} className="max-sm:py-2.5" onSelect={() => pick(choice)}>
           {choice.label}
@@ -353,7 +353,7 @@ export default function CaptureRow({
             )}
           >
             {offset < 0 ? <ArchiveIcon className="size-[18px]" /> : <ClockIcon className="size-[18px]" />}
-            {offset < 0 ? swipe.left?.label : "Snooze"}
+            {offset < 0 ? swipe.left?.label : "Remind me"}
           </span>
         </span>
       )}

@@ -4,9 +4,10 @@ import { isUuid } from "@/lib/crm/mutate";
 import { likePattern } from "@/lib/crm/normalize";
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
 import { assertScope } from "@/lib/crm/scopes";
+import { sameOrigin } from "@/lib/crm/task-beacon";
 import { detectTaskRecordsInDb, folded, memberNames, mentionsName, quotesFoldedSql, TEXT_LIMIT, type DetectedTaskLinks, type LinkedRecord } from "@/lib/crm/task-detect";
 import type { UserActor } from "@/lib/crm/types";
-import type { Db } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
 import { londonParts, namePattern, parseTaskText } from "@/lib/task-pad";
 
@@ -272,6 +273,7 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
       "title is the task without the date, time and reminder words, starting with a capital letter. " +
       "due is in Europe/London local time. Give a time only when the text gives one (a clock time, or words like morning, noon, tonight or end of day). " +
       "If a day is given without a time, due is the day alone as YYYY-MM-DD. If nothing says when, due is null. " +
+      "A bare hour with no am or pm means working hours: 1 to 6 is the afternoon (3 means 15:00) and 7 to 12 is as written (9 means nine in the morning). A number that is a count, a quantity, a version, a room or a chapter is not a time. " +
       "remindMinutes is how many minutes before the due time to remind, or null if no reminder is asked for. Keep it even when due has no time. " +
       `Now is ${today} in London.`,
     user: clean,
@@ -286,4 +288,41 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
     due,
     remindMinutes: due ? snapReminder(result.data.remindMinutes) : null,
   };
+}
+
+export type PadReadBody = { value: PadAiParse | null; available: boolean; error?: string };
+
+export const PAD_READS_PER_WINDOW = 120;
+const PAD_READ_WINDOW_SECONDS = 600;
+
+async function padReadAllowed(actor: UserActor) {
+  const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [
+    `task-pad-read:${actor.userId}`,
+    PAD_READS_PER_WINDOW,
+    PAD_READ_WINDOW_SECONDS,
+  ]);
+  return Boolean(result.rows[0]?.allowed);
+}
+
+export async function readPadRequest(
+  user: UserActor | null,
+  request: Request,
+  options: { fetchImpl?: typeof fetch; now?: Date } = {},
+): Promise<{ status: number; body: PadReadBody }> {
+  if (!user) return { status: 401, body: { value: null, available: false, error: "Your session ended. Sign in again." } };
+  if (!sameOrigin(request)) return { status: 403, body: { value: null, available: false, error: "Open Orbit and try again." } };
+  if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? "")) {
+    return { status: 415, body: { value: null, available: false, error: "Send JSON." } };
+  }
+  const input = (await request.json().catch(() => null)) as { text?: unknown } | null;
+  const text = typeof input?.text === "string" ? input.text : "";
+  if (!process.env.LLM_API_KEY?.trim()) return { status: 200, body: { value: null, available: false } };
+  if (!text.trim()) return { status: 200, body: { value: null, available: true } };
+  if (!(await padReadAllowed(user))) return { status: 200, body: { value: null, available: true } };
+  try {
+    return { status: 200, body: { value: await parsePadWithAi(text, options.now ?? new Date(), { fetchImpl: options.fetchImpl }), available: true } };
+  } catch (error) {
+    console.warn("Task pad AI parse failed", error instanceof Error ? error.message : error);
+    return { status: 200, body: { value: null, available: true } };
+  }
 }

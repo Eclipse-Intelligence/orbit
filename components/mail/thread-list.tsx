@@ -298,9 +298,9 @@ function Row({
               />
             )}
             {thread.snoozedUntil ? (
-              <time dateTime={thread.snoozedUntil} title={`Snoozed until ${mailFullWhen(thread.snoozedUntil)}`} className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums">
+              <time dateTime={thread.snoozedUntil} title={`Reminder ${mailFullWhen(thread.snoozedUntil)}`} className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums">
                 <ClockIcon aria-hidden className="size-3" />
-                <span className="sr-only">Snoozed until</span>
+                <span className="sr-only">Reminder</span>
                 {laterDetail(thread.snoozedUntil, now)}
               </time>
             ) : thread.followUpAt ? (
