@@ -14,7 +14,7 @@ export async function changeTaskDoc(actor: UserActor, taskId: string, pageId: st
   if (!isUuid(pageId)) throw new CrmError("invalid_input", change === "link" ? LINK_DOC_FAILED : UNLINK_DOC_FAILED, 400, { field: "docIds" });
   const page = pageId.toLowerCase();
   return withActor(actor, async (db) => {
-    await db.query("select 1 from crm.tasks where id = $1 for update", [taskId]);
+    await db.query("select 1 from crm.tasks where id = $1 for no key update", [taskId]);
     const task = await readTaskInDb(db, actor, taskId);
     if (!task || task.workspaceId !== actor.workspaceId || task.archivedAt) throw notFound("task");
     if (!canChangeTask(actor, task)) {

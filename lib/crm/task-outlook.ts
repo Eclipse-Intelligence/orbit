@@ -689,6 +689,30 @@ type ReadBackRow = {
   archived_at: Date | string | null;
 };
 
+type ReadBackTiming = Pick<ReadBackRow, "owner_id" | "due_at" | "due_has_time" | "duration_minutes" | "completed_at" | "archived_at">;
+
+async function unchangedSinceRead(db: Db, row: ReadBackRow) {
+  const found = await db.query<ReadBackTiming>(
+    "select owner_id, due_at, due_has_time, duration_minutes, completed_at, archived_at from crm.tasks where id = $1 for no key update",
+    [row.task_id],
+  );
+  const now = found.rows[0];
+  return (
+    Boolean(now) &&
+    now.owner_id === row.owner_id &&
+    time(now.due_at) === time(row.due_at) &&
+    now.due_has_time === row.due_has_time &&
+    now.duration_minutes === row.duration_minutes &&
+    time(now.completed_at) === time(row.completed_at) &&
+    time(now.archived_at) === time(row.archived_at)
+  );
+}
+
+async function queuedForOutlook(taskId: string) {
+  const result = await query<{ task_id: string }>("select private.task_blocks_pending($1::uuid[]) as task_id", [[taskId]]);
+  return result.rows.length > 0;
+}
+
 export function outlookMinutes(start: string, end: string) {
   const minutes = Math.round((new Date(end).getTime() - new Date(start).getTime()) / MINUTE_MS);
   return Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, minutes));
@@ -743,25 +767,31 @@ export async function readBackTaskBlocks(
         if (!open || event.isAllDay || event.isCancelled) continue;
         const minutes = outlookMinutes(event.startsAt, event.endsAt);
         if (time(row.due_at) === new Date(event.startsAt).getTime() && minutes === row.duration_minutes) continue;
-        await withActor(member, (db) =>
-          scheduleTaskInDb(db, member, row.task_id, { at: event.startsAt, durationMinutes: minutes, byHand: true }, CALENDAR_SYNC, () => null),
-        );
-        changed.push({ actor: member, taskId: row.task_id });
+        if (await queuedForOutlook(row.task_id)) continue;
+        const moved = await withActor(member, async (db) => {
+          if (!(await unchangedSinceRead(db, row))) return false;
+          await scheduleTaskInDb(db, member, row.task_id, { at: event.startsAt, durationMinutes: minutes, byHand: true }, CALENDAR_SYNC, () => null);
+          return true;
+        });
+        if (moved) changed.push({ actor: member, taskId: row.task_id });
         continue;
       }
       if (!input.complete) continue;
       const startsAt = new Date(row.starts_at).getTime();
       if (startsAt < input.window.start.getTime() || startsAt >= input.window.end.getTime()) continue;
       if (!(await input.isGone(row.provider_event_id))) continue;
-      await withActor(member, async (db) => {
+      if (await queuedForOutlook(row.task_id)) continue;
+      const cleared = await withActor(member, async (db) => {
+        if (!(await unchangedSinceRead(db, row))) return false;
         if (open) {
           const day = taskDueDay(new Date(row.due_at!).toISOString());
           if (day) await updateTaskInDb(db, member, row.task_id, { dueDate: day }, CALENDAR_SYNC);
         }
         await db.query("delete from crm.calendar_events where id = $1 and user_id = $2", [row.event_id, actor.userId]);
         await db.query("update crm.tasks set calendar_event_ref = null where id = $1 and calendar_event_ref = $2", [row.task_id, row.provider_event_id]);
+        return true;
       });
-      changed.push({ actor: member, taskId: row.task_id });
+      if (cleared) changed.push({ actor: member, taskId: row.task_id });
     } catch (error) {
       console.error("Reading a task block back from Outlook failed", error);
     }

@@ -17,6 +17,22 @@ export async function requireCompany(db: Db, workspaceId: string, companyId: str
   return row;
 }
 
+export async function currentLinksInDb(db: Db, workspaceId: string, links: LinkRefs): Promise<LinkRefs> {
+  if (!links.contactId || !links.companyId) return links;
+  const contact = (
+    await db.query<{ company_id: string | null }>("select company_id from crm.contacts where id = $1 and workspace_id = $2", [links.contactId, workspaceId])
+  ).rows[0];
+  if (!contact?.company_id || contact.company_id === links.companyId) return links;
+  const opportunity = links.opportunityId
+    ? (await db.query<{ company_id: string }>("select company_id from crm.opportunities where id = $1 and workspace_id = $2", [links.opportunityId, workspaceId])).rows[0]
+    : undefined;
+  return {
+    companyId: contact.company_id,
+    contactId: links.contactId,
+    opportunityId: opportunity?.company_id === contact.company_id ? links.opportunityId : null,
+  };
+}
+
 export async function resolveLinks(
   db: Db,
   workspaceId: string,

@@ -60,6 +60,13 @@ function provenance(args: { provenanceSource?: string | null; provenanceUrl?: st
   };
 }
 
+function mcpIdempotencyKey(value: string | undefined) {
+  const key = value?.trim();
+  if (!key) return null;
+  if (!/^[\x21-\x7E]+$/.test(key)) throw new CrmError("invalid_input", "Invalid idempotency_key.", 400, { field: "idempotency_key" });
+  return key;
+}
+
 export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "search_contacts",
@@ -392,6 +399,11 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         opportunityId: z.uuid().nullable().optional(),
         mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
         docIds: z.array(z.uuid()).max(20).nullable().optional().describe("Docs linked to the task: the whole list of doc ids from search_docs or list_docs, in this workspace. [] or null takes them all off. You can only link docs you can read; agent tokens only see shared docs. Docs can also mention a task with @[Title](task:id)."),
+        idempotency_key: z
+          .string()
+          .max(200)
+          .optional()
+          .describe("Up to 200 printable characters with no spaces. Reuse it when retrying a call whose answer was lost: the same key and arguments create the task once and answer with it again. A key belongs to one request."),
         ...provenanceFields,
       },
     },
@@ -414,7 +426,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
             mailThreadKey: args.mailThreadKey,
             docIds: args.docIds,
           },
-          { provenance: provenance(args, "create_task") },
+          { provenance: provenance(args, "create_task"), idempotencyKey: mcpIdempotencyKey(args.idempotency_key) },
         );
         return result.body;
       }),
