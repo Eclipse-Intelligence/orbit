@@ -618,7 +618,7 @@ const WRITE_FALLBACK: Record<WriteAction, string> = {
   cancel: "Couldn't cancel the meeting. Try again.",
   move: "Couldn't move the meeting. Try again.",
   respond: "Couldn't send your response. Try again.",
-  find: "Couldn't look up the Outlook block.",
+  find: "Couldn't look up the Outlook block. Try again.",
 };
 
 async function writeError(response: Response, action: WriteAction) {

@@ -139,7 +139,8 @@ as $$
   returning create_key
 $$;
 
-create or replace function private.hold_task_block(p_task_id uuid, p_pending_at timestamptz, p_grace interval)
+drop function if exists private.hold_task_block(uuid, timestamptz, interval);
+create or replace function private.hold_task_block(p_task_id uuid, p_grace interval)
 returns void
 language sql
 security definer
@@ -147,7 +148,6 @@ set search_path = ''
 as $$
   update crm.task_outlook_queue
   set claimed_at = null,
-      attempts = case when pending_at = p_pending_at then attempts + 1 else attempts end,
       retry_at = greatest(clock_timestamp() + interval '1 minute', coalesce(create_sent_at, clock_timestamp()) + p_grace)
   where task_id = p_task_id;
 $$;
@@ -1103,11 +1103,11 @@ grant execute on function private.move_records_to_workspace(uuid, uuid, uuid, js
 revoke all on function private.task_outlook_enqueue() from public;
 revoke all on function private.claim_task_blocks(uuid[], uuid, integer) from public;
 revoke all on function private.begin_task_block_create(uuid, uuid) from public;
-revoke all on function private.hold_task_block(uuid, timestamptz, interval) from public;
+revoke all on function private.hold_task_block(uuid, interval) from public;
 revoke all on function private.settle_task_block(uuid, timestamptz, text, boolean, boolean) from public;
 grant execute on function private.claim_task_blocks(uuid[], uuid, integer) to crm_app;
 grant execute on function private.begin_task_block_create(uuid, uuid) to crm_app;
-grant execute on function private.hold_task_block(uuid, timestamptz, interval) to crm_app;
+grant execute on function private.hold_task_block(uuid, interval) to crm_app;
 grant execute on function private.settle_task_block(uuid, timestamptz, text, boolean, boolean) to crm_app;
 
 reset lock_timeout;

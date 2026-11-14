@@ -505,15 +505,82 @@ describe("looking up a block whose create never confirmed", () => {
     assert.equal(await queued(tasks[0].id), null);
   });
 
-  it("keeps the found event when removing the second one fails", async () => {
+  it("keeps the key and tries the second event again when removing it fails", async () => {
     const { tasks } = await lost();
     const [id, first] = [...outlook.events.entries()][0];
     outlook.events.set("block-copy", { ...first });
     outlook.failDeletes.add("block-copy");
+    const sent = await key(tasks[0].id);
+    const run = await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(run.deferred, 1);
+    assert.equal(await key(tasks[0].id), sent);
+    assert.equal(outlook.events.size, 2);
+    outlook.failDeletes.clear();
+    await retryNow();
+    await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.deepEqual([...outlook.events.keys()], [id]);
+    assert.equal(await ref(tasks[0].id), id);
+    assert.equal(await queued(tasks[0].id), null);
+    assert.equal(outlook.created, 1);
+  });
+
+  it("links the found event anyway once the second one has failed to go five times", async () => {
+    const { tasks } = await lost();
+    const [id, first] = [...outlook.events.entries()][0];
+    outlook.events.set("block-copy", { ...first });
+    outlook.failDeletes.add("block-copy");
+    await admin().query("update crm.task_outlook_queue set attempts = 5 where task_id = $1", [tasks[0].id]);
     await syncTaskBlocks({ fetchImpl: outlook.fetch });
     assert.equal(await ref(tasks[0].id), id);
     assert.equal(await queued(tasks[0].id), null);
     assert.equal(outlook.created, 1);
+  });
+
+  it("trusts an empty search when it doesn't know when the create was sent", async () => {
+    const { tasks } = await lost();
+    const [id] = [...outlook.events.keys()];
+    outlook.hiddenFromSearch.add(id);
+    await admin().query("update crm.task_outlook_queue set create_sent_at = null");
+    await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(outlook.created, 1);
+    assert.equal(await ref(tasks[0].id), id);
+    assert.equal(await queued(tasks[0].id), null);
+  });
+
+  it("holds without counting an attempt", async () => {
+    const { tasks } = await lost();
+    outlook.hiddenFromSearch.add([...outlook.events.keys()][0]);
+    const before = ((await queued(tasks[0].id)) as { attempts: number }).attempts;
+    await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(((await queued(tasks[0].id)) as { attempts: number }).attempts, before);
+  });
+
+  it("defers that person's other writes in the run after a 429 on a lookup", async () => {
+    const { tasks } = await lost();
+    const fresh = await timed(mark, "Call Zoe", Date.now() + 4 * DAY);
+    outlook.searchStatus = 429;
+    const run = await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(run.throttled, 2);
+    assert.equal(outlook.created, 1);
+    assert.ok(await key(tasks[0].id));
+    assert.ok(await queued(fresh.id));
+  });
+
+  it("gives the new owner a block when the previous creator's Outlook is disconnected", async () => {
+    const { at, tasks } = await lost();
+    const colleague = await createUser(`kit${seq}@outlook-moves.test`, "Kit Moss");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, colleague.userId]);
+    const kit: UserActor = { ...mark, userId: colleague.userId, email: colleague.email, fullName: "Kit Moss", role: "member" };
+    await connect(kit);
+    await updateTask(mark, tasks[0].id, { ownerId: colleague.userId });
+    await placeTask(kit, tasks[0].id, { at: minuteAt(at + HOUR), durationMinutes: 30 });
+    await disconnectMailbox(mark);
+    await retryNow();
+    const run = await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(run.orbit_only, 1);
+    assert.equal(outlook.owned(colleague.userId).length, 1);
+    assert.equal(await queued(tasks[0].id), null);
+    assert.equal(await key(tasks[0].id), null);
   });
 
   it("patches the event Graph returns for a repeated create to the task's new time", async () => {

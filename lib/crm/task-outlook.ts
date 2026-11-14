@@ -37,6 +37,7 @@ const RESERVE_MS = 4_000;
 const MIN_MINUTES = 5;
 const MAX_MINUTES = 480;
 const CREATE_GRACE_MS = 2 * MINUTE_MS;
+const SURPLUS_ATTEMPTS = 5;
 
 export const CALENDAR_SYNC: Provenance = { operation: "calendar_sync", source: "microsoft" };
 
@@ -453,17 +454,23 @@ async function runRow(row: BlockRow, plan: BlockPlan, access: Access, fetchImpl:
 }
 
 async function hold(row: BlockRow) {
-  await query("select private.hold_task_block($1, $2, $3::interval)", [row.task_id, row.pending_at, `${CREATE_GRACE_MS / 1000} seconds`]).catch((error) =>
+  await query("select private.hold_task_block($1, $2::interval)", [row.task_id, `${CREATE_GRACE_MS / 1000} seconds`]).catch((error) =>
     console.error("Holding a task block failed", error),
   );
 }
 
 function recently(row: BlockRow, now: number) {
   const sent = time(row.create_sent_at);
-  return sent === null || now - sent < CREATE_GRACE_MS;
+  return sent !== null && now - sent < CREATE_GRACE_MS;
 }
 
-async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result: BlockRun, deadline: number): Promise<BlockRow[]> {
+async function recoverCreates(
+  rows: BlockRow[],
+  fetchImpl: typeof fetch,
+  result: BlockRun,
+  deadline: number,
+  throttledUsers: Set<string>,
+): Promise<BlockRow[]> {
   const uncertain = new Map<string, BlockRow[]>();
   for (const row of rows) {
     if (!row.create_key || !row.create_user_id || blockRef(row)) continue;
@@ -494,16 +501,23 @@ async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result:
     }
     if (access === "orbit_only" || access === "retry") {
       console.error("Couldn't look up an unconfirmed Outlook block", { userId, access });
-      for (const row of items) await skip(row, "deferred");
+      for (const row of items) {
+        if (access === "orbit_only" && row.owner_id !== userId) {
+          await settle(row, null, { requeue: true, dropEvent: true });
+          result.orbit_only += 1;
+          recovered.set(row.task_id, null);
+          continue;
+        }
+        await skip(row, "deferred");
+      }
       continue;
     }
-    let throttled = false;
     for (const row of items) {
       if (deadline - Date.now() < RESERVE_MS) {
         await skip(row, null);
         continue;
       }
-      if (throttled) {
+      if (throttledUsers.has(userId)) {
         await skip(row, "throttled");
         continue;
       }
@@ -513,7 +527,7 @@ async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result:
       } catch (error) {
         console.error("Looking up an unconfirmed Outlook block failed", error);
         const failure = graphFailure(error);
-        if (failure === "throttled") throttled = true;
+        if (failure === "throttled") throttledUsers.add(userId);
         await skip(row, failure === "throttled" ? "throttled" : "deferred");
         continue;
       }
@@ -524,6 +538,17 @@ async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result:
           result.deferred += 1;
           recovered.set(row.task_id, null);
         }
+        continue;
+      }
+      let surplusLeft = false;
+      for (const event of extra) {
+        await deleteGraphEvent(access.token.accessToken, event.id!.trim(), fetchImpl).catch((error) => {
+          console.error("Removing a second Outlook block failed", error);
+          surplusLeft = true;
+        });
+      }
+      if (surplusLeft && row.attempts < SURPLUS_ATTEMPTS) {
+        await skip(row, "deferred");
         continue;
       }
       const id = found.id!.trim();
@@ -541,11 +566,6 @@ async function recoverCreates(rows: BlockRow[], fetchImpl: typeof fetch, result:
         block_starts_at: null,
         block_ends_at: null,
       });
-      for (const event of extra) {
-        await deleteGraphEvent(access.token.accessToken, event.id!.trim(), fetchImpl).catch((error) =>
-          console.error("Removing a second Outlook block failed", error),
-        );
-      }
     }
   }
   return rows.flatMap((row) => {
@@ -566,6 +586,7 @@ export async function syncTaskBlocks(
   const deadline = options.deadline ?? Date.now() + 25_000;
   const result = emptyRun();
   if (options.taskIds && options.taskIds.length === 0) return result;
+  const throttledUsers = new Set<string>();
   for (let round = 0; round < RUN_ROUNDS; round += 1) {
     if (deadline - Date.now() < RESERVE_MS) break;
     const claimed = await query<BlockRow>("select * from private.claim_task_blocks($1::uuid[], $2::uuid, $3)", [
@@ -575,7 +596,7 @@ export async function syncTaskBlocks(
     ]);
     if (claimed.rows.length === 0) break;
     const now = options.now ?? Date.now();
-    const rows = await recoverCreates(claimed.rows, fetchImpl, result, deadline);
+    const rows = await recoverCreates(claimed.rows, fetchImpl, result, deadline, throttledUsers);
     const groups = new Map<string, { row: BlockRow; plan: BlockPlan }[]>();
     for (const row of rows) {
       const plan = planBlock(row, now);
@@ -584,8 +605,8 @@ export async function syncTaskBlocks(
     }
     for (const [key, items] of groups) {
       let access: Access = "orbit_only";
-      if (key) {
-        const [kind, userId] = key.split(":");
+      const [kind, userId] = key ? key.split(":") : [null, null];
+      if (kind && userId) {
         try {
           const actor = await actingActor(userId, items[0].row.workspace_id, kind === "remove");
           access = actor ? await openOutlook(actor, fetchImpl) : "orbit_only";
@@ -594,13 +615,12 @@ export async function syncTaskBlocks(
           access = "retry";
         }
       }
-      let throttled = false;
       for (const { row, plan } of items) {
         if (deadline - Date.now() < RESERVE_MS) {
           await release(row);
           continue;
         }
-        if (throttled) {
+        if (userId && throttledUsers.has(userId)) {
           await defer(row);
           result.throttled += 1;
           continue;
@@ -613,7 +633,7 @@ export async function syncTaskBlocks(
           await defer(row);
           outcome = "deferred";
         }
-        if (outcome === "throttled") throttled = true;
+        if (outcome === "throttled" && userId) throttledUsers.add(userId);
         result[outcome] += 1;
       }
     }
