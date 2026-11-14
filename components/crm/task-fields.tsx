@@ -88,11 +88,11 @@ function useAutoSize(value: string) {
   return attach;
 }
 
-export function canChangeTaskAs(viewer: Pick<Viewer, "id" | "role">, task: Pick<Task, "ownerId" | "createdByUserId">) {
+export function canChangeTaskAs(viewer: Pick<Viewer, "id">, task: Pick<Task, "ownerId" | "createdByUserId">) {
   return task.ownerId === viewer.id || task.createdByUserId === viewer.id;
 }
 
-export function canRemoveTag(viewer: Pick<Viewer, "id" | "role">, task: Pick<Task, "ownerId" | "createdByUserId">, person: string) {
+export function canRemoveTag(viewer: Pick<Viewer, "id">, task: Pick<Task, "ownerId" | "createdByUserId">, person: string) {
   return person === viewer.id || canChangeTaskAs(viewer, task);
 }
 
@@ -911,7 +911,7 @@ export default function TaskFields({
   done = false,
 }: {
   details: TaskDetailsState;
-  viewer: Pick<Viewer, "id" | "role">;
+  viewer: Pick<Viewer, "id">;
   members: AssignableMember[];
   tagged: string[];
   layout: "panel" | "row";
@@ -990,7 +990,7 @@ export default function TaskFields({
 
 export type TaskTagging = { removed: string[]; remove: (person: string) => void };
 
-function TaggedField({ details, viewer, members, people, tagging }: { details: TaskDetailsState; viewer: Pick<Viewer, "id" | "role">; members: AssignableMember[]; people: string[]; tagging?: TaskTagging }) {
+function TaggedField({ details, viewer, members, people, tagging }: { details: TaskDetailsState; viewer: Pick<Viewer, "id">; members: AssignableMember[]; people: string[]; tagging?: TaskTagging }) {
   const task = details.task;
   const shown = people.filter((person) => !tagging?.removed.includes(person));
   return (

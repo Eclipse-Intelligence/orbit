@@ -584,8 +584,8 @@ describe("Outlook lifecycle", () => {
     const owned = (await createTask(agent.actor, { title: "Agent call", dueAt: minuteAt(Date.now() + 2 * DAY), ownerId: mark.userId })).body.task;
     assert.equal(owned.dueHasTime, false);
     const unowned = (await createTask(agent.actor, { title: "Agent loose call", dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
-    assert.equal(unowned.dueHasTime, true);
-    assert.equal(unowned.ownerId, null);
+    assert.equal(unowned.ownerId, mark.userId);
+    assert.equal(unowned.dueHasTime, false);
     await assert.rejects(updateTask(agent.actor, own.body.task.id, { dueAt: minuteAt(Date.now() + 4 * DAY) }), /not found/i);
     const later = await updateTask(agent.actor, owned.id, { dueAt: minuteAt(Date.now() + 4 * DAY) });
     assert.equal(later.body.task.dueHasTime, false);

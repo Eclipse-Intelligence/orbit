@@ -457,7 +457,10 @@ async function keeperFor(s: Session, taskId: string, listId: string | null, titl
   ]);
   if (matches.rows.length === 0) return { found: false, actor: s.actor };
   const people = await keepers(s.actor, matches.rows.map((row) => row.id));
-  const all = [...people.values()];
+  const all = [...matches.rows.map((row) => row.id)].sort().flatMap((id) => {
+    const person = people.get(id);
+    return person ? [person] : [];
+  });
   if (all.some((person) => person.userId === s.actor.userId)) return { found: true, actor: s.actor };
   return { found: true, actor: all[0] ?? null };
 }
@@ -987,7 +990,8 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
     await lockClickUpTask(db, s.actor.workspaceId, taskId);
     linkedAnywhere = await linkedElsewhereInAppDb(db, s.actor.workspaceId, taskId);
   };
-  return withActorAfterAppStep(s.actor, lockAndCheck, async (db) => {
+  let handTo: string | null = null;
+  const outcome = await withActorAfterAppStep(s.actor, lockAndCheck, async (db): Promise<PullOutcome> => {
     let linked = linkedAnywhere ? await linkedRow(db, s.actor.workspaceId, taskId) : null;
     if (!linkedAnywhere && listId && (await adoptUnconfirmed(db, s.actor.workspaceId, task, listId))) {
       linked = await linkedRow(db, s.actor.workspaceId, taskId);
@@ -1037,6 +1041,10 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
     const link = await findClickUpLink(db, s.actor.workspaceId, task);
     if (!link) return "ignored";
     const owner = await ownerForAssignees(db, s.actor.workspaceId, task);
+    if (owner && owner !== s.actor.userId) {
+      handTo = owner;
+      return "ignored";
+    }
     const created = await createTaskInDb(
       db,
       s.actor,
@@ -1062,6 +1070,14 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
     );
     return "imported";
   });
+  if (!handTo) return outcome;
+  const member = await memberOf(s.actor.workspaceId, handTo);
+  return member ? pullRemote({ ...s, actor: member }, task, watched) : outcome;
+}
+
+async function memberOf(workspaceId: string, userId: string) {
+  const result = await query<Omit<KeeperRow, "task_id">>("select * from private.clickup_member($1, $2)", [workspaceId, userId]);
+  return result.rows[0] ? memberActor(result.rows[0]) : null;
 }
 
 function watchedSet(state: ClickUpState) {

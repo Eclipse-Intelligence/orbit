@@ -265,9 +265,9 @@ describe("undoing changes", () => {
     const hidden = (await listRecentChanges(colleague)).find((item) => item.id === change.id);
     assert.deepEqual(
       [hidden?.entityName, hidden?.summary, hidden?.canUndo, hidden?.reason],
-      ["this task", "A change to this task", false, "You can't see that task any more."],
+      ["this task", "A change to this task", false, "Can't undo: you can't see this task any more."],
     );
-    await assert.rejects(undoAuditEvent(colleague, change.id, UNDO), refused(/^You can't see that task any more\.$/));
+    await assert.rejects(undoAuditEvent(colleague, change.id, UNDO), refused(/^Can't undo: you can't see this task any more\.$/));
     assert.equal((await getTask(owner, task.id)).title, "Prepare the Q4 board pack");
   });
 

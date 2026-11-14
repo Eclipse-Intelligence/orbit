@@ -387,6 +387,14 @@ export function canChangeTask(actor: Actor, task: { ownerId: string | null; crea
   return task.ownerId === actor.userId || task.createdByUserId === actor.userId;
 }
 
+async function workspaceOwner(db: Db, workspaceId: string) {
+  const result = await db.query<{ user_id: string }>(
+    "select user_id from crm.workspace_members where workspace_id = $1 and role = 'owner' order by created_at, user_id limit 1",
+    [workspaceId],
+  );
+  return result.rows[0]?.user_id ?? null;
+}
+
 async function assertAssignee(db: Db, workspaceId: string, ownerId: string | null | undefined) {
   try {
     await assertOwner(db, workspaceId, ownerId);
@@ -450,6 +458,7 @@ export async function createTaskInDb(
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   if (write.completed && !silent(provenance)) throw new CrmError("invalid_input", CREATE_OPEN, 400, { field: "completed" });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
+  if ((write.ownerId === undefined || write.ownerId === null) && actor.type === "agent") write.ownerId = await workspaceOwner(db, actor.workspaceId);
   if (setsSomeoneElsesTime(actor, write, null)) keepDayOnly(write, { dueAt: null, dueHasTime: false });
   settleReminder(write, { dueHasTime: false });
   assertReminderCanFire(write.dueAt, write.remindMinutes);
@@ -537,6 +546,7 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   if (current.archived_at && !options.restoring) throw notFound("task");
+  if (actor.type === "agent" && write.ownerId === null) write.ownerId = await workspaceOwner(db, actor.workspaceId);
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const restoresTime = Boolean(options.restoring && write.dueAt !== undefined && write.ownerId !== undefined);
   const echoesDay = write.dueAt !== undefined && Boolean(write.dueHasTime) && !current.due_has_time && !options.claimSchedule && !write.wallTime && sameDue(write, current);

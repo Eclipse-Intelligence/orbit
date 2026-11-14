@@ -246,7 +246,7 @@ create policy webhook_endpoints_insert_member on crm.webhook_endpoints
   for insert to authenticated
   with check (
     workspace_id in (select private.user_workspace_ids())
-    and private.is_workspace_admin(workspace_id)
+    and (select private.is_workspace_admin(workspace_id))
     and created_by_user_id = (select private.session_user_id())
     and created_by_agent_id is null
   );
@@ -254,8 +254,8 @@ create policy webhook_endpoints_insert_member on crm.webhook_endpoints
 drop policy if exists webhook_endpoints_update_member on crm.webhook_endpoints;
 create policy webhook_endpoints_update_member on crm.webhook_endpoints
   for update to authenticated
-  using (workspace_id in (select private.user_workspace_ids()) and private.is_workspace_admin(workspace_id))
-  with check (workspace_id in (select private.user_workspace_ids()) and private.is_workspace_admin(workspace_id));
+  using (workspace_id in (select private.user_workspace_ids()) and (select private.is_workspace_admin(workspace_id)))
+  with check (workspace_id in (select private.user_workspace_ids()) and (select private.is_workspace_admin(workspace_id)));
 
 drop policy if exists webhook_endpoints_insert_agent on crm.webhook_endpoints;
 create policy webhook_endpoints_insert_agent on crm.webhook_endpoints
@@ -271,10 +271,31 @@ returns trigger
 language plpgsql
 set search_path = ''
 as $$
+declare
+  v_user uuid := (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid;
+  v_agent uuid := nullif(current_setting('app.agent_id', true), '')::uuid;
 begin
-  if current_user in ('authenticated', 'crm_agent') then
-    new.created_by_user_id := old.created_by_user_id;
-    new.created_by_agent_id := old.created_by_agent_id;
+  if current_user not in ('authenticated', 'crm_agent') then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    if new.created_by_user_id is null and new.created_by_agent_id is null then
+      if current_user = 'authenticated' then
+        new.created_by_user_id := v_user;
+      else
+        new.created_by_agent_id := v_agent;
+      end if;
+    end if;
+    return new;
+  end if;
+  new.created_by_user_id := old.created_by_user_id;
+  new.created_by_agent_id := old.created_by_agent_id;
+  if (new.url, new.secret, new.events) is distinct from (old.url, old.secret, old.events)
+    and not (
+      (current_user = 'authenticated' and old.created_by_user_id is not distinct from v_user and v_user is not null)
+      or (current_user = 'crm_agent' and old.created_by_agent_id is not distinct from v_agent and v_agent is not null)
+    ) then
+    raise exception 'Only whoever made this webhook can change where it sends or what it sends.' using errcode = '42501';
   end if;
   return new;
 end;
@@ -284,8 +305,37 @@ revoke all on function private.webhook_endpoints_keep_creator() from public;
 
 drop trigger if exists webhook_endpoints_keep_creator on crm.webhook_endpoints;
 create trigger webhook_endpoints_keep_creator
-  before update on crm.webhook_endpoints
+  before insert or update on crm.webhook_endpoints
   for each row execute function private.webhook_endpoints_keep_creator();
+
+update crm.webhook_endpoints e
+set created_by_user_id = (
+  select m.user_id from crm.workspace_members m
+  where m.workspace_id = e.workspace_id and m.role = 'owner'
+  order by m.created_at, m.user_id
+  limit 1
+)
+where e.created_by_user_id is null and e.created_by_agent_id is null;
+
+with owners as (
+  select distinct on (m.workspace_id) m.workspace_id, m.user_id
+  from crm.workspace_members m
+  where m.role = 'owner'
+  order by m.workspace_id, m.created_at, m.user_id
+),
+assigned as (
+  update crm.tasks t
+  set owner_id = owners.user_id
+  from owners
+  where owners.workspace_id = t.workspace_id
+    and t.owner_id is null and t.created_by_user_id is null
+    and t.archived_at is null and t.completed_at is null
+  returning t.id, t.workspace_id, t.owner_id
+)
+insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, operation, source, changes)
+select assigned.workspace_id, 'task.updated', 'task', assigned.id, 'system', 'assign_agent_task_to_owner', 'migration',
+  jsonb_build_object('fields', jsonb_build_array('ownerId'), 'before', jsonb_build_object('ownerId', null), 'after', jsonb_build_object('ownerId', assigned.owner_id))
+from assigned;
 
 create or replace function private.webhook_delivery_audience()
 returns trigger
@@ -381,7 +431,87 @@ create trigger tasks_keep_workspace
   when (old.workspace_id is distinct from new.workspace_id)
   execute function private.tasks_keep_workspace();
 
-drop function if exists private.waiting_approvals_of_others(uuid, uuid);
+create or replace function private.dispatch_workflow_events(p_limit integer)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  dispatched integer := 0;
+  inserted integer := 0;
+  event crm.workflow_events%rowtype;
+begin
+  for event in
+    select * from crm.workflow_events order by created_at limit greatest(1, least(p_limit, 500)) for update skip locked
+  loop
+    if event.depth < 3 then
+      insert into crm.workflow_runs (workspace_id, workflow_id, owner_id, definition, event, company_id, contact_id, depth)
+      select
+        w.workspace_id,
+        w.id,
+        w.owner_id,
+        w.definition,
+        jsonb_build_object(
+          'type', event.event_type,
+          'entityType', event.entity_type,
+          'entityId', event.entity_id,
+          'data', event.data,
+          'actorUserId', event.actor_user_id,
+          'at', event.created_at
+        ),
+        case when event.entity_type = 'company' then event.entity_id else null end,
+        case when event.entity_type = 'contact' then event.entity_id else null end,
+        event.depth
+      from crm.workflows w
+      join crm.workspace_members m on m.workspace_id = w.workspace_id and m.user_id = w.owner_id
+      where w.workspace_id = event.workspace_id
+        and w.status = 'active'
+        and w.archived_at is null
+        and w.trigger_type = any(event.trigger_types)
+        and w.id is distinct from event.source_workflow_id
+        and (event.owner_user_id is null or w.owner_id = event.owner_user_id)
+        and (
+          event.entity_type is distinct from 'task'
+          or exists (
+            select 1 from crm.tasks t
+            where t.id = event.entity_id
+              and (
+                t.owner_id = w.owner_id
+                or t.created_by_user_id = w.owner_id
+                or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = w.owner_id)
+              )
+          )
+        );
+      get diagnostics inserted = row_count;
+      dispatched := dispatched + inserted;
+    end if;
+    delete from crm.workflow_events where id = event.id;
+  end loop;
+  return dispatched;
+end;
+$$;
+
+revoke all on function private.dispatch_workflow_events(integer) from public;
+grant execute on function private.dispatch_workflow_events(integer) to crm_app;
+
+create or replace function private.waiting_approvals_of_others(p_user uuid, p_workspace uuid)
+returns table (
+  id uuid,
+  workflow_id uuid,
+  workflow_name text,
+  title text,
+  owner_name text,
+  updated_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select null::uuid, null::uuid, null::text, null::text, null::text, null::timestamptz
+  where false;
+$$;
 
 create or replace function private.clickup_keepers(p_workspace uuid, p_tasks uuid[], p_prefer uuid)
 returns table (task_id uuid, workspace_id uuid, workspace_name text, user_id uuid, role text, email text, full_name text)
@@ -401,11 +531,29 @@ as $$
     limit 1
   ) keeper on true
   join crm.profiles p on p.id = keeper.user_id
-  where t.workspace_id = p_workspace and t.id = any(p_tasks);
+  where t.workspace_id = p_workspace and t.id = any(p_tasks)
+  order by t.id;
 $$;
 
 revoke all on function private.clickup_keepers(uuid, uuid[], uuid) from public;
 grant execute on function private.clickup_keepers(uuid, uuid[], uuid) to crm_app;
+
+create or replace function private.clickup_member(p_workspace uuid, p_user uuid)
+returns table (workspace_id uuid, workspace_name text, user_id uuid, role text, email text, full_name text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select w.id, w.name, m.user_id, m.role, p.email, p.full_name
+  from crm.workspace_members m
+  join crm.workspaces w on w.id = m.workspace_id
+  join crm.profiles p on p.id = m.user_id
+  where m.workspace_id = p_workspace and m.user_id = p_user;
+$$;
+
+revoke all on function private.clickup_member(uuid, uuid) from public;
+grant execute on function private.clickup_member(uuid, uuid) to crm_app;
 
 create or replace function private.clickup_matching_tasks(p_workspace uuid, p_clickup_task text, p_list text, p_title text)
 returns setof uuid
@@ -423,7 +571,8 @@ as $$
     and (
       (t.clickup_sync -> 'unconfirmed' ->> 'listId' = p_list and t.clickup_sync -> 'unconfirmed' ->> 'title' = p_title)
       or (t.clickup_list_id = p_list and t.title = p_title and t.clickup_sync ? 'creatingAt')
-    );
+    )
+  order by 1;
 $$;
 
 revoke all on function private.clickup_matching_tasks(uuid, text, text, text) from public;
@@ -454,6 +603,10 @@ set search_path = ''
 as $$
   select t.id from crm.tasks t
   where t.workspace_id = p_workspace and t.archived_at is null and t.clickup_list_id is not null
+    and exists (
+      select 1 from crm.workspace_members m
+      where m.workspace_id = t.workspace_id and m.user_id in (t.owner_id, t.created_by_user_id)
+    )
     and (
       t.clickup_task_id is null
       or t.title is distinct from t.clickup_sync ->> 'title'
@@ -478,6 +631,10 @@ as $$
   select t.id from crm.tasks t
   where t.workspace_id = p_workspace and t.archived_at is null and t.completed_at is null
     and t.clickup_task_id is not null
+    and exists (
+      select 1 from crm.workspace_members m
+      where m.workspace_id = t.workspace_id and m.user_id in (t.owner_id, t.created_by_user_id)
+    )
     and (t.clickup_synced_at is null or t.clickup_synced_at < now() - make_interval(secs => p_seconds))
   order by t.clickup_synced_at asc nulls first
   limit p_limit;
@@ -500,7 +657,10 @@ as $$
       and r.owner_id <> p_user
       and r.status = 'waiting'
       and r.waiting_for = 'approval'
-      and exists (select 1 from crm.workspace_members m where m.workspace_id = p_workspace and m.user_id = p_user)
+      and exists (
+        select 1 from crm.workspace_members m
+        where m.workspace_id = p_workspace and m.user_id = p_user and m.role in ('owner', 'admin')
+      )
   );
 $$;
 
@@ -729,6 +889,9 @@ begin
    and endpoint.enabled
    and (events.event_type = any(endpoint.events) or '*' = any(endpoint.events));
 
+  update crm.webhook_endpoints set created_by_user_id = p_actor
+  where workspace_id = p_workspace and created_by_user_id = p_user;
+
   if next_home is not null then
     perform private.move_personal_rows(p_user, p_workspace, next_home);
   else
@@ -765,3 +928,5 @@ grant execute on function private.team_remove_records(uuid, uuid, uuid, text, te
 reset lock_timeout;
 
 create index concurrently if not exists webhook_deliveries_workspace_created_idx on crm.webhook_deliveries (workspace_id, created_at desc);
+create index concurrently if not exists tasks_created_by_user_idx on crm.tasks (created_by_user_id) where created_by_user_id is not null;
+create index concurrently if not exists tasks_created_by_agent_idx on crm.tasks (created_by_agent_id) where created_by_agent_id is not null;

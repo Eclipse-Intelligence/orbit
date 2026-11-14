@@ -301,7 +301,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                       readOnly && isTagged ? (
                         <p role="note" className="caption-style text-soft flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2.5">
                           <UsersIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-blue-text)" />
-                          <span>You&apos;re tagged. You can read and discuss this task. {changersLine(changers)}</span>
+                          <span>You&apos;re tagged. You can read and discuss this task.{changers.length > 0 ? ` ${changersLine(changers)}` : null}</span>
                         </p>
                       ) : null
                     }

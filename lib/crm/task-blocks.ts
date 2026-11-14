@@ -1,13 +1,12 @@
 import { listMembers } from "@/lib/crm/companies";
 import { listPlannerTasks, listTaskParticipants } from "@/lib/crm/tasks";
-import type { Task, UserActor, WorkspaceRole } from "@/lib/crm/types";
+import type { Task, UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { blocksInRange, taskBlocks, type ClashCandidate, type PlannerWorkspace } from "@/lib/task-blocks";
 
 export type PlannerTeam = {
   id: string;
   name: string;
-  role: WorkspaceRole;
   members: { id: string; name: string }[];
 };
 
@@ -41,7 +40,6 @@ export async function readPlanner(actor: UserActor, now = Date.now()): Promise<P
         team: {
           id: target.workspaceId,
           name: target.workspaceName,
-          role: target.role,
           members: team ? members.map((member) => ({ id: member.id, name: member.name })) : [],
         },
         tagged,

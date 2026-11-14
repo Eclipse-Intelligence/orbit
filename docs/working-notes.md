@@ -110,6 +110,7 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 
 ## Open follow-ups
 
+- **Cleanup after #365 deploys:** drop `private.waiting_approvals_of_others`. It is kept, returning nothing, only so the code deployed before the migration keeps working.
 - **Meta Lead Ads** is live for the Ridgeon Consultancy Page (webhook on the app's Page object, `leadgen` subscribed, Page subscribed to the app). `META_ACCESS_TOKEN` must be a long-lived Page token or System User token; a Graph Explorer token expires within hours.
 - **Meta lead behaviour:**
   - Phone-only resubmissions create a new contact each time.

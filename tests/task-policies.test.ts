@@ -202,15 +202,15 @@ describe("task insert and update policies", () => {
 });
 
 describe("only your own tasks", () => {
-  it("never shows a member's private task to the owner or an admin", async () => {
+  it("hides a member's private task from the owner and an admin in lists, counts, Plan, the assistant, MCP, SQL, audit and undo", async () => {
+    const before = new Map<string, number>();
+    for (const boss of [mark, ada]) before.set(boss.userId, (await countTaskViews(boss)).all);
     const task = (await createTask(priya, { title: "Priya's private appraisal notes", dueAt: new Date(Date.now() - 3_600_000).toISOString() })).body.task;
     for (const boss of [mark, ada]) {
       await assert.rejects(getTask(boss, task.id), hidden);
       assert.equal((await listTasks(boss, { limit: 100 })).data.some((item) => item.id === task.id), false);
       assert.equal((await getDueActions(boss, "all")).tasks.some((item) => item.id === task.id), false);
-      const counts = await countTaskViews(boss);
-      const own = await queryAsUser<{ total: number }>(boss.userId, "select count(*)::int as total from crm.tasks where archived_at is null and completed_at is null and workspace_id = $1", [boss.workspaceId]);
-      assert.ok(counts.all <= own[0].total);
+      assert.equal((await countTaskViews(boss)).all, before.get(boss.userId));
       assert.equal((await readPlanner(boss)).tasks.some((item) => item.id === task.id), false);
       assert.doesNotMatch(JSON.stringify(await runTool(boss, "list_tasks", { view: "all" })), /appraisal/);
       assert.doesNotMatch(await mcpText(boss, "get_due_actions", { view: "all" }), /appraisal/);
@@ -259,7 +259,7 @@ describe("only your own tasks", () => {
       [[marks.id, agents.id, nobody.rows[0].id]],
     );
     const to = (endpoint: string) => deliveries.rows.filter((row) => row.endpoint_id === endpoint).map((row) => row.entity).sort();
-    assert.deepEqual(to(marks.id), [mine.id, company.id].sort());
+    assert.deepEqual(to(marks.id), [mine.id, robots.id, company.id].sort(), "the agent's unassigned task goes to the workspace owner");
     assert.deepEqual(to(agents.id), [robots.id]);
     assert.deepEqual(to(nobody.rows[0].id), [company.id]);
   });
@@ -320,3 +320,61 @@ describe("raw writes that skip the app", () => {
     assert.equal(changed.length, 0);
   });
 });
+
+describe("agents and webhooks under task privacy", () => {
+  it("gives an agent's unassigned task to the workspace owner", async () => {
+    const task = (await createTask(agent, { title: "Agent found a lead to call" })).body.task;
+    assert.equal(task.ownerId, mark.userId);
+    assert.equal((await getTask(mark, task.id)).title, "Agent found a lead to call");
+    const released = (await updateTask(agent, task.id, { ownerId: null })).body.task;
+    assert.equal(released.ownerId, mark.userId);
+  });
+
+  it("sends an endpoint subscribed to every event only the tasks its creator can see", async () => {
+    const network = { lookup: async () => ["93.184.216.34"] };
+    const everything = (await createWebhook(mark, { url: "https://hooks.example.com/everything", events: ["*"] }, network)).endpoint;
+    const theirs = (await createTask(priya, { title: "Priya's own, for nobody's webhook" })).body.task;
+    const mine = (await createTask(mark, { title: "Mark's own, for his webhook" })).body.task;
+    const sent = await admin().query<{ entity: string }>(
+      "select payload -> 'entity' ->> 'id' as entity from crm.webhook_deliveries where endpoint_id = $1 and payload -> 'entity' ->> 'type' = 'task'",
+      [everything.id],
+    );
+    const ids = sent.rows.map((row) => row.entity);
+    assert.ok(ids.includes(mine.id));
+    assert.equal(ids.includes(theirs.id), false);
+  });
+
+  it("records who made a webhook even when the insert doesn't say, freezes where it sends for anyone else, and hands it over when they leave", async () => {
+    const made = await queryAsUserKeep(mark.userId, "insert into crm.webhook_endpoints (workspace_id, url, secret, events) values ($1, 'https://hooks.example.com/old-app', 's', array['task.updated']) returning id, created_by_user_id", [mark.workspaceId]);
+    assert.equal(made.created_by_user_id, mark.userId);
+    await assert.rejects(
+      queryAsUser(ada.userId, "update crm.webhook_endpoints set url = 'https://evil.example.com' where id = $1", [made.id]),
+      /Only whoever made this webhook/,
+    );
+    const archived = await queryAsUser<{ id: string }>(ada.userId, "update crm.webhook_endpoints set enabled = false where id = $1 returning id", [made.id]);
+    assert.equal(archived.length, 1);
+    await queryAsUser(mark.userId, "update crm.webhook_endpoints set url = 'https://hooks.example.com/new-app' where id = $1", [made.id]);
+
+    const person = await createUser("rita@policies.test", "Rita Leaver");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'admin')", [mark.workspaceId, person.userId]);
+    const rita: UserActor = { ...person, workspaceId: mark.workspaceId, workspaceName: "Eclipse", role: "admin", scopes: scopesForRole("admin") };
+    const hers = (await createWebhook(rita, { url: "https://hooks.example.com/rita", events: ["task.created"] }, { lookup: async () => ["93.184.216.34"] })).endpoint;
+    await removeMember(mark, rita.userId, { operation: "remove_member", source: "web" });
+    const handed = await admin().query<{ created_by_user_id: string }>("select created_by_user_id from crm.webhook_endpoints where id = $1", [hers.id]);
+    assert.equal(handed.rows[0].created_by_user_id, mark.userId);
+  });
+});
+
+async function queryAsUserKeep(userId: string, text: string, values: unknown[]) {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: userId, role: "authenticated" })]);
+    await client.query("set local role authenticated");
+    const result = await client.query<{ id: string; created_by_user_id: string }>(text, values);
+    await client.query("commit");
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}

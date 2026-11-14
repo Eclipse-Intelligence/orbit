@@ -786,7 +786,7 @@ export default function CalendarScreen({
           onOpenChange={(open) => {
             if (!open) setOpenTaskId(null);
           }}
-          viewer={{ ...viewer, role: team?.role ?? viewer.role }}
+          viewer={viewer}
           members={team?.members ?? []}
           tagged={shownTask ? (planner.tagged[shownTask.id] ?? []) : []}
           completed={shownTask ? done.has(shownTask.id) : false}

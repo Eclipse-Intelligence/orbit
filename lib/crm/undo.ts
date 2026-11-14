@@ -456,7 +456,7 @@ async function describeEvent(
   const plain = (reason: string): Described => ({ entityName: `this ${noun}`, summary: `A change to this ${noun}`, plan: { ok: false, reason } });
   if (!ownedBy(actor, event)) return plain("You can only undo your own changes.");
   const current = await snapshot(db, actor, entity, event.entity_id);
-  if (!current && entity === "task") return plain("You can't see that task any more.");
+  if (!current && entity === "task") return plain("Can't undo: you can't see this task any more.");
   const entityName = current?.name ?? eventName(event, entity);
   const refuse = (summary: string, reason: string): Described => ({ entityName, summary, plan: { ok: false, reason } });
   const fallback = `${event.event_type.replace(/[._]/g, " ")}: ${entityName}`;

@@ -361,8 +361,10 @@ describe("task discussions", () => {
     assert.equal((await getDiscussion(priya, { kind: "task", id: task.id })).count, 1);
     await sql("update crm.tasks set workspace_id = $2 where id = $1", [task.id, other.workspaceId]);
     await refused(getDiscussion(priya, { kind: "task", id: task.id }), /Task not found/);
-    assert.equal((await getDiscussion(mark, { kind: "task", id: task.id })).count, 1);
-    assert.equal((await getDiscussion(mark, { kind: "task", id: task.id })).conversationId, conversationId);
+    const markThere: UserActor = { ...mark, workspaceId: other.workspaceId, workspaceName: "Elsewhere", role: "owner" };
+    const moved = await getDiscussion(markThere, { kind: "task", id: task.id });
+    assert.equal(moved.conversationId, conversationId);
+    assert.equal(moved.count, 1);
     await refused(getDiscussion(other, { kind: "task", id: task.id }), /Task not found/);
     await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [other.workspaceId, mark.userId]);
   });
