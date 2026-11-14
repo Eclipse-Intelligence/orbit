@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { CrmError } from "@/lib/crm/errors";
 import { missingOrFailed, panelTaskFor, stillOpenIds } from "@/lib/task-done";
-import { keyboardUp, shownAlert, typingInto } from "@/lib/reminder-alerts";
+import { alertRenderKey, keyboardUp, restingView, shownAlert, typingInto } from "@/lib/reminder-alerts";
 import { draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
-import { clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
+import { applyDraftNews, clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { parseTaskText } from "@/lib/task-pad";
 
 describe("task area UI", () => {
@@ -76,6 +76,19 @@ describe("task area UI", () => {
     assert.equal(keyboardUp(900, 860, true), false);
   });
 
+  it("measures the screen without the keyboard only while nothing is being typed, and again after rotating", () => {
+    const start = { width: 390, height: 844 };
+    assert.deepEqual(restingView(start, { width: 390, height: 500, layoutHeight: 844, typing: true }), start);
+    assert.deepEqual(restingView(start, { width: 390, height: 760, layoutHeight: 760, typing: false }), { width: 390, height: 760 });
+    assert.deepEqual(restingView(start, { width: 844, height: 200, layoutHeight: 390, typing: true }), { width: 844, height: 390 });
+  });
+
+  it("announces a reminder again after the keyboard only when a different one is waiting", () => {
+    assert.equal(alertRenderKey("a", true, "a"), "a");
+    assert.equal(alertRenderKey("b", true, "a"), "b:waiting");
+    assert.equal(alertRenderKey("b", false, "a"), "b");
+  });
+
   it("knows which focused elements take typing", () => {
     assert.equal(typingInto(null), false);
     assert.equal(typingInto({ tagName: "TEXTAREA" }), true);
@@ -86,6 +99,18 @@ describe("task area UI", () => {
     assert.equal(typingInto({ tagName: "INPUT", type: "text", disabled: true }), false);
     assert.equal(typingInto({ tagName: "DIV", isContentEditable: true }), true);
     assert.equal(typingInto({ tagName: "BUTTON" }), false);
+    assert.equal(typingInto({ tagName: "IFRAME" }), true);
+  });
+
+  it("records the saved value on every dropped draft, even in a view that is mid-edit", () => {
+    const savedElsewhere = { kept: false, draft: "Call Jane edited", saved: "Call Jane edited" };
+    assert.deepEqual(applyDraftNews(savedElsewhere, "Call Jane later", "Call Jane"), { sent: "Call Jane edited", show: null, error: null });
+    assert.deepEqual(applyDraftNews(savedElsewhere, "Call Jane edited", "Call Jane"), { sent: "Call Jane edited", show: null, error: "clear" });
+    const reverted = { kept: false, draft: "Call Jane edited", saved: "Call Jane" };
+    assert.deepEqual(applyDraftNews(reverted, "Call Jane edited", "Call Jane"), { sent: "Call Jane", show: "Call Jane", error: "clear" });
+    const kept = { kept: true, draft: "Call Jane edited", saved: "Call Jane" };
+    assert.deepEqual(applyDraftNews(kept, "Call Jane", "Call Jane"), { sent: "Call Jane", show: "Call Jane edited", error: "fail" });
+    assert.deepEqual(applyDraftNews(kept, "Call Jane later", "Call Jane"), { sent: "Call Jane", show: null, error: null });
   });
 
   it("tells every other view of a task about a kept or dropped draft, never the view that raised it", () => {
@@ -97,16 +122,10 @@ describe("task area UI", () => {
       const listen = (change: DraftChange) => {
         if (change.id !== "t1") return;
         view.heard += 1;
-        const reaction = draftReaction(change, view.local, view.sent);
-        if (reaction === "adopt") {
-          view.local = change.draft;
-          view.error = true;
-        }
-        if (reaction === "restore") {
-          view.local = change.saved;
-          view.sent = change.saved;
-        }
-        if (reaction === "restore" || reaction === "clear") view.error = false;
+        const next = applyDraftNews(change, view.local, view.sent);
+        view.sent = next.sent;
+        if (next.show !== null) view.local = next.show;
+        if (next.error) view.error = next.error === "fail";
       };
       return listen;
     };
@@ -173,20 +192,6 @@ describe("task area UI", () => {
     assert.equal(parseTaskText("Call Jane next Monday 3pm", mondayMorning).due, "2026-11-23T15:00");
     assert.equal(parseTaskText("Call Jane Monday", mondayMorning).due, "2026-11-23");
     assert.equal(parseTaskText("Call Jane Tuesday 3pm", mondayMorning).due, "2026-11-17T15:00");
-    const read = (text: string) => {
-      const parsed = parseTaskText(text, mondayMorning);
-      return [parsed.title, parsed.due];
-    };
-    assert.deepEqual(read("Call Jane next week Monday 3pm"), ["Call Jane", "2026-11-23T15:00"]);
-    assert.deepEqual(read("Call Jane Monday next week 3pm"), ["Call Jane", "2026-11-23T15:00"]);
-    assert.deepEqual(read("Call Jane Monday week 3pm"), ["Call Jane", "2026-11-30T15:00"]);
-    assert.equal(parseTaskText("Call Jane Monday week 3pm", mondayMorning).unsure, true);
-    assert.deepEqual(read("Call Jane Monday in 2 weeks 3pm"), ["Call Jane", "2026-11-30T15:00"]);
-    assert.deepEqual(read("Call Jane next week sat"), ["Call Jane", "2026-11-28"]);
-    assert.deepEqual(read("Call Jane Monday 30 Nov 3pm"), ["Call Jane", "2026-11-30T15:00"]);
-    assert.deepEqual(read("Call Jane tomorrow 3pm re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-17T15:00"]);
-    assert.deepEqual(read("Send Monday report Tuesday 3pm"), ["Send Monday report", "2026-11-17T15:00"]);
-    assert.deepEqual(read("Call Jane 20 Nov re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-20"]);
     const springSaturday = new Date("2027-03-27T12:00:00Z");
     const gap = parseTaskText("Call Jane Sunday 1:30am", springSaturday);
     assert.equal(gap.due, "2027-03-28T01:30");
@@ -195,6 +200,51 @@ describe("task area UI", () => {
     const saturday = new Date("2026-11-21T09:00:00Z");
     assert.equal(parseTaskText("Call Sam sat 3pm", saturday).due, "2026-11-21T15:00");
     assert.equal(parseTaskText("Call Sam next sat 3pm", saturday).due, "2026-11-28T15:00");
+  });
+
+  it("reads a weekday as a date only when it is clearly a date phrase, and asks the AI when signals disagree", () => {
+    const read = (text: string, at = "2026-11-16T10:30:00Z") => {
+      const parsed = parseTaskText(text, new Date(at));
+      return [parsed.title, parsed.due, parsed.unsure];
+    };
+    assert.deepEqual(read("Call Sam this Monday"), ["Call Sam", "2026-11-16", false]);
+    assert.deepEqual(read("Call Sam on Friday"), ["Call Sam", "2026-11-20", false]);
+    assert.deepEqual(read("Call Sam by Friday"), ["Call Sam", "2026-11-20", false]);
+    assert.deepEqual(read("Call Jane next week Monday 3pm"), ["Call Jane", "2026-11-23T15:00", false]);
+    assert.deepEqual(read("Call Jane Monday next week 3pm"), ["Call Jane", "2026-11-23T15:00", false]);
+    assert.deepEqual(read("Call Jane next week sat"), ["Call Jane", "2026-11-28", false]);
+    assert.deepEqual(read("Call Jane Monday week 3pm"), ["Call Jane", "2026-11-30T15:00", true]);
+    assert.deepEqual(read("Call Jane Monday 30 Nov 3pm"), ["Call Jane", "2026-11-30T15:00", false]);
+    assert.deepEqual(read("Call Sam in 2 weeks"), ["Call Sam", "2026-11-30", false]);
+    assert.deepEqual(read("Call Sam in 2 weeks Friday"), ["Call Sam", "2026-12-04", false]);
+    assert.deepEqual(read("Call Sam Friday in 2 weeks"), ["Call Sam", "2026-12-04", false]);
+    assert.deepEqual(read("Call Jane Monday in 2 weeks 3pm"), ["Call Jane", "2026-12-07T15:00", true]);
+    assert.deepEqual(read("Call Sam Monday in 2 weeks", "2026-11-22T10:30:00Z"), ["Call Sam", "2026-12-07", false]);
+    assert.deepEqual(read("Call Sam in 2 weeks Monday", "2026-11-22T10:30:00Z"), ["Call Sam", "2026-12-07", false]);
+
+    assert.deepEqual(read("Call Jane tomorrow 3pm re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-17T15:00", true]);
+    assert.deepEqual(read("Send Monday report Tuesday 3pm"), ["Send Monday report", "2026-11-17T15:00", true]);
+    assert.deepEqual(read("Call Jane 20 Nov re Monday meeting"), ["Call Jane re Monday meeting", "2026-11-20", true]);
+    assert.deepEqual(read("Send Friday report next week"), ["Send Friday report", "2026-11-23", true]);
+    assert.deepEqual(read("Chase Friday Media next week"), ["Chase Friday Media", "2026-11-23", true]);
+    assert.deepEqual(read("Call Sam next week re Friday Media"), ["Call Sam re Friday Media", "2026-11-23", true]);
+    assert.deepEqual(read("Call Sam in 2 hours re Monday report"), ["Call Sam re Monday report", "2026-11-16T12:30", true]);
+    assert.deepEqual(read("Call Sam Tuesday 23 Nov"), ["Call Sam Tuesday", "2026-11-23", true]);
+    assert.deepEqual(read("Call Sam Mon 16 Nov 3pm", "2026-11-18T10:30:00Z"), ["Call Sam Mon", "2027-11-16T15:00", true]);
+    assert.deepEqual(read("Call Sam today Friday 5pm", "2026-11-14T10:30:00Z"), ["Call Sam Friday", "2026-11-14T17:00", true]);
+    assert.deepEqual(read("Call Sam tomorrow Friday", "2026-11-14T10:30:00Z"), ["Call Sam Friday", "2026-11-15", true]);
+    assert.deepEqual(read("Call Sam tomorrow Sunday", "2026-11-14T10:30:00Z"), ["Call Sam", "2026-11-15", false]);
+
+    assert.deepEqual(read("Black Friday campaign plan"), ["Black Friday campaign plan", null, true]);
+    assert.deepEqual(read("Chase Monday.com invoice"), ["Chase Monday.com invoice", null, true]);
+    assert.deepEqual(read("Chase Friday Media invoice"), ["Chase Friday Media invoice", null, true]);
+    assert.deepEqual(read("Call Monday re Friday Media"), ["Call re Friday Media", "2026-11-23", true]);
+
+    assert.deepEqual(read("Call Sam Monday night"), ["Call Sam", "2026-11-16T19:00", false]);
+    assert.deepEqual(read("Call Sam lunchtime"), ["Call Sam", "2026-11-16T12:30", true]);
+    assert.deepEqual(read("Call Sam half past 3"), ["Call Sam", "2026-11-16T15:30", true]);
+    assert.deepEqual(read("Call Sam before 3pm"), ["Call Sam", "2026-11-16T15:00", true]);
+    assert.deepEqual(read("Night shift rota"), ["Night shift rota", null, false]);
   });
 });
 

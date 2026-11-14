@@ -29,7 +29,7 @@ import { recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
 import { draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
-import { clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
+import { applyDraftNews, clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { durationLabel, localInstant } from "@/lib/crm/task-time";
@@ -298,19 +298,14 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   function onDraftChange(change: DraftChange) {
     if (change.id !== task.id) return;
     const field = change.field;
-    const reaction = draftReaction(change, field === "title" ? title.trim() : text.trim(), sent.current[field]);
-    if (reaction === "ignore") return;
-    const show = (value: string) => (field === "title" ? setTitle(value) : setText(value));
-    if (reaction === "adopt") {
-      show(change.draft);
-      setErrors((current) => failFields(current, [field], saveFailedMessage([field])));
-      return;
+    const next = applyDraftNews(change, field === "title" ? title.trim() : text.trim(), sent.current[field]);
+    sent.current[field] = next.sent;
+    if (next.show !== null) {
+      if (field === "title") setTitle(next.show);
+      else setText(next.show);
     }
-    if (reaction === "restore") {
-      sent.current[field] = change.saved;
-      show(change.saved);
-    }
-    setErrors((current) => clearFields(current, [field]));
+    if (next.error === "fail") setErrors((current) => failFields(current, [field], saveFailedMessage([field])));
+    if (next.error === "clear") setErrors((current) => clearFields(current, [field]));
   }
 
   useEffect(() => {

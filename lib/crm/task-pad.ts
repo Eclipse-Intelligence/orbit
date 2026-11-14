@@ -274,7 +274,7 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
       "due is in Europe/London local time. Give a time only when the text gives one (a clock time, or words like morning, noon, tonight or end of day). " +
       "If a day is given without a time, due is the day alone as YYYY-MM-DD. If nothing says when, due is null. " +
       "A bare hour with no am or pm means working hours: 1 to 6 is the afternoon (3 means 15:00) and 7 to 12 is as written (9 means nine in the morning). A number that is a count, a quantity, a version, a room or a chapter is not a time. " +
-      "A weekday that is the only word saying when, typed on that same weekday with a time still ahead today, means today; otherwise, or with next, it means the coming week's. A date, today, tomorrow or next week beats a weekday that only describes something (Monday report, re Monday meeting). " +
+      "A weekday is the due day only when it is clearly a date: on its own, next to a time, or after on, next, this, by, due, until or from. A weekday in a name or describing something (Black Friday, Friday Media, Monday report) stays in the title. This Monday typed on a Monday means today; a weekday on its own typed on that day means today if its time is still ahead, otherwise the coming week's. " +
       "remindMinutes is how many minutes before the due time to remind, or null if no reminder is asked for. Keep it even when due has no time. " +
       `Now is ${today} in London.`,
     user: clean,

@@ -14,9 +14,12 @@ import {
   reminderFired,
   reminderKey,
   requestReminderPermission,
+  alertRenderKey,
   keyboardUp,
+  restingView,
   shownAlert,
   typingInto,
+  type RestingView,
 } from "@/lib/reminder-alerts";
 
 const POLL_MS = 60_000;
@@ -30,21 +33,19 @@ export default function TaskReminders() {
   const timers = useRef(new Map<string, number>());
   const devicePushed = useRef(false);
   const [keyboard, setKeyboard] = useState(false);
+  const [lastShown, setLastShown] = useState<string | null>(null);
 
   useEffect(() => {
     const view = window.visualViewport;
     const coarse = window.matchMedia("(pointer: coarse)");
-    let width = window.innerWidth;
-    let resting = view?.height ?? window.innerHeight;
+    const visibleHeight = () => (view ? view.height * view.scale : window.innerHeight);
+    let resting: RestingView = { width: window.innerWidth, height: visibleHeight() };
     let timer = 0;
     const check = () => {
-      const height = view?.height ?? window.innerHeight;
+      const height = visibleHeight();
       const typing = coarse.matches && typingInto(document.activeElement);
-      if (window.innerWidth !== width || !typing) {
-        width = window.innerWidth;
-        resting = height;
-      }
-      setKeyboard(keyboardUp(resting, height, typing));
+      resting = restingView(resting, { width: window.innerWidth, height, layoutHeight: window.innerHeight, typing });
+      setKeyboard(keyboardUp(resting.height, height, typing));
     };
     const soon = () => {
       window.clearTimeout(timer);
@@ -144,7 +145,8 @@ export default function TaskReminders() {
   }, [refresh]);
 
   const { alert, more } = shownAlert(alerts);
-  if (!alert || keyboard) return null;
+  if (alert && !keyboard && alert.key !== lastShown) setLastShown(alert.key);
+  if (!alert) return null;
 
   function dismiss(key: string) {
     setAlerts((current) => current.filter((alert) => alert.key !== key));
@@ -152,9 +154,12 @@ export default function TaskReminders() {
 
   const about = alert.reminder.contactName ?? alert.reminder.companyName;
   return (
-    <div className="pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] left-1/2 z-50 flex w-[min(24em,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-2">
+    <div
+      hidden={keyboard}
+      className="pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] left-1/2 z-50 flex w-[min(24em,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-2"
+    >
       <div
-        key={alert.key}
+        key={alertRenderKey(alert.key, keyboard, lastShown)}
         role="alert"
         className="border-line-strong bg-popover shadow-overlay animate-in fade-in-0 slide-in-from-bottom-2 ease-power3-out pointer-events-auto flex flex-col gap-3 rounded-xl border p-3 duration-200"
       >

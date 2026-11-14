@@ -58,3 +58,12 @@ export function draftReaction(news: DraftNews, local: string, sent: string): "ad
 export function fieldError(errors: FieldErrors) {
   return errors.at(-1)?.message ?? null;
 }
+
+export function applyDraftNews(news: DraftNews, local: string, sent: string) {
+  const reaction = draftReaction(news, local, sent);
+  return {
+    sent: news.kept ? sent : news.saved,
+    show: reaction === "adopt" ? news.draft : reaction === "restore" ? news.saved : null,
+    error: reaction === "adopt" ? ("fail" as const) : reaction === "ignore" ? null : ("clear" as const),
+  };
+}
