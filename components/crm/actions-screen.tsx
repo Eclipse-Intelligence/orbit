@@ -109,13 +109,11 @@ export default function ActionsScreen({
   clickup,
   now,
   who = "mine",
-  shared = false,
   members = [],
   tagged = {},
   taggedCount = 0,
   discussions = {},
   openTask = null,
-  admins = [],
   switchTo = null,
   total = 0,
 }: {
@@ -126,21 +124,19 @@ export default function ActionsScreen({
   companies: Company[];
   clickup: ClickUpPicker | null;
   now: number;
-  who?: "mine" | "tagged" | "everyone";
-  shared?: boolean;
+  who?: "mine" | "tagged";
   members?: AssignableMember[];
   tagged?: Record<string, string[]>;
   taggedCount?: number;
   discussions?: Record<string, number>;
   openTask?: Task | null;
-  admins?: string[];
   switchTo?: string | null;
   total?: number;
 }) {
   const team = members.length > 1;
   const href = (target: TaskView, person = who) => {
     const base = tasksHref(target);
-    if (person === "mine" || (person === "everyone" && !shared) || (person === "tagged" && !team)) return base;
+    if (person === "mine" || !team) return base;
     return `${base}${base.includes("?") ? "&" : "?"}who=${person}`;
   };
   const views = who === "tagged" ? VIEWS.filter((item) => item.id !== "none") : VIEWS;
@@ -532,16 +528,6 @@ export default function ActionsScreen({
                   Tagged
                   {taggedCount > 0 && <span className="text-subtle tabular-nums">{taggedCount}</span>}
                 </Button>
-                {shared && (
-                  <Button
-                    variant={who === "everyone" ? "secondary" : "ghost"}
-                    size="sm"
-                    href={href(view, "everyone")}
-                    aria-current={who === "everyone" ? "page" : undefined}
-                  >
-                    Everyone
-                  </Button>
-                )}
               </>
             )}
             <RecordTransfer resource="tasks" />
@@ -669,7 +655,6 @@ export default function ActionsScreen({
         viewer={viewer}
         members={members}
         tagged={allTagged[(panelTask ?? kept)?.id ?? ""] ?? []}
-        admins={admins}
         modal={panelModal}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}

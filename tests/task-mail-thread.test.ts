@@ -207,7 +207,7 @@ describe("the thread link migration", () => {
 });
 
 describe("a task's email thread, read by each viewer", () => {
-  it("shows the owner the subject and a teammate, an admin and an agent only Email", async () => {
+  it("shows the owner the subject and a teammate and an agent only Email, and hides the task from an admin", async () => {
     const key = `${markBox.sourceId}|renewal`;
     const task = (await createTask(mark, { title: "Call Jane about the renewal", description: "Ask about the price.", mailThreadKey: key, ownerId: sam.userId })).body.task;
     assert.equal(task.mailThreadKey, key);
@@ -215,14 +215,14 @@ describe("a task's email thread, read by each viewer", () => {
     assert.equal(task.description, "Ask about the price.");
 
     assert.deepEqual((await getTask(mark, task.id)).mailThread, { subject: `Re: ${SUBJECT}`, readable: true });
-    for (const viewer of [sam, ada]) {
+    await assert.rejects(getTask(ada, task.id), /not found/i);
+    for (const viewer of [sam]) {
       const seen = await getTask(viewer, task.id);
       assert.equal(seen.mailThreadKey, key);
       assert.deepEqual(seen.mailThread, { subject: null, readable: false });
       assert.doesNotMatch(JSON.stringify(seen), /Renewal terms/);
     }
-    const listed = (await listTasks(ada, { view: "all" })).data.find((item) => item.id === task.id);
-    assert.deepEqual(listed?.mailThread, { subject: null, readable: false });
+    assert.equal((await listTasks(ada, { view: "all" })).data.some((item) => item.id === task.id), false);
     const mine = (await listTasks(sam, { mine: true })).data.find((item) => item.id === task.id);
     assert.deepEqual(mine?.mailThread, { subject: null, readable: false });
 
@@ -230,10 +230,12 @@ describe("a task's email thread, read by each viewer", () => {
     assert.deepEqual(changed.mailThread, { subject: null, readable: false });
     assert.equal(changed.mailThreadKey, key);
 
-    const asAgent = await getTask(agent, task.id);
+    await assert.rejects(getTask(agent, task.id), /not found/i);
+    const agentTask = (await createTask(agent, { title: "Agent's renewal call", mailThreadKey: key, ownerId: sam.userId })).body.task;
+    const asAgent = await getTask(agent, agentTask.id);
     assert.deepEqual(asAgent.mailThread, { subject: null, readable: false });
-    const rest = await restGetTask(new Request(`http://crm.test/api/v1/tasks/${task.id}`, { headers: { authorization: `Bearer ${agentToken}` } }), {
-      params: Promise.resolve({ id: task.id }),
+    const rest = await restGetTask(new Request(`http://crm.test/api/v1/tasks/${agentTask.id}`, { headers: { authorization: `Bearer ${agentToken}` } }), {
+      params: Promise.resolve({ id: agentTask.id }),
     });
     const restText = await rest.text();
     assert.equal(rest.status, 200);
@@ -241,7 +243,7 @@ describe("a task's email thread, read by each viewer", () => {
     assert.match(restText, /"mailThread":\{"subject":null,"readable":false\}/);
     const restList = await restListTasks(new Request("http://crm.test/api/v1/tasks?view=all", { headers: { authorization: `Bearer ${agentToken}` } }));
     assert.doesNotMatch(await restList.text(), /Renewal terms/);
-    const agentMcp = await mcpCall(agent, "get_next_action", { id: task.id });
+    const agentMcp = await mcpCall(agent, "get_next_action", { id: agentTask.id });
     assert.equal(agentMcp.error, false);
     assert.doesNotMatch(agentMcp.text, /Renewal terms/);
     const ownerMcp = await mcpCall(mark, "get_next_action", { id: task.id });
@@ -259,10 +261,11 @@ describe("a task's email thread, read by each viewer", () => {
     const own = (await createTask(sam, { title: "Sam's thread", mailThreadKey: `${samBox.sourceId.toUpperCase()}|sams` })).body.task;
     assert.equal(own.mailThreadKey, `${samBox.sourceId}|sams`);
     assert.deepEqual(own.mailThread, { subject: "Sam's private pricing", readable: true });
-    await assert.rejects(updateTask(mark, own.id, { mailThreadKey: `${samBox.sourceId}|missing` }), invalid("mailThreadKey"));
-    const kept = (await updateTask(mark, own.id, { mailThreadKey: `${samBox.sourceId}|sams`, title: "Sam's thread, checked" })).body.task;
+    await assert.rejects(updateTask(mark, own.id, { title: "Mark can't see it" }), /not found/i);
+    await assert.rejects(updateTask(sam, own.id, { mailThreadKey: `${samBox.sourceId}|missing` }), invalid("mailThreadKey"));
+    const kept = (await updateTask(sam, own.id, { mailThreadKey: `${samBox.sourceId}|sams`, title: "Sam's thread, checked" })).body.task;
     assert.equal(kept.mailThreadKey, `${samBox.sourceId}|sams`);
-    const unpinned = (await updateTask(mark, own.id, { mailThreadKey: null })).body.task;
+    const unpinned = (await updateTask(sam, own.id, { mailThreadKey: null })).body.task;
     assert.equal(unpinned.mailThreadKey, null);
     assert.equal(unpinned.mailThread, null);
 
@@ -270,7 +273,7 @@ describe("a task's email thread, read by each viewer", () => {
       new Request("http://crm.test/api/v1/tasks", {
         method: "POST",
         headers: { authorization: `Bearer ${agentToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ title: "Agent pinned", mailThreadKey: `${markBox.sourceId}|renewal` }),
+        body: JSON.stringify({ title: "Agent pinned", mailThreadKey: `${markBox.sourceId}|renewal`, ownerId: mark.userId }),
       }),
     );
     assert.equal(created.status, 201);

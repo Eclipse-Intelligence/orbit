@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
-import { listWaitingOnOthers, pastOneWorkingDay, snoozeTask, waitingFor, waitingIn } from "@/lib/crm/action-needed";
+import { snoozeTask, waitingFor, waitingIn } from "@/lib/crm/action-needed";
 import { onWorkingDay, taskSnoozeChoices } from "@/lib/crm/task-snooze";
 import { dayKeyAt, nextWorkingDay, shiftDay, wallClockAt, weekday } from "@/lib/crm/working-days";
 import { runTool } from "@/lib/assistant/tools";
@@ -193,12 +193,6 @@ describe("working days for Capture", () => {
     assert.equal(workingDaysSince("2026-11-06T09:00:00Z", monday), 1);
   });
 
-  it("waits more than one working day before showing a colleague's approval", () => {
-    assert.equal(pastOneWorkingDay("2026-11-06T15:00:00Z", new Date("2026-11-09T14:00:00Z")), false);
-    assert.equal(pastOneWorkingDay("2026-11-06T15:00:00Z", new Date("2026-11-09T16:00:00Z")), true);
-    assert.equal(pastOneWorkingDay("2026-11-07T10:00:00Z", new Date("2026-11-09T23:00:00Z")), false, "a Saturday request starts counting on Monday");
-    assert.equal(pastOneWorkingDay("2026-11-07T10:00:00Z", new Date("2026-11-10T01:00:00Z")), true);
-  });
 
   it("snoozes a task to working days and keeps its time of day", () => {
     const friday = taskSnoozeChoices("2026-11-06T14:00:00Z", new Date("2026-11-06T10:00:00Z"));
@@ -430,7 +424,7 @@ describe("Tasks, approvals and To file", () => {
     assert.deepEqual((await waitingFor(mark, [mark])).tasks, []);
   });
 
-  it("shows approvals waiting on you, and admins see a colleague's that has waited over a working day", async () => {
+  it("shows approvals waiting on you, and never a colleague's", async () => {
     const mine = await waitingRun(mark, "Send intro email to Priya Shah");
     const stale = await waitingRun(james, "Send renewal reminder to Brightline", new Date(Date.now() - 30 * DAY_MS));
     await waitingRun(james, "Fresh request");
@@ -440,13 +434,6 @@ describe("Tasks, approvals and To file", () => {
       [mine],
     );
     assert.deepEqual((await waitingFor(james, [james])).approvals.map((item) => item.title).sort(), ["Fresh request", "Send renewal reminder to Brightline"]);
-    const others = await listWaitingOnOthers(mark);
-    assert.deepEqual(
-      others.map((item) => [item.id, item.ownerName]),
-      [[stale, "James Carter"]],
-    );
-    assert.ok(others[0].waitingDays >= 2);
-    assert.deepEqual(await listWaitingOnOthers(james), [], "members don't see colleagues' approvals");
 
     await assert.rejects(
       runCaptureAction(mark, { kind: "approve", runId: stale }),
@@ -604,13 +591,10 @@ describe("Capture after review", () => {
     }
   });
 
-  it("shows an admin who isn't the owner Waiting on others, but never other people's mail", async () => {
+  it("never shows an admin a colleague's approvals or mail", async () => {
     const ada = await teammate(mark, "ada@eclipse-review.test", "Ada Price", "admin");
     const run = await waitingRun(mark, "Send the contract to Halden", new Date(Date.now() - 30 * DAY_MS));
-    assert.deepEqual(
-      (await listWaitingOnOthers(ada)).map((item) => [item.id, item.ownerName]),
-      [[run, "Mark Ridgeon"]],
-    );
+    assert.deepEqual((await waitingFor(ada, [ada])).approvals, []);
     assert.ok((await replyKeys()).length > 0, "Mark has replies waiting");
     const adas = await waitingMail(ada, [ada], new Date());
     assert.deepEqual([adas.replies, adas.nudges, adas.reminders], [[], [], []]);

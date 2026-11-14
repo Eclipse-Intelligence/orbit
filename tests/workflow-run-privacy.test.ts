@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { listWaitingOnOthers } from "@/lib/crm/action-needed";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
@@ -83,13 +82,4 @@ describe("workflow run privacy", () => {
     assert.deepEqual(await queryAsUser(owner.userId, "select input, output from crm.workflow_run_steps where run_id = $1", [runId]), []);
   });
 
-  it("still shows the owner that a colleague's approval is waiting, without its details", async () => {
-    const waiting = await listWaitingOnOthers(owner);
-    assert.deepEqual(
-      waiting.map((item) => [item.id, item.title, item.ownerName]),
-      [[runId, "Send the renewal email", "Mia Member"]],
-    );
-    assert.doesNotMatch(JSON.stringify(waiting), /discount/);
-    assert.deepEqual(await listWaitingOnOthers(member), []);
-  });
 });

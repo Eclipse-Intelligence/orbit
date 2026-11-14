@@ -13,7 +13,7 @@ import { FilePicker } from "@/components/capture/file-picker";
 import { useComposer } from "@/components/mail/compose-dock";
 import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import { formatMeetingWhen } from "@/lib/companies";
-import type { OthersApproval, WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
+import type { WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
 import type { MetPerson } from "@/lib/crm/calendar";
 import { agoLabel, dayLabel, dueLabel, REPLY_AMBER_WORKING_DAYS, sinceLabel } from "@/lib/crm/capture-format";
 import type { CaptureAction } from "@/lib/crm/capture-actions";
@@ -29,7 +29,6 @@ import { threadHref, type WorkspaceChoiceRef } from "@/lib/mail/view";
 import type { WaitingNudge, WaitingReminder, WaitingReply } from "@/lib/mail/waiting";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
-import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import MicIcon from "@/public/assets/images/_common/mic.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
@@ -179,31 +178,6 @@ export function ApprovalItem({ item, now, clearId }: { item: WaitingApproval; no
         },
       ]}
     />
-  );
-}
-
-export function OthersApprovals({ items }: { items: OthersApproval[] }) {
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      <h3 className="caption-style text-subtle font-normal">Waiting on others</h3>
-      <ul className="border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border border-dashed">
-        {items.map((item) => (
-          <li key={item.id} className="flex items-center gap-2.5 px-4 py-2.5">
-            <Monogram name={item.ownerName} className="size-6 rounded-full text-[11px]" />
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-soft truncate text-[14px] leading-5">{item.title}</span>
-              <span className="caption-style text-subtle truncate">
-                {item.ownerName} · {item.workflowName} · waiting {item.waitingDays} {item.waitingDays === 1 ? "day" : "days"}
-              </span>
-            </span>
-            <Button variant="ghost" size="sm" href={`/workflows/${item.workflowId}`} aria-label={`Open ${item.workflowName}`}>
-              Open
-              <ChevronRightIcon aria-hidden className="size-3" />
-            </Button>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 

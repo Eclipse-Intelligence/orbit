@@ -208,7 +208,7 @@ describe("tasks, proactive", () => {
     const llm = scripted(() => ({ nextTask: "", dueOn: "", why: "" }));
     const runs = async () => (await listRuns(owner, workflow.id)).length;
 
-    const samsTask = (await createTask(owner, { title: "Sam calls Gavin", contactId, ownerId: sam.userId })).body.task;
+    const samsTask = (await createTask(agent, { title: "Sam calls Gavin", contactId, ownerId: sam.userId })).body.task;
     await completeTask(agent, samsTask.id);
     await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
     assert.equal(await runs(), 0, "an agent completing a teammate's task");
@@ -218,7 +218,7 @@ describe("tasks, proactive", () => {
     await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
     assert.equal(await runs(), 0, "a teammate completing their own task");
 
-    const mine = (await createTask(owner, { title: "Mark emails Gavin", contactId, ownerId: owner.userId })).body.task;
+    const mine = (await createTask(agent, { title: "Mark emails Gavin", contactId, ownerId: owner.userId })).body.task;
     await completeTask(agent, mine.id);
     await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
     assert.equal(await runs(), 1, "an agent completing the owner's task");

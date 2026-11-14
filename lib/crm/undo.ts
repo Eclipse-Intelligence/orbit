@@ -469,7 +469,7 @@ async function describeEvent(
   const plain = (reason: string): Described => ({ entityName: `this ${noun}`, summary: `A change to this ${noun}`, plan: { ok: false, reason } });
   if (!ownedBy(actor, event)) return plain("You can only undo your own changes.");
   const current = await snapshot(db, actor, entity, event.entity_id);
-  if (!current && entity === "task") return plain("You can't see that task any more.");
+  if (!current && entity === "task") return plain("Can't undo: you can't see this task any more.");
   const entityName = current?.name ?? eventName(event, entity);
   const refuse = (summary: string, reason: string): Described => ({ entityName, summary, plan: { ok: false, reason } });
   const fallback = `${event.event_type.replace(/[._]/g, " ")}: ${entityName}`;
@@ -596,7 +596,7 @@ async function describeEvent(
   if (undone) return refuse(summary, "This change has already been undone.");
   if (!current) return refuse(summary, notFoundMessage(noun));
   if (!hasScope(actor.scopes, SCOPES[entity])) return refuse(summary, `You don't have permission to change this ${noun}.`);
-  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null })) {
+  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null })) {
     return refuse(summary, "Can't undo: you're only tagged on this task now.");
   }
   if (check) return refuse(summary, check);

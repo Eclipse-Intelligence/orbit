@@ -89,18 +89,19 @@ function useAutoSize(value: string) {
   return attach;
 }
 
-export function canChangeTaskAs(viewer: Pick<Viewer, "id" | "role">, task: Pick<Task, "ownerId" | "createdByUserId">) {
-  return viewer.role === "owner" || viewer.role === "admin" || task.ownerId === viewer.id || task.createdByUserId === viewer.id;
+export function canChangeTaskAs(viewer: Pick<Viewer, "id">, task: Pick<Task, "ownerId" | "createdByUserId">) {
+  return task.ownerId === viewer.id || task.createdByUserId === viewer.id;
 }
 
-export function canRemoveTag(viewer: Pick<Viewer, "id" | "role">, task: Pick<Task, "ownerId" | "createdByUserId">, person: string) {
+export function canRemoveTag(viewer: Pick<Viewer, "id">, task: Pick<Task, "ownerId" | "createdByUserId">, person: string) {
   return person === viewer.id || canChangeTaskAs(viewer, task);
 }
 
 export function changersLine(names: string[]) {
   const people = [...new Set(names.filter(Boolean))];
-  if (people.length === 0) return "Admins can change it.";
-  return `${people.join(", ")} and admins can change it.`;
+  if (people.length === 0) return "";
+  if (people.length === 1) return `${people[0]} can change it.`;
+  return `${people.slice(0, -1).join(", ")} and ${people[people.length - 1]} can change it.`;
 }
 
 export function firstName(name: string | null | undefined) {
@@ -947,7 +948,7 @@ export default function TaskFields({
   done = false,
 }: {
   details: TaskDetailsState;
-  viewer: Pick<Viewer, "id" | "role">;
+  viewer: Pick<Viewer, "id">;
   members: AssignableMember[];
   tagged: string[];
   layout: "panel" | "row";
@@ -1033,7 +1034,7 @@ export default function TaskFields({
 
 export type TaskTagging = { removed: string[]; remove: (person: string) => void };
 
-function TaggedField({ details, viewer, members, people, tagging }: { details: TaskDetailsState; viewer: Pick<Viewer, "id" | "role">; members: AssignableMember[]; people: string[]; tagging?: TaskTagging }) {
+function TaggedField({ details, viewer, members, people, tagging }: { details: TaskDetailsState; viewer: Pick<Viewer, "id">; members: AssignableMember[]; people: string[]; tagging?: TaskTagging }) {
   const task = details.task;
   const shown = people.filter((person) => !tagging?.removed.includes(person));
   return (

@@ -331,8 +331,8 @@ describe("removing a member", () => {
     await addMember(eclipse.workspaceId, leaver.userId);
     const sam = inWorkspace(leaver, eclipse.workspaceId, "Eclipse", "member");
     const endpoint = await admin().query<{ id: string }>(
-      "insert into crm.webhook_endpoints (workspace_id, url, secret, events) values ($1, 'https://hooks.guards.invalid/orbit', 'secret-value', '{company.updated,task.updated}') returning id",
-      [eclipse.workspaceId],
+      "insert into crm.webhook_endpoints (workspace_id, url, secret, events, created_by_user_id) values ($1, 'https://hooks.guards.invalid/orbit', 'secret-value', '{company.updated,task.updated}', $2) returning id",
+      [eclipse.workspaceId, eclipse.userId],
     );
     const company = (await createCompany(sam, { name: "Sam's Accounts Ltd", ownerId: sam.userId })).body.company;
     const contact = (await upsertContact(sam, { firstName: "Lee", lastName: "Handover", email: "lee@handover.test", ownerId: sam.userId })).body.contact;

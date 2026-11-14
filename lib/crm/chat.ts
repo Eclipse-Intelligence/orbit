@@ -357,7 +357,6 @@ const SUBJECT_AUDIENCE_SQL = `
     and (
       wm.user_id = t.owner_id
       or wm.user_id = t.created_by_user_id
-      or wm.role in ('owner', 'admin')
       or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = wm.user_id)
     )
   union
@@ -1248,7 +1247,6 @@ async function tagFromDiscussion(db: Db, actor: UserActor, conversation: Convers
        and (
          wm.user_id = t.owner_id
          or wm.user_id = t.created_by_user_id
-         or wm.role in ('owner', 'admin')
          or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = wm.user_id)
        )`,
     [conversation.task_id, wanted],

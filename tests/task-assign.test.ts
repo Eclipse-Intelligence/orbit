@@ -282,7 +282,7 @@ describe("task assignment and tagging", () => {
     assert.deepEqual(tagEvents, []);
   });
 
-  it("lets the owner, creator, admins and the person themselves remove someone", async () => {
+  it("lets the owner, creator and the person themselves remove someone, and never an admin", async () => {
     const task = (await createTask(sam, { title: "Plan the Halden kickoff", ownerId: priya.userId })).body.task;
     await addTaskParticipants(sam, task.id, [mark.userId, ada.userId]);
     const second = (await createTask(mark, { title: "Second kickoff task", ownerId: sam.userId })).body.task;
@@ -298,7 +298,8 @@ describe("task assignment and tagging", () => {
     assert.equal(await removeTaskParticipant(priya, task.id, mark.userId), true);
     assert.equal(await removeTaskParticipant(sam, task.id, ada.userId), true);
     await addTaskParticipants(sam, task.id, [mark.userId]);
-    assert.equal(await removeTaskParticipant(ada, task.id, mark.userId), true);
+    await assert.rejects(removeTaskParticipant(ada, task.id, mark.userId), /not found/i);
+    assert.equal(await removeTaskParticipant(sam, task.id, mark.userId), true);
     assert.deepEqual(await listTaskParticipants(sam, [task.id]), { [task.id]: [sam.userId] });
   });
 });
@@ -346,11 +347,9 @@ describe("task access edges", () => {
     const own = (await createTask(priya, { title: "Priya's own" })).body.task;
     assert.deepEqual(await listTaskParticipants(priya, [own.id]), {});
 
-    const byAdmin = (await createTask(sam, { title: "Admin moves this" })).body.task;
-    await updateTask(ada, byAdmin.id, { ownerId: priya.userId });
-    assert.deepEqual((await listTaskParticipants(ada, [byAdmin.id]))[byAdmin.id], [ada.userId]);
-    await updateTask(ada, byAdmin.id, { ownerId: ada.userId });
-    assert.ok(!(await listTasks(ada, { tagged: true })).data.some((task) => task.id === byAdmin.id));
+    const byAdmin = (await createTask(sam, { title: "Admin can't move this" })).body.task;
+    await assert.rejects(updateTask(ada, byAdmin.id, { ownerId: priya.userId }), /not found/i);
+    assert.equal((await getTask(sam, byAdmin.id)).ownerId, sam.userId);
 
     const byCreator = (await createTask(mark, { title: "Creator hands to Priya" })).body.task;
     await updateTask(mark, byCreator.id, { ownerId: priya.userId });
@@ -426,6 +425,7 @@ describe("task access edges", () => {
     const agent = (await createAgent(mark.workspaceId, ["crm:read", "tasks:write"], "Lister")).actor;
     assert.deepEqual((await listTasks(agent, { tagged: true })).data, []);
     assert.equal((await countTaskViews(agent, { tagged: true })).all, 0);
+    await createTask(agent, { title: "The lister's own task" });
     assert.ok((await listTasks(agent)).total > 0);
 
     const hidden = (await createTask(mark, { title: "Hidden from Priya", ownerId: mark.userId })).body.task;
@@ -465,27 +465,27 @@ describe("task access edges", () => {
   });
 
   it("never shows the assignee as tagged, and undoing a reassignment removes only the tag it added", async () => {
-    const task = (await createTask(sam, { title: "Admin reassigns then undoes" })).body.task;
-    await updateTask(ada, task.id, { ownerId: priya.userId });
-    assert.deepEqual((await listTaskParticipants(ada, [task.id]))[task.id], [ada.userId]);
-    const event = await lastEvent(task.id, ada, "task.updated");
-    await undoAuditEvent(ada, event, { operation: "undo_change" });
-    assert.equal((await getTask(ada, task.id)).ownerId, sam.userId);
-    assert.deepEqual(await listTaskParticipants(ada, [task.id]), {});
-    const untagged = await sql<{ n: number }>("select count(*)::int as n from crm.audit_events where entity_id = $1 and event_type = 'task.participant_removed' and actor_user_id = $2", [task.id, ada.userId]);
+    const task = (await createTask(sam, { title: "Sam reassigns then undoes" })).body.task;
+    await updateTask(sam, task.id, { ownerId: priya.userId });
+    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id], [sam.userId]);
+    const event = await lastEvent(task.id, sam, "task.updated");
+    await undoAuditEvent(sam, event, { operation: "undo_change" });
+    assert.equal((await getTask(sam, task.id)).ownerId, sam.userId);
+    assert.deepEqual(await listTaskParticipants(sam, [task.id]), {});
+    const untagged = await sql<{ n: number }>("select count(*)::int as n from crm.audit_events where entity_id = $1 and event_type = 'task.participant_removed' and actor_user_id = $2", [task.id, sam.userId]);
     assert.equal(untagged[0].n, 1);
-    const recent = await listRecentChanges(ada);
+    const recent = await listRecentChanges(sam);
     assert.ok(!recent.some((change) => change.type.startsWith("task.participant_")));
 
-    const readded = (await createTask(sam, { title: "Ada untags and tags again" })).body.task;
-    await updateTask(ada, readded.id, { ownerId: priya.userId });
-    const reassigned = await lastEvent(readded.id, ada, "task.updated");
+    const readded = (await createTask(sam, { title: "Sam untags and tags again" })).body.task;
+    await updateTask(sam, readded.id, { ownerId: priya.userId });
+    const reassigned = await lastEvent(readded.id, sam, "task.updated");
     assert.deepEqual((await sql<{ tagged: boolean }>("select (changes ->> 'taggedAssigner')::boolean as tagged from crm.audit_events where id = $1", [reassigned]))[0].tagged, true);
-    assert.equal(await removeTaskParticipant(ada, readded.id, ada.userId), true);
-    await addTaskParticipants(ada, readded.id, [ada.userId]);
-    await undoAuditEvent(ada, reassigned, { operation: "undo_change" });
-    assert.equal((await getTask(ada, readded.id)).ownerId, sam.userId);
-    assert.deepEqual((await listTaskParticipants(ada, [readded.id]))[readded.id], [ada.userId]);
+    assert.equal(await removeTaskParticipant(sam, readded.id, sam.userId), true);
+    await addTaskParticipants(sam, readded.id, [sam.userId]);
+    await undoAuditEvent(sam, reassigned, { operation: "undo_change" });
+    assert.equal((await getTask(sam, readded.id)).ownerId, sam.userId);
+    assert.equal((await sql("select 1 from crm.task_participants where task_id = $1 and user_id = $2", [readded.id, sam.userId])).length, 1, "the tag added by hand stays");
 
     const ownRow = (await createTask(mark, { title: "Hidden assignee row", ownerId: sam.userId })).body.task;
     await addTaskParticipants(mark, ownRow.id, [priya.userId]);
@@ -497,11 +497,10 @@ describe("task access edges", () => {
     await updateTask(mark, ownRow.id, { ownerId: sam.userId });
     assert.ok((await listTasks(priya, { tagged: true })).data.some((item) => item.id === ownRow.id));
 
-    const followed = (await createTask(sam, { title: "Ada already follows" })).body.task;
-    await addTaskParticipants(ada, followed.id, [ada.userId]);
-    await updateTask(ada, followed.id, { ownerId: priya.userId });
-    await undoAuditEvent(ada, await lastEvent(followed.id, ada, "task.updated"), { operation: "undo_change" });
-    assert.deepEqual((await listTaskParticipants(ada, [followed.id]))[followed.id], [ada.userId]);
+    const followed = (await createTask(mark, { title: "Mark already follows", ownerId: sam.userId })).body.task;
+    await updateTask(mark, followed.id, { ownerId: priya.userId });
+    await undoAuditEvent(mark, await lastEvent(followed.id, mark, "task.updated"), { operation: "undo_change" });
+    assert.deepEqual((await listTaskParticipants(mark, [followed.id]))[followed.id], [mark.userId]);
 
     const follower = (await createTask(mark, { title: "Follower becomes assignee", ownerId: sam.userId })).body.task;
     await addTaskParticipants(mark, follower.id, [priya.userId]);
@@ -531,8 +530,8 @@ describe("task access edges", () => {
 
   it("lets agents reassign tasks over REST and MCP", async () => {
     const issued = await createAgent(mark.workspaceId, [...SCOPES].filter((scope) => scope !== "admin"), "Reassigner");
-    const task = (await createTask(mark, { title: "Agent moves this", ownerId: sam.userId })).body.task;
-    await addTaskParticipants(mark, task.id, [priya.userId]);
+    const task = (await createTask(issued.actor, { title: "Agent moves this", ownerId: sam.userId })).body.task;
+    await addTaskParticipants(sam, task.id, [priya.userId]);
     const response = await restUpdateTask(
       new Request(`http://crm.test/api/v1/tasks/${task.id}`, {
         method: "PATCH",

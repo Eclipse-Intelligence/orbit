@@ -342,7 +342,12 @@ function settleReminder(write: PreparedTask, current: { dueHasTime: boolean; rem
   if (write.remindMinutes === undefined && current.remindMinutes !== null && current.remindMinutes !== undefined) write.remindMinutes = null;
 }
 
-function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { ownerId: string | null; timed: boolean } | null) {
+function agentMadeIt(actor: Actor, createdByAgentId: string | null | undefined) {
+  return actor.type === "agent" && createdByAgentId === actor.agentId;
+}
+
+function setsSomeoneElsesTime(actor: Actor, write: PreparedTask, current: { ownerId: string | null; timed: boolean; createdByAgentId: string | null } | null) {
+  if (actor.type === "agent" && (current === null || agentMadeIt(actor, current.createdByAgentId))) return false;
   const owner = write.ownerId !== undefined ? (write.ownerId ?? null) : (current?.ownerId ?? null);
   if (!owner || (actor.type === "user" && actor.userId === owner)) return false;
   if (!(write.dueHasTime ?? current?.timed ?? false)) return false;
@@ -380,6 +385,7 @@ export const OWNER_SETS_LENGTH = "Only the owner can change the length of a time
 
 function resizesSomeoneElsesBlock(actor: Actor, write: PreparedTask, current: TaskRow) {
   if (write.durationMinutes === undefined || write.durationMinutes === current.duration_minutes) return false;
+  if (agentMadeIt(actor, current.created_by_agent_id)) return false;
   const owner = write.ownerId !== undefined ? (write.ownerId ?? null) : current.owner_id;
   if (!owner || (actor.type === "user" && actor.userId === owner)) return false;
   return write.dueHasTime ?? Boolean(current.due_has_time && current.due_at);
@@ -433,9 +439,22 @@ function taskAlerts(db: Db, actor: Actor, before: Task | null, task: Task, prove
   }
 }
 
-export function canChangeTask(actor: Actor, task: { ownerId: string | null; createdByUserId: string | null }) {
-  if (actor.type !== "user") return true;
-  return actor.role === "owner" || actor.role === "admin" || task.ownerId === actor.userId || task.createdByUserId === actor.userId;
+export function canChangeTask(actor: Actor, task: { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null }) {
+  if (actor.type !== "user") return Boolean(task.createdByAgentId) && task.createdByAgentId === actor.agentId;
+  return task.ownerId === actor.userId || task.createdByUserId === actor.userId;
+}
+
+async function workspaceOwner(db: Db, workspaceId: string) {
+  const result = await db.query<{ user_id: string }>(
+    "select user_id from crm.workspace_members where workspace_id = $1 and role = 'owner' order by created_at, user_id limit 1",
+    [workspaceId],
+  );
+  return result.rows[0]?.user_id ?? null;
+}
+
+async function ownerForAgent(db: Db, actor: Actor, current: TaskRow) {
+  if (actor.type !== "agent" || current.owner_id || current.created_by_agent_id !== actor.agentId) return null;
+  return workspaceOwner(db, actor.workspaceId);
 }
 
 async function assertAssignee(db: Db, workspaceId: string, ownerId: string | null | undefined) {
@@ -476,7 +495,7 @@ async function keepAssignerTagged(
   provenance: Provenance | undefined,
 ) {
   if (actor.type !== "user" || nextOwner === actor.userId || nextOwner === previousOwner) return false;
-  if (nextOwner === null && canChangeTask(actor, { ownerId: null, createdByUserId: task.createdByUserId })) return false;
+  if (nextOwner === null && canChangeTask(actor, { ownerId: null, createdByUserId: task.createdByUserId, createdByAgentId: null })) return false;
   return (await tagInDb(db, actor, task, [actor.userId], provenance)).length > 0;
 }
 
@@ -501,6 +520,7 @@ export async function createTaskInDb(
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   if (write.completed && !silent(provenance)) throw new CrmError("invalid_input", CREATE_OPEN, 400, { field: "completed" });
   if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
+  if ((write.ownerId === undefined || write.ownerId === null) && actor.type === "agent") write.ownerId = await workspaceOwner(db, actor.workspaceId);
   if (setsSomeoneElsesTime(actor, write, null)) keepDayOnly(write, { dueAt: null, dueHasTime: false });
   settleReminder(write, { dueHasTime: false });
   assertReminderCanFire(write.dueAt, write.remindMinutes);
@@ -575,7 +595,7 @@ function cannotChange(write: PreparedTask = {}) {
   const reassigning = write.ownerId !== undefined;
   return new CrmError(
     "forbidden",
-    `Only the assignee, the task's creator, a workspace owner or an admin can ${reassigning ? "reassign" : "change"} it.`,
+    `Only the assignee or the task's creator can ${reassigning ? "reassign" : "change"} it.`,
     403,
     reassigning ? { field: "ownerId" } : undefined,
   );
@@ -590,6 +610,13 @@ async function applyTask(
   options: TaskApplyOptions = {},
 ) {
   if (current.archived_at && !options.restoring) throw notFound("task");
+  if (
+    actor.type === "agent" &&
+    (write.ownerId === null || (write.ownerId === undefined && !current.owner_id)) &&
+    canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })
+  ) {
+    write.ownerId = await workspaceOwner(db, actor.workspaceId);
+  }
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const restoresTime = Boolean(options.restoring && write.dueAt !== undefined && write.ownerId !== undefined);
   const echoesDay = write.dueAt !== undefined && Boolean(write.dueHasTime) && !current.due_has_time && !options.claimSchedule && !write.wallTime && sameDue(write, current);
@@ -602,7 +629,7 @@ async function applyTask(
     if (!options.claimSchedule || write.scheduledBy === (current.scheduled_by ?? null)) delete write.scheduledBy;
   }
   const timed = Boolean(current.due_has_time && current.due_at);
-  if (!restoresTime && setsSomeoneElsesTime(actor, write, { ownerId: current.owner_id, timed })) {
+  if (!restoresTime && setsSomeoneElsesTime(actor, write, { ownerId: current.owner_id, timed, createdByAgentId: current.created_by_agent_id })) {
     keepDayOnly(write, { dueAt: iso(current.due_at), dueHasTime: timed });
   }
   if (!restoresTime && resizesSomeoneElsesBlock(actor, write, current)) {
@@ -625,7 +652,7 @@ async function applyTask(
     },
   );
   const settled = write.completedAt === undefined && write.completed !== undefined && Boolean(current.completed_at) === write.completed;
-  if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
+  if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange(write);
   const completedAt =
     write.completedAt !== undefined
       ? write.completedAt !== null && current.completed_at
@@ -659,16 +686,16 @@ async function applyTask(
   ]);
   const before = mapTask(current);
   if (change.sets.length === 0) {
-    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
+    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange(write);
     return { task: (await withMailThreadsInDb(db, actor, [before]))[0], changed: false };
   }
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
-  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
+  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id });
   let taggedAssigner = false;
   if (reassigning && !options.restoring && !silent(provenance)) {
     taggedAssigner = await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
   }
-  if (current.series_id && current.completed_at && completedAt === null && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
+  if (current.series_id && current.completed_at && completedAt === null && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
     await seriesBeforeReopen(db, actor, mapTask(current), provenance);
   }
   change.values.push(current.id);
@@ -799,7 +826,7 @@ export async function placeTask(
   return withActor(actor, async (db) => {
     const current = await readTaskForWrite(db, actor, id);
     if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
-    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange();
     if (current.completed_at) throw new CrmError("invalid_input", "This task is done. Reopen it to move it.", 400);
     const input = placementWrite(current, actor, placement);
     if (Object.keys(input).length === 0) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0], changed: false };
@@ -819,7 +846,7 @@ export async function scheduleTaskInDb(
   if (!isUuid(id)) throw notFound("task");
   const current = await readTaskForWrite(db, actor, id);
   if (!current || current.archived_at || current.workspace_id !== actor.workspaceId) throw notFound("task");
-  if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+  if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange();
   const refusal = refuse(mapTask(current));
   if (refusal) throw new CrmError("invalid_input", refusal, 400, { field: "schedule" });
   const placedByPerson = Boolean(current.due_has_time && current.due_at && current.scheduled_by === "person");
@@ -1006,7 +1033,7 @@ export async function completeTask(
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       const current = await readTaskForWrite(db, actor, id);
       if (!current || current.archived_at) throw notFound("task");
-      if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
+      if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
         return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
       }
       const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
@@ -1028,7 +1055,7 @@ export async function reopenTask(
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       const current = await readTaskForWrite(db, actor, id);
       if (!current) throw notFound("task");
-      if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
+      if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange();
       if (!current.completed_at || current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
       const updated = await applyTask(db, actor, current, prepareTask({ completed: false }, "patch"), provenance);
       return { task: updated.task };
@@ -1054,15 +1081,16 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
-  if (current.series_id && !options.keepSeries && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
+  if (current.series_id && !options.keepSeries && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
     const skipped = await archiveAsSkipInDb(db, actor, mapTask(current), provenance);
     if (skipped) return { task: skipped };
   }
+  const keeper = await ownerForAgent(db, actor, current);
   const archived = await db.query(
-    `update crm.tasks set archived_at = now(),
+    `update crm.tasks set archived_at = now(), owner_id = coalesce(owner_id, $3::uuid),
        clickup_sync = case when $2::boolean then clickup_sync || '{"goneFromClickUp": true}'::jsonb else clickup_sync end
      where id = $1 and archived_at is null`,
-    [id, Boolean(options.goneFromClickUp)],
+    [id, Boolean(options.goneFromClickUp), keeper],
   );
   if ((archived.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
@@ -1070,8 +1098,8 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
   await recordAudit(db, actor, "task.archived", "task", task.id, provenance, {
-    before: { archivedAt: null },
-    after: { archivedAt: task.archivedAt },
+    before: { archivedAt: null, ...(keeper ? { ownerId: null } : {}) },
+    after: { archivedAt: task.archivedAt, ...(keeper ? { ownerId: task.ownerId } : {}) },
   });
   if (task.seriesId && !options.keepSeries) await seriesAfterArchive(db, actor, task);
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
@@ -1082,15 +1110,16 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   if (!current) throw notFound("task");
   if (!current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
   if (current.series_id) await seriesBeforeUnarchive(db, mapTask(current));
+  const keeper = await ownerForAgent(db, actor, current);
   const restored = await db.query(
-    `update crm.tasks set archived_at = null,
+    `update crm.tasks set archived_at = null, owner_id = coalesce(owner_id, $2::uuid),
        clickup_task_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_task_id end,
        clickup_list_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_list_id end,
        clickup_url = case when clickup_sync ? 'goneFromClickUp' then null else clickup_url end,
        clickup_error = case when clickup_sync ? 'goneFromClickUp' then null else clickup_error end,
        clickup_sync = case when clickup_sync ? 'goneFromClickUp' then '{}'::jsonb else clickup_sync - 'deleteRemote' end
      where id = $1 and archived_at is not null`,
-    [id],
+    [id, keeper],
   );
   if ((restored.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
@@ -1099,9 +1128,9 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   const task = mapTask(saved);
   const unlinked = current.clickup_task_id !== null && saved.clickup_task_id === null;
   await recordAudit(db, actor, "task.updated", "task", task.id, provenance, {
-    fields: ["archivedAt"],
-    before: { archivedAt: iso(current.archived_at) },
-    after: { archivedAt: null },
+    fields: keeper ? ["archivedAt", "ownerId"] : ["archivedAt"],
+    before: { archivedAt: iso(current.archived_at), ...(keeper ? { ownerId: null } : {}) },
+    after: { archivedAt: null, ...(keeper ? { ownerId: task.ownerId } : {}) },
     ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
   if (task.seriesId) await seriesAfterUnarchive(db, actor, task);
