@@ -79,7 +79,7 @@ export default function TeamSettings({
       <SettingsCard
         id="people"
         title="People"
-        description="Records and activity are shared. Inboxes and calendars are private. Tasks are seen by the person they're assigned to, whoever made them, and the owner and admins."
+        description="Records and activity are shared. Inboxes and calendars are private. Tasks are seen only by the person they're assigned to, whoever made them, and people tagged on them."
       >
         {error && (
           <p role="alert" className="caption-style text-danger">

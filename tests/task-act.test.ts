@@ -229,17 +229,15 @@ describe("task context", () => {
     assert.equal(context.lastEmail?.subject, "Copied Tom");
   });
 
-  it("shows an admin opening someone else's task only their own mail", async () => {
+  it("never shows an admin someone else's task", async () => {
     const task = (await createTask(mark, { title: "Reply to Jane", contactId: jane, mailThreadKey: `${markBox.sourceId}|renewal` })).body.task;
-    const context = await taskContext(ava, task.id);
-    assert.equal(context.thread, null);
-    assert.equal(context.lastEmail, null);
-    assert.equal(context.opportunity?.id, renewal);
+    await assert.rejects(() => taskContext(ava, task.id), (error: unknown) => (error as { status?: number }).status === 404);
+    assert.equal((await taskContext(mark, task.id)).opportunity?.id, renewal);
   });
 
   it("gives agents the contact's details on the task", async () => {
-    const { token } = await createAgent(mark.workspaceId, scopesForRole("owner"), "Act agent");
-    const task = (await createTask(mark, { title: "Call Jane", contactId: jane })).body.task;
+    const { actor: bot, token } = await createAgent(mark.workspaceId, scopesForRole("owner"), "Act agent");
+    const task = (await createTask(bot, { title: "Call Jane", contactId: jane })).body.task;
     const response = await restGetTask(new Request(`http://crm.test/api/v1/tasks/${task.id}`, { headers: { authorization: `Bearer ${token}` } }), {
       params: Promise.resolve({ id: task.id }),
     });
@@ -394,10 +392,11 @@ describe("done with an outcome", () => {
   it("refuses a second outcome for the same completion, from anyone, with or without a note, whatever the links now are", async () => {
     const task = (await createTask(mark, { title: "Call Martin about the pilot", contactId: martin })).body.task;
     await completeTaskWithOutcome(mark, task.id, outcome({ next: { title: "Chase Martin for the PO", dueAt: null } }));
-    await assert.rejects(() => completeTaskWithOutcome(ava, task.id, outcome({ next: { title: "Chase Martin for the PO", dueAt: null } })), /already saved/);
+    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, outcome({ next: { title: "Chase Martin for the PO", dueAt: null } })), /already saved/);
+    await assert.rejects(() => completeTaskWithOutcome(ava, task.id, outcome({ next: { title: "Chase Martin for the PO", dueAt: null } })), (error: unknown) => (error as { status?: number }).status === 404);
     assert.equal(await tasksTitled("Chase Martin for the PO"), 1);
     await relinkTask(mark, task.id, { contactId: jane, companyId: northwind }, { operation: "link_task", source: "web" });
-    await assert.rejects(() => completeTaskWithOutcome(ava, task.id, outcome({ note: "Martin said yes", kind: "call" })), /already saved/);
+    await assert.rejects(() => completeTaskWithOutcome(mark, task.id, outcome({ note: "Martin said yes", kind: "call" })), /already saved/);
     await assert.rejects(() => completeTaskWithOutcome(mark, task.id, outcome({ note: "Different words" })), /already saved/);
     assert.equal((await activitiesFor(task.id)).length, 0);
   });
@@ -447,7 +446,10 @@ describe("done with an outcome", () => {
     await assert.rejects(() =>
       queryAsUser(priya.userId, "insert into crm.task_outcomes (id, task_id, completed_at, created_by) values ($1, $2, now(), $3)", [randomUUID(), task.id, priya.userId]),
     );
-    await queryAsUser(ava.userId, "insert into crm.task_outcomes (id, task_id, completed_at, created_by) values ($1, $2, now(), $3)", [randomUUID(), task.id, ava.userId]);
+    await assert.rejects(() =>
+      queryAsUser(ava.userId, "insert into crm.task_outcomes (id, task_id, completed_at, created_by) values ($1, $2, now(), $3)", [randomUUID(), task.id, ava.userId]),
+    );
+    await queryAsUser(mark.userId, "insert into crm.task_outcomes (id, task_id, completed_at, created_by) values ($1, $2, now(), $3)", [randomUUID(), task.id, mark.userId]);
   });
 
   it("just completes when nothing is entered", async () => {

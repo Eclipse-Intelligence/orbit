@@ -591,12 +591,12 @@ export async function decideApproval(
     return true;
   });
   if (!claimed) {
-    const others = await query<{ id: string }>("select id from private.waiting_approvals_of_others($1, $2) where id = $3", [
+    const others = await query<{ waiting: boolean }>("select private.approval_waits_on_other($1, $2, $3) as waiting", [
+      runId,
       actor.userId,
       actor.workspaceId,
-      runId,
     ]);
-    if (others.rows[0]) throw new CrmError("forbidden", "Only the person this approval is waiting on can decide it.", 403);
+    if (others.rows[0]?.waiting) throw new CrmError("forbidden", "Only the person this approval is waiting on can decide it.", 403);
     throw new CrmError("conflict", "This approval has already been dealt with.", 409);
   }
   return executeRun(runId, actor.userId, actor.workspaceId, { deadline: Date.now() + 50_000, fetchImpl: options.fetchImpl });

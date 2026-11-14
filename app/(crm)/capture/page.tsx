@@ -2,7 +2,6 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import CaptureScreen from "@/components/capture/capture-screen";
 import { getUserActor } from "@/lib/auth/user";
-import { listWaitingOnOthers } from "@/lib/crm/action-needed";
 import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
 import { captureContext, captureStatus, connectionAlert, listToFile, markCaptureSeen, waitingHere } from "@/lib/crm/capture";
@@ -41,7 +40,7 @@ export default async function CapturePage() {
   const live = mailbox?.status === "connected";
   const context = await captureContext(user, openedAt.getTime(), { inline: true });
   const failed = new Set<CaptureSection>(context.failed);
-  const [items, status, calls, granola, transcripts, calendar, followUps, unknown, others, dismissed] = await Promise.all([
+  const [items, status, calls, granola, transcripts, calendar, followUps, unknown, dismissed] = await Promise.all([
     listToFile(user, openedAt.getTime()).catch((error) => {
       failed.add("toFile");
       return logged("Reading what's waiting to file failed", { unfiled: [], people: [] })(error);
@@ -66,7 +65,6 @@ export default async function CapturePage() {
         workspaces: [{ id: user.workspaceId, name: user.workspaceName }],
       })(error);
     }),
-    listWaitingOnOthers(user, openedAt).catch(logged("Reading approvals waiting on others failed", [])),
     listDismissedImports(user).catch(logged("Reading dismissed calls failed", { items: [], total: 0 })),
   ]);
   const rules = await listSenderRules(user).catch(logged("Reading Capture rules failed", []));
@@ -99,7 +97,6 @@ export default async function CapturePage() {
       }}
       data={{
         approvals: here.approvals,
-        others,
         nudges: here.nudges,
         reminders: here.reminders,
         calls: followUps,

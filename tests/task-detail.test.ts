@@ -113,6 +113,7 @@ async function rejects(work: Promise<unknown>, code: string) {
 }
 
 let callJane: string;
+let agentJane: string;
 let threadEmail: string;
 
 before(async () => {
@@ -146,6 +147,9 @@ before(async () => {
     await createTask(mark, { title: "Call Jane about the renewal", description: "Ask about the three-year price.", mailThreadKey: `${markBox.sourceId}|renewal`, dueDate: "2026-11-20", ownerId: sam.userId, contactId: jane, opportunityId: renewal })
   ).body.task.id;
   await addTaskParticipants(mark, callJane, [priya.userId]);
+  agentJane = (
+    await createTask(agent, { title: "Call Jane about the renewal", description: "Ask about the three-year price.", mailThreadKey: `${markBox.sourceId}|renewal`, dueDate: "2026-11-20", ownerId: sam.userId, contactId: jane, opportunityId: renewal })
+  ).body.task.id;
 });
 
 after(async () => {
@@ -153,8 +157,8 @@ after(async () => {
   await getAdminPool().end();
 });
 
-function assertCrmFields(detail: TaskDetail) {
-  assert.equal(detail.task.id, callJane);
+function assertCrmFields(detail: TaskDetail, id = callJane) {
+  assert.equal(detail.task.id, id);
   assert.equal(detail.task.title, "Call Jane about the renewal");
   assert.equal(detail.task.dueDate, "2026-11-20");
   assert.equal(detail.task.ownerId, sam.userId);
@@ -212,15 +216,16 @@ describe("the full detail of one task", () => {
   });
 
   it("gives an agent token every CRM field and no mail, without an error", async () => {
-    const detail = await taskDetail(agent, callJane);
-    assertCrmFields(detail);
+    await rejects(taskDetail(agent, callJane), "not_found");
+    const detail = await taskDetail(agent, agentJane);
+    assertCrmFields(detail, agentJane);
     assert.equal(detail.mail, null);
     assert.deepEqual(detail.task.mailThread, { subject: null, readable: false });
     assert.doesNotMatch(JSON.stringify(detail), /Renewal terms/);
     assert.equal(detail.canChange, true);
     assert.equal(detail.assignedToViewer, false);
     assert.deepEqual(detail.workspace, { id: mark.workspaceId, name: null, current: true });
-    await rejects(taskDetail({ ...agent, scopes: ["tasks:write"] }, callJane), "forbidden");
+    await rejects(taskDetail({ ...agent, scopes: ["tasks:write"] }, agentJane), "forbidden");
   });
 
   it("reads a task in another of the user's workspaces as read only, and fails closed for everyone else", async () => {
@@ -282,7 +287,7 @@ describe("list_tasks with a task id and a workspace", () => {
 describe("what a task block tells the model", () => {
   it("says when the user can't change the task, and offers something else", async () => {
     const tagged = await pageContext(priya, null, { taggedTaskIds: [callJane] });
-    assert.match(tagged, /\nThe user can't change that task: only its assignee, its creator, an owner or an admin can\. Don't propose update_task on it; offer what they can do instead, such as logging the activity or a new task\.\n/);
+    assert.match(tagged, /\nThe user can't change that task: only its assignee or its creator can\. Don't propose update_task on it; offer what they can do instead, such as logging the activity or a new task\.\n/);
     assert.doesNotMatch(await pageContext(sam, null, { taggedTaskIds: [callJane] }), /can't change that task/);
     const gone = (await createTask(mark, { title: "Archived follow-up", ownerId: mark.userId, contactId: jane })).body.task.id;
     await archiveTask(mark, gone);
@@ -315,14 +320,15 @@ describe("what a task block tells the model", () => {
 
 describe("MCP get_next_action", () => {
   it("is registered for agent and personal tokens with crm:read, and gives agents no mail", async () => {
-    const asAgent = await mcpCall(agent, "get_next_action", { id: callJane });
+    const asAgent = await mcpCall(agent, "get_next_action", { id: agentJane });
     assert.ok(asAgent.names.includes("get_next_action"));
     assert.equal(asAgent.error, false);
     const body = JSON.parse(asAgent.text) as TaskDetail;
-    assertCrmFields(body);
+    assertCrmFields(body, agentJane);
+    assert.equal((await mcpCall(agent, "get_next_action", { id: callJane })).error, true);
     assert.equal(body.mail, null);
 
-    const noRead = await mcpCall({ ...agent, scopes: ["tasks:write"] }, "get_next_action", { id: callJane });
+    const noRead = await mcpCall({ ...agent, scopes: ["tasks:write"] }, "get_next_action", { id: agentJane });
     assert.equal(noRead.error, true);
     assert.match(noRead.text, /^forbidden: Missing scope crm:read\./);
 
@@ -343,8 +349,12 @@ describe("MCP get_next_action", () => {
 
 describe("GET /api/v1/tasks/:id", () => {
   it("returns the task and its full detail, with no mail for an agent token", async () => {
-    const response = await restGetTask(new Request(`http://crm.test/api/v1/tasks/${callJane}`, { headers: { authorization: `Bearer ${agentToken}` } }), {
+    const hidden = await restGetTask(new Request(`http://crm.test/api/v1/tasks/${callJane}`, { headers: { authorization: `Bearer ${agentToken}` } }), {
       params: Promise.resolve({ id: callJane }),
+    });
+    assert.equal(hidden.status, 404);
+    const response = await restGetTask(new Request(`http://crm.test/api/v1/tasks/${agentJane}`, { headers: { authorization: `Bearer ${agentToken}` } }), {
+      params: Promise.resolve({ id: agentJane }),
     });
     assert.equal(response.status, 200);
     const body = (await response.json()) as { task: { description: string; mailThreadKey: string; mailThread: unknown }; detail: TaskDetail };
@@ -352,12 +362,12 @@ describe("GET /api/v1/tasks/:id", () => {
     assert.equal(body.task.mailThreadKey, `${markBox.sourceId}|renewal`);
     assert.deepEqual(body.task.mailThread, { subject: null, readable: false });
     assert.doesNotMatch(JSON.stringify(body), /Renewal terms/);
-    assertCrmFields(body.detail);
+    assertCrmFields(body.detail, agentJane);
     assert.equal(body.detail.mail, null);
   });
 
   it("still returns the task when its detail can't be read", async () => {
-    const task = await getTask(agent, callJane);
+    const task = await getTask(agent, agentJane);
     const original = console.error;
     console.error = () => {};
     try {
@@ -365,6 +375,6 @@ describe("GET /api/v1/tasks/:id", () => {
     } finally {
       console.error = original;
     }
-    assertCrmFields((await detailOfTask(agent, task))!);
+    assertCrmFields((await detailOfTask(agent, task))!, agentJane);
   });
 });

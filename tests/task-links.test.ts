@@ -277,8 +277,8 @@ describe("linking tasks on creation", () => {
   it("keeps the time blocking rules when the assistant relinks a teammate's timed task", async () => {
     const theirs = (await createTask(mark, { title: "Walk Sam through the rollout", dueAt: "2027-01-12T14:30", ownerId: sam.userId, companyId: null, contactId: null, opportunityId: null })).body.task;
     assert.equal(theirs.dueHasTime, false);
-    const own = (await createTask(sam, { title: "Plan the Halden rollout", dueAt: "2027-01-12T14:30", ownerId: sam.userId, companyId: null, contactId: null, opportunityId: null })).body.task;
-    assert.equal(own.dueHasTime, true);
+    const own = (await createTask(mark, { title: "Plan the Halden rollout", ownerId: sam.userId, companyId: null, contactId: null, opportunityId: null })).body.task;
+    assert.equal((await updateTask(sam, own.id, { dueAt: "2027-01-12T14:30" })).body.task.dueHasTime, true);
     const relinked = ((await runTool(mark, "update_task", { taskId: own.id, contactId: raj, dueAt: "2027-01-13T09:00" })) as { task: Task }).task;
     assert.deepEqual(links(relinked), { companyId: halden, contactId: raj, opportunityId: null });
     assert.equal(relinked.dueHasTime, false);
