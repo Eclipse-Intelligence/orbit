@@ -28,8 +28,40 @@ import {
 
 const nullableText = z.string().nullable().optional();
 
+export const SYSTEM_SOURCES = [
+  "web",
+  "email",
+  "assistant",
+  "mcp",
+  "api",
+  "clickup",
+  "workflow",
+  "communication",
+  "microsoft",
+  "microsoft_teams",
+  "teams",
+  "granola",
+  "mail",
+  "mail_share",
+  "chat",
+  "task_outcome",
+  "backfill",
+  "meta_lead_ad",
+  "booking",
+  "proposal_page",
+  "meeting",
+  "parallel",
+  "readwise",
+  "activity_pad",
+  "shortcut",
+  "contact_email",
+  "csv",
+  "linkedin_extension",
+] as const;
+
 export function agentSource(source: string | null | undefined) {
-  return source?.trim().toLowerCase() === "web" ? null : source;
+  if (typeof source !== "string") return source;
+  return (SYSTEM_SOURCES as readonly string[]).includes(source.trim().toLowerCase()) ? null : source;
 }
 
 const LEADING_DATE = /^\s*(\d{4}-\d{2}-\d{2})(?![\d])/;

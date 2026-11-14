@@ -22,6 +22,7 @@ import {
   type ContactWrite,
 } from "@/lib/crm/types";
 import { agentSource } from "@/lib/crm/validation";
+import { withTaskWorkspaceHint } from "@/lib/crm/workspaces";
 
 function toolResult(value: unknown) {
   return {
@@ -423,9 +424,11 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     },
     async (args) =>
       run(async () => {
-        const result = await completeTask(actor, args.id, {
-          provenance: provenance(args, "complete_task"),
-        });
+        const result = await withTaskWorkspaceHint(actor, args.id, () =>
+          completeTask(actor, args.id, {
+            provenance: provenance(args, "complete_task"),
+          }),
+        );
         return result.body;
       }),
   );
@@ -439,7 +442,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
           : "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, and the last activity. mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
       inputSchema: { id: z.uuid() },
     },
-    async (args) => run(() => taskDetail(actor, args.id)),
+    async (args) => run(() => withTaskWorkspaceHint(actor, args.id, () => taskDetail(actor, args.id))),
   );
 
   server.registerTool(

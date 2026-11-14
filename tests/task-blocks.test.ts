@@ -387,7 +387,7 @@ describe("acting on a task in its own workspace", () => {
     assert.equal(resolved.role, "member");
     assert.match(await failure(() => updateTask(resolved, tagged.id, { title: "renamed" })), /^forbidden\|403/);
     assert.match(await failure(() => completeTask(resolved, tagged.id)), /^forbidden\|403/);
-    assert.match(await failure(() => updateTask(danaA, tagged.id, { title: "renamed as an admin of A" })), /^forbidden\|403/);
+    assert.match(await failure(() => updateTask(danaA, tagged.id, { title: "renamed as an admin of A" })), /^not_found\|404/);
     const task = await getTask(markB, tagged.id);
     assert.equal(task.title, "Mark tags Dana");
     assert.equal(task.completedAt, null);

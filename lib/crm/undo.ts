@@ -303,7 +303,7 @@ async function snapshot(db: Db, actor: Actor, entity: EntityType, id: string): P
     return { name: opportunity.name, values: { ...opportunity }, archivedAt: opportunity.archivedAt };
   }
   if (entity === "task") {
-    const task = await readTaskInDb(db, id);
+    const task = await readTaskInDb(db, actor, id);
     if (!task || task.workspaceId !== workspaceId) return null;
     return { name: task.title, values: { ...task }, archivedAt: task.archivedAt };
   }

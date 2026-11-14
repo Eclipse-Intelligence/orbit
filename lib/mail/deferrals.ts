@@ -373,9 +373,9 @@ async function lockDeferral(db: Db, actor: UserActor, id: string) {
   return row;
 }
 
-async function openTask(db: Db, taskId: string | null) {
+async function openTask(db: Db, actor: UserActor, taskId: string | null) {
   if (!taskId) return null;
-  const task = await readTaskInDb(db, taskId);
+  const task = await readTaskInDb(db, actor, taskId);
   return task && !task.archivedAt && !task.completedAt ? task : null;
 }
 
@@ -388,7 +388,7 @@ export async function moveDeferral(caller: UserActor, id: string, atValue: strin
   return withActor(actor, async (db) => {
     const row = await lockDeferral(db, actor, id);
     await db.query("update crm.mail_reminders set due_at = $2 where id = $1", [row.id, at.toISOString()]);
-    const task = await openTask(db, row.task_id);
+    const task = await openTask(db, actor, row.task_id);
     if (task) {
       await updateTaskInDb(db, actor, task.id, task.dueHasTime && task.dueDate === dayKeyAt(at) ? { dueAt: at.toISOString() } : onDayKeepingKind(task, dayKeyAt(at)), { operation: "move_deferred_follow_up", source: "mail", sourceUrl: threadHref(row.source_id, row.thread_key) });
     }
@@ -401,7 +401,7 @@ export async function cancelDeferral(caller: UserActor, id: string) {
   return withActor(actor, async (db) => {
     const row = await lockDeferral(db, actor, id);
     await db.query("update crm.mail_reminders set state = 'done' where id = $1", [row.id]);
-    const task = await openTask(db, row.task_id);
+    const task = await openTask(db, actor, row.task_id);
     if (task) {
       await archiveTaskInDb(db, actor, task.id, { operation: "cancel_deferred_follow_up", source: "mail", sourceUrl: threadHref(row.source_id, row.thread_key) });
     }

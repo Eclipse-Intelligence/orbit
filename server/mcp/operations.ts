@@ -13,6 +13,7 @@ import { archiveTask, updateTask } from "@/lib/crm/tasks";
 import { WEBHOOK_EVENTS, createWebhook, listWebhookDeliveries } from "@/lib/crm/webhooks";
 import { OPPORTUNITY_STATUSES, TASK_PRIORITIES, type Actor } from "@/lib/crm/types";
 import { agentSource } from "@/lib/crm/validation";
+import { withTaskWorkspaceHint } from "@/lib/crm/workspaces";
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -147,7 +148,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     async (args) =>
       run(async () =>
         (
-          await updateTask(
+          await withTaskWorkspaceHint(actor, args.id, () => updateTask(
             actor,
             args.id,
             {
@@ -165,7 +166,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               mailThreadKey: args.mailThreadKey,
             },
             { provenance: provenance(args, "update_task") },
-          )
+          ))
         ).body,
       ),
   );
@@ -178,7 +179,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     },
     async (args) =>
       run(async () =>
-        (await archiveTask(actor, args.id, { provenance: provenance(args, "archive_task") })).body,
+        (await withTaskWorkspaceHint(actor, args.id, () => archiveTask(actor, args.id, { provenance: provenance(args, "archive_task") }))).body,
       ),
   );
 

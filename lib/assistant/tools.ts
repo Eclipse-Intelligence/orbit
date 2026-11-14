@@ -272,6 +272,40 @@ function taskEmailLines(args: Record<string, unknown>) {
   return [nullableStr(args.emailId) ? "Pinned to the email's thread" : "Email: none"];
 }
 
+const TASK_SELF_KEY = "task:self";
+const TASK_CLICKUP_KEY = "task:clickup";
+
+function dueDayOf(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const reading = readDateTime(value);
+  return reading.ok ? taskDueDay(reading.date.toISOString()) : null;
+}
+
+function taskTimingLines(args: Args, name: Names, current: { ownerId: string | null; timed: boolean } | null) {
+  const self = detail(name, TASK_SELF_KEY);
+  const owner = optionalStr(args.ownerId) ?? current?.ownerId ?? null;
+  const ownerChanges = optionalStr(args.ownerId) !== undefined && owner !== (current?.ownerId ?? null);
+  const someoneElse = Boolean(owner && self && owner !== self);
+  const timed = hasTime(args.dueAt) || (args.dueAt === undefined && args.dueDate === undefined && Boolean(current?.timed));
+  const dayOnly = someoneElse && timed && (ownerChanges || args.dueAt !== undefined);
+  if (!dayOnly) {
+    return [
+      ...fieldLines(args, { dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder" }),
+      ...clearedLines(args, { dueDate: "Due", dueAt: "Due", remindMinutes: "Reminder" }),
+    ];
+  }
+  const day = dueDayOf(args.dueAt);
+  return [
+    day ? `Due: ${formatDateLabel(day)}` : "",
+    ...fieldLines(args, { durationMinutes: "Duration" }),
+    "Date only: only the owner sets a time",
+  ];
+}
+
+function clearedLines(args: Args, labels: Record<string, string>) {
+  return [...new Set(Object.entries(labels).filter(([key]) => args[key] === null).map(([, label]) => `${label}: none`))];
+}
+
 function taskRelinkLines(args: Record<string, unknown>, name: Names) {
   return TASK_LINK_KEYS.filter((key) => args[key] !== undefined).map((key) => {
     const id = nullableStr(args[key]);
@@ -609,6 +643,20 @@ function nameList(ids: string[], name: Names, noun: string) {
 
 function scheduleItems(value: unknown) {
   return (Array.isArray(value) ? value : []).filter((item): item is Args => Boolean(item) && typeof item === "object");
+}
+
+async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
+  const id = str(value);
+  if (!isUuid(id)) return { [TASK_SELF_KEY]: actor.userId };
+  const rows = await withActor(actor, (db) =>
+    db.query<{ owner_id: string | null; timed: boolean }>(
+      "select owner_id, (due_has_time and due_at is not null) as timed from crm.tasks where id = $1 and workspace_id = $2",
+      [id, actor.workspaceId],
+    ),
+  );
+  const row = rows.rows[0];
+  if (!row) return { [TASK_SELF_KEY]: actor.userId };
+  return { [TASK_SELF_KEY]: actor.userId, [`${id}:owner`]: row.owner_id ?? "none", [`${id}:timed`]: row.timed ? "yes" : "no" };
 }
 
 async function scheduleDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
@@ -1086,7 +1134,7 @@ const TASK_FIELDS = {
   remindMinutes: {
     type: "integer",
     enum: REMINDER_OPTIONS.map((option) => option.minutes),
-    description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080. Needs a due time (dueAt).",
+    description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080, or null to remove it. Needs a due time (dueAt).",
   },
   priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent it is: low, normal or high. New tasks are normal unless set." },
   ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
@@ -3441,14 +3489,19 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["title"],
     },
+    details: async (actor, args) => ({
+      [TASK_SELF_KEY]: actor.userId,
+      ...(args.sendToClickUp !== false && (await getClickUpPicker(actor).catch(() => null)) ? { [TASK_CLICKUP_KEY]: "yes" } : {}),
+    }),
     describe: (args, name) => ({
       title: `Create task: ${str(args.title)}`,
       lines: [
-        ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner", dueDate: "Due", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
-        ...fieldLines(args, { durationMinutes: "Duration", remindMinutes: "Reminder" }),
+        ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner" }, name),
+        ...taskTimingLines(args, name, null),
+        ...fieldLines(args, { description: "Detail", priority: "Priority" }),
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
         ...taskEmailLines(args),
-        `ClickUp: ${args.sendToClickUp === false ? "no" : "yes"}`,
+        args.sendToClickUp === false ? "ClickUp: no" : detail(name, TASK_CLICKUP_KEY) ? "ClickUp: yes" : "",
       ],
     }),
     run: async (actor, args) => {
@@ -3504,13 +3557,19 @@ const TOOL_LIST: AssistantTool[] = [
         },
       },
     },
-    details: async (actor, args) => (args.schedule !== undefined && args.schedule !== null ? scheduleDetails(actor, args.schedule) : {}),
+    details: async (actor, args) => (args.schedule !== undefined && args.schedule !== null ? scheduleDetails(actor, args.schedule) : taskOwnerDetails(actor, args.taskId)),
     describe: (args, name) => {
       if (args.schedule !== undefined && args.schedule !== null) return describeSchedule(args.schedule, name);
+      const id = str(args.taskId);
+      const owner = detail(name, `${id}:owner`);
+      const current = owner ? { ownerId: owner === "none" ? null : owner, timed: detail(name, `${id}:timed`) === "yes" } : null;
       return {
         title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
         lines: [
-          ...fieldLines(args, { title: "Title", dueDate: "Due", dueAt: "Due", durationMinutes: "Duration", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
+          ...fieldLines(args, { title: "Title" }),
+          ...taskTimingLines(args, name, current),
+          ...fieldLines(args, { priority: "Priority", description: "Detail" }),
+          ...clearedLines(args, { description: "Detail" }),
           ...fieldLines(args, { ownerId: "Owner" }, name),
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
