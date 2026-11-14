@@ -40,7 +40,8 @@ import { wallMinutes } from "@/lib/calendar-view";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
 import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { assertOwnThreadInDb, readMailThreadKey, withMailThreadsInDb, withoutViewerMail } from "@/lib/crm/task-mail";
+import { assertOwnThreadInDb, readMailThreadKey } from "@/lib/crm/task-mail";
+import { planTaskDocsInDb, readDocIds, withoutViewerLinks, withViewerLinksInDb, writeTaskDocsInDb } from "@/lib/crm/task-docs";
 import { dayWindow, readDateTime } from "@/lib/time";
 
 const TASK_SQL = `
@@ -84,6 +85,7 @@ const TASK_SQL = `
     t.clickup_error,
     t.calendar_event_ref,
     t.mail_thread_key,
+    array(select d.page_id::text from crm.task_docs d where d.task_id = t.id order by d.created_at, d.page_id) as doc_ids,
     t.created_at,
     t.updated_at
   from crm.tasks t
@@ -129,6 +131,7 @@ type TaskRow = {
   clickup_error: string | null;
   calendar_event_ref: string | null;
   mail_thread_key: string | null;
+  doc_ids: string[] | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -148,6 +151,7 @@ type PreparedTask = {
   contactId?: string | null;
   opportunityId?: string | null;
   mailThreadKey?: string | null;
+  docIds?: string[];
   completed?: boolean;
   completedAt?: string | null;
 };
@@ -191,6 +195,8 @@ function mapTask(row: TaskRow): Task {
     inOutlook: Boolean(row.calendar_event_ref),
     mailThreadKey: row.mail_thread_key,
     mailThread: row.mail_thread_key ? { subject: null, readable: false } : null,
+    docIds: row.doc_ids ?? [],
+    docs: [],
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
   };
@@ -269,6 +275,7 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   if (input.contactId !== undefined) next.contactId = input.contactId || null;
   if (input.opportunityId !== undefined) next.opportunityId = input.opportunityId || null;
   if (input.mailThreadKey !== undefined) next.mailThreadKey = readMailThreadKey(input.mailThreadKey);
+  if (input.docIds !== undefined) next.docIds = readDocIds(input.docIds);
   if (input.completed !== undefined) next.completed = input.completed;
   return next;
 }
@@ -471,17 +478,19 @@ export async function createTaskInDb(
         write.mailThreadKey ?? null,
       ],
     );
+    const docs = await planTaskDocsInDb(db, actor, actor.workspaceId, [], write.docIds);
+    if (docs) await writeTaskDocsInDb(db, actor, { id: inserted.rows[0].id, workspaceId: actor.workspaceId }, docs);
     const saved = await readTask(db, actor, inserted.rows[0].id);
     if (!saved) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
     queueTaskBlock(db, saved.id);
     const task = mapTask(saved);
     await recordAudit(db, actor, "task.created", "task", task.id, provenance, {
-      after: withoutViewerMail(task),
+      after: withoutViewerLinks(task),
       ...(detectedLinks.length > 0 ? { detectedLinks: [...new Set(detectedLinks)] } : {}),
     });
     if (!silent(provenance)) await keepAssignerTagged(db, actor, task, null, task.ownerId, provenance);
     taskAlerts(db, actor, null, task, provenance);
-    return (await withMailThreadsInDb(db, actor, [task]))[0];
+    return (await withViewerLinksInDb(db, actor, [task]))[0];
   } catch (error) {
     constraintError(error, "duplicate_task", "A matching task already exists.");
   }
@@ -565,8 +574,13 @@ async function applyTask(
     [write.mailThreadKey !== undefined, "mail_thread_key", "mailThreadKey", write.mailThreadKey ?? null],
     [completedAt !== undefined, "completed_at", "completedAt", completedAt ?? null],
   ]);
+  const docs = await planTaskDocsInDb(db, actor, current.workspace_id, current.doc_ids ?? [], write.docIds);
+  if (docs) {
+    change.fields.push("docIds");
+    if (change.sets.length === 0) change.sets.push("updated_at = now()");
+  }
   const before = mapTask(current);
-  if (change.sets.length === 0) return { task: (await withMailThreadsInDb(db, actor, [before]))[0], changed: false };
+  if (change.sets.length === 0) return { task: (await withViewerLinksInDb(db, actor, [before]))[0], changed: false };
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
   const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
   let taggedAssigner = false;
@@ -586,6 +600,7 @@ async function applyTask(
     constraintError(error, "duplicate_task", "A matching task already exists.");
   }
   if (updated === 0) throw cannotChange(write);
+  if (docs) await writeTaskDocsInDb(db, actor, { id: current.id, workspaceId: current.workspace_id }, docs);
   queueTaskBlock(db, current.id);
   const saved = await readTask(db, actor, current.id);
   if (!saved) throw notFound("task");
@@ -629,7 +644,7 @@ async function applyTask(
     },
   );
   taskAlerts(db, actor, before, task, provenance);
-  return { task: (await withMailThreadsInDb(db, actor, [task]))[0], changed: true };
+  return { task: (await withViewerLinksInDb(db, actor, [task]))[0], changed: true };
 }
 
 export async function updateTaskInDb(
@@ -699,7 +714,7 @@ export async function placeTask(
     if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
     if (current.completed_at) throw new CrmError("invalid_input", "This task is done. Reopen it to move it.", 400);
     const input = placementWrite(current, actor, placement);
-    if (Object.keys(input).length === 0) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0], changed: false };
+    if (Object.keys(input).length === 0) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0], changed: false };
     return applyTask(db, actor, current, prepareTask(input, "patch"), provenance, { claimSchedule: placement.dateOnly !== true });
   });
 }
@@ -835,7 +850,7 @@ export async function listTasks(actor: Actor, query: TaskListQuery = {}, options
       listed,
     );
     return {
-      data: await withMailThreadsInDb(db, actor, rows.rows.map(mapTask)),
+      data: await withViewerLinksInDb(db, actor, rows.rows.map(mapTask)),
       total: count.rows[0]?.total ?? 0,
       limit: page.limit,
       offset: page.offset,
@@ -851,7 +866,7 @@ export async function getTask(actor: Actor, id: string, options: { direct?: bool
       ? (await db.query<TaskRow>(`${TASK_SQL} where t.id = $1 and t.workspace_id = $2 and ${directTaskSql("t")}`, [id, actor.workspaceId])).rows[0]
       : await readTask(db, actor, id);
     if (!row) throw notFound("task");
-    return (await withMailThreadsInDb(db, actor, [mapTask(row)]))[0];
+    return (await withViewerLinksInDb(db, actor, [mapTask(row)]))[0];
   });
 }
 
@@ -907,7 +922,7 @@ export async function completeTask(
       const current = await readTask(db, actor, id);
       if (!current || current.archived_at) throw notFound("task");
       if (current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
-        return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+        return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
       }
       const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
       return { task: updated.task };
@@ -930,7 +945,7 @@ export async function reopenTask(
       const current = await readTask(db, actor, id);
       if (!current) throw notFound("task");
       if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange();
-      if (!current.completed_at || current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+      if (!current.completed_at || current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
       const updated = await applyTask(db, actor, current, prepareTask({ completed: false }, "patch"), provenance);
       return { task: updated.task };
     }),
@@ -954,7 +969,7 @@ export async function archiveTask(
 export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   const current = await readTask(db, actor, id);
   if (!current) throw notFound("task");
-  if (current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+  if (current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
   const archived = await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
   if ((archived.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
@@ -965,13 +980,13 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
     before: { archivedAt: null },
     after: { archivedAt: task.archivedAt },
   });
-  return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
+  return { task: (await withViewerLinksInDb(db, actor, [task]))[0] };
 }
 
 export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   const current = await readTask(db, actor, id);
   if (!current) throw notFound("task");
-  if (!current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+  if (!current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
   const restored = await db.query("update crm.tasks set archived_at = null where id = $1", [id]);
   if ((restored.rowCount ?? 0) === 0) throw cannotChange();
   queueTaskBlock(db, id);
@@ -983,7 +998,7 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
     before: { archivedAt: iso(current.archived_at) },
     after: { archivedAt: null },
   });
-  return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
+  return { task: (await withViewerLinksInDb(db, actor, [task]))[0] };
 }
 
 export async function readTaskInDb(db: Db, actor: Actor, id: string) {

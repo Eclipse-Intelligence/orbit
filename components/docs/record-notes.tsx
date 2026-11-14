@@ -46,7 +46,7 @@ function useRecordNotes(record: RecordRef) {
   return { list: hits?.key === key ? hits.list : null, failed: hits?.key === key && Boolean(hits.failed) };
 }
 
-function useNewNote(record: RecordRef) {
+export function useNewNote(record: RecordRef) {
   const navigate = useDocsNavigate();
   const createNote = useDocsStore((state) => state.createNote);
   const [creating, setCreating] = useState(false);

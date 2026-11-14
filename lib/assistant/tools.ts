@@ -267,6 +267,19 @@ async function taskEmailArgs(actor: UserActor, args: Record<string, unknown>): P
   return { mailThreadKey: id ? await emailThreadKey(actor, id) : null };
 }
 
+function taskDocArgs(args: Record<string, unknown>): { docIds?: string[] } {
+  if (args.docIds === undefined) return {};
+  if (args.docIds === null) return { docIds: [] };
+  if (!Array.isArray(args.docIds)) throw new CrmError("invalid_input", "docIds takes a list of doc ids, or null to take them all off.", 400, { field: "docIds" });
+  return { docIds: args.docIds.map((id) => str(id)) };
+}
+
+function taskDocLines(args: Record<string, unknown>, name: Names) {
+  if (args.docIds === undefined) return [];
+  const ids = Array.isArray(args.docIds) ? args.docIds.map((id) => str(id)).filter(Boolean) : [];
+  return [ids.length > 0 ? `Docs: ${ids.map((id) => name(id)).join(", ")}` : "Docs: none"];
+}
+
 function taskEmailLines(args: Record<string, unknown>) {
   if (args.emailId === undefined) return [];
   return [nullableStr(args.emailId) ? "Pinned to the email's thread" : "Email: none"];
@@ -1184,6 +1197,12 @@ const TASK_FIELDS = {
   priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent it is: low, normal or high. New tasks are normal unless set." },
   ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
   emailId: { type: "string", description: "Pins the task to the thread of this email (an email id from search_email or get_email_thread), so the task links to the conversation in Mail. null unpins it." },
+  docIds: {
+    type: "array",
+    items: { type: "string" },
+    maxItems: 20,
+    description: "Docs linked to the task, by docId from search_knowledge. The whole list: it replaces the task's linked docs, so keep the ones already linked; [] or null takes them all off. Only docs the user can open in this workspace, not daily notes.",
+  },
 };
 
 const LIFECYCLE_PARAM = {
@@ -3546,6 +3565,7 @@ const TOOL_LIST: AssistantTool[] = [
         ...fieldLines(args, { description: "Detail", priority: "Priority" }),
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
         ...taskEmailLines(args),
+        ...taskDocLines(args, name),
         args.sendToClickUp === false ? "ClickUp: no" : detail(name, TASK_CLICKUP_KEY) ? "ClickUp: yes" : "",
       ],
     }),
@@ -3562,6 +3582,7 @@ const TOOL_LIST: AssistantTool[] = [
           priority: oneOf(args.priority, ["low", "normal", "high"] as const) ?? "normal",
           ...taskLinkArgs(args),
           ...(await taskEmailArgs(actor, args)),
+          ...taskDocArgs(args),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
         },
         picker?.listId ?? null,
@@ -3575,7 +3596,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Updating a task",
     write: true,
     description:
-      "Change a task's title, detail, due day or time, duration, reminder, priority, assignee or who it is about (contactId, companyId, opportunityId), or mark it done with completed true (false reopens it). ClickUp is updated too. To relink, find the record with search_records and pass its id; null takes that link off and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company, and opportunityId too (that company's opportunity, or null) when the task has an opportunity, since an opportunity must belong to the task's company. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
+      "Change a task's title, detail, due day or time, duration, reminder, priority, assignee, linked docs (docIds) or who it is about (contactId, companyId, opportunityId), or mark it done with completed true (false reopens it). ClickUp is updated too. To relink, find the record with search_records and pass its id; null takes that link off and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company, and opportunityId too (that company's opportunity, or null) when the task has an opportunity, since an opportunity must belong to the task's company. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
     parameters: {
       type: "object",
       properties: {
@@ -3625,6 +3646,7 @@ const TOOL_LIST: AssistantTool[] = [
           losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
+          ...taskDocLines(args, name),
         ],
       };
     },
@@ -3653,6 +3675,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
           ...taskRelinkArgs(args),
           ...(await taskEmailArgs(actor, args)),
+          ...taskDocArgs(args),
         },
         { provenance: { operation: completing ? "complete_task" : "update_task", ...provenanceSource() } },
       );

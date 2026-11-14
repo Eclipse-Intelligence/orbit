@@ -397,6 +397,28 @@ export function stripMention(text: string, caret: number) {
   return { start: at, end: caret, query };
 }
 
+export type DocQuery = { start: number; end: number; query: string };
+
+export function docQueryAt(text: string, caret: number): DocQuery | null {
+  const before = text.slice(0, caret);
+  const open = before.lastIndexOf("[[");
+  if (open < 0) return null;
+  const query = before.slice(open + 2);
+  if (/[\]\n]/.test(query) || query.length > 80) return null;
+  return { start: open, end: caret, query };
+}
+
+export function withoutDocQuery(text: string, found: Pick<DocQuery, "start" | "end">) {
+  const before = text.slice(0, found.start).replace(/\s+$/, "");
+  const after = text.slice(found.end).replace(/^\]\]/, "").replace(/^\s+/, "");
+  if (!after) {
+    const next = before ? `${before} ` : "";
+    return { text: next, caret: next.length };
+  }
+  const next = before ? `${before} ${after}` : after;
+  return { text: next, caret: before ? before.length + 1 : 0 };
+}
+
 const APOSTROPHES = /['\u2019\u2018\u02bc\u201b]/g;
 
 export function straightQuotes(value: string) {

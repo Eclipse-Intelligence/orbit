@@ -102,6 +102,8 @@ function task(id: string, title: string, overrides: Partial<Task> = {}): Task {
     inOutlook: false,
     mailThreadKey: null,
     mailThread: null,
+    docIds: [],
+    docs: [],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

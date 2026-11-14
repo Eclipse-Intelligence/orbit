@@ -420,11 +420,15 @@ export type Task = {
   inOutlook: boolean;
   mailThreadKey: string | null;
   mailThread: TaskMailThread | null;
+  docIds: string[];
+  docs: TaskDoc[];
   createdAt: string;
   updatedAt: string;
 };
 
 export type TaskMailThread = { subject: string | null; readable: boolean };
+
+export type TaskDoc = { id: string; title: string | null; readable: boolean };
 
 export const TASK_SCHEDULED_BY = ["person", "planner"] as const;
 export type TaskScheduledBy = (typeof TASK_SCHEDULED_BY)[number];
@@ -444,6 +448,7 @@ export type TaskWrite = {
   contactId?: string | null;
   opportunityId?: string | null;
   mailThreadKey?: string | null;
+  docIds?: string[] | null;
   completed?: boolean;
 };
 
