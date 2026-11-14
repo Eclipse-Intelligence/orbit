@@ -623,12 +623,13 @@ function seriesRights(row: SeriesRow): SeriesRights {
 }
 
 async function writeOccurrence(db: Db, actor: Actor, row: SeriesRow, task: Task, write: TaskWrite, provenance: Provenance, options: OccurrenceWriteOptions = {}): Promise<Task> {
+  if (!canChangeTask(actor, task, seriesRights(row))) throw new CrmError("forbidden", seriesRefusal(actor, task), 403, { field: "repeatScope" });
   if (options.detach) {
     await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
     return (await readTaskInDb(db, actor, task.id)) ?? task;
   }
   if (options.occursOn) await db.query("update crm.tasks set occurs_on = $2 where id = $1", [task.id, options.occursOn]);
-  if (options.archive) return (await archiveTaskInDb(db, actor, task.id, provenance, { keepSeries: true })).task;
+  if (options.archive) return (await archiveTaskInDb(db, actor, task.id, provenance, { keepSeries: true, series: seriesRights(row) })).task;
   return (await updateTaskInDb(db, actor, task.id, write, provenance, { restoring: options.restoring, auditExtra: options.auditExtra, series: seriesRights(row) })).task;
 }
 
@@ -724,10 +725,11 @@ export async function rollDueSeries(options: { deadline: number; now?: number; l
       const actor = memberActor({ ...row, role: row.role });
       const moved = await withActor(actor, (db) => rollSeriesInDb(db, actor, row.series_id, now));
       if (moved) rolled += 1;
+      else await query("select private.delay_series_roll($1, $2, $3)", [row.series_id, new Date(now + ROLL_RETRY_MS).toISOString(), new Date(now).toISOString()]);
     } catch (error) {
       failed += 1;
       console.error("Repeating task roll failed", row.series_id, error instanceof Error ? error.name : "unknown");
-      await query("select private.delay_series_roll($1, $2)", [row.series_id, new Date(now + ROLL_RETRY_MS).toISOString()]).catch(() => undefined);
+      await query("select private.delay_series_roll($1, $2, $3)", [row.series_id, new Date(now + ROLL_RETRY_MS).toISOString(), new Date(now).toISOString()]).catch(() => undefined);
     }
   }
   return { due: due.rows.length, rolled, failed };
@@ -761,6 +763,15 @@ async function resolveTarget(db: Db, actor: Actor, target: OccurrenceTarget) {
 }
 
 export const SERIES_RIGHTS = "Only the repeating task's assignee or creator can change every date. You can change this one.";
+export const SERIES_RIGHTS_TAGGED = "Only the repeating task's assignee or creator can change every date.";
+
+function seriesRefusal(actor: Actor, task: Pick<Task, "ownerId" | "createdByUserId" | "createdByAgentId">) {
+  return canChangeTask(actor, task) ? SERIES_RIGHTS : SERIES_RIGHTS_TAGGED;
+}
+
+function hiddenSeries(actor: Actor, task: Task, field: string) {
+  if (task.seriesId && !canChangeTask(actor, task)) throw new CrmError("forbidden", SERIES_RIGHTS_TAGGED, 403, { field });
+}
 
 function ownsSeries(actor: Actor, row: SeriesRow) {
   return actor.type === "user"
@@ -773,7 +784,7 @@ function assertSeriesChange(actor: Actor, row: SeriesRow) {
 }
 
 function assertOccurrenceChange(actor: Actor, row: SeriesRow, task: Task) {
-  if (!ownsSeries(actor, row) && !canChangeTask(actor, task)) throw new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
+  if (!ownsSeries(actor, row) && !canChangeTask(actor, task)) throw new CrmError("forbidden", SERIES_RIGHTS_TAGGED, 403);
 }
 
 export const SKIP_MOVED_ON = "This one has moved on already. Check its date and try again.";
@@ -781,7 +792,10 @@ export const SKIP_MOVED_ON = "This one has moved on already. Check its date and 
 export async function skipOccurrenceInDb(db: Db, actor: Actor, target: OccurrenceTarget, provenance: Provenance, extra: Record<string, unknown> = {}, expect?: string) {
   const found = await resolveTarget(db, actor, target);
   const { task, row } = found;
-  if (!row) throw new CrmError("invalid_input", "This task doesn't repeat.", 400, { field: "skip" });
+  if (!row) {
+    hiddenSeries(actor, task, "skip");
+    throw new CrmError("invalid_input", "This task doesn't repeat.", 400, { field: "skip" });
+  }
   if (expect !== undefined && !found.future && task.occursOn !== expect) throw new CrmError("conflict", SKIP_MOVED_ON, 409, { field: "skip" });
   if (found.future) assertSeriesChange(actor, row);
   else assertOccurrenceChange(actor, row, task);
@@ -1051,6 +1065,7 @@ async function editFollowing(db: Db, actor: Actor, row: SeriesRow, task: Task, o
 export async function updateOccurrenceInDb(db: Db, actor: Actor, target: OccurrenceTarget, input: TaskWrite, scope: RepeatScope | undefined, provenance: Provenance) {
   const found = await resolveTarget(db, actor, target);
   const { task, row } = found;
+  if (!row && (scope === "all" || scope === "following")) hiddenSeries(actor, task, "repeatScope");
   const plain = !row || !found.occursOn || (!found.future && (stopped(row) || task.completedAt || row.current_task_id !== task.id));
   if (plain) return (await updateTaskInDb(db, actor, task.id, input, provenance)).task;
   if (input.dueAt === null || input.dueDate === null || input.dueAt === "" || input.dueDate === "") {
@@ -1085,8 +1100,9 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
   if (!isUuid(taskId)) throw notFound("task");
   const found = await resolveTarget(db, actor, { taskId });
   const { task, row } = found;
+  if (!row) hiddenSeries(actor, task, "repeat");
   if (row && !stopped(row) ? !ownsSeries(actor, row) : !canChangeTask(actor, task)) {
-    throw new CrmError("forbidden", row && !stopped(row) ? SERIES_RIGHTS : "Only the assignee or the task's creator can change how it repeats.", 403, { field: "repeat" });
+    throw new CrmError("forbidden", row && !stopped(row) ? seriesRefusal(actor, task) : "Only the assignee or the task's creator can change how it repeats.", 403, { field: "repeat" });
   }
   if (repeat === null) {
     if (!row || stopped(row)) return task;
@@ -1170,7 +1186,10 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
 export async function endSeriesOnInDb(db: Db, actor: Actor, taskId: string, until: string, provenance: Provenance) {
   if (!isDayKey(until)) throw new CrmError("invalid_input", "Choose an end date.", 400, { field: "until" });
   const found = await resolveTarget(db, actor, { taskId });
-  if (!found.row) throw new CrmError("invalid_input", "This task doesn't repeat.", 400, { field: "until" });
+  if (!found.row) {
+    hiddenSeries(actor, found.task, "until");
+    throw new CrmError("invalid_input", "This task doesn't repeat.", 400, { field: "until" });
+  }
   return setRepeatInDb(db, actor, taskId, { ...repeatInputOf(found.row.rule, found.row.ends), ends: { on: until } }, provenance);
 }
 
@@ -1180,10 +1199,12 @@ export async function deleteSeriesInDb(db: Db, actor: Actor, taskId: string, pro
   if (!given || given.workspaceId !== actor.workspaceId) throw notFound("task");
   if (!given.seriesId) throw new CrmError("invalid_input", "This task doesn't repeat.", 400);
   const peek = await readSeries(db, given.seriesId);
+  if (!peek) hiddenSeries(actor, given, "repeat");
   if (!peek || peek.archived_at) throw notFound("task");
   const openId = peek.current_task_id;
   if (openId) await lockOccurrence(db, openId);
   const row = await lockSeries(db, given.seriesId);
+  if (!row) hiddenSeries(actor, given, "repeat");
   if (!row) throw notFound("task");
   if (row.current_task_id && row.current_task_id !== openId) await lockOccurrence(db, row.current_task_id);
   const open = row.current_task_id ? await readTaskInDb(db, actor, row.current_task_id) : null;
@@ -1298,7 +1319,7 @@ export async function restoreSeriesInDb(db: Db, actor: Actor, changes: Record<st
     const child = await lockSeries(db, split.seriesId);
     if (child?.current_task_id) {
       const created = await readTaskInDb(db, actor, child.current_task_id);
-      if (created && !created.archivedAt) await archiveTaskInDb(db, actor, created.id, provenance, { keepSeries: true });
+      if (created && !created.archivedAt) await writeOccurrence(db, actor, child, created, {}, provenance, { archive: true });
     }
     await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false where id = $1", [split.seriesId]);
   }
@@ -1328,7 +1349,7 @@ export async function restoreSeriesInDb(db: Db, actor: Actor, changes: Record<st
   );
   if (!before.archivedAt && row.archived_at && row.current_task_id) {
     const current = await readTaskInDb(db, actor, row.current_task_id);
-    if (current?.archivedAt) await unarchiveTaskInDb(db, actor, current.id, provenance);
+    if (current?.archivedAt) await unarchiveTaskInDb(db, actor, current.id, provenance, { series: seriesRights(row) });
   }
   if (typeof changes.occursOnBefore === "string" && row.current_task_id) {
     await db.query("update crm.tasks set occurs_on = $2 where id = $1", [row.current_task_id, changes.occursOnBefore]);
@@ -1474,6 +1495,8 @@ export async function seriesRightsRefusal(actor: Actor, target: { taskId?: strin
       const current = row.current_task_id ? await readTaskInDb(db, actor, row.current_task_id) : null;
       if (current?.occursOn === target.occursOn) return null;
     }
-    return ownsSeries(actor, row) ? null : SERIES_RIGHTS;
+    if (ownsSeries(actor, row)) return null;
+    const open = row.current_task_id ? await readTaskInDb(db, actor, row.current_task_id) : null;
+    return open ? seriesRefusal(actor, open) : SERIES_RIGHTS;
   });
 }

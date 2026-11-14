@@ -14,7 +14,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
-import { isRepeating, ownsRepeat, RepeatField, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
+import { isRepeating, ownsRepeat, RepeatField, runsSeries, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
 import LinkedText from "@/components/_ui/linked-text";
 import { showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
@@ -1015,13 +1015,14 @@ export default function TaskFields({
   const linkPerson = unlinked && details.canChange && !done;
   const people = tagged.filter((person) => person !== task.ownerId);
   const team = members.length > 1;
+  const seriesOnly = !details.canChange && !done && runsSeries(task, viewer.id);
 
   if (layout === "row") {
     return (
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
-          {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && <RepeatField task={task} canChange={details.canChange && ownsRepeat(task, viewer.id)} layout="row" />}
+          {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="row" />}
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}
           {details.canChange && !done && (
             <>
@@ -1030,6 +1031,7 @@ export default function TaskFields({
               <SkipButton task={task} />
             </>
           )}
+          {seriesOnly && <SkipButton task={task} />}
         </div>
         <Description details={details} layout="row" />
         {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} docs={task.canLinkDocs} />}
@@ -1057,7 +1059,7 @@ export default function TaskFields({
         </Field>
         {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && (
           <Field label="Repeat">
-            <RepeatField task={task} canChange={details.canChange && ownsRepeat(task, viewer.id)} layout="panel" />
+            <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="panel" />
           </Field>
         )}
         {details.canChange && (

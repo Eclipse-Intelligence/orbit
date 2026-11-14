@@ -20,7 +20,7 @@ import { contactHref, companyHref } from "@/lib/crm/hrefs";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
-import { archiveTaskInDb, createTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
+import { archiveTaskInDb, canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import { createTaskFromApi, skipDeletedOccurrenceInDb } from "@/lib/crm/task-series";
 import type { Provenance, Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
@@ -1342,12 +1342,13 @@ export async function sendTaskToDefaultList(
   const state = await getClickUpState(actor);
   if (!state?.teamId || !state.defaultListId) return "unchanged" as const;
   if (!state.lists.some((list) => list.id === state.defaultListId)) return "unchanged" as const;
-  await withActor(actor, (db) =>
-    db.query(
+  await withActor(actor, async (db) => {
+    await assertCanSend(db, actor, taskId);
+    await db.query(
       "update crm.tasks set clickup_list_id = $2 where id = $1 and workspace_id = $3 and clickup_list_id is null",
       [taskId, state.defaultListId, actor.workspaceId],
-    ),
-  );
+    );
+  });
   return pushClickUpTask(actor, taskId, options);
 }
 
@@ -1388,8 +1389,15 @@ export async function createTaskWithClickUp(
   return { task: { ...task, clickupListId: listId }, clickupError };
 }
 
+async function assertCanSend(db: Db, actor: UserActor, taskId: string) {
+  const task = await readTaskInDb(db, actor, taskId);
+  if (!task) throw new CrmError("not_found", "Task not found.", 404);
+  if (!canChangeTask(actor, task)) throw new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
+}
+
 export async function sendTaskToClickUpList(actor: UserActor, taskId: string, listId: string, options: ClickUpOptions & { fallback?: string } = {}) {
   await withActor(actor, async (db) => {
+    await assertCanSend(db, actor, taskId);
     await db.query("update crm.tasks set clickup_list_id = $2 where id = $1 and clickup_task_id is null", [taskId, listId]);
     await db.query(
       `update crm.integration_state set last_used_list_id = $2

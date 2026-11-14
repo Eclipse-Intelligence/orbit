@@ -606,6 +606,10 @@ export async function createTaskInDb(
   }
 }
 
+function taskRights(row: TaskRow) {
+  return { ownerId: row.owner_id, createdByUserId: row.created_by_user_id, createdByAgentId: row.created_by_agent_id, seriesId: row.series_id, completedAt: iso(row.completed_at) };
+}
+
 function cannotChange(write: PreparedTask = {}) {
   const reassigning = write.ownerId !== undefined;
   return new CrmError(
@@ -625,6 +629,9 @@ async function applyTask(
   options: TaskApplyOptions = {},
 ) {
   if (current.archived_at && !options.restoring) throw notFound("task");
+  const ownTask = canChangeTask(actor, taskRights(current));
+  const may = ownTask || canChangeTask(actor, taskRights(current), options.series);
+  if (!may) throw cannotChange(write);
   if (
     actor.type === "agent" &&
     (write.ownerId === null || (write.ownerId === undefined && !current.owner_id)) &&
@@ -667,10 +674,6 @@ async function applyTask(
     },
   );
   const settled = write.completedAt === undefined && write.completed !== undefined && Boolean(current.completed_at) === write.completed;
-  const rights = { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id, seriesId: current.series_id };
-  const ownTask = canChangeTask(actor, rights);
-  const may = canChangeTask(actor, rights, options.series);
-  if (settled && !may) throw cannotChange(write);
   const completedAt =
     write.completedAt !== undefined
       ? write.completedAt !== null && current.completed_at
@@ -712,7 +715,6 @@ async function applyTask(
   }
   const before = mapTask(current);
   if (change.sets.length === 0) {
-    if (!may) throw cannotChange(write);
     return { task: (await withViewerLinksInDb(db, actor, [before]))[0], changed: false };
   }
   if (!ownTask && (docs || change.fields.some((field) => field === "mailThreadKey" || field === "completedAt"))) throw cannotChange(write);
@@ -1105,10 +1107,11 @@ export async function archiveTask(
   );
 }
 
-export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean; keepSeries?: boolean } = {}) {
+export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean; keepSeries?: boolean; series?: SeriesRights } = {}) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
+  if (!canChangeTask(actor, taskRights(current), options.series)) throw cannotChange();
   if (current.series_id && !options.keepSeries && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
     const skipped = await archiveAsSkipInDb(db, actor, mapTask(current), provenance);
     if (skipped) return { task: skipped };
@@ -1133,10 +1136,11 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
   return { task: (await withViewerLinksInDb(db, actor, [task]))[0] };
 }
 
-export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { series?: SeriesRights } = {}) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (!current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
+  if (!canChangeTask(actor, taskRights(current), options.series)) throw cannotChange();
   if (current.series_id) await seriesBeforeUnarchive(db, mapTask(current));
   const keeper = await ownerForAgent(db, actor, current);
   const restored = await db.query(
@@ -1178,12 +1182,13 @@ export async function restoreTaskInDb(
   completedAt: string | null | undefined,
   provenance: Provenance,
   undoing: string | null = null,
+  series?: SeriesRights,
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;
-  return applyTask(db, actor, current, write, provenance, { restoring: true, undoing });
+  return applyTask(db, actor, current, write, provenance, { restoring: true, undoing, series });
 }
 
 export type DueReminder = {

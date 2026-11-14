@@ -478,7 +478,9 @@ $$;
 revoke all on function private.task_series_follow_move(uuid, uuid) from public;
 grant execute on function private.task_series_follow_move(uuid, uuid) to crm_app;
 
-create or replace function private.delay_series_roll(p_series uuid, p_until timestamptz)
+drop function if exists private.delay_series_roll(uuid, timestamptz);
+
+create or replace function private.delay_series_roll(p_series uuid, p_until timestamptz, p_now timestamptz)
 returns void
 language sql
 security definer
@@ -486,11 +488,11 @@ set search_path = ''
 as $$
   update crm.task_series s set roll_at = greatest(coalesce(s.roll_at, p_until), p_until), roll_pending = false
   where s.id = p_series and s.ended_at is null and s.archived_at is null
-    and (s.roll_pending or s.roll_at is null or s.roll_at <= now());
+    and (s.roll_pending or s.roll_at is null or s.roll_at <= p_now);
 $$;
 
-revoke all on function private.delay_series_roll(uuid, timestamptz) from public;
-grant execute on function private.delay_series_roll(uuid, timestamptz) to crm_app;
+revoke all on function private.delay_series_roll(uuid, timestamptz, timestamptz) from public;
+grant execute on function private.delay_series_roll(uuid, timestamptz, timestamptz) to crm_app;
 
 create or replace function private.tasks_bind_series()
 returns trigger
@@ -649,22 +651,37 @@ as $$
     select 1 from crm.task_series s
     where s.id = p_series
       and s.workspace_id = p_workspace
-      and (
-        s.owner_id = (select private.session_user_id())
-        or s.created_by_user_id = (select private.session_user_id())
-        or s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
-      )
+      and (s.owner_id = (select private.session_user_id()) or s.created_by_user_id = (select private.session_user_id()))
   )
 $$;
 
 revoke all on function private.session_owns_series(uuid, uuid) from public;
-grant execute on function private.session_owns_series(uuid, uuid) to authenticated, crm_agent;
+grant execute on function private.session_owns_series(uuid, uuid) to authenticated;
+
+create or replace function private.agent_owns_series(p_series uuid, p_workspace uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from crm.task_series s
+    where s.id = p_series
+      and s.workspace_id = p_workspace
+      and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+  )
+$$;
+
+revoke all on function private.agent_owns_series(uuid, uuid) from public;
+grant execute on function private.agent_owns_series(uuid, uuid) to crm_agent;
 
 drop policy if exists tasks_update_series_member on crm.tasks;
 create policy tasks_update_series_member on crm.tasks
   for update to authenticated
   using (
     series_id is not null
+    and completed_at is null
     and workspace_id in (select private.user_workspace_ids())
     and private.session_owns_series(series_id, workspace_id)
   )
@@ -679,13 +696,14 @@ create policy tasks_update_series_agent on crm.tasks
   for update to crm_agent
   using (
     series_id is not null
+    and completed_at is null
     and workspace_id = (select private.request_workspace_id())
-    and private.session_owns_series(series_id, workspace_id)
+    and private.agent_owns_series(series_id, workspace_id)
   )
   with check (
     series_id is not null
     and workspace_id = (select private.request_workspace_id())
-    and private.session_owns_series(series_id, workspace_id)
+    and private.agent_owns_series(series_id, workspace_id)
   );
 
 drop policy if exists tasks_series_binding on crm.tasks;
@@ -823,6 +841,11 @@ begin
     )
   from crm.task_series s
   where s.workspace_id = p_workspace and (s.owner_id = p_user or s.created_by_user_id = p_user) and s.current_task_id is not null;
+  insert into crm.task_participants (task_id, user_id, added_by)
+  select s.current_task_id, p_actor, p_actor
+  from crm.task_series s
+  where s.workspace_id = p_workspace and (s.owner_id = p_user or s.created_by_user_id = p_user) and s.current_task_id is not null
+  on conflict do nothing;
   update crm.task_series s set owner_id = p_actor
   where s.workspace_id = p_workspace and s.owner_id = p_user;
   update crm.task_series s set created_by_user_id = p_actor

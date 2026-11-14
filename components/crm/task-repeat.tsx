@@ -82,6 +82,10 @@ export function isRepeating(task: Task) {
   return Boolean(task.repeat && task.repeat.current && !task.completedAt && !task.repeat.ended);
 }
 
+export function runsSeries(task: Task, viewerId: string | null | undefined) {
+  return isRepeating(task) && !task.archivedAt && Boolean(viewerId) && (task.repeat?.ownerId === viewerId || task.repeat?.creatorId === viewerId);
+}
+
 export function ownsRepeat(task: Task, viewerId: string | null | undefined) {
   if (!task.repeat || task.repeat.ended) return true;
   return Boolean(viewerId) && (task.repeat.ownerId === viewerId || task.repeat.creatorId === viewerId);

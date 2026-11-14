@@ -24,6 +24,19 @@ import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { linkableDocIdsInDb } from "@/lib/crm/task-docs";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
 import { restoreOccurrenceInDb, restoreSeriesInDb } from "@/lib/crm/task-series";
+import type { SeriesRights } from "@/lib/crm/task-rights";
+
+type TaskValues = { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null; seriesId?: string | null; completedAt?: string | null };
+
+async function seriesRightsOf(db: Db, seriesId: unknown): Promise<SeriesRights | undefined> {
+  if (typeof seriesId !== "string") return undefined;
+  const found = await db.query<{ id: string; owner_id: string | null; created_by_user_id: string | null; created_by_agent_id: string | null }>(
+    "select id, owner_id, created_by_user_id, created_by_agent_id from crm.task_series where id = $1",
+    [seriesId],
+  );
+  const row = found.rows[0];
+  return row ? { id: row.id, ownerId: row.owner_id, createdByUserId: row.created_by_user_id, createdByAgentId: row.created_by_agent_id } : undefined;
+}
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { dateTimeInputValue } from "@/lib/time";
 import type { AccountHealth, Actor, CompanyWrite, ContactWrite, OpportunityWrite, Provenance, TaskWrite } from "@/lib/crm/types";
@@ -384,6 +397,7 @@ function restoreFields(
   provenance: Provenance,
   undoing: string | null = null,
   repeat: Record<string, unknown> | null = null,
+  series?: SeriesRights,
 ) {
   const plain = fields.filter((field) => !RELATIONSHIP_FIELDS.has(field) && field !== "completedAt");
   const write = Object.fromEntries(plain.map((field) => [field, before[field] ?? null]));
@@ -395,7 +409,7 @@ function restoreFields(
     }
     if (entity === "task" && (plain.length > 0 || fields.includes("completedAt"))) {
       const completedAt = fields.includes("completedAt") ? ((before.completedAt as string | null) ?? null) : undefined;
-      await restoreTaskInDb(db, actor, id, write as TaskWrite, completedAt, provenance, undoing);
+      await restoreTaskInDb(db, actor, id, write as TaskWrite, completedAt, provenance, undoing, series);
       if (repeat) await restoreOccurrenceInDb(db, actor, id, repeat);
     }
     if ((entity === "company" || entity === "contact") && fields.some((field) => RELATIONSHIP_FIELDS.has(field))) {
@@ -425,12 +439,12 @@ function restoreActivityFields(
   return () => undoActivityEditInDb(db, actor, id, write, clearedHealthIn(changes), provenance);
 }
 
-function archiveRun(db: Db, actor: Actor, entity: EntityType, id: string, provenance: Provenance) {
+function archiveRun(db: Db, actor: Actor, entity: EntityType, id: string, provenance: Provenance, series?: SeriesRights) {
   return async () => {
     if (entity === "company") return archiveCompanyInDb(db, actor, id, provenance);
     if (entity === "contact") return archiveContactInDb(db, actor, id, provenance);
     if (entity === "opportunity") return archiveOpportunityInDb(db, actor, id, provenance);
-    if (entity === "task") return archiveTaskInDb(db, actor, id, provenance);
+    if (entity === "task") return archiveTaskInDb(db, actor, id, provenance, { series });
     return archiveActivityInDb(db, actor, id, provenance);
   };
 }
@@ -452,12 +466,12 @@ function clearedHealthIn(changes: Record<string, unknown> | null): ClearedHealth
   });
 }
 
-function unarchiveRun(db: Db, actor: Actor, entity: EntityType, id: string, provenance: Provenance, changes: Record<string, unknown> | null) {
+function unarchiveRun(db: Db, actor: Actor, entity: EntityType, id: string, provenance: Provenance, changes: Record<string, unknown> | null, series?: SeriesRights) {
   return async () => {
     if (entity === "company") return unarchiveCompanyInDb(db, actor, id, provenance);
     if (entity === "contact") return unarchiveContactInDb(db, actor, id, provenance);
     if (entity === "opportunity") return unarchiveOpportunityInDb(db, actor, id, provenance);
-    if (entity === "task") return unarchiveTaskInDb(db, actor, id, provenance);
+    if (entity === "task") return unarchiveTaskInDb(db, actor, id, provenance, { series });
     return restoreActivityInDb(db, actor, id, provenance, clearedHealthIn(changes));
   };
 }
@@ -490,6 +504,7 @@ async function describeEvent(
   const current = await snapshot(db, actor, entity, event.entity_id);
   if (!current && entity === "task") return plain("Can't undo: you can't see this task any more.");
   const entityName = current?.name ?? eventName(event, entity);
+  const series = entity === "task" ? await seriesRightsOf(db, current?.values.seriesId) : undefined;
   const refuse = (summary: string, reason: string): Described => ({ entityName, summary, plan: { ok: false, reason } });
   const fallback = `${event.event_type.replace(/[._]/g, " ")}: ${entityName}`;
 
@@ -504,6 +519,7 @@ async function describeEvent(
     const kind = event.event_type.slice("task_series.".length);
     const seriesChanges = record(event.changes) ?? {};
     if (seriesChanges.splitFrom) return refuse(`Split ${entityName} from its series`, "Undo the change that split it instead.");
+    if (seriesChanges.handedOver) return refuse(`Took over the series ${entityName}`, "Can't undo: it was handed over when someone left the workspace.");
     const made = kind === "created";
     const summary =
       kind === "created"
@@ -538,7 +554,7 @@ async function describeEvent(
     summary = entity === "activity" ? `Restored ${entityName}` : `Restored ${noun} ${entityName} from the archive`;
     restores = entity === "activity" ? `Deletes ${entityName} again.` : `Archives ${entityName} again.`;
     if (current && current.archivedAt) check = `Can't undo: ${entityName} is ${entity === "activity" ? "deleted" : "archived"}.`;
-    run = archiveRun(db, actor, entity, event.entity_id, provenance);
+    run = archiveRun(db, actor, entity, event.entity_id, provenance, series);
   } else if (updateEntity === "activity" && fields && fields.fields.every((field) => field in FIELDS.activity)) {
     const labels = FIELDS.activity;
     const parts = fields.fields.map(
@@ -584,6 +600,7 @@ async function describeEvent(
       provenance,
       changes?.taggedAssigner === true ? event.id : null,
       updateEntity === "task" ? record(changes?.repeat) : null,
+      series,
     );
   } else if (updateEntity) {
     return refuse(`Changed ${noun} ${entityName}`, "This change can't be undone.");
@@ -604,12 +621,12 @@ async function describeEvent(
     restores = entity === "activity" ? `Restores ${entityName}.` : `Restores ${noun} ${entityName} from the archive.`;
     if (current && !current.archivedAt) check = `Can't undo: ${entityName} is already restored.`;
     else if (current && !same(current.archivedAt, iso(after.archivedAt))) check = `Can't undo: ${entityName} has changed since.`;
-    run = unarchiveRun(db, actor, entity, event.entity_id, provenance, changes);
+    run = unarchiveRun(db, actor, entity, event.entity_id, provenance, changes, series);
   } else if (event.event_type === `${entity}.created`) {
     summary = entity === "activity" ? `Logged ${entityName}` : `Created ${noun} ${entityName}`;
     restores = entity === "activity" ? `Deletes ${entityName}.` : `Archives ${noun} ${entityName}.`;
     if (current?.archivedAt) check = `Can't undo: ${entityName} is already ${entity === "activity" ? "deleted" : "archived"}.`;
-    run = archiveRun(db, actor, entity, event.entity_id, provenance);
+    run = archiveRun(db, actor, entity, event.entity_id, provenance, series);
   } else {
     return refuse(fallback, "This change can't be undone.");
   }
@@ -617,7 +634,7 @@ async function describeEvent(
   if (undone) return refuse(summary, "This change has already been undone.");
   if (!current) return refuse(summary, notFoundMessage(noun));
   if (!hasScope(actor.scopes, SCOPES[entity])) return refuse(summary, `You don't have permission to change this ${noun}.`);
-  if (entity === "task" && !canChangeTask(actor, current.values as { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null })) {
+  if (entity === "task" && !canChangeTask(actor, current.values as TaskValues, series)) {
     return refuse(summary, "Can't undo: you're only tagged on this task now.");
   }
   if (check) return refuse(summary, check);
