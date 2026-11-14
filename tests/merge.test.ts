@@ -312,7 +312,7 @@ describe("merging companies as an agent", () => {
     const here = await company("Wayne");
     const there = await company("Wayne Enterprises");
     const person = await contact({ firstName: "Lucius", companyId: there.id });
-    const task = (await createTask(owner, { title: "Call Lucius", companyId: there.id, contactId: person.id }, { provenance: PROVENANCE })).body.task;
+    const task = (await createTask(agent, { title: "Call Lucius", companyId: there.id, contactId: person.id }, { provenance: PROVENANCE })).body.task;
     await agentSession(agent, async (db) => {
       await db.query("select set_config('orbit.merging', 'on', true)");
       await assert.rejects(db.query("update crm.tasks set company_id = $1 where id = $2", [here.id, task.id]), /contact belongs to a different company/);

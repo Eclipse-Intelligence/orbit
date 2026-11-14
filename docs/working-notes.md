@@ -33,6 +33,7 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 - **Send fixes back to the agent that built the branch.** Re-review until there are no blockers. Several features needed three rounds.
 - **Review the whole area once it's finished.** After the last PR for a feature area, run one review across the whole area, not just the per-PR diffs: workspaces, concurrent requests, retries, and every route that writes the record (web, API, MCP, assistant, workflows, background jobs).
 - **Close every review point before merging.** Each point is either fixed or explicitly accepted by Mark. Never leave one as a nit or an open question. Every round of fixes gets re-reviewed.
+- **Keep reviewing until clean, with a clear finish line.** There is no cap on rounds: genuine bugs are always fixed and re-reviewed. For open-ended areas (free-text parsing, heuristics), set a measurable bar before the first review, such as a test corpus that must never save a wrong result silently, so reviews check against that bar rather than finding endless new phrasings.
 
 ### Migrations
 
@@ -57,6 +58,11 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 - **Linear:** the backlog is the Linear project Orbit (P-CNT-6) in the Cntent team. Write PR references there as full GitHub URLs, because a bare `#123` links to the wrong repository. Comment on the project when a feature ships.
 
 ## Product decisions
+
+### Privacy
+
+- **Users only see their own data, including tasks.** A task is seen only by its assignee, its creator and people tagged on it. Owners and admins get no exception: no Everyone view, no Waiting on others, no reading or changing a colleague's task. A workspace agent token sees only tasks it created; a personal token acts as its person. Task audit rows, webhook deliveries and stored idempotent replies follow the same rule, and a task event goes only to a webhook whose creator can see that task (endpoints with no recorded creator get no task events). Work that crosses people (removing a member, moving records, reminders, Outlook, ClickUp, prepare) goes through `private.*` definer functions, never admin row-level security.
+- **Agent tasks belong to the workspace owner.** A task a workspace agent creates without an assignee goes to the workspace owner and keeps the agent's time and reminder, so it lands on their Outlook and reminds them like one they made. The agent can set or change the time later on tasks it created; it can't on any other task, and people keep the rule that a time set on a colleague's task saves as date only.
 
 ### Copy
 
@@ -106,6 +112,7 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 
 ## Open follow-ups
 
+- **Cleanup after #365 deploys:** drop `private.waiting_approvals_of_others`. It is kept, returning nothing, only so the code deployed before the migration keeps working.
 - **Meta Lead Ads** is live for the Ridgeon Consultancy Page (webhook on the app's Page object, `leadgen` subscribed, Page subscribed to the app). `META_ACCESS_TOKEN` must be a long-lived Page token or System User token; a Graph Explorer token expires within hours.
 - **Meta lead behaviour:**
   - Phone-only resubmissions create a new contact each time.

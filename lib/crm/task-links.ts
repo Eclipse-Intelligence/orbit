@@ -103,15 +103,15 @@ export async function linkTask(actor: Actor, taskId: string, link: { contactId?:
   const companyId = !contactId && link.companyId && isUuid(link.companyId) ? link.companyId : undefined;
   if (!contactId && !companyId) throw new CrmError("invalid_input", "Choose a person or company.", 400);
   return withActor(actor, async (db) => {
-    const current = await db.query<{ owner_id: string | null; created_by_user_id: string | null; linked: boolean }>(
-      `select owner_id, created_by_user_id, (company_id is not null or contact_id is not null or opportunity_id is not null) as linked
+    const current = await db.query<{ owner_id: string | null; created_by_user_id: string | null; created_by_agent_id: string | null; linked: boolean }>(
+      `select owner_id, created_by_user_id, created_by_agent_id, (company_id is not null or contact_id is not null or opportunity_id is not null) as linked
        from crm.tasks where id = $1 and workspace_id = $2 for update`,
       [taskId, actor.workspaceId],
     );
     const row = current.rows[0];
     if (!row) throw notFound("task");
-    if (!canChangeTask(actor, { ownerId: row.owner_id, createdByUserId: row.created_by_user_id })) {
-      throw new CrmError("forbidden", "Only the assignee, the task's creator, a workspace owner or an admin can change it.", 403);
+    if (!canChangeTask(actor, { ownerId: row.owner_id, createdByUserId: row.created_by_user_id, createdByAgentId: row.created_by_agent_id })) {
+      throw new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
     }
     if (row.linked) throw new CrmError("conflict", "This task is already linked.", 409);
     const updated = await updateTaskInDb(db, actor, taskId, contactId ? { contactId } : { companyId }, provenance);

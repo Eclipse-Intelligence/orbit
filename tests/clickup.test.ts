@@ -1037,7 +1037,7 @@ describe("clickup sync", () => {
     await db.query("delete from crm.workspace_members where user_id = any($1::uuid[])", [[sam, ola]]);
   });
 
-  it("brings a teammate's timed ClickUp task in date only and never pushes that back to ClickUp", async () => {
+  it("imports a teammate's timed ClickUp task as that teammate, keeping its time, and never echoes it back", async () => {
     const db = getAdminPool();
     const tia = (await db.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["tia@orbit.test", "Tia Teammate"])).rows[0].id;
     await db.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, tia]);
@@ -1053,9 +1053,11 @@ describe("clickup sync", () => {
     const mine = remoteTask(fake, { id: "formark", listId: RELATIONSHIPS, name: "Mark calls Jane", orbit: "jane@acme.com", due_date: String(Date.UTC(2026, 6, 2, 13, 0)), due_date_time: true });
     await syncClickUp({ actor: owner, force: true, fetchImpl });
     const theirs = await importedTask(owner.workspaceId, "fortia");
-    assert.equal(theirs?.due_has_time, false);
-    assert.equal(theirs?.due_at?.toISOString(), "2026-06-30T23:00:00.000Z");
-    assert.equal(await pushClickUpTask(owner, theirs!.id, { fetchImpl }), "unchanged");
+    assert.equal(theirs?.due_has_time, true);
+    assert.equal(theirs?.due_at?.toISOString(), "2026-07-01T13:00:00.000Z");
+    const made = await db.query<{ owner_id: string; created_by_user_id: string }>("select owner_id, created_by_user_id from crm.tasks where id = $1", [theirs!.id]);
+    assert.deepEqual(made.rows[0], { owner_id: tia, created_by_user_id: tia });
+    await assert.rejects(getTask(owner, theirs!.id), /not found/i);
     assert.equal((await importedTask(owner.workspaceId, "formark"))?.due_has_time, true);
 
     remote.name = "Tia calls Jane today";
@@ -1064,8 +1066,7 @@ describe("clickup sync", () => {
     await syncClickUp({ actor: owner, force: true, fetchImpl });
     const edited = await importedTask(owner.workspaceId, "fortia");
     assert.equal(edited?.title, "Tia calls Jane today");
-    assert.equal(edited?.due_has_time, false);
-    assert.equal(await pushClickUpTask(owner, edited!.id, { fetchImpl }), "unchanged");
+    assert.equal(edited?.due_has_time, true);
     await syncClickUp({ actor: owner, force: true, fetchImpl });
     assert.equal(puts(fake, "fortia").length, 0);
     assert.equal(mine.due_date_time, true);
@@ -1109,7 +1110,10 @@ describe("clickup sync", () => {
       remote.status = { status: "done", type: "closed" };
       remote.date_updated = String(Date.now() + 3_000);
       await syncClickUp({ actor: owner, force: true, fetchImpl });
+      await assert.rejects(getTask(owner, task.id), /not found/i);
       assert.ok((await getTask(sam, task.id)).completedAt);
+      const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [remote.id]);
+      assert.equal(copies.rows[0].n, 1);
       const events = await db.query<{ actor_user_id: string | null }>("select actor_user_id from crm.workflow_events where entity_id = $1", [task.id]);
       assert.deepEqual(events.rows, [{ actor_user_id: null }]);
       process.env.LLM_API_KEY = "llm-test";
@@ -1123,6 +1127,78 @@ describe("clickup sync", () => {
       await setWorkflowStatus(owner, markFlow.id, "paused");
       await setWorkflowStatus(sam, samFlow.id, "paused");
       await db.query("delete from crm.workspace_members where user_id = $1", [samId]);
+    }
+  });
+
+  async function colleague(email: string, name: string): Promise<UserActor> {
+    const id = (await getAdminPool().query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, id]);
+    return { ...owner, userId: id, email, fullName: name, role: "member", scopes: scopesForRole("member") };
+  }
+
+  async function leave(person: UserActor) {
+    await getAdminPool().query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [owner.workspaceId, person.userId]);
+  }
+
+  async function remoteOf(taskId: string) {
+    const clickupId = (await taskRow(taskId)).clickup_task_id!;
+    return { clickupId, remote: fake.tasks.get(clickupId)! };
+  }
+
+  it("syncs a colleague's task as its creator when its assignee has left, and leaves it alone when nobody can keep it", async () => {
+    const kim = await colleague("kim-keeper@orbit.test", "Kim Keeper");
+    const lee = await colleague("lee-keeper@orbit.test", "Lee Keeper");
+    const task = (await createTaskWithClickUp(kim, { title: "Kim asks Lee", contactId: janeId, ownerId: lee.userId }, RELATIONSHIPS, { fetchImpl })).task;
+    const { clickupId, remote } = await remoteOf(task.id);
+    await leave(lee);
+    remote.name = "Kim asks Lee again";
+    remote.date_updated = String(Date.now() + 2_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    await assert.rejects(getTask(owner, task.id), /not found/i);
+    assert.equal((await importedTask(owner.workspaceId, clickupId))?.title, "Kim asks Lee again");
+
+    await leave(kim);
+    remote.name = "Nobody keeps this";
+    remote.date_updated = String(Date.now() + 4_000);
+    const result = await syncClickUp({ actor: owner, force: true, fetchImpl });
+    assert.equal(result.imported, 0);
+    assert.equal((await importedTask(owner.workspaceId, clickupId))?.title, "Kim asks Lee again");
+    const copies = await getAdminPool().query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [clickupId]);
+    assert.equal(copies.rows[0].n, 1);
+  });
+
+  it("takes a ClickUp event for a colleague's task even when whoever receives it can't see the task", async () => {
+    const kim = await colleague("kim-event@orbit.test", "Kim Event");
+    const task = (await createTaskWithClickUp(kim, { title: "Kim's event task", contactId: janeId }, RELATIONSHIPS, { fetchImpl })).task;
+    const { clickupId, remote } = await remoteOf(task.id);
+    remote.name = "Kim's event task, renamed in ClickUp";
+    remote.date_updated = String(Date.now() + 2_000);
+    await assert.rejects(getTask(owner, task.id), /not found/i);
+    await processClickUpEvent(owner, { event: "taskUpdated", taskId: clickupId, newestAt: null }, { fetchImpl });
+    assert.equal((await getTask(kim, task.id)).title, "Kim's event task, renamed in ClickUp");
+    await leave(kim);
+  });
+
+  it("pushes a colleague's edit as that colleague, even with more keeperless tasks waiting than one batch", async () => {
+    const kim = await colleague("kim-push@orbit.test", "Kim Push");
+    const ghost = (await getAdminPool().query<{ id: string }>("select private.create_local_user('ghost-push@orbit.test', 'password-123', 'Ghost') as id")).rows[0].id;
+    await getAdminPool().query(
+      `insert into crm.tasks (workspace_id, title, clickup_list_id, created_by_user_id)
+       select $1, 'Ghost task ' || n, $2, $3 from generate_series(1, 30) as n`,
+      [owner.workspaceId, RELATIONSHIPS, ghost],
+    );
+    try {
+      const task = (await createTaskWithClickUp(kim, { title: "Kim's pushed task", contactId: janeId }, RELATIONSHIPS, { fetchImpl })).task;
+      const { clickupId } = await remoteOf(task.id);
+      await updateTask(kim, task.id, { title: "Kim's pushed task, renamed" });
+      const before = puts(fake, clickupId).length;
+      await syncClickUp({ actor: owner, force: true, fetchImpl });
+      const sent = puts(fake, clickupId);
+      assert.ok(sent.length > before);
+      assert.match(JSON.stringify(sent[sent.length - 1].body), /Kim's pushed task, renamed/);
+    } finally {
+      await getAdminPool().query("update crm.tasks set archived_at = now() where created_by_user_id = $1", [ghost]);
+      await leave(kim);
     }
   });
 
