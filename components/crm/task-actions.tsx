@@ -14,6 +14,7 @@ import FindDetailButton from "@/components/crm/find-detail";
 import { useFindAvailability } from "@/components/crm/find-availability";
 import type { InvitePrefill } from "@/components/crm/invite-dialog";
 import { SearchChip } from "@/components/crm/task-pad";
+import { EditTaskDocs } from "@/components/crm/task-docs";
 import { relinkChange, relinkNote } from "@/lib/task-pad";
 import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { useComposer } from "@/components/mail/compose-dock";
@@ -560,7 +561,7 @@ export function TaskAct({ task, here, canChange }: { task: Task; here?: TitleHer
   );
 }
 
-export function EditLinks({ task }: { task: Task }) {
+export function EditLinks({ task, warn, docs }: { task: Task; warn: boolean; docs: boolean }) {
   const router = useRouter();
   const group = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
@@ -629,6 +630,7 @@ export function EditLinks({ task }: { task: Task }) {
           onClosed={() => refocus("opportunity")}
         />
       </span>
+      {docs && <EditTaskDocs task={task} warn={warn} />}
       {busy && (
         <span role="status" className="caption-style text-subtle">
           Saving…

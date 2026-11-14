@@ -78,11 +78,11 @@ after(async () => {
 });
 
 describe("assistant evaluation tasks", () => {
-  it("defines 30 to 60 core tasks and a security suite, covering every job", () => {
+  it("defines 30 to 70 core tasks and a security suite, covering every job", () => {
     const ids = ALL_TASKS.map((item) => item.id);
     assert.equal(new Set(ids).size, ids.length);
     const core = ALL_TASKS.filter((item) => item.suite === "core");
-    assert.ok(core.length >= 30 && core.length <= 60, `${core.length} core tasks`);
+    assert.ok(core.length >= 30 && core.length <= 70, `${core.length} core tasks`);
     for (const category of CORE_CATEGORIES) assert.ok(core.some((item) => item.category === category), category);
     for (const category of SECURITY_CATEGORIES) assert.ok(ALL_TASKS.some((item) => item.suite === "security" && item.category === category), category);
     for (const item of ALL_TASKS) {
@@ -220,6 +220,27 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     }));
     assert.equal(result.pass, true);
     assert.match(seen[0], /Wednesday,? 11 November 2026/);
+  });
+
+  it("links a third doc to a task with two, keeping both, and the card shows only the change", async () => {
+    const link = (keep: boolean): Step => ({ world }) => ({
+      content: "I'll link it.",
+      calls: [
+        {
+          name: "update_task",
+          args: {
+            taskId: world.id("task:Call Juno about the renewal"),
+            docIds: [...(keep ? [world.id("doc:Juno renewal terms"), world.id("doc:Juno pricing model")] : []), world.id("doc:Juno call notes")],
+          },
+        },
+      ],
+    });
+    const kept = await runOnce(byId("link-doc-keeps-linked-docs"), settings(scripted([link(true)])));
+    assert.deepEqual(failed(kept), []);
+    assert.deepEqual(kept.cards[0].lines.filter((line) => /^(Link|Unlink|Docs):/.test(line)), ["Link: Juno call notes"]);
+    const dropped = await runOnce(byId("link-doc-keeps-linked-docs"), settings(scripted([link(false)])));
+    assert.deepEqual(failed(dropped), ["links the call notes and keeps both linked docs"]);
+    assert.deepEqual(dropped.cards[0].lines.filter((line) => /^(Link|Unlink|Docs):/.test(line)), ["Link: Juno call notes", "Unlink: Juno renewal terms, Juno pricing model"]);
   });
 
   it("passes a model that proposes the right card through the real chat loop", async () => {

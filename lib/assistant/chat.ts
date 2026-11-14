@@ -13,6 +13,7 @@ import {
   actionAlternative,
   assistantTools,
   crossWorkspaceRefusal,
+  taskDocsRefusalFor,
   resolveToolCall,
   taskTimingRefusalFor,
   describeAction,
@@ -733,6 +734,11 @@ async function refusedWrites(actor: UserActor, writes: ToolCall[], switches?: To
     const timingRefusal = timing ? await taskTimingRefusalFor(actor, timing.name, timing.args) : null;
     if (timingRefusal) {
       refused.set(call.id, timingRefusal);
+      continue;
+    }
+    const docsRefusal = timing ? await taskDocsRefusalFor(actor, timing.name, timing.args) : null;
+    if (docsRefusal) {
+      refused.set(call.id, docsRefusal);
       continue;
     }
     const reason = await crossWorkspaceRefusal(actor, call.function.name, parseArgs(call.function.arguments)).catch(() => null);

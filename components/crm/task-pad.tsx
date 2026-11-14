@@ -32,8 +32,13 @@ import {
   reminderClock,
   resolvePadLinks,
   stripMention,
+  docQueryAt,
+  withoutDocQuery,
+  type DocQuery,
   type PadMark,
 } from "@/lib/task-pad";
+import { DocPickHeader, DocPickNotice, DocPickOptions, DocPickPopover, useDocPicks } from "@/components/crm/task-doc-picker";
+import type { DocPick } from "@/lib/docs/client-types";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -46,6 +51,7 @@ import MailIcon from "@/public/assets/images/mail/mail-open.svg";
 import ClockIcon from "@/public/assets/images/tasks/clock.svg";
 import UserCircleIcon from "@/public/assets/images/tasks/user-circle.svg";
 import UserIcon from "@/public/assets/images/tasks/user.svg";
+import DocIcon from "@/public/assets/images/docs/doc.svg";
 
 type Mention = { start: number; end: number; query: string };
 type Suggestion = { kind: "company" | "contact"; option: PadOption };
@@ -438,6 +444,17 @@ function ThreadChip({ thread, variant, onRemove }: { thread: PadThread; variant:
   );
 }
 
+function DocChip({ doc, variant, onRemove }: { doc: DocPick; variant: Variant; onRemove: () => void }) {
+  const title = doc.title.trim() || "Untitled";
+  return (
+    <button type="button" aria-label={`Doc: ${title}. Remove`} onClick={onRemove} className={cn(chipClass("on", variant), "max-w-[18em]")}>
+      <DocIcon aria-hidden />
+      <span className="truncate">{title}</span>
+      <XIcon aria-hidden />
+    </button>
+  );
+}
+
 export default function TaskPad({
   clickup,
   company: fixedCompany = null,
@@ -502,6 +519,11 @@ export default function TaskPad({
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const [docs, setDocs] = useState<DocPick[]>([]);
+  const [docQuery, setDocQuery] = useState<DocQuery | null>(null);
+  const docMuted = useRef<number | null>(null);
+  const [docHighlight, setDocHighlight] = useState(0);
+  const docFound = useDocPicks(docQuery ? docQuery.query : null, null);
 
   const parsed = useMemo(() => parseTaskText(text), [text]);
   const aiFits = ai !== null && ai.text === text && parsed.unsure;
@@ -524,8 +546,11 @@ export default function TaskPad({
   const detectedContact = shown.fromText;
   const detectedCompany = !fixedCompany && !company.set && !finalContact && seen?.company && finalCompany?.id === seen.company.id;
   const confirm = seen && detectedContact ? padConfirmLine(seen) : seen && detectedCompany ? padConfirmLine({ ...seen, contact: null, matchedBy: null, word: companyWord(seen) }) : null;
-  const listing = mention !== null && suggestions.length > 0;
+  const docOptions = docFound.docs ? docFound.docs.filter((doc) => !docs.some((picked) => picked.id === doc.id)) : null;
+  const docActive = docOptions && docOptions.length > 0 ? Math.min(docHighlight, docOptions.length - 1) : -1;
+  const listing = mention !== null && suggestions.length > 0 && docQuery === null;
   const card = variant === "card";
+  const docWarn = assignable && owner !== viewerId;
 
   function derive(value: PadAiParse | null) {
     const confirmed = confirmedReading(parsed, value);
@@ -680,6 +705,28 @@ export default function TaskPad({
     setMention(found);
   }
 
+  function refreshDocQuery(value: string, caret: number) {
+    const found = docQueryAt(value, caret);
+    if (docMuted.current !== null && value.slice(docMuted.current, docMuted.current + 2) !== "[[") docMuted.current = null;
+    if (found && found.start === docMuted.current) {
+      setDocQuery(null);
+      return;
+    }
+    setDocQuery((current) => (current && found && current.start === found.start && current.end === found.end && current.query === found.query ? current : found));
+    if (!found || found.query !== docQuery?.query) setDocHighlight(0);
+  }
+
+  function pickDoc(doc: DocPick) {
+    if (docQuery) {
+      const next = withoutDocQuery(text, docQuery);
+      setText(next.text);
+      focusAt(next.caret);
+    } else focusAt();
+    setDocQuery(null);
+    setDocHighlight(0);
+    setDocs((current) => (current.some((item) => item.id === doc.id) ? current : [...current, doc]));
+  }
+
   function linkContact(option: PadOption | null) {
     setContact({ set: true, value: option ? { id: option.id, name: option.name, company: option.company } : null });
     if (!option?.company || fixedCompany) return;
@@ -760,6 +807,9 @@ export default function TaskPad({
     setPicked(null);
     setAskOpen(true);
     setChoice(0);
+    setDocs([]);
+    setDocQuery(null);
+    setDocHighlight(0);
   }
 
   async function freshDetection() {
@@ -835,6 +885,7 @@ export default function TaskPad({
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
+      ...(docs.length > 0 ? { docIds: docs.map((doc) => doc.id) } : {}),
     }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined }));
     setBusy(false);
     if (result.error) {
@@ -854,6 +905,29 @@ export default function TaskPad({
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing) return;
+    if (docQuery) {
+      const count = docOptions?.length ?? 0;
+      if (event.key === "Enter" && !event.shiftKey && docFound.loading) {
+        event.preventDefault();
+        return;
+      }
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && count > 0) {
+        event.preventDefault();
+        setDocHighlight((docActive + (event.key === "ArrowDown" ? 1 : -1) + count) % count);
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && docOptions && docActive >= 0 && !docFound.loading) {
+        event.preventDefault();
+        pickDoc(docOptions[docActive]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        docMuted.current = docQuery.start;
+        setDocQuery(null);
+        return;
+      }
+    }
     if (listing) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -898,7 +972,12 @@ export default function TaskPad({
     detectedContact ? seen?.word : null,
     picked && finalContact?.id === picked.id ? picked.word : null,
   ].filter((name): name is string => Boolean(name));
-  const marks = mergeMarks([...parsed.marks, ...nameMarks(text, names), ...(ask ? nameMarks(text, [ask.word], "ask") : [])]);
+  const marks = mergeMarks([
+    ...parsed.marks,
+    ...nameMarks(text, names),
+    ...(ask ? nameMarks(text, [ask.word], "ask") : []),
+    ...(docQuery ? [{ start: docQuery.start, end: docQuery.end, kind: "record" as const }] : []),
+  ]);
   const pieces: { text: string; kind: PadMark["kind"] | null }[] = [];
   let cursor = 0;
   for (const mark of marks) {
@@ -983,6 +1062,23 @@ export default function TaskPad({
       onPick={linkOpportunity}
       onClosed={() => focusAt()}
     />,
+    ...docs.map((doc) => (
+      <DocChip
+        key={`doc-${doc.id}`}
+        doc={doc}
+        variant={variant}
+        onRemove={() => {
+          setDocs((current) => current.filter((item) => item.id !== doc.id));
+          focusAt();
+        }}
+      />
+    )),
+    <DocPickPopover key="doc" taskId={null} warn={docWarn} exclude={docs.map((doc) => doc.id)} onPick={pickDoc} onClosed={() => focusAt()}>
+      <button type="button" aria-label="Link a doc" className={chipClass("empty", variant)}>
+        <DocIcon aria-hidden />
+        <span className="truncate">Doc</span>
+      </button>
+    </DocPickPopover>,
   ];
   if (pinned) {
     chips.push(
@@ -1054,7 +1150,7 @@ export default function TaskPad({
           autoFocus={autoFocus}
           value={text}
           data-shortcut="add-record"
-          data-mention-open={listing ? "" : undefined}
+          data-mention-open={listing || docQuery ? "" : undefined}
           readOnly={busy}
           aria-busy={busy || undefined}
           placeholder={placeholder}
@@ -1077,10 +1173,19 @@ export default function TaskPad({
             }
             setChoice(0);
             refreshMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
+            refreshDocQuery(event.target.value, event.target.selectionStart ?? event.target.value.length);
           }}
-          onSelect={(event) => refreshMention(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
+          onSelect={(event) => {
+            refreshMention(event.currentTarget.value, event.currentTarget.selectionStart ?? 0);
+            refreshDocQuery(event.currentTarget.value, event.currentTarget.selectionStart ?? 0);
+          }}
           onKeyDown={onKeyDown}
-          onBlur={() => window.setTimeout(() => setMention(null), 150)}
+          onBlur={() =>
+            window.setTimeout(() => {
+              setMention(null);
+              setDocQuery(null);
+            }, 150)
+          }
           onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
           className={cn(
             "placeholder:text-subtle caret-foreground selection:bg-primary/40 relative m-0 block max-h-40 w-full resize-none overflow-x-hidden border-0 bg-transparent p-0 text-transparent outline-none",
@@ -1117,6 +1222,22 @@ export default function TaskPad({
             </li>
           ))}
         </ul>
+      )}
+      {docQuery && (
+        <div
+          aria-label="Link a doc"
+          role="group"
+          className={cn(
+            "bg-popover border-line-strong overflow-hidden rounded-xl border p-1",
+            card ? "mt-2 w-full" : "shadow-overlay absolute top-full left-3 z-30 -mt-1 w-[min(24rem,calc(100%-1.5rem))]",
+          )}
+        >
+          <DocPickHeader query={docQuery.query} docs={docOptions} loading={docFound.loading} />
+          <DocPickNotice query={docQuery.query} docs={docOptions} failed={docFound.failed} />
+          {docOptions && docOptions.length > 0 && (
+            <DocPickOptions id={`${id}-docs`} docs={docOptions} query={docQuery.query} active={docActive} warn={docWarn} buttons onHover={setDocHighlight} onPick={pickDoc} />
+          )}
+        </div>
       )}
     </div>
   );

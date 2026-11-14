@@ -271,6 +271,7 @@ describe("task area UI", () => {
     assert.deepEqual(check("Start the day one onboarding on Monday", ["the day one", "on Monday"], "2026-11-23"), untouched("Start the day one onboarding on Monday"));
     assert.deepEqual(check("Tell Sam to log in on Friday", ["in on Friday"], friday), untouched("Tell Sam to log in on Friday"));
     assert.deepEqual(check("Call Sam 1 2 3 Friday", ["1 2 3 Friday"], friday), untouched("Call Sam 1 2 3 Friday"));
+    assert.deepEqual(check("Prep [[Friday plan]]", ["Friday"], friday), untouched("Prep [[Friday plan]]"), "never inside a doc link");
     assert.deepEqual(check("Tell Sam to log in on Friday", ["on Friday"], friday), { title: "Tell Sam to log in on Friday", due: friday, remindMinutes: null, durationMinutes: null }, "a cut after a dangling word keeps the typed title");
     assert.deepEqual(check("Tomorrow send NDA", ["Tomorrow"], "2026-11-17"), { title: "Tomorrow send NDA", due: "2026-11-17", remindMinutes: null, durationMinutes: null }, "a cut at the start that leaves a dangling word keeps the typed title");
 
@@ -422,6 +423,10 @@ describe("task area UI", () => {
       ["Flat 3 viewing Friday", monday, ["Flat 3 viewing", "2026-11-20"]],
       ["iPhone repair tomorrow", monday, ["iPhone repair", "2026-11-17"]],
       ["eBay listing", monday, ["eBay listing", null]],
+      ["Prep [[Friday plan]] tomorrow", monday, ["Prep [[Friday plan]]", "2026-11-17"]],
+      ["Read [[Tomorrow]]", monday, ["Read [[Tomorrow]]", null]],
+      ["Notes [[3pm sync", monday, ["Notes [[3pm sync", null]],
+      ["Read [[The Day After Tomorrow]] by Friday", monday, ["Read [[The Day After Tomorrow]]", "2026-11-20"]],
     ];
     for (const [text, at, expected] of cases) {
       const parsed = parseTaskText(text, new Date(at));

@@ -5,7 +5,7 @@ import { readContactInDb } from "@/lib/crm/contacts";
 import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure, tooMany } from "@/lib/crm/errors";
 import { fillCompanyGaps, fillContactGaps, type GapFill } from "@/lib/crm/merge";
-import { clickupUnlinkedLine } from "@/lib/crm/move-lines";
+import { clickupUnlinkedLine, docsUnlinkedLine } from "@/lib/crm/move-lines";
 import { isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { readOpportunityInDb } from "@/lib/crm/opportunities";
 import { assertScope, type Scope } from "@/lib/crm/scopes";
@@ -148,6 +148,7 @@ export type MoveResult = {
   tasks: number;
   leftBehind: { id: string; name: string }[];
   clickupUnlinked: number;
+  docsUnlinked: number;
   message: string;
 };
 
@@ -358,12 +359,39 @@ function alongPhrase(plan: Plan) {
   return `, with ${what}${people},`;
 }
 
-function resultMessage(plan: Plan) {
+function resultMessage(plan: Plan, docsUnlinked = 0) {
   const names = selectedNames(plan);
   const what = names.length === 1 ? names[0] : counted(names.length, "record", "records");
   const moved = `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
   const unlinked = plan.copy ? "" : clickupUnlinkedLine(plan.clickupTasks ?? 0);
-  return unlinked ? `${moved} ${unlinked}` : moved;
+  return [moved, unlinked, docsUnlinkedLine(docsUnlinked, plan.source.name)].filter(Boolean).join(" ");
+}
+
+type DocLinks = Map<string, string[]>;
+
+async function docLinksIn(db: Db, workspaceId: string): Promise<DocLinks> {
+  const result = await db.query<{ task_id: string; page_ids: string[] }>("select task_id, page_ids::text[] as page_ids from private.task_doc_links_in($1)", [workspaceId]);
+  return new Map(result.rows.map((row) => [row.task_id, row.page_ids]));
+}
+
+export async function droppedDocLinks(db: Db, before: DocLinks, after: DocLinks, targetId: string) {
+  const gone = [...before].filter(([taskId]) => !after.has(taskId));
+  if (gone.length === 0) return [];
+  const moved = await db.query<{ id: string }>("select id from private.tasks_now_in($1::uuid[], $2) as id", [gone.map(([taskId]) => taskId), targetId]);
+  const ids = new Set(moved.rows.map((row) => row.id));
+  return gone.filter(([taskId]) => ids.has(taskId)).map(([taskId, docIds]) => ({ taskId, docIds }));
+}
+
+async function auditDroppedDocs(db: Db, target: UserActor, plan: Plan, dropped: { taskId: string; docIds: string[] }[], provenance: Provenance) {
+  for (const item of dropped) {
+    await recordAudit(db, target, "task.updated", "task", item.taskId, provenance, {
+      fields: ["docIds"],
+      before: { docIds: item.docIds },
+      after: { docIds: [] },
+      movedFrom: plan.source,
+    });
+  }
+  return dropped.length;
 }
 
 type CopiedFrom = { workspaceId: string; workspaceName: string; id: string };
@@ -505,6 +533,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
   const { source, target } = await moveActors(actor, request.workspaceId, { moving: request.copy !== true });
   const input = moveInput(request);
   let plan: Plan | null = null;
+  let dropped: { taskId: string; docIds: string[] }[] = [];
   return withActorAfterAppStep(
     source,
     async (db) => {
@@ -513,7 +542,9 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         const [workspaceId, name] = key.split(":");
         await lockNamespace(db, workspaceId, name);
       }
+      const linksBefore = await docLinksIn(db, source.workspaceId);
       plan = await runPlan(db, source, target, input, false);
+      dropped = linksBefore.size > 0 ? await droppedDocLinks(db, linksBefore, await docLinksIn(db, source.workspaceId), target.workspaceId) : [];
     },
     async (db) => {
       const done = plan as Plan | null;
@@ -534,6 +565,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
       }
       if (done.copy) await auditCopy(db, source, target, done, fills, provenance);
       else await auditMove(db, source, target, done, fills, provenance);
+      const docsUnlinked = done.copy ? 0 : await auditDroppedDocs(db, target, done, dropped, provenance);
       return {
         copy: done.copy,
         source: done.source,
@@ -545,7 +577,8 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         tasks: done.tasks,
         leftBehind: (done.leftBehind ?? []).map((item) => ({ id: item.id, name: item.name })),
         clickupUnlinked: done.copy ? 0 : (done.clickupTasks ?? 0),
-        message: resultMessage(done),
+        docsUnlinked,
+        message: resultMessage(done, docsUnlinked),
       };
     },
   ).catch((error: unknown) => moveFailure(error, target.workspaceName));

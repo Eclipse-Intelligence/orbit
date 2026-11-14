@@ -143,6 +143,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         contactId: z.uuid().nullable().optional(),
         opportunityId: z.uuid().nullable().optional(),
         mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
+        docIds: z.array(z.uuid()).max(20).nullable().optional().describe("Docs linked to the task: the whole list of doc ids from search_docs or list_docs, in this workspace. [] or null takes them all off. You can only link docs you can read; agent tokens only see shared docs. Docs can also mention a task with @[Title](task:id)."),
         ...provenanceFields,
       },
     },
@@ -166,6 +167,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               contactId: args.contactId,
               opportunityId: args.opportunityId,
               mailThreadKey: args.mailThreadKey,
+              docIds: args.docIds,
             },
             { provenance: provenance(args, "update_task") },
           ))

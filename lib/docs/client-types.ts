@@ -95,6 +95,19 @@ export type LinkTarget =
 
 export type NoteTitle = { id: string; title: string; shared: boolean; folderName: string | null };
 
+export type DocPick = { id: string; title: string; folderPath: string | null; shared: boolean; updatedAt: string; updatedBy: Participant };
+
+export type PageTask = {
+  id: string;
+  title: string;
+  dueAt: string | null;
+  dueHasTime: boolean;
+  completedAt: string | null;
+  ownerId: string | null;
+  ownerName: string | null;
+  tagged: boolean;
+};
+
 export type Version = {
   id: string;
   pageId: string;
@@ -220,6 +233,7 @@ export interface DocsData {
   listDailyNotes(): Promise<DailySummary[]>;
   meetingsOn(date: string): Promise<Meeting[]>;
   backlinks(pageId: string): Promise<Backlinks>;
+  pageTasks(pageId: string): Promise<PageTask[]>;
   linkTargets(query: string, fromPageId: string | null): Promise<LinkTarget[]>;
   resolveTitles(): Promise<Record<string, string>>;
   noteTitles(): Promise<NoteTitle[]>;

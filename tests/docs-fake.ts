@@ -1,6 +1,7 @@
 import type {
   ActivityListener,
   Backlinks,
+  PageTask,
   CreateInput,
   DailySummary,
   DocsData,
@@ -671,6 +672,9 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
         { id: "m-acme", title: "Acme partner sync", start: `${date}T10:00:00Z`, href: "/calendar" },
         { id: "m-northwind", title: "Northwind legal", start: `${date}T14:00:00Z`, href: "/calendar" },
       ];
+    },
+    async pageTasks(): Promise<PageTask[]> {
+      return [];
     },
     async backlinks(pageId): Promise<Backlinks> {
       const row = rows.get(pageId);
