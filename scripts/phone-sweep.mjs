@@ -42,6 +42,7 @@ if (env.CRM_AGENT_TOKEN) {
 
 const sweepContacts = [];
 const sweepCallTasks = [];
+const sweepStarted = new Date();
 async function seedCallTask(label, verb = "Call") {
   if (!env.CRM_AGENT_TOKEN) return null;
   const stamp = `${label}${Date.now().toString(36)}`;
@@ -67,31 +68,15 @@ function londonDay(offset) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + offset * 86_400_000));
 }
 
-async function seedBlock(page, device) {
+async function seedBlock(device) {
   if (!env.CRM_AGENT_TOKEN) return null;
   const stamp = `${device}${Date.now().toString(36)}`;
-  await goto(page, `${base}/tasks`);
-  await page.waitForTimeout(1200);
-  const pad = page.locator('textarea[data-shortcut="add-record"]').first();
-  if ((await pad.count()) === 0 || !(await pad.isVisible())) return null;
-  await pad.click();
-  await pad.fill(`Sweep owner ${stamp}`);
-  await page.waitForTimeout(800);
-  await pad.press("Enter");
-  let mine = null;
-  for (let attempt = 0; attempt < 4 && !mine; attempt += 1) {
-    await page.waitForTimeout(1000);
-    const found = await api(`/tasks?q=${encodeURIComponent(stamp)}&view=all&limit=5`);
-    mine = found?.ok ? ((await found.json()).data ?? [])[0] : null;
-  }
-  if (mine) await api(`/tasks/${mine.id}`, { method: "DELETE" });
-  if (!mine?.ownerId) return null;
   const add = async (title, dueAt, durationMinutes = 30) => {
     const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title, dueAt, durationMinutes }) });
-    const id = created?.ok ? (await created.json()).task.id : null;
-    if (!id) return null;
-    if (await ownTimedTask(id, mine.ownerId)) return id;
-    await api(`/tasks/${id}`, { method: "DELETE" });
+    const task = created?.ok ? (await created.json()).task : null;
+    if (!task) return null;
+    if (task.ownerId && task.dueHasTime) return task.id;
+    await api(`/tasks/${task.id}`, { method: "DELETE" });
     return null;
   };
   const day = londonDay(1);
@@ -99,7 +84,7 @@ async function seedBlock(page, device) {
   const id = await add(title, `${day}T10:00`);
   const overdueDay = londonDay(-1);
   const overdueId = await add(`Sweep overdue ${stamp}`, `${overdueDay}T10:00`);
-  const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title: `Sweep plain ${stamp}`, ownerId: mine.ownerId, companyId: null, contactId: null, opportunityId: null }) });
+  const created = await api("/tasks", { method: "POST", body: JSON.stringify({ title: `Sweep plain ${stamp}`, companyId: null, contactId: null, opportunityId: null }) });
   const plainId = created?.ok ? (await created.json()).task.id : null;
   const earlyId = await add(`Sweep early ${stamp}`, `${day}T08:00`, 15);
   const stacked = [];
@@ -152,11 +137,17 @@ async function seedPreparation(taskId) {
   return seeded?.rowCount === 1;
 }
 
-async function ownTimedTask(id, ownerId) {
-  const db = await localAdmin("seed timed blocks: an agent can't set a time on someone's task");
-  if (!db) return false;
-  const updated = await db.query("update crm.tasks set owner_id = $2 where id = $1 and due_has_time", [id, ownerId]).catch(() => null);
-  return updated?.rowCount === 1;
+async function archiveFollowUps() {
+  const db = await localAdmin("archive the follow-ups the sweep added as you: an agent only sees tasks it created");
+  await db
+    ?.query(
+      `update crm.tasks t set archived_at = now()
+       from auth.users u
+       where t.created_by_user_id = u.id and lower(u.email) = lower($1)
+         and t.title = 'Sweep follow-up' and t.created_at >= $2 and t.archived_at is null`,
+      [env.DEV_USER_EMAIL, sweepStarted],
+    )
+    .catch(() => null);
 }
 
 async function dropTasks(ids) {
@@ -747,8 +738,6 @@ for (const [device, viewport] of [
     await save.tap();
     await page.waitForTimeout(1500);
     check(`${device} Save completes and logs the outcome`, (await row.count()) === 0 && (await visible(page.getByText(/Task done\. Note saved\. Next task added\./))));
-    const followUp = page.locator("li[data-task-id]").filter({ hasText: "Sweep follow-up" }).first();
-    if ((await followUp.count()) > 0) sweepCallTasks.push(await followUp.getAttribute("data-task-id"));
   } else check(`${device} call, email and outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a contact");
 
   const undoTask = await seedCallTask(`${device}u`);
@@ -906,7 +895,7 @@ for (const [device, viewport] of [
   await resetLearned(page, device);
   await goto(page, `${base}/calendar`);
   await page.waitForTimeout(800);
-  const block = await seedBlock(page, device);
+  const block = await seedBlock(device);
   if (block) {
     try {
       await goto(page, `${base}/calendar?date=${block.day}&view=day`);
@@ -1152,7 +1141,7 @@ for (const [device, viewport] of [
     } finally {
       await dropTasks(block.ids);
     }
-  } else check(`${device} calendar block checks ran`, false, "set CRM_AGENT_TOKEN and keep the Add task card so the sweep can add a task");
+  } else check(`${device} calendar block checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
   await goto(page, `${base}/settings/general`);
   await page.waitForTimeout(1200);
   check(`${device} settings loads`, await visible(page.getByRole("heading", { name: "General" })));
@@ -1269,7 +1258,7 @@ for (const width of [1100, 1280, 1440]) {
   } else if (width === 1280) check(`${device} keyboard outcome checks ran`, false, "set CRM_AGENT_TOKEN so the sweep can add a task");
 
   if (width === 1280) {
-    const block = await seedBlock(page, "desk");
+    const block = await seedBlock("desk");
     if (block) {
       try {
         await resetLearned(page, device);
@@ -1506,6 +1495,7 @@ for (const width of [1100, 1280, 1440]) {
 } finally {
 if (sweepTask) await api(`/tasks/${sweepTask.id}`, { method: "DELETE" });
 for (const id of sweepCallTasks) if (id) await api(`/tasks/${id}`, { method: "DELETE" });
+await archiveFollowUps();
 for (const id of sweepContacts) await api(`/contacts/${id}`, { method: "DELETE" });
 }
 
