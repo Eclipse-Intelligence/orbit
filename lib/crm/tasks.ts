@@ -21,7 +21,7 @@ import {
   type MutationOutcome,
 } from "@/lib/crm/mutate";
 import { cleanText, likePattern } from "@/lib/crm/normalize";
-import { assertScope } from "@/lib/crm/scopes";
+import { assertScope, scopesForRole } from "@/lib/crm/scopes";
 import {
   TASK_PRIORITIES,
   type Actor,
@@ -1086,9 +1086,25 @@ export async function listTaskParticipants(actor: UserActor, taskIds: string[]):
   });
 }
 
-export async function addTaskParticipantsInDb(db: Db, actor: UserActor, taskId: string, userIds: string[], provenance?: Provenance, options: { alert?: boolean } = {}) {
+async function actorInTaskWorkspace(db: Db, actor: UserActor, workspaceId: string): Promise<UserActor> {
+  if (workspaceId === actor.workspaceId) return actor;
+  const found = await db.query<{ role: UserActor["role"]; name: string }>(
+    `select m.role, w.name from crm.workspace_members m
+     join crm.workspaces w on w.id = m.workspace_id
+     where m.workspace_id = $1 and m.user_id = $2`,
+    [workspaceId, actor.userId],
+  );
+  const row = found.rows[0];
+  if (!row) throw notFound("task");
+  const home: UserActor = { ...actor, workspaceId, workspaceName: row.name, role: row.role, scopes: scopesForRole(row.role) };
+  assertScope(home.scopes, "tasks:write");
+  return home;
+}
+
+export async function addTaskParticipantsInDb(db: Db, caller: UserActor, taskId: string, userIds: string[], provenance?: Provenance, options: { alert?: boolean } = {}) {
   const task = (await db.query<TaskRow>(`${TASK_SQL} where t.id = $1`, [taskId])).rows[0];
   if (!task) throw notFound("task");
+  const actor = await actorInTaskWorkspace(db, caller, task.workspace_id);
   const wanted = [...new Set(userIds.filter(isUuid).map((id) => id.toLowerCase()))].filter((id) => id !== task.owner_id);
   if (wanted.length === 0) return [];
   const members = await db.query<{ user_id: string }>(

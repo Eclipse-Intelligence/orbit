@@ -5,6 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { upsertContact } from "@/lib/crm/contacts";
+import { openDiscussion, postMessage } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
 import { detectPadRecords } from "@/lib/crm/task-pad";
@@ -254,5 +255,32 @@ describe("curly apostrophes", () => {
     const pad = await detectPadRecords(eclipse, "Call O’Brien");
     assert.equal(pad.contact?.id, straight.id);
     assert.equal(pad.word, "O’Brien");
+  });
+});
+
+describe("tagging from a task discussion", () => {
+  it("writes the tag's audit event in the task's own workspace, even when posted from another", async () => {
+    const helper = await createUser("dana@guards.test", "Dana Helper");
+    await addMember(ridgeon.workspaceId, helper.userId);
+    const task = (await createTask(ridgeon, { title: "Ridgeon discussion" })).body.task;
+    const { conversationId } = await openDiscussion(ridgeon, { kind: "task", id: task.id });
+    await postMessage(eclipse, { conversationId, body: `Can you look? @[Dana Helper](member:${helper.userId})` });
+    const tagged = (await audits(task.id)).filter((row) => row.event_type === "task.participant_added");
+    assert.equal(tagged.length, 1);
+    assert.equal(tagged[0].workspace_id, ridgeon.workspaceId);
+    assert.equal((await admin().query("select 1 from crm.audit_events where entity_id = $1 and workspace_id = $2", [task.id, eclipse.workspaceId])).rowCount, 0);
+  });
+});
+
+describe("assistant unassigning", () => {
+  it("unassigns a task when the assistant sends ownerId null, and the card says so", async () => {
+    const task = (await createTask(eclipse, { title: "Hand back", ownerId: priya.userId })).body.task;
+    assert.equal(task.ownerId, priya.userId);
+    const card = describeAction("update_task", { taskId: task.id, ownerId: null });
+    assert.ok(card.lines.includes("Owner: none"), card.lines.join("\n"));
+    const out = (await runTool(eclipse, "update_task", { taskId: task.id, ownerId: null })) as { error?: string; task?: { ownerId: string | null } };
+    assert.equal(out.error, undefined);
+    assert.equal(out.task?.ownerId, null);
+    assert.equal((await getTask(eclipse, task.id)).ownerId, null);
   });
 });

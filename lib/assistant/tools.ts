@@ -283,8 +283,8 @@ function dueDayOf(value: unknown) {
 
 function taskTimingLines(args: Args, name: Names, current: { ownerId: string | null; timed: boolean } | null) {
   const self = detail(name, TASK_SELF_KEY);
-  const owner = optionalStr(args.ownerId) ?? current?.ownerId ?? null;
-  const ownerChanges = optionalStr(args.ownerId) !== undefined && owner !== (current?.ownerId ?? null);
+  const owner = args.ownerId === null ? null : (optionalStr(args.ownerId) ?? current?.ownerId ?? null);
+  const ownerChanges = (args.ownerId === null || optionalStr(args.ownerId) !== undefined) && owner !== (current?.ownerId ?? null);
   const someoneElse = Boolean(owner && self && owner !== self);
   const timed = hasTime(args.dueAt) || (args.dueAt === undefined && args.dueDate === undefined && Boolean(current?.timed));
   const dayOnly = someoneElse && timed && (ownerChanges || args.dueAt !== undefined);
@@ -3536,6 +3536,7 @@ const TOOL_LIST: AssistantTool[] = [
       properties: {
         taskId: idParam("Task id. Send this or schedule, not both."),
         ...TASK_FIELDS,
+        ownerId: { type: "string", description: "Team member id from list_team_members to assign it to, or null to unassign it." },
         completed: { type: "boolean", description: "True marks the task done; false reopens a done task." },
         contactId: { type: "string", description: "Person id the task is about, or null to take the person off." },
         companyId: { type: "string", description: "Company id the task is about, or null to take the company off." },
@@ -3571,6 +3572,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...fieldLines(args, { priority: "Priority", description: "Detail" }),
           ...clearedLines(args, { description: "Detail" }),
           ...fieldLines(args, { ownerId: "Owner" }, name),
+          ...clearedLines(args, { ownerId: "Owner" }),
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
         ],
@@ -3597,7 +3599,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(args.durationMinutes !== undefined && typeof args.durationMinutes === "number" ? { durationMinutes: args.durationMinutes } : {}),
           ...(args.remindMinutes !== undefined ? { remindMinutes: typeof args.remindMinutes === "number" ? args.remindMinutes : null } : {}),
           ...(args.priority !== undefined ? { priority: oneOf(args.priority, ["low", "normal", "high"] as const) } : {}),
-          ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
+          ...(args.ownerId === null ? { ownerId: null } : optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
           ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
           ...taskRelinkArgs(args),
           ...(await taskEmailArgs(actor, args)),
