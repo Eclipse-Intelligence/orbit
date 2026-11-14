@@ -34,6 +34,9 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 - **Review the whole area once it's finished.** After the last PR for a feature area, run one review across the whole area, not just the per-PR diffs: workspaces, concurrent requests, retries, and every route that writes the record (web, API, MCP, assistant, workflows, background jobs).
 - **Close every review point before merging.** Each point is either fixed or explicitly accepted by Mark. Never leave one as a nit or an open question. Every round of fixes gets re-reviewed.
 - **Keep reviewing until clean, with a clear finish line.** There is no cap on rounds: genuine bugs are always fixed and re-reviewed. For open-ended areas (free-text parsing, heuristics), set a measurable bar before the first review, such as a test corpus that must never save a wrong result silently, so reviews check against that bar rather than finding endless new phrasings.
+- **First review is full depth.** No time limit on the first review of a feature; give it a checklist (privacy and workspace boundaries, concurrency, retries, every route that writes the record, migrations). Later rounds review the fixes and what they touch.
+- **Fix the class, not the instance.** Builders fix the kind of problem a finding shows and add a test of the general rule (for example, "a person never reads a task outside their workspaces"), not only the listed case.
+- **No new rules during a review.** If a product rule changes, pause the PRs it affects rather than merging underneath them, and re-review them against the new rule.
 
 ### Migrations
 
