@@ -358,6 +358,32 @@ export const CORE_TASKS: EvalTask[] = [
     ],
   }),
   task({
+    id: "link-doc-keeps-linked-docs",
+    suite: "core",
+    category: "propose_write",
+    origin: "Task docs: linking one more doc to a task that already has two keeps both, since docIds is the whole list.",
+    fixture: {
+      eclipse: {
+        docs: [
+          { title: "Juno renewal terms", content: "# Juno renewal terms\n\nThree-year option with a break clause.", shared: true },
+          { title: "Juno pricing model", content: "# Juno pricing model\n\nFloor price per seat." },
+          { title: "Juno call notes", content: "# Juno call notes\n\nShe wants the proposal on Friday.", shared: true },
+        ],
+        tasks: [{ title: "Call Juno about the renewal", due: { days: 0 }, contact: "Juno Frith", company: "Driftbox Cloud", docs: ["Juno renewal terms", "Juno pricing model"] }],
+      },
+    },
+    page: { path: "/tasks", focus: { kind: "task", id: "task:Call Juno about the renewal" } },
+    message: "Link the Juno call notes doc to this task too.",
+    checks: [
+      card(
+        "update_task",
+        arg.all(arg.is("taskId", "task:Call Juno about the renewal"), idsInclude("docIds", "doc:Juno call notes", "doc:Juno renewal terms", "doc:Juno pricing model")),
+        "links the call notes and keeps both linked docs",
+      ),
+      exactlyCards(["update_task"]),
+    ],
+  }),
+  task({
     id: "write-call-outcome-named",
     suite: "core",
     category: "multi_step",

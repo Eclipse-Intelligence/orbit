@@ -5,6 +5,7 @@ import type { UserActor } from "@/lib/crm/types";
 import type {
   Backlinks,
   DailySummary,
+  DocPick,
   DocsNav,
   Folder,
   LinkContext,
@@ -398,6 +399,50 @@ function noteTarget(actor: UserActor, doc: DocSummary, folderNames: Map<string, 
     updatedAt: doc.editedAt,
     updatedBy: editorParticipant(actor, doc.lastEditor, doc.owner),
   };
+}
+
+export function folderPaths(folders: { id: string; parentId: string | null; name: string }[]) {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  return (folderId: string | null) => {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    let at = folderId ? byId.get(folderId) : undefined;
+    while (at && !seen.has(at.id)) {
+      seen.add(at.id);
+      names.unshift(at.name);
+      at = at.parentId ? byId.get(at.parentId) : undefined;
+    }
+    return names.length > 0 ? names.join(" › ") : null;
+  };
+}
+
+export const DOC_PICK_LIMIT = 8;
+
+export async function docPickTargets(actor: UserActor, query: string): Promise<DocPick[]> {
+  assertDocsRead(actor);
+  const text = query.replace(/\s+/g, " ").trim().slice(0, 120);
+  const [summaries, folders] = await Promise.all([
+    text
+      ? searchDocs(actor, text, { limit: 30 }).then(async (hits) => {
+          const notes = hits.filter((hit) => hit.kind === "note").sort((left, right) => Number(right.titleMatch !== null) - Number(left.titleMatch !== null));
+          const found = await summariesByIds(actor, notes.map((hit) => hit.id));
+          return notes.flatMap((hit) => found.get(hit.id) ?? []);
+        })
+      : listDocs(actor, { kind: "note", sort: "edited", limit: DOC_PICK_LIMIT }).then((page) => page.data.map((doc) => toSummary(actor, doc))),
+    listFolders(actor),
+  ]);
+  const pathOf = folderPaths(folders);
+  return summaries
+    .filter((summary) => summary.kind === "note")
+    .slice(0, DOC_PICK_LIMIT)
+    .map((summary) => ({
+      id: summary.id,
+      title: summary.title,
+      folderPath: pathOf(summary.folderId),
+      shared: summary.shared,
+      updatedAt: summary.updatedAt,
+      updatedBy: summary.updatedBy,
+    }));
 }
 
 export async function docsMentions(actor: UserActor, record: { kind: string; id: string }): Promise<SearchHit[]> {

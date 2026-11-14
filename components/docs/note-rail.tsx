@@ -5,11 +5,13 @@ import Link from "next/link";
 import { Monogram } from "@/components/beautifui/record-marks";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { navigateWithinDocs, useDocsNow } from "@/components/docs/use-docs";
-import type { Backlinks, LinkContext, Page, RecordRef } from "@/lib/docs/client-types";
+import { taskPanelHref } from "@/lib/chat/discussions";
+import { taskDueLabel, taskDueState } from "@/lib/crm/task-views";
+import type { Backlinks, LinkContext, Page, PageTask, RecordRef } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
 import { whenLabel } from "@/lib/docs/format";
 import { linkTitlesIn, parseMentions } from "@/lib/docs/markdown";
-import { participantInitials } from "@/lib/docs/participants";
+import { participantInitials, personParticipant } from "@/lib/docs/participants";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -17,6 +19,7 @@ import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import FileSignatureIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
+import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import DocIcon from "@/public/assets/images/docs/doc.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
@@ -118,6 +121,97 @@ function RecordRow({ icon, name, detail, href, internal }: { icon: ReactNode; na
   );
 }
 
+function firstNameOf(name: string | null) {
+  return name?.trim().split(/\s+/)[0] ?? "";
+}
+
+function pageTaskDetail(task: PageTask, now: number) {
+  const owner = firstNameOf(task.ownerName);
+  if (task.completedAt) return { text: ["Done", owner].filter(Boolean).join(" · "), late: false };
+  const state = taskDueState(task.dueAt, now);
+  const due = state.kind === "overdue" ? "Overdue" : state.kind === "today" ? "Due today" : state.kind === "none" ? null : `Due ${taskDueLabel(task, now)}`;
+  return { text: [due, owner].filter(Boolean).join(" · "), late: state.kind === "overdue" };
+}
+
+function PageTaskRow({ task, now }: { task: PageTask; now: number }) {
+  const detail = pageTaskDetail(task, now);
+  const Icon = task.completedAt ? CheckIcon : TargetIcon;
+  return (
+    <li>
+      <Link
+        href={taskPanelHref(task.id, { tagged: task.tagged })}
+        className="ease-power3-out focus-visible:ring-ring/60 -mx-2 flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors duration-150 outline-none hover:bg-white/[0.04] focus-visible:ring-2 [@media(pointer:coarse)]:min-h-11"
+      >
+        <span className="bg-secondary text-subtle flex size-6 shrink-0 items-center justify-center rounded-lg">
+          <Icon aria-hidden className="size-3.5" />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className={cn("truncate text-[13px] leading-4", task.completedAt ? "text-subtle line-through" : "text-foreground")}>{task.title}</span>
+          {detail.text && <span className={cn("caption-style truncate", detail.late ? "text-danger" : "text-subtle")}>{detail.text}</span>}
+        </span>
+        {task.ownerId && <ParticipantAvatar participant={personParticipant({ id: task.ownerId, name: task.ownerName ?? "Former member" }, null)} size="sm" />}
+      </Link>
+    </li>
+  );
+}
+
+function PageTasks({ pageId }: { pageId: string }) {
+  const [tasks, setTasks] = useState<{ id: string; value: PageTask[] } | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  const [now] = useState(() => Date.now());
+
+  useEffect(() => {
+    let live = true;
+    void docsData()
+      .pageTasks(pageId)
+      .then((value) => {
+        if (live) setTasks({ id: pageId, value });
+      })
+      .catch(() => {
+        if (live) setTasks({ id: pageId, value: [] });
+      });
+    return () => {
+      live = false;
+    };
+  }, [pageId]);
+
+  const list = tasks?.id === pageId ? tasks.value : [];
+  if (list.length === 0) return null;
+  const open = list.filter((task) => !task.completedAt);
+  const done = list.filter((task) => task.completedAt);
+  return (
+    <RailSection title="Tasks" count={open.length > 0 ? open.length : undefined}>
+      {open.length > 0 && (
+        <ul className="flex flex-col">
+          {open.map((task) => (
+            <PageTaskRow key={task.id} task={task} now={now} />
+          ))}
+        </ul>
+      )}
+      {done.length > 0 && (
+        <>
+          <button
+            type="button"
+            aria-expanded={showDone}
+            onClick={() => setShowDone((value) => !value)}
+            className="caption-style text-subtle hover:text-foreground focus-visible:ring-ring/60 hit flex items-center gap-1.5 self-start rounded-md py-1 transition-colors duration-150 outline-none focus-visible:ring-2"
+          >
+            {done.length} done
+            <ChevronRightIcon aria-hidden className={cn("ease-power3-out size-3 transition-transform duration-150", showDone && "rotate-90")} />
+          </button>
+          {showDone && (
+            <ul className="flex flex-col">
+              {done.map((task) => (
+                <PageTaskRow key={task.id} task={task} now={now} />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </RailSection>
+  );
+}
+
 export default function NoteRail({ page }: { page: Page }) {
   const now = useDocsNow();
   const titles = useDocsStore((state) => state.titles);
@@ -204,6 +298,7 @@ export default function NoteRail({ page }: { page: Page }) {
           </>
         )}
       </RailSection>
+      {page.kind !== "daily" && <PageTasks pageId={page.id} />}
       {(recordList.length > 0 || linkedNotes.length > 0) && (
         <RailSection title="In this note">
           <ul className="flex flex-col">
