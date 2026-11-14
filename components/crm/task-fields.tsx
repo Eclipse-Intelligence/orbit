@@ -240,12 +240,12 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     setDuration(values.duration);
   }
 
-  async function save(write: TaskDetails) {
+  async function save(write: TaskDetails, ask = true) {
     const timed = touchesTiming(write);
     const ticket = timed ? timing.start() : 0;
     setError(null);
     setNotice(null);
-    const change = scopeChange(task, write);
+    const change = ask ? scopeChange(task, write) : null;
     let scope: RepeatScope | undefined = task.repeat?.current && !task.completedAt ? "this" : undefined;
     if (change) {
       const picked = await repeatScope.ask(change);
@@ -298,7 +298,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     return true;
   }
 
-  function saveTitle() {
+  function saveTitle(ask = true) {
     if (!canChange) return;
     const next = title.trim();
     if (!next) {
@@ -312,7 +312,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
       return;
     }
     sent.current.title = next;
-    void save({ title: next }).then((ok) => {
+    void save({ title: next }, ask).then((ok) => {
       if (ok) {
         dropDraft(task.id, "title");
         return;
@@ -322,7 +322,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     });
   }
 
-  function saveText() {
+  function saveText(ask = true) {
     if (!canChange) return;
     const next = text.trim();
     const previous = sent.current.text;
@@ -331,7 +331,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
       return;
     }
     sent.current.text = next;
-    void save({ description: next || null }).then((ok) => {
+    void save({ description: next || null }, ask).then((ok) => {
       if (ok) {
         dropDraft(task.id, "text");
         return;
@@ -342,8 +342,8 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   }
 
   function flush() {
-    saveTitle();
-    saveText();
+    saveTitle(false);
+    saveText(false);
   }
 
   const latestFlush = useRef(flush);
@@ -496,7 +496,7 @@ export function TaskTitleField({
       onFocus={(event) => event.currentTarget.setSelectionRange(editing, editing)}
       onChange={(event) => details.setTitle(event.target.value.replace(/\n/g, " "))}
       onBlur={() => {
-        details.saveTitle();
+        details.saveTitle(true);
         setEditing(null);
       }}
       onKeyDown={(event) => {
@@ -918,7 +918,7 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
       value={details.text}
       placeholder="Add a description"
       onChange={(event) => details.setText(event.target.value)}
-      onBlur={details.saveText}
+      onBlur={() => details.saveText(true)}
       className={cn(
         "resize-none overflow-hidden",
         layout === "panel" ? "min-h-16" : "min-h-0 rounded-lg border-transparent bg-transparent px-2 py-1.5 text-[13.5px] leading-[1.5] shadow-none hover:bg-white/[0.04] focus-visible:bg-white/[0.04] -mx-2",
@@ -977,7 +977,6 @@ export default function TaskFields({
             </>
           )}
         </div>
-        {details.scopeDialog}
         <Description details={details} layout="row" />
         {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label />}
         {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
@@ -1028,7 +1027,6 @@ export default function TaskFields({
         <Description details={details} layout="panel" />
       </Section>
       <SavedNote details={details} />
-      {details.scopeDialog}
     </>
   );
 }

@@ -31,12 +31,6 @@ create table if not exists crm.task_series (
   constraint task_series_duration check (duration_minutes between 5 and 480),
   constraint task_series_reminder check (remind_minutes is null or (at is not null and remind_minutes between 0 and 10080)),
   constraint task_series_actor_exclusive check (num_nonnulls(created_by_user_id, created_by_agent_id) <= 1),
-  constraint task_series_rule_shape check (
-    jsonb_typeof(rule) = 'object'
-    and rule ->> 'freq' in ('daily', 'weekly', 'monthly', 'yearly')
-    and case when jsonb_typeof(rule -> 'interval') = 'number' then (rule ->> 'interval')::numeric between 1 and 99 else false end
-    and (rule ->> 'freq' <> 'weekly' or (jsonb_typeof(rule -> 'weekdays') = 'array' and jsonb_array_length(rule -> 'weekdays') between 1 and 7))
-  ),
   constraint task_series_ends_shape check (
     jsonb_typeof(ends) = 'object'
     and (
@@ -55,6 +49,31 @@ create index if not exists task_series_split_idx on crm.task_series (split_from_
 create index if not exists task_series_company_idx on crm.task_series (company_id) where company_id is not null;
 create index if not exists task_series_contact_idx on crm.task_series (contact_id) where contact_id is not null;
 create index if not exists task_series_opportunity_idx on crm.task_series (opportunity_id) where opportunity_id is not null;
+
+alter table crm.task_series drop constraint if exists task_series_rule_shape;
+alter table crm.task_series add constraint task_series_rule_shape check (
+    jsonb_typeof(rule) = 'object'
+    and rule ->> 'freq' in ('daily', 'weekly', 'monthly', 'yearly')
+    and (rule - 'freq' - 'interval' - 'weekdays' - 'monthDay' - 'monthWeek') = '{}'::jsonb
+    and case when jsonb_typeof(rule -> 'interval') = 'number' then (rule ->> 'interval') ~ '^[1-9][0-9]?$' else false end
+    and case
+      when rule ->> 'freq' = 'weekly' then
+        jsonb_typeof(rule -> 'weekdays') = 'array'
+        and jsonb_array_length(rule -> 'weekdays') between 1 and 7
+        and (rule -> 'weekdays') <@ '["mo", "tu", "we", "th", "fr", "sa", "su"]'::jsonb
+        and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
+      when rule ->> 'freq' = 'monthly' then
+        not (rule ? 'weekdays')
+        and not (rule ? 'monthDay' and rule ? 'monthWeek')
+        and (not (rule ? 'monthDay') or (jsonb_typeof(rule -> 'monthDay') = 'number' and (rule ->> 'monthDay') in ('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31')))
+        and (not (rule ? 'monthWeek') or (
+          jsonb_typeof(rule -> 'monthWeek') = 'object'
+          and (rule -> 'monthWeek' ->> 'n') in ('1', '2', '3', '4', '-1')
+          and (rule -> 'monthWeek' ->> 'weekday') in ('mo', 'tu', 'we', 'th', 'fr', 'sa', 'su')
+        ))
+      else not (rule ? 'weekdays') and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
+    end
+  );
 
 alter table crm.task_series enable row level security;
 alter table crm.task_series force row level security;
@@ -163,7 +182,8 @@ create policy task_series_update_member on crm.task_series
       or created_by_user_id = (select private.session_user_id())
       or exists (
         select 1 from crm.tasks t
-        where t.id = task_series.current_task_id and t.owner_id = (select private.session_user_id())
+        where t.id = task_series.current_task_id
+          and (t.owner_id = (select private.session_user_id()) or t.created_by_user_id = (select private.session_user_id()))
       )
     )
   )
@@ -216,7 +236,11 @@ create policy task_occurrence_changes_write_member on crm.task_occurrence_change
         and (
           s.owner_id = (select private.session_user_id())
           or s.created_by_user_id = (select private.session_user_id())
-          or exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.owner_id = (select private.session_user_id()))
+          or exists (
+            select 1 from crm.tasks t
+            where t.id = s.current_task_id
+              and (t.owner_id = (select private.session_user_id()) or t.created_by_user_id = (select private.session_user_id()))
+          )
         )
     )
   )
@@ -227,7 +251,11 @@ create policy task_occurrence_changes_write_member on crm.task_occurrence_change
         and (
           s.owner_id = (select private.session_user_id())
           or s.created_by_user_id = (select private.session_user_id())
-          or exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.owner_id = (select private.session_user_id()))
+          or exists (
+            select 1 from crm.tasks t
+            where t.id = s.current_task_id
+              and (t.owner_id = (select private.session_user_id()) or t.created_by_user_id = (select private.session_user_id()))
+          )
         )
     )
   );
@@ -258,7 +286,11 @@ as $$
           and (
             s.owner_id = (select private.session_user_id())
             or s.created_by_user_id = (select private.session_user_id())
-            or exists (select 1 from crm.tasks c where c.id = s.current_task_id and c.owner_id = (select private.session_user_id()))
+            or exists (
+              select 1 from crm.tasks c
+              where c.id = s.current_task_id
+                and (c.owner_id = (select private.session_user_id()) or c.created_by_user_id = (select private.session_user_id()))
+            )
           )
         )
         or (
@@ -349,18 +381,24 @@ as $$
   join lateral (
     select candidate.user_id, candidate.role
     from (
-      values (1, t.owner_id), (2, t.created_by_user_id), (3, s.owner_id), (4, s.created_by_user_id)
+      values
+        (1, case when t.completed_at is null then t.owner_id else s.owner_id end),
+        (2, case when t.completed_at is null then t.created_by_user_id else s.created_by_user_id end),
+        (3, s.owner_id),
+        (4, s.created_by_user_id),
+        (5, t.owner_id),
+        (6, (select o.user_id from crm.workspace_members o where o.workspace_id = s.workspace_id and o.role = 'owner' order by o.created_at limit 1))
     ) as wanted (rank, user_id)
     join crm.workspace_members candidate on candidate.workspace_id = s.workspace_id and candidate.user_id = wanted.user_id
     order by wanted.rank
     limit 1
   ) m on true
   left join crm.profiles p on p.id = m.user_id
-  where (s.roll_pending or (s.roll_at is not null and s.roll_at <= p_now))
+  where (s.roll_pending or (s.roll_at is not null and s.roll_at <= p_now) or t.completed_at is not null)
     and s.ended_at is null
     and s.archived_at is null
-    and t.completed_at is null
     and t.archived_at is null
+    and t.series_id = s.id
   order by s.roll_pending desc, s.roll_at
   limit greatest(1, least(coalesce(p_limit, 50), 200))
 $$;
@@ -424,6 +462,99 @@ $$;
 
 revoke all on function private.task_series_follow_move(uuid, uuid) from public;
 grant execute on function private.task_series_follow_move(uuid, uuid) to crm_app;
+
+create or replace function private.delay_series_roll(p_series uuid, p_until timestamptz)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update crm.task_series set roll_at = greatest(coalesce(roll_at, p_until), p_until), roll_pending = false
+  where id = p_series and ended_at is null and archived_at is null;
+$$;
+
+revoke all on function private.delay_series_roll(uuid, timestamptz) from public;
+grant execute on function private.delay_series_roll(uuid, timestamptz) to crm_app;
+
+create or replace function private.tasks_bind_series()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_series crm.task_series%rowtype;
+begin
+  if current_user not in ('authenticated', 'crm_agent') then
+    return new;
+  end if;
+  if new.series_id is null or (tg_op = 'UPDATE' and old.series_id is not distinct from new.series_id and old.workspace_id is not distinct from new.workspace_id) then
+    return new;
+  end if;
+  select * into v_series from crm.task_series s where s.id = new.series_id;
+  if not found or v_series.workspace_id <> new.workspace_id or v_series.archived_at is not null then
+    raise exception 'That repeating task isn''t in this workspace.' using errcode = '42501';
+  end if;
+  if tg_op = 'UPDATE' and (
+    v_series.current_task_id is not null and v_series.current_task_id <> new.id
+    or not (
+      v_series.owner_id = (select private.session_user_id())
+      or v_series.created_by_user_id = (select private.session_user_id())
+      or (v_series.created_by_agent_id is not null and v_series.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid)
+    )
+  ) then
+    raise exception 'That task can''t join this repeating task.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.tasks_bind_series() from public;
+
+drop trigger if exists tasks_bind_series on crm.tasks;
+create trigger tasks_bind_series
+  before insert or update of series_id, workspace_id on crm.tasks
+  for each row
+  execute function private.tasks_bind_series();
+
+create or replace function private.task_series_bind_current()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.current_task_id is not null
+    and (tg_op = 'INSERT' or old.current_task_id is distinct from new.current_task_id or old.workspace_id is distinct from new.workspace_id)
+    and not exists (
+      select 1 from crm.tasks t
+      where t.id = new.current_task_id and t.series_id = new.id and t.workspace_id = new.workspace_id
+    ) then
+    raise exception 'A repeating task''s open task must belong to it.' using errcode = '23514';
+  end if;
+  if new.owner_id is not null
+    and current_user in ('authenticated', 'crm_agent')
+    and (tg_op = 'INSERT' or old.owner_id is distinct from new.owner_id)
+    and not exists (select 1 from crm.workspace_members m where m.workspace_id = new.workspace_id and m.user_id = new.owner_id) then
+    raise exception 'Choose an assignee in this workspace.' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.task_series_bind_current() from public;
+
+drop trigger if exists task_series_bind_current on crm.task_series;
+create trigger task_series_bind_current
+  before insert or update of current_task_id, workspace_id, owner_id on crm.task_series
+  for each row
+  execute function private.task_series_bind_current();
+
+drop policy if exists tasks_series_binding on crm.tasks;
+create policy tasks_series_binding on crm.tasks
+  as restrictive
+  for insert to authenticated, crm_agent
+  with check (series_id is null or private.series_occurrence_allowed(series_id, workspace_id, created_by_user_id, created_by_agent_id));
 
 reset lock_timeout;
 

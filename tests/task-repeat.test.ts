@@ -9,6 +9,7 @@ import {
   nextOccurrence,
   occurrenceAfter,
   occurrenceDays,
+  occurrenceEnd,
   occurrenceOnOrAfter,
   occurrencesBetween,
   occurrenceTiming,
@@ -109,12 +110,15 @@ describe("repeat ends", () => {
   });
 
   it("checks rules and ends with messages people can act on", () => {
-    assert.equal(checkRule({ freq: "weekly", interval: 1, weekdays: [] }), "Pick at least one day.");
+    assert.equal(checkRule({ freq: "weekly", interval: 1, weekdays: [] }), "Choose at least one day.");
     assert.equal(checkRule({ freq: "daily", interval: 0 }), "Repeat every 1 to 99.");
     assert.equal(checkRule({ freq: "daily", interval: 100 }), "Repeat every 1 to 99.");
     assert.equal(checkRule({ freq: "monthly", interval: 1, monthDay: 32 }), "Choose a day from 1 to 31.");
     assert.equal(checkRule({ freq: "monthly", interval: 1, monthWeek: { n: 5, weekday: "mo" } }), "Choose which week of the month.");
     assert.equal(checkRule({ freq: "hourly", interval: 1 }), "Choose how it repeats.");
+    assert.equal(checkRule({ freq: "daily", interval: 1, weekdays: ["mo"] }), "Days only go with a weekly repeat.");
+    assert.equal(checkRule({ freq: "monthly", interval: 1, monthDay: 3, monthWeek: { n: 1, weekday: "mo" } }), "Choose a day of the month or a weekday, not both.");
+    assert.equal(occurrenceOnOrAfter(pattern({ freq: "yearly", interval: 1 }, "9998-06-01"), "9998-06-02"), null);
     assert.equal(checkRule({ freq: "monthly", interval: 1, monthWeek: { n: -1, weekday: "fr" } }), null);
     assert.equal(checkEnds({ until: "2026-11-01" }, "2026-11-14", "2026-11-14"), "The end date is before the first one.");
     assert.equal(checkEnds({ until: "2037-11-14" }, "2026-11-14", "2026-11-14"), "Choose an end date within 10 years.");
@@ -185,8 +189,10 @@ describe("rolling a missed occurrence", () => {
   it("rolls at the start of the next day, or the next reminder when earlier", () => {
     const daily = pattern({ freq: "daily", interval: 1 }, "2026-11-16", { at: "09:00" });
     const next = nextOccurrence(daily, [], "2026-11-16", LONDON)!;
-    assert.equal(rollThreshold(daily, next, null, Date.parse("2026-11-16T09:15:00Z"), LONDON), "2026-11-17T00:00:00.000Z");
-    assert.equal(rollThreshold(daily, next, 1440, Date.parse("2026-11-16T09:15:00Z"), LONDON), "2026-11-16T09:15:00.000Z");
+    const currentEnd = occurrenceEnd({ dueAt: "2026-11-16T09:00:00.000Z", dueHasTime: true, durationMinutes: 15 }, LONDON);
+    assert.equal(rollThreshold(daily, next, null, currentEnd, LONDON), "2026-11-17T00:00:00.000Z");
+    for (const remind of [1440, 2880, 10080]) assert.equal(rollThreshold(daily, next, remind, currentEnd, LONDON), "2026-11-16T09:15:00.000Z");
+    assert.equal(occurrenceEnd({ dueAt: "2026-11-16T00:00:00.000Z", dueHasTime: false }, LONDON), Date.parse("2026-11-17T00:00:00.000Z"));
     const weekly = pattern({ freq: "weekly", interval: 1, weekdays: ["tu"] }, "2026-11-17", { at: "14:00" });
     const tuesday = nextOccurrence(weekly, [], "2026-11-17", LONDON)!;
     assert.equal(rollThreshold(weekly, tuesday, 60, Date.parse("2026-11-17T14:15:00Z"), LONDON), "2026-11-24T00:00:00.000Z");
@@ -239,5 +245,7 @@ describe("repeat words", () => {
     assert.equal(toRrule(pattern({ freq: "monthly", interval: 1, monthWeek: { n: -1, weekday: "fr" } }, "2026-11-27", { ends: { until: "2027-03-31" } })), "RRULE:FREQ=MONTHLY;BYDAY=-1FR;UNTIL=20270331");
     assert.equal(toRrule(pattern({ freq: "monthly", interval: 1, monthDay: 31 }, "2027-01-31")), "RRULE:FREQ=MONTHLY;BYMONTHDAY=31,-1;BYSETPOS=1");
     assert.equal(toRrule(pattern({ freq: "yearly", interval: 1 }, "2026-11-14")), "RRULE:FREQ=YEARLY;BYMONTH=11;BYMONTHDAY=14");
+    assert.equal(toRrule(pattern({ freq: "yearly", interval: 1 }, "2028-02-29")), "RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1");
+    assert.equal(toRrule(pattern({ freq: "daily", interval: 1 }, "2027-03-01", { at: "14:00", ends: { until: "2027-07-01" } }), LONDON), "RRULE:FREQ=DAILY;UNTIL=20270701T225959Z");
   });
 });

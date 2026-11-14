@@ -43,7 +43,7 @@ import { TASKS_PATH } from "@/lib/crm/task-views";
 import { assertOwnThreadInDb, readMailThreadKey, withMailThreadsInDb, withoutViewerMail } from "@/lib/crm/task-mail";
 import { dayWindow, readDateTime } from "@/lib/time";
 import { describeRepeat, type OccurrenceChange, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
-import { seriesAfterArchive, seriesAfterTaskChange, seriesAfterUnarchive, seriesBeforeReopen } from "@/lib/crm/task-series";
+import { archiveAsSkipInDb, seriesAfterArchive, seriesAfterTaskChange, seriesAfterUnarchive, seriesBeforeReopen, seriesBeforeUnarchive } from "@/lib/crm/task-series";
 
 const TASK_SQL = `
   select
@@ -1054,6 +1054,10 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+  if (current.series_id && !options.keepSeries && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) {
+    const skipped = await archiveAsSkipInDb(db, actor, mapTask(current), provenance);
+    if (skipped) return { task: skipped };
+  }
   const archived = await db.query(
     `update crm.tasks set archived_at = now(),
        clickup_sync = case when $2::boolean then clickup_sync || '{"goneFromClickUp": true}'::jsonb else clickup_sync end
@@ -1069,7 +1073,7 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
     before: { archivedAt: null },
     after: { archivedAt: task.archivedAt },
   });
-  if (task.seriesId && !options.keepSeries) await seriesAfterArchive(db, actor, task, provenance);
+  if (task.seriesId && !options.keepSeries) await seriesAfterArchive(db, actor, task);
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
 }
 
@@ -1077,13 +1081,14 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (!current.archived_at) return { task: (await withMailThreadsInDb(db, actor, [mapTask(current)]))[0] };
+  if (current.series_id) await seriesBeforeUnarchive(db, mapTask(current));
   const restored = await db.query(
     `update crm.tasks set archived_at = null,
        clickup_task_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_task_id end,
        clickup_list_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_list_id end,
        clickup_url = case when clickup_sync ? 'goneFromClickUp' then null else clickup_url end,
        clickup_error = case when clickup_sync ? 'goneFromClickUp' then null else clickup_error end,
-       clickup_sync = case when clickup_sync ? 'goneFromClickUp' then '{}'::jsonb else clickup_sync end
+       clickup_sync = case when clickup_sync ? 'goneFromClickUp' then '{}'::jsonb else clickup_sync - 'deleteRemote' end
      where id = $1 and archived_at is not null`,
     [id],
   );

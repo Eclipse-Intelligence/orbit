@@ -478,9 +478,13 @@ async function describeEvent(
   if (entity === "task" && REPEAT_MOVES.has(event.operation)) {
     return refuse(event.operation === "repeat_roll" ? `Moved ${entityName} on to its next date` : `Made the next ${entityName}`, "Can't undo a repeat. Undo the Done, or change or skip the task instead.");
   }
+  if (entity === "task" && event.event_type === "task.created" && typeof record(record(event.changes)?.after)?.seriesId === "string") {
+    return refuse(`Created task ${entityName}`, "Undo making it repeat instead, or delete the series.");
+  }
   if (entity === "task" && event.event_type.startsWith("task_series.")) {
     const kind = event.event_type.slice("task_series.".length);
     const seriesChanges = record(event.changes) ?? {};
+    if (seriesChanges.splitFrom) return refuse(`Split ${entityName} from its series`, "Undo the change that split it instead.");
     const made = kind === "created";
     const summary =
       kind === "created"
@@ -638,6 +642,35 @@ async function lockEntity(db: Db, workspaceId: string, entity: EntityType, id: s
   const namespace = LOCKS[entity];
   if (namespace) await lockNamespace(db, workspaceId, namespace);
   await db.query(`select 1 from crm.${TABLES[entity]} where id = $1 and workspace_id = $2 for update`, [id, workspaceId]);
+}
+
+const ALREADY = /already|has changed since/i;
+
+export async function undoTaskEvents(actor: Actor, taskId: string, eventIds: string[], provenance: Provenance) {
+  return withActor(actor, async (db) => {
+    const ids = [...new Set(eventIds.filter(isUuid))].slice(0, 10);
+    const found = await db.query<AuditRow>(`${AUDIT_SQL} where e.id = any($1::uuid[]) and e.workspace_id = $2 and e.entity_type = 'task' and e.entity_id = $3`, [ids, actor.workspaceId, taskId]);
+    if (found.rows.length === 0 || found.rows.length !== ids.length) throw new CrmError("cannot_undo", "Couldn't undo. Try again.", 409);
+    await lockEntity(db, actor.workspaceId, "task", taskId);
+    const ordered = [...found.rows].sort((left, right) => Number(right.event_type.startsWith("task_series.")) - Number(left.event_type.startsWith("task_series.")));
+    let undone = 0;
+    for (const event of ordered) {
+      await lockNamespace(db, actor.workspaceId, `undo:${event.id}`);
+      const { described } = await describeById(db, actor, event.id, provenance);
+      if (!described.plan.ok) {
+        if (undone > 0 && ALREADY.test(described.plan.reason)) continue;
+        throw new CrmError("cannot_undo", described.plan.reason, 409);
+      }
+      await described.plan.run();
+      await recordAudit(db, actor, `${event.entity_type}.undone`, event.entity_type, event.entity_id, provenance, {
+        undoes: event.id,
+        undoneEventType: event.event_type,
+        restored: described.plan.restores,
+      });
+      undone += 1;
+    }
+    return { undone };
+  });
 }
 
 export async function undoAuditEvent(actor: Actor, auditEventId: string, provenance: Provenance) {

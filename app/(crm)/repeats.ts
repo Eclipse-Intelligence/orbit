@@ -19,9 +19,12 @@ import {
 } from "@/lib/crm/task-series";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { Task, UserActor } from "@/lib/crm/types";
-import { undoAuditEvent } from "@/lib/crm/undo";
+import { undoTaskEvents } from "@/lib/crm/undo";
+import { isPgError } from "@/lib/crm/errors";
 import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 import { revalidateRecordPages } from "@/lib/revalidate";
+
+const UNDO_FAILED = "Couldn't undo. Try again.";
 
 export type RepeatActionResult = { ok?: true; error?: string; task?: Task; undo?: string[]; skipped?: string };
 
@@ -66,8 +69,10 @@ export async function setRepeatAction(id: string, repeat: RepeatInput | null): P
   return run(id, async (user) => (await setTaskRepeat(user, id, repeat, { provenance: { operation: repeat === null ? "stop_repeating" : "set_repeat", source: "web" } })).body);
 }
 
-export async function skipOccurrenceAction(id: string): Promise<RepeatActionResult> {
-  return run(id, async (user) => (await skipOccurrence(user, { taskId: id }, { provenance: { operation: "skip_occurrence", source: "web" } })).body);
+export async function skipOccurrenceAction(id: string, occursOn?: string | null): Promise<RepeatActionResult> {
+  return run(id, async (user) =>
+    (await skipOccurrence(user, { taskId: id }, { provenance: { operation: "skip_occurrence", source: "web" }, ...(typeof occursOn === "string" ? { expect: occursOn } : {}) })).body,
+  );
 }
 
 export async function endSeriesAction(id: string, until: string): Promise<RepeatActionResult> {
@@ -90,24 +95,18 @@ export async function repeatHistoryAction(id: string): Promise<{ items?: RepeatH
 }
 
 export async function undoRepeatAction(id: string, events: string[]): Promise<{ ok?: true; error?: string }> {
+  if (!isUuid(id)) return { error: UNDO_FAILED };
   const user = await taskUser(id);
   if (!user) return { error: TASK_LOOKUP_FAILED };
-  const ids = (Array.isArray(events) ? events : []).filter((event) => typeof event === "string" && isUuid(event)).slice(0, 10);
-  if (ids.length === 0) return { error: "Couldn't undo. Try again." };
+  const ids = (Array.isArray(events) ? events : []).filter((event) => typeof event === "string" && isUuid(event));
+  if (ids.length === 0) return { error: UNDO_FAILED };
   try {
-    let undone = 0;
-    for (const event of ids) {
-      try {
-        await undoAuditEvent(user, event, { operation: "undo_change", source: "web" });
-        undone += 1;
-      } catch (error) {
-        if (undone === 0 && event === ids[ids.length - 1]) throw error;
-      }
-    }
+    await undoTaskEvents(user, id, ids, { operation: "undo_change", source: "web" });
     pushLater(user, id);
     refresh();
     return { ok: true };
   } catch (error) {
+    if (isPgError(error) && error.code === "40P01") return { error: UNDO_FAILED };
     return actionError(error);
   }
 }

@@ -349,6 +349,7 @@ function TaskPanelBody({ task, viewer, members, tagged, admins = [], completed =
         </div>
       </DiscussionProvider>
       </TaskWorkspace.Provider>
+      {details.scopeDialog}
     </SheetContent>
   );
 }

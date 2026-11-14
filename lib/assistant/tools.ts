@@ -136,7 +136,7 @@ import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
 import { archiveTask, listTasks } from "@/lib/crm/tasks";
-import { readRepeat, REPEAT_SCOPES, updateTaskFromApi } from "@/lib/crm/task-series";
+import { readRepeat, readSeriesTitle, REPEAT_SCOPES, updateTaskFromApi } from "@/lib/crm/task-series";
 import { endWords, ruleWords, shortDay } from "@/lib/task-repeat";
 import { dayKeyAt } from "@/lib/crm/working-days";
 import { emailThreadKey } from "@/lib/crm/task-mail";
@@ -1210,10 +1210,17 @@ const REPEAT_PARAM = {
   required: ["every"],
 };
 
-function repeatWordsOf(value: unknown) {
+const REPEAT_KEY = "repeat:title";
+const REPEAT_OBJECT = "Send repeat as an object, such as { \"every\": \"week\" }.";
+
+function anchorDay(args: Record<string, unknown>, dueAt: string | null) {
+  const given = typeof args.dueDate === "string" && args.dueDate ? args.dueDate : typeof args.dueAt === "string" && args.dueAt ? taskDueDay(localInstant(args.dueAt)) : null;
+  return given ?? taskDueDay(dueAt) ?? dayKeyAt(new Date());
+}
+
+function repeatWordsOf(value: unknown, anchor: string) {
   if (!value || typeof value !== "object") return null;
   try {
-    const anchor = dayKeyAt(new Date());
     const { rule, ends } = readRepeat(value, anchor);
     const pattern = { startsOn: anchor, at: null, rule, ends };
     const end = endWords(pattern);
@@ -1223,16 +1230,22 @@ function repeatWordsOf(value: unknown) {
   }
 }
 
-function repeatLines(args: Record<string, unknown>) {
+function repeatLines(args: Record<string, unknown>, dueAt: string | null = null) {
   const lines: string[] = [];
   if (args.repeat === null) lines.push("Stop repeating. This one stays.");
-  else if (args.repeat !== undefined) lines.push(`Repeats: ${repeatWordsOf(args.repeat)}`);
+  else if (args.repeat !== undefined) lines.push(`Repeats: ${repeatWordsOf(args.repeat, anchorDay(args, dueAt)) ?? "a pattern Orbit can't read"}`);
   const day = typeof args.occursOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.occursOn) ? shortDay(args.occursOn) : null;
   if (args.skip === true) lines.push(day ? `Skip ${day} only` : "Skip this one");
   if (args.repeatScope === "this") lines.push(day ? `Only ${day}` : "This one only");
   if (args.repeatScope === "following") lines.push(day ? `${day} and every later one` : "This and every later one");
   if (args.repeatScope === "all") lines.push("The open one and every later one");
   return lines;
+}
+
+function repeatArg(value: unknown) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new CrmError("invalid_input", REPEAT_OBJECT, 400, { field: "repeat" });
+  return { repeat: value };
 }
 
 const LIFECYCLE_PARAM = {
@@ -3615,7 +3628,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...taskLinkArgs(args),
           ...(await taskEmailArgs(actor, args)),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
-          ...(args.repeat && typeof args.repeat === "object" ? { repeat: args.repeat } : {}),
+          ...repeatArg(args.repeat),
         },
         picker?.listId ?? null,
         { provenance: { operation: "create_task", ...provenanceSource() } },
@@ -3666,7 +3679,15 @@ const TOOL_LIST: AssistantTool[] = [
         },
       },
     },
-    details: async (actor, args) => (args.schedule !== undefined && args.schedule !== null ? scheduleDetails(actor, args.schedule) : taskOwnerDetails(actor, args.taskId)),
+    details: async (actor, args) => {
+      if (args.schedule !== undefined && args.schedule !== null) return scheduleDetails(actor, args.schedule);
+      const details = await taskOwnerDetails(actor, args.taskId);
+      if (!optionalStr(args.taskId) && optionalStr(args.seriesId)) {
+        const title = await readSeriesTitle(actor, str(args.seriesId)).catch(() => null);
+        if (title) details[REPEAT_KEY] = title;
+      }
+      return details;
+    },
     describe: (args, name) => {
       if (args.schedule !== undefined && args.schedule !== null) return describeSchedule(args.schedule, name);
       const id = str(args.taskId);
@@ -3677,7 +3698,10 @@ const TOOL_LIST: AssistantTool[] = [
       const creator = detail(name, `${id}:creator`);
       const losesChange = args.ownerId === null && Boolean(self) && owner === self && role === "member" && creator !== self;
       return {
-        title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
+        title: titled(
+          args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task",
+          optionalStr(args.taskId) ? name(args.taskId) : detail(name, REPEAT_KEY) || "a repeating task",
+        ),
         lines: [
           ...fieldLines(args, { title: "Title" }),
           ...taskTimingLines(args, name, current),
@@ -3688,7 +3712,7 @@ const TOOL_LIST: AssistantTool[] = [
           losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
-          ...repeatLines(args),
+          ...repeatLines(args, current?.dueAt ?? null),
         ],
       };
     },
@@ -3706,7 +3730,7 @@ const TOOL_LIST: AssistantTool[] = [
         actor,
         { taskId: optionalStr(args.taskId), seriesId: optionalStr(args.seriesId), occursOn: optionalStr(args.occursOn) },
         {
-          ...(args.repeat !== undefined ? { repeat: args.repeat } : {}),
+          ...(args.repeat === null ? { repeat: null } : repeatArg(args.repeat)),
           ...(oneOf(args.repeatScope, REPEAT_SCOPES) ? { repeatScope: oneOf(args.repeatScope, REPEAT_SCOPES) } : {}),
           ...(args.skip === true ? { skip: true } : {}),
           ...(args.title !== undefined ? { title: str(args.title) } : {}),

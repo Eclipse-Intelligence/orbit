@@ -612,7 +612,7 @@ async function archiveDeleted(s: Session, row: SyncRow, gone = true) {
   assertScope(s.actor.scopes, "tasks:write");
   const provenance = { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true };
   const skipped = await withActor(s.actor, async (db) => {
-    if (gone && (await skipDeletedOccurrenceInDb(db, s.actor, row.id, provenance))) return true;
+    if ((await skipDeletedOccurrenceInDb(db, s.actor, row.id, provenance))) return true;
     await archiveTaskInDb(db, s.actor, row.id, provenance, { goneFromClickUp: gone });
     await db.query("update crm.tasks set clickup_error = null, clickup_synced_at = now() where id = $1", [row.id]);
     return false;
@@ -981,6 +981,11 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
         new Date(row.updated_at).getTime(),
         changedAt,
       );
+      if ((write.dueAt === null || write.dueDate === null) && (await db.query("select 1 from crm.tasks where id = $1 and series_id is not null", [row.id])).rowCount) {
+        delete write.dueAt;
+        delete write.dueDate;
+        delete write.dueHasTime;
+      }
       const changed = Object.keys(write).length > 0;
       if (changed) {
         const saved = await updateTaskInDb(db, s.actor, row.id, write, { ...PROVENANCE, sourceUrl: clip(task.url, 2000) });

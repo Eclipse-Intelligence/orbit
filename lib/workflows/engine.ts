@@ -453,6 +453,13 @@ function loopVars(frame: LoopFrame | undefined) {
   return frame ? { item: frame.items[frame.index], index: frame.index + 1, total: frame.items.length } : undefined;
 }
 
+export function followsUpRepeat(definition: WorkflowDefinition, vars: Vars) {
+  if (definition.trigger.type !== "task_completed") return false;
+  const task = vars.task as { seriesId?: string | null } | undefined;
+  if (!task?.seriesId) return false;
+  return definition.nodes.some((node) => node.type === "create_task" && (node.config as { link?: unknown }).link === "task");
+}
+
 function follow(definition: WorkflowDefinition, source: string, handle: string, state: RunState, vars: Vars): string | null {
   const target = nextNode(definition, source, handle);
   if (target) return target;
@@ -1350,6 +1357,7 @@ export async function executeRun(
   }
   if (!state.started) {
     const built = await buildContext(actor, definition.trigger, run.event);
+    if (built.matches && followsUpRepeat(definition, built.vars)) built.matches = false;
     if (!built.matches && !run.test) {
       await withActor(actor, (db) => db.query("delete from crm.workflow_runs where id = $1", [run.id]));
       return "skipped" as const;

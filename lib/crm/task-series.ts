@@ -6,9 +6,10 @@ import { memberActor } from "@/lib/crm/conversations";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit, replayOrRun, requestHash, type MutationOptions, type MutationOutcome } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
+import { isReminderMinutes } from "@/lib/crm/reminder-options";
 import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { withoutViewerMail } from "@/lib/crm/task-mail";
-import { clockLabel, dayStartIso, taskDueDay, taskDueEnd } from "@/lib/crm/task-time";
+import { clockLabel, dayStartIso, isTaskDuration, taskDueDay } from "@/lib/crm/task-time";
 import { readDateTime } from "@/lib/time";
 import { archiveTaskInDb, canChangeTask, createTaskInDb, readTaskInDb, unarchiveTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
@@ -16,10 +17,13 @@ import {
   checkEnds,
   checkRule,
   firstPatternDay,
+  MAX_COUNT,
   isDayKey,
   lastOccurrence,
   nextOccurrence,
   normalRule,
+  occurrenceDays,
+  occurrenceEnd,
   occurrenceAfter,
   occurrenceFor,
   occurrenceOnOrAfter,
@@ -46,6 +50,7 @@ export { REPEAT_EVERY, repeatInputOf, type RepeatEvery, type RepeatInput } from 
 import type { Actor, Provenance, Task, TaskPriority, TaskWrite, WorkspaceRole } from "@/lib/crm/types";
 
 export const MAX_ACTIVE_SERIES = 200;
+const ROLL_RETRY_MS = 15 * 60_000;
 export const TOO_MANY_SERIES = "You have 200 repeating tasks. End one first.";
 export const REPEAT_SAVE_FAILED = "Couldn't save the repeat. Try again.";
 export const NEEDS_SCOPE = "This task repeats. Send repeatScope: this, following or all.";
@@ -168,14 +173,34 @@ async function readTask(db: Db, actor: Actor, id: string | null) {
   return readTaskInDb(db, actor, id);
 }
 
-type RollFrom = Pick<Task, "occursOn" | "dueAt" | "dueHasTime"> & Partial<Pick<Task, "completedAt" | "archivedAt">>;
+type RollFrom = Pick<Task, "occursOn" | "dueAt" | "dueHasTime"> & { durationMinutes?: number | null } & Partial<Pick<Task, "completedAt" | "archivedAt">>;
+
+function endOf(row: SeriesRow, occurrence: { dueAt: string | null; dueHasTime: boolean; durationMinutes?: number | null }) {
+  return occurrenceEnd({ ...occurrence, durationMinutes: occurrence.durationMinutes ?? row.duration_minutes });
+}
 
 function rollAtFor(row: SeriesRow, task: RollFrom | null, changes: OccurrenceChange[]) {
   if (stopped(row) || !task || task.completedAt || task.archivedAt || !task.occursOn) return null;
   const pattern = patternOf(row);
   const next = nextOccurrence(pattern, changes, task.occursOn);
   if (!next) return null;
-  return rollThreshold(pattern, next, row.remind_minutes, taskDueEnd(task));
+  return rollThreshold(pattern, next, row.remind_minutes, endOf(row, task));
+}
+
+function latestDue(row: SeriesRow, changes: OccurrenceChange[], first: Occurrence, now: number, notBefore: string | null = null) {
+  const pattern = patternOf(row);
+  let target = first;
+  const passed: string[] = [];
+  for (let guard = 0; guard < 2000; guard += 1) {
+    const after = nextOccurrence(pattern, changes, target.occursOn);
+    if (!after) break;
+    const early = notBefore !== null && target.day <= notBefore;
+    const over = (endOf(row, target) ?? Infinity) <= now && Date.parse(rollThreshold(pattern, after, row.remind_minutes, endOf(row, target))) <= now;
+    if (!early && !over) break;
+    passed.push(target.occursOn);
+    target = after;
+  }
+  return { target, passed };
 }
 
 async function refreshRoll(db: Db, actor: Actor, seriesId: string) {
@@ -186,10 +211,13 @@ async function refreshRoll(db: Db, actor: Actor, seriesId: string) {
   await db.query("update crm.task_series set roll_at = $2, roll_pending = false where id = $1 and (roll_pending or roll_at is distinct from $2::timestamptz)", [row.id, rollAtFor(row, task, changes)]);
 }
 
+const WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
 function readWeekday(value: unknown): Weekday | null {
   if (typeof value !== "string") return null;
-  const key = value.trim().toLowerCase().slice(0, 2);
-  return (WEEKDAYS as readonly string[]).includes(key) ? (key as Weekday) : null;
+  const text = value.trim().toLowerCase();
+  const index = WEEKDAY_NAMES.findIndex((name) => text === name || text === name.slice(0, 3) || text === name.slice(0, 2));
+  return index === -1 ? null : WEEKDAYS[index];
 }
 
 function repeatError(message: string, field = "repeat"): never {
@@ -200,13 +228,16 @@ export function readRepeat(input: unknown, startsOn: string, now = Date.now()): 
   if (!input || typeof input !== "object") repeatError("Choose how it repeats.");
   const value = input as Partial<RepeatInput>;
   if (!REPEAT_EVERY.includes(value.every as RepeatEvery)) repeatError("Choose how it repeats: day, weekday, week, month or year.");
+  if (value.days !== undefined && value.days !== null && value.every !== "week") repeatError("days only go with every: week.");
+  if ((value.monthDay !== undefined || value.monthWeek !== undefined) && value.every !== "month") repeatError("monthDay and monthWeek only go with every: month.");
+  if (value.monthDay !== undefined && value.monthWeek !== undefined) repeatError("Choose monthDay or monthWeek, not both.");
   const interval = value.interval === undefined || value.interval === null ? 1 : value.interval;
   let rule: RepeatRule;
   if (value.every === "day") rule = { freq: "daily", interval };
   else if (value.every === "weekday") rule = { freq: "weekly", interval, weekdays: [...WORKWEEK] };
   else if (value.every === "week") {
     const days = value.days === undefined || value.days === null ? [weekdayOf(startsOn)] : Array.isArray(value.days) ? value.days.map(readWeekday) : [null];
-    if (days.some((day) => day === null)) repeatError("Pick days as mo, tu, we, th, fr, sa or su.");
+    if (days.some((day) => day === null)) repeatError("Choose days as mo, tu, we, th, fr, sa or su.");
     rule = { freq: "weekly", interval, weekdays: days as Weekday[] };
   } else if (value.every === "month") {
     if (value.monthWeek) {
@@ -228,10 +259,13 @@ export function readRepeat(input: unknown, startsOn: string, now = Date.now()): 
 }
 
 async function assertRoom(db: Db, workspaceId: string, ownerId: string | null) {
-  if (!ownerId) return;
   const counted = await db.query<{ total: number }>(
-    `select count(*)::int as total from crm.task_series
-     where workspace_id = $1 and owner_id = $2 and archived_at is null and ended_at is null`,
+    `with keeper as (
+       select coalesce($2::uuid, (select m.user_id from crm.workspace_members m where m.workspace_id = $1 and m.role = 'owner' order by m.created_at limit 1)) as id
+     )
+     select count(*)::int as total from crm.task_series s, keeper k
+     where s.workspace_id = $1 and s.archived_at is null and s.ended_at is null
+       and (s.owner_id = k.id or (s.owner_id is null and k.id = (select m.user_id from crm.workspace_members m where m.workspace_id = $1 and m.role = 'owner' order by m.created_at limit 1)))`,
     [workspaceId, ownerId],
   );
   if ((counted.rows[0]?.total ?? 0) >= MAX_ACTIVE_SERIES) throw new CrmError("invalid_input", TOO_MANY_SERIES, 400, { field: "repeat" });
@@ -261,8 +295,18 @@ async function eventIds(db: Db, entityIds: string[]) {
   return result.rows.map((row) => row.id);
 }
 
+function checkLengths(input: Pick<TaskWrite, "durationMinutes" | "remindMinutes">) {
+  if (input.durationMinutes !== undefined && !isTaskDuration(input.durationMinutes)) {
+    throw new CrmError("invalid_input", "Choose a duration between 5 and 480 minutes.", 400, { field: "durationMinutes" });
+  }
+  if (input.remindMinutes !== undefined && input.remindMinutes !== null && !isReminderMinutes(input.remindMinutes)) {
+    throw new CrmError("invalid_input", "Choose a reminder.", 400, { field: "remindMinutes" });
+  }
+}
+
 export async function createRepeatingTaskInDb(db: Db, actor: Actor, input: TaskWrite, repeat: unknown, provenance: Provenance, now = Date.now()) {
   if (input.completed) throw new CrmError("invalid_input", "Create the task, then complete it.", 400, { field: "completed" });
+  checkLengths(input);
   const ownerId = input.ownerId === undefined ? (actor.type === "user" ? actor.userId : null) : input.ownerId || null;
   await assertRoom(db, actor.workspaceId, ownerId);
   const probe = await createTaskProbe(input);
@@ -407,6 +451,45 @@ async function insertOccurrence(db: Db, actor: Actor, row: SeriesRow, occurrence
   return { id, task };
 }
 
+async function finishSeries(db: Db, actor: Actor, row: SeriesRow, previous: Task | null, provenance: Provenance | undefined) {
+  await db.query("update crm.task_series set ended_at = coalesce(ended_at, now()), roll_at = null, roll_pending = false where id = $1", [row.id]);
+  const child = await db.query<SeriesRow>(
+    `${SERIES_SQL} where s.split_from_id = $1 and s.current_task_id is null and s.archived_at is null and s.ended_at is null for update`,
+    [row.id],
+  );
+  for (const split of child.rows) {
+    const changes = await changesOf(db, split.id);
+    const first = occurrenceFor(patternOf(split), split.starts_on, changes.find((change) => change.occursOn === split.starts_on));
+    if (changes.find((change) => change.occursOn === split.starts_on)?.skip) continue;
+    await consumeChanges(db, split.id, split.starts_on);
+    const created = await insertOccurrence(db, actor, split, first, previous, provenance);
+    await db.query("update crm.task_series set roll_at = $3, roll_pending = false where id = $1 and current_task_id = $2", [
+      split.id,
+      created.id,
+      rollAtFor(split, first, changes.filter((change) => change.occursOn > split.starts_on)),
+    ]);
+  }
+}
+
+async function advanceFrom(db: Db, actor: Actor, row: SeriesRow, done: Task, provenance: Provenance | undefined, now = Date.now()) {
+  if (stopped(row) || !done.occursOn) {
+    await db.query("update crm.task_series set roll_at = null, roll_pending = false where id = $1", [row.id]);
+    return null;
+  }
+  const changes = await changesOf(db, row.id, done.occursOn);
+  const first = nextOccurrence(patternOf(row), changes, done.occursOn);
+  if (!first) {
+    await finishSeries(db, actor, row, done, provenance);
+    return null;
+  }
+  const { target: next } = latestDue(row, changes, first, now, taskDueDay(done.dueAt));
+  await consumeChanges(db, row.id, next.occursOn);
+  const rollAt = rollAtFor(row, next, changes.filter((change) => change.occursOn > next.occursOn));
+  const created = await insertOccurrence(db, actor, row, next, done, provenance);
+  await db.query("update crm.task_series set roll_at = $3, roll_pending = false where id = $1 and current_task_id = $2", [row.id, created.id, rollAt]);
+  return created;
+}
+
 async function consumeChanges(db: Db, seriesId: string, upTo: string) {
   await db.query("delete from crm.task_occurrence_changes where series_id = $1 and occurs_on <= $2::date", [seriesId, upTo]);
 }
@@ -416,20 +499,7 @@ export async function seriesAfterTaskChange(db: Db, actor: Actor, before: Task, 
   const row = await lockSeries(db, task.seriesId);
   if (!row || row.current_task_id !== task.id) return null;
   if (!before.completedAt && task.completedAt) {
-    if (stopped(row) || !task.occursOn) {
-      await db.query("update crm.task_series set roll_at = null where id = $1", [row.id]);
-      return null;
-    }
-    const changes = await changesOf(db, row.id, task.occursOn);
-    const next = nextOccurrence(patternOf(row), changes, task.occursOn);
-    if (!next) {
-      await db.query("update crm.task_series set roll_at = null where id = $1", [row.id]);
-      return readTaskInDb(db, actor, task.id);
-    }
-    await consumeChanges(db, row.id, next.occursOn);
-    const rollAt = rollAtFor(row, next, changes.filter((change) => change.occursOn > next.occursOn));
-    const created = await insertOccurrence(db, actor, row, next, task, provenance);
-    await db.query("update crm.task_series set roll_at = $3, roll_pending = false where id = $1 and current_task_id = $2", [row.id, created.id, rollAt]);
+    await advanceFrom(db, actor, row, task, provenance);
     return readTaskInDb(db, actor, task.id);
   }
   const retimed = before.dueAt !== task.dueAt || before.dueHasTime !== task.dueHasTime || Boolean(before.completedAt) !== Boolean(task.completedAt);
@@ -446,34 +516,55 @@ async function untouched(db: Db, taskId: string) {
   return (result.rows[0]?.total ?? 0) === 0;
 }
 
+async function predecessorOf(db: Db, seriesId: string, occursOn: string | null) {
+  if (!occursOn) return null;
+  const found = await db.query<{ id: string }>(
+    `select id from crm.tasks where series_id = $1 and occurs_on < $2::date and archived_at is null order by occurs_on desc limit 1`,
+    [seriesId, occursOn],
+  );
+  return found.rows[0]?.id ?? null;
+}
+
 export async function seriesBeforeReopen(db: Db, actor: Actor, task: Task, provenance: Provenance | undefined) {
   if (!task.seriesId) return;
+  const peek = await readSeries(db, task.seriesId);
+  if (!peek) return;
+  if (peek.current_task_id && peek.current_task_id !== task.id) await db.query("select 1 from crm.tasks where id = $1 for no key update", [peek.current_task_id]);
   const row = await lockSeries(db, task.seriesId);
   if (!row) return;
   if (row.current_task_id === task.id) return;
   const current = await readTask(db, actor, row.current_task_id);
   const later = current && !current.completedAt && !current.archivedAt && (current.occursOn ?? "") > (task.occursOn ?? "");
-  if (later && (await untouched(db, current.id))) {
+  const predecessor = current ? (await predecessorOf(db, row.id, current.occursOn)) === task.id : false;
+  if (later && predecessor && (await untouched(db, current.id))) {
     await archiveTaskInDb(db, actor, current.id, { operation: "undo_repeat", source: provenance?.source ?? null }, { keepSeries: true });
-    if (current.clickupTaskId) {
+    if (current.clickupTaskId || current.clickupListId) {
       await db.query(`update crm.tasks set clickup_sync = clickup_sync || '{"deleteRemote": true}'::jsonb where id = $1`, [current.id]);
     }
     await db.query("update crm.task_series set current_task_id = $2 where id = $1", [row.id, task.id]);
     return;
   }
-  if (!current || current.archivedAt) {
+  if ((!current || current.archivedAt || current.completedAt) && (await predecessorOf(db, row.id, "9999-12-31")) === task.id) {
     await db.query("update crm.task_series set current_task_id = $2 where id = $1", [row.id, task.id]);
     return;
   }
   await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
 }
 
-export async function seriesAfterArchive(db: Db, actor: Actor, task: Task, provenance: Provenance) {
+export async function seriesAfterArchive(db: Db, actor: Actor, task: Task) {
   const row = await lockSeries(db, task.seriesId);
-  if (!row || row.current_task_id !== task.id || row.archived_at) return;
-  await db.query("update crm.task_series set archived_at = now(), roll_at = null where id = $1", [row.id]);
-  const after = await readSeries(db, row.id);
-  await recordAudit(db, actor, "task_series.deleted", "task", task.id, provenance, auditSeries(row, after));
+  if (!row || row.current_task_id !== task.id || stopped(row)) return;
+  await db.query("update crm.task_series set ended_at = now(), roll_at = null, roll_pending = false where id = $1", [row.id]);
+}
+
+export async function seriesBeforeUnarchive(db: Db, task: Task) {
+  if (!task.seriesId || !task.occursOn) return;
+  const clash = await db.query(
+    `select 1 from crm.tasks where series_id = $1 and id <> $2 and archived_at is null
+       and (occurs_on = $3::date or ($4::boolean and completed_at is null))`,
+    [task.seriesId, task.id, task.occursOn, !task.completedAt],
+  );
+  if ((clash.rowCount ?? 0) > 0) await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
 }
 
 export async function seriesAfterUnarchive(db: Db, actor: Actor, task: Task) {
@@ -518,9 +609,16 @@ async function moveCurrent(
 export async function rollSeriesInDb(db: Db, actor: Actor, seriesId: string, now = Date.now()) {
   const peek = await readSeries(db, seriesId);
   if (!peek?.current_task_id) return null;
-  const task = await lockOpenTask(db, actor, peek.current_task_id);
+  await db.query("select 1 from crm.tasks where id = $1 for no key update", [peek.current_task_id]);
+  const current = await readTaskInDb(db, actor, peek.current_task_id);
   const row = await lockSeries(db, seriesId);
-  if (!row || !task || row.current_task_id !== task.id || stopped(row) || !task.occursOn) return null;
+  if (!row || !current || current.seriesId !== row.id || row.current_task_id !== current.id || stopped(row) || !current.occursOn || current.archivedAt) return null;
+  if (current.completedAt) {
+    const created = await advanceFrom(db, actor, row, current, { operation: "repeat_task", automatic: true }, now);
+    return created?.task ?? null;
+  }
+  const task = { ...current, occursOn: current.occursOn };
+  const from = current.occursOn;
   if (row.roll_pending) {
     await refreshRoll(db, actor, row.id);
     const fresh = await readSeries(db, row.id);
@@ -528,20 +626,14 @@ export async function rollSeriesInDb(db: Db, actor: Actor, seriesId: string, now
   }
   if (!row.roll_at || new Date(row.roll_at).getTime() > now) return null;
   const pattern = patternOf(row);
-  const changes = await changesOf(db, row.id, task.occursOn);
-  let target = nextOccurrence(pattern, changes, task.occursOn);
-  if (!target) {
-    await db.query("update crm.task_series set roll_at = null where id = $1", [row.id]);
+  const changes = await changesOf(db, row.id, from);
+  const first = nextOccurrence(pattern, changes, from);
+  if (!first) {
+    await db.query("update crm.task_series set roll_at = null, roll_pending = false where id = $1", [row.id]);
     return null;
   }
-  const passed = [task.occursOn];
-  for (let guard = 0; guard < 400; guard += 1) {
-    const after = nextOccurrence(pattern, changes, target.occursOn);
-    if (!after || Date.parse(rollThreshold(pattern, after, row.remind_minutes, null)) > now) break;
-    passed.push(target.occursOn);
-    target = after;
-  }
-  return moveCurrent(db, actor, row, task, target, passed, "missed", { operation: "repeat_roll", automatic: true });
+  const { target, passed } = latestDue(row, changes, first, now);
+  return moveCurrent(db, actor, row, task, target, [from, ...passed], "missed", { operation: "repeat_roll", automatic: true });
 }
 
 async function lockOpenTask(db: Db, actor: Actor, id: string) {
@@ -565,7 +657,8 @@ export async function rollDueSeries(options: { deadline: number; now?: number; l
       if (moved) rolled += 1;
     } catch (error) {
       failed += 1;
-      console.error("Repeating task roll failed", error instanceof Error ? error.name : "unknown");
+      console.error("Repeating task roll failed", row.series_id, error instanceof Error ? error.name : "unknown");
+      await query("select private.delay_series_roll($1, $2)", [row.series_id, new Date(now + ROLL_RETRY_MS).toISOString()]).catch(() => undefined);
     }
   }
   return { due: due.rows.length, rolled, failed };
@@ -580,7 +673,8 @@ async function resolveTarget(db: Db, actor: Actor, target: OccurrenceTarget) {
     const row = task.seriesId ? await lockSeries(db, task.seriesId) : null;
     return { task, row, occursOn: task.occursOn, future: false };
   }
-  if (!isUuid(target.seriesId) || !isDayKey(target.occursOn)) throw notFound("task");
+  if (!isDayKey(target.occursOn)) throw new CrmError("invalid_input", "occursOn takes a day, such as 2027-03-04.", 400, { field: "occursOn" });
+  if (!isUuid(target.seriesId)) throw notFound("task");
   const peek = await readSeries(db, target.seriesId);
   if (!peek || peek.workspace_id !== actor.workspaceId || peek.archived_at) throw notFound("task");
   const current = peek.current_task_id ? await lockOpenTask(db, actor, peek.current_task_id) : null;
@@ -599,15 +693,18 @@ async function resolveTarget(db: Db, actor: Actor, target: OccurrenceTarget) {
 function assertSeriesChange(actor: Actor, row: SeriesRow, task: Task) {
   const allowed =
     actor.type === "user"
-      ? row.owner_id === actor.userId || row.created_by_user_id === actor.userId || canChangeTask(actor, task)
+      ? row.owner_id === actor.userId || row.created_by_user_id === actor.userId || task.createdByUserId === actor.userId || canChangeTask(actor, task)
       : canChangeTask(actor, task);
   if (!allowed) throw new CrmError("forbidden", "Only the assignee or the task's creator can change how it repeats.", 403);
 }
 
-export async function skipOccurrenceInDb(db: Db, actor: Actor, target: OccurrenceTarget, provenance: Provenance, extra: Record<string, unknown> = {}) {
+export const SKIP_MOVED_ON = "This one has moved on already. Check its date and try again.";
+
+export async function skipOccurrenceInDb(db: Db, actor: Actor, target: OccurrenceTarget, provenance: Provenance, extra: Record<string, unknown> = {}, expect?: string) {
   const found = await resolveTarget(db, actor, target);
   const { task, row } = found;
   if (!row) throw new CrmError("invalid_input", "This task doesn't repeat.", 400, { field: "skip" });
+  if (expect !== undefined && !found.future && task.occursOn !== expect) throw new CrmError("conflict", SKIP_MOVED_ON, 409, { field: "skip" });
   assertSeriesChange(actor, row, task);
   if (task.completedAt) throw new CrmError("invalid_input", "This one is done. Reopen it to skip it.", 400, { field: "skip" });
   if (found.future) {
@@ -631,16 +728,27 @@ export async function skipOccurrenceInDb(db: Db, actor: Actor, target: Occurrenc
   return { task: moved, skipped: task.occursOn! };
 }
 
-export async function skipOccurrence(actor: Actor, target: OccurrenceTarget, options: MutationOptions = {}) {
+export async function skipOccurrence(actor: Actor, target: OccurrenceTarget, options: MutationOptions & { expect?: string } = {}) {
   assertScope(actor.scopes, "tasks:write");
   const provenance = options.provenance ?? { operation: "skip_occurrence" };
-  const hash = requestHash("skip_occurrence", { target, provenance });
+  const hash = requestHash("skip_occurrence", { target, provenance, expect: options.expect });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      const result = await skipOccurrenceInDb(db, actor, target, { ...provenance, operation: "skip_occurrence" });
+      const result = await skipOccurrenceInDb(db, actor, target, { ...provenance, operation: "skip_occurrence" }, {}, options.expect);
       return { ...result, undo: await eventIds(db, [result.task.id]) };
     }),
   );
+}
+
+export async function archiveAsSkipInDb(db: Db, actor: Actor, task: Task, provenance: Provenance) {
+  if (!task.seriesId || task.completedAt || task.archivedAt || !task.occursOn) return null;
+  const peek = await readSeries(db, task.seriesId);
+  if (!peek || peek.current_task_id !== task.id || stopped(peek)) return null;
+  const row = await lockSeries(db, task.seriesId);
+  if (!row || row.current_task_id !== task.id || stopped(row)) return null;
+  const next = nextOccurrence(patternOf(row), await changesOf(db, row.id, task.occursOn), task.occursOn);
+  if (!next) return null;
+  return moveCurrent(db, actor, row, task, next, [task.occursOn], "skipped", { ...provenance, operation: provenance.operation === "archive_task" ? "skip_occurrence" : provenance.operation }, { archived: true });
 }
 
 export async function skipDeletedOccurrenceInDb(db: Db, actor: Actor, taskId: string, provenance: Provenance) {
@@ -832,36 +940,40 @@ async function editFollowing(db: Db, actor: Actor, row: SeriesRow, task: Task, o
     ],
   );
   const newId = split.rows[0].id;
-  const moving = changes.filter((change) => change.occursOn > occursOn);
+  const moving = changes.filter((change) => change.occursOn >= occursOn);
   for (const change of moving) {
-    const retimed = at !== row.at && change.dueAt;
+    const retimed = at !== row.at && change.dueAt && change.occursOn !== occursOn;
     await db.query(
       `insert into crm.task_occurrence_changes (series_id, occurs_on, skip, due_at, due_has_time, duration_minutes, title, description, created_by)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict do nothing`,
       [newId, change.occursOn, change.skip ?? false, retimed ? null : change.dueAt, retimed ? null : change.dueAt ? change.dueHasTime : null, change.durationMinutes ?? null, change.title ?? null, change.description ?? null, actor.type === "user" ? actor.userId : null],
     );
   }
+  if (probe?.dueAt && firstChange?.dueAt) {
+    await db.query("update crm.task_occurrence_changes set due_at = $3, due_has_time = $4 where series_id = $1 and occurs_on = $2", [newId, occursOn, probe.dueAt, probe.dueHasTime]);
+  }
   await db.query("delete from crm.task_occurrence_changes where series_id = $1 and occurs_on >= $2::date", [row.id, occursOn]);
   const until = shiftDay(occursOn, -1);
   await db.query(`update crm.task_series set ends = jsonb_build_object('until', $2::text) where id = $1`, [row.id, until]);
-  const newRow = (await readSeries(db, newId))!;
-  const timing = probe?.dueAt ? { dueAt: probe.dueAt, dueHasTime: probe.dueHasTime } : occurrenceTiming(at, occursOn);
-  const first: Occurrence = { ...base, occursOn, day: taskDueDay(timing.dueAt) ?? occursOn, dueAt: timing.dueAt, dueHasTime: timing.dueHasTime, title: input.title?.trim() || null, description: input.description ?? null, durationMinutes: input.durationMinutes ?? null };
-  const created = await insertOccurrence(db, actor, newRow, first, task, provenance);
-  await db.query("update crm.task_series set current_task_id = $2 where id = $1", [newId, created.id]);
-  await refreshRoll(db, actor, newId);
+  const parent = (await readSeries(db, row.id))!;
+  const parentNext = task.completedAt ? null : nextOccurrence(patternOf(parent), await changesOf(db, row.id, task.occursOn), task.occursOn ?? until);
+  if (!parentNext && (task.completedAt || row.current_task_id !== task.id)) await finishSeries(db, actor, parent, task, provenance);
   await refreshRoll(db, actor, row.id);
   const after = await readSeries(db, row.id);
   const splitRow = await readSeries(db, newId);
-  await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, after, { scope: "following", split: { seriesId: newId, taskId: created.id, from: occursOn }, movedChanges: moving }));
-  await recordAudit(db, actor, "task_series.created", "task", created.id, provenance, { series: { id: newId, before: null, after: splitRow ? snapshotOf(splitRow) : null }, splitFrom: row.id });
-  return created.task ?? task;
+  await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, after, { scope: "following", split: { seriesId: newId, from: occursOn }, movedChanges: moving }));
+  if (splitRow?.current_task_id) {
+    await recordAudit(db, actor, "task_series.created", "task", splitRow.current_task_id, provenance, { series: { id: newId, before: null, after: snapshotOf(splitRow) }, splitFrom: row.id });
+  }
+  void base;
+  return (await readTaskInDb(db, actor, task.id))!;
 }
 
 export async function updateOccurrenceInDb(db: Db, actor: Actor, target: OccurrenceTarget, input: TaskWrite, scope: RepeatScope | undefined, provenance: Provenance) {
   const found = await resolveTarget(db, actor, target);
   const { task, row } = found;
-  if (!row || !found.occursOn || (stopped(row) && !found.future)) return (await updateTaskInDb(db, actor, task.id, input, provenance)).task;
+  const plain = !row || !found.occursOn || (!found.future && (stopped(row) || task.completedAt || row.current_task_id !== task.id));
+  if (plain) return (await updateTaskInDb(db, actor, task.id, input, provenance)).task;
   if (input.dueAt === null || input.dueDate === null || input.dueAt === "" || input.dueDate === "") {
     throw new CrmError("invalid_input", "A repeating task needs a day. Stop repeating first.", 400, { field: "dueAt" });
   }
@@ -870,12 +982,12 @@ export async function updateOccurrenceInDb(db: Db, actor: Actor, target: Occurre
   if (!touches || scope === "this") {
     if (!found.future) return (await updateTaskInDb(db, actor, task.id, input, provenance)).task;
     assertSeriesChange(actor, row, task);
-    await writeChangeRow(db, actor, row, task, found.occursOn, input, provenance);
+    await writeChangeRow(db, actor, row, task, found.occursOn!, input, provenance);
     return (await readTaskInDb(db, actor, task.id))!;
   }
   assertSeriesChange(actor, row, task);
   if (stopped(row) && found.future) throw new CrmError("invalid_input", "It doesn't repeat any more.", 400, { field: "repeatScope" });
-  if (scope === "following" && found.future) return editFollowing(db, actor, row, task, found.occursOn, input, provenance);
+  if (scope === "following" && found.future) return editFollowing(db, actor, row, task, found.occursOn!, input, provenance);
   return editAll(db, actor, row, task, input, found.future, provenance);
 }
 
@@ -901,14 +1013,15 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
   const { rule, ends } = readRepeat(repeat, day, now);
   if (!row || stopped(row)) {
     await assertRoom(db, actor.workspaceId, task.ownerId);
+    checkLengths(task);
     if (row) await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
     let current = task;
     if (!task.dueAt) current = (await updateTaskInDb(db, actor, task.id, { dueDate: day }, provenance)).task;
     const inserted = await db.query<{ id: string }>(
       `insert into crm.task_series (
          workspace_id, owner_id, created_by_user_id, created_by_agent_id, title, description, priority, company_id, contact_id, opportunity_id,
-         starts_on, at, duration_minutes, remind_minutes, rule, ends, current_task_id
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::time, $13, $14, $15::jsonb, $16::jsonb, $17)
+         starts_on, at, duration_minutes, remind_minutes, rule, ends
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::time, $13, $14, $15::jsonb, $16::jsonb)
        returning id`,
       [
         current.workspaceId,
@@ -927,16 +1040,17 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
         start.at ? current.remindMinutes : null,
         JSON.stringify(rule),
         JSON.stringify(ends),
-        current.id,
       ],
     );
     await db.query("update crm.tasks set series_id = $2, occurs_on = $3 where id = $1", [current.id, inserted.rows[0].id, day]);
+    await db.query("update crm.task_series set current_task_id = $2 where id = $1", [inserted.rows[0].id, current.id]);
     await refreshRoll(db, actor, inserted.rows[0].id);
     const created = (await readSeries(db, inserted.rows[0].id))!;
     await recordAudit(db, actor, "task_series.created", "task", current.id, provenance, { series: { id: created.id, before: null, after: snapshotOf(created) } });
     return (await readTaskInDb(db, actor, current.id))!;
   }
   assertSeriesChange(actor, row, task);
+  const consumed = task.occursOn ? occurrenceDays({ ...patternOf(row), ends: { never: true } }, row.starts_on, shiftDay(task.occursOn, -1), MAX_COUNT + 1).length : 0;
   const samePattern = sameRule(rule, row.rule);
   if (samePattern && JSON.stringify(ends) === JSON.stringify(row.ends)) return task;
   if (samePattern) {
@@ -950,9 +1064,12 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
     return (await readTaskInDb(db, actor, task.id))!;
   }
   const dropped = await changesOf(db, row.id);
+  const taken = await db.query("select 1 from crm.tasks where series_id = $1 and id <> $2 and occurs_on = $3::date and archived_at is null", [row.id, task.id, day]);
+  const startDay = (taken.rowCount ?? 0) > 0 && task.occursOn ? task.occursOn : day;
+  const kept: RepeatEnds = "count" in ends ? { count: Math.max(1, ends.count - consumed) } : ends;
   await db.query("delete from crm.task_occurrence_changes where series_id = $1", [row.id]);
-  await db.query("update crm.task_series set rule = $2::jsonb, ends = $3::jsonb, starts_on = $4 where id = $1", [row.id, JSON.stringify(rule), JSON.stringify(ends), day]);
-  await db.query("update crm.tasks set occurs_on = $2 where id = $1", [task.id, day]);
+  await db.query("update crm.task_series set rule = $2::jsonb, ends = $3::jsonb, starts_on = $4 where id = $1", [row.id, JSON.stringify(rule), JSON.stringify(kept), startDay]);
+  await db.query("update crm.tasks set occurs_on = $2 where id = $1", [task.id, startDay]);
   await refreshRoll(db, actor, row.id);
   const after = await readSeries(db, row.id);
   await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, after, { scope: "all", droppedChanges: dropped, occursOnBefore: task.occursOn }));
@@ -967,17 +1084,23 @@ export async function endSeriesOnInDb(db: Db, actor: Actor, taskId: string, unti
 }
 
 export async function deleteSeriesInDb(db: Db, actor: Actor, taskId: string, provenance: Provenance) {
-  const found = await resolveTarget(db, actor, { taskId });
-  if (!found.row) throw new CrmError("invalid_input", "This task doesn't repeat.", 400);
-  assertSeriesChange(actor, found.row, found.task);
-  if (found.row.current_task_id === found.task.id && !found.task.completedAt) {
-    await archiveTaskInDb(db, actor, found.task.id, provenance);
-  } else {
-    await db.query("update crm.task_series set archived_at = now(), roll_at = null where id = $1", [found.row.id]);
-    const after = await readSeries(db, found.row.id);
-    await recordAudit(db, actor, "task_series.deleted", "task", found.task.id, provenance, auditSeries(found.row, after));
-  }
-  return found.task;
+  if (!isUuid(taskId)) throw notFound("task");
+  const given = await readTaskInDb(db, actor, taskId);
+  if (!given?.seriesId) throw new CrmError("invalid_input", "This task doesn't repeat.", 400);
+  const peek = await readSeries(db, given.seriesId);
+  if (!peek || peek.archived_at) throw notFound("task");
+  const openId = peek.current_task_id;
+  if (openId) await db.query("select 1 from crm.tasks where id = $1 for no key update", [openId]);
+  const row = await lockSeries(db, given.seriesId);
+  if (!row) throw notFound("task");
+  const open = openId ? await readTaskInDb(db, actor, openId) : null;
+  assertSeriesChange(actor, row, open ?? given);
+  await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false where id = $1", [row.id]);
+  const anchor = open && !open.completedAt && !open.archivedAt ? open : given;
+  if (anchor === open) await archiveTaskInDb(db, actor, open.id, provenance, { keepSeries: true });
+  const after = await readSeries(db, row.id);
+  await recordAudit(db, actor, "task_series.deleted", "task", anchor.id, provenance, auditSeries(row, after, { archivedTask: anchor === open ? open.id : null }));
+  return (await readTaskInDb(db, actor, anchor.id))!;
 }
 
 async function mutate<T>(actor: Actor, operation: string, payload: unknown, options: MutationOptions, run: (db: Db, provenance: Provenance) => Promise<T>) {
@@ -1015,8 +1138,7 @@ export function deleteSeries(actor: Actor, taskId: string, options: MutationOpti
 export function updateOccurrence(actor: Actor, target: OccurrenceTarget, input: TaskWrite, scope: RepeatScope | undefined, options: MutationOptions = {}) {
   return mutate(actor, "update_task", { target, input, scope }, options, async (db, provenance) => {
     const task = await updateOccurrenceInDb(db, actor, target, input, scope, provenance);
-    const ids = new Set([task.id, ...("taskId" in target ? [target.taskId] : [])]);
-    return { task, undo: await eventIds(db, [...ids]) };
+    return { task, undo: await eventIds(db, [task.id]) };
   });
 }
 
@@ -1067,19 +1189,22 @@ export async function restoreSeriesInDb(db: Db, actor: Actor, changes: Record<st
   if (!row) throw new CrmError("cannot_undo", "Can't undo: you can't change how this task repeats.", 409);
   const before = series.before;
   if (!before) {
+    await db.query("update crm.task_series set archived_at = coalesce(archived_at, now()), roll_at = null, roll_pending = false where id = $1", [row.id]);
     if (row.current_task_id) {
       const task = await readTaskInDb(db, actor, row.current_task_id);
-      if (task && changes.withTask && !task.archivedAt) await archiveTaskInDb(db, actor, task.id, provenance);
+      if (task && changes.withTask && !task.archivedAt) await archiveTaskInDb(db, actor, task.id, provenance, { keepSeries: true });
       else if (task) await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
     }
-    await db.query("update crm.task_series set archived_at = coalesce(archived_at, now()), roll_at = null where id = $1", [row.id]);
     return;
   }
-  const split = changes.split as { seriesId?: string; taskId?: string } | undefined;
-  if (split?.taskId) {
-    const created = await readTaskInDb(db, actor, split.taskId);
-    if (created && !created.archivedAt) await archiveTaskInDb(db, actor, created.id, provenance, { keepSeries: true });
-    if (split.seriesId) await db.query("update crm.task_series set archived_at = now(), roll_at = null where id = $1", [split.seriesId]);
+  const split = changes.split as { seriesId?: string } | undefined;
+  if (split?.seriesId) {
+    const child = await lockSeries(db, split.seriesId);
+    if (child?.current_task_id) {
+      const created = await readTaskInDb(db, actor, child.current_task_id);
+      if (created && !created.archivedAt) await archiveTaskInDb(db, actor, created.id, provenance, { keepSeries: true });
+    }
+    await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false where id = $1", [split.seriesId]);
   }
   await db.query(
     `update crm.task_series set title = $2, description = $3, priority = $4, owner_id = $5, company_id = $6, contact_id = $7, opportunity_id = $8,
@@ -1208,7 +1333,7 @@ export async function updateTaskFromApi(
         if (!("taskId" in occurrence)) throw new CrmError("invalid_input", "Change how it repeats from the open task.", 400, { field: "repeat" });
         task = await setRepeatInDb(db, actor, occurrence.taskId, input.repeat, { ...provenance, operation: input.repeat === null ? "stop_repeating" : "set_repeat" });
       }
-      if (fields || !task) task = await updateOccurrenceInDb(db, actor, occurrence, write, scope ?? (input.repeat ? "all" : undefined), provenance);
+      if (fields || !task) task = await updateOccurrenceInDb(db, actor, occurrence, write, scope, provenance);
       return { task };
     }),
   );
@@ -1226,4 +1351,9 @@ export async function followSeriesLinks(actor: Actor, taskId: string, provenance
     const after = await readSeries(db, row.id);
     await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, after, { scope: "all" }));
   });
+}
+
+export async function readSeriesTitle(actor: Actor, seriesId: string) {
+  if (!isUuid(seriesId)) return null;
+  return withActor(actor, async (db) => (await readSeries(db, seriesId))?.title ?? null);
 }

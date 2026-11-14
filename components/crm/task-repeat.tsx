@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { DatePicker } from "@/components/_ui/date-picker";
@@ -19,7 +19,6 @@ import {
   checkEnds,
   checkRule,
   isLastWeekOfMonth,
-  lastOccurrence,
   monthWeekOf,
   normalRule,
   occurrenceDays,
@@ -87,7 +86,7 @@ function plural(count: number, one: string, many: string) {
 }
 
 export function RepeatMark({ task, short = false, className }: { task: Task; short?: boolean; className?: string }) {
-  if (!task.repeat || task.completedAt || !task.repeat.current) return null;
+  if (!task.repeat || task.completedAt || !task.repeat.current || task.repeat.ended) return null;
   const words = short ? task.repeat.short : task.repeat.phrase;
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-1", className)}>
@@ -147,7 +146,7 @@ export function useRepeatActions(task: Task) {
   );
   return {
     busy,
-    skip: () => act(() => skipOccurrenceAction(task.id), (result) => `Skipped. Next: ${nextLabel(result.task ? { dueAt: result.task.dueAt ?? "", dueHasTime: result.task.dueHasTime, occursOn: result.task.occursOn ?? "" } : null) ?? "none"}`),
+    skip: () => act(() => skipOccurrenceAction(task.id, task.occursOn), (result) => `Skipped. Next: ${nextLabel(result.task ? { dueAt: result.task.dueAt ?? "", dueHasTime: result.task.dueHasTime, occursOn: result.task.occursOn ?? "" } : null) ?? "none"}`),
     stop: () => act(() => setRepeatAction(task.id, null), () => "Stopped repeating."),
     end: (until: string) => act(() => endSeriesAction(task.id, until), () => "Saved."),
     remove: () => act(() => deleteSeriesAction(task.id), () => "Deleted the series."),
@@ -177,10 +176,15 @@ function MenuOption({ checked, onSelect, children, detail, danger, icon }: { che
 }
 
 function Panel({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
+  const id = useId();
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    root.current?.querySelector<HTMLElement>("input, select, button[aria-pressed], [role='radio'], button:not([aria-label='Close'])")?.focus({ preventScroll: true });
+  }, []);
   return (
-    <div className="flex flex-col gap-3 p-3.5">
+    <div ref={root} role="group" aria-labelledby={id} className="flex flex-col gap-3 p-3.5">
       <div className="flex items-center justify-between gap-2">
-        <h3>{title}</h3>
+        <h3 id={id}>{title}</h3>
         <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose} className="hit">
           <XIcon aria-hidden className="size-3.5" />
         </Button>
@@ -215,11 +219,15 @@ function draftOf(task: Task, anchor: string): Draft {
   };
 }
 
-function ruleOf(draft: Draft, anchor: string): RepeatRule {
+function ruleOf(draft: Draft, anchor: string, original: RepeatRule | null = null): RepeatRule {
   const interval = Number(draft.interval);
   const base: RepeatRule = { freq: draft.freq, interval: Number.isInteger(interval) ? interval : 0 };
   if (draft.freq === "weekly") base.weekdays = draft.weekdays;
-  if (draft.freq === "monthly") {
+  const kept = original?.freq === "monthly" ? (original.monthWeek ? (original.monthWeek.n === -1 ? "last" : "week") : "day") : null;
+  if (draft.freq === "monthly" && kept === draft.monthly) {
+    if (original?.monthWeek) base.monthWeek = original.monthWeek;
+    else base.monthDay = original?.monthDay ?? Number(anchor.slice(8, 10));
+  } else if (draft.freq === "monthly") {
     if (draft.monthly === "day") base.monthDay = Number(anchor.slice(8, 10));
     else base.monthWeek = draft.monthly === "last" ? { n: -1, weekday: weekdayOf(anchor) } : monthWeekOf(anchor).n === -1 ? { n: 4, weekday: weekdayOf(anchor) } : monthWeekOf(anchor);
   }
@@ -240,7 +248,7 @@ function CustomRepeat({ task, anchor, onCancel, onSave }: { task: Task; anchor: 
     setShown(null);
     setDraft((current) => ({ ...current, ...change }));
   };
-  const rule = ruleOf(draft, anchor);
+  const rule = ruleOf(draft, anchor, task.repeat && !task.repeat.ended ? task.repeat.rule : null);
   const ends = endsOf(draft);
   const problem = checkRule(rule) ?? (draft.ends === "until" && !draft.until ? "Choose an end date." : checkEnds(ends, anchor, dayKeyAt(new Date())));
   const pattern: RepeatPattern = { startsOn: anchor, at: atOf(task), rule: normalRule({ ...rule, interval: Math.max(1, rule.interval || 1) }), ends: problem ? { never: true } : ends };
@@ -305,7 +313,7 @@ function CustomRepeat({ task, anchor, onCancel, onSave }: { task: Task; anchor: 
                   aria-label={DAY_NAMES[index]}
                   onClick={() => update({ weekdays: on ? draft.weekdays.filter((item) => item !== day) : [...draft.weekdays, day] })}
                   className={cn(
-                    "hit flex size-8 items-center justify-center rounded-full text-[12px] font-medium transition-colors duration-150",
+                    "hit flex size-8 items-center justify-center rounded-full text-[12px] font-medium transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--primary)",
                     on ? "bg-primary text-primary-foreground" : "border-line-strong text-soft border hover:bg-white/[0.06]",
                   )}
                 >
@@ -381,9 +389,9 @@ function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => voi
   const [until, setUntil] = useState(() => ("until" in repeat.ends ? repeat.ends.until : ""));
   const from = task.occursOn ?? anchorOf(task);
   const pattern: RepeatPattern = { startsOn: repeat.startsOn, at: repeat.at, rule: repeat.rule, ends: until ? { until } : { never: true } };
-  const left = until && until >= from ? occurrenceDays(pattern, shiftDay(from, 1), until).length : null;
-  const last = until && until >= from ? (lastOccurrence(pattern) ?? until) : null;
-  const lastDay = last && left ? occurrenceDays(pattern, shiftDay(from, 1), last).pop() ?? from : from;
+  const days = until && until >= from ? occurrenceDays(pattern, shiftDay(from, 1), until, 5000) : null;
+  const left = days ? days.length : null;
+  const lastDay = days && days.length > 0 ? days[days.length - 1] : from;
   const problem = until && until < from ? "The end date is before the first one." : null;
   return (
     <Panel
@@ -409,12 +417,26 @@ function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => voi
         left !== null && (
           <p className="caption-style text-soft flex items-start gap-2 rounded-lg bg-white/[0.04] px-2.5 py-2">
             <RepeatIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-purple-text)" />
-            <span>{left === 0 ? "This is the last one." : `${left} more. Last one: ${shortDay(lastDay)}.`}</span>
+            <span>{left === 0 ? "This is the last one." : `${left} more. Last one: ${dayWithYear(lastDay)}.`}</span>
           </p>
         )
       )}
     </Panel>
   );
+}
+
+function dayWithYear(day: string) {
+  return day.slice(0, 4) === dayKeyAt(new Date()).slice(0, 4) ? shortDay(day) : `${shortDay(day)} ${day.slice(0, 4)}`;
+}
+
+function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const items = [...event.currentTarget.querySelectorAll<HTMLElement>("[role^='menuitem']")];
+  if (items.length === 0) return;
+  event.preventDefault();
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : event.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
+  items[next]?.focus();
 }
 
 export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; trigger: ReactNode; align?: "start" | "end" }) {
@@ -446,9 +468,9 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
       }}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align={align} className="w-[min(19rem,calc(100vw-2rem))]">
+      <PopoverContent align={align} className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain">
         {view === "menu" && (
-          <div role="menu" aria-label="Repeat" className="flex flex-col p-1">
+          <div role="menu" aria-label="Repeat" onKeyDown={moveFocus} className="flex flex-col p-1">
             <MenuOption checked={!repeating} onSelect={() => (repeating ? setView("stop") : close())}>
               Don&apos;t repeat
             </MenuOption>
@@ -572,6 +594,7 @@ export function RepeatField({ task, canChange, layout }: { task: Task; canChange
   const repeat = task.repeat;
   const live = Boolean(repeat && repeat.current && !task.completedAt);
   const stopped = live && repeat!.ended && !repeat!.next;
+  const halted = stopped && !("never" in repeat!.ends) && !repeat!.end;
   const words = live && !stopped ? `${repeat!.text}${repeat!.end ? `, ${repeat!.end}` : ""}` : null;
   const next = live && !stopped ? nextLabel(repeat!.next) : null;
   if (!canChange || task.completedAt) {
@@ -593,7 +616,7 @@ export function RepeatField({ task, canChange, layout }: { task: Task; canChange
     <>
       <RepeatMenu task={task} trigger={trigger} />
       {next && <span className="caption-style text-subtle">Next: {shortDay(repeat!.next!.occursOn)}</span>}
-      {stopped && <span className="caption-style text-subtle">Stopped. This is the last one.</span>}
+      {stopped && <span className="caption-style text-subtle">{halted || "never" in repeat!.ends ? "Stopped. This is the last one." : "This is the last one."}</span>}
     </>
   );
 }
@@ -660,7 +683,7 @@ const CHANGE_LINES: Record<ScopeChange["kind"], string> = {
 
 function scopeTexts(task: Task, change: ScopeChange) {
   const today = dayKeyAt(new Date());
-  const day = task.occursOn ?? anchorOf(task);
+  const day = taskDueDay(task.dueAt) ?? task.occursOn ?? anchorOf(task);
   const own = day === today ? "today's" : shortDay(day);
   const ownCapital = day === today ? "Today" : shortDay(day);
   const next = task.repeat?.next?.occursOn;
@@ -681,6 +704,7 @@ export function useRepeatScope(task: Task) {
   useEffect(() => {
     latest.current = asking;
   });
+  useEffect(() => () => latest.current?.resolve("this"), []);
   const ask = useCallback((change: ScopeChange) => {
     latest.current?.resolve(null);
     setChoice("this");
@@ -696,7 +720,10 @@ export function useRepeatScope(task: Task) {
     <Dialog open={Boolean(asking)} onOpenChange={(open) => !open && finish(null)}>
       <DialogContent className="max-w-[420px]">
         <DialogHeader className="pr-12">
-          <DialogTitle className="truncate">{task.title} repeats</DialogTitle>
+          <DialogTitle className="flex min-w-0 gap-1">
+            <span className="truncate">{task.title}</span>
+            <span className="shrink-0">repeats</span>
+          </DialogTitle>
           <DialogDescription>{texts?.line}</DialogDescription>
         </DialogHeader>
         <fieldset className="flex flex-col gap-1 px-3 pb-2">

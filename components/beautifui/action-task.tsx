@@ -208,7 +208,7 @@ function ActionTask({
     wasExpanded.current = expanded;
   }, [expanded]);
   const preview = (task.description ?? "").trim().split("\n")[0]?.trim();
-  const repeats = Boolean(task.repeat?.current && !completed);
+  const repeats = Boolean(task.repeat?.current && !task.repeat.ended && !completed);
   const expansion = useExpansion(expanded);
   usePageFocus("task", task.id, expanded);
   const row = useRef<HTMLLIElement>(null);
@@ -370,7 +370,7 @@ function ActionTask({
                     <span className="sr-only"> duration</span>
                   </span>
                 )}
-                {repeats && <RepeatIcon aria-label={task.repeat?.phrase} role="img" className="hidden size-3 shrink-0 text-(--tag-purple-text) @xl:block" />}
+                {repeats && <RepeatIcon aria-hidden className="hidden size-3 shrink-0 text-(--tag-purple-text) @xl:block" />}
                 {due ? (
                   <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="gap-1 text-[12px]">
                     {task.dueHasTime && due.kind !== "none" && <ClockIcon aria-hidden className="size-3 shrink-0" />}
@@ -459,6 +459,7 @@ function ActionTask({
           </div>
         </div>
       </div>
+      {details.scopeDialog}
     </li>
   );
 }

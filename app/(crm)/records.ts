@@ -14,7 +14,7 @@ import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
 import { createContact, findContactsToLink, getContact, updateContact } from "@/lib/crm/contacts";
 import { mergeContacts } from "@/lib/crm/merge";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
@@ -307,6 +307,7 @@ export async function reopenTaskAction(id: string): Promise<RecordActionState> {
     refresh();
     return { ok: true };
   } catch (error) {
+    if (isPgError(error) && error.code === "40P01") return { error: "Couldn't undo. Try again." };
     return actionError(error);
   }
 }

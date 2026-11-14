@@ -147,7 +147,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         repeat: repeatSchema.nullable().optional().describe("Changes how it repeats, for this and every later one, as on create_next_action. null stops it repeating: this one stays and nothing comes after it."),
         repeatScope: z.enum(["this", "following", "all"]).optional().describe("Required when the task repeats and you change its time, title, description, links, assignee, duration or reminder. this: only this one. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope."),
         skip: z.boolean().optional().describe("true skips this date of a repeating task: the open one moves to its next date, or an upcoming date (occursOn) is left out. Send it on its own."),
-        occursOn: z.string().optional().describe("An upcoming date of this repeating task, YYYY-MM-DD, to change or skip just that date instead of the open one."),
+        occursOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "occursOn takes a day, such as 2027-03-04.").optional().describe("An upcoming date of this repeating task, YYYY-MM-DD, to change or skip just that date instead of the open one."),
         ...provenanceFields,
       },
     },
