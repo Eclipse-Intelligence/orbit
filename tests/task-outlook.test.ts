@@ -572,7 +572,7 @@ describe("Outlook lifecycle", () => {
     const setter = await createUser(`setter${seq}@outlook-blocks.test`, "Priya");
     await addMember(mark.workspaceId, setter.userId, "admin");
     const priya: UserActor = { ...setter, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "admin" };
-    const hers = (await createTask(priya, { title: "Priya's call", dueDate: new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10) })).body.task;
+    const hers = (await createTask(mark, { title: "Priya's call", ownerId: priya.userId, dueDate: new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10) })).body.task;
     const set = await updateTask(mark, hers.id, { dueAt: minuteAt(Date.now() + 2 * DAY) });
     assert.equal(set.body.task.dueHasTime, false);
     const reassigned = await timed(mark, "Call Ben", Date.now() + 2 * DAY);
@@ -586,7 +586,8 @@ describe("Outlook lifecycle", () => {
     const unowned = (await createTask(agent.actor, { title: "Agent loose call", dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
     assert.equal(unowned.dueHasTime, true);
     assert.equal(unowned.ownerId, null);
-    const later = await updateTask(agent.actor, own.body.task.id, { dueAt: minuteAt(Date.now() + 4 * DAY) });
+    await assert.rejects(updateTask(agent.actor, own.body.task.id, { dueAt: minuteAt(Date.now() + 4 * DAY) }), /not found/i);
+    const later = await updateTask(agent.actor, owned.id, { dueAt: minuteAt(Date.now() + 4 * DAY) });
     assert.equal(later.body.task.dueHasTime, false);
   });
 
@@ -603,7 +604,7 @@ describe("Outlook lifecycle", () => {
         )
       ).rows[0].id;
 
-    const taken = (await createTask(priya, { title: "Priya's call", dueDate: day })).body.task;
+    const taken = (await createTask(mark, { title: "Priya's call", ownerId: priya.userId, dueDate: day })).body.task;
     await updateTask(mark, taken.id, { ownerId: mark.userId });
     await updateTask(mark, taken.id, { dueAt: `${day}T14:00` });
     await undoAuditEvent(mark, await lastEvent(taken.id, "ownerId"), { operation: "undo", source: "web" });
@@ -612,7 +613,7 @@ describe("Outlook lifecycle", () => {
     assert.equal(back.dueHasTime, false);
     assert.equal(back.dueDate, day);
 
-    const loose = (await createTask(priya, { title: "Priya's email", dueDate: day })).body.task;
+    const loose = (await createTask(mark, { title: "Priya's email", ownerId: priya.userId, dueDate: day })).body.task;
     await updateTask(mark, loose.id, { ownerId: null });
     await updateTask(mark, loose.id, { dueAt: `${day}T15:00` });
     assert.equal((await getTask(mark, loose.id)).dueHasTime, true);
@@ -687,15 +688,18 @@ describe("Outlook lifecycle", () => {
     const colleague = await createUser(`length${seq}@outlook-blocks.test`, "Priya");
     await addMember(mark.workspaceId, colleague.userId);
     const priya: UserActor = { ...colleague, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member" };
-    const hers = (await createTask(priya, { title: "Priya's call", dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
+    const made = (await createTask(mark, { title: "Priya's call", ownerId: priya.userId })).body.task;
+    const hers = (await updateTask(priya, made.id, { dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
     assert.equal(hers.dueHasTime, true);
     const refused = (error: unknown) => error instanceof CrmError && error.message === OWNER_SETS_LENGTH;
     await assert.rejects(updateTask(mark, hers.id, { durationMinutes: 45 }), refused);
     await assert.rejects(placeTask(mark, hers.id, { at: hers.dueAt!, durationMinutes: 45 }), refused);
     const agent = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"]);
-    await assert.rejects(updateTask(agent.actor, hers.id, { durationMinutes: 60 }), refused);
+    const agents = (await createTask(agent.actor, { title: "Agent's call for Priya", ownerId: priya.userId })).body.task;
+    await updateTask(priya, agents.id, { dueAt: minuteAt(Date.now() + 2 * DAY) });
+    await assert.rejects(updateTask(agent.actor, agents.id, { durationMinutes: 60 }), refused);
     assert.equal((await updateTask(priya, hers.id, { durationMinutes: 45 })).body.task.durationMinutes, 45);
-    const dated = (await createTask(priya, { title: "Priya's day", dueDate: new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10) })).body.task;
+    const dated = (await createTask(mark, { title: "Priya's day", ownerId: priya.userId, dueDate: new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10) })).body.task;
     assert.equal((await updateTask(mark, dated.id, { durationMinutes: 30 })).body.task.durationMinutes, 30);
   });
 
@@ -863,7 +867,8 @@ describe("Outlook lifecycle", () => {
     const taker = await createUser(`taker${seq}@outlook-blocks.test`, "Priya");
     await addMember(mark.workspaceId, taker.userId, "admin");
     const priya: UserActor = { ...taker, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "admin" };
-    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    const made = (await createTask(priya, { title: "Call Jane", ownerId: mark.userId })).body.task;
+    const task = (await updateTask(mark, made.id, { dueAt: minuteAt(Date.now() + 2 * DAY) })).body.task;
     await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
     await admin().query("update crm.mailbox_connections set status = 'disconnected', refresh_token = null where user_id = $1", [mark.userId]);
     const taken = await updateTask(priya, task.id, { ownerId: priya.userId });
@@ -1097,13 +1102,14 @@ describe("reading blocks back from Outlook", () => {
     const task = await timed(there, "Call Ridgeon lead", Date.now() + 2 * DAY);
     await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
     await admin().query("update crm.calendar_events set block_written_at = now() - interval '5 minutes' where task_id = $1", [task.id]);
-    const before = await getTask(ridgeon, task.id);
+    const timing = async () => (await admin().query<{ due_at: Date; due_has_time: boolean }>("select due_at, due_has_time from crm.tasks where id = $1", [task.id])).rows[0];
+    const before = await timing();
     await admin().query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [ridgeon.workspaceId, mark.userId]);
     outlook.events.clear();
     await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
-    const after = await getTask(ridgeon, task.id);
-    assert.equal(after.dueAt, before.dueAt);
-    assert.equal(after.dueHasTime, true);
+    const after = await timing();
+    assert.equal(after.due_at.toISOString(), before.due_at.toISOString());
+    assert.equal(after.due_has_time, true);
     const kept = await admin().query("select 1 from crm.calendar_events where task_id = $1", [task.id]);
     assert.equal(kept.rowCount, 1);
   });

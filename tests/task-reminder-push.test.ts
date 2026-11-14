@@ -161,7 +161,7 @@ describe("task reminder pushes", () => {
     const samSees = await listDueReminders(teammate, new Date(now));
     assert.equal(samSees.find((item) => item.id === assigned.id)?.pushed, true);
     const markSees = await listDueReminders(owner, new Date(now));
-    assert.equal(markSees.find((item) => item.id === ownerless.id)?.pushed, false);
+    assert.equal(markSees.some((item) => item.id === ownerless.id), false);
 
     await getAdminPool().query("update crm.tasks set owner_id = $2 where id = $1", [assigned.id, owner.userId]);
     const handed = pusher();
