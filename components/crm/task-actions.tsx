@@ -14,6 +14,7 @@ import FindDetailButton from "@/components/crm/find-detail";
 import { useFindAvailability } from "@/components/crm/find-availability";
 import type { InvitePrefill } from "@/components/crm/invite-dialog";
 import { SearchChip } from "@/components/crm/task-pad";
+import { relinkChange } from "@/lib/task-pad";
 import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { useComposer } from "@/components/mail/compose-dock";
 import { relinkTaskAction, taskContextAction, taskInviteSetupAction } from "@/app/(crm)/task-act";
@@ -594,7 +595,7 @@ export function EditLinks({ task }: { task: Task }) {
           companyId={task.companyId}
           variant="card"
           taskId={task.id}
-          onPick={(option) => void change(option ? { contactId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { contactId: null })}
+          onPick={(option) => void change(relinkChange(task, "contact", option))}
           onClosed={() => refocus("contact")}
         />
       </span>
@@ -607,7 +608,7 @@ export function EditLinks({ task }: { task: Task }) {
           companyId={null}
           variant="card"
           taskId={task.id}
-          onPick={(option) => void change({ companyId: option?.id ?? null })}
+          onPick={(option) => void change(relinkChange(task, "company", option))}
           onClosed={() => refocus("company")}
         />
       </span>
@@ -620,7 +621,7 @@ export function EditLinks({ task }: { task: Task }) {
           companyId={null}
           variant="card"
           taskId={task.id}
-          onPick={(option) => void change(option ? { opportunityId: option.id, ...(option.company ? { companyId: option.company.id } : {}) } : { opportunityId: null })}
+          onPick={(option) => void change(relinkChange(task, "opportunity", option))}
           onClosed={() => refocus("opportunity")}
         />
       </span>

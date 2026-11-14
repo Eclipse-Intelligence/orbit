@@ -87,7 +87,7 @@ import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 
 const MORE_VIEWS = [
   { id: "inbox", label: "All inbox" },
-  { id: "snoozed", label: "Snoozed" },
+  { id: "snoozed", label: "Reminders" },
   { id: "scheduled", label: "Scheduled" },
   { id: "sent", label: "Sent" },
   { id: "drafts", label: "Drafts" },
@@ -101,7 +101,7 @@ function inInbox(view: string) {
 }
 
 const MOVES = new Set<ReaderAction>(["archive", "trash", "inbox", "snooze"]);
-const DONE_LABEL: Record<string, string> = { archive: "Archived.", trash: "Moved to Trash.", inbox: "Moved to Inbox.", snooze: "Snoozed." };
+const DONE_LABEL: Record<string, string> = { archive: "Archived.", trash: "Moved to Trash.", inbox: "Moved to Inbox.", snooze: "Reminder set." };
 const NARROW = "(max-width: 47.99rem)";
 const BACK_MS = 200;
 
@@ -580,7 +580,7 @@ export default function MailScreen({
   function snooze(keys: string[]) {
     const now = Date.now();
     pickLater({
-      title: keys.length > 1 ? `Snooze ${keys.length} until` : "Snooze until",
+      title: keys.length > 1 ? `Remind me about ${keys.length}` : "Remind me",
       options: laterOptions(now),
       now,
       onPick: (at, detail) => (keys.length > 1 ? actMany(keys, "snooze", at, detail) : act(keys[0], "snooze", at, detail)),
@@ -707,7 +707,7 @@ export default function MailScreen({
       archive: `Archived ${count}.`,
       trash: `Moved ${count} to Trash.`,
       inbox: `Moved ${count} to Inbox.`,
-      snooze: `Snoozed ${count} until ${detail ?? "later"}.`,
+      snooze: `Reminder set for ${count}, ${detail ?? "later"}.`,
     };
     const pending = runAll((thread) => postAction(thread.key, action, from, until));
     const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
@@ -766,7 +766,7 @@ export default function MailScreen({
       const undoable = (inInbox(from) && action !== "inbox") || action === "snooze";
       const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
       const shown = showToast({
-        message: action === "snooze" && detail ? `Snoozed until ${detail}.` : DONE_LABEL[action],
+        message: action === "snooze" && detail ? `Reminder set for ${detail}.` : DONE_LABEL[action],
         action: undoable
           ? {
               label: "Undo",
@@ -1526,7 +1526,7 @@ export default function MailScreen({
                     primaryMove() === "inbox"
                       ? { action: "archive" as const, label: "Move to Inbox", hint: "E", icon: InboxIcon }
                       : { action: "archive" as const, label: "Archive", hint: "E", icon: ArchiveIcon },
-                    query.view === "snoozed" ? null : { action: "snooze" as const, label: "Snooze", hint: "H", icon: ClockIcon },
+                    query.view === "snoozed" ? null : { action: "snooze" as const, label: "Remind me", hint: "H", icon: ClockIcon },
                     selectedThreads.some((thread) => !thread.flagged)
                       ? { action: "flag" as const, label: "Flag", hint: "S", icon: FlagIcon }
                       : { action: "flag" as const, label: "Remove flag", hint: "S", icon: FlagIcon },
@@ -1622,7 +1622,7 @@ export default function MailScreen({
                         leftLabel: primaryMove() === "inbox" ? "Move to Inbox" : "Archive",
                         restore: primaryMove() === "inbox",
                         onLeft: (key) => act(key, primaryMove()),
-                        rightLabel: query.view === "snoozed" && !query.query ? null : "Snooze",
+                        rightLabel: query.view === "snoozed" && !query.query ? null : "Remind me",
                         onRight: (key) => {
                           if (query.view !== "snoozed" || query.query) snooze([key]);
                         },

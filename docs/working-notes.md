@@ -31,6 +31,8 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
 
 - **Fable review with the 800 line rule.** For anything non-trivial, launch one reviewer agent on Fable. It measures the changed lines and spawns one sub-agent per 800 lines (rounded up), each owning a coherent group of files. Give it file and PR pointers, not your conclusions. When Fable is rate-limited, use Opus 5.5 with the same structure.
 - **Send fixes back to the agent that built the branch.** Re-review until there are no blockers. Several features needed three rounds.
+- **Review the whole area once it's finished.** After the last PR for a feature area, run one review across the whole area, not just the per-PR diffs: workspaces, concurrent requests, retries, and every route that writes the record (web, API, MCP, assistant, workflows, background jobs).
+- **Close every review point before merging.** Each point is either fixed or explicitly accepted by Mark. Never leave one as a nit or an open question. Every round of fixes gets re-reviewed.
 
 ### Migrations
 

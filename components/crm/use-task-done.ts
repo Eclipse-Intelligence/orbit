@@ -4,13 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useComposer } from "@/components/mail/compose-dock";
 import { completeTaskAction, openTaskIdsAction, remindTaskAction, reopenTaskAction } from "@/app/(crm)/records";
-import { onWorkingDay, snoozeDetail, taskRemindChoices } from "@/lib/crm/task-snooze";
+import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
+import { reconcileDone } from "@/lib/task-done";
+import { movedMessage } from "@/lib/task-pad";
 import type { Task } from "@/lib/crm/types";
 
 export const TASK_UNDO_MS = 8_000;
 const BEACON_BATCH = 50;
 const NOT_DONE = "Couldn't mark it done. Try again.";
+const NOT_REOPENED = "Couldn't reopen the task. Try again.";
 const RECHECK_MS = 1_500;
 
 function wait(ms: number) {
@@ -18,6 +21,8 @@ function wait(ms: number) {
 }
 
 type Outcome = { error?: string };
+type Moved = Outcome & { saved?: { dueAt: string | null; dueHasTime: boolean } };
+
 type Entry = { toast: number; timer: number; until: number; sent: boolean };
 
 function without(set: Set<string>, ids: string[]) {
@@ -46,6 +51,7 @@ export function useTaskDone(tasks: Task[]) {
   const composer = useComposer();
   const [done, setDone] = useState<Set<string>>(() => new Set());
   const [awaiting, setAwaiting] = useState<Set<string>>(() => new Set());
+  const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set());
   const [message, setMessage] = useState<string | null>(null);
   const entries = useRef(new Map<string, Entry>());
   const beaconed = useRef(new Set<string>());
@@ -58,12 +64,10 @@ export function useTaskDone(tasks: Task[]) {
   const [seenKey, setSeenKey] = useState(openKey);
   if (seenKey !== openKey) {
     setSeenKey(openKey);
-    if (awaiting.size > 0) {
-      const open = new Set(openKey.split(","));
-      const back = [...awaiting].filter((id) => open.has(id));
-      setAwaiting(new Set());
-      if (back.length > 0) setDone((current) => without(current, back));
-    }
+    const next = reconcileDone(new Set(openKey.split(",")), { done, awaiting, confirmed });
+    setDone(next.done);
+    setAwaiting(next.awaiting);
+    setConfirmed(next.confirmed);
   }
 
   const expire = useCallback((id: string) => {
@@ -268,6 +272,29 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
+  const reopen = useCallback(
+    (task: Task) => {
+      if (entries.current.has(task.id)) return undo(task.id);
+      setMessage(null);
+      void reopenTaskAction(task.id)
+        .catch((): Outcome => ({ error: NOT_REOPENED }))
+        .then((result: Outcome) => {
+          if (result.error) {
+            setMessage(result.error);
+            composer.showToast({ message: result.error, tone: "alert" });
+            return;
+          }
+          setDone((current) => without(current, [task.id]));
+          setAwaiting((current) => without(current, [task.id]));
+          setConfirmed((current) => without(current, [task.id]));
+          composer.showToast({ message: "Task reopened." });
+          router.refresh();
+        });
+      return true;
+    },
+    [composer, router, undo],
+  );
+
   const undoLast = useCallback(() => {
     const ids = [...entries.current.keys()];
     const id = ids[ids.length - 1];
@@ -285,14 +312,14 @@ export function useTaskDone(tasks: Task[]) {
         onPick: (at) => {
           setMessage(null);
           void remindTaskAction(task.id, at)
-            .catch((): Outcome => ({ error: "Couldn't move the task. Try again." }))
-            .then((result: Outcome) => {
+            .catch((): Moved => ({ error: "Couldn't move the task. Try again." }))
+            .then((result: Moved) => {
               if (result.error) {
                 setMessage(result.error);
                 composer.showToast({ message: result.error, tone: "alert" });
                 return;
               }
-              composer.showToast({ message: `Due ${snoozeDetail(onWorkingDay(new Date(at)), task.dueHasTime, Date.now())}.` });
+              composer.showToast({ message: movedMessage(task, at, result.saved, Date.now()) });
               router.refresh();
             });
         },
@@ -301,5 +328,5 @@ export function useTaskDone(tasks: Task[]) {
     [composer, router],
   );
 
-  return { done, message, setMessage, complete, release, settle, abandon, undo, undoLast, remind };
+  return { done, message, setMessage, complete, release, settle, abandon, undo, undoLast, remind, reopen };
 }

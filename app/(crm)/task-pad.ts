@@ -80,7 +80,7 @@ export async function addPadTaskAction(input: {
   ownerId?: string | null;
   durationMinutes?: number | null;
   mailThreadKey?: string | null;
-}): Promise<{ ok?: boolean; error?: string; warning?: string }> {
+}): Promise<{ ok?: boolean; error?: string; warning?: string; dayOnly?: boolean }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
@@ -103,9 +103,10 @@ export async function addPadTaskAction(input: {
     );
     revalidatePath(TASKS_PATH);
     revalidateRecordPages();
+    const dayOnly = timed && !created.task.dueHasTime;
     return created.clickupError
-      ? { ok: true, warning: `Saved. ClickUp sync failed and will retry: ${created.clickupError}` }
-      : { ok: true };
+      ? { ok: true, dayOnly, warning: `Saved. ClickUp sync failed and will retry: ${created.clickupError}` }
+      : { ok: true, dayOnly };
   } catch (error) {
     return actionError(error);
   }

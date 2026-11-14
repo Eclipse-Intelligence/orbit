@@ -24,6 +24,9 @@ import {
   padRelease,
   padDueHasTime,
   padSaveIds,
+  ownerSetsTime,
+  dayOnlyHint,
+  dayOnlyNote,
   parseTaskText,
   reminderClock,
   resolvePadLinks,
@@ -465,7 +468,7 @@ export default function TaskPad({
   const [reading, setReading] = useState(false);
   const [due, setDue] = useState<Override<string | null>>(unset);
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
-  const [duration, setDuration] = useState(DEFAULT_TASK_DURATION);
+  const [chosenDuration, setDuration] = useState<number | null>(null);
   const [askingTime, setAskingTime] = useState(false);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
   const startContact = (): Override<PadContact | null> => (initialContact ? { set: true, value: { ...initialContact, company: null } } : unset());
@@ -489,9 +492,16 @@ export default function TaskPad({
   const aiFits = ai !== null && ai.text === text && parsed.unsure;
   const title = aiFits ? ai.value.title : parsed.title;
   const autoDue = aiFits ? (ai.value.due ?? parsed.due) : parsed.due;
-  const finalDue = due.set ? due.value : autoDue;
+  const chosenDue = due.set ? due.value : autoDue;
   const autoReminder = aiFits ? ai.value.remindMinutes : parsed.remindMinutes;
-  const finalReminder = finalDue ? (reminder.set ? reminder.value : autoReminder) : null;
+  const chosenReminder = chosenDue ? (reminder.set ? reminder.value : autoReminder) : null;
+  const assignable = Boolean(viewerId) && members.length > 1;
+  const assignee = members.find((member) => member.id === owner) ?? null;
+  const forTeammate = assignable && ownerSetsTime(viewerId, owner);
+  const droppedTime = forTeammate && (padDueHasTime(chosenDue) || chosenReminder !== null);
+  const finalDue = forTeammate && chosenDue ? chosenDue.slice(0, 10) : chosenDue;
+  const finalReminder = forTeammate ? null : chosenReminder;
+  const duration = chosenDuration ?? (!due.set && padDueHasTime(chosenDue) ? parsed.durationMinutes : null) ?? DEFAULT_TASK_DURATION;
   const needsTime = Boolean(finalDue) && !padDueHasTime(finalDue) && finalReminder !== null;
   const anchor = fixedCompany ?? (company.set ? company.value : null);
   const scope = anchor?.id ?? null;
@@ -502,8 +512,6 @@ export default function TaskPad({
   const finalOpportunity = shown.opportunity;
   const ask = shown.ask;
   const finalList = clickup ? (list.set ? list.value : clickup.listId) : null;
-  const assignable = Boolean(viewerId) && members.length > 1;
-  const assignee = members.find((member) => member.id === owner) ?? null;
   const asking = ask !== null && askOpen;
   const detectedContact = shown.fromText;
   const detectedCompany = !fixedCompany && !company.set && !finalContact && seen?.company && finalCompany?.id === seen.company.id;
@@ -671,7 +679,7 @@ export default function TaskPad({
     setAi(null);
     setDue(unset());
     setReminder(unset());
-    setDuration(DEFAULT_TASK_DURATION);
+    setDuration(null);
     setAskingTime(false);
     setCompany(startCompany());
     setContact(startContact());
@@ -738,19 +746,20 @@ export default function TaskPad({
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
-    });
+    }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined, dayOnly: false }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
       return;
     }
+    const notes = [result.dayOnly ? dayOnlyNote(assignee?.name) : null, result.warning ?? null].filter(Boolean).join(" ") || undefined;
     reset();
     router.refresh();
     if (onAdded) {
-      onAdded({ warning: result.warning });
+      onAdded({ warning: notes });
       return;
     }
-    setWarning(result.warning ?? null);
+    setWarning(notes ?? null);
     input.current?.focus();
   }
 
@@ -848,7 +857,7 @@ export default function TaskPad({
       )}
     />,
     <DurationMenu key="duration" compact value={duration} onChange={setDuration} className={chipClass(duration === DEFAULT_TASK_DURATION ? "empty" : "on", variant)} />,
-    <ReminderChip
+    forTeammate ? null : <ReminderChip
       key="reminder"
       due={finalDue}
       title={title}
@@ -1109,6 +1118,11 @@ export default function TaskPad({
           {error}
         </p>
       )}
+      {droppedTime && !error && (
+        <p role="status" className={cn("caption-style text-soft", card ? "px-[18px] pt-2.5" : "px-0.5")}>
+          {dayOnlyHint(assignee?.name)}
+        </p>
+      )}
       {warning && !error && (
         <p role="status" className={cn("caption-style text-soft", card ? "px-[18px] pt-2.5" : "px-0.5")}>
           {warning}
@@ -1165,7 +1179,7 @@ export default function TaskPad({
             {clickup && <ClickUpButton picker={clickup} listId={finalList} onChange={(value) => setList({ set: true, value })} onClosed={() => focusAt()} />}
             {add}
           </div>
-          {(confirm || which || error || warning) && <div className="order-3 flex basis-full flex-col gap-1.5 pr-1">{notes}</div>}
+          {(confirm || which || error || warning || droppedTime) && <div className="order-3 flex basis-full flex-col gap-1.5 pr-1">{notes}</div>}
         </div>
       </div>
     </div>

@@ -88,7 +88,7 @@ function useSnoozePicker() {
   const { pickLater } = useComposer();
   return (choices: SnoozeChoice[], description: string, pick: (choice: SnoozeChoice) => void, adjust: (at: Date) => Date = (at) => at) =>
     pickLater({
-      title: "Snooze until",
+      title: "Remind me",
       description,
       options: choices,
       now: Date.now(),
@@ -328,7 +328,7 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
   const name = item.from.name ?? item.from.email;
   const done = () => onClear("Done", { kind: "reply-done", thread: item.key });
   const snooze = (choice: SnoozeChoice) =>
-    onClear(`Snoozed until ${choice.detail}`, {
+    onClear(`Reminder set for ${choice.detail}`, {
       kind: "reply-snooze",
       thread: item.key,
       until: choice.at,
@@ -369,7 +369,7 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
         { id: "done", label: "Done", variant: "ghost", key: "e", hint: "E", run: done },
         {
           id: "snooze",
-          label: "Snooze",
+          label: "Remind me",
           variant: "ghost",
           key: "h",
           hint: "H",
@@ -417,7 +417,7 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
   const href = item.companyId ? companyHref(item.companyId) : item.contactId ? contactHref(item.contactId) : tasksHref(item.overdue ? "overdue" : "today");
   const done = () => onClear("Task done", { kind: "task-done", id: item.id });
   const snooze = (choice: SnoozeChoice) =>
-    onClear(`Snoozed until ${choice.detail}`, {
+    onClear(`Due ${choice.detail}`, {
       kind: "task-snooze",
       id: item.id,
       until: choice.at,
@@ -442,7 +442,7 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
         { id: "done", label: "Done", variant: "secondary", key: "e", hint: "E", run: done },
         {
           id: "snooze",
-          label: "Snooze",
+          label: "Remind me",
           variant: "ghost",
           key: "h",
           hint: "H",

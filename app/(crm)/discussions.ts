@@ -40,6 +40,11 @@ export async function openDiscussionAction(subject: ChatSubject): Promise<ChatRe
 }
 
 export type TaskDetails = Pick<TaskWrite, "title" | "description" | "dueAt" | "dueDate" | "remindMinutes" | "durationMinutes">;
+export type SavedTiming = Pick<Task, "dueAt" | "dueDate" | "dueHasTime" | "remindMinutes" | "durationMinutes">;
+
+function timingOf(task: Task): SavedTiming {
+  return { dueAt: task.dueAt, dueDate: task.dueDate, dueHasTime: task.dueHasTime, remindMinutes: task.remindMinutes, durationMinutes: task.durationMinutes };
+}
 
 function details(input: TaskDetails): TaskDetails {
   const write: TaskDetails = {};
@@ -78,15 +83,16 @@ function refresh() {
   revalidatePath(TASKS_PATH);
 }
 
-export async function saveTaskDetailsAction(id: string, input: TaskDetails): Promise<{ ok?: true; error?: string }> {
+export async function saveTaskDetailsAction(id: string, input: TaskDetails): Promise<{ ok?: true; error?: string; saved?: SavedTiming }> {
   const resolved = await taskActor(id);
   if (!resolved.actor) return { error: resolved.error };
   const actor = resolved.actor;
   if (!isUuid(id)) return { error: "Couldn't save. Try again." };
   try {
-    const write = changed(await getTask(actor, id), details(input));
-    if (Object.keys(write).length === 0) return { ok: true };
-    await updateTask(actor, id, write, { provenance: { operation: "update_task", source: "web" } });
+    const current = await getTask(actor, id);
+    const write = changed(current, details(input));
+    if (Object.keys(write).length === 0) return { ok: true, saved: timingOf(current) };
+    const updated = await updateTask(actor, id, write, { provenance: { operation: "update_task", source: "web" } });
     if (clickupToken()) {
       after(async () => {
         try {
@@ -97,7 +103,7 @@ export async function saveTaskDetailsAction(id: string, input: TaskDetails): Pro
       });
     }
     refresh();
-    return { ok: true };
+    return { ok: true, saved: timingOf(updated.body.task) };
   } catch (error) {
     return { error: actionError(error).error };
   }

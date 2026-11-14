@@ -84,14 +84,14 @@ function RecordChip({ href, label, icon: Icon, className }: { href: string; labe
   );
 }
 
-function DoneButton({ task, completed, overdue, onComplete }: { task: Task; completed: boolean; overdue: boolean; onComplete?: () => void }) {
+function DoneButton({ task, completed, overdue, onComplete, onReopen }: { task: Task; completed: boolean; overdue: boolean; onComplete?: () => void; onReopen?: () => void }) {
   return (
     <button
       type="button"
-      disabled={completed || !onComplete}
-      onClick={onComplete}
-      aria-label={completed ? "Done" : `Mark “${task.title}” done`}
-      title={completed ? "Done" : "Mark done"}
+      disabled={completed ? !onReopen : !onComplete}
+      onClick={completed ? onReopen : onComplete}
+      aria-label={completed ? (onReopen ? `Reopen “${task.title}”` : "Done") : `Mark “${task.title}” done`}
+      title={completed ? (onReopen ? "Reopen" : "Done") : "Mark done"}
       className={cn(
         "group/done relative flex size-6 shrink-0 items-center justify-center rounded-full text-white transition-colors duration-150 enabled:cursor-pointer disabled:cursor-default",
         "before:absolute before:-inset-2.5 before:content-[''] [@media(pointer:fine)]:before:-inset-1",
@@ -146,6 +146,7 @@ function ActionTask({
   onComplete,
   onOpen,
   onRemind,
+  onReopen,
   canComplete = false,
   comments = 0,
   onAssign,
@@ -170,6 +171,7 @@ function ActionTask({
   onComplete?: (task: Task, via?: "swipe") => void;
   onOpen: (task: Task) => void;
   onRemind?: (task: Task) => void;
+  onReopen?: (task: Task) => void;
   canComplete?: boolean;
   comments?: number;
   onAssign?: (task: Task, ownerId: string) => void;
@@ -186,6 +188,7 @@ function ActionTask({
   const swipeDone = canComplete && onComplete ? () => onComplete(task, "swipe") : undefined;
   const concluding = Boolean(outcome && expanded && outcomeHandlers);
   const remind = canComplete && onRemind ? () => onRemind(task) : undefined;
+  const reopen = completed && onReopen && canChangeTaskAs(viewer, task) ? () => onReopen(task) : undefined;
   const open = () => onOpen(task);
   const assigning: TaskAssigning | undefined = onAssign
     ? { members, viewerId: viewer.id, tagged, canAssign, pending: assignPending, onAssign: (ownerId) => onAssign(task, ownerId) }
@@ -193,7 +196,7 @@ function ActionTask({
   const overdue = isTaskOverdue(task, now);
   const due = dueBadge ? { kind: taskDueState(task.dueAt, now).kind, label: taskDueLabel(task, now) } : null;
   const canChange = canChangeTaskAs(viewer, task);
-  const details = useTaskDetails(task, canChange, expanded);
+  const details = useTaskDetails(task, canChange, expanded, viewer.id);
   const flushDetails = useRef(details.flush);
   const wasExpanded = useRef(expanded);
   useEffect(() => {
@@ -307,7 +310,7 @@ function ActionTask({
       >
         <div className={cn("flex items-start gap-2.5 px-2.5 py-2.5 @xl:min-h-11 @xl:py-1.5", expanded ? "@xl:items-start @xl:pt-3" : "@xl:items-center")}>
           <span className={cn("flex", expanded && "@xl:mt-px")}>
-            <DoneButton task={task} completed={completed} overdue={overdue} onComplete={complete} />
+            <DoneButton task={task} completed={completed} overdue={overdue} onComplete={complete} onReopen={reopen} />
           </span>
           {expanded ? (
             <div className="flex min-w-0 flex-1 items-start gap-2">
@@ -426,6 +429,11 @@ function ActionTask({
                       <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="hit max-sm:flex-1">
                         Open
                       </Button>
+                      {reopen && (
+                        <Button variant="secondary" size="md" onClick={reopen} className="hit max-sm:flex-1">
+                          Reopen
+                        </Button>
+                      )}
                       {complete && !completed && (
                         <Button variant="secondary" size="md" onClick={complete} shortcut={keyboard ? ["E"] : undefined} className="hit max-sm:flex-1">
                           <CheckIcon aria-hidden className="size-3.5" />

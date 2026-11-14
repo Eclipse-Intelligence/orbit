@@ -19,7 +19,7 @@ import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLink
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
 import type { LinkCandidate } from "@/lib/crm/task-links";
 import { TaskRecordLink } from "@/components/crm/task-workspace";
-import { saveTaskDetailsAction, type TaskDetails } from "@/app/(crm)/discussions";
+import { saveTaskDetailsAction, type SavedTiming, type TaskDetails } from "@/app/(crm)/discussions";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { reminderLabel } from "@/lib/crm/reminder-options";
 import { taskSnoozeChoices } from "@/lib/crm/task-snooze";
@@ -27,7 +27,7 @@ import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
-import { padDueHasTime } from "@/lib/task-pad";
+import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { durationLabel, localInstant } from "@/lib/crm/task-time";
 import { taskDueLabel } from "@/lib/crm/task-views";
@@ -132,6 +132,14 @@ export function dueValue(task: Pick<Task, "dueAt" | "dueDate" | "dueHasTime">) {
   return task.dueHasTime ? dateTimeInputValue(task.dueAt) : (task.dueDate ?? dateTimeInputValue(task.dueAt).slice(0, 10));
 }
 
+function asksForTime(write: TaskDetails) {
+  return Boolean(write.dueAt) || (write.remindMinutes !== undefined && write.remindMinutes !== null);
+}
+
+function touchesTiming(write: TaskDetails) {
+  return write.dueAt !== undefined || write.dueDate !== undefined || write.remindMinutes !== undefined || write.durationMinutes !== undefined;
+}
+
 function sourceOf(task: Task): Source {
   return {
     title: task.title,
@@ -161,7 +169,7 @@ function dropDraft(id: string, field: "title" | "text") {
   if (draft.title === undefined && draft.text === undefined) drafts.delete(id);
 }
 
-export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
+export function useTaskDetails(task: Task, canChange: boolean, shown = true, viewerId: string | null = null) {
   const router = useRouter();
   const composer = useComposer();
   const source = sourceOf(task);
@@ -175,6 +183,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const sent = useRef({ title: source.title, text: source.text });
   const visible = useRef(shown);
   useEffect(() => {
@@ -202,8 +211,17 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
     sent.current = { title: source.title, text: source.text };
   }, [source.title, source.text]);
 
+  function settle(timing: SavedTiming) {
+    const next = { due: dueValue(timing), reminder: timing.remindMinutes, duration: timing.durationMinutes };
+    setDue(next.due);
+    setReminder(next.reminder);
+    setDuration(next.duration);
+    setSeen((current) => ({ ...current, ...next }));
+  }
+
   async function save(write: TaskDetails) {
     setError(null);
+    setNotice(null);
     let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
     try {
       result = await saveTaskDetailsAction(task.id, write);
@@ -214,6 +232,14 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
       setError(result.error);
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
       return false;
+    }
+    if (result.saved && touchesTiming(write)) {
+      settle(result.saved);
+      if (asksForTime(write) && result.saved.dueAt && !result.saved.dueHasTime) {
+        const note = dayOnlyNote(task.ownerName);
+        setNotice(note);
+        if (!visible.current) composer.showToast({ message: note });
+      }
     }
     setSaved(true);
     window.setTimeout(() => setSaved(false), 2000);
@@ -340,6 +366,8 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true) {
   return {
     task,
     canChange,
+    ownerSetsTime: ownerSetsTime(viewerId, task.ownerId) && !task.dueHasTime,
+    notice,
     title,
     setTitle,
     text,
@@ -697,6 +725,7 @@ function scheduleTask(details: TaskDetailsState) {
 function ReminderChip({ details, id }: { details: TaskDetailsState; id: string }) {
   const { timed } = dueState(details);
   if (!details.due) return null;
+  if (!timed && details.ownerSetsTime) return <span className="caption-style text-subtle">{ownerTimeLine(details.task.ownerName)}</span>;
   if (!timed) {
     return <ReminderTimePrompt title={details.task.title} day={details.due.slice(0, 10)} onSave={(time) => details.remindAt(time)} className={cn(TASK_CHIP, TOUCH, "text-subtle")} />;
   }
@@ -859,7 +888,7 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
 function SavedNote({ details }: { details: TaskDetailsState }) {
   return (
     <span role="status" className="caption-style text-subtle empty:hidden">
-      {details.saved ? "Saved" : ""}
+      {details.notice ?? (details.saved ? "Saved" : "")}
     </span>
   );
 }

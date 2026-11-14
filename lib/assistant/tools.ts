@@ -2707,7 +2707,7 @@ const TOOL_LIST: AssistantTool[] = [
         unread: "Mark unread",
         flag: "Flag",
         unflag: "Remove the flag from",
-        snooze: "Snooze",
+        snooze: "Remind me about",
         remind_if_no_reply: "Remind me if there's no reply to",
       };
       return {

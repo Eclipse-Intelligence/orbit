@@ -31,7 +31,7 @@ export default function RecordTasks({
   limit?: number;
   onCount?: (count: number) => void;
 }) {
-  const { done, message, complete, release, settle, abandon, remind } = useTaskDone(tasks);
+  const { done, message, complete, release, settle, abandon, remind, reopen } = useTaskDone(tasks);
   const concluding = useTaskOutcome({ done, complete, release, settle, abandon, onClosed: concluded, onFailed: restoreOutcome });
   const outcome = concluding.outcome;
   const [now] = useState(() => Date.now());
@@ -192,6 +192,7 @@ export default function RecordTasks({
         tagged={tagged && tagged.id === (panelTask ?? kept)?.id ? tagged.people : []}
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}
+        onReopen={reopen}
         outcome={panelOutcome}
         outcomeHandlers={outcomeHandlers}
       />
