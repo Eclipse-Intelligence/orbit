@@ -77,6 +77,19 @@ async function inActorTransaction<T>(
   }
 }
 
+export async function asAppInActor<T>(db: Db, actor: Actor, fn: () => Promise<T>): Promise<T> {
+  await db.query("reset role");
+  let result: T;
+  try {
+    result = await fn();
+  } catch (error) {
+    await db.query(actorSession(db, actor)).catch(() => undefined);
+    throw error;
+  }
+  await db.query(actorSession(db, actor));
+  return result;
+}
+
 export async function withActor<T>(
   actor: Actor,
   fn: (db: Db) => Promise<T>,

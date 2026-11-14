@@ -661,10 +661,10 @@ export const DOCS_NOT_YOURS = "Only the task's assignee or creator can change it
 
 export async function taskRepeatRefusalFor(actor: UserActor, name: string, args: Args) {
   if (name !== "update_task") return null;
-  const seriesWide =
-    args.repeat !== undefined || args.repeatScope === "all" || args.repeatScope === "following" || (args.skip === true && optionalStr(args.occursOn) !== undefined) || (optionalStr(args.occursOn) !== undefined && args.repeatScope === "this");
-  if (!seriesWide) return null;
-  const reason = await seriesRightsRefusal(actor, { taskId: optionalStr(args.taskId), seriesId: optionalStr(args.seriesId) }).catch(() => null);
+  const seriesWide = args.repeat !== undefined || args.repeatScope === "all" || args.repeatScope === "following";
+  const datePicked = optionalStr(args.occursOn) !== undefined;
+  if (!seriesWide && !datePicked) return null;
+  const reason = await seriesRightsRefusal(actor, { taskId: optionalStr(args.taskId), seriesId: optionalStr(args.seriesId), occursOn: optionalStr(args.occursOn), seriesWide }).catch(() => null);
   return reason ? { error: reason, field: "repeatScope" } : null;
 }
 
@@ -3734,7 +3734,7 @@ const TOOL_LIST: AssistantTool[] = [
           type: "string",
           enum: ["this", "following", "all"],
           description:
-            "Required when the task repeats and you change its time, title, detail, links, assignee, duration or reminder. this: only this date. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope. Ask the user which they mean when it isn't clear.",
+            "Required when the task repeats and you change its time, title, detail, priority, assignee, duration or reminder. Links on the open one apply to every later one without it; this keeps them to this one. this: only this date. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope. Ask the user which they mean when it isn't clear.",
         },
         skip: { type: "boolean", description: "True skips this date of a repeating task: the open one moves to its next date, or the upcoming date in occursOn is left out. Send it on its own." },
         occursOn: { type: "string", description: "An upcoming date of a repeating task (YYYY-MM-DD, from its repeat.next or the pattern), to change or skip just that date. Send with taskId or seriesId." },

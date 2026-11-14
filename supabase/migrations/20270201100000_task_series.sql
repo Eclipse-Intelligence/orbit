@@ -50,30 +50,40 @@ create index if not exists task_series_company_idx on crm.task_series (company_i
 create index if not exists task_series_contact_idx on crm.task_series (contact_id) where contact_id is not null;
 create index if not exists task_series_opportunity_idx on crm.task_series (opportunity_id) where opportunity_id is not null;
 
-alter table crm.task_series drop constraint if exists task_series_rule_shape;
-alter table crm.task_series add constraint task_series_rule_shape check (
-    jsonb_typeof(rule) = 'object'
-    and rule ->> 'freq' in ('daily', 'weekly', 'monthly', 'yearly')
-    and (rule - 'freq' - 'interval' - 'weekdays' - 'monthDay' - 'monthWeek') = '{}'::jsonb
-    and case when jsonb_typeof(rule -> 'interval') = 'number' then (rule ->> 'interval') ~ '^[1-9][0-9]?$' else false end
-    and case
-      when rule ->> 'freq' = 'weekly' then
-        jsonb_typeof(rule -> 'weekdays') = 'array'
-        and jsonb_array_length(rule -> 'weekdays') between 1 and 7
-        and (rule -> 'weekdays') <@ '["mo", "tu", "we", "th", "fr", "sa", "su"]'::jsonb
-        and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
-      when rule ->> 'freq' = 'monthly' then
-        not (rule ? 'weekdays')
-        and not (rule ? 'monthDay' and rule ? 'monthWeek')
-        and (not (rule ? 'monthDay') or (jsonb_typeof(rule -> 'monthDay') = 'number' and (rule ->> 'monthDay') in ('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31')))
-        and (not (rule ? 'monthWeek') or (
-          jsonb_typeof(rule -> 'monthWeek') = 'object'
-          and (rule -> 'monthWeek' ->> 'n') in ('1', '2', '3', '4', '-1')
-          and (rule -> 'monthWeek' ->> 'weekday') in ('mo', 'tu', 'we', 'th', 'fr', 'sa', 'su')
-        ))
-      else not (rule ? 'weekdays') and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
-    end
-  );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'task_series_rule_shape' and conrelid = 'crm.task_series'::regclass
+      and pg_get_constraintdef(oid) like '%monthWeek%weekday%'
+  ) then
+    alter table crm.task_series drop constraint if exists task_series_rule_shape;
+    alter table crm.task_series add constraint task_series_rule_shape check (
+        jsonb_typeof(rule) = 'object'
+        and rule ->> 'freq' in ('daily', 'weekly', 'monthly', 'yearly')
+        and (rule - 'freq' - 'interval' - 'weekdays' - 'monthDay' - 'monthWeek') = '{}'::jsonb
+        and case when jsonb_typeof(rule -> 'interval') = 'number' then (rule ->> 'interval') ~ '^[1-9][0-9]?$' else false end
+        and case
+          when rule ->> 'freq' = 'weekly' then
+            jsonb_typeof(rule -> 'weekdays') = 'array'
+            and jsonb_array_length(rule -> 'weekdays') between 1 and 7
+            and (rule -> 'weekdays') <@ '["mo", "tu", "we", "th", "fr", "sa", "su"]'::jsonb
+            and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
+          when rule ->> 'freq' = 'monthly' then
+            not (rule ? 'weekdays')
+            and not (rule ? 'monthDay' and rule ? 'monthWeek')
+            and (not (rule ? 'monthDay') or (jsonb_typeof(rule -> 'monthDay') = 'number' and (rule ->> 'monthDay') in ('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31')))
+            and (not (rule ? 'monthWeek') or (
+              jsonb_typeof(rule -> 'monthWeek') = 'object'
+              and (rule -> 'monthWeek' ->> 'n') in ('1', '2', '3', '4', '-1')
+              and (rule -> 'monthWeek' ->> 'weekday') in ('mo', 'tu', 'we', 'th', 'fr', 'sa', 'su')
+            ))
+          else not (rule ? 'weekdays') and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
+        end
+      );
+  end if;
+end
+$$;
 
 alter table crm.task_series enable row level security;
 alter table crm.task_series force row level security;
@@ -497,7 +507,10 @@ begin
     return new;
   end if;
   select * into v_series from crm.task_series s where s.id = new.series_id;
-  if not found or v_series.workspace_id <> new.workspace_id or v_series.archived_at is not null then
+  if not found then
+    raise exception 'You can''t add to that repeating task.' using errcode = '42501';
+  end if;
+  if v_series.workspace_id <> new.workspace_id or v_series.archived_at is not null then
     raise exception 'That repeating task isn''t in this workspace.' using errcode = '42501';
   end if;
   if tg_op = 'UPDATE' and (
@@ -617,48 +630,258 @@ create trigger tasks_leave_series
   when (old.series_id is not null and old.series_id is distinct from new.series_id)
   execute function private.tasks_leave_series();
 
-create or replace function private.owns_series(p_series uuid)
-returns boolean
-language sql
-stable
+drop policy if exists tasks_select_series_owner on crm.tasks;
+drop policy if exists tasks_update_series_owner on crm.tasks;
+drop function if exists private.owns_series(uuid);
+
+create or replace function private.series_write_occurrence(p_actor uuid, p_series uuid, p_task uuid, p_set jsonb)
+returns jsonb
+language plpgsql
 security definer
 set search_path = ''
 as $$
-  select exists (
-    select 1 from crm.task_series s
-    where s.id = p_series
-      and (
-        (
-          (select private.session_user_id()) is not null
-          and (s.owner_id = (select private.session_user_id()) or s.created_by_user_id = (select private.session_user_id()))
-        )
-        or (
-          nullif(current_setting('app.agent_id', true), '')::uuid is not null
-          and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
-        )
-      )
-  )
+declare
+  v_series crm.task_series%rowtype;
+  v_task crm.tasks%rowtype;
+  v_owner uuid;
+begin
+  select * into v_series from crm.task_series s where s.id = p_series for update;
+  if not found
+    or not exists (select 1 from crm.workspace_members m where m.workspace_id = v_series.workspace_id and m.user_id = p_actor)
+    or not (v_series.owner_id is not distinct from p_actor or v_series.created_by_user_id is not distinct from p_actor)
+    or p_actor is null then
+    raise exception 'Only the repeating task''s assignee or creator can change every date.' using errcode = '42501';
+  end if;
+  select * into v_task from crm.tasks t where t.id = p_task and t.series_id = p_series and t.workspace_id = v_series.workspace_id for update;
+  if not found then
+    raise exception 'That task isn''t part of this repeating task.' using errcode = '42501';
+  end if;
+  if p_set ? 'owner_id' and p_set ->> 'owner_id' is not null then
+    select m.user_id into v_owner from crm.workspace_members m where m.workspace_id = v_series.workspace_id and m.user_id = (p_set ->> 'owner_id')::uuid;
+    if v_owner is null then
+      raise exception 'Choose an assignee in this workspace.' using errcode = '23514';
+    end if;
+  end if;
+  update crm.tasks t set
+    title = case when p_set ? 'title' then p_set ->> 'title' else t.title end,
+    description = case when p_set ? 'description' then p_set ->> 'description' else t.description end,
+    priority = case when p_set ? 'priority' then p_set ->> 'priority' else t.priority end,
+    due_at = case when p_set ? 'due_at' then (p_set ->> 'due_at')::timestamptz else t.due_at end,
+    due_has_time = case when p_set ? 'due_has_time' then (p_set ->> 'due_has_time')::boolean else t.due_has_time end,
+    scheduled_by = case when p_set ? 'scheduled_by' then p_set ->> 'scheduled_by' else t.scheduled_by end,
+    duration_minutes = case when p_set ? 'duration_minutes' then (p_set ->> 'duration_minutes')::integer else t.duration_minutes end,
+    remind_minutes = case when p_set ? 'remind_minutes' then (p_set ->> 'remind_minutes')::integer else t.remind_minutes end,
+    owner_id = case when p_set ? 'owner_id' then (p_set ->> 'owner_id')::uuid else t.owner_id end,
+    company_id = case when p_set ? 'company_id' then (p_set ->> 'company_id')::uuid else t.company_id end,
+    contact_id = case when p_set ? 'contact_id' then (p_set ->> 'contact_id')::uuid else t.contact_id end,
+    opportunity_id = case when p_set ? 'opportunity_id' then (p_set ->> 'opportunity_id')::uuid else t.opportunity_id end,
+    occurs_on = case when p_set ? 'occurs_on' then (p_set ->> 'occurs_on')::date else t.occurs_on end,
+    archived_at = case when p_set ? 'archived' then case when (p_set ->> 'archived')::boolean then coalesce(t.archived_at, now()) else null end else t.archived_at end,
+    series_id = case when (p_set ->> 'detach')::boolean is true then null else t.series_id end
+  where t.id = p_task;
+  return to_jsonb(v_task);
+end;
 $$;
 
-revoke all on function private.owns_series(uuid) from public;
-grant execute on function private.owns_series(uuid) to authenticated, crm_agent;
-
-drop policy if exists tasks_select_series_owner on crm.tasks;
-create policy tasks_select_series_owner on crm.tasks
-  for select to authenticated, crm_agent
-  using (series_id is not null and private.owns_series(series_id));
-
-drop policy if exists tasks_update_series_owner on crm.tasks;
-create policy tasks_update_series_owner on crm.tasks
-  for update to authenticated, crm_agent
-  using (series_id is not null and private.owns_series(series_id))
-  with check (series_id is null or private.owns_series(series_id));
+revoke all on function private.series_write_occurrence(uuid, uuid, uuid, jsonb) from public;
+grant execute on function private.series_write_occurrence(uuid, uuid, uuid, jsonb) to crm_app;
 
 drop policy if exists tasks_series_binding on crm.tasks;
 create policy tasks_series_binding on crm.tasks
   as restrictive
   for insert to authenticated, crm_agent
   with check (series_id is null or private.series_occurrence_allowed(series_id, workspace_id, created_by_user_id, created_by_agent_id));
+
+create or replace function private.team_remove_records(
+  p_workspace uuid,
+  p_actor uuid,
+  p_user uuid,
+  p_source text default null,
+  p_operation text default 'remove_member',
+  p_source_url text default null
+)
+returns table (record_kind text, record_id uuid)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_role text := private.team_role(p_workspace, p_actor);
+  target_role text := private.team_role(p_workspace, p_user);
+  next_home uuid;
+  handed jsonb := '[]'::jsonb;
+  owner_only jsonb := jsonb_build_object('ownerId', p_user);
+  owner_now jsonb := jsonb_build_object('ownerId', p_actor);
+begin
+  if coalesce(actor_role, '') not in ('owner', 'admin') then
+    raise exception 'Only the owner or an admin can remove people.' using errcode = '42501';
+  end if;
+  if target_role is null then
+    raise exception 'They are not in this workspace.' using errcode = '22023';
+  end if;
+  if target_role = 'owner' then
+    raise exception 'The owner can''t be removed.' using errcode = '42501';
+  end if;
+  if p_user = p_actor then
+    raise exception 'You can''t remove yourself.' using errcode = '42501';
+  end if;
+  if target_role = 'admin' and actor_role <> 'owner' then
+    raise exception 'Only the owner can remove an admin.' using errcode = '42501';
+  end if;
+  select m.workspace_id into next_home
+  from crm.workspace_members m
+  where m.user_id = p_user and m.workspace_id <> p_workspace
+  order by m.created_at, m.workspace_id
+  limit 1;
+
+  with moved as (
+    update crm.companies c set owner_id = p_actor
+    where c.workspace_id = p_workspace and c.owner_id = p_user
+    returning c.id
+  )
+  select handed || coalesce(jsonb_agg(jsonb_build_object('kind', 'company', 'id', moved.id, 'changes', private.handover_changes(owner_only, owner_now, array['ownerId']))), '[]'::jsonb)
+  into handed from moved;
+
+  with moved as (
+    update crm.contacts c set owner_id = p_actor
+    where c.workspace_id = p_workspace and c.owner_id = p_user
+    returning c.id
+  )
+  select handed || coalesce(jsonb_agg(jsonb_build_object('kind', 'contact', 'id', moved.id, 'changes', private.handover_changes(owner_only, owner_now, array['ownerId']))), '[]'::jsonb)
+  into handed from moved;
+
+  with moved as (
+    update crm.opportunities o set owner_id = p_actor
+    where o.workspace_id = p_workspace and o.owner_id = p_user
+    returning o.id
+  )
+  select handed || coalesce(jsonb_agg(jsonb_build_object('kind', 'opportunity', 'id', moved.id, 'changes', private.handover_changes(owner_only, owner_now, array['ownerId']))), '[]'::jsonb)
+  into handed from moved;
+
+  with prior as (
+    select t.id, t.owner_id, t.due_at, t.due_has_time, t.scheduled_by, t.remind_minutes
+    from crm.tasks t
+    where t.workspace_id = p_workspace
+      and (t.owner_id = p_user or (t.owner_id is null and t.created_by_user_id = p_user))
+    for update
+  ),
+  moved as (
+    update crm.tasks t
+      set owner_id = p_actor,
+          due_at = case
+            when t.due_has_time and t.due_at is not null
+            then date_trunc('day', t.due_at at time zone 'Europe/London') at time zone 'Europe/London'
+            else t.due_at
+          end,
+          scheduled_by = case when t.due_has_time then null else t.scheduled_by end,
+          remind_minutes = case when t.due_has_time then null else t.remind_minutes end,
+          due_has_time = false
+    from prior
+    where t.id = prior.id
+    returning t.id, t.due_at, t.scheduled_by, t.remind_minutes
+  )
+  select handed || coalesce(jsonb_agg(jsonb_build_object(
+    'kind', 'task',
+    'id', moved.id,
+    'changes', private.handover_changes(
+      jsonb_build_object(
+        'ownerId', prior.owner_id,
+        'dueAt', private.handover_instant(prior.due_at),
+        'dueHasTime', coalesce(prior.due_has_time and prior.due_at is not null, false),
+        'scheduledBy', prior.scheduled_by,
+        'remindMinutes', prior.remind_minutes
+      ),
+      jsonb_build_object(
+        'ownerId', p_actor,
+        'dueAt', private.handover_instant(moved.due_at),
+        'dueHasTime', false,
+        'scheduledBy', moved.scheduled_by,
+        'remindMinutes', moved.remind_minutes
+      ),
+      array['ownerId', 'dueAt', 'dueHasTime', 'scheduledBy', 'remindMinutes']
+    )
+  )), '[]'::jsonb)
+  into handed
+  from moved
+  join prior on prior.id = moved.id;
+
+  with moved as (
+    update crm.documents d set owner_id = p_actor
+    where d.workspace_id = p_workspace and d.owner_id = p_user
+    returning d.id
+  )
+  select handed || coalesce(jsonb_agg(jsonb_build_object('kind', 'document', 'id', moved.id, 'changes', private.handover_changes(owner_only, owner_now, array['ownerId']))), '[]'::jsonb)
+  into handed from moved;
+
+  update crm.task_series s set owner_id = p_actor
+  where s.workspace_id = p_workspace and s.owner_id = p_user and s.archived_at is null;
+  update crm.task_series s set created_by_user_id = p_actor
+  where s.workspace_id = p_workspace and s.created_by_user_id = p_user and s.archived_at is null;
+
+  with items as (
+    select item ->> 'kind' as kind, (item ->> 'id')::uuid as id, item -> 'changes' as changes
+    from jsonb_array_elements(handed) as item
+  ),
+  events as (
+    insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, source, source_url, operation, changes)
+    select p_workspace, items.kind || '.updated', items.kind, items.id, 'user', p_actor, p_source, p_source_url, p_operation, items.changes
+    from items
+    returning id, event_type, entity_type, entity_id, changes, created_at
+  )
+  insert into crm.webhook_deliveries (workspace_id, endpoint_id, event_id, event_type, payload)
+  select p_workspace, endpoint.id, events.id, events.event_type, jsonb_build_object(
+    'id', events.id,
+    'type', events.event_type,
+    'createdAt', private.handover_instant(events.created_at),
+    'workspaceId', p_workspace,
+    'entity', jsonb_build_object('type', events.entity_type, 'id', events.entity_id),
+    'actor', jsonb_build_object('type', 'user', 'userId', p_actor, 'agentId', null),
+    'source', p_source,
+    'sourceUrl', p_source_url,
+    'data', events.changes
+  )
+  from events
+  join crm.webhook_endpoints endpoint
+    on endpoint.workspace_id = p_workspace
+   and endpoint.archived_at is null
+   and endpoint.enabled
+   and (events.event_type = any(endpoint.events) or '*' = any(endpoint.events));
+
+  update crm.webhook_endpoints set created_by_user_id = p_actor
+  where workspace_id = p_workspace and created_by_user_id = p_user;
+
+  if next_home is not null then
+    perform private.move_personal_rows(p_user, p_workspace, next_home);
+  else
+    update crm.mailbox_connections
+      set status = 'disconnected', refresh_token = null, access_token = null, access_token_expires_at = null
+      where workspace_id = p_workspace and user_id = p_user;
+    update crm.calendar_accounts
+      set status = 'disconnected', refresh_token = null, access_token = null, access_token_expires_at = null
+      where workspace_id = p_workspace and user_id = p_user;
+    delete from crm.ai_accounts where workspace_id = p_workspace and user_id = p_user;
+    update crm.ai_companions set revoked_at = now()
+      where workspace_id = p_workspace and user_id = p_user and revoked_at is null;
+  end if;
+  delete from crm.granola_keys where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.readwise_keys where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.recall_keys where workspace_id = p_workspace and user_id = p_user;
+  update crm.personal_tokens set revoked_at = now()
+    where workspace_id = p_workspace and user_id = p_user and revoked_at is null;
+  update crm.agent_mail_messages
+    set status = 'failed', status_reason = 'They left the workspace.', advancing_until = null
+    where workspace_id = p_workspace and user_id = p_user and status in ('received', 'working') and replied_at is null;
+  delete from crm.agent_mail_threads where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.workspace_members where workspace_id = p_workspace and user_id = p_user;
+
+  return query
+    select item ->> 'kind', (item ->> 'id')::uuid
+    from jsonb_array_elements(handed) as item;
+end;
+$$;
+
+revoke all on function private.team_remove_records(uuid, uuid, uuid, text, text, text) from public;
+grant execute on function private.team_remove_records(uuid, uuid, uuid, text, text, text) to crm_app;
 
 reset lock_timeout;
 
