@@ -19,6 +19,7 @@ import {
   backspaceKeeps,
   mergeMarks,
   padReading,
+  readingToSave,
   nameMarks,
   padConfirmLine,
   padFits,
@@ -502,6 +503,7 @@ export default function TaskPad({
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
   const [chosenDuration, setDuration] = useState<number | null>(null);
   const [askingTime, setAskingTime] = useState(false);
+  const [addedTime, setAddedTime] = useState<{ date: string; time: string } | null>(null);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
   const startContact = (): Override<PadContact | null> => (initialContact ? { set: true, value: { ...initialContact, company: null } } : unset());
   const [company, setCompany] = useState<Override<PadRecord | null>>(startCompany);
@@ -532,14 +534,25 @@ export default function TaskPad({
   const assignable = Boolean(viewerId) && members.length > 1;
   const assignee = members.find((member) => member.id === owner) ?? null;
   const forTeammate = assignable && ownerSetsTime(viewerId, owner);
-  const read = derive(aiFits ? ai.value : null);
-  const { title, chosenDue, chosenReminder, finalDue, finalReminder, duration, needsTime, dateMarks, phrase } = read;
+  const aiValue = aiFits ? ai.value : null;
+  const read = derive(aiValue);
+  const { title, chosenDue, chosenReminder, finalDue, finalReminder, duration, needsTime, dateMarks, phrase, key } = read;
+  const producedKey = padReading(text, parsed, aiValue, []).key;
+  if (keptAsText.length > 0 && !keptAsText.includes(producedKey)) setKeptAsText([]);
+  const fromAi = aiValue !== null && key !== "";
+  const aiShown = useRef<{ id: string; at: number } | null>(null);
+  const aiShownId = fromAi ? `${text}\u0000${key}` : null;
+  useEffect(() => {
+    if (aiShownId === null) aiShown.current = null;
+    else if (aiShown.current?.id !== aiShownId) aiShown.current = { id: aiShownId, at: Date.now() };
+  }, [aiShownId]);
 
   function keepAsText() {
-    if (!phrase) return;
-    setKeptAsText((current) => (current.includes(phrase) ? current : [...current, phrase]));
+    if (!key) return;
+    setKeptAsText((current) => (current.includes(key) ? current : [...current, key]));
     setDue(unset());
     setReminder(unset());
+    setAddedTime(null);
     setJustKept(true);
   }
 
@@ -551,7 +564,7 @@ export default function TaskPad({
     const field = input.current;
     if (!field) return;
     const onBeforeInput = (event: InputEvent) => {
-      if (event.inputType !== "deleteContentBackward") return;
+      if (event.inputType !== "deleteContentBackward" || event.isComposing || !event.cancelable) return;
       const { phrase: current, dateMarks: shownMarks, keepAsText: keep } = latestKeep.current;
       if (!current || !backspaceKeeps(shownMarks, field.selectionStart, field.selectionEnd)) return;
       event.preventDefault();
@@ -582,8 +595,9 @@ export default function TaskPad({
 
   function derive(value: PadAiParse | null) {
     const shown = padReading(text, parsed, value, keptAsText);
-    const confirmed = due.set && shown.phrase ? padReading(text, parsed, value, [...keptAsText, shown.phrase]) : shown;
-    const chosenDue = due.set ? due.value : confirmed.due;
+    const confirmed = due.set && shown.key ? padReading(text, parsed, value, [...keptAsText, shown.key]) : shown;
+    const timed = addedTime && confirmed.due === addedTime.date ? `${addedTime.date}T${addedTime.time}` : confirmed.due;
+    const chosenDue = due.set ? due.value : timed;
     const autoReminder = confirmed.remindMinutes;
     const chosenReminder = chosenDue ? (reminder.set ? reminder.value : autoReminder) : null;
     const finalDue = forTeammate && chosenDue ? chosenDue.slice(0, 10) : chosenDue;
@@ -592,6 +606,7 @@ export default function TaskPad({
       title: confirmed.title,
       dateMarks: confirmed.marks,
       phrase: confirmed.phrase,
+      key: confirmed.key,
       chosenDue,
       chosenReminder,
       finalDue,
@@ -825,6 +840,7 @@ export default function TaskPad({
     setReminder(unset());
     setDuration(null);
     setAskingTime(false);
+    setAddedTime(null);
     setCompany(startCompany());
     setContact(startContact());
     setOpportunity(unset());
@@ -859,7 +875,7 @@ export default function TaskPad({
       return;
     }
     setBusy(true);
-    const saving = read;
+    const saving = readingToSave(read, derive(null), fromAi ? { shownAt: aiShown.current?.id === aiShownId ? aiShown.current.at : null } : null);
     setError(null);
     setWarning(null);
     const fresh = await freshDetection();
@@ -1073,7 +1089,8 @@ export default function TaskPad({
       onChange={(value) => setReminder({ set: true, value })}
       onTime={(time) => {
         if (!finalDue) return;
-        setDue({ set: true, value: `${finalDue.slice(0, 10)}T${time}` });
+        if (due.set) setDue({ set: true, value: `${finalDue.slice(0, 10)}T${time}` });
+        else setAddedTime({ date: finalDue.slice(0, 10), time });
         setReminder({ set: true, value: finalReminder ?? 0 });
       }}
       onNeedDue={() => document.getElementById(`${id}-due`)?.click()}
@@ -1195,7 +1212,6 @@ export default function TaskPad({
           onChange={(event) => {
             setText(event.target.value);
             setJustKept(false);
-            setKeptAsText((current) => (current.some((kept) => !event.target.value.includes(kept)) ? current.filter((kept) => event.target.value.includes(kept)) : current));
             setError(null);
             forgetSideClears();
             if (!event.target.value.trim()) {
@@ -1203,6 +1219,7 @@ export default function TaskPad({
               setAi(null);
               setDue(unset());
               setReminder(unset());
+              setAddedTime(null);
               setCompany(startCompany());
               setContact(startContact());
               setOpportunity(unset());

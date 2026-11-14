@@ -528,8 +528,9 @@ for (const [device, viewport] of [
     const saved = await localAdmin("check what Add task saved: an agent only sees tasks it created");
     const savedTask = async (stamp) =>
       saved ? ((await saved.query("select title, due_at from crm.tasks where title like $1 order by created_at desc limit 1", [`%${stamp}%`]).catch(() => null))?.rows[0] ?? null) : null;
-    const keepStamp = `${device}${Date.now().toString(36)}`;
-    const keepText = `Draft keep ${keepStamp} tomorrow 3pm`;
+    const letters = (value) => value.toString(36).replace(/\d/g, (digit) => "qrstuvwxyz"[Number(digit)]);
+    const keepStamp = `zq${letters(Date.now())}`;
+    const keepText = `${keepStamp} keep tomorrow 3pm`;
     await pad.tap();
     await pad.fill(keepText);
     await page.waitForTimeout(700);
@@ -547,15 +548,15 @@ for (const [device, viewport] of [
       await pad.press("Enter");
       await page.waitForTimeout(2500);
       const kept = await savedTask(keepStamp);
-      if (saved) check(`${device} Keep as text saves the words with no date`, kept?.title === keepText && kept?.due_at === null, JSON.stringify(kept));
+      check(`${device} Keep as text saves the words with no date`, Boolean(saved) && kept?.title === keepText && kept?.due_at === null, saved ? JSON.stringify(kept) : "set DATABASE_ADMIN_URL to a local database");
     }
-    const pendingStamp = `${device}p${Date.now().toString(36)}`;
-    const pendingText = `Draft pending ${pendingStamp} at 3`;
+    const pendingStamp = `zp${letters(Date.now())}`;
+    const pendingText = `${pendingStamp} pending at 3`;
     await pad.fill(pendingText);
     await pad.press("Enter");
     await page.waitForTimeout(2500);
     const pending = await savedTask(pendingStamp);
-    if (saved) check(`${device} Enter on an unconfirmed reading saves the text as typed`, pending?.title === pendingText && pending?.due_at === null, JSON.stringify(pending));
+    check(`${device} Enter on an unconfirmed reading saves the text as typed`, Boolean(saved) && pending?.title === pendingText && pending?.due_at === null, saved ? JSON.stringify(pending) : "set DATABASE_ADMIN_URL to a local database");
     if (saved) await saved.query("update crm.tasks set archived_at = now() where title like $1 or title like $2", [`%${keepStamp}%`, `%${pendingStamp}%`]).catch(() => null);
     await pad.fill("");
     await page.waitForTimeout(300);

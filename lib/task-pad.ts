@@ -226,47 +226,72 @@ function debris(text: string, spans: Span[], strict = false) {
   });
 }
 
+const GLUE = String.raw`(?:[,;:]|[-–—](?=\s|$)|\band\b)`;
+const GLUE_GAP = new RegExp(String.raw`^(?:\s|${GLUE})*$`, "i");
+const GLUE_BEFORE = new RegExp(String.raw`(?:\s*${GLUE})+\s*$`, "i");
+const ONLY_GLUE = new RegExp(String.raw`^\s*(?:${GLUE}\s*)*$`, "i");
+const ENDING = new RegExp(String.raw`^(?:\s|[,;:.!…]|[-–—]|\band\b)*$`, "i");
+const SEPARATOR_AFTER = /^\s*(?:[,;:]|[-–—](?=\s))/;
+
+function trimSpan(text: string, span: Span): Span {
+  const lead = /^\s*/.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
+  const tail = /\s*$/.exec(text.slice(span.start + lead, span.end))?.[0].length ?? 0;
+  return { ...span, start: span.start + lead, end: span.end - tail };
+}
+
 function withGlue(text: string, spans: Span[]): Span[] {
-  if (spans.length === 0) return spans;
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
-  const last = sorted[sorted.length - 1];
-  return sorted.map((span) => {
-    if (span !== last) return span;
-    let { start, end } = span;
-    const ending = text.slice(end);
-    if (/^\s*[.!]+\s*$/.test(ending)) end = text.length - (/\s*$/.exec(text)?.[0].length ?? 0);
-    if (/^\s*$/.test(text.slice(end))) {
-      const glue = /(?:\s*,\s*(?:and\s+)?|\s+and\s+)$/i.exec(text.slice(0, start));
-      if (glue && glue.index > 0) start = glue.index + (/^\s*/.exec(glue[0])?.[0].length ?? 0);
+  const sorted: Span[] = [];
+  for (const span of [...spans].sort((a, b) => a.start - b.start).map((span) => trimSpan(text, span))) {
+    if (span.end <= span.start) continue;
+    const last = sorted.at(-1);
+    if (last && span.start < last.end) last.end = Math.max(last.end, span.end);
+    else sorted.push({ ...span });
+  }
+  const runs: Span[][] = [];
+  for (const span of sorted) {
+    const run = runs.at(-1);
+    const previous = run?.at(-1);
+    if (run && previous && GLUE_GAP.test(text.slice(previous.end, span.start))) {
+      previous.end = span.start;
+      run.push(span);
+    } else runs.push([span]);
+  }
+  for (const run of runs) {
+    const first = run[0];
+    const last = run[run.length - 1];
+    const before = text.slice(0, first.start);
+    const after = text.slice(last.end);
+    if (ONLY_GLUE.test(before)) {
+      first.start = before.length - before.trimStart().length;
+      const separator = SEPARATOR_AFTER.exec(after);
+      if (separator && !ENDING.test(after)) last.end += separator[0].length;
     }
-    return { ...span, start, end };
-  });
+    if (ENDING.test(after)) {
+      last.end = text.length - (text.length - text.trimEnd().length);
+      const glue = GLUE_BEFORE.exec(before);
+      if (glue && /\S/.test(before.slice(0, glue.index))) first.start = glue.index + (/^\s*/.exec(glue[0])?.[0].length ?? 0);
+    } else if (/[,;:]\s*$/.test(before) && /^\s*[,;:]/.test(after)) {
+      last.end += /^\s*[,;:]/.exec(after)![0].length;
+    }
+  }
+  return runs.flat().map((span) => trimSpan(text, span)).filter((span) => span.end > span.start);
+}
+
+function typedTitle(text: string) {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function cleanTitle(text: string, spans: Span[]) {
   let result = "";
   let last = 0;
   for (const span of [...spans].sort((a, b) => a.start - b.start)) {
-    if (span.start < last) continue;
-    result += `${text.slice(last, span.start)} `;
-    last = span.end;
+    const piece = text.slice(last, span.start).trim();
+    if (piece) result = !result ? piece : /^[,.;:!?]/.test(piece) ? `${result}${piece}` : `${result} ${piece}`;
+    last = Math.max(last, span.end);
   }
-  result += text.slice(last);
-  let title = result
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.;:!?])/g, "$1")
-    .replace(/[,;:]\s*(?=[,;:.]|$)/g, "")
-    .trim();
-  if (spans.length > 0) {
-    for (let index = 0; index < 3; index += 1) {
-      title = title
-        .replace(/(?:^|\s)(?:and|,)\s*$/i, "")
-        .replace(/^(?:and|,)\s+/i, "")
-        .replace(/[\s,;:-]+$/, "")
-        .trim();
-    }
-  }
-  return capitalise(title);
+  const rest = text.slice(last).trim();
+  if (rest) result = !result ? rest : /^[,.;:!?]/.test(rest) ? `${result}${rest}` : `${result} ${rest}`;
+  return capitalise(typedTitle(result));
 }
 
 function capitalise(title: string) {
@@ -601,25 +626,15 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   const title = cleanTitle(text, glued);
   const docFree = title.replace(DOC_REFERENCE, " ");
   if (new RegExp(`(?<![£$€\\d.]\\s*)(?<!\\b(?:gbp|usd|eur)\\s*)\\b\\d{1,2}\\.[0-5]\\d\\b(?!\\s*(?:gbp|usd|eur)\\b)`, "i").test(docFree) && !/\b(?:v|ver|version|release)\s*\d/i.test(docFree)) ambiguous = true;
-  const marks = glued
-    .filter((span) => span.kind === "when" || due)
-    .map((span) => {
-      const lead = /^\s*/.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
-      const tail = /\s*$/.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
-      return { start: span.start + lead, end: span.end - tail, kind: span.kind } as PadMark;
-    })
-    .filter((mark) => mark.end > mark.start)
-    .sort((a, b) => a.start - b.start);
+  const marks = glued.filter((span) => span.kind === "when" || due).map((span) => ({ start: span.start, end: span.end, kind: span.kind }) as PadMark);
   if (/\?\s*$/.test(readable)) doubt = true;
   const plainTitle = explicitTime ? docFree.replace(/\blunch\b/gi, "") : docFree;
   if (kept.length > 0 && (doubt || !title || LEFTOVER.test(plainTitle) || debris(text, kept))) {
-    return { title: text.replace(/\s+/g, " ").trim(), due: null, remindMinutes: null, durationMinutes: null, unsure: true, marks: marks.filter((mark) => mark.kind === "when"), guess: hardDoubt ? null : due };
+    return { title: typedTitle(text), due: null, remindMinutes: null, durationMinutes: null, unsure: true, marks: marks.filter((mark) => mark.kind === "when"), guess: hardDoubt ? null : due };
   }
   const unsure = ambiguous || doubt || LEFTOVER.test(plainTitle) || BARE_NUMBER_END.test(docFree);
-  const lastEnd = Math.max(0, ...kept.map((span) => span.end));
-  const finished = kept.length > 0 && /^\s*[.!]+\s*$/.test(text.slice(lastEnd)) ? title.replace(/\s*[.!]+$/, "") : title;
   return {
-    title: unsure ? text.replace(/\s+/g, " ").trim() : finished,
+    title: unsure || !due ? typedTitle(text) : title,
     due,
     remindMinutes: due ? found.remind : null,
     durationMinutes: due && found.time ? found.duration : null,
@@ -839,7 +854,7 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
     if (found.length !== 1) return kept;
     if ([...text.matchAll(DOC_REFERENCE)].some((doc) => found[0].index < doc.index + doc[0].length && found[0].index + phrase.length > doc.index)) return kept;
     const start = found[0].index;
-    const span: Span = { start, end: start + phrase.length, kind: "when" };
+    const span: Span = { start, end: start + phrase.length, kind: kind === "remind" ? "reminder" : "when" };
     if (spans.some((other) => span.start < other.end && span.end > other.start)) return kept;
     spans.push(span);
     kinds.push(kind);
@@ -867,14 +882,15 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
   const asksReminder = new RegExp(AI_REMIND, "i").test(said);
   const reminder =
     !asksReminder || answer.remindMinutes === null || !Number.isFinite(answer.remindMinutes) || answer.remindMinutes < 0 ? null : nearestReminder(answer.remindMinutes);
-  const title = cleanTitle(text, spans);
+  const glued = withGlue(text, spans);
+  const title = cleanTitle(text, glued);
   if (!title || debris(text, spans, true)) return kept;
   return {
     title,
     due: answer.due,
     remindMinutes: reminder,
     durationMinutes: time ? duration : null,
-    marks: spans.map((span, index) => ({ start: span.start + lead, end: span.end + lead, kind: kinds[index] === "remind" ? ("reminder" as const) : ("when" as const) })),
+    marks: glued.map((span) => ({ start: span.start + lead, end: span.end + lead, kind: span.kind === "reminder" ? ("reminder" as const) : ("when" as const) })),
   };
 }
 
@@ -891,23 +907,41 @@ export function confirmedReading(parsed: Pick<PadParse, "title" | "due" | "remin
 }
 
 export function readPhrase(text: string, marks: PadMark[]) {
-  return marks
-    .map((mark) => text.slice(mark.start, mark.end).trim())
-    .filter(Boolean)
-    .join(" ");
+  return typedTitle(
+    marks
+      .map((mark) => text.slice(mark.start, mark.end).trim())
+      .filter(Boolean)
+      .join(" "),
+  )
+    .replace(/^(?:[,;:\-–—]\s*|and\s+)+/i, "")
+    .replace(/(?:\s*[,;:.!…\-–—]|\s+and)+$/i, "");
 }
+
+export function readingKey(text: string, marks: PadMark[]) {
+  return marks.map((mark) => `${mark.kind}:${text.slice(mark.start, mark.end)}`).join("\u0000");
+}
+
+export type PadReading = PadAiParse & { phrase: string; key: string };
 
 export function padReading(
   text: string,
   parsed: Pick<PadParse, "title" | "due" | "remindMinutes" | "durationMinutes" | "unsure" | "marks">,
   ai: PadAiParse | null,
   keptAsText: readonly string[],
-): PadAiParse & { phrase: string } {
+): PadReading {
   const reading = confirmedReading(parsed, ai);
   const phrase = readPhrase(text, reading.marks);
-  if (!reading.due || !phrase) return { ...reading, marks: reading.due ? reading.marks : [], phrase: reading.due ? phrase : "" };
-  if (keptAsText.includes(phrase)) return { title: capitalise(text.replace(/\s+/g, " ").trim()), due: null, remindMinutes: null, durationMinutes: null, marks: [], phrase: "" };
-  return { ...reading, phrase };
+  if (!reading.due || !phrase) return { title: typedTitle(text), due: null, remindMinutes: null, durationMinutes: null, marks: [], phrase: "", key: "" };
+  const key = readingKey(text, reading.marks);
+  if (keptAsText.includes(key)) return { title: typedTitle(text), due: null, remindMinutes: null, durationMinutes: null, marks: [], phrase: "", key: "" };
+  return { ...reading, phrase, key };
+}
+
+export const AI_SETTLE_MS = 300;
+
+export function readingToSave<T>(shown: T, asTyped: T, ai: { shownAt: number | null } | null, now = Date.now()): T {
+  if (!ai) return shown;
+  return ai.shownAt !== null && now - ai.shownAt >= AI_SETTLE_MS ? shown : asTyped;
 }
 
 export function backspaceKeeps(marks: PadMark[], caret: number, selectionEnd: number) {

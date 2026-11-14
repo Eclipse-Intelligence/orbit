@@ -8,10 +8,52 @@ import { missingOrFailed, panelTaskFor, stillOpenIds } from "@/lib/task-done";
 import { alertRenderKey, keyboardUp, restingView, shownAlert, typingInto } from "@/lib/reminder-alerts";
 import { draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
 import { applyDraftNews, clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
-import { acceptAiReading as acceptWithMarks, backspaceKeeps, confirmedReading, padReading, parseTaskText, type PadAiParse } from "@/lib/task-pad";
+import { acceptAiReading as acceptWithMarks, AI_SETTLE_MS, backspaceKeeps, confirmedReading, padReading, parseTaskText, readingToSave, type PadAiParse, type PadMark, type PadReading } from "@/lib/task-pad";
 
 const plain = (reading: PadAiParse) => ({ title: reading.title, due: reading.due, remindMinutes: reading.remindMinutes, durationMinutes: reading.durationMinutes });
 const acceptAiReading = (...args: Parameters<typeof acceptWithMarks>) => plain(acceptWithMarks(...args));
+const fixtures = path.join(import.meta.dirname, "fixtures");
+const corpusTitles = () =>
+  ["task-pad-titles.txt", "task-pad-titles-2.txt", "task-pad-titles-3.txt", "task-pad-titles-4.txt", "task-pad-titles-5.txt"]
+    .flatMap((file) => readFileSync(path.join(fixtures, file), "utf8").split("\n"))
+    .filter(Boolean);
+const CORPUS_NOWS: Record<string, string> = {
+  monAM: "2026-11-16T09:15:00Z",
+  friPM: "2026-11-20T18:30:00Z",
+  sunNight: "2026-11-22T23:30:00Z",
+  satBeforeSpring: "2027-03-27T20:00:00Z",
+  sunSpring: "2027-03-28T00:30:00Z",
+  satBeforeAutumn: "2026-10-24T19:00:00Z",
+  sunAutumn: "2026-10-25T00:30:00Z",
+  sat14: "2026-11-14T10:30:00Z",
+  wed18: "2026-11-18T14:00:00Z",
+  dec31: "2026-12-31T16:00:00Z",
+};
+const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
+function withoutMarks(text: string, marks: PadMark[]) {
+  let result = "";
+  let last = 0;
+  for (const mark of [...marks].sort((a, b) => a.start - b.start)) {
+    const piece = text.slice(last, mark.start).trim();
+    if (piece) result = !result ? piece : /^[,.;:!?]/.test(piece) ? result + piece : `${result} ${piece}`;
+    last = mark.end;
+  }
+  const rest = text.slice(last).trim();
+  if (rest) result = !result ? rest : /^[,.;:!?]/.test(rest) ? result + rest : `${result} ${rest}`;
+  return collapse(result);
+}
+const lowerFirst = (title: string) => title.charAt(0).toLowerCase() + title.slice(1);
+function holdsTheRule(text: string, reading: PadReading, keep: (key: string) => PadReading, label: string) {
+  if (!reading.due) {
+    assert.equal(reading.title, collapse(text), `${label}: no date, so the title is the text as typed`);
+    assert.deepEqual(reading.marks, [], label);
+    return;
+  }
+  assert.ok(reading.marks.length > 0 && reading.key, `${label}: a date is only saved with words lit up`);
+  assert.equal(lowerFirst(reading.title), lowerFirst(withoutMarks(text, reading.marks)), `${label}: the title is the text minus the lit words`);
+  const kept = keep(reading.key);
+  assert.deepEqual({ title: kept.title, due: kept.due, marks: kept.marks }, { title: collapse(text), due: null, marks: [] }, `${label}: Keep as text saves the text as typed`);
+}
 
 describe("task area UI", () => {
   it("keeps a failed due date's error until the due date itself saves", () => {
@@ -187,23 +229,10 @@ describe("task area UI", () => {
   });
 
   it("either reads a title from the review corpus with confidence and gets it right, or hands the whole text to the AI", () => {
-    const nows: Record<string, string> = {
-      monAM: "2026-11-16T09:15:00Z",
-      friPM: "2026-11-20T18:30:00Z",
-      sunNight: "2026-11-22T23:30:00Z",
-      satBeforeSpring: "2027-03-27T20:00:00Z",
-      sunSpring: "2027-03-28T00:30:00Z",
-      satBeforeAutumn: "2026-10-24T19:00:00Z",
-      sunAutumn: "2026-10-25T00:30:00Z",
-      sat14: "2026-11-14T10:30:00Z",
-      wed18: "2026-11-18T14:00:00Z",
-      dec31: "2026-12-31T16:00:00Z",
-    };
-    const fixtures = path.join(import.meta.dirname, "fixtures");
-    const titles = ["task-pad-titles.txt", "task-pad-titles-2.txt", "task-pad-titles-3.txt", "task-pad-titles-4.txt", "task-pad-titles-5.txt"].flatMap((file) => readFileSync(path.join(fixtures, file), "utf8").split("\n")).filter(Boolean);
+    const titles = corpusTitles();
     const confident = JSON.parse(readFileSync(path.join(fixtures, "task-pad-confident.json"), "utf8")) as Record<string, Record<string, string>>;
     assert.ok(titles.length >= 930);
-    for (const [moment, iso] of Object.entries(nows)) {
+    for (const [moment, iso] of Object.entries(CORPUS_NOWS)) {
       for (const text of titles) {
         const parsed = parseTaskText(text, new Date(iso));
         const label = `${moment}: ${text}`;
@@ -260,7 +289,7 @@ describe("task area UI", () => {
     assert.equal(shown.phrase, "tomorrow 3pm");
     assert.deepEqual(shown.marks.map((mark) => typed.slice(mark.start, mark.end)), ["tomorrow", "3pm"]);
     assert.deepEqual({ title: shown.title, due: shown.due }, { title: "Call Sam", due: "2026-11-17T15:00" });
-    const kept = padReading(typed, sure, null, ["tomorrow 3pm"]);
+    const kept = padReading(typed, sure, null, [shown.key]);
     assert.deepEqual({ title: kept.title, due: kept.due, marks: kept.marks, phrase: kept.phrase }, { title: typed, due: null, marks: [], phrase: "" });
 
     const led = "Send deck by Friday";
@@ -273,7 +302,7 @@ describe("task area UI", () => {
     const confirmed = padReading(unsureText, unsure, answer, []);
     assert.deepEqual(confirmed.marks.map((mark) => unsureText.slice(mark.start, mark.end)), ["at 3"]);
     assert.equal(confirmed.phrase, "at 3");
-    assert.deepEqual(padReading(unsureText, unsure, answer, ["at 3"]).due, null, "the AI's phrase can be kept as text too");
+    assert.deepEqual(padReading(unsureText, unsure, answer, [confirmed.key]).due, null, "the AI's phrase can be kept as text too");
     assert.deepEqual(acceptWithMarks("  Call Sam at 3", { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now).marks, [{ start: 11, end: 15, kind: "when" }]);
 
     const marks = shown.marks;
@@ -282,23 +311,77 @@ describe("task area UI", () => {
     assert.equal(backspaceKeeps(marks, typed.length - 3, typed.length), false, "not with a selection");
   });
 
-  it("saves on Enter only the reading the card shows at that moment, and treats a hand-set Due chip as keeping the words", () => {
-    const source = readFileSync("components/crm/task-pad.tsx", "utf8");
-    const submit = source.slice(source.indexOf("async function submit()"), source.indexOf("addPadTaskAction(", source.indexOf("async function submit()")));
-    assert.match(submit, /const saving = read;/, "the reading on screen is taken before anything is awaited");
-    assert.ok(submit.indexOf("const saving = read;") < submit.indexOf("await "), "nothing is awaited before the reading is taken");
-    assert.doesNotMatch(submit, /readWithAi|aiReads|AI_WAIT|setTimeout/, "Enter never waits for or applies an answer that hasn't been shown");
-    assert.doesNotMatch(source, /AI_WAIT_MS|settledAnswer/);
-    const saved = source.slice(source.indexOf("addPadTaskAction({"), source.indexOf("})", source.indexOf("addPadTaskAction({")));
-    for (const field of ["title: saving.title", "saving.finalDue", "remindMinutes: saving.finalReminder", "durationMinutes: saving.duration"]) assert.ok(saved.includes(field), field);
-    assert.match(source, /due\.set && shown\.phrase \? padReading\(text, parsed, value, \[\.\.\.keptAsText, shown\.phrase\]\)/, "a hand-set Due chip keeps the highlighted words in the title");
-
+  it("saves on Enter only a reading that has been on screen, and the text as typed otherwise", () => {
     const now = new Date("2026-11-16T09:15:00Z");
     const pending = "Call Sam at 3";
-    assert.deepEqual(plain(padReading(pending, parseTaskText(pending, now), null, [])), { title: pending, due: null, remindMinutes: null, durationMinutes: null }, "an unconfirmed reading saves the text as typed");
+    const parsed = parseTaskText(pending, now);
+    const asTyped = padReading(pending, parsed, null, []);
+    assert.deepEqual(plain(asTyped), { title: pending, due: null, remindMinutes: null, durationMinutes: null }, "an unconfirmed reading saves the text as typed");
+    const answer = acceptWithMarks(pending, { phrases: ["at 3"], due: "2026-11-16T15:00", remindMinutes: null, durationMinutes: null }, now);
+    const shown = padReading(pending, parsed, answer, []);
+    assert.equal(readingToSave(shown, asTyped, null, 1000), shown, "the fast reader's reading is on screen as soon as it is typed");
+    assert.equal(readingToSave(shown, asTyped, { shownAt: null }, 1000), asTyped, "an AI answer that hasn't rendered is never saved");
+    assert.equal(readingToSave(shown, asTyped, { shownAt: 1000 }, 1000 + AI_SETTLE_MS - 1), asTyped, "an AI answer that only just rendered is not saved");
+    assert.equal(readingToSave(shown, asTyped, { shownAt: 1000 }, 1000 + AI_SETTLE_MS), shown, "an AI answer that has been on screen is saved");
+
     const typed = "Call Sam tomorrow 3pm";
-    const shown = padReading(typed, parseTaskText(typed, now), null, []);
-    assert.deepEqual(padReading(typed, parseTaskText(typed, now), null, [shown.phrase]).title, typed, "changing the chip keeps the words");
+    const sure = parseTaskText(typed, now);
+    const read = padReading(typed, sure, null, []);
+    assert.equal(padReading(typed, sure, null, [read.key]).title, typed, "changing the Due chip by hand keeps the words, like Keep as text");
+  });
+
+  it("removes exactly the lit words, and Keep as text keeps exactly the typed text, across the corpus and the seam cases", () => {
+    for (const [moment, iso] of Object.entries(CORPUS_NOWS)) {
+      const now = new Date(iso);
+      for (const text of corpusTitles()) {
+        const parsed = parseTaskText(text, now);
+        holdsTheRule(text, padReading(text, parsed, null, []), (key) => padReading(text, parsed, null, [key]), `${moment}: ${text}`);
+      }
+    }
+    const seams = JSON.parse(readFileSync(path.join(fixtures, "task-pad-seams.json"), "utf8")) as { now: string; fast: string[]; ai: { text: string; phrases: string[]; due: string }[] };
+    const now = new Date(seams.now);
+    for (const text of seams.fast) {
+      const parsed = parseTaskText(text, now);
+      holdsTheRule(text, padReading(text, parsed, null, []), (key) => padReading(text, parsed, null, [key]), text);
+    }
+    for (const { text, phrases, due } of seams.ai) {
+      const parsed = parseTaskText(text, now);
+      const answer = acceptWithMarks(text, { phrases, due, remindMinutes: phrases.length > 1 ? 15 : null, durationMinutes: null }, now);
+      holdsTheRule(text, padReading(text, parsed, answer, []), (key) => padReading(text, parsed, answer, [key]), `AI: ${text}`);
+    }
+    const lit = (text: string) => {
+      const reading = padReading(text, parseTaskText(text, now), null, []);
+      return { title: reading.title, lit: reading.marks.map((mark) => text.slice(mark.start, mark.end)) };
+    };
+    assert.deepEqual(lit("Call Bob, tomorrow"), { title: "Call Bob", lit: [", tomorrow"] });
+    assert.deepEqual(lit("Call Bob tomorrow."), { title: "Call Bob", lit: ["tomorrow."] });
+    assert.deepEqual(lit("Tomorrow, call Bob"), { title: "Call Bob", lit: ["Tomorrow,"] });
+    assert.deepEqual(lit("Call Bob, tomorrow, about pricing"), { title: "Call Bob, about pricing", lit: ["tomorrow,"] });
+    assert.deepEqual(lit("Call Bob tomorrow, and"), { title: "Call Bob", lit: ["tomorrow, and"] });
+  });
+
+  it("keeps a multi-piece reading as text by the reading itself, and forgets it only when that reading goes", () => {
+    const now = new Date(CORPUS_NOWS.monAM);
+    for (const text of ["Call Bob tomorrow, 3pm", "Call Bob tomorrow, and remind me 15 mins before", "Call Bob Friday about the deck 3pm", "Call Bob tomorrow\n3pm", "Call Bob tomorrow  3pm"]) {
+      const parsed = parseTaskText(text, now);
+      const shown = padReading(text, parsed, null, []);
+      assert.ok(shown.due && shown.key, text);
+      const kept = padReading(text, parsed, null, [shown.key]);
+      assert.deepEqual({ title: kept.title, due: kept.due }, { title: collapse(text), due: null }, text);
+      const edited = `Ring ${text.slice(5)}`;
+      assert.equal(padReading(edited, parseTaskText(edited, now), null, []).key, shown.key, `${text}: editing other words keeps the same reading`);
+      const longer = `${text} on 3 Dec`;
+      assert.notEqual(padReading(longer, parseTaskText(longer, now), null, []).key, shown.key, `${text}: a different reading is not kept`);
+    }
+    const typed = "Call Sam at 3 and remind me 15 mins before";
+    const parsed = parseTaskText(typed, now);
+    const answer = acceptWithMarks(typed, { phrases: ["at 3", "remind me 15 mins before"], due: "2026-11-16T15:00", remindMinutes: 15, durationMinutes: null }, now);
+    const shown = padReading(typed, parsed, answer, []);
+    assert.deepEqual(shown.marks.map((mark) => typed.slice(mark.start, mark.end)), ["at 3 and", "remind me 15 mins before"]);
+    assert.equal(shown.title, "Call Sam");
+    const kept = padReading(typed, parsed, answer, [shown.key]);
+    assert.deepEqual({ title: kept.title, due: kept.due }, { title: typed, due: null });
+    assert.equal(padReading(typed, parsed, null, []).key, "", "without the AI's answer there is no reading to keep");
   });
 
   it("only takes the AI's date when its phrase is really in the text, holds only date words, and the date is real and near", () => {
