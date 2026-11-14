@@ -70,6 +70,7 @@ const LINK_FIELD_TYPES = ["short_text", "text", "url", "email"];
 function clickupNotSetUp(actor: UserActor) {
   return notSetUp("ClickUp", "CLICKUP_API_TOKEN", actor);
 }
+const CLICKUP_CHECKING = "Waiting for ClickUp. Orbit will check again shortly.";
 const CLICKUP_NOT_SET_UP = "Choose a ClickUp workspace and lists in Settings › Tools first.";
 
 type ClickUpSyncResult = {
@@ -599,11 +600,18 @@ async function ownerForAssignees(db: Db, workspaceId: string, task: ClickUpTask)
   return result.rows[0]?.id;
 }
 
-async function archiveDeleted(s: Session, row: SyncRow) {
-  if (row.archived_at) return "unchanged" as const;
+async function archiveDeleted(s: Session, row: SyncRow, gone = true) {
+  if (row.archived_at) {
+    if (gone) {
+      await withActor(s.actor, (db) =>
+        db.query(`update crm.tasks set clickup_sync = clickup_sync || '{"goneFromClickUp": true}'::jsonb where id = $1 and archived_at is not null`, [row.id]),
+      );
+    }
+    return "unchanged" as const;
+  }
   assertScope(s.actor.scopes, "tasks:write");
   await withActor(s.actor, async (db) => {
-    await archiveTaskInDb(db, s.actor, row.id, { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true }, { goneFromClickUp: true });
+    await archiveTaskInDb(db, s.actor, row.id, { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true }, { goneFromClickUp: gone });
     await db.query("update crm.tasks set clickup_error = null, clickup_synced_at = now() where id = $1", [row.id]);
   });
   return "archived" as const;
@@ -638,7 +646,9 @@ async function createRemote(s: Session, taskId: string) {
         return "pushed" as const;
       }
       if (Date.now() - earlier.at < UNCONFIRMED_SETTLE_MS) {
-        await withActor(s.actor, (db) => db.query("update crm.tasks set clickup_sync = clickup_sync - 'creatingAt' where id = $1", [row.id]));
+        await withActor(s.actor, (db) =>
+          db.query("update crm.tasks set clickup_sync = clickup_sync - 'creatingAt', clickup_error = $2 where id = $1", [row.id, CLICKUP_CHECKING]),
+        );
         return "unchanged" as const;
       }
     } catch (error) {
@@ -744,12 +754,14 @@ async function claimPush(s: Session, taskId: string) {
          and coalesce((clickup_sync->>'pushingAt')::bigint, 0) < $3::bigint`,
       [taskId, now, now - PUSH_CLAIM_MS, s.actor.workspaceId],
     );
-    return (result.rowCount ?? 0) > 0;
+    return (result.rowCount ?? 0) > 0 ? now : null;
   });
 }
 
-async function releasePush(s: Session, taskId: string) {
-  await withActor(s.actor, (db) => db.query("update crm.tasks set clickup_sync = clickup_sync - 'pushingAt' where id = $1", [taskId]));
+async function releasePush(s: Session, taskId: string, claimedAt: number) {
+  await withActor(s.actor, (db) =>
+    db.query("update crm.tasks set clickup_sync = clickup_sync - 'pushingAt' where id = $1 and (clickup_sync->>'pushingAt')::bigint = $2::bigint", [taskId, claimedAt]),
+  );
 }
 
 async function pushRow(s: Session, taskId: string) {
@@ -758,13 +770,14 @@ async function pushRow(s: Session, taskId: string) {
   if (!row.clickup_task_id) return row.clickup_list_id ? createRemote(s, taskId) : ("unchanged" as const);
   let outcome: "unchanged" | "pushed" | "archived" = "unchanged";
   for (let round = 0; round < PUSH_ROUNDS; round += 1) {
-    if (!(await claimPush(s, taskId))) return outcome;
+    const claimedAt = await claimPush(s, taskId);
+    if (claimedAt === null) return outcome;
     let next: "unchanged" | "pushed" | "archived" = "unchanged";
     try {
       const fresh = await withActor(s.actor, (db) => readSyncRow(db, s.actor.workspaceId, taskId));
       if (fresh && !fresh.archived_at && fresh.clickup_task_id) next = await updateRemote(s, fresh);
     } finally {
-      await releasePush(s, taskId);
+      await releasePush(s, taskId, claimedAt);
     }
     if (next !== "unchanged") outcome = next;
     if (next !== "pushed") return outcome;
@@ -932,9 +945,10 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
   if (!task?.id || !isClickUpId(String(task.id))) return "ignored";
   const taskId = String(task.id);
   const listId = task.list?.id ? String(task.list.id) : null;
-  if (task.archived || (task as { deleted?: boolean }).deleted) {
+  const deleted = Boolean((task as { deleted?: boolean }).deleted);
+  if (task.archived || deleted) {
     const row = await withActor(s.actor, (db) => linkedRow(db, s.actor.workspaceId, taskId));
-    return row ? archiveDeleted(s, row) : "ignored";
+    return row ? archiveDeleted(s, row, deleted) : "ignored";
   }
   const remote = remoteFields(task);
   const changedAt = remoteTime(task);
@@ -1030,6 +1044,7 @@ async function linkedLists(actor: UserActor) {
       `select distinct t.clickup_list_id from crm.tasks t
        where t.workspace_id = $1 and t.clickup_task_id is not null and t.clickup_list_id is not null
          and t.archived_at is null and ${directTaskSql("t")}
+       order by t.clickup_list_id
        limit $2`,
       [actor.workspaceId, MAX_POLL_LISTS],
     );
@@ -1155,7 +1170,7 @@ export async function syncClickUp(
         if (body.lastPage || !complete) break;
       }
     }
-    const cursor = stoppedAt === null ? null : { since, page: stoppedAt, startedAt: chainStartedAt, lists };
+    const cursor = stoppedAt === null ? null : { since, page: Math.max(0, stoppedAt - 1), startedAt: chainStartedAt, lists };
     await withActor(actor, (db) => savePollCursor(db, actor.workspaceId, cursor));
     syncedAt = new Date(chainStartedAt).toISOString();
     for (const id of await pushQueue(actor)) {

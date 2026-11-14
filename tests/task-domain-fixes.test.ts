@@ -11,8 +11,9 @@ import { createContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
+import { ingestLead } from "@/lib/crm/leads";
 import { completeTaskWithOutcome } from "@/lib/crm/task-act";
-import { archiveTask, completeTask, createTask, getTask, placeTask, unarchiveTaskInDb, updateTask } from "@/lib/crm/tasks";
+import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, placeTask, unarchiveTaskInDb, updateTask } from "@/lib/crm/tasks";
 import type { AgentActor, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { runWorkflowTick } from "@/lib/workflows/engine";
@@ -191,6 +192,19 @@ describe("Done with an outcome after the person changed company", () => {
     assert.deepEqual([result.next?.companyId, result.next?.contactId, result.next?.opportunityId], [northwind, lee, pilot]);
   });
 
+  it("keeps a company deliberately left empty, and the completed task keeps its own links", async () => {
+    const kim = (await createContact(mark, { companyId: northwind, firstName: "Kim", lastName: "Lowe", email: "kim@northwind-fixes.test" })).body.contact.id;
+    const task = (await createTask(mark, { title: "Call Kim", contactId: kim })).body.task;
+    await updateTask(mark, task.id, { companyId: null });
+    const moved = (await createTask(mark, { title: "Call Kim again", contactId: kim })).body.task;
+    await sql("update crm.contacts set company_id = $2 where id = $1", [kim, ashby]);
+    const result = await completeTaskWithOutcome(mark, task.id, outcome({ next: { title: "Kim follow-up", dueAt: null } }));
+    assert.deepEqual([result.next?.companyId, result.next?.contactId], [null, kim]);
+    const done = await completeTaskWithOutcome(mark, moved.id, outcome({ next: { title: "Kim second follow-up", dueAt: null } }));
+    assert.equal(done.next?.companyId, ashby);
+    assert.equal((await getTask(mark, moved.id)).companyId, northwind);
+  });
+
   it("runs a Create task step set to Same as the task", async () => {
     const ravi = (await createContact(mark, { companyId: northwind, firstName: "Ravi", lastName: "Shah", email: "ravi@northwind-fixes.test" })).body.contact.id;
     const deal = (await createOpportunity(mark, { companyId: northwind, name: "Northwind freight lanes", primaryContactId: ravi })).body.opportunity.id;
@@ -250,6 +264,23 @@ describe("writers read the task under a row lock", () => {
     assert.equal((await row(task.id)).due_at?.toISOString(), "2027-03-12T10:00:00.000Z");
   });
 
+  it("doesn't wait behind a key share lock, such as a foreign key check from the Outlook queue", async () => {
+    const task = (await createTask(mark, { title: "Key share" })).body.task;
+    const client = await admin().connect();
+    try {
+      await client.query("begin");
+      await client.query("select 1 from crm.tasks where id = $1 for key share", [task.id]);
+      const outcome = await Promise.race([
+        updateTask(mark, task.id, { title: "Key share, renamed" }).then(() => "saved"),
+        new Promise((resolve) => setTimeout(() => resolve("waited"), 3000)),
+      ]);
+      assert.equal(outcome, "saved");
+    } finally {
+      await client.query("commit");
+      client.release();
+    }
+  });
+
   it("archives once when two people archive together, and restores once", async () => {
     const task = (await createTask(mark, { title: "Old lead" })).body.task;
     const both = () => Promise.all([archiveTask(mark, task.id), archiveTask(mark, task.id)]);
@@ -278,6 +309,12 @@ describe("an update that changes nothing", () => {
     const changed = await events(task.id, "task.updated");
     assert.equal(changed.length, 1);
     assert.deepEqual(changed[0].changes.fields, ["priority"]);
+  });
+
+  it("still refuses someone who can't change the task", async () => {
+    const task = (await createTask(mark, { title: "Mark's own", priority: "high" })).body.task;
+    await addTaskParticipants(mark, task.id, [sam.userId]);
+    await assert.rejects(() => updateTask(sam, task.id, { priority: "high" }), (error: { status?: number }) => error.status === 403);
   });
 });
 
@@ -312,6 +349,12 @@ describe("a reminder that can never go off", () => {
     const retitled = await updateTask(mark, kept.id, { title: "Reminder kept, renamed" });
     assert.equal(retitled.body.task.remindMinutes, 15);
   });
+
+  it("drops the reminder from a lead's task due in the past instead of refusing the lead", async () => {
+    const lead = await ingestLead(mark, { contact: { firstName: "Pat", email: "pat@lead-fixes.test" }, task: { title: "Call Pat", dueAt: "2026-11-01T10:00", remindMinutes: 15 } });
+    assert.equal(lead.body.task?.dueHasTime, true);
+    assert.equal(lead.body.task?.remindMinutes, null);
+  });
 });
 
 describe("MCP create_next_action", () => {
@@ -325,6 +368,14 @@ describe("MCP create_next_action", () => {
     const clash = await mcp("create_next_action", { title: "Something else", idempotency_key: key });
     assert.equal(clash.error, true);
     assert.match(clash.text, /already used/);
+  });
+
+  it("treats an empty idempotency key as none", async () => {
+    const first = await mcp("create_next_action", { title: "Blank key", idempotency_key: "" });
+    const second = await mcp("create_next_action", { title: "Blank key", idempotency_key: "  " });
+    assert.equal(first.error, false, first.text);
+    assert.equal(second.error, false, second.text);
+    assert.notEqual(first.json?.task?.id, second.json?.task?.id);
   });
 
   it("can't create a done task", async () => {

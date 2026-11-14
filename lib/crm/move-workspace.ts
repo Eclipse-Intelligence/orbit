@@ -69,6 +69,7 @@ type Plan = {
   notCopied?: string[];
   proposalContacts?: string[];
   dealsLosingContact?: number;
+  clickupTasks?: number;
   taskMoves?: PlanTaskChange[];
   tasksLeft?: PlanTaskChange[];
 };
@@ -129,7 +130,13 @@ export type MovePreview = {
   notCopied: string[];
   proposalContacts: string[];
   dealsLosingContact: number;
+  clickupUnlinked: number;
 };
+
+export function clickupUnlinkedLine(count: number) {
+  if (count <= 0) return "";
+  return count === 1 ? "1 task is unlinked from ClickUp." : `${count} tasks are unlinked from ClickUp.`;
+}
 
 export type MovedRecord = { id: string; name: string; targetId: string; merged: boolean };
 
@@ -143,6 +150,7 @@ export type MoveResult = {
   activities: number;
   tasks: number;
   leftBehind: { id: string; name: string }[];
+  clickupUnlinked: number;
   message: string;
 };
 
@@ -330,6 +338,7 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     notCopied: plan.notCopied ?? [],
     proposalContacts: plan.proposalContacts ?? [],
     dealsLosingContact: plan.dealsLosingContact ?? 0,
+    clickupUnlinked: plan.copy ? 0 : (plan.clickupTasks ?? 0),
   };
 }
 
@@ -355,7 +364,9 @@ function alongPhrase(plan: Plan) {
 function resultMessage(plan: Plan) {
   const names = selectedNames(plan);
   const what = names.length === 1 ? names[0] : counted(names.length, "record", "records");
-  return `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
+  const moved = `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
+  const unlinked = plan.copy ? "" : clickupUnlinkedLine(plan.clickupTasks ?? 0);
+  return unlinked ? `${moved} ${unlinked}` : moved;
 }
 
 type CopiedFrom = { workspaceId: string; workspaceName: string; id: string };
@@ -536,6 +547,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         activities: done.activities,
         tasks: done.tasks,
         leftBehind: (done.leftBehind ?? []).map((item) => ({ id: item.id, name: item.name })),
+        clickupUnlinked: done.copy ? 0 : (done.clickupTasks ?? 0),
         message: resultMessage(done),
       };
     },

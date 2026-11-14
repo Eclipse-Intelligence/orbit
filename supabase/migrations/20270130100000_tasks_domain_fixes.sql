@@ -3,9 +3,11 @@ set lock_timeout = '5s';
 alter table crm.integration_state add column if not exists clickup_poll jsonb;
 grant update (clickup_poll) on crm.integration_state to authenticated;
 
+alter table crm.tasks disable trigger tasks_set_updated_at;
 update crm.tasks
 set remind_minutes = null
 where remind_minutes is not null and not due_has_time;
+alter table crm.tasks enable trigger tasks_set_updated_at;
 
 do $$
 begin
@@ -20,6 +22,35 @@ end;
 $$;
 
 alter table crm.tasks validate constraint tasks_reminder_needs_time;
+
+create or replace function private.task_reminder_marker()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.due_at is distinct from old.due_at
+    or new.due_has_time is distinct from old.due_has_time
+    or new.remind_minutes is distinct from old.remind_minutes
+    or new.owner_id is distinct from old.owner_id
+  then
+    new.reminder_sent_at := null;
+    new.reminder_attempts := 0;
+  elsif (new.reminder_sent_at is distinct from old.reminder_sent_at or new.reminder_attempts is distinct from old.reminder_attempts)
+    and (to_jsonb(new) - 'reminder_sent_at' - 'reminder_attempts' - 'updated_at') = (to_jsonb(old) - 'reminder_sent_at' - 'reminder_attempts' - 'updated_at')
+  then
+    new.updated_at := old.updated_at;
+  elsif new.clickup_sync is distinct from old.clickup_sync
+    and (new.clickup_sync - 'pushingAt') = (old.clickup_sync - 'pushingAt')
+    and (to_jsonb(new) - 'clickup_sync' - 'updated_at') = (to_jsonb(old) - 'clickup_sync' - 'updated_at')
+  then
+    new.updated_at := old.updated_at;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.task_reminder_marker() from public;
 
 create or replace function private.move_records_to_workspace(
   p_user uuid,
@@ -424,6 +455,10 @@ begin
     ), '[]'::jsonb),
     'activities', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'activity'),
     'tasks', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'task'),
+    'clickupTasks', (
+      select count(*) from pg_temp.orbit_move_map m join crm.tasks ct on ct.id = m.old_id
+      where m.kind = 'task' and (ct.clickup_task_id is not null or ct.clickup_list_id is not null)
+    ),
     'documents', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'document'),
     'knowledge', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'knowledge'),
     'pipelineId', v_pipeline,
@@ -590,14 +625,18 @@ begin
     with prior as (
       select x.id, x.owner_id, x.due_at, x.due_has_time, x.scheduled_by, x.remind_minutes,
         case
-          when x.owner_id is null and x.created_by_user_id is not null
-            and not exists (select 1 from crm.workspace_members wm where wm.workspace_id = p_target and wm.user_id = x.created_by_user_id)
+          when x.owner_id is null
+            and (
+              x.created_by_user_id is null
+              or not exists (select 1 from crm.workspace_members wm where wm.workspace_id = p_target and wm.user_id = x.created_by_user_id)
+            )
           then p_user
           else private.move_owner(x.owner_id, p_target, p_user)
         end as next_owner
       from pg_temp.orbit_move_map m
       join crm.tasks x on x.id = m.old_id
       where m.kind = 'task'
+      for no key update of x
     ),
     moved as (
     update crm.tasks t
@@ -613,17 +652,18 @@ begin
         opportunity_id = (select md.new_id from pg_temp.orbit_move_map md where md.kind = 'deal' and md.old_id = t.opportunity_id),
         owner_id = h.next_owner,
         due_at = case
-          when t.due_has_time and t.due_at is not null and h.next_owner is distinct from t.owner_id
+          when t.due_has_time and t.due_at is not null and (t.owner_id is not null and h.next_owner is distinct from t.owner_id)
           then date_trunc('day', t.due_at at time zone 'Europe/London') at time zone 'Europe/London'
           else t.due_at
         end,
-        scheduled_by = case when t.due_has_time and h.next_owner is distinct from t.owner_id then null else t.scheduled_by end,
-        remind_minutes = case when t.due_has_time and h.next_owner is distinct from t.owner_id then null else t.remind_minutes end,
-        due_has_time = case when h.next_owner is distinct from t.owner_id then false else t.due_has_time end,
+        scheduled_by = case when t.due_has_time and (t.owner_id is not null and h.next_owner is distinct from t.owner_id) then null else t.scheduled_by end,
+        remind_minutes = case when t.due_has_time and (t.owner_id is not null and h.next_owner is distinct from t.owner_id) then null else t.remind_minutes end,
+        due_has_time = case when (t.owner_id is not null and h.next_owner is distinct from t.owner_id) then false else t.due_has_time end,
         clickup_task_id = null,
         clickup_list_id = null,
         clickup_url = null,
         clickup_error = null,
+        clickup_synced_at = null,
         clickup_sync = '{}'::jsonb
     from prior h
     where h.id = t.id
@@ -682,6 +722,7 @@ begin
           x.company_id in (select m.old_id from pg_temp.orbit_move_map m where m.kind = 'company')
           or x.opportunity_id in (select m.old_id from pg_temp.orbit_move_map m where m.kind in ('deal', 'board_card'))
         )
+      for no key update of x
     ),
     stripped as (
     update crm.tasks t

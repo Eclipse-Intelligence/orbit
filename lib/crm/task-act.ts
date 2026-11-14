@@ -251,7 +251,7 @@ export async function taskContext(actor: UserActor, taskId: string): Promise<Tas
 }
 
 async function lockedTask(db: Db, actor: UserActor, taskId: string) {
-  await db.query("select 1 from crm.tasks where id = $1 for update", [taskId]);
+  await db.query("select 1 from crm.tasks where id = $1 for no key update", [taskId]);
   const task = await readTaskInDb(db, actor, taskId);
   if (!task || task.workspaceId !== actor.workspaceId || task.archivedAt) throw notFound("task");
   if (!canChangeTask(actor, task)) throw cannotChange();

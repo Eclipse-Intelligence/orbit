@@ -310,6 +310,13 @@ function assertReminderCanFire(dueAt: string | null | undefined, remindMinutes: 
   throw new CrmError("invalid_input", REMINDER_TIME_PASSED, 400, { field: "remindMinutes" });
 }
 
+function taskConstraintError(error: unknown): never {
+  if (isPgError(error) && error.code === "23514" && error.constraint === "tasks_reminder_needs_time") {
+    throw new CrmError("invalid_input", "Pick a time for the reminder.", 400, { field: "remindMinutes" });
+  }
+  constraintError(error, "duplicate_task", "A matching task already exists.");
+}
+
 function sameInstant(a: string | null, b: string | null) {
   return a === null || b === null ? a === b : new Date(a).getTime() === new Date(b).getTime();
 }
@@ -428,7 +435,7 @@ async function readTask(db: Db, actor: Actor, id: string) {
 }
 
 async function readTaskForWrite(db: Db, actor: Actor, id: string) {
-  await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
+  await db.query("select 1 from crm.tasks where id = $1 for no key update", [id]);
   return readTask(db, actor, id);
 }
 
@@ -507,7 +514,7 @@ export async function createTaskInDb(
     taskAlerts(db, actor, null, task, provenance);
     return (await withMailThreadsInDb(db, actor, [task]))[0];
   } catch (error) {
-    constraintError(error, "duplicate_task", "A matching task already exists.");
+    taskConstraintError(error);
   }
 }
 
@@ -598,7 +605,10 @@ async function applyTask(
     [completedAt !== undefined && !sameInstant(completedAt ?? null, iso(current.completed_at)), "completed_at", "completedAt", completedAt ?? null],
   ]);
   const before = mapTask(current);
-  if (change.sets.length === 0) return { task: (await withMailThreadsInDb(db, actor, [before]))[0], changed: false };
+  if (change.sets.length === 0) {
+    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
+    return { task: (await withMailThreadsInDb(db, actor, [before]))[0], changed: false };
+  }
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
   const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
   let taggedAssigner = false;
@@ -615,7 +625,7 @@ async function applyTask(
     updated = result.rowCount ?? 0;
   } catch (error) {
     if (isPgError(error) && error.code === "42501") throw cannotChange(write);
-    constraintError(error, "duplicate_task", "A matching task already exists.");
+    taskConstraintError(error);
   }
   if (updated === 0) throw cannotChange(write);
   queueTaskBlock(db, current.id);
@@ -1020,10 +1030,12 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
   const saved = await readTask(db, actor, id);
   if (!saved) throw notFound("task");
   const task = mapTask(saved);
+  const unlinked = current.clickup_task_id !== null && saved.clickup_task_id === null;
   await recordAudit(db, actor, "task.updated", "task", task.id, provenance, {
     fields: ["archivedAt"],
     before: { archivedAt: iso(current.archived_at) },
     after: { archivedAt: null },
+    ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
   return { task: (await withMailThreadsInDb(db, actor, [task]))[0] };
 }

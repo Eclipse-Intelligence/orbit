@@ -58,6 +58,9 @@ function summaryLines(preview: MovePreview, copy: boolean, copyDeals: boolean) {
   if (!copy && preview.dealsLosingContact > 0) {
     lines.push(preview.dealsLosingContact === 1 ? "1 opportunity loses its main contact." : `${preview.dealsLosingContact} opportunities lose their main contact.`);
   }
+  if (!copy && preview.clickupUnlinked > 0) {
+    lines.push(preview.clickupUnlinked === 1 ? "1 task is unlinked from ClickUp." : `${preview.clickupUnlinked} tasks are unlinked from ClickUp.`);
+  }
   if (!copy && preview.boards.length > 0) lines.push(`Comes off ${listed(preview.boards)}.`);
   if (preview.aiFields.length > 0) lines.push(`Not carried over: AI fields ${listed(preview.aiFields)}.`);
   return lines;

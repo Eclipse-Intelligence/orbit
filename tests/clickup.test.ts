@@ -1234,6 +1234,41 @@ describe("clickup sync edge cases", () => {
     assert.equal(fake.tasks.size, 0);
   });
 
+  it("unlinks a task archived in Orbit and then deleted in ClickUp when it is restored, and records what it cleared", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Archived first", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const remoteId = (await taskRow(created.task.id)).clickup_task_id!;
+    await getAdminPool().query("update crm.tasks set archived_at = now() where id = $1", [created.task.id]);
+    fake.tasks.delete(remoteId);
+    await processClickUpEvent(owner, { event: "taskDeleted", taskId: remoteId, newestAt: null }, { fetchImpl });
+    await withActor(owner, (db) => unarchiveTaskInDb(db, owner, created.task.id, { operation: "undo", source: "web" }));
+    const restored = await taskRow(created.task.id);
+    assert.deepEqual([restored.archived_at, restored.clickup_task_id, restored.clickup_list_id], [null, null, null]);
+    const audit = await getAdminPool().query<{ changes: { clickupUnlinked?: { clickupTaskId: string } } }>(
+      "select changes from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at desc limit 1",
+      [created.task.id],
+    );
+    assert.equal(audit.rows[0].changes.clickupUnlinked?.clickupTaskId, remoteId);
+  });
+
+  it("keeps the link on a task archived, not deleted, in ClickUp when it is restored", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Archived remotely", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const remoteId = (await taskRow(created.task.id)).clickup_task_id!;
+    fake.tasks.get(remoteId)!.archived = true;
+    assert.equal(await processClickUpEvent(owner, { event: "taskUpdated", taskId: remoteId, newestAt: null }, { fetchImpl }), "archived");
+    await withActor(owner, (db) => unarchiveTaskInDb(db, owner, created.task.id, { operation: "undo", source: "web" }));
+    assert.equal((await taskRow(created.task.id)).clickup_task_id, remoteId);
+    delete fake.tasks.get(remoteId)!.archived;
+  });
+
+  it("claims a push without changing when the task was last edited", async () => {
+    const created = await createTaskWithClickUp(owner, { title: "Quiet push", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    const before = (await taskRow(created.task.id)).updated_at;
+    assert.equal(await pushClickUpTask(owner, created.task.id, { fetchImpl }), "unchanged");
+    const after = await taskRow(created.task.id);
+    assert.equal(after.updated_at.getTime(), before.getTime());
+    assert.equal(after.clickup_sync.pushingAt, undefined);
+  });
+
   it("ends with ClickUp matching Orbit when a done push and a reopen push cross", async () => {
     const created = await createTaskWithClickUp(owner, { title: "Crossed pushes", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
     const id = created.task.id;

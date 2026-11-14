@@ -693,7 +693,7 @@ type ReadBackTiming = Pick<ReadBackRow, "owner_id" | "due_at" | "due_has_time" |
 
 async function unchangedSinceRead(db: Db, row: ReadBackRow) {
   const found = await db.query<ReadBackTiming>(
-    "select owner_id, due_at, due_has_time, duration_minutes, completed_at, archived_at from crm.tasks where id = $1 for update",
+    "select owner_id, due_at, due_has_time, duration_minutes, completed_at, archived_at from crm.tasks where id = $1 for no key update",
     [row.task_id],
   );
   const now = found.rows[0];

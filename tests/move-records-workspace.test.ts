@@ -20,7 +20,7 @@ import { describeUndo } from "@/lib/crm/undo";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createCrmMcpServer } from "@/server/mcp/server";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const PROVENANCE = { operation: "move_test", source: "test" };
 
@@ -1186,6 +1186,37 @@ describe("moving records to another workspace", () => {
     const leftEvent = events.find((event) => event.entity_id === left.id);
     assert.equal(leftEvent?.workspace_id, eclipse.workspaceId);
     assert.deepEqual(leftEvent?.changes.fields, ["companyId"]);
+  });
+
+  it("hands an agent's unassigned task to the mover with its time, leaves one whose creator is in the target unassigned, and says how many lose ClickUp", async () => {
+    const dock = await company(eclipse, "Dock", { domain: "dock-move.test" });
+    const at = new Date(Math.floor((Date.now() + 4 * 86_400_000) / 60_000) * 60_000).toISOString();
+    const agent = (await createAgent(eclipse.workspaceId, ["crm:read", "tasks:write"], "Dock agent")).actor;
+    const fromAgent = (await createTask(agent, { title: "Dock agent task", companyId: dock.id, dueAt: at, remindMinutes: 15 }, { provenance: PROVENANCE })).body.task;
+    const mine = (await createTask(eclipse, { title: "Dock unassigned", companyId: dock.id, ownerId: null }, { provenance: PROVENANCE })).body.task;
+    assert.equal(fromAgent.ownerId, null);
+    assert.equal(fromAgent.dueHasTime, true);
+    await admin("update crm.tasks set clickup_list_id = '901', clickup_synced_at = now() where id = $1", [fromAgent.id]);
+    const preview = await previewMoveToWorkspace(eclipse, { companyIds: [dock.id], workspaceId: ridgeon.workspaceId });
+    assert.equal(preview.clickupUnlinked, 1);
+    const moved = await moveRecordsToWorkspace(eclipse, { companyIds: [dock.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    assert.equal(moved.clickupUnlinked, 1);
+    assert.match(moved.message, /1 task is unlinked from ClickUp\.$/);
+    const rows = await admin<{ id: string; owner_id: string | null; due_has_time: boolean; due_at: Date; remind_minutes: number | null; clickup_list_id: string | null; clickup_synced_at: Date | null }>(
+      "select id, owner_id, due_has_time, due_at, remind_minutes, clickup_list_id, clickup_synced_at from crm.tasks where id = any($1::uuid[])",
+      [[fromAgent.id, mine.id]],
+    );
+    const agentRow = rows.find((row) => row.id === fromAgent.id)!;
+    assert.deepEqual(
+      [agentRow.owner_id, agentRow.due_has_time, new Date(agentRow.due_at).toISOString(), agentRow.remind_minutes, agentRow.clickup_list_id, agentRow.clickup_synced_at],
+      [eclipse.userId, true, at, 15, null, null],
+    );
+    assert.equal(rows.find((row) => row.id === mine.id)?.owner_id, null);
+    const events = await admin<{ changes: { fields: string[] } }>(
+      "select changes from crm.audit_events where event_type = 'task.updated' and entity_id = $1 and operation = 'move_test'",
+      [fromAgent.id],
+    );
+    assert.deepEqual(events.map((event) => event.changes.fields), [["ownerId"]]);
   });
 
   it("puts a handed-over task on its London day in summer and winter", async () => {
