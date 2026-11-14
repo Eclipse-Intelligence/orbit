@@ -236,9 +236,10 @@ async function suggestFollowUp(
           )
         : `Follow up with ${followUp.who}`;
     const due = await scheduleTaskDue(actor, { days: 2 });
-    if (await companyHasOpenTask(actor.workspaceId, followUp.companyId)) return null;
-    return await withActor(actor, (db) =>
-      createTaskInDb(
+    return await withActor(actor, async (db) => {
+      await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`follow-up|${actor.workspaceId}|${followUp.companyId}`]);
+      if (await companyHasOpenTask(actor.workspaceId, followUp.companyId)) return null;
+      return createTaskInDb(
         db,
         actor,
         {
@@ -250,8 +251,8 @@ async function suggestFollowUp(
           priority: "normal",
         },
         { operation: "suggest_follow_up", source: "communication" },
-      ),
-    );
+      );
+    });
   } catch (error) {
     console.error("Could not suggest a follow-up task", error);
     return null;

@@ -169,6 +169,7 @@ describe("tasks, proactive", () => {
     const approval = approvals.find((item) => item.title === "Next step: Chase Gavin Belson for the signed order form");
     assert.ok(approval, JSON.stringify(approvals));
     assert.match(approval.details, /He promised it by Friday\./);
+    assert.match(approval.details, /Also created in ClickUp if it's set up\./);
 
     assert.equal(await decideApproval(owner, approval.runId, { approved: true }, { fetchImpl: llm.fetchImpl }), "succeeded");
     const created = (await listTasks(owner, { companyId })).data.find((task) => task.title === "Chase Gavin Belson for the signed order form");
@@ -346,7 +347,7 @@ describe("follow-up titles from the email", () => {
         { kind: "email", title: "Re: Pilot scope", body: "Could you send over the pilot scope by Friday?", participantEmails: ["ivo@larchmont-title.test"] },
         { fetchImpl },
       );
-    const open = async () => (await getAdminPool().query<{ open: number }>("select count(*)::int as open from pg_stat_activity where state = 'idle in transaction'")).rows[0].open;
+    const open = async () => (await getAdminPool().query<{ open: number }>("select count(*)::int as open from pg_stat_activity where datname = current_database() and state = 'idle in transaction'")).rows[0].open;
     process.env.LLM_API_KEY = "llm-test";
     try {
       let openDuringCall = -1;
@@ -383,5 +384,73 @@ describe("follow-up titles from the email", () => {
     const keyless = await record();
     assert.equal(keyless.task?.title, "Follow up with Ivo Hart: Pilot scope");
     assert.equal(loggedTitle({ who: "Ivo Hart", subject: " Fwd: " }), "Follow up with Ivo Hart");
+  });
+
+  it("keeps the activity and suggests nothing when the follow-up can't be created after the title", async () => {
+    const owner = await createUser("tom@second-step.test", "Tom Second");
+    const company = (await createCompany(owner, { name: "Quayside", domain: "quayside-title.test" })).body.company.id;
+    const contact = (await createContact(owner, { companyId: company, firstName: "Ruth", lastName: "Quinn", email: "ruth@quayside-title.test" })).body.contact.id;
+    const activities = async (title: string) =>
+      (await getAdminPool().query<{ total: number }>("select count(*)::int as total from crm.activities where company_id = $1 and title = $2", [company, title])).rows[0].total;
+    const record = (title: string, fetchImpl: typeof fetch) =>
+      recordCommunication(owner, { kind: "email", title, body: "Can we talk pricing?", participantEmails: ["ruth@quayside-title.test"] }, { fetchImpl });
+    process.env.LLM_API_KEY = "llm-test";
+    try {
+      const titled = scripted(() => ({ title: "Talk pricing with Ruth Quinn" }));
+      const beaten: typeof fetch = async (input, init) => {
+        await createTask(owner, { title: "Call Quayside", companyId: company, ownerId: owner.userId });
+        return titled.fetchImpl(input, init);
+      };
+      const raced = await record("Pricing", beaten);
+      assert.equal(raced.task, null);
+      assert.equal(raced.suggested, false);
+      assert.equal(await activities("Pricing"), 1);
+      assert.deepEqual((await listTasks(owner, { companyId: company })).data.map((task) => task.title), ["Call Quayside"]);
+      for (const task of (await listTasks(owner, { companyId: company })).data) await completeTask(owner, task.id);
+
+      const elsewhere = (await createCompany(owner, { name: "Elsewhere", domain: "elsewhere-title.test" })).body.company.id;
+      const moving: typeof fetch = async (input, init) => {
+        await getAdminPool().query("update crm.contacts set company_id = $2 where id = $1", [contact, elsewhere]);
+        return titled.fetchImpl(input, init);
+      };
+      const failed = await record("Pricing again", moving);
+      assert.equal(failed.task, null);
+      assert.equal(failed.suggested, false);
+      assert.equal(await activities("Pricing again"), 1);
+      await getAdminPool().query("update crm.contacts set company_id = $2 where id = $1", [contact, company]);
+
+      let arrived = 0;
+      let release = () => {};
+      const together = new Promise<void>((resolve) => (release = resolve));
+      const paired: typeof fetch = async (input, init) => {
+        arrived += 1;
+        if (arrived === 2) release();
+        await together;
+        return titled.fetchImpl(input, init);
+      };
+      const both = await Promise.all([record("Pricing one", paired), record("Pricing two", paired)]);
+      assert.equal(both.filter((result) => result.task).length, 1);
+      assert.equal((await listTasks(owner, { companyId: company })).data.filter((task) => !task.completedAt).length, 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
+  it("skips the follow-up and the model for an agent token without tasks:write", async () => {
+    const owner = await createUser("una@no-tasks.test", "Una Scoped");
+    const company = (await createCompany(owner, { name: "Westbrook", domain: "westbrook-title.test" })).body.company.id;
+    const agent = (await createAgent(owner.workspaceId, ["crm:read", "activities:write"], "Logger")).actor;
+    const llm = scripted(() => ({ title: "Should not be used" }));
+    process.env.LLM_API_KEY = "llm-test";
+    try {
+      const logged = await recordCommunication(agent, { kind: "email", title: "Intro", body: "Nice to meet you", companyId: company }, { fetchImpl: llm.fetchImpl });
+      assert.equal(logged.activity.companyId, company);
+      assert.equal(logged.task, null);
+      assert.equal(logged.suggested, false);
+      assert.equal(llm.seen.length, 0);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    assert.equal((await listTasks(owner, { companyId: company })).data.length, 0);
   });
 });

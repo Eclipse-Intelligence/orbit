@@ -97,7 +97,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
           id: "approval_1",
           type: "approval",
           label: "Check with me",
-          config: { title: "Next step: {{steps.ai_1.nextTask}}", details: "{{steps.ai_1.why}}\n\nAfter: {{task.title}}\nDue: {{steps.ai_1.dueOn}}" },
+          config: { title: "Next step: {{steps.ai_1.nextTask}}", details: "{{steps.ai_1.why}}\n\nAfter: {{task.title}}\nDue: {{steps.ai_1.dueOn}}\nAlso created in ClickUp if it's set up." },
         },
         {
           id: "create_task_1",
