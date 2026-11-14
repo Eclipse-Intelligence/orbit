@@ -14,6 +14,28 @@ type GestureHandlers = {
 
 type GestureOptions = { touchTarget?: EventTarget | null };
 
+function swallowReleaseClick(pointerId: number) {
+  const swallow = (click: Event) => {
+    click.stopPropagation();
+    click.preventDefault();
+  };
+  let timer = 0;
+  const stop = () => {
+    window.clearTimeout(timer);
+    window.removeEventListener("pointerup", released, { capture: true });
+    window.removeEventListener("pointerdown", stop, { capture: true });
+    window.removeEventListener("click", swallow, { capture: true });
+  };
+  function released(up: Event) {
+    if ((up as PointerEvent).pointerId !== pointerId) return;
+    window.removeEventListener("pointerup", released, { capture: true });
+    timer = window.setTimeout(stop, 0);
+  }
+  window.addEventListener("pointerup", released, { capture: true });
+  window.addEventListener("pointerdown", stop, { capture: true });
+  window.addEventListener("click", swallow, { capture: true });
+}
+
 export function startPointerGesture(event: GestureStart, handlers: GestureHandlers, options: GestureOptions = {}): () => void {
   const touch = event.pointerType === "touch";
   const touchTarget = touch ? (options.touchTarget ?? null) : null;
@@ -94,6 +116,14 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     finish("cancel");
   }
 
+  function onKeyDown(key: KeyboardEvent) {
+    if (key.key !== "Escape" || !active) return;
+    key.preventDefault();
+    key.stopImmediatePropagation();
+    finish("cancel");
+    swallowReleaseClick(event.pointerId);
+  }
+
   function finish(result: GestureResult) {
     if (done) return;
     done = true;
@@ -106,6 +136,7 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
     window.removeEventListener("touchcancel", onTouchCancel);
     window.removeEventListener("contextmenu", blockMenu);
     window.removeEventListener("contextmenu", onMenu);
+    window.removeEventListener("keydown", onKeyDown, { capture: true });
     touchTarget?.removeEventListener("touchmove", onTouchMove as EventListener);
     touchTarget?.removeEventListener("touchend", onTouchEnd as EventListener);
     touchTarget?.removeEventListener("touchcancel", onTouchCancel);
@@ -113,6 +144,7 @@ export function startPointerGesture(event: GestureStart, handlers: GestureHandle
   }
 
   window.addEventListener("pointercancel", onPointerCancel);
+  window.addEventListener("keydown", onKeyDown, { capture: true });
   if (touch) {
     window.addEventListener("touchmove", onTouchMove, { passive: false });
     window.addEventListener("touchend", onTouchEnd);

@@ -168,6 +168,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   } = { date: null, time: null, exact: null, remind: null, duration: null };
   let ambiguous = false;
   let evening = false;
+  let sameWeekday = false;
   const clock = (hour: string, minute: number, meridiem: string | undefined) => {
     if (guessable(hour, meridiem)) return toHour(Number(hour), minute, meridiem);
     ambiguous = true;
@@ -258,13 +259,18 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (!match[3] && !led && !closing) return false;
     return setDate({ year, month: Number(match[2]), day: Number(match[1]) }, Boolean(match[3]));
   });
+  const onWeekday = (target: number, said: string) => {
+    const ahead = (target - weekday(today) + 7) % 7;
+    found.date = addDays(today, ahead || 7);
+    sameWeekday = ahead === 0 && !/\bnext\b/i.test(said);
+  };
   take(new RegExp(`${LEAD}\\b(?:(next|this|coming)\\s+)?${WEEKDAY}\\b`, "i"), (match) => {
     const target = weekdayIndex(match[2]);
     if (target < 0) return false;
-    found.date = addDays(today, ((target - weekday(today) + 7) % 7) || 7);
+    onWeekday(target, match[0]);
   });
   const weekendDay = (match: RegExpExecArray) => {
-    found.date = addDays(today, ((weekdayIndex(match[1]) - weekday(today) + 7) % 7) || 7);
+    onWeekday(weekdayIndex(match[1]), match[0]);
   };
   take(new RegExp(`\\b(?:on|by|due|for|until|this|next|coming)\\s+${WEEKEND_SHORT}\\b`, "i"), weekendDay);
   take(new RegExp(`${LEAD}\\b${WEEKEND_SHORT}\\b(?=\\s*,?\\s*(?:(?:at\\s+)?${CLOCK}|at\\s+\\d{1,2}\\b))`, "i"), weekendDay);
@@ -358,9 +364,9 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   } else if (found.date || found.time) {
     const time = found.time;
     let day = found.date ?? today;
-    if (time && !found.date && (time.hour < wall.hour || (time.hour === wall.hour && time.minute <= wall.minute))) {
-      day = addDays(today, 1);
-    }
+    const passed = time !== null && (time.hour < wall.hour || (time.hour === wall.hour && time.minute <= wall.minute));
+    if (time && !found.date && passed) day = addDays(today, 1);
+    if (time && sameWeekday && !passed) day = today;
     const date = `${day.year}-${pad(day.month)}-${pad(day.day)}`;
     due = time ? `${date}T${pad(time.hour)}:${pad(time.minute)}` : date;
   }

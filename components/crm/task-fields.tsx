@@ -28,6 +28,7 @@ import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
+import { clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { durationLabel, localInstant } from "@/lib/crm/task-time";
@@ -182,11 +183,17 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const [reminder, setReminder] = useState<number | null>(source.reminder);
   const [duration, setDuration] = useState(source.duration);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldErrors>(() => {
+    const message = unsavedDraftError(draft);
+    return message ? failFields([], draftFields(draft), message) : [];
+  });
+  const error = fieldError(errors);
+  const setError = useCallback((message: string | null) => {
+    setErrors((current) => (message ? failFields(current, ["other"], message) : clearFields(current, ["other"])));
+  }, []);
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const sent = useRef({ title: source.title, text: source.text });
-  const timingError = useRef(false);
   const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
   const visible = useRef(shown);
   useEffect(() => {
@@ -228,30 +235,27 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   async function save(write: TaskDetails) {
     const timed = touchesTiming(write);
     const ticket = timed ? timing.start() : 0;
-    setError(null);
+    const fields = fieldsOf(write);
     setNotice(null);
     let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
     try {
       result = await saveTaskDetailsAction(task.id, write);
     } catch {
-      result = { error: "Couldn't save. Try again." };
+      result = { error: saveFailedMessage(fields) };
     }
     if (result.error) {
       const restore = timed ? timing.fail(ticket) : null;
       if (restore) show(restore);
-      timingError.current = timed;
-      setError(result.error);
+      const message = result.error;
+      setErrors((current) => failFields(current, fields, message));
       if (!visible.current) composer.showToast({ message: result.error, tone: "alert" });
       return false;
     }
+    setErrors((current) => clearFields(current, fields));
     const applied = timed && result.saved ? timing.succeed(ticket, { due: dueValue(result.saved), reminder: result.saved.remindMinutes, duration: result.saved.durationMinutes }) : null;
     if (timed && !result.saved) timing.fail(ticket);
     if (applied && result.saved) {
       show(applied);
-      if (timingError.current) {
-        timingError.current = false;
-        setError(null);
-      }
       if (asksForTime(write) && result.saved.dueAt && !result.saved.dueHasTime) {
         const note = dayOnlyNote(task.ownerName);
         setNotice(note);

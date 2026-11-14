@@ -7,3 +7,16 @@ export function reconcileDone(open: Set<string>, state: DoneState): DoneState {
   const done = new Set([...state.done].filter((id) => !back.has(id)));
   return { done, awaiting: new Set(), confirmed, sent };
 }
+
+export async function stillOpenIds(wanted: string[], check: (ids: string[]) => Promise<{ open?: string[] }>) {
+  try {
+    return (await check(wanted)).open ?? wanted;
+  } catch {
+    return wanted;
+  }
+}
+
+export function panelTaskFor<T extends { id: string }>(openId: string | null, listed: T | null, kept: T | null, keep: (id: string) => boolean) {
+  if (listed) return listed;
+  return kept && kept.id === openId && keep(kept.id) ? kept : null;
+}

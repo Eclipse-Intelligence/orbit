@@ -127,7 +127,7 @@ export default function TaskReminders() {
               <span className="truncate text-[14px] leading-5">{alert.reminder.title}</span>
               {about && <span className="caption-style text-subtle truncate">{about}</span>}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 [@media(pointer:coarse)]:gap-x-3 [@media(pointer:coarse)]:gap-y-6">
               <Button
                 variant="primary"
                 size="sm"
@@ -136,10 +136,11 @@ export default function TaskReminders() {
                   dismiss(alert.key);
                   router.push(TASKS_PATH);
                 }}
+                className="hit"
               >
                 Open tasks
               </Button>
-              <Button variant="ghost" size="sm" type="button" onClick={() => dismiss(alert.key)}>
+              <Button variant="ghost" size="sm" type="button" onClick={() => dismiss(alert.key)} className="hit">
                 Dismiss
               </Button>
               {permission === "default" && (
@@ -147,7 +148,7 @@ export default function TaskReminders() {
                   variant="link"
                   size="none"
                   type="button"
-                  className="caption-style ml-auto"
+                  className="caption-style hit ml-auto"
                   onClick={() => void requestReminderPermission().then((next) => setPermission(next))}
                 >
                   Turn on browser alerts
