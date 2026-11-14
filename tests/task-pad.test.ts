@@ -93,7 +93,7 @@ describe("task pad parser", () => {
   it("keeps the typed words and takes only a checked date from the AI fallback", async () => {
     const answers = [
       { phrases: ["after the weekend", "remind me 15 mins before"], due: "2026-10-19", remindMinutes: 15, durationMinutes: null },
-      { phrases: ["monday 11.15", "remind me 30 mins before"], due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null },
+      { phrases: ["monday 11:15", "remind me 30 mins before"], due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null },
       { phrases: [], due: null, remindMinutes: 15, durationMinutes: null },
       { phrases: ["next monday"], due: "next Monday", remindMinutes: null, durationMinutes: null },
       { phrases: ["Ring Jane"], due: "2026-10-19", remindMinutes: null, durationMinutes: null },
@@ -117,7 +117,7 @@ describe("task pad parser", () => {
     const nothing = (title: string) => ({ title, due: null, remindMinutes: null, durationMinutes: null });
     try {
       assert.deepEqual(await ask("ring jane after the weekend, remind me 15 mins before"), { title: "Ring jane", due: "2026-10-19", remindMinutes: 15, durationMinutes: null });
-      assert.deepEqual(await ask("ring jane monday 11.15, remind me 30 mins before"), { title: "Ring jane", due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null });
+      assert.deepEqual(await ask("ring jane monday 11:15, remind me 30 mins before"), { title: "Ring jane", due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null });
       assert.deepEqual(await ask("ring jane, nudge me"), nothing("ring jane, nudge me"));
       assert.deepEqual(await ask("ring jane next monday"), nothing("ring jane next monday"), "a due that is not a date");
       assert.deepEqual(await ask("ring jane at some point"), nothing("ring jane at some point"), "a phrase that is not in the text");

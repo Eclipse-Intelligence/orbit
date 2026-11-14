@@ -197,9 +197,9 @@ describe("task area UI", () => {
       dec31: "2026-12-31T16:00:00Z",
     };
     const fixtures = path.join(import.meta.dirname, "fixtures");
-    const titles = ["task-pad-titles.txt", "task-pad-titles-2.txt", "task-pad-titles-3.txt", "task-pad-titles-4.txt"].flatMap((file) => readFileSync(path.join(fixtures, file), "utf8").split("\n")).filter(Boolean);
+    const titles = ["task-pad-titles.txt", "task-pad-titles-2.txt", "task-pad-titles-3.txt", "task-pad-titles-4.txt", "task-pad-titles-5.txt"].flatMap((file) => readFileSync(path.join(fixtures, file), "utf8").split("\n")).filter(Boolean);
     const confident = JSON.parse(readFileSync(path.join(fixtures, "task-pad-confident.json"), "utf8")) as Record<string, Record<string, string>>;
-    assert.ok(titles.length >= 721);
+    assert.ok(titles.length >= 930);
     for (const [moment, iso] of Object.entries(nows)) {
       for (const text of titles) {
         const parsed = parseTaskText(text, new Date(iso));
@@ -272,6 +272,34 @@ describe("task area UI", () => {
     assert.deepEqual(check("Tell Sam to log in on Friday", ["in on Friday"], friday), untouched("Tell Sam to log in on Friday"));
     assert.deepEqual(check("Call Sam 1 2 3 Friday", ["1 2 3 Friday"], friday), untouched("Call Sam 1 2 3 Friday"));
     assert.deepEqual(check("Prep [[Friday plan]]", ["Friday"], friday), untouched("Prep [[Friday plan]]"), "never inside a doc link");
+
+    const full = (text: string, phrases: string[], due: string, remindMinutes: number | null = null, durationMinutes: number | null = null) =>
+      acceptAiReading(text, { phrases, due, remindMinutes, durationMinutes }, now);
+    assert.deepEqual(full("Pay 2.50 tomorrow", ["2.50 tomorrow"], "2026-11-17T14:50"), untouched("Pay 2.50 tomorrow"), "a decimal is not a clock");
+    assert.deepEqual(full("Pay £2.50 tomorrow", ["2.50"], "2026-11-17T14:50"), untouched("Pay £2.50 tomorrow"));
+    assert.deepEqual(full("Budget 14.50 tomorrow", ["14.50 tomorrow"], "2026-11-17T14:50"), untouched("Budget 14.50 tomorrow"));
+    assert.deepEqual(full("Lunch tomorrow at 12:30", ["tomorrow at 12:30"], "2026-11-17T12:30"), { title: "Lunch", due: "2026-11-17T12:30", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(full("Set up reminder tomorrow", ["reminder tomorrow"], "2026-11-17"), untouched("Set up reminder tomorrow"), "a reminder noun is never cut");
+    assert.deepEqual(full("Call Sam tomorrow, remind me", ["tomorrow, remind me"], "2026-11-17", 15), untouched("Call Sam tomorrow, remind me"));
+    assert.deepEqual(full("Call Sam tomorrow 3pm 1 hour reminder", ["tomorrow 3pm", "1 hour reminder"], "2026-11-17T15:00", 60), { title: "Call Sam", due: "2026-11-17T15:00", remindMinutes: 60, durationMinutes: null });
+    assert.deepEqual(full("Holiday tomorrow for 3 days", ["tomorrow", "for 3 days"], "2026-11-17", null, 4320), untouched("Holiday tomorrow for 3 days"), "for N days is never a length");
+    assert.deepEqual(full("Call Sam tomorrow 3pm for 30 mins", ["tomorrow 3pm", "for 30 mins"], "2026-11-17T15:00", null, 45), untouched("Call Sam tomorrow 3pm for 30 mins"), "a length must match");
+    assert.deepEqual(full("Call Sam tomorrow 3pm for 30 mins", ["tomorrow 3pm", "for 30 mins"], "2026-11-17T15:00", null, 30), { title: "Call Sam", due: "2026-11-17T15:00", remindMinutes: null, durationMinutes: 30 });
+    assert.deepEqual(full("Workshop tomorrow 2-4pm", ["tomorrow 2-4pm"], "2026-11-17T15:00", null, 120), untouched("Workshop tomorrow 2-4pm"), "a range's start must be the due time");
+    assert.deepEqual(full("Workshop tomorrow 2-4pm", ["tomorrow 2-4pm"], "2026-11-17T14:00", null, 90), untouched("Workshop tomorrow 2-4pm"), "a range's length must match");
+    assert.deepEqual(full("Workshop tomorrow 2-4pm", ["tomorrow 2-4pm"], "2026-11-17T14:00", null, 120), { title: "Workshop", due: "2026-11-17T14:00", remindMinutes: null, durationMinutes: 120 });
+    assert.deepEqual(full("Renew domain 3 June 2027", ["3 June 2027"], "2028-06-03"), untouched("Renew domain 3 June 2027"), "the year must match");
+    assert.deepEqual(full("Renew domain 3 June", ["3 June"], "2028-06-03"), untouched("Renew domain 3 June"), "a day and month is the next one");
+    assert.deepEqual(full("Call Sam Friday", ["Friday"], "2026-11-27"), untouched("Call Sam Friday"), "a weekday is the next one");
+    assert.deepEqual(full("Call Sam next Friday", ["next Friday"], "2026-11-27"), { title: "Call Sam", due: "2026-11-27", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(full("Call Sam in 2 hours", ["in 2 hours"], "2026-11-16T12:15"), untouched("Call Sam in 2 hours"), "in N hours must add up");
+    assert.deepEqual(full("Call Sam in 2 hours", ["in 2 hours"], "2026-11-16T11:15"), { title: "Call Sam", due: "2026-11-16T11:15", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(full("Call Sam in twenty days", ["in twenty days"], "2026-12-06"), { title: "Call Sam", due: "2026-12-06", remindMinutes: null, durationMinutes: null });
+    assert.deepEqual(full("Call Sam in twenty days", ["in twenty days"], "2026-12-07"), untouched("Call Sam in twenty days"));
+    assert.deepEqual(full("Call Sam tomorrow afternoon", ["tomorrow afternoon"], "2026-11-17T09:00"), untouched("Call Sam tomorrow afternoon"), "afternoon must be in the afternoon");
+    assert.deepEqual(full("Call Sam tomorrow at 3 o'clock", ["tomorrow at 3 o'clock"], "2026-11-17T04:00"), untouched("Call Sam tomorrow at 3 o'clock"));
+    assert.deepEqual(full("Call Sam next week", ["next week"], "2026-11-30"), untouched("Call Sam next week"), "next week is the coming Monday's week");
+    assert.deepEqual(full("Call Sam next week", ["next week"], "2026-11-23"), { title: "Call Sam", due: "2026-11-23", remindMinutes: null, durationMinutes: null });
     assert.deepEqual(check("Tell Sam to log in on Friday", ["on Friday"], friday), { title: "Tell Sam to log in on Friday", due: friday, remindMinutes: null, durationMinutes: null }, "a cut after a dangling word keeps the typed title");
     assert.deepEqual(check("Tomorrow send NDA", ["Tomorrow"], "2026-11-17"), { title: "Tomorrow send NDA", due: "2026-11-17", remindMinutes: null, durationMinutes: null }, "a cut at the start that leaves a dangling word keeps the typed title");
 
@@ -427,6 +455,20 @@ describe("task area UI", () => {
       ["Read [[Tomorrow]]", monday, ["Read [[Tomorrow]]", null]],
       ["Notes [[3pm sync", monday, ["Notes [[3pm sync", null]],
       ["Read [[The Day After Tomorrow]] by Friday", monday, ["Read [[The Day After Tomorrow]]", "2026-11-20"]],
+      ["Afternoon tea booking", monday, asked],
+      ["Evening class signup", monday, asked],
+      ["Evening meal plan", monday, asked],
+      ["Midnight release plan", monday, asked],
+      ["Weekend rota", monday, asked],
+      ["Weekend cover for Jo", monday, asked],
+      ["Weekend plans with Jo", monday, asked],
+      ["Tonight show tickets", monday, asked],
+      ["Today programme pitch", monday, asked],
+      ["Morning standup tomorrow", monday, asked],
+      ["Agenda for tomorrow", monday, asked],
+      ["Notes for tonight", monday, asked],
+      ["Prep for today", monday, asked],
+      ["Call Sam tomorrow. Then email Jo", monday, ["Call Sam. Then email Jo", "2026-11-17"]],
     ];
     for (const [text, at, expected] of cases) {
       const parsed = parseTaskText(text, new Date(at));

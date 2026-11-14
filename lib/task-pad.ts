@@ -178,6 +178,7 @@ function readWeekdays(text: string, spans: Span[]): WeekdayWord[] {
   return found.filter((item) => item.target >= 0);
 }
 
+const START_TIME_WORD = /^\s*(?:the\s+)?(?:afternoon|evening|morning|midnight|midday|noon|night|weekend|tonight|today|tomorrow|tmrw|tmr|eod|eow|end)\b/i;
 const FREE_WORDS = "about|re|regarding|with|for|and|to|at|in|via|on|by|then|if|please|remind|reminder";
 const FREE_AFTER = new RegExp(`^\\s*(?:$|[,.;:!?)]|(?:${FREE_WORDS})\\b)`, "i");
 const NOUN_AFTER = new RegExp(`^\\s+(?!(?:${FREE_WORDS})\\b)[a-z]`, "i");
@@ -187,7 +188,7 @@ const EXTRA_DOUBT = new RegExp(
   [
     `\\b${WEEKDAY_ANY}\\s+(?:1[3-9]|2\\d|3[01])\\b(?!\\s*(?:[:.]\\d|am\\b|pm\\b|st\\b|nd\\b|rd\\b|th\\b|${MONTH}))`,
     "\\bnext\\s+next\\b",
-    `\\bfor\\s+(?:the\\s+)?(?:\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}|${MONTH}\\s+\\d|\\d{1,2}\\/\\d{1,2}|${WEEKDAY_ANY}\\b)`,
+    `\\bfor\\s+(?:the\\s+)?(?:\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}|${MONTH}\\s+\\d|\\d{1,2}\\/\\d{1,2}|${WEEKDAY_ANY}\\b|today\\b|tomorrow\\b|tonight\\b|tmrw\\b|tmr\\b)`,
   ].join("|"),
   "i",
 );
@@ -219,6 +220,7 @@ function debris(text: string, spans: Span[], strict = false) {
     if (run.start > 0 && NAMED_TIME.test(text.slice(run.start, run.end)) && text !== text.toUpperCase()) return true;
     if (run.start === 0 && NAMED_TIME.test(text.slice(run.start, run.end)) && /^\s+[A-Z]/.test(after) && text !== text.toUpperCase()) return true;
     if (strict && run.start === 0 && NOUN_AFTER.test(after)) return true;
+    if (run.start === 0 && START_TIME_WORD.test(text.slice(run.start, run.end)) && NOUN_AFTER.test(after)) return true;
     const number = /(?:^|\s)(\d{1,4})\s*$/.exec(before);
     return Boolean(number) && !COUNTED.test(before.slice(0, number!.index));
   });
@@ -319,7 +321,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (!valid(candidate)) return false;
     if (!explicitYear && compare(candidate, today) < 0 && compare({ ...candidate, year: candidate.year + 1 }, addDays(today, 92)) > 0) {
       doubt = true;
-      if (compare(candidate, addDays(today, -31)) >= 0) hardDoubt = true;
+      if (compare(candidate, addDays(today, -61)) >= 0) hardDoubt = true;
     }
     found.date = !explicitYear && compare(candidate, today) < 0 ? { ...candidate, year: candidate.year + 1 } : candidate;
     dateSource = "explicit"; dateHits += 1;
@@ -642,14 +644,40 @@ function escapeRegExp(value: string) {
 const AI_DUE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/;
 const AI_REACH_DAYS = 730;
 
-const AI_NUM = "(?:\\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|forty-five|sixty|ninety)";
+const SPELLED: Record<string, number> = {
+  a: 1,
+  an: 1,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  fifteen: 15,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  "forty-five": 45,
+  fifty: 50,
+  sixty: 60,
+  ninety: 90,
+};
+const AI_NUM = `(?:\\d+|${Object.keys(SPELLED).join("|")})`;
+const AI_SHORT_UNIT = "(?:min(?:ute)?s?|hours?|hrs?)";
 const AI_UNIT = "(?:min(?:ute)?s?|hours?|hrs?|days?|weeks?)";
-const AI_CLOCK = `\\b\\d{1,2}(?:[:.]\\d{2})?\\s*(?:-\\s*\\d{1,2}(?:[:.]\\d{2})?\\s*)?(?:am|pm)\\b|\\b\\d{1,2}[:.]\\d{2}\\b|\\b(?:noon|midday|midnight)\\b|\\bat\\s+\\d{1,2}\\b|\\b\\d{1,2}\\s*o'?clock\\b`;
+const AI_RANGE = "\\b(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?\\s*-\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)\\b";
+const AI_CLOCK = `${AI_RANGE}|\\b\\d{1,2}(?:[:.]\\d{2})?\\s*(?:am|pm)\\b|\\b\\d{1,2}:\\d{2}\\b|\\b(?:noon|midday|midnight)\\b|\\bat\\s+\\d{1,2}(?::\\d{2})?\\b(?![.]\\d)|\\b\\d{1,2}\\s*o'?clock\\b`;
 const AI_DAY_MONTH = `\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}\\b|\\b${MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`;
 const AI_NUMERIC_DATE = "\\b\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?\\b";
 const AI_IN_UNITS = `\\bin\\s+${AI_NUM}\\s+${AI_UNIT}\\b`;
-const AI_REMIND = `\\bremind(?:er)?(?:\\s+me)?(?:\\s+${AI_NUM}\\s+${AI_UNIT}\\s+(?:before|early|ahead))?|\\b${AI_NUM}\\s+${AI_UNIT}\\s+(?:before|early|ahead)\\b`;
-const AI_FOR = `\\bfor\\s+${AI_NUM}\\s+${AI_UNIT}\\b`;
+const AI_REMIND = `\\bremind(?:er)?(?:\\s+me)?\\s+${AI_NUM}\\s+${AI_UNIT}\\s+(?:before|early|ahead)\\b|\\b${AI_NUM}\\s+${AI_UNIT}\\s+(?:before|early|ahead)\\b|\\b${AI_NUM}[\\s-]+${AI_UNIT}\\s+reminder\\b`;
+const AI_FOR = `\\bfor\\s+${AI_NUM}\\s+${AI_SHORT_UNIT}\\b`;
 const AI_STRUCTURE = new RegExp([AI_CLOCK, AI_DAY_MONTH, AI_NUMERIC_DATE, AI_IN_UNITS, AI_REMIND, AI_FOR, "\\b20\\d\\d\\b"].join("|"), "gi");
 const AI_ANCHOR = new RegExp(
   [
@@ -666,7 +694,10 @@ const AI_ANCHOR = new RegExp(
   ].join("|"),
   "i",
 );
-const AI_LOOSE = new RegExp(`\\d|\\b${MONTH}\\b|\\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|half|quarter)\\b`, "i");
+const AI_LOOSE = new RegExp(
+  `\\d|\\b${MONTH}\\b|\\b(?:${Object.keys(SPELLED).filter((word) => word.length > 2).join("|")}|half|quarter|remind|reminder|me)\\b`,
+  "i",
+);
 
 function phraseKind(phrase: string): "when" | "remind" | "length" | null {
   if (!phraseWords(phrase)) return null;
@@ -678,48 +709,100 @@ function phraseKind(phrase: string): "when" | "remind" | "length" | null {
   return null;
 }
 
-const SPELLED_NUMBERS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
-
 function amountOf(word: string) {
   if (/^\d+$/.test(word)) return Number(word);
-  if (/^an?$/i.test(word)) return 1;
-  const index = SPELLED_NUMBERS.indexOf(word.toLowerCase());
-  return index >= 0 ? index : null;
+  return SPELLED[word.toLowerCase()] ?? null;
 }
 
-function dueAgrees(said: string, day: Day, time: { hour: number; minute: number } | null, today: Day) {
-  for (const word of said.match(WEEKDAY_WORD) ?? []) if (weekdayIndex(word) !== weekday(day)) return false;
-  if (/\b(?:today|tonight)\b/i.test(said) && compare(day, today) !== 0) return false;
-  if (/\b(?:tomorrow|tmrw|tmr)\b/i.test(said) && compare(day, addDays(today, 1)) !== 0) return false;
-  for (const found of said.matchAll(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}\\b`, "gi"))) {
-    if (Number(found[1]) !== day.day || monthIndex(found[2]) + 1 !== day.month) return false;
+function unitMinutesOf(unit: string) {
+  const key = unit.toLowerCase();
+  if (key.startsWith("w")) return 7 * 24 * 60;
+  if (key.startsWith("d")) return 24 * 60;
+  if (key.startsWith("h")) return 60;
+  return 1;
+}
+
+function hourFits(hour: number, said: string) {
+  if (/\bmorning\b/i.test(said) && (hour < 5 || hour > 11)) return false;
+  if (/\bafternoon\b/i.test(said) && (hour < 12 || hour > 17)) return false;
+  if (/\bevening\b/i.test(said) && (hour < 17 || hour > 22)) return false;
+  if (/\b(?:tonight|night)\b/i.test(said) && hour < 17) return false;
+  return true;
+}
+
+function dueAgrees(said: string, day: Day, time: { hour: number; minute: number } | null, wall: ReturnType<typeof londonParts>, duration: number | null) {
+  const today: Day = { year: wall.year, month: wall.month, day: wall.day };
+  const ahead = Math.round((Date.UTC(day.year, day.month - 1, day.day) - Date.UTC(today.year, today.month - 1, today.day)) / 86_400_000);
+  const dated = new RegExp(`${AI_DAY_MONTH}|${AI_NUMERIC_DATE}|${AI_IN_UNITS}|\\bweek\\b`, "i").test(said);
+  for (const word of said.match(WEEKDAY_WORD) ?? []) {
+    if (weekdayIndex(word) !== weekday(day)) return false;
+    if (!dated && ahead > (/\bnext\b/i.test(said) ? 13 : 7)) return false;
   }
-  for (const found of said.matchAll(new RegExp(`\\b${MONTH}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`, "gi"))) {
-    if (Number(found[2]) !== day.day || monthIndex(found[1]) + 1 !== day.month) return false;
+  if (/\b(?:today|tonight)\b/i.test(said) && ahead !== 0) return false;
+  if (/\b(?:tomorrow|tmrw|tmr)\b/i.test(said) && ahead !== 1) return false;
+  if (/\bnext\s+week\b/i.test(said)) {
+    const monday = addDays(today, ((1 - weekday(today) + 7) % 7) || 7);
+    const offset = Math.round((Date.UTC(day.year, day.month - 1, day.day) - Date.UTC(monday.year, monday.month - 1, monday.day)) / 86_400_000);
+    if (offset < 0 || offset > 6) return false;
   }
-  for (const found of said.matchAll(/\b(\d{1,2})\/(\d{1,2})\b/g)) {
-    if (Number(found[1]) !== day.day || Number(found[2]) !== day.month) return false;
+  for (const found of said.matchAll(/\b(20\d\d)\b/g)) if (Number(found[1]) !== day.year) return false;
+  const explicitYear = /\b20\d\d\b/.test(said);
+  const dayMonths = [
+    ...[...said.matchAll(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}\\b`, "gi"))].map((found) => ({ day: Number(found[1]), month: monthIndex(found[2]) + 1 })),
+    ...[...said.matchAll(new RegExp(`\\b${MONTH}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`, "gi"))].map((found) => ({ day: Number(found[2]), month: monthIndex(found[1]) + 1 })),
+    ...[...said.matchAll(/\b(\d{1,2})\/(\d{1,2})\b(?!\/)/g)].map((found) => ({ day: Number(found[1]), month: Number(found[2]) })),
+  ];
+  for (const found of dayMonths) {
+    if (found.day !== day.day || found.month !== day.month) return false;
+    if (!explicitYear) {
+      const thisYear = { year: today.year, month: found.month, day: found.day };
+      const nearest = compare(thisYear, today) >= 0 ? today.year : today.year + 1;
+      if (day.year !== nearest) return false;
+    }
   }
-  for (const found of said.matchAll(new RegExp(`\\bin\\s+(${AI_NUM})\\s+(days?|weeks?)\\b`, "gi"))) {
+  for (const found of said.matchAll(new RegExp(`\\bin\\s+(${AI_NUM})\\s+(${AI_UNIT})\\b`, "gi"))) {
     const amount = amountOf(found[1]);
-    if (amount !== null && compare(day, addDays(today, amount * (/^w/i.test(found[2]) ? 7 : 1))) !== 0) return false;
+    if (amount === null) return false;
+    const minutes = amount * unitMinutesOf(found[2]);
+    if (minutes >= 24 * 60) {
+      if (ahead !== Math.round(minutes / (24 * 60))) return false;
+    } else {
+      if (!time) return false;
+      const target = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute) + minutes * 60_000;
+      const got = Date.UTC(day.year, day.month - 1, day.day, time.hour, time.minute);
+      if (Math.abs(got - target) > 60_000) return false;
+    }
   }
-  const clocks = [...said.replace(/\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?\s*-\s*\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?/gi, " ").matchAll(/\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b|\b(\d{1,2})[:.](\d{2})\b|\bat\s+(\d{1,2})\b(?![:.]\d)/gi)];
-  for (const found of clocks) {
+  const range = new RegExp(AI_RANGE, "i").exec(said);
+  if (range) {
+    if (!time) return false;
+    const startHour = Number(range[1]);
+    const startMinute = Number(range[2] ?? 0);
+    const options = range[3] ? [toHour(startHour, startMinute, range[3])] : [toHour(startHour, startMinute, "am"), toHour(startHour, startMinute, "pm")];
+    if (!options.some((option) => option && option.hour === time.hour && option.minute === time.minute)) return false;
+    const end = toHour(Number(range[4]), Number(range[5] ?? 0), range[6]);
+    if (duration !== null && (!end || end.hour * 60 + end.minute - (time.hour * 60 + time.minute) !== duration)) return false;
+  }
+  const rest = said.replace(new RegExp(AI_RANGE, "gi"), " ");
+  for (const found of rest.matchAll(/\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b|\b(\d{1,2}):(\d{2})\b|\bat\s+(\d{1,2})(?::(\d{2}))?\b|\b(\d{1,2})\s*o'?clock\b/gi)) {
     if (!time) return false;
     if (found[1] !== undefined) {
       const wanted = toHour(Number(found[1]), Number(found[2] ?? 0), found[3]);
       if (!wanted || wanted.hour !== time.hour || wanted.minute !== time.minute) return false;
-    } else if (found[4] !== undefined) {
-      const hour = Number(found[4]);
-      if (time.minute !== Number(found[5]) || (time.hour !== hour && time.hour !== hour + 12)) return false;
     } else {
-      const hour = Number(found[6]);
-      if (time.minute !== 0 || (time.hour !== hour && time.hour !== hour + 12)) return false;
+      const hour = Number(found[4] ?? found[6] ?? found[8]);
+      const minute = Number(found[5] ?? found[7] ?? 0);
+      if (time.minute !== minute || (time.hour !== hour && time.hour !== hour + 12) || hour > 23) return false;
     }
   }
   if (/\bnoon\b|\bmidday\b/i.test(said) && (!time || time.hour !== 12 || time.minute !== 0)) return false;
   if (/\bmidnight\b/i.test(said) && (!time || time.hour !== 0 || time.minute !== 0)) return false;
+  if (time && !hourFits(time.hour, said)) return false;
+  const length = new RegExp(`\\bfor\\s+(${AI_NUM})\\s+(${AI_SHORT_UNIT})\\b`, "i").exec(said);
+  if (length && duration !== null) {
+    const amount = amountOf(length[1]);
+    if (amount === null || amount * unitMinutesOf(length[2]) !== duration) return false;
+  }
   return true;
 }
 
@@ -756,15 +839,15 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
   const today: Day = { year: wall.year, month: wall.month, day: wall.day };
   if (compare(day, today) < 0 || compare(day, addDays(today, AI_REACH_DAYS)) > 0) return kept;
   if (time && compare(day, today) === 0 && (time.hour < wall.hour || (time.hour === wall.hour && time.minute < wall.minute))) return kept;
-  if (!dueAgrees(said, day, time, today)) return kept;
-  const asksReminder = new RegExp(AI_REMIND, "i").test(said);
-  const reminder =
-    !asksReminder || answer.remindMinutes === null || !Number.isFinite(answer.remindMinutes) || answer.remindMinutes < 0 ? null : nearestReminder(answer.remindMinutes);
-  const statesLength = new RegExp(AI_FOR, "i").test(said) || /\d\s*(?:am|pm)?\s*-\s*\d/i.test(said);
+  const statesLength = new RegExp(AI_FOR, "i").test(said) || new RegExp(AI_RANGE, "i").test(said);
   const duration =
     statesLength && answer.durationMinutes !== null && Number.isInteger(answer.durationMinutes) && answer.durationMinutes > 0 && answer.durationMinutes <= MAX_TASK_DURATION
       ? answer.durationMinutes
       : null;
+  if (!dueAgrees(said, day, time, wall, duration)) return kept;
+  const asksReminder = new RegExp(AI_REMIND, "i").test(said);
+  const reminder =
+    !asksReminder || answer.remindMinutes === null || !Number.isFinite(answer.remindMinutes) || answer.remindMinutes < 0 ? null : nearestReminder(answer.remindMinutes);
   const title = cleanTitle(text, spans);
   return {
     title: title && !debris(text, spans, true) ? title : text,
