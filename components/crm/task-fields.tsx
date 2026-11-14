@@ -14,7 +14,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { EditLinks } from "@/components/crm/task-actions";
-import { linksDocsAs, othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
+import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
 import LinkedText from "@/components/_ui/linked-text";
 import { showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
 import type { Viewer } from "@/components/crm/viewer";
@@ -875,6 +875,15 @@ function QuickDates({ details }: { details: TaskDetailsState }) {
 function Description({ details, layout }: { details: TaskDetailsState; layout: "panel" | "row" }) {
   const field = useAutoSize(details.text);
   const [editing, setEditing] = useState<number | null>(null);
+  useEffect(() => {
+    if (editing === null) return;
+    const settle = () => {
+      if (!(document.activeElement instanceof HTMLTextAreaElement && document.activeElement.getAttribute("aria-label") === "Description")) setEditing(null);
+    };
+    const later = () => window.setTimeout(settle, 0);
+    window.addEventListener("focus", later);
+    return () => window.removeEventListener("focus", later);
+  }, [editing]);
   if (!details.canChange) {
     if (layout === "row" && !details.text) return null;
     return <p className="text-soft break-words whitespace-pre-wrap">{details.text ? <LinkedText text={details.text} /> : "No description"}</p>;
@@ -917,7 +926,7 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
       onChange={(event) => details.setText(event.target.value)}
       onBlur={() => {
         details.saveText();
-        setEditing(null);
+        if (document.hasFocus()) setEditing(null);
       }}
       className={cn(
         "resize-none overflow-hidden",
@@ -976,7 +985,7 @@ export default function TaskFields({
           )}
         </div>
         <Description details={details} layout="row" />
-        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} docs={linksDocsAs(viewer.id, task)} />}
+        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} docs={task.canLinkDocs} />}
         {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
         {details.error && (
           <p role="alert" className="caption-style text-danger">
@@ -1013,7 +1022,7 @@ export default function TaskFields({
       </dl>
       {taskIsLinked(task) && (
         <Section label="Linked">
-          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} warn={othersSeeTask(task, viewer.id, tagged)} docs={linksDocsAs(viewer.id, task)} />
+          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} warn={othersSeeTask(task, viewer.id, tagged)} docs={task.canLinkDocs} />
         </Section>
       )}
       <Section label="Description">

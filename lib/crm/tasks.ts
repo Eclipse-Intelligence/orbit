@@ -197,6 +197,7 @@ function mapTask(row: TaskRow): Task {
     mailThread: row.mail_thread_key ? { subject: null, readable: false } : null,
     docIds: row.doc_ids ?? [],
     docs: [],
+    canLinkDocs: false,
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
   };
@@ -626,6 +627,7 @@ async function applyTask(
     if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id })) throw cannotChange(write);
     return { task: (await withViewerLinksInDb(db, actor, [before]))[0], changed: false };
   }
+  if (docs) await writeTaskDocsInDb(db, actor, { id: current.id, workspaceId: current.workspace_id }, docs);
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
   const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id });
   let taggedAssigner = false;
@@ -645,7 +647,6 @@ async function applyTask(
     taskConstraintError(error);
   }
   if (updated === 0) throw cannotChange(write);
-  if (docs) await writeTaskDocsInDb(db, actor, { id: current.id, workspaceId: current.workspace_id }, docs);
   if (change.fields.some((field) => field !== "docIds")) queueTaskBlock(db, current.id);
   const saved = await readTask(db, actor, current.id);
   if (!saved) throw notFound("task");

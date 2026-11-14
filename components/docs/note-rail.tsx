@@ -180,7 +180,7 @@ function PageTasks({ pageId }: { pageId: string }) {
   const open = list.filter((task) => !task.completedAt);
   const done = list.filter((task) => task.completedAt);
   return (
-    <RailSection title="Tasks" count={open.length}>
+    <RailSection title="Tasks" count={open.length > 0 ? open.length : undefined}>
       {open.length > 0 && (
         <ul className="flex flex-col">
           {open.map((task) => (

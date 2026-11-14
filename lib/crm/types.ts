@@ -422,6 +422,7 @@ export type Task = {
   mailThread: TaskMailThread | null;
   docIds: string[];
   docs: TaskDoc[];
+  canLinkDocs: boolean;
   createdAt: string;
   updatedAt: string;
 };

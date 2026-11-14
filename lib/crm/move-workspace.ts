@@ -5,7 +5,7 @@ import { readContactInDb } from "@/lib/crm/contacts";
 import { withActor, withActorAfterAppStep } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure, tooMany } from "@/lib/crm/errors";
 import { fillCompanyGaps, fillContactGaps, type GapFill } from "@/lib/crm/merge";
-import { clickupUnlinkedLine } from "@/lib/crm/move-lines";
+import { clickupUnlinkedLine, docsUnlinkedLine } from "@/lib/crm/move-lines";
 import { isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { readOpportunityInDb } from "@/lib/crm/opportunities";
 import { assertScope, type Scope } from "@/lib/crm/scopes";
@@ -148,6 +148,7 @@ export type MoveResult = {
   tasks: number;
   leftBehind: { id: string; name: string }[];
   clickupUnlinked: number;
+  docsUnlinked: number;
   message: string;
 };
 
@@ -358,12 +359,29 @@ function alongPhrase(plan: Plan) {
   return `, with ${what}${people},`;
 }
 
-function resultMessage(plan: Plan) {
+function resultMessage(plan: Plan, docsUnlinked = 0) {
   const names = selectedNames(plan);
   const what = names.length === 1 ? names[0] : counted(names.length, "record", "records");
   const moved = `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
   const unlinked = plan.copy ? "" : clickupUnlinkedLine(plan.clickupTasks ?? 0);
-  return unlinked ? `${moved} ${unlinked}` : moved;
+  return [moved, unlinked, docsUnlinkedLine(docsUnlinked, plan.source.name)].filter(Boolean).join(" ");
+}
+
+async function auditDroppedDocs(db: Db, target: UserActor, plan: Plan, provenance: Provenance) {
+  const setting = await db.query<{ value: string | null }>("select current_setting('orbit.task_docs_dropped', true) as value");
+  const raw = setting.rows[0]?.value;
+  if (!raw) return 0;
+  await db.query("select set_config('orbit.task_docs_dropped', '', true)");
+  const dropped = JSON.parse(raw) as { taskId: string; docIds: string[] }[];
+  for (const item of dropped) {
+    await recordAudit(db, target, "task.updated", "task", item.taskId, provenance, {
+      fields: ["docIds"],
+      before: { docIds: item.docIds },
+      after: { docIds: [] },
+      movedFrom: plan.source,
+    });
+  }
+  return dropped.length;
 }
 
 type CopiedFrom = { workspaceId: string; workspaceName: string; id: string };
@@ -534,6 +552,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
       }
       if (done.copy) await auditCopy(db, source, target, done, fills, provenance);
       else await auditMove(db, source, target, done, fills, provenance);
+      const docsUnlinked = done.copy ? 0 : await auditDroppedDocs(db, target, done, provenance);
       return {
         copy: done.copy,
         source: done.source,
@@ -545,7 +564,8 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         tasks: done.tasks,
         leftBehind: (done.leftBehind ?? []).map((item) => ({ id: item.id, name: item.name })),
         clickupUnlinked: done.copy ? 0 : (done.clickupTasks ?? 0),
-        message: resultMessage(done),
+        docsUnlinked,
+        message: resultMessage(done, docsUnlinked),
       };
     },
   ).catch((error: unknown) => moveFailure(error, target.workspaceName));

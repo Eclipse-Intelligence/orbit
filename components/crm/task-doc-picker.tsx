@@ -250,11 +250,17 @@ export function DocPickPopover({
               setHighlight(0);
             }}
             onKeyDown={(event) => {
-              if (!docs || docs.length === 0 || event.nativeEvent.isComposing) return;
+              if (event.nativeEvent.isComposing) return;
+              const picks = event.key === "Enter" || (event.key === "Tab" && !event.shiftKey);
+              if (picks && found.loading) {
+                event.preventDefault();
+                return;
+              }
+              if (!docs || docs.length === 0) return;
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 setHighlight((active + (event.key === "ArrowDown" ? 1 : -1) + docs.length) % docs.length);
-              } else if ((event.key === "Enter" || event.key === "Tab") && active >= 0) {
+              } else if (picks && active >= 0) {
                 event.preventDefault();
                 choose(docs[active]);
               }

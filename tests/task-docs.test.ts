@@ -23,7 +23,9 @@ import { docPickTargets } from "@/lib/docs/view";
 import { docQueryAt, withoutDocQuery } from "@/lib/task-pad";
 import { createCrmMcpServer } from "@/server/mcp/server";
 import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
-import { describeAction, recordNames } from "@/lib/assistant/tools";
+import { describeAction, DOCS_NOT_YOURS, recordNames, taskDocsRefusalFor } from "@/lib/assistant/tools";
+import { createCompany } from "@/lib/crm/companies";
+import { moveRecordsToWorkspace } from "@/lib/crm/move-workspace";
 import { withActor } from "@/lib/crm/context";
 import { writeTaskDocsInDb } from "@/lib/crm/task-docs";
 import { archiveWebhook, createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
@@ -648,5 +650,76 @@ describe("task docs under review", () => {
     const daily = await appendToDailyNote(mark, { text: `See @[Daily mention title](task:${task.id})` });
     const entry = (await listTaskDocs(mark, task.id)).find((item) => item.id === daily.page.id);
     assert.match(entry?.title ?? "", /^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}$/);
+  });
+});
+
+describe("task docs, second review", () => {
+  it("reassigns a task and changes its docs in one update", async () => {
+    const task = (await createTask(mark, { title: "Hand over with docs", docIds: [privateDoc] })).body.task;
+    const other = (await createDoc(mark, { title: "Handover notes", shared: true })).id;
+    const handed = (await updateTask(mark, task.id, { ownerId: priya.userId, docIds: [shared, other] })).body.task;
+    assert.equal(handed.ownerId, priya.userId);
+    assert.deepEqual([...handed.docIds].sort(), [shared, other].sort());
+    assert.equal(handed.canLinkDocs, true);
+    assert.equal((await getTask(priya, task.id)).canLinkDocs, true);
+    const event = await sql<{ changes: { fields: string[] } }>(
+      "select changes from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at desc limit 1",
+      [task.id],
+    );
+    assert.ok(event[0].changes.fields.includes("ownerId") && event[0].changes.fields.includes("docIds"));
+  });
+
+  it("tells each viewer whether they can change a task's docs", async () => {
+    const task = (await createTask(mark, { title: "Who can link" })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    assert.equal((await getTask(mark, task.id)).canLinkDocs, true);
+    assert.equal((await getTask(priya, task.id)).canLinkDocs, false);
+    assert.equal((await getTask(agent, task.id)).canLinkDocs, false);
+  });
+
+  it("refuses an assistant doc change on someone else's task before the card", async () => {
+    const task = (await createTask(mark, { title: "Assistant refusal", docIds: [shared] })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    assert.deepEqual(await taskDocsRefusalFor(priya, "update_task", { taskId: task.id, docIds: [shared, privateDoc] }), { error: DOCS_NOT_YOURS, field: "docIds" });
+    assert.deepEqual(await taskDocsRefusalFor(priya, "update_task", { taskId: task.id, docIds: null }), { error: DOCS_NOT_YOURS, field: "docIds" });
+    assert.equal(await taskDocsRefusalFor(priya, "update_task", { taskId: task.id, docIds: [shared] }), null);
+    assert.equal(await taskDocsRefusalFor(priya, "update_task", { taskId: task.id, title: "Renamed" }), null);
+    assert.equal(await taskDocsRefusalFor(mark, "update_task", { taskId: task.id, docIds: [] }), null);
+  });
+
+  it("says why an admin can't undo a doc change on a task they don't own", async () => {
+    const ada = await join(await createUser("ada2@docs-tasks.test", "Ada Second"), mark, "admin");
+    const task = (await createTask(ada, { title: "Ada made this", docIds: [shared] })).body.task;
+    await updateTask(ada, task.id, { docIds: [] });
+    await updateTask(ada, task.id, { ownerId: mark.userId });
+    await sql("update crm.tasks set created_by_user_id = $2 where id = $1", [task.id, mark.userId]);
+    const change = (await listRecentChanges(ada, { entityType: "task" })).find((item) => item.entityId === task.id && item.type === "task.updated" && item.summary.includes("Docs"));
+    assert.ok(change);
+    assert.equal(change.canUndo, false);
+    assert.equal(change.reason, "Can't undo: only the task's assignee or creator can change its docs.");
+  });
+
+  it("counts and audits the doc links a workspace move drops", async () => {
+    const company = (await createCompany(mark, { name: "Moving Docs Ltd", domain: "moving-docs.test" })).body.company;
+    const task = (await createTask(mark, { title: "Moves with Moving Docs", companyId: company.id, docIds: [shared, privateDoc] })).body.task;
+    const result = await moveRecordsToWorkspace(mark, { companyIds: [company.id], workspaceId: elsewhere.workspaceId }, { operation: "move_records", source: "web" });
+    assert.equal(result.docsUnlinked, 1);
+    assert.match(result.message, /1 task is unlinked from its docs, which stay in /);
+    assert.deepEqual(await sql("select page_id from crm.task_docs where task_id = $1", [task.id]), []);
+    const audit = await sql<{ workspace_id: string; changes: { fields: string[]; before: { docIds: string[] }; after: { docIds: string[] } } }>(
+      "select workspace_id, changes from crm.audit_events where entity_id = $1 and event_type = 'task.updated' and changes ? 'movedFrom' and changes->'fields' ? 'docIds'",
+      [task.id],
+    );
+    assert.equal(audit.length, 1);
+    assert.equal(audit[0].workspace_id, elsewhere.workspaceId);
+    assert.deepEqual([...audit[0].changes.before.docIds].sort(), [shared, privateDoc].sort());
+    assert.deepEqual(audit[0].changes.after.docIds, []);
+  });
+
+  it("adds the year to a daily note from another year", async () => {
+    const task = (await createTask(mark, { title: "Old daily mention" })).body.task;
+    const note = await appendToDailyNote(mark, { text: `Older @[Old daily mention](task:${task.id})`, date: "2025-03-04" });
+    const entry = (await listTaskDocs(mark, task.id)).find((item) => item.id === note.page.id);
+    assert.equal(entry?.title, "Tue 4 Mar 2025");
   });
 });

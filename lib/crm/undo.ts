@@ -21,7 +21,7 @@ import { readRelationshipOverride, setRelationshipOverrideInDb } from "@/lib/crm
 import { isRelationshipLabel, RELATIONSHIP_META } from "@/lib/crm/relationship-score";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
-import { linkableDocIdsInDb } from "@/lib/crm/task-docs";
+import { canLinkTaskDocs, linkableDocIdsInDb, type TaskDocRights } from "@/lib/crm/task-docs";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
 import { formatDateTimeLabel } from "@/lib/date-input";
 import { dateTimeInputValue } from "@/lib/time";
@@ -527,6 +527,7 @@ async function describeEvent(
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
       if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
+      else if (updateEntity === "task" && fields.fields.includes("docIds") && !canLinkTaskDocs(actor, current.values as unknown as TaskDocRights)) check = "Can't undo: only the task's assignee or creator can change its docs.";
       else if (updateEntity === "task" && fields.fields.length === 1 && fields.fields[0] === "docIds") check = await docsUndoCheck(db, actor, current.values, fields.before);
     }
     run = restoreFields(db, actor, updateEntity, event.entity_id, fields.before, fields.fields, provenance, changes?.taggedAssigner === true ? event.id : null);

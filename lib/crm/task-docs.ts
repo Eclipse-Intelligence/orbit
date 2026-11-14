@@ -5,6 +5,7 @@ import { actorIds, iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { withMailThreadsInDb } from "@/lib/crm/task-mail";
 import type { Actor, Task, TaskDoc } from "@/lib/crm/types";
+import { localDate } from "@/lib/docs/daily";
 import { shortDay } from "@/lib/docs/format";
 
 export const MAX_TASK_DOCS = 20;
@@ -112,7 +113,8 @@ export async function writeTaskDocsInDb(db: Db, actor: Actor, task: { id: string
         [task.id, plan.add, task.workspaceId, by.userId, by.agentId],
       );
     } catch (error) {
-      if (isPgError(error) && ["23503", "23514", "42501"].includes(error.code ?? "")) throw new CrmError("invalid_input", NOT_A_DOC, 400, { field: "docIds" });
+      if (isPgError(error) && error.code === "42501") throw new CrmError("forbidden", DOCS_OWNER_ONLY, 403, { field: "docIds" });
+      if (isPgError(error) && ["23503", "23514"].includes(error.code ?? "")) throw new CrmError("invalid_input", NOT_A_DOC, 400, { field: "docIds" });
       throw error;
     }
   }
@@ -144,7 +146,7 @@ export async function withTaskDocsInDb<T extends Task>(db: Db, viewer: Actor, ta
       if (found?.archived) return [];
       return [found ? { id, title: found.title, readable: true } : { id, title: null, readable: false }];
     });
-    return { ...task, docs };
+    return { ...task, docs, canLinkDocs: canLinkTaskDocs(viewer, task) };
   });
 }
 
@@ -152,11 +154,12 @@ export async function withViewerLinksInDb<T extends Task>(db: Db, viewer: Actor,
   return withTaskDocsInDb(db, viewer, await withMailThreadsInDb(db, viewer, tasks));
 }
 
-export function withoutViewerLinks<T extends Task>(task: T): Omit<T, "mailThread" | "docs"> {
+export function withoutViewerLinks<T extends Task>(task: T): Omit<T, "mailThread" | "docs" | "canLinkDocs"> {
   const rest: Partial<T> = { ...task };
   delete rest.mailThread;
   delete rest.docs;
-  return rest as Omit<T, "mailThread" | "docs">;
+  delete rest.canLinkDocs;
+  return rest as Omit<T, "mailThread" | "docs" | "canLinkDocs">;
 }
 
 type FolderRow = { id: string; parent_id: string | null; name: string };
@@ -182,6 +185,11 @@ export async function folderPathsInDb(db: Db, workspaceId: string) {
     return path;
   };
   return (folderId: string | null) => (folderId ? pathOf(folderId) : null);
+}
+
+function dailyTitle(day: string) {
+  const year = day.slice(0, 4);
+  return year === localDate(new Date()).slice(0, 4) ? shortDay(day) : `${shortDay(day)} ${year}`;
 }
 
 type DocRow = {
@@ -219,7 +227,7 @@ export async function listTaskDocsInDb(db: Db, viewer: Actor, task: { id: string
   const pathOf = reading ? await folderPathsInDb(db, task.workspaceId) : () => null;
   const entry = (row: DocRow, reason: TaskDocEntry["reason"]): TaskDocEntry => ({
     id: row.id,
-    title: row.kind === "daily" && row.daily_date ? shortDay(row.daily_date) : (row.title ?? ""),
+    title: row.kind === "daily" && row.daily_date ? dailyTitle(row.daily_date) : (row.title ?? ""),
     readable: true,
     reason,
     kind: row.kind === "daily" ? "daily" : "note",

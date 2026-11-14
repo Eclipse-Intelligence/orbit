@@ -25,11 +25,8 @@ const UNLINK_FAILED = "Couldn't remove the link. Try again.";
 const LONG_PRESS_MS = 500;
 const MOVE_SLOP = 10;
 
-const CHIP = "bg-secondary text-foreground inline-flex max-w-full items-center gap-1.5 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 hit [@media(pointer:coarse)]:h-7 [@media(pointer:coarse)]:pr-2.5 [@media(pointer:coarse)]:pl-2";
-
-export function linksDocsAs(viewerId: string, task: Pick<Task, "ownerId" | "createdByUserId">) {
-  return task.ownerId === viewerId || task.createdByUserId === viewerId;
-}
+const CHIP_SHAPE = "bg-secondary text-foreground inline-flex max-w-full items-center gap-1.5 rounded-full py-px pr-2 pl-1.5 text-[12px] leading-5 [@media(pointer:coarse)]:h-7 [@media(pointer:coarse)]:pr-2.5 [@media(pointer:coarse)]:pl-2";
+const CHIP = `${CHIP_SHAPE} hit`;
 
 export function othersSeeTask(task: Pick<Task, "ownerId" | "createdByUserId">, viewerId: string, tagged: string[]) {
   return Boolean((task.ownerId && task.ownerId !== viewerId) || (task.createdByUserId && task.createdByUserId !== viewerId) || tagged.some((person) => person !== viewerId));
@@ -41,7 +38,7 @@ function docName(doc: Pick<TaskDoc, "title">) {
 
 export function LockedDocChip({ className }: { className?: string }) {
   return (
-    <span role="img" aria-label="Doc, private" title="Private" className={cn(CHIP, className)}>
+    <span role="img" aria-label="Doc, private" title="Private" className={cn(CHIP_SHAPE, className)}>
       <DocIcon aria-hidden className="text-subtle size-3 shrink-0" />
       <span className="truncate">Doc</span>
       <LockIcon aria-hidden className="text-faint size-3 shrink-0" />
@@ -130,6 +127,11 @@ export function EditTaskDocs({ task, warn }: { task: Pick<Task, "id" | "docs" | 
           Doc
         </button>
       </DocPickPopover>
+      {change.busy && (
+        <span role="status" className="caption-style text-subtle">
+          Saving…
+        </span>
+      )}
       {change.error && (
         <p role="alert" className="caption-style text-danger basis-full">
           {change.error}
@@ -256,7 +258,7 @@ function DocRow({ entry, removable, onRemove, onMenu }: { entry: TaskDocEntry; r
         }}
         className={cn(
           "focus-visible:ring-ring/60 -mx-1.5 flex min-w-0 flex-1 items-start gap-2.5 rounded-md px-1.5 py-1 outline-none hover:bg-white/[0.04] focus-visible:ring-2 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:items-center [@media(pointer:coarse)]:select-none [@media(pointer:coarse)]:[-webkit-touch-callout:none]",
-          removable && "[@media(any-pointer:fine)]:pr-8",
+          removable && "pr-10",
         )}
       >
         <Icon aria-hidden className="text-subtle mt-[3px] size-3.5 shrink-0" />
@@ -275,7 +277,7 @@ function DocRow({ entry, removable, onRemove, onMenu }: { entry: TaskDocEntry; r
           aria-label={`Remove link to ${name}`}
           title="Remove"
           onClick={onRemove}
-          className="absolute top-1 right-0 hidden opacity-0 group-focus-within/doc:opacity-100 group-hover/doc:opacity-100 focus-visible:opacity-100 [@media(any-pointer:fine)]:inline-flex [@media(pointer:coarse)]:top-2.5"
+          className="hit absolute top-1 right-0 focus-visible:opacity-100 [@media(pointer:coarse)]:top-2.5 [@media(pointer:fine)]:opacity-0 [@media(pointer:fine)]:group-focus-within/doc:opacity-100 [@media(pointer:fine)]:group-hover/doc:opacity-100"
         >
           <XIcon aria-hidden className="size-3" />
         </Button>
@@ -300,6 +302,11 @@ export default function TaskDocs({ task, canChange, warn }: { task: Task; canCha
           {shown && shown.length > 0 && <span className="text-subtle tabular-nums">{shown.length}</span>}
         </h3>
         <span className="flex-1" />
+        {change.busy && (
+          <span role="status" className="caption-style text-subtle">
+            Saving…
+          </span>
+        )}
         {canChange && (
           <>
             <Button
@@ -333,7 +340,7 @@ export default function TaskDocs({ task, canChange, warn }: { task: Task; canCha
       )}
       {list.failed ? (
         <p role="alert" className="caption-style text-danger">
-          Docs didn&apos;t load. Reload to try again.
+          Couldn&apos;t load docs. Reload to try again.
         </p>
       ) : shown === null ? (
         <p role="status" className="caption-style text-subtle">

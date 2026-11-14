@@ -654,6 +654,28 @@ export async function taskTimingRefusalFor(actor: UserActor, name: string, args:
   return { error: NO_TIME_FOR_REMINDER, field: "dueHasTime" };
 }
 
+export const DOCS_NOT_YOURS = "Only the task's assignee or creator can change its docs. Leave docIds out.";
+
+export async function taskDocsRefusalFor(actor: UserActor, name: string, args: Args) {
+  if (name !== "update_task" || args.docIds === undefined) return null;
+  const id = typeof args.taskId === "string" ? args.taskId.trim() : "";
+  if (!isUuid(id)) return null;
+  const current = await withActor(actor, async (db) => {
+    const result = await db.query<{ owner_id: string | null; created_by_user_id: string | null; doc_ids: string[] }>(
+      `select t.owner_id, t.created_by_user_id,
+         array(select d.page_id::text from crm.task_docs d where d.task_id = t.id and not d.page_archived) as doc_ids
+       from crm.tasks t where t.id = $1 and t.workspace_id = $2`,
+      [id, actor.workspaceId],
+    );
+    return result.rows[0] ?? null;
+  }).catch(() => null);
+  if (!current || current.owner_id === actor.userId || current.created_by_user_id === actor.userId) return null;
+  const wanted = new Set(Array.isArray(args.docIds) ? args.docIds.map((item) => str(item).toLowerCase()) : []);
+  const now = new Set(current.doc_ids ?? []);
+  if (wanted.size === now.size && [...wanted].every((item) => now.has(item))) return null;
+  return { error: DOCS_NOT_YOURS, field: "docIds" };
+}
+
 function taskDueArgs(args: Args): { dueAt?: string | null; dueDate?: string | null; dueHasTime?: true } {
   const refused = taskTimingRefusal("create_task", { dueDate: args.dueDate, dueAt: args.dueAt });
   if (refused) throw new CrmError("invalid_input", refused.error, 400, { field: refused.field });
@@ -1227,7 +1249,7 @@ const TASK_FIELDS = {
     type: "array",
     items: { type: "string" },
     maxItems: 20,
-    description: "Docs linked to the task, by docId from search_knowledge. The whole list: it replaces the task's linked docs, so keep the ones already linked; [] or null takes them all off. Only docs the user can open in this workspace, not daily notes.",
+    description: "Docs linked to the task, by docId from search_knowledge. The whole list: it replaces the task's linked docs, so keep the ones already linked; [] or null takes them all off. Only docs the user can open in this workspace, not daily notes, and only on a task the user is assigned to or created; leave it out otherwise.",
   },
 };
 

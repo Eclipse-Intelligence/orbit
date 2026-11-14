@@ -51,8 +51,22 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  dropped uuid[];
 begin
-  delete from crm.task_docs d where d.task_id = new.id and d.workspace_id is distinct from new.workspace_id;
+  with gone as (
+    delete from crm.task_docs d where d.task_id = new.id and d.workspace_id is distinct from new.workspace_id
+    returning d.page_id, d.page_archived
+  )
+  select array_agg(page_id order by page_id) filter (where not page_archived) into dropped from gone;
+  if dropped is not null then
+    perform set_config(
+      'orbit.task_docs_dropped',
+      (coalesce(nullif(current_setting('orbit.task_docs_dropped', true), ''), '[]')::jsonb
+        || jsonb_build_array(jsonb_build_object('taskId', new.id, 'docIds', to_jsonb(dropped))))::text,
+      true
+    );
+  end if;
   return new;
 end;
 $$;
@@ -129,6 +143,7 @@ create policy task_docs_delete on crm.task_docs
     and exists (
       select 1 from crm.tasks t
       where t.id = task_docs.task_id
+        and t.workspace_id = task_docs.workspace_id
         and (
           t.owner_id = (select private.session_user_id())
           or t.created_by_user_id = (select private.session_user_id())
@@ -171,6 +186,7 @@ create policy task_docs_agent_delete on crm.task_docs
     and exists (
       select 1 from crm.tasks t
       where t.id = task_docs.task_id
+        and t.workspace_id = task_docs.workspace_id
         and t.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
     )
   );

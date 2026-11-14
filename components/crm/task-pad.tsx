@@ -711,7 +711,7 @@ export default function TaskPad({
       return;
     }
     setDocQuery((current) => (current && found && current.start === found.start && current.end === found.end && current.query === found.query ? current : found));
-    if (!found) setDocHighlight(0);
+    if (!found || found.query !== docQuery?.query) setDocHighlight(0);
   }
 
   function pickDoc(doc: DocPick) {
@@ -905,6 +905,10 @@ export default function TaskPad({
     if (event.nativeEvent.isComposing) return;
     if (docQuery) {
       const count = docOptions?.length ?? 0;
+      if ((event.key === "Enter" || (event.key === "Tab" && !event.shiftKey)) && docFound.loading) {
+        event.preventDefault();
+        return;
+      }
       if ((event.key === "ArrowDown" || event.key === "ArrowUp") && count > 0) {
         event.preventDefault();
         setDocHighlight((docActive + (event.key === "ArrowDown" ? 1 : -1) + count) % count);
