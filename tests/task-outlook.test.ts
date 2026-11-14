@@ -107,7 +107,12 @@ class FakeOutlook {
       if (this.failPatchWith) return json({ error: { code: "Nope", message: "Nope" } }, this.failPatchWith);
       const event = this.events.get(id);
       if (!event) return json({ error: { code: "ErrorItemNotFound", message: "Not found" } }, 404);
-      this.events.set(id, { ...event, subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end) });
+      this.events.set(id, {
+        ...event,
+        subject: String(body!.subject),
+        start: body!.start === undefined ? event.start : fromGraph(body!.start),
+        end: body!.end === undefined ? event.end : fromGraph(body!.end),
+      });
       return json(this.graphEvent(id));
     }
     if (one && method === "GET") {
@@ -244,6 +249,8 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
     calendar_event_ref: null,
     pending_at: "2026-11-13 09:00:00.123456+00",
     attempts: 0,
+    create_key: null,
+    create_user_id: null,
     event_id: null,
     event_user_id: null,
     provider_event_id: null,
@@ -251,6 +258,8 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
     event_ends_at: null,
     event_subject: null,
     event_workspace_id: null,
+    block_starts_at: null,
+    block_ends_at: null,
     ...overrides,
   };
 }
@@ -277,6 +286,7 @@ describe("task block event shape", () => {
       timeZone: "Europe/London",
       link: "https://orbit.example/open?workspace=w&to=%2Ftasks%3Ftask%3Dt",
       transactionId: "tx",
+      key: "key",
     });
     assert.equal(draft.subject, "Call Jane");
     assert.equal(draft.showAs, "busy");
