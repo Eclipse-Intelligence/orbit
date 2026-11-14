@@ -31,6 +31,8 @@ import { completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { runWorkflowTick } from "@/lib/workflows/engine";
+import { createWorkflow, listRuns, setWorkflowStatus } from "@/lib/workflows/store";
 import { createUser, resetDatabase } from "./helpers";
 
 const TOKEN = "pk_101_TESTTOKEN";
@@ -951,6 +953,39 @@ describe("clickup sync", () => {
     const copies = await db.query<{ n: number }>("select count(*)::int as n from crm.tasks where clickup_task_id = $1", [clickupId]);
     assert.equal(copies.rows[0].n, 1);
     await db.query("delete from crm.workspace_members where user_id = $1", [priyaId]);
+  });
+
+  it("runs the task owner's Next step, not the syncing person's, when a task is ticked off in ClickUp", async () => {
+    const db = getAdminPool();
+    const samId = (await db.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["sam-next@orbit.test", "Sam Next"])).rows[0].id;
+    await db.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, samId]);
+    const sam: UserActor = { ...owner, userId: samId, email: "sam-next@orbit.test", fullName: "Sam Next", role: "member", scopes: scopesForRole("member") };
+    const markFlow = await createWorkflow(owner, { template: "next-step" });
+    await setWorkflowStatus(owner, markFlow.id, "active");
+    const samFlow = await createWorkflow(sam, { template: "next-step" });
+    await setWorkflowStatus(sam, samFlow.id, "active");
+    try {
+      const task = (await createTaskWithClickUp(sam, { title: "Sam emails Jane", contactId: janeId, ownerId: samId }, RELATIONSHIPS, { fetchImpl })).task;
+      const remote = fake.tasks.get((await taskRow(task.id)).clickup_task_id!)!;
+      await db.query("delete from crm.workflow_events");
+      remote.status = { status: "done", type: "closed" };
+      remote.date_updated = String(Date.now() + 3_000);
+      await syncClickUp({ actor: owner, force: true, fetchImpl });
+      assert.ok((await getTask(sam, task.id)).completedAt);
+      const events = await db.query<{ actor_user_id: string | null }>("select actor_user_id from crm.workflow_events where entity_id = $1", [task.id]);
+      assert.deepEqual(events.rows, [{ actor_user_id: null }]);
+      process.env.LLM_API_KEY = "llm-test";
+      const llm: typeof fetch = async () =>
+        Response.json({ model: "test", choices: [{ message: { role: "assistant", content: JSON.stringify({ nextTask: "Chase Jane", dueOn: "", why: "She asked." }) }, finish_reason: "stop" }] });
+      await runWorkflowTick({ fetchImpl: llm, budgetMs: 30_000 });
+      assert.equal((await listRuns(owner, markFlow.id)).length, 0);
+      assert.equal((await listRuns(sam, samFlow.id)).length, 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+      await setWorkflowStatus(owner, markFlow.id, "paused");
+      await setWorkflowStatus(sam, samFlow.id, "paused");
+      await db.query("delete from crm.workspace_members where user_id = $1", [samId]);
+    }
   });
 
   it("adds a clickup step for the workspace in scheduled sync", async () => {

@@ -219,7 +219,7 @@ const DIRTY_SQL = `(
   or (t.completed_at is not null) is distinct from (t.clickup_sync->>'done')::boolean
 )`;
 
-const PROVENANCE: Provenance = { operation: "sync_clickup", source: "clickup" };
+const PROVENANCE: Provenance = { operation: "sync_clickup", source: "clickup", synced: true };
 
 function client(token: string, options: ClickUpOptions) {
   return clickupClient({
@@ -505,7 +505,7 @@ async function ownerForAssignees(db: Db, workspaceId: string, task: ClickUpTask)
 async function archiveDeleted(s: Session, row: SyncRow) {
   if (row.archived_at) return "unchanged" as const;
   await archiveTask(s.actor, row.id, {
-    provenance: { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url },
+    provenance: { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true },
   });
   await withActor(s.actor, (db) =>
     db.query(
@@ -845,7 +845,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
         contactId: link.contactId,
         companyId: link.contactId ? undefined : link.companyId,
       },
-      { operation: "import_clickup", source: "clickup", sourceUrl: clip(task.url, 2000) },
+      { operation: "import_clickup", source: "clickup", sourceUrl: clip(task.url, 2000), synced: true },
     );
     if (!created) return "ignored";
     const kept = keptDayOnly({ dueAt: remote.dueAt, dueHasTime: remote.dueHasTime }, created);
