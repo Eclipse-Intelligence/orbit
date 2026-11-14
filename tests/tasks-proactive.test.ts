@@ -233,7 +233,7 @@ describe("tasks, proactive", () => {
     const walk = (await createRepeatingTask(owner, { title: "Weekly call with Gavin", contactId, ownerId: owner.userId }, { every: "week" })).body.task;
     await completeTask(owner, walk.id);
     await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
-    assert.equal(await runs(), 3);
+    assert.equal(await runs(), 2, "no run for a repeating task, even in a Next step saved before the template skipped them");
     assert.equal(llm.seen.length, 1, "no model call for a repeating task");
     await setWorkflowStatus(owner, workflow.id, "paused");
   });
