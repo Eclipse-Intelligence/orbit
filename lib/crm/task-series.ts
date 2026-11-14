@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "@/lib/db/pool";
 import { query } from "@/lib/db/pool";
-import { asAppInActor, withActor } from "@/lib/crm/context";
+import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit, replayOrRun, requestHash, type MutationOptions, type MutationOutcome } from "@/lib/crm/mutate";
@@ -11,6 +11,7 @@ import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { withoutViewerMail } from "@/lib/crm/task-mail";
 import { clockLabel, dayStartIso, isTaskDuration, taskDueDay } from "@/lib/crm/task-time";
 import { readDateTime } from "@/lib/time";
+import type { SeriesRights } from "@/lib/crm/task-rights";
 import { addTaskParticipantsInDb, archiveTaskInDb, canChangeTask, createTaskInDb, readTaskInDb, unarchiveTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import {
@@ -546,7 +547,7 @@ export async function seriesBeforeReopen(db: Db, actor: Actor, task: Task, prove
     await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
     return;
   }
-  if (peek.current_task_id && peek.current_task_id !== task.id) await db.query("select 1 from crm.tasks where id = $1 for no key update", [peek.current_task_id]);
+  if (peek.current_task_id && peek.current_task_id !== task.id) await lockOccurrence(db, peek.current_task_id);
   const row = await lockSeries(db, task.seriesId);
   if (!row) {
     await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
@@ -602,7 +603,7 @@ async function seriesValues(db: Db, actor: Actor, row: SeriesRow, task: Task, ta
   if ((description ?? null) !== (task.description ?? null)) write.description = description;
   if (row.priority !== task.priority) write.priority = row.priority;
   const duration = target.durationMinutes ?? row.duration_minutes;
-  if (duration !== task.durationMinutes) write.durationMinutes = duration;
+  if (duration !== task.durationMinutes && !handed) write.durationMinutes = duration;
   if (target.dueHasTime && !handed && row.remind_minutes !== task.remindMinutes) write.remindMinutes = row.remind_minutes;
   const owner = await memberOrNull(db, row.workspace_id, row.owner_id);
   if (owner && owner !== task.ownerId && ownsSeries(actor, row)) write.ownerId = owner;
@@ -615,54 +616,20 @@ async function seriesValues(db: Db, actor: Actor, row: SeriesRow, task: Task, ta
   return write;
 }
 
-type OccurrenceWriteOptions = { auditExtra?: Record<string, unknown>; occursOn?: string; archive?: boolean; detach?: boolean };
+type OccurrenceWriteOptions = { auditExtra?: Record<string, unknown>; occursOn?: string; archive?: boolean; detach?: boolean; restoring?: boolean };
 
-function occurrenceColumns(write: TaskWrite, options: OccurrenceWriteOptions) {
-  const set: Record<string, unknown> = {};
-  if (write.dueDate !== undefined && write.dueDate !== null) Object.assign(set, { due_at: dayStartIso(write.dueDate), due_has_time: false, scheduled_by: null, remind_minutes: null });
-  if (write.dueAt) Object.assign(set, { due_at: write.dueAt, due_has_time: write.dueHasTime !== false, scheduled_by: write.dueHasTime === false ? null : (write.scheduledBy ?? "person") });
-  const plain: [keyof TaskWrite, string][] = [
-    ["title", "title"],
-    ["description", "description"],
-    ["priority", "priority"],
-    ["durationMinutes", "duration_minutes"],
-    ["remindMinutes", "remind_minutes"],
-    ["ownerId", "owner_id"],
-    ["companyId", "company_id"],
-    ["contactId", "contact_id"],
-    ["opportunityId", "opportunity_id"],
-  ];
-  for (const [field, column] of plain) if (write[field] !== undefined) set[column] = write[field] ?? null;
-  if (options.occursOn) set.occurs_on = options.occursOn;
-  if (options.archive) set.archived = true;
-  if (options.detach) Object.assign(set, { detach: true, occurs_on: null });
-  return set;
+function seriesRights(row: SeriesRow): SeriesRights {
+  return { id: row.id, ownerId: row.owner_id, createdByUserId: row.created_by_user_id, createdByAgentId: row.created_by_agent_id };
 }
 
 async function writeOccurrence(db: Db, actor: Actor, row: SeriesRow, task: Task, write: TaskWrite, provenance: Provenance, options: OccurrenceWriteOptions = {}): Promise<Task> {
-  if (actor.type !== "user" || canChangeTask(actor, task)) {
-    if (options.occursOn) await db.query("update crm.tasks set occurs_on = $2 where id = $1", [task.id, options.occursOn]);
-    if (options.detach) {
-      await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
-      return (await readTaskInDb(db, actor, task.id)) ?? task;
-    }
-    if (options.archive) return (await archiveTaskInDb(db, actor, task.id, provenance, { keepSeries: true })).task;
-    return (await updateTaskInDb(db, actor, task.id, write, provenance, { restoring: true, auditExtra: options.auditExtra })).task;
+  if (options.detach) {
+    await db.query("update crm.tasks set series_id = null, occurs_on = null where id = $1", [task.id]);
+    return (await readTaskInDb(db, actor, task.id)) ?? task;
   }
-  const set = occurrenceColumns(write, options);
-  await asAppInActor(db, actor, () => db.query("select private.series_write_occurrence($1, $2, $3, $4::jsonb)", [actor.userId, row.id, task.id, JSON.stringify(set)]));
-  queueTaskBlock(db, task.id);
-  const after = await readTaskInDb(db, actor, task.id);
-  const shown = after ?? { ...task, ...write };
-  const fields = Object.keys(write).filter((field) => field !== "dueDate" && field !== "scheduledBy");
-  if (write.dueDate !== undefined) fields.push("dueAt", "dueHasTime");
-  const pick = (source: Task) => Object.fromEntries([...new Set(fields)].map((field) => [field, (source as unknown as Record<string, unknown>)[field] ?? null]));
-  if (options.archive) {
-    await recordAudit(db, actor, "task.archived", "task", task.id, provenance, { before: { archivedAt: null }, after: { archivedAt: after?.archivedAt ?? new Date().toISOString() }, series: { id: row.id } });
-  } else if (!options.detach && fields.length > 0) {
-    await recordAudit(db, actor, "task.updated", "task", task.id, provenance, { fields: [...new Set(fields)], before: pick(task), after: pick(shown as Task), ...options.auditExtra });
-  }
-  return shown as Task;
+  if (options.occursOn) await db.query("update crm.tasks set occurs_on = $2 where id = $1", [task.id, options.occursOn]);
+  if (options.archive) return (await archiveTaskInDb(db, actor, task.id, provenance, { keepSeries: true })).task;
+  return (await updateTaskInDb(db, actor, task.id, write, provenance, { restoring: options.restoring, auditExtra: options.auditExtra, series: seriesRights(row) })).task;
 }
 
 function moveWrite(occurrence: Occurrence, task: Task): TaskWrite {
@@ -696,6 +663,7 @@ async function moveCurrent(
   if (!used.dueHasTime && task.remindMinutes !== null) write.remindMinutes = null;
   const moved = await writeOccurrence(db, actor, row, task, write, provenance, {
     occursOn: target.occursOn,
+    restoring: true,
     auditExtra: { repeat: { seriesId: row.id, kind, from: task.occursOn, to: target.occursOn, passed, consumed, ...extra } },
   });
   await consumeChanges(db, row.id, target.occursOn);
@@ -706,7 +674,7 @@ async function moveCurrent(
 export async function rollSeriesInDb(db: Db, actor: Actor, seriesId: string, now = Date.now()) {
   const peek = await readSeries(db, seriesId);
   if (!peek?.current_task_id) return null;
-  await db.query("select 1 from crm.tasks where id = $1 for no key update", [peek.current_task_id]);
+  await lockOccurrence(db, peek.current_task_id);
   const current = await readTaskInDb(db, actor, peek.current_task_id);
   const row = await lockSeries(db, seriesId);
   if (!row || !current || current.seriesId !== row.id || row.current_task_id !== current.id || stopped(row) || !current.occursOn || current.archivedAt) return null;
@@ -733,8 +701,12 @@ export async function rollSeriesInDb(db: Db, actor: Actor, seriesId: string, now
   return moveCurrent(db, actor, row, task, target, [from, ...passed], "missed", { operation: "repeat_roll", automatic: true });
 }
 
+async function lockOccurrence(db: Db, taskId: string) {
+  await db.query("select 1 from crm.tasks where id = $1 for no key update", [taskId]);
+}
+
 async function lockOpenTask(db: Db, actor: Actor, id: string) {
-  await db.query("select 1 from crm.tasks where id = $1 for no key update", [id]);
+  await lockOccurrence(db, id);
   const task = await readTaskInDb(db, actor, id);
   return task && !task.completedAt && !task.archivedAt ? task : null;
 }
@@ -764,7 +736,7 @@ export async function rollDueSeries(options: { deadline: number; now?: number; l
 async function resolveTarget(db: Db, actor: Actor, target: OccurrenceTarget) {
   if ("taskId" in target) {
     if (!isUuid(target.taskId)) throw notFound("task");
-    await db.query("select 1 from crm.tasks where id = $1 for no key update", [target.taskId]);
+    await lockOccurrence(db, target.taskId);
     const task = await readTaskInDb(db, actor, target.taskId);
     if (!task || task.archivedAt || task.workspaceId !== actor.workspaceId) throw notFound("task");
     const row = task.seriesId ? await lockSeries(db, task.seriesId) : null;
@@ -1086,9 +1058,10 @@ export async function updateOccurrenceInDb(db: Db, actor: Actor, target: Occurre
   }
   const touches = touchesSeries(task, input) || found.future;
   if (touches && !scope) throw new CrmError("invalid_input", NEEDS_SCOPE, 400, { field: "repeatScope" });
-  if ((!touches && scope !== "all" && scope !== "following") || scope === "this") {
+  const relinks = LINK_FIELDS.some((field) => input[field] !== undefined);
+  if ((!touches && !(relinks && (scope === "all" || scope === "following"))) || scope === "this") {
     if (!found.future) {
-      const saved = (await updateTaskInDb(db, actor, task.id, input, provenance)).task;
+      const saved = (await updateTaskInDb(db, actor, task.id, input, provenance, { series: seriesRights(row) })).task;
       if (input.ownerId !== undefined && actor.type === "user" && row.owner_id && row.owner_id !== (input.ownerId || null) && (await memberOrNull(db, row.workspace_id, row.owner_id))) {
         await addTaskParticipantsInDb(db, actor, task.id, [row.owner_id], provenance, { alert: false });
       }
@@ -1209,10 +1182,10 @@ export async function deleteSeriesInDb(db: Db, actor: Actor, taskId: string, pro
   const peek = await readSeries(db, given.seriesId);
   if (!peek || peek.archived_at) throw notFound("task");
   const openId = peek.current_task_id;
-  if (openId) await db.query("select 1 from crm.tasks where id = $1 for no key update", [openId]);
+  if (openId) await lockOccurrence(db, openId);
   const row = await lockSeries(db, given.seriesId);
   if (!row) throw notFound("task");
-  if (row.current_task_id && row.current_task_id !== openId) await db.query("select 1 from crm.tasks where id = $1 for no key update", [row.current_task_id]);
+  if (row.current_task_id && row.current_task_id !== openId) await lockOccurrence(db, row.current_task_id);
   const open = row.current_task_id ? await readTaskInDb(db, actor, row.current_task_id) : null;
   assertSeriesChange(actor, row);
   await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false where id = $1", [row.id]);
@@ -1307,7 +1280,7 @@ export async function restoreSeriesInDb(db: Db, actor: Actor, changes: Record<st
   if (!series?.id) return;
   const splitId = (changes.split as { seriesId?: string } | undefined)?.seriesId;
   const child = splitId ? await readSeries(db, splitId) : null;
-  if (child?.current_task_id) await db.query("select 1 from crm.tasks where id = $1 for no key update", [child.current_task_id]);
+  if (child?.current_task_id) await lockOccurrence(db, child.current_task_id);
   const row = await lockSeries(db, series.id);
   if (!row) throw new CrmError("cannot_undo", "Can't undo: you can't change how this task repeats.", 409);
   const before = series.before;

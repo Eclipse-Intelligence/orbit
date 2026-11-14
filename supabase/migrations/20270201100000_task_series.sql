@@ -634,57 +634,59 @@ drop policy if exists tasks_select_series_owner on crm.tasks;
 drop policy if exists tasks_update_series_owner on crm.tasks;
 drop function if exists private.owns_series(uuid);
 
-create or replace function private.series_write_occurrence(p_actor uuid, p_series uuid, p_task uuid, p_set jsonb)
-returns jsonb
-language plpgsql
+drop function if exists private.series_write_occurrence(uuid, uuid, uuid, jsonb);
+drop function if exists private.series_lock_occurrence(uuid, uuid, uuid);
+drop function if exists private.series_check_occurrence(uuid, uuid, uuid);
+
+create or replace function private.session_owns_series(p_series uuid, p_workspace uuid)
+returns boolean
+language sql
+stable
 security definer
 set search_path = ''
 as $$
-declare
-  v_series crm.task_series%rowtype;
-  v_task crm.tasks%rowtype;
-  v_owner uuid;
-begin
-  select * into v_series from crm.task_series s where s.id = p_series for update;
-  if not found
-    or not exists (select 1 from crm.workspace_members m where m.workspace_id = v_series.workspace_id and m.user_id = p_actor)
-    or not (v_series.owner_id is not distinct from p_actor or v_series.created_by_user_id is not distinct from p_actor)
-    or p_actor is null then
-    raise exception 'Only the repeating task''s assignee or creator can change every date.' using errcode = '42501';
-  end if;
-  select * into v_task from crm.tasks t where t.id = p_task and t.series_id = p_series and t.workspace_id = v_series.workspace_id for update;
-  if not found then
-    raise exception 'That task isn''t part of this repeating task.' using errcode = '42501';
-  end if;
-  if p_set ? 'owner_id' and p_set ->> 'owner_id' is not null then
-    select m.user_id into v_owner from crm.workspace_members m where m.workspace_id = v_series.workspace_id and m.user_id = (p_set ->> 'owner_id')::uuid;
-    if v_owner is null then
-      raise exception 'Choose an assignee in this workspace.' using errcode = '23514';
-    end if;
-  end if;
-  update crm.tasks t set
-    title = case when p_set ? 'title' then p_set ->> 'title' else t.title end,
-    description = case when p_set ? 'description' then p_set ->> 'description' else t.description end,
-    priority = case when p_set ? 'priority' then p_set ->> 'priority' else t.priority end,
-    due_at = case when p_set ? 'due_at' then (p_set ->> 'due_at')::timestamptz else t.due_at end,
-    due_has_time = case when p_set ? 'due_has_time' then (p_set ->> 'due_has_time')::boolean else t.due_has_time end,
-    scheduled_by = case when p_set ? 'scheduled_by' then p_set ->> 'scheduled_by' else t.scheduled_by end,
-    duration_minutes = case when p_set ? 'duration_minutes' then (p_set ->> 'duration_minutes')::integer else t.duration_minutes end,
-    remind_minutes = case when p_set ? 'remind_minutes' then (p_set ->> 'remind_minutes')::integer else t.remind_minutes end,
-    owner_id = case when p_set ? 'owner_id' then (p_set ->> 'owner_id')::uuid else t.owner_id end,
-    company_id = case when p_set ? 'company_id' then (p_set ->> 'company_id')::uuid else t.company_id end,
-    contact_id = case when p_set ? 'contact_id' then (p_set ->> 'contact_id')::uuid else t.contact_id end,
-    opportunity_id = case when p_set ? 'opportunity_id' then (p_set ->> 'opportunity_id')::uuid else t.opportunity_id end,
-    occurs_on = case when p_set ? 'occurs_on' then (p_set ->> 'occurs_on')::date else t.occurs_on end,
-    archived_at = case when p_set ? 'archived' then case when (p_set ->> 'archived')::boolean then coalesce(t.archived_at, now()) else null end else t.archived_at end,
-    series_id = case when (p_set ->> 'detach')::boolean is true then null else t.series_id end
-  where t.id = p_task;
-  return to_jsonb(v_task);
-end;
+  select exists (
+    select 1 from crm.task_series s
+    where s.id = p_series
+      and s.workspace_id = p_workspace
+      and (
+        s.owner_id = (select private.session_user_id())
+        or s.created_by_user_id = (select private.session_user_id())
+        or s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+      )
+  )
 $$;
 
-revoke all on function private.series_write_occurrence(uuid, uuid, uuid, jsonb) from public;
-grant execute on function private.series_write_occurrence(uuid, uuid, uuid, jsonb) to crm_app;
+revoke all on function private.session_owns_series(uuid, uuid) from public;
+grant execute on function private.session_owns_series(uuid, uuid) to authenticated, crm_agent;
+
+drop policy if exists tasks_update_series_member on crm.tasks;
+create policy tasks_update_series_member on crm.tasks
+  for update to authenticated
+  using (
+    series_id is not null
+    and workspace_id in (select private.user_workspace_ids())
+    and private.session_owns_series(series_id, workspace_id)
+  )
+  with check (
+    series_id is not null
+    and workspace_id in (select private.user_workspace_ids())
+    and private.session_owns_series(series_id, workspace_id)
+  );
+
+drop policy if exists tasks_update_series_agent on crm.tasks;
+create policy tasks_update_series_agent on crm.tasks
+  for update to crm_agent
+  using (
+    series_id is not null
+    and workspace_id = (select private.request_workspace_id())
+    and private.session_owns_series(series_id, workspace_id)
+  )
+  with check (
+    series_id is not null
+    and workspace_id = (select private.request_workspace_id())
+    and private.session_owns_series(series_id, workspace_id)
+  );
 
 drop policy if exists tasks_series_binding on crm.tasks;
 create policy tasks_series_binding on crm.tasks
@@ -813,10 +815,18 @@ begin
   select handed || coalesce(jsonb_agg(jsonb_build_object('kind', 'document', 'id', moved.id, 'changes', private.handover_changes(owner_only, owner_now, array['ownerId']))), '[]'::jsonb)
   into handed from moved;
 
+  insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, source, source_url, operation, changes)
+  select p_workspace, 'task_series.updated', 'task', s.current_task_id, 'user', p_actor, p_source, p_source_url, p_operation,
+    jsonb_build_object(
+      'series', jsonb_build_object('id', s.id),
+      'handedOver', jsonb_build_object('from', p_user, 'to', p_actor, 'owner', s.owner_id = p_user, 'creator', s.created_by_user_id = p_user)
+    )
+  from crm.task_series s
+  where s.workspace_id = p_workspace and (s.owner_id = p_user or s.created_by_user_id = p_user) and s.current_task_id is not null;
   update crm.task_series s set owner_id = p_actor
-  where s.workspace_id = p_workspace and s.owner_id = p_user and s.archived_at is null;
+  where s.workspace_id = p_workspace and s.owner_id = p_user;
   update crm.task_series s set created_by_user_id = p_actor
-  where s.workspace_id = p_workspace and s.created_by_user_id = p_user and s.archived_at is null;
+  where s.workspace_id = p_workspace and s.created_by_user_id = p_user;
 
   with items as (
     select item ->> 'kind' as kind, (item ->> 'id')::uuid as id, item -> 'changes' as changes

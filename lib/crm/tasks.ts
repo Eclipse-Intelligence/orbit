@@ -41,7 +41,7 @@ import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, 
 import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { assertOwnThreadInDb, readMailThreadKey } from "@/lib/crm/task-mail";
-import { canChangeTask } from "@/lib/crm/task-rights";
+import { canChangeTask, type SeriesRights } from "@/lib/crm/task-rights";
 import { planTaskDocsInDb, readDocIds, TASK_DOC_IDS_SQL, withoutViewerLinks, withViewerLinksInDb, writeTaskDocsInDb } from "@/lib/crm/task-docs";
 import { dayWindow, readDateTime } from "@/lib/time";
 import { describeRepeat, type OccurrenceChange, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
@@ -667,7 +667,10 @@ async function applyTask(
     },
   );
   const settled = write.completedAt === undefined && write.completed !== undefined && Boolean(current.completed_at) === write.completed;
-  if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange(write);
+  const rights = { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id, seriesId: current.series_id };
+  const ownTask = canChangeTask(actor, rights);
+  const may = canChangeTask(actor, rights, options.series);
+  if (settled && !may) throw cannotChange(write);
   const completedAt =
     write.completedAt !== undefined
       ? write.completedAt !== null && current.completed_at
@@ -709,17 +712,18 @@ async function applyTask(
   }
   const before = mapTask(current);
   if (change.sets.length === 0) {
-    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange(write);
+    if (!may) throw cannotChange(write);
     return { task: (await withViewerLinksInDb(db, actor, [before]))[0], changed: false };
   }
+  if (!ownTask && (docs || change.fields.some((field) => field === "mailThreadKey" || field === "completedAt"))) throw cannotChange(write);
   if (docs) await writeTaskDocsInDb(db, actor, { id: current.id, workspaceId: current.workspace_id }, docs);
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
-  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id });
+  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && may;
   let taggedAssigner = false;
   if (reassigning && !options.restoring && !silent(provenance)) {
     taggedAssigner = await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
   }
-  if (current.series_id && current.completed_at && completedAt === null && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
+  if (current.series_id && current.completed_at && completedAt === null && may) {
     await seriesBeforeReopen(db, actor, mapTask(current), provenance);
   }
   change.values.push(current.id);
@@ -783,7 +787,7 @@ async function applyTask(
   return { task: (await withViewerLinksInDb(db, actor, [settledTask]))[0], changed: true };
 }
 
-export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown> };
+export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown>; series?: SeriesRights };
 
 export async function updateTaskInDb(
   db: Db,
@@ -791,7 +795,7 @@ export async function updateTaskInDb(
   id: string,
   input: TaskWrite,
   provenance?: Provenance,
-  options: Pick<TaskApplyOptions, "auditExtra" | "restoring"> = {},
+  options: Pick<TaskApplyOptions, "auditExtra" | "restoring" | "series"> = {},
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");

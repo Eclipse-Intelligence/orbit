@@ -16,8 +16,8 @@ import {
   updateOccurrence,
 } from "@/lib/crm/task-series";
 import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, listTasks, reopenTask, updateTask } from "@/lib/crm/tasks";
-import type { Task, UserActor, WorkspaceRole } from "@/lib/crm/types";
-import { undoAuditEvent } from "@/lib/crm/undo";
+import type { Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
+import { undoAuditEvent, undoTaskEvents } from "@/lib/crm/undo";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
@@ -530,7 +530,7 @@ describe("repeating task review round 2", () => {
     await updateOccurrence(mark, { taskId: task.id }, { title: "Just this week", durationMinutes: 45, ownerId: sam.userId }, "this");
     await skipOccurrence(sam, { taskId: task.id });
     const moved = await getTask(mark, task.id);
-    assert.deepEqual([moved.title, moved.durationMinutes, moved.ownerId, moved.occursOn], ["Series title", 15, sam.userId, "2027-06-08"]);
+    assert.deepEqual([moved.title, moved.durationMinutes, moved.ownerId, moved.occursOn], ["Series title", 45, sam.userId, "2027-06-08"], "Sam keeps the length of the one he holds");
     assert.deepEqual([moved.dueAt, moved.dueHasTime], ["2027-06-07T23:00:00.000Z", false], "still Sam's, so no time is put back");
     await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-06-15T01:00:00Z") });
     const rolled = await getTask(mark, task.id);
@@ -758,6 +758,102 @@ describe("repeating task review round 4", () => {
     const done = (await sql<{ id: string }>("select id from crm.tasks where series_id = $1 and completed_at is not null order by occurs_on desc limit 1", [seriesId]))[0];
     await reopenTask(mark, done.id).catch(() => undefined);
     assert.ok((await openOnes()) <= 1);
+  });
+});
+
+describe("repeating task review round 5", () => {
+  async function handedSeries(title: string, day: string) {
+    const original = (await createTask(sam, { title, dueAt: at(day, "09:00"), ownerId: mark.userId })).body.task;
+    const made = (await setTaskRepeat(mark, original.id, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: made.id }, { ownerId: priya.userId }, "this");
+    return made;
+  }
+
+  it("gives a tagged series owner the same validation and results as the task's creator", async () => {
+    const outcome = async (actor: UserActor, other: UserActor, taskId: string, write: TaskWrite, scope: "all" | "following" | "this") => {
+      const label = (id: string | null) => (id === priya.userId ? "priya" : id === actor.userId ? "actor" : id === other.userId ? "other" : id);
+      try {
+        const task = (await updateOccurrence(actor, { taskId }, write, scope)).body.task;
+        const alerts = await sql("select 1 from crm.notifications where user_id = $1 and href like $2", [other.userId, `%${taskId}%`]);
+        return {
+          ok: true,
+          title: task.title.replace(/^(Mark|Sam) side /, ""),
+          dueHasTime: task.dueHasTime,
+          dueAt: task.dueAt,
+          durationMinutes: task.durationMinutes,
+          priority: task.priority,
+          ownerId: label(task.ownerId),
+          alerts: alerts.length,
+        };
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      }
+    };
+    const cases: [string, TaskWrite | ((other: UserActor) => TaskWrite)][] = [
+      ["blank title", { title: "   " }],
+      ["long length", { durationMinutes: 900 }],
+      ["outsider", { ownerId: "00000000-0000-4000-8000-000000000099" }],
+      ["bad time", { dueAt: "not a time", dueHasTime: true }],
+      ["rename", { title: "Renamed weekly" }],
+      ["length", { durationMinutes: 30 }],
+      ["priority", { priority: "high" }],
+      ["time", { dueAt: at("2027-10-05", "15:00"), dueHasTime: true }],
+      ["hand on", (other) => ({ ownerId: other.userId })],
+    ];
+    for (const scope of ["all", "following", "this"] as const) {
+      for (const [name, made] of cases) {
+        const markSide = await handedSeries(`Mark side ${scope} ${name}`, "2027-10-05");
+        const samSide = (await createRepeatingTask(sam, { title: `Sam side ${scope} ${name}`, dueAt: at("2027-10-05", "09:00"), ownerId: priya.userId }, { every: "week" })).body.task;
+        const viaSeries = await outcome(mark, sam, markSide.id, typeof made === "function" ? made(sam) : made, scope);
+        const asCreator = await outcome(sam, mark, samSide.id, typeof made === "function" ? made(mark) : made, scope);
+        assert.deepEqual(viaSeries, asCreator, `${scope} ${name}`);
+      }
+    }
+  });
+
+  it("keeps an All change that hands the series on with a time date only", async () => {
+    const task = await weekly("All hand-over", "2027-10-06", "09:00");
+    const saved = (await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId, dueAt: at("2027-10-06", "11:00"), dueHasTime: true }, "all")).body.task;
+    assert.deepEqual([saved.ownerId, saved.dueHasTime], [sam.userId, false]);
+    assert.equal((await seriesRow(task.seriesId!)).at, null);
+  });
+
+  it("lets a tagged series owner delete the series and undo it", async () => {
+    const task = await handedSeries("Owner undo", "2027-10-07");
+    const deleted = (await deleteSeries(mark, task.id)).body;
+    assert.ok((await getTask(mark, task.id)).archivedAt);
+    await undoTaskEvents(mark, task.id, deleted.undo, { operation: "undo_change" });
+    assert.equal((await getTask(mark, task.id)).archivedAt, null);
+    assert.equal((await seriesRow(task.seriesId!)).archived_at, null);
+  });
+
+  it("lets the series' owner update its occurrences without seeing more or reaching other tasks", async () => {
+    const { queryAsUser } = await import("./helpers");
+    const task = await handedSeries("Policy check", "2027-10-09");
+    const olly = await join(await createUser("olly5@series.test", "Olly Park"), "member");
+    const loose = (await createTask(priya, { title: "Priya's own" })).body.task;
+    const renamed = await queryAsUser(mark.userId, "update crm.tasks set title = 'Policy renamed' where id = $1 returning id", [task.id]);
+    assert.equal(renamed.length, 1);
+    assert.equal((await queryAsUser(mark.userId, "update crm.tasks set title = 'Nope' where id = $1 returning id", [loose.id])).length, 0);
+    assert.equal((await queryAsUser(olly.userId, "update crm.tasks set title = 'Nope' where id = $1 returning id", [task.id])).length, 0);
+    assert.equal((await queryAsUser(mark.userId, "select 1 from crm.tasks where id = $1", [loose.id])).length, 0);
+  });
+
+  it("records handing a removed person's series on, archived ones included", async () => {
+    const rita = await join(await createUser("rita5@series.test", "Rita Moss"), "member");
+    const live = (await createRepeatingTask(rita, { title: "Rita's live", dueDate: "2027-10-10" }, { every: "week" })).body.task;
+    const gone = (await createRepeatingTask(rita, { title: "Rita's archived", dueDate: "2027-10-10" }, { every: "week" })).body.task;
+    await deleteSeries(rita, gone.id);
+    await removeMember(mark, rita.userId);
+    const rows = await sql<{ owner_id: string; created_by_user_id: string }>("select owner_id, created_by_user_id from crm.task_series where id = any($1::uuid[]) order by title", [[live.seriesId, gone.seriesId]]);
+    assert.deepEqual(rows, [{ owner_id: mark.userId, created_by_user_id: mark.userId }, { owner_id: mark.userId, created_by_user_id: mark.userId }]);
+    const audits = await sql("select 1 from crm.audit_events where entity_id = $1 and event_type = 'task_series.updated' and changes ? 'handedOver'", [live.id]);
+    assert.equal(audits.length, 1);
+  });
+
+  it("keeps completed, docs and email pins to the task's own people", async () => {
+    const task = await handedSeries("Own fields", "2027-10-08");
+    await assert.rejects(updateOccurrence(mark, { taskId: task.id }, { completed: true }, "all"), /Only the assignee or the task's creator/);
   });
 });
 
