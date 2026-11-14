@@ -109,9 +109,11 @@ export function SearchChip({
   onClosed,
   allow,
   taskId,
+  suggested,
 }: {
   allow?: (option: PadOption) => boolean;
   taskId?: string;
+  suggested?: { heading: string; options: PadOption[] };
   kind: PadSearchKind;
   icon: Icon;
   label: string;
@@ -128,7 +130,9 @@ export function SearchChip({
   const [highlight, setHighlight] = useState(0);
   const key = `${kind}|${companyId ?? ""}|${query.trim()}`;
   const current = results?.key === key ? results : null;
-  const options = current && !current.failed ? current.options.filter((option) => !allow || allow(option)) : null;
+  const named = suggested && !query.trim() ? suggested.options.filter((option) => !allow || allow(option)) : [];
+  const found = current && !current.failed ? current.options.filter((option) => (!allow || allow(option)) && !named.some((item) => item.id === option.id)) : null;
+  const options = found ? [...named, ...found] : named.length > 0 ? named : null;
   const active = options && options.length > 0 ? Math.min(highlight, options.length - 1) : -1;
   const noun = kind === "contact" ? "people" : kind === "company" ? "companies" : "opportunities";
 
@@ -213,6 +217,7 @@ export function SearchChip({
             Couldn&apos;t search. Try again.
           </p>
         )}
+        {named.length > 0 && <p className="caption-style text-subtle px-2.5 pt-1 pb-0.5">{suggested?.heading}</p>}
         <ul id={`${id}-list`} role="listbox" aria-label={noun} className="flex max-h-64 flex-col overflow-y-auto">
           {(options ?? []).map((option, index) => (
             <li

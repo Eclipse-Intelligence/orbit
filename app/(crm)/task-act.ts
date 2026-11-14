@@ -73,7 +73,12 @@ export async function relinkTaskAction(id: string, change: LinkChange): Promise<
   if (typeof user === "string") return { error: user };
   if (typeof id !== "string" || !isUuid(id) || !change || typeof change !== "object") return { error: "Couldn't link the task. Try again." };
   try {
-    await relinkTask(user, id, { companyId: change.companyId, contactId: change.contactId, opportunityId: change.opportunityId }, { operation: "link_task", source: "web" });
+    await relinkTask(
+      user,
+      id,
+      { companyId: change.companyId, contactId: change.contactId, opportunityId: change.opportunityId, ...(change.mailThreadKey === null ? { mailThreadKey: null } : {}) },
+      { operation: "link_task", source: "web" },
+    );
     pushLater(user, [id]);
     refresh();
     return { ok: true };

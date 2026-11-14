@@ -38,7 +38,7 @@ export type TaskOutcome = {
   next: { title: string; dueAt: string | null } | null;
 };
 
-export type LinkChange = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
+export type LinkChange = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null; mailThreadKey?: null };
 
 const OUTCOME_KINDS: OutcomeKind[] = ["call", "email", "meeting"];
 const PEOPLE_SHOWN = 8;
@@ -272,8 +272,9 @@ export async function relinkTask(actor: UserActor, taskId: string, change: LinkC
     companyId: linkValue(change.companyId),
     contactId: linkValue(change.contactId),
     opportunityId: linkValue(change.opportunityId),
+    ...(change.mailThreadKey === null ? { mailThreadKey: null } : {}),
   };
-  if (write.companyId === undefined && write.contactId === undefined && write.opportunityId === undefined) {
+  if (write.companyId === undefined && write.contactId === undefined && write.opportunityId === undefined && write.mailThreadKey === undefined) {
     throw new CrmError("invalid_input", "Choose a person, company or opportunity.", 400);
   }
   return withActor(actor, async (db) => {

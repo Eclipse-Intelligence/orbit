@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
-import { detectedIds, detectTaskRecordsInDb, folded, memberNames, mentionsName, MIN_NAME, quotesFoldedSql, TEXT_LIMIT, type DetectedLinkIds } from "@/lib/crm/task-detect";
+import { detectedIds, detectTaskRecordsInDb, folded, memberNames, mentionsName, MIN_NAME, quotesFoldedSql, TEXT_LIMIT, type DetectedLinkIds, type LinkedRecord } from "@/lib/crm/task-detect";
 import { straightQuotes } from "@/lib/task-pad";
 import { canChangeTask, updateTaskInDb } from "@/lib/crm/tasks";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
@@ -12,6 +12,7 @@ export type LinkCandidate = {
   id: string;
   name: string;
   detail: string | null;
+  company?: LinkedRecord | null;
 };
 
 export type LinkCandidates = { candidates: LinkCandidate[]; reason: string | null };
@@ -42,9 +43,9 @@ export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<
     const title = row.title.slice(0, TEXT_LIMIT);
     const members = await memberNames(db, actor.workspaceId);
     const words = titleWords(title);
-    const contacts = await db.query<{ id: string; name: string; first: string | null; last: string | null; job_title: string | null; company_name: string | null; full: boolean }>(
+    const contacts = await db.query<{ id: string; name: string; first: string | null; last: string | null; job_title: string | null; company_id: string | null; company_name: string | null; full: boolean }>(
       `select c.id, trim(concat_ws(' ', c.first_name, c.last_name)) as name, lower(${quotesFoldedSql("trim(c.first_name)")}) as first, lower(${quotesFoldedSql("trim(c.last_name)")}) as last,
-         c.job_title, co.name as company_name,
+         c.job_title, c.company_id, co.name as company_name,
          strpos(lower($2), lower(${quotesFoldedSql("trim(concat_ws(' ', c.first_name, c.last_name))")})) > 0 as full
        from crm.contacts c
        left join crm.companies co on co.id = c.company_id
@@ -55,7 +56,7 @@ export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<
            or lower(${quotesFoldedSql("trim(c.first_name)")}) = any($3::text[])
            or lower(${quotesFoldedSql("trim(c.last_name)")}) = any($3::text[])
          )
-       order by 7 desc, c.updated_at desc
+       order by 8 desc, c.updated_at desc
        limit 40`,
       [actor.workspaceId, straightQuotes(title), words],
     );
@@ -74,6 +75,7 @@ export async function taskLinkCandidates(actor: Actor, taskId: string): Promise<
       id: contact.id,
       name: contact.name,
       detail: [contact.job_title, contact.company_name].filter(Boolean).join(" · ") || null,
+      company: contact.company_id && contact.company_name ? { id: contact.company_id, name: contact.company_name } : null,
     }));
     const places = companies.rows
       .filter((company) => !members.has(folded(company.name)) && mentionsName(title, company.name))

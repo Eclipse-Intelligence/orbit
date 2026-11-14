@@ -328,6 +328,22 @@ describe("relinking from the task", () => {
     await assert.rejects(() => relinkTask(priya, task.id, { contactId: jane }, { operation: "link_task", source: "web" }), /Only the assignee/);
     assert.equal((await getTask(mark, task.id)).contactId, martin);
   });
+
+  it("removes a linked email from the Email chip with an audited update, only for people who can change the task", async () => {
+    const task = (await createTask(mark, { title: "Reply to Jane about renewal", contactId: jane, mailThreadKey: `${markBox.sourceId}|renewal` })).body.task;
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    await assert.rejects(() => relinkTask(priya, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" }), /Only the assignee/);
+    assert.equal((await getTask(mark, task.id)).mailThreadKey, `${markBox.sourceId}|renewal`);
+    const cleared = await relinkTask(mark, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" });
+    assert.equal(cleared.mailThreadKey, null);
+    assert.equal(cleared.contactId, jane);
+    const events = await audits(task.id, "task.updated");
+    assert.equal(events.length, 1);
+    assert.ok(events[0].changes.fields?.includes("mailThreadKey"));
+    await relinkTask(mark, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" });
+    assert.equal((await audits(task.id, "task.updated")).length, 1, "clearing an email that is already gone records nothing");
+    await assert.rejects(() => relinkTask(mark, task.id, { mailThreadKey: "someone|else" } as never, { operation: "link_task", source: "web" }), /Choose a person/);
+  });
 });
 
 function outcome(values: { note?: string; kind?: "call" | "email" | "meeting" | null; next?: { title: string; dueAt: string | null } | null; outcomeId?: string } = {}) {

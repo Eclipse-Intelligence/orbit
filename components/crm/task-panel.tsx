@@ -196,6 +196,10 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
           return;
         }
         const focused = document.activeElement;
+        if (focused instanceof HTMLElement && focused.closest("[data-mention-open]")) {
+          event.preventDefault();
+          return;
+        }
         if (focused instanceof HTMLElement && !sheet?.contains(focused) && focused.closest(FIELD)) {
           event.preventDefault();
           focused.blur();
@@ -262,7 +266,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                     <span className="mt-px flex">
                       <TaskDoneCircle done={done} disabled={!canChange} title={task.title} onClick={complete} />
                     </span>
-                    <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} />
+                    <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} docWarn={othersSeeTask(task, viewer.id, tagged)} />
                   </div>
                   {done && canChange && onReopen && !outcome && (
                     <div className="flex">
@@ -312,7 +316,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                       {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
                     </div>
                   )}
-                  {recordNotes && <TaskDocs task={task} canChange={canChange && !done && task.canLinkDocs} warn={othersSeeTask(task, viewer.id, tagged)} />}
+                  {recordNotes && <TaskDocs task={task} canChange={canChange && !done && task.canLinkDocs} />}
                   <TaskSection label="Discussion" count={discussion.count}>
                     <DiscussionMessages discussion={discussion} />
                   </TaskSection>

@@ -11,6 +11,7 @@ import { TaskAct } from "@/components/crm/task-actions";
 import TaskAskButton from "@/components/crm/task-ask";
 import { TaskPrepare } from "@/components/crm/task-prepare";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
+import { othersSeeTask } from "@/components/crm/task-docs";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskTitle from "@/components/crm/task-title";
 import type { Viewer } from "@/components/crm/viewer";
@@ -315,7 +316,7 @@ function ActionTask({
           {expanded ? (
             <div className="flex min-w-0 flex-1 items-start gap-2">
               <div className="flex min-w-0 flex-1 pt-0.5">
-                <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} here={here} size="row" />
+                <TaskTitleField details={details} colleagues={colleagues} viewerId={viewer.id} here={here} size="row" docWarn={othersSeeTask(task, viewer.id, tagged)} />
               </div>
               <Button
                 variant="ghost"
