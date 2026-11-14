@@ -329,11 +329,10 @@ assigned as (
   from owners
   where owners.workspace_id = t.workspace_id
     and t.owner_id is null and t.created_by_user_id is null
-    and t.archived_at is null and t.completed_at is null
   returning t.id, t.workspace_id, t.owner_id
 )
 insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, operation, source, changes)
-select assigned.workspace_id, 'task.updated', 'task', assigned.id, 'system', 'assign_agent_task_to_owner', 'migration',
+select assigned.workspace_id, 'task.updated', 'task', assigned.id, 'system', 'assign_ownerless_task_to_owner', 'migration',
   jsonb_build_object('fields', jsonb_build_array('ownerId'), 'before', jsonb_build_object('ownerId', null), 'after', jsonb_build_object('ownerId', assigned.owner_id))
 from assigned;
 

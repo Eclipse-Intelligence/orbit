@@ -552,7 +552,9 @@ async function applyTask(
   options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
 ) {
   if (current.archived_at && !options.restoring) throw notFound("task");
-  if (actor.type === "agent" && write.ownerId === null) write.ownerId = await workspaceOwner(db, actor.workspaceId);
+  if (actor.type === "agent" && (write.ownerId === null || (write.ownerId === undefined && !current.owner_id))) {
+    write.ownerId = await workspaceOwner(db, actor.workspaceId);
+  }
   await assertAssignee(db, actor.workspaceId, write.ownerId);
   const restoresTime = Boolean(options.restoring && write.dueAt !== undefined && write.ownerId !== undefined);
   const echoesDay = write.dueAt !== undefined && Boolean(write.dueHasTime) && !current.due_has_time && !options.claimSchedule && !write.wallTime && sameDue(write, current);

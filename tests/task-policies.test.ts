@@ -328,6 +328,13 @@ describe("agents and webhooks under task privacy", () => {
     assert.equal((await getTask(mark, task.id)).title, "Agent found a lead to call");
     const released = (await updateTask(agent, task.id, { ownerId: null })).body.task;
     assert.equal(released.ownerId, mark.userId);
+    await admin().query("update crm.tasks set owner_id = null where id = $1", [task.id]);
+    const touched = (await updateTask(agent, task.id, { title: "Agent found a lead to call, renamed" })).body.task;
+    assert.equal(touched.ownerId, mark.userId);
+    await completeTask(agent, task.id);
+    await admin().query("update crm.tasks set owner_id = null where id = $1", [task.id]);
+    const reopened = (await updateTask(agent, task.id, { completed: false })).body.task;
+    assert.equal(reopened.ownerId, mark.userId);
   });
 
   it("sends an endpoint subscribed to every event only the tasks its creator can see", async () => {
