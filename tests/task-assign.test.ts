@@ -387,8 +387,10 @@ describe("task access edges", () => {
     await settle();
     assert.deepEqual((await alertsFor(mark)).map((alert) => [alert.title, alert.body]), [["Done by Sam Member", "Done only once"]]);
 
+    const finished = (await createTask(mark, { title: "Already finished", ownerId: sam.userId })).body.task;
+    await sql("update crm.tasks set completed_at = now() where id = $1", [finished.id]);
+    await settle();
     await sql("truncate crm.notifications, crm.push_log");
-    const finished = (await createTask(mark, { title: "Already finished", ownerId: sam.userId, completed: true })).body.task;
     await updateTask(mark, finished.id, { ownerId: priya.userId });
     await settle();
     assert.deepEqual(await alertsFor(sam), []);

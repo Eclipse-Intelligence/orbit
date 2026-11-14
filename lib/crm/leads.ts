@@ -59,6 +59,12 @@ function leadTaskTimed(task: TaskWrite) {
   return reading.ok && !reading.dateOnly;
 }
 
+function leadReminderCanFire(task: TaskWrite) {
+  if (!leadTaskTimed(task)) return false;
+  const reading = readDateTime(task.dueAt!);
+  return reading.ok && reading.date.getTime() > Date.now();
+}
+
 async function ingestLeadInDb(
   db: Db,
   actor: Actor,
@@ -181,7 +187,7 @@ async function ingestLeadInDb(
           actor,
           {
             ...input.task,
-            ...(leadTaskTimed(input.task) ? {} : { remindMinutes: null }),
+            ...(leadReminderCanFire(input.task) ? {} : { remindMinutes: null }),
             companyId:
               input.task.companyId === undefined
                 ? (result.company?.id ?? result.contact?.companyId ?? undefined)
