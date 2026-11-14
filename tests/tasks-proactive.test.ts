@@ -3,6 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { getConversation, openBrief } from "@/lib/assistant/chat";
 import { offersCreateThose } from "@/lib/assistant/brief-dock";
 import { createCompany } from "@/lib/crm/companies";
+import { recordCommunication } from "@/lib/crm/communications";
 import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
@@ -12,7 +13,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { suggestsTasks } from "@/lib/learning/brief-format";
 import { latestBrief, runUnit } from "@/lib/learning/nightly";
-import { cleanSubject, followUpTitle, subjectTitle } from "@/lib/mail/follow-up-title";
+import { cleanSubject, followUpTitle, loggedTitle, subjectTitle } from "@/lib/mail/follow-up-title";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
@@ -333,5 +334,52 @@ describe("follow-up titles from the email", () => {
     }
     const task = (await listTasks(owner, { companyId: company })).data[0];
     assert.equal(task.title, "Send Emma Lowe the deck before Thursday");
+  });
+
+  it("titles an API follow-up from the logged email outside the filing transaction", async () => {
+    const owner = await createUser("lena@logged-title.test", "Lena Logged");
+    const company = (await createCompany(owner, { name: "Larchmont", domain: "larchmont-title.test" })).body.company.id;
+    await createContact(owner, { companyId: company, firstName: "Ivo", lastName: "Hart", email: "ivo@larchmont-title.test" });
+    const record = (fetchImpl?: typeof fetch) =>
+      recordCommunication(
+        owner,
+        { kind: "email", title: "Re: Pilot scope", body: "Could you send over the pilot scope by Friday?", participantEmails: ["ivo@larchmont-title.test"] },
+        { fetchImpl },
+      );
+    const open = async () => (await getAdminPool().query<{ open: number }>("select count(*)::int as open from pg_stat_activity where state = 'idle in transaction'")).rows[0].open;
+    process.env.LLM_API_KEY = "llm-test";
+    try {
+      let openDuringCall = -1;
+      const llm = scripted(() => ({ title: "Send Ivo Hart the pilot scope by Friday" }));
+      const watched: typeof fetch = async (input, init) => {
+        openDuringCall = await open();
+        return llm.fetchImpl(input, init);
+      };
+      const filed = await record(watched);
+      assert.equal(filed.suggested, true);
+      assert.equal(filed.task?.title, "Send Ivo Hart the pilot scope by Friday");
+      assert.equal(filed.task?.contactId, (await listTasks(owner, { companyId: company })).data[0].contactId);
+      assert.equal(openDuringCall, 0);
+      assert.equal(llm.seen.length, 1);
+      assert.match(llm.seen[0].system, /An email with Ivo Hart has just been logged/);
+      assert.match(llm.seen[0].user, /Subject: Pilot scope\n\nCould you send over the pilot scope by Friday\?/);
+      await completeTask(owner, filed.task!.id);
+
+      const failing: typeof fetch = async () => new Response("nope", { status: 500 });
+      const failed = await record(failing);
+      assert.equal(failed.task?.title, "Follow up with Ivo Hart: Pilot scope");
+      await completeTask(owner, failed.task!.id);
+
+      const meeting = scripted(() => ({ title: "Should not be used" }));
+      const met = await recordCommunication(owner, { kind: "meeting", title: "Kickoff", body: "Agreed the plan", companyId: company }, { fetchImpl: meeting.fetchImpl });
+      assert.equal(met.task?.title, "Follow up with Larchmont");
+      assert.equal(meeting.seen.length, 0);
+      await completeTask(owner, met.task!.id);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    const keyless = await record();
+    assert.equal(keyless.task?.title, "Follow up with Ivo Hart: Pilot scope");
+    assert.equal(loggedTitle({ who: "Ivo Hart", subject: " Fwd: " }), "Follow up with Ivo Hart");
   });
 });

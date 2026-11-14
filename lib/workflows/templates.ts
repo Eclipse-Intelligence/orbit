@@ -76,7 +76,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
           type: "ai",
           label: "Suggest the next step",
           config: {
-            model: "claude-sonnet-5-5",
+            model: "claude-opus-5-5",
             context: true,
             prompt:
               "I've just completed this task: {{task.title}}\nIts notes: {{task.notes}}\nIts opportunity: {{task.opportunityName}}\nWho it is with: {{contact.name}} at {{company.name}}\n\nOpen tasks on the same records:\n{{task.openTasks}}\n\nSuggest the one next task that moves this on, from what was agreed, promised or asked for in what Orbit knows below. Leave nextTask empty when an open task already covers it, when nothing clearly follows, or when the task wasn't about anyone.",
@@ -110,7 +110,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
             dueDate: "{{steps.ai_1.dueOn}}",
             assignee: "owner",
             link: "task",
-            clickup: false,
+            clickup: true,
           },
         },
       ],

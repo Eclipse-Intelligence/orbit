@@ -237,7 +237,7 @@ On an existing task, `PATCH /api/v1/tasks/:id`, MCP `update_next_action` and the
 
 ## Communications
 
-`POST /api/v1/communications` accepts `{ "kind": "email" | "meeting", "title", "body", "participantEmails", "companyId", "contactId" }`. It files the activity and, when it happened in the last 48 hours and the company has no open task, creates a suggested follow-up task. Requires `activities:write`. The follow-up also requires `tasks:write`.
+`POST /api/v1/communications` accepts `{ "kind": "email" | "meeting", "title", "body", "participantEmails", "companyId", "contactId" }`. It files the activity and, when it happened in the last 48 hours and the company has no open task, creates a suggested follow-up task. For an email the AI titles the task from the subject and body, or else it is "Follow up with <name>: <subject>"; for a meeting it is "Follow up with <name>". Requires `activities:write`. The follow-up also requires `tasks:write`.
 
 ## Bulk leads
 
