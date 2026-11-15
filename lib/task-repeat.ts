@@ -617,7 +617,6 @@ export function repeatInputOf(rule: RepeatRule, ends: RepeatEnds): RepeatInput {
   return input;
 }
 
-
 export type SeriesTiming = RepeatPattern & {
   durationMinutes: number;
   after: string | null;

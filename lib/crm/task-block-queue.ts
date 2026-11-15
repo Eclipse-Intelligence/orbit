@@ -7,12 +7,12 @@ const RUN_MS = 25_000;
 async function run(taskIds: string[]) {
   if (taskIds.length === 0) return;
   try {
-    const { blockWrites, syncTaskBlocks } = await import("@/lib/crm/task-outlook");
-    const { syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
+    const { syncTaskBlocks } = await import("@/lib/crm/task-outlook");
+    const { SERIES_SHARE, syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
     const deadline = Date.now() + RUN_MS;
     const throttled = new Set<string>();
-    const blocks = await syncTaskBlocks({ taskIds, deadline, throttled });
-    await syncSeriesOutlook({ taskIds, deadline, throttled, limit: Math.max(0, 50 - blockWrites(blocks)) });
+    const series = await syncSeriesOutlook({ taskIds, deadline, throttled, limit: SERIES_SHARE });
+    await syncTaskBlocks({ taskIds, deadline, throttled, limit: Math.max(1, 50 - series.requests) });
   } catch (error) {
     console.error("Outlook task blocks failed", error);
   }

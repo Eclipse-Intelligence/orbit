@@ -136,7 +136,7 @@ export async function setMemberRole(actor: UserActor, userId: string, role: stri
   }
 }
 
-export async function removeMember(actor: UserActor, userId: string, provenance: Provenance = { operation: "remove_member" }) {
+export async function removeMember(actor: UserActor, userId: string, provenance: Provenance = { operation: "remove_member" }, options: { fetchImpl?: typeof fetch } = {}) {
   const rooms = isUuid(userId)
     ? await roomsLostOnLeaving(actor.workspaceId, userId).catch((error) => {
         console.error("Couldn't read the Chat rooms they leave", error);
@@ -149,6 +149,14 @@ export async function removeMember(actor: UserActor, userId: string, provenance:
         return [];
       })
     : [];
+  if (isUuid(userId)) {
+    try {
+      const { removeSeriesOutlookFor } = await import("@/lib/crm/series-outlook");
+      await removeSeriesOutlookFor(userId, actor.workspaceId, { fetchImpl: options.fetchImpl });
+    } catch (error) {
+      console.error("Couldn't take their repeating tasks out of Outlook", error);
+    }
+  }
   try {
     const handed = await query("select * from private.team_remove_records($1, $2, $3, $4, $5, $6)", [
       actor.workspaceId,

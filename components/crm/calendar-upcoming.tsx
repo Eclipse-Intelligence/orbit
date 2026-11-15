@@ -7,8 +7,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useComposer } from "@/components/mail/compose-dock";
 import { REPEAT_SAVE_FAILED, RepeatIcon, useUndoToast } from "@/components/crm/task-repeat";
 import { moveUpcomingAction, skipUpcomingAction, undoRepeatAction, type RepeatActionResult, type UpcomingTarget } from "@/app/(crm)/repeats";
+import { dateKey } from "@/lib/calendar-view";
 import { clockLabel, durationLabel } from "@/lib/crm/task-time";
-import type { TaskBlock } from "@/lib/task-blocks";
+import { dropRefusal, NOT_HERE, resetsFor, type TaskBlock } from "@/lib/task-blocks";
 import type { DropPlacement } from "@/lib/task-drag";
 import { shortDay } from "@/lib/task-repeat";
 
@@ -25,26 +26,34 @@ function targetOf(block: TaskBlock): UpcomingTarget | null {
   return { currentTaskId: upcoming.currentTaskId, seriesId: upcoming.seriesId, occursOn: upcoming.occursOn };
 }
 
-export function useUpcomingMove() {
+export function useUpcomingMove(today: string) {
   const composer = useComposer();
   const router = useRouter();
   const undoToast = useUndoToast();
   const failed = useCallback((message?: string) => composer.showToast({ message: message || REPEAT_SAVE_FAILED, tone: "alert" }), [composer]);
   return useCallback(
-    (block: TaskBlock, placement: DropPlacement, onFailed: () => void) => {
+    (block: TaskBlock, placement: DropPlacement, onDone: (saved: boolean) => void) => {
       const target = targetOf(block);
-      if (!target || placement.dateOnly === true) {
-        onFailed();
+      if (placement.dateOnly === true) {
+        onDone(false);
+        return;
+      }
+      const refusal = dropRefusal(block, placement.at, today);
+      if (refusal || !target) {
+        onDone(false);
+        failed(refusal ?? NOT_HERE);
         return;
       }
       const move: { dueAt?: string; durationMinutes?: number } = {};
       if (Date.parse(placement.at) !== Date.parse(block.task.dueAt ?? "")) move.dueAt = placement.at;
       if (placement.durationMinutes !== block.task.durationMinutes) move.durationMinutes = placement.durationMinutes;
       if (!move.dueAt && !move.durationMinutes) {
-        onFailed();
+        onDone(false);
         return;
       }
-      const day = shortDay(block.upcoming!.occursOn);
+      const landed = dateKey(placement.at);
+      const day = shortDay(landed);
+      const sameDay = landed === block.upcoming!.occursOn;
       const rescope = (scope: "following" | "all", undo: string[], message: string) =>
         void moveUpcomingAction(target, move, scope, undo)
           .catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }))
@@ -57,13 +66,14 @@ export function useUpcomingMove() {
         .catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }))
         .then((result) => {
           if (result.error) {
-            onFailed();
+            onDone(false);
             failed(result.error);
             return;
           }
+          onDone(true);
           router.refresh();
           const undo = result.undo ?? [];
-          const resets = move.dueAt ? block.upcoming!.changedDates : 0;
+          const resets = move.dueAt ? resetsFor(block) : 0;
           const confirmAll = () =>
             composer.showToast({
               message: `Resets ${resets} changed date${resets === 1 ? "" : "s"}.`,
@@ -73,10 +83,14 @@ export function useUpcomingMove() {
           composer.showToast({
             message: `Moved ${day} only.`,
             duration: 10_000,
-            choices: [
-              { label: "This and following", run: () => rescope("following", undo, `Moved ${day} and later.`) },
-              { label: "All", run: () => (resets > 0 ? confirmAll() : rescope("all", undo, "Moved every one.")) },
-            ],
+            ...(sameDay
+              ? {
+                  choices: [
+                    { label: "This and following", run: () => rescope("following", undo, `Moved ${day} and later.`) },
+                    { label: "All", run: () => (resets > 0 ? confirmAll() : rescope("all", undo, "Moved every one.")) },
+                  ],
+                }
+              : {}),
             ...(undo.length > 0
               ? {
                   action: {
@@ -94,7 +108,7 @@ export function useUpcomingMove() {
           });
         });
     },
-    [composer, failed, router, undoToast],
+    [composer, failed, router, today, undoToast],
   );
 }
 
@@ -102,18 +116,23 @@ export default function UpcomingDialog({
   block,
   onClose,
   onOpenTask,
+  canOpen,
 }: {
   block: TaskBlock | null;
   onClose: () => void;
   onOpenTask: (taskId: string) => void;
+  canOpen: (taskId: string) => boolean;
 }) {
   const composer = useComposer();
   const router = useRouter();
   const undoToast = useUndoToast();
   const [busy, setBusy] = useState(false);
-  const target = block ? targetOf(block) : null;
+  const [shown, setShown] = useState(block);
+  if (block && block !== shown) setShown(block);
+  const target = shown ? targetOf(shown) : null;
+  const openable = Boolean(target && canOpen(target.currentTaskId));
   const skip = async () => {
-    if (!block || !target) return;
+    if (!shown || !target) return;
     setBusy(true);
     const result = await skipUpcomingAction(target).catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }));
     setBusy(false);
@@ -122,7 +141,7 @@ export default function UpcomingDialog({
       return;
     }
     onClose();
-    undoToast(target.currentTaskId, `Skipped ${shortDay(block.upcoming!.occursOn)}.`, result.undo);
+    undoToast(target.currentTaskId, `Skipped ${shortDay(shown.task.dueDate ?? shown.upcoming!.occursOn)}.`, result.undo);
     router.refresh();
   };
   return (
@@ -131,12 +150,17 @@ export default function UpcomingDialog({
         <DialogHeader className="pr-12">
           <DialogTitle className="flex min-w-0 items-center gap-2">
             <RepeatIcon aria-hidden className="text-violet size-3.5 shrink-0" />
-            <span className="truncate">{block?.title}</span>
+            <span className="truncate">{shown?.title}</span>
           </DialogTitle>
           <DialogDescription>
-            {block ? ["Upcoming", upcomingWhen(block), block.task.dueHasTime ? durationLabel(block.durationMinutes) : null].filter(Boolean).join(" · ") : null}
+            {shown ? ["Upcoming", upcomingWhen(shown), shown.task.dueHasTime ? durationLabel(shown.durationMinutes) : null].filter(Boolean).join(" · ") : null}
           </DialogDescription>
         </DialogHeader>
+        {!target && (
+          <p role="status" className="caption-style text-subtle px-6">
+            {NOT_HERE}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="secondary" size="md" className="hit" disabled={busy || !target} onClick={() => void skip()}>
             Skip this one
@@ -145,7 +169,7 @@ export default function UpcomingDialog({
             variant="primary"
             size="md"
             className="hit"
-            disabled={!target}
+            disabled={!openable}
             onClick={() => {
               if (!target) return;
               onClose();

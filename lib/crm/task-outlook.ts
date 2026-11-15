@@ -671,18 +671,13 @@ export async function flushTaskBlocks(
     const fresh = await noteTaskBlocksWrite(connectionId, writes);
     if (writes) {
       await queueOwnTaskBlocks(actor.userId, options.now, fresh);
-      if (fresh) await query("select private.queue_series_outlook($1)", [actor.userId]);
+      await query(fresh ? "select private.queue_series_outlook($1)" : "select private.wake_series_outlook($1)", [actor.userId]);
     }
   }
   const throttled = new Set<string>();
-  const blocks = await syncTaskBlocks({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled });
-  const { syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
-  await syncSeriesOutlook({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled, limit: Math.max(0, RUN_LIMIT - blockWrites(blocks)) });
-  return blocks;
-}
-
-export function blockWrites(run: BlockRun) {
-  return run.created + run.updated + run.removed;
+  const { SERIES_SHARE, syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
+  const series = await syncSeriesOutlook({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled, limit: SERIES_SHARE });
+  return syncTaskBlocks({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled, limit: Math.max(1, RUN_LIMIT - series.requests) });
 }
 
 type ReadBackRow = {

@@ -56,9 +56,10 @@ export async function readPlanner(actor: UserActor, now = Date.now()): Promise<P
   ).flat();
   const teams = await Promise.all(
     read.map(async ({ target, tasks }) => {
-      const members = tasks.length > 0 ? await listMembers(target) : [];
+      const shown = [...tasks, ...seriesTasks.filter((task) => task.workspaceId === target.workspaceId)];
+      const members = shown.length > 0 ? await listMembers(target) : [];
       const team = members.length > 1;
-      const tagged = team ? await listTaskParticipants(target, tasks.map((task) => task.id)) : {};
+      const tagged = team ? await listTaskParticipants(target, shown.map((task) => task.id)) : {};
       return {
         team: {
           id: target.workspaceId,
@@ -94,11 +95,14 @@ export async function listUpcomingBlocks(actor: UserActor, range: { start: Date;
   const series = await listOwnSeries(actor, workspaces.map((workspace) => workspace.id));
   const blocks = upcomingBlocks(series, {
     viewerId: actor.userId,
-    from: dateKey(range.start),
+    from: dateKey(range.start.getTime() - 86_400_000),
     to: dateKey(range.end.getTime() - 1),
     today: dateKey(now),
     meetings,
     workspaces,
   });
-  return blocks.filter((block) => !block.task.dueHasTime || (Date.parse(block.startsAt) < range.end.getTime() && Date.parse(block.endsAt) > range.start.getTime()));
+  const firstDay = dateKey(range.start);
+  return blocks.filter((block) =>
+    block.task.dueHasTime ? Date.parse(block.startsAt) < range.end.getTime() && Date.parse(block.endsAt) > range.start.getTime() : (block.task.dueDate ?? "") >= firstDay,
+  );
 }

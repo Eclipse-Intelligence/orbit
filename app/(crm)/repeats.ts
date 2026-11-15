@@ -102,11 +102,15 @@ export async function moveUpcomingAction(
   const read = readTarget(target);
   if (!read || !REPEAT_SCOPES.includes(scope) || !move || typeof move !== "object") return { error: REPEAT_SAVE_FAILED };
   const write: TaskWrite = {};
-  if (typeof move.dueAt === "string") {
-    write.dueAt = move.dueAt;
+  if (move.dueAt !== undefined) {
+    if (typeof move.dueAt !== "string" || Number.isNaN(Date.parse(move.dueAt))) return { error: REPEAT_SAVE_FAILED };
+    write.dueAt = new Date(move.dueAt).toISOString();
     write.dueHasTime = true;
   }
-  if (typeof move.durationMinutes === "number") write.durationMinutes = move.durationMinutes;
+  if (move.durationMinutes !== undefined) {
+    if (!Number.isInteger(move.durationMinutes) || move.durationMinutes < 5 || move.durationMinutes > 480) return { error: "Choose a duration between 5 and 480 minutes." };
+    write.durationMinutes = move.durationMinutes;
+  }
   if (Object.keys(write).length === 0) return { error: REPEAT_SAVE_FAILED };
   const undone = (Array.isArray(replaces) ? replaces : []).filter((event) => typeof event === "string" && isUuid(event));
   return run(read.currentTaskId, (user) =>

@@ -609,7 +609,7 @@ export type SeriesMasterDraft = Omit<ReturnType<typeof taskBlockDraft>, "start" 
 };
 
 export function graphTimeZoneName(timeZone: string) {
-  return windowsTimeZone(timeZone) ?? "UTC";
+  return windowsTimeZone(timeZone) ?? null;
 }
 
 export async function listSeriesInstances(accessToken: string, masterId: string, start: Date, end: Date, fetchImpl: typeof fetch = fetch) {

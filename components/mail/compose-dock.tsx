@@ -414,10 +414,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
 
   const showToast = useCallback(
     (toast: Toast) => {
-      const repeat = toast.action ? undefined : shownMessages.current.get(toast.message);
+      const repeat = toast.action || toast.choices ? undefined : shownMessages.current.get(toast.message);
       if (repeat !== undefined) return repeat;
       const id = ++toastCounter.current;
-      if (!toast.action) shownMessages.current.set(toast.message, id);
+      if (!toast.action && !toast.choices) shownMessages.current.set(toast.message, id);
       if (toast.action && toast.onDismiss) toastEnds.current.set(id, toast.onDismiss);
       setToasts((current) => [...current.slice(-2), { ...toast, id }]);
       toastTimers.current.set(

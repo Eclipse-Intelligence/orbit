@@ -48,8 +48,7 @@ begin
         where c.series_id = s.id and c.due_has_time
       )
     )
-  order by s.created_at, s.id
-  limit 400;
+  order by s.created_at, s.id;
 end;
 $$;
 
@@ -72,6 +71,8 @@ create table if not exists crm.task_series_outlook (
   attempts integer not null default 0,
   updated_at timestamptz not null default now()
 );
+
+alter table crm.task_series_outlook add column if not exists waiting boolean not null default false;
 
 alter table crm.task_series_outlook enable row level security;
 alter table crm.task_series_outlook force row level security;
@@ -100,7 +101,7 @@ as $$
       or exists (select 1 from crm.task_series_outlook x where x.series_id = s.id)
       or exists (select 1 from crm.task_occurrence_changes c where c.series_id = s.id and c.due_has_time)
     )
-  on conflict (series_id) do update set version = o.version + 1, retry_at = null, updated_at = now();
+  on conflict (series_id) do update set version = o.version + 1, retry_at = null, waiting = false, updated_at = now();
 $$;
 
 create or replace function private.task_series_outlook_enqueue()
@@ -182,7 +183,7 @@ as $$
       and (o.claimed_at is null or o.claimed_at < clock_timestamp() - interval '2 minutes')
       and (o.retry_at is null or o.retry_at <= clock_timestamp())
       and (p_task_ids is null or s.current_task_id = any(p_task_ids))
-      and (p_user_id is null or s.owner_id = p_user_id or o.user_id = p_user_id)
+      and (p_user_id is null or s.owner_id = p_user_id or o.user_id = p_user_id or o.create_user_id = p_user_id)
     order by o.updated_at
     limit greatest(1, least(coalesce(p_limit, 50), 200))
     for update of o skip locked
@@ -244,7 +245,8 @@ as $$
   where series_id = p_series;
 $$;
 
-create or replace function private.settle_series_outlook(p_series uuid, p_version bigint, p_requeue boolean)
+drop function if exists private.settle_series_outlook(uuid, bigint, boolean);
+create or replace function private.settle_series_outlook(p_series uuid, p_version bigint, p_requeue boolean, p_waiting boolean)
 returns void
 language sql
 security definer
@@ -254,8 +256,32 @@ as $$
   set settled_version = case when p_requeue then settled_version else greatest(settled_version, p_version) end,
       claimed_at = null,
       retry_at = null,
-      attempts = 0
+      attempts = 0,
+      waiting = p_waiting and not p_requeue
   where series_id = p_series;
+$$;
+
+create or replace function private.wake_series_outlook(p_user_id uuid)
+returns integer
+language sql
+security definer
+set search_path = ''
+as $$
+  with picked as (
+    select o.series_id
+    from crm.task_series_outlook o
+    join crm.task_series s on s.id = o.series_id
+    where (o.waiting or o.retry_at is not null)
+      and (s.owner_id = p_user_id or o.user_id = p_user_id or o.create_user_id = p_user_id)
+    for update of o skip locked
+  ), woken as (
+    update crm.task_series_outlook o
+    set version = o.version + 1, retry_at = null, attempts = 0, waiting = false, updated_at = now()
+    from picked
+    where o.series_id = picked.series_id
+    returning 1
+  )
+  select count(*)::integer from woken;
 $$;
 
 create or replace function private.defer_series_outlook(p_series uuid, p_until timestamptz)
@@ -289,8 +315,7 @@ language sql
 security definer
 set search_path = ''
 as $$
-  with touched as (
-    insert into crm.task_series_outlook as o (series_id)
+  with wanted as (
     select s.id from crm.task_series s
     where (
         s.owner_id = p_user_id
@@ -298,26 +323,40 @@ as $$
         and (s.at is not null or exists (select 1 from crm.task_occurrence_changes c where c.series_id = s.id and c.due_has_time))
       )
       or exists (select 1 from crm.task_series_outlook x where x.series_id = s.id and (x.user_id = p_user_id or x.create_user_id = p_user_id))
-    on conflict (series_id) do update set version = o.version + 1, retry_at = null, attempts = 0, updated_at = now()
+  ), held as (
+    select o.series_id from crm.task_series_outlook o join wanted on wanted.id = o.series_id
+    for update of o skip locked
+  ), bumped as (
+    update crm.task_series_outlook o
+    set version = o.version + 1, retry_at = null, attempts = 0, waiting = false, updated_at = now()
+    from held
+    where o.series_id = held.series_id
+    returning 1
+  ), added as (
+    insert into crm.task_series_outlook (series_id)
+    select wanted.id from wanted where not exists (select 1 from crm.task_series_outlook x where x.series_id = wanted.id)
+    on conflict (series_id) do nothing
     returning 1
   )
-  select count(*)::integer from touched;
+  select (select count(*) from bumped)::integer + (select count(*) from added)::integer;
 $$;
 
 revoke all on function private.queue_series_outlook(uuid) from public;
 grant execute on function private.queue_series_outlook(uuid) to crm_app;
+revoke all on function private.wake_series_outlook(uuid) from public;
+grant execute on function private.wake_series_outlook(uuid) to crm_app;
 revoke all on function private.series_outlook_touch(uuid) from public;
 revoke all on function private.task_series_outlook_enqueue() from public;
 revoke all on function private.claim_series_outlook(uuid[], uuid, integer) from public;
 revoke all on function private.begin_series_outlook_create(uuid, uuid) from public;
 revoke all on function private.save_series_outlook(uuid, uuid, text, jsonb, jsonb, boolean) from public;
-revoke all on function private.settle_series_outlook(uuid, bigint, boolean) from public;
+revoke all on function private.settle_series_outlook(uuid, bigint, boolean, boolean) from public;
 revoke all on function private.defer_series_outlook(uuid, timestamptz) from public;
 revoke all on function private.series_outlook_events(uuid) from public;
 grant execute on function private.claim_series_outlook(uuid[], uuid, integer) to crm_app;
 grant execute on function private.begin_series_outlook_create(uuid, uuid) to crm_app;
 grant execute on function private.save_series_outlook(uuid, uuid, text, jsonb, jsonb, boolean) to crm_app;
-grant execute on function private.settle_series_outlook(uuid, bigint, boolean) to crm_app;
+grant execute on function private.settle_series_outlook(uuid, bigint, boolean, boolean) to crm_app;
 grant execute on function private.defer_series_outlook(uuid, timestamptz) to crm_app;
 grant execute on function private.series_outlook_events(uuid) to crm_app;
 
@@ -328,3 +367,5 @@ where s.ended_at is null and s.archived_at is null
 on conflict (series_id) do nothing;
 
 reset lock_timeout;
+
+create index concurrently if not exists task_series_owner_active_idx on crm.task_series (owner_id) where archived_at is null and ended_at is null;

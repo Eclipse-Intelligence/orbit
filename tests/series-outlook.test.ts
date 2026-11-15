@@ -3,10 +3,11 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { runTool } from "@/lib/assistant/tools";
 import { storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
-import { saveMailbox } from "@/lib/crm/inbox";
-import { seriesRecurrence, syncSeriesOutlook } from "@/lib/crm/series-outlook";
+import { disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
+import { masterDraft, seriesRecurrence, syncSeriesOutlook } from "@/lib/crm/series-outlook";
 import { createRepeatingTask, deleteSeries, endSeriesOn, rollDueSeries, setTaskRepeat, skipOccurrence, updateOccurrence } from "@/lib/crm/task-series";
-import { syncTaskBlocks } from "@/lib/crm/task-outlook";
+import { flushTaskBlocks, syncTaskBlocks } from "@/lib/crm/task-outlook";
+import { removeMember } from "@/lib/crm/team";
 import { completeTask } from "@/lib/crm/tasks";
 import type { Task, UserActor } from "@/lib/crm/types";
 import { undoTaskEvents } from "@/lib/crm/undo";
@@ -26,7 +27,7 @@ const HOUR = 3_600_000;
 const DRAG = { operation: "drag_task", source: "web" };
 
 type Recurrence = {
-  pattern: { type: string; interval: number; daysOfWeek?: string[] };
+  pattern: { type: string; interval: number; daysOfWeek?: string[]; dayOfMonth?: number; month?: number; index?: string };
   range: { type: string; startDate: string; endDate?: string };
 };
 type Master = { subject: string; at: string; minutes: number; recurrence: Recurrence; transactionId: string; key: string | null; body: string; owner?: string };
@@ -61,10 +62,40 @@ function weekdayOf(day: string) {
   return (new Date(`${day}T12:00:00Z`).getUTCDay() + 6) % 7;
 }
 
+function monthLength(year: number, month: number) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function dayOf(year: number, month: number, date: number) {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
+}
+
+const INDEXES = ["first", "second", "third", "fourth"];
+
+function monthlyDay(pattern: Recurrence["pattern"], year: number, month: number) {
+  if (pattern.type === "absoluteMonthly" || pattern.type === "absoluteYearly") return dayOf(year, month, Math.min(pattern.dayOfMonth!, monthLength(year, month)));
+  const wanted = WEEK_NAMES.indexOf(pattern.daysOfWeek![0]);
+  const matches: string[] = [];
+  for (let date = 1; date <= monthLength(year, month); date += 1) if (weekdayOf(dayOf(year, month, date)) === wanted) matches.push(dayOf(year, month, date));
+  return pattern.index === "last" ? matches[matches.length - 1] : matches[INDEXES.indexOf(pattern.index ?? "first")];
+}
+
 function expand(recurrence: Recurrence, limit = 400) {
   const days: string[] = [];
   const { pattern, range } = recurrence;
   const start = range.startDate;
+  if (pattern.type === "absoluteMonthly" || pattern.type === "relativeMonthly" || pattern.type === "absoluteYearly") {
+    const [startYear, startMonth] = start.split("-").map(Number);
+    const yearly = pattern.type === "absoluteYearly";
+    for (let step = 0; step < 240 && days.length < limit; step += 1) {
+      const offset = step * pattern.interval * (yearly ? 12 : 1);
+      const monthIndex = (yearly ? (startYear + step * pattern.interval) * 12 + pattern.month! - 1 : startYear * 12 + startMonth - 1 + offset);
+      const day = monthlyDay(pattern, Math.floor(monthIndex / 12), (monthIndex % 12) + 1);
+      if (range.endDate && day > range.endDate) break;
+      if (day >= start) days.push(day);
+    }
+    return days;
+  }
   const anchor = shiftDay(start, -weekdayOf(start));
   for (let index = 0; index < 800 && days.length < limit; index += 1) {
     const day = shiftDay(start, index);
@@ -86,13 +117,18 @@ class FakeGraph {
   calls: { method: string; url: string; body: Record<string, unknown> | null }[] = [];
   refuseInstancePatch = false;
   keepExceptions = false;
+  failLogin = false;
+  loseCreates = 0;
+  refuseCreate = false;
   throttleDeletes = false;
   strict = false;
   faultRate = 0;
-  faults = { throttled: 0, unavailable: 0, network: 0 };
+  faults = { throttled: 0, unavailable: 0, network: 0, afterWrite: 0 };
   random: () => number = Math.random;
   created = 0;
-  everCreated = new Map<string, string>();
+  everCreated = new Map<string, { id: string; at: number }>();
+  clock = 0;
+  dedupeFor = 40;
 
   instancesOf(id: string) {
     const master = this.masters.get(id)!;
@@ -123,22 +159,12 @@ class FakeGraph {
   }
 
   fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    const method = init?.method ?? "GET";
-    let body: Record<string, unknown> | null = null;
-    if (typeof init?.body === "string") {
-      try {
-        body = JSON.parse(init.body) as Record<string, unknown>;
-      } catch {
-        body = null;
+    const graph = new URL(String(input)).hostname === "graph.microsoft.com";
+    if (graph && this.faultRate > 0 && this.random() < this.faultRate) {
+      if ((init?.method ?? "GET") !== "GET" && this.random() < 0.5) {
+        this.faults.afterWrite += 1;
+        await this.handle(input, init);
       }
-    }
-    this.calls.push({ method, url, body });
-    const parsed = new URL(url);
-    if (parsed.hostname === "login.microsoftonline.com") return json({ access_token: "fresh", refresh_token: "refresh", expires_in: 3600, scope: WRITE_SCOPES });
-    const auth = String((init?.headers as Record<string, string> | undefined)?.authorization ?? "");
-    const mine = (item: { owner?: string } | undefined) => Boolean(item) && (!this.strict || item!.owner === auth);
-    if (this.faultRate > 0 && this.random() < this.faultRate) {
       const pick = this.random();
       if (pick < 0.34) {
         this.faults.throttled += 1;
@@ -151,11 +177,43 @@ class FakeGraph {
       this.faults.network += 1;
       throw new TypeError("fetch failed");
     }
+    return this.handle(input, init);
+  }) as typeof fetch;
+
+  handle = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    let body: Record<string, unknown> | null = null;
+    if (typeof init?.body === "string") {
+      try {
+        body = JSON.parse(init.body) as Record<string, unknown>;
+      } catch {
+        body = null;
+      }
+    }
+    this.calls.push({ method, url, body });
+    const parsed = new URL(url);
+    if (parsed.hostname === "login.microsoftonline.com") {
+      if (this.failLogin) return json({ error: "temporarily_unavailable" }, 503);
+      return json({ access_token: "fresh", refresh_token: "refresh", expires_in: 3600, scope: WRITE_SCOPES });
+    }
+    const auth = String((init?.headers as Record<string, string> | undefined)?.authorization ?? "");
+    const mine = (item: { owner?: string } | undefined) => Boolean(item) && (!this.strict || item!.owner === auth);
+    this.clock += 1;
     const property = (value: Record<string, unknown> | null) =>
       ((value?.singleValueExtendedProperties as { value: string }[] | undefined) ?? [])[0]?.value ?? null;
+    if (method === "POST" && parsed.pathname === "/v1.0/me/events" && this.refuseCreate) return json({ error: { code: "ErrorInvalidRequest", message: "No" } }, 400);
+    if (method === "POST" && parsed.pathname === "/v1.0/me/events" && this.loseCreates > 0) {
+      this.loseCreates -= 1;
+      const held = this.loseCreates;
+      this.loseCreates = 0;
+      await this.handle(input, init);
+      this.loseCreates = held;
+      throw new TypeError("fetch failed");
+    }
     if (method === "POST" && parsed.pathname === "/v1.0/me/events") {
       const same = this.everCreated.get(`${this.strict ? auth : ""}|${String(body!.transactionId)}`);
-      if (same) return json({ id: same }, 201);
+      if (same && this.clock - same.at < this.dedupeFor) return json({ id: same.id }, 201);
       this.created += 1;
       if (body!.recurrence) {
         const id = `master-${this.created}`;
@@ -163,12 +221,12 @@ class FakeGraph {
         const end = fromGraph(body!.end);
         const minutes = (Date.parse(end) - Date.parse(fromGraph(body!.start))) / 60_000;
         this.masters.set(id, { subject: String(body!.subject), at: start.dateTime.slice(11, 16), minutes, recurrence: body!.recurrence as Recurrence, transactionId: String(body!.transactionId), key: property(body), body: String((body!.body as { content: string }).content), owner: auth });
-        this.everCreated.set(`${this.strict ? auth : ""}|${String(body!.transactionId)}`, id);
+        this.everCreated.set(`${this.strict ? auth : ""}|${String(body!.transactionId)}`, { id, at: this.clock });
         return json({ id }, 201);
       }
       const id = `single-${this.created}`;
       this.plains.set(id, { subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end), transactionId: String(body!.transactionId), key: property(body), owner: auth });
-      this.everCreated.set(`${this.strict ? auth : ""}|${String(body!.transactionId)}`, id);
+      this.everCreated.set(`${this.strict ? auth : ""}|${String(body!.transactionId)}`, { id, at: this.clock });
       return json({ id }, 201);
     }
     if (method === "GET" && parsed.pathname === "/v1.0/me/events") {
@@ -190,6 +248,9 @@ class FakeGraph {
       const id = decodeURIComponent(one[1]);
       const owned = mine(this.masters.get(id.split("::")[0])) || mine(this.plains.get(id));
       if (!owned && (method === "DELETE" || method === "PATCH")) return json({ error: { code: "ErrorItemNotFound" } }, 404);
+      if (id.includes("::") && this.masters.has(id.split("::")[0]) && !expand(this.masters.get(id.split("::")[0])!.recurrence).includes(id.split("::")[1])) {
+        return json({ error: { code: "ErrorItemNotFound", message: "Not an occurrence" } }, 404);
+      }
       if (method === "DELETE") {
         if (this.throttleDeletes) return new Response(JSON.stringify({ error: { code: "TooManyRequests", message: "Slow down" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "1" } });
         if (this.masters.delete(id)) return json(null, 204);
@@ -500,28 +561,51 @@ describe("repeating tasks in Outlook", () => {
     assert.equal(graph.masters.size, 0);
   });
 
-  it("keeps the Outlook series while the mailbox can't be reached, and catches up once it can", async () => {
+  it("keeps the Outlook series while Microsoft can't be reached for now, and catches up once it can", async () => {
     const tuesday = nextWeekday(2);
     const task = await repeating("Kept", tuesday, "12:00", { every: "week" });
     await sync();
     const masterId = [...graph.masters.keys()][0];
-    await admin().query("update crm.mailbox_connections set status = 'disconnected' where user_id = $1", [mark.userId]);
+    await admin().query("update crm.mailbox_connections set access_token_expires_at = now() - interval '1 hour' where user_id = $1", [mark.userId]);
+    graph.failLogin = true;
     await updateOccurrence(mark, { taskId: task.id }, { dueAt: london(tuesday, "13:00") }, "all");
-    await sync();
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
     assert.equal(graph.masters.get(masterId)!.at, "12:00");
-    let row = (await admin().query<{ master_id: string | null; version: string; settled_version: string }>("select master_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    const row = (await admin().query<{ master_id: string | null; version: string; settled_version: string }>("select master_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
     assert.equal(row.master_id, masterId);
     assert.ok(Number(row.version) > Number(row.settled_version));
-    await setTaskRepeat(mark, task.id, null);
+    graph.failLogin = false;
     await admin().query("update crm.task_series_outlook set retry_at = null where series_id = $1", [task.seriesId]);
-    await sync();
-    assert.ok(graph.masters.has(masterId));
-    row = (await admin().query<{ master_id: string | null; version: string; settled_version: string }>("select master_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
-    assert.equal(row.master_id, masterId);
-    await admin().query("update crm.mailbox_connections set status = 'connected' where user_id = $1", [mark.userId]);
-    await admin().query("select private.queue_series_outlook($1)", [mark.userId]);
-    await sync();
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.equal(graph.masters.get(masterId)!.at, "13:00");
+  });
+
+  it("writes a series made while Microsoft was disconnected once it is connected again", async () => {
+    const first = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await flushTaskBlocks(mark, first, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    await disconnectMailbox(mark);
+    const tuesday = nextWeekday(2);
+    await repeating("Made offline", tuesday, "12:00", { every: "week" });
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
     assert.equal(graph.masters.size, 0);
+    await saveMailbox(mark, { email: mark.email, refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + HOUR).toISOString() });
+    const connection = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await flushTaskBlocks(mark, connection, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    assert.equal(graph.masters.size, 1);
+  });
+
+  it("gives the series to the new owner when the previous one disconnected Microsoft", async () => {
+    const sam = await createUser(`sam-off${seq}@series-outlook.test`, "Sam Okafor");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+    await connect({ ...sam, workspaceId: mark.workspaceId });
+    const task = await repeating("Disconnected", nextWeekday(3), "16:00", { every: "week" });
+    await sync();
+    await disconnectMailbox(mark);
+    await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch });
+    const row = (await admin().query<{ user_id: string | null; version: string; settled_version: string }>("select user_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(row.user_id, sam.userId);
+    assert.equal(Number(row.version), Number(row.settled_version));
   });
 
   it("writes a timed This one on a date-only series as its own event", async () => {
@@ -629,25 +713,35 @@ describe("repeating tasks in Outlook", () => {
     for (const date of skipped) assert.equal(graph.onDay(date).length, 0, date);
   });
 
-  for (const gone of ["removed their Microsoft account", "left every workspace"]) {
-    it(`gives the series to the new owner when the previous holder ${gone}`, async () => {
-      const sam = await createUser(`sam-gone${seq}${gone.length}@series-outlook.test`, "Sam Okafor");
-      await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
-      await connect({ ...sam, workspaceId: mark.workspaceId });
-      const wednesday = nextWeekday(3);
-      const task = await repeating("Handed on", wednesday, "16:00", { every: "week" });
-      await sync();
-      assert.equal(graph.masters.size, 1);
-      await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
-      if (gone === "removed their Microsoft account") await admin().query("delete from crm.mailbox_connections where user_id = $1", [mark.userId]);
-      else await admin().query("delete from crm.workspace_members where user_id = $1", [mark.userId]);
-      await syncSeriesOutlook({ fetchImpl: graph.fetch });
-      const row = (await admin().query<{ user_id: string | null; version: string; settled_version: string }>("select user_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
-      assert.equal(row.user_id, sam.userId);
-      assert.equal(Number(row.version), Number(row.settled_version));
-      assert.equal(graph.masters.size, 2);
-    });
-  }
+  it("gives the series to the new owner when the previous holder removed their Microsoft account", async () => {
+    const sam = await createUser(`sam-gone${seq}@series-outlook.test`, "Sam Okafor");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+    await connect({ ...sam, workspaceId: mark.workspaceId });
+    const task = await repeating("Handed on", nextWeekday(3), "16:00", { every: "week" });
+    await sync();
+    await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
+    await admin().query("delete from crm.mailbox_connections where user_id = $1", [mark.userId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch });
+    const row = (await admin().query<{ user_id: string | null; version: string; settled_version: string }>("select user_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(row.user_id, sam.userId);
+    assert.equal(Number(row.version), Number(row.settled_version));
+  });
+
+  it("takes the series out of the Outlook of someone removed from their only workspace", async () => {
+    const sam = await createUser(`sam-removed${seq}@series-outlook.test`, "Sam Okafor");
+    const samHere: UserActor = { ...sam, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member", scopes: scopesForRole("member") };
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+    await admin().query("delete from crm.workspace_members where user_id = $1 and workspace_id <> $2", [sam.userId, mark.workspaceId]);
+    await connect(samHere, `access-${sam.userId}`);
+    graph.strict = true;
+    await admin().query("update crm.mailbox_connections set access_token = $2 where user_id = $1", [mark.userId, "access-mark"]);
+    const task = (await createRepeatingTask(samHere, { title: "Sam's call", dueAt: london(nextWeekday(4), "10:00") }, { every: "week" })).body.task;
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: sam.userId });
+    assert.equal([...graph.masters.values()].filter((master) => master.owner === `Bearer access-${sam.userId}`).length, 1);
+    await removeMember(mark, sam.userId, { operation: "remove_member" }, { fetchImpl: graph.fetch });
+    assert.equal([...graph.masters.values()].filter((master) => master.owner === `Bearer access-${sam.userId}`).length, 0);
+    assert.ok(task.seriesId);
+  });
 
   it("queues a date-only series with a timed date when the migration runs", async () => {
     const thursday = nextWeekday(4);
@@ -757,7 +851,7 @@ describe("repeating tasks in Outlook, random sequences", () => {
     await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, teammate.userId]);
     const people = [owner, teammate];
     const tokens = new Map(people.map((person) => [person.userId, `access-${person.userId}`]));
-    const totals = { throttled: 0, unavailable: 0, network: 0, budgetCuts: 0, timeStops: 0, operations: 0, refused: 0, workerRuns: 0, keptExceptions: 0 };
+    const totals = { afterWrite: 0, throttled: 0, unavailable: 0, network: 0, budgetCuts: 0, timeStops: 0, operations: 0, refused: 0, workerRuns: 0, keptExceptions: 0 };
     for (let sequence = 0; sequence < SEQUENCES; sequence += 1) {
       const seed = FIRST_SEED + sequence;
       const random = seeded(seed);
@@ -804,7 +898,17 @@ describe("repeating tasks in Outlook, random sequences", () => {
               const timed = random() < 0.75;
               const start = shiftDay(today, Math.floor(random() * 5));
               const interval = random() < 0.3 ? { interval: 2 } : {};
-              const repeat = random() < 0.5 ? { every: "day", ...interval } : { every: "week", days: [...new Set([pick(["mo", "tu", "we", "th", "fr"]), pick(["sa", "su", "we"])])], ...interval };
+              const kind = random();
+              const repeat =
+                kind < 0.35
+                  ? { every: "day", ...interval }
+                  : kind < 0.7
+                    ? { every: "week", days: [...new Set([pick(["mo", "tu", "we", "th", "fr"]), pick(["sa", "su", "we"])])], ...interval }
+                    : kind < 0.8
+                      ? { every: "month", monthDay: pick([1, 15, 29, 30, 31]) }
+                      : kind < 0.9
+                        ? { every: "month", monthWeek: { n: pick([1, 2, -1]), weekday: pick(["mo", "fr"]) } }
+                        : { every: "year" };
               const ends = random() < 0.25 ? { ends: { after: 3 + Math.floor(random() * 6) } } : random() < 0.2 ? { ends: { on: shiftDay(today, 10 + Math.floor(random() * 20)) } } : {};
               const at = hour();
               const made = (await createRepeatingTask(actor, { title: `S${series.length} ${seed}`, ...(timed ? { dueAt: london(start, at) } : { dueDate: start }) }, { ...repeat, ...ends })).body.task;
@@ -864,8 +968,7 @@ describe("repeating tasks in Outlook, random sequences", () => {
             } else if (choice === "unlink") {
               const person = pick(people);
               note += ` ${person === owner ? "owner" : "mate"}`;
-              await admin().query("delete from crm.calendars where user_id = $1", [person.userId]);
-              await admin().query("delete from crm.mailbox_connections where user_id = $1", [person.userId]);
+              await disconnectMailbox(person);
             } else if (choice === "worker") await runWorker();
             else note += " (nothing)";
           }
@@ -883,7 +986,7 @@ describe("repeating tasks in Outlook, random sequences", () => {
         if (left.rows.length === 0) break;
       }
       const pending = await admin().query("select series_id from crm.task_series_outlook where version > settled_version");
-      const linked = (await admin().query<{ user_id: string }>("select user_id from crm.mailbox_connections where user_id = any($1::uuid[])", [[...tokens.keys()]])).rows.map((row) => row.user_id);
+      const linked = (await admin().query<{ user_id: string }>("select user_id from crm.mailbox_connections where user_id = any($1::uuid[]) and status = 'connected'", [[...tokens.keys()]])).rows.map((row) => row.user_id);
       const expected = await expectedEvents(linked);
       const actual = actualEvents(fake, tokens);
       const failure: string[] = [];
@@ -894,14 +997,102 @@ describe("repeating tasks in Outlook, random sequences", () => {
         if (JSON.stringify(want) !== JSON.stringify(have)) {
           const missing = want.filter((item) => !have.includes(item));
           const extra = have.filter((item) => !want.includes(item));
-          failure.push(`${person === owner.userId ? "owner" : "mate"}: missing ${JSON.stringify(missing.slice(0, 4))} extra ${JSON.stringify(extra.slice(0, 4))} (${missing.length}/${extra.length})`);
+          failure.push(`${person === owner.userId ? "owner" : "mate"}: missing ${JSON.stringify(missing.slice(0, 4))} extra ${JSON.stringify(extra.slice(0, 4))} (${missing.length}/${extra.length})${missing.length + extra.length === 0 ? ` want ${JSON.stringify(want)} have ${JSON.stringify(have)}` : ""}`);
         }
       }
       totals.throttled += fake.faults.throttled;
       totals.unavailable += fake.faults.unavailable;
       totals.network += fake.faults.network;
-      assert.deepEqual(failure, [], `seed ${seed} (keep exceptions ${fake.keepExceptions}):\n${log.join("\n")}`);
+      totals.afterWrite += fake.faults.afterWrite;
+      const state = failure.length > 0 ? (await admin().query("select o.series_id, s.owner_id, s.at, s.archived_at, s.ended_at, o.user_id, o.master_id, o.create_key, o.version, o.settled_version, o.waiting, o.retry_at, o.dates from crm.task_series_outlook o join crm.task_series s on s.id = o.series_id")).rows : [];
+      assert.deepEqual(failure, [], `seed ${seed} (keep exceptions ${fake.keepExceptions}):\n${log.join("\n")}\n${JSON.stringify(state)}\nmasters ${JSON.stringify([...fake.masters].map(([id, master]) => [id, master.owner, master.subject]))}\ncalls ${process.env.SERIES_DEBUG ? JSON.stringify(fake.calls.filter((call) => call.url.includes(process.env.SERIES_DEBUG!) || call.method === "POST").map((call) => `${call.method} ${call.url.slice(40, 100)}`)) : ""}`);
     }
     console.log(`series sequences ${SEQUENCES}`, JSON.stringify(totals));
+  });
+});
+
+describe("Outlook review fixes", () => {
+  it("finishes a rewrite with more changed dates than one run can write", async () => {
+    const monday = nextWeekday(1);
+    const task = await repeating("Many moves", monday, "09:00", { every: "week" });
+    await sync();
+    const dates = [1, 2, 3, 4, 5].map((week) => shiftDay(monday, week * 7));
+    for (const date of dates) await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: date }, { dueAt: london(date, "16:00"), dueHasTime: true }, "this", [], DRAG);
+    await sync();
+    await completeTask(mark, task.id);
+    for (let run = 0; run < 30; run += 1) {
+      await admin().query("update crm.task_series_outlook set retry_at = null where series_id = $1", [task.seriesId]);
+      await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId, limit: 3 });
+    }
+    for (const date of dates.slice(1)) assert.deepEqual(graph.onDay(date).map((item) => item.start), [london(date, "16:00")], date);
+    const settled = (await version(task.seriesId!))!;
+    assert.equal(settled.version, settled.settled);
+  });
+
+  it("finds and removes an event Graph made but Orbit never heard back about", async () => {
+    const wednesday = nextWeekday(3);
+    const task = await repeating("Lost answer", wednesday, "14:00", { every: "week" });
+    await sync();
+    const later = shiftDay(wednesday, 7);
+    graph.refuseInstancePatch = true;
+    graph.loseCreates = 2;
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "09:00"), dueHasTime: true }, "this", [], DRAG);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.equal(graph.plains.size > 0, true);
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: later });
+    await admin().query("update crm.task_series_outlook set retry_at = null where series_id = $1", [task.seriesId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.equal(graph.onDay(later).length, 0);
+
+    graph.loseCreates = 2;
+    const lost = await repeating("Lost master", nextWeekday(4), "11:00", { every: "week" });
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.equal([...graph.masters.values()].filter((master) => master.subject === "Lost master").length, 1);
+    await deleteSeries(mark, lost.id);
+    await admin().query("update crm.task_series_outlook set retry_at = null, create_sent_at = create_sent_at - interval '10 minutes' where series_id = $1", [lost.seriesId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.equal([...graph.masters.values()].filter((master) => master.subject === "Lost master").length, 0);
+  });
+
+  it("stops retrying a series Outlook refuses until it changes again", async () => {
+    graph.refuseCreate = true;
+    const task = await repeating("Refused", nextWeekday(2), "10:00", { every: "week" });
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    const row = (await admin().query<{ version: string; settled_version: string; retry_at: Date | null }>("select version, settled_version, retry_at from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(Number(row.version), Number(row.settled_version));
+    assert.equal(row.retry_at, null);
+  });
+
+  it("counts every Graph request against the run's budget", async () => {
+    const friday = nextWeekday(5);
+    const task = await repeating("Budgeted", friday, "08:00", { every: "week" });
+    for (const week of [1, 2, 3]) await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: shiftDay(friday, week * 7) });
+    graph.calls = [];
+    const run = await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId, limit: 3 });
+    assert.ok(graph.calls.filter((call) => new URL(call.url).hostname === "graph.microsoft.com").length <= 3);
+    assert.ok(run.requests <= 3);
+  });
+
+  it("claims a row held only by a pending creation for that person", async () => {
+    const task = await repeating("Pending key", nextWeekday(2), "10:00", { every: "week" });
+    await admin().query("update crm.task_series_outlook set create_key = gen_random_uuid(), create_user_id = $2, user_id = null where series_id = $1", [task.seriesId, mark.userId]);
+    const sam = await createUser(`sam-claim${seq}@series-outlook.test`, "Sam Okafor");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+    await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
+    const claimed = await getPool().query("select series_id from private.claim_series_outlook(null, $1::uuid, 10)", [mark.userId]);
+    assert.ok(claimed.rows.some((row: { series_id: string }) => row.series_id === task.seriesId));
+  });
+
+  it("writes a time zone Graph can't name in UTC rather than as a wrong wall time", () => {
+    const draft = masterDraft("00000000-0000-4000-8000-000000000001", {
+      startDay: "2027-01-04",
+      at: "09:00",
+      durationMinutes: 30,
+      title: "Zone",
+      link: null,
+      recurrence: seriesRecurrence({ startsOn: "2027-01-04", at: "09:00", rule: { freq: "daily", interval: 1 }, ends: { never: true } }, "2027-01-04", null, "Antarctica/Troll"),
+    }, "key", "Antarctica/Troll");
+    assert.equal(draft.start.timeZone, "UTC");
+    assert.equal(draft.recurrence.range.recurrenceTimeZone, "UTC");
   });
 });

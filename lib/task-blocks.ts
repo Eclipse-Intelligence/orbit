@@ -1,7 +1,7 @@
 import { dateKey, shiftDateKey, weekStartKey } from "@/lib/calendar-view";
 import { DEFAULT_TASK_DURATION, isTaskOverdue } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
-import { upcomingBetween, type SeriesTiming, type UpcomingOccurrence } from "@/lib/task-repeat";
+import { shortDay, upcomingBetween, type SeriesTiming, type UpcomingOccurrence } from "@/lib/task-repeat";
 import { appTimeZone, startOfDay } from "@/lib/time";
 
 const MINUTE_MS = 60_000;
@@ -44,7 +44,7 @@ export type UpcomingSeries = SeriesTiming & {
   anchorTaskId: string | null;
 };
 
-export type UpcomingRef = { seriesId: string; occursOn: string; currentTaskId: string | null; workspaceId: string; changedDates: number };
+export type UpcomingRef = { seriesId: string; occursOn: string; currentTaskId: string | null; workspaceId: string; after: string | null; changedOn: string[] };
 
 export type TaskListGroupKind = "overdue" | "today" | "week" | "later" | "none";
 
@@ -141,6 +141,22 @@ export function taskBlocks(
 }
 
 const UPCOMING_PREFIX = "upcoming:";
+
+export const PAST_DAY = "Choose today or a later day.";
+export const NOT_HERE = "This date can't be changed from the Calendar yet.";
+
+export function dropRefusal(block: TaskBlock, at: string, today: string) {
+  const day = dateKey(at);
+  if (day < today) return PAST_DAY;
+  const after = block.upcoming?.after;
+  if (after && day <= after) return `Move it to a day after the open one (${shortDay(after)}).`;
+  if (!block.upcoming?.currentTaskId) return NOT_HERE;
+  return null;
+}
+
+export function resetsFor(block: TaskBlock) {
+  return (block.upcoming?.changedOn ?? []).filter((day) => day !== block.upcoming?.occursOn).length;
+}
 
 export function upcomingTaskId(seriesId: string, occursOn: string) {
   return `${UPCOMING_PREFIX}${seriesId}:${occursOn}`;
@@ -239,7 +255,8 @@ export function upcomingBlocks(
             occursOn: occurrence.occursOn,
             currentTaskId: item.anchorTaskId,
             workspaceId: item.workspaceId,
-            changedDates: item.changes.filter((change) => !change.skip && change.dueAt && (!item.afterOccurs || change.occursOn > item.afterOccurs)).length,
+            after: item.after,
+            changedOn: item.changes.filter((change) => !change.skip && change.dueAt && (!item.afterOccurs || change.occursOn > item.afterOccurs)).map((change) => change.occursOn),
           },
         };
       }),
@@ -248,7 +265,26 @@ export function upcomingBlocks(
 }
 
 export function upcomingDayBlocks(blocks: TaskBlock[], day: string) {
-  return blocks.filter((block) => block.upcoming && !block.task.dueHasTime && block.task.dueDate === day);
+  return blocks.filter((block) => !block.task.dueHasTime && block.task.dueDate === day);
+}
+
+export function openDayChips(tasks: Task[], viewerId: string, workspaces: PlannerWorkspace[] = []): TaskBlock[] {
+  const names = workspaces.length > 1 ? new Map(workspaces.map((item) => [item.id, item.name])) : null;
+  return tasks
+    .filter((task) => task.seriesId && task.repeat?.current && !task.dueHasTime && task.dueDate && task.ownerId === viewerId && !task.completedAt && !task.archivedAt)
+    .map((task) => ({
+      id: taskBlockId(task.id),
+      task,
+      title: task.title,
+      startsAt: task.dueAt ?? "",
+      endsAt: task.dueAt ?? "",
+      durationMinutes: task.durationMinutes,
+      person: taskPerson(task),
+      workspaceName: names?.get(task.workspaceId) ?? null,
+      done: false,
+      overdue: false,
+      clash: null,
+    }));
 }
 
 export function blocksInRange(blocks: TaskBlock[], range: { start: Date; end: Date }) {

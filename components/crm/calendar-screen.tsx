@@ -36,7 +36,6 @@ import { applyPlanAction, planAction } from "@/app/(crm)/calendar/plan-actions";
 import PlanPanel, { type PlanPanelHandlers } from "@/components/crm/calendar-plan";
 import { placeTaskAction } from "@/app/(crm)/records";
 import {
-  dateKey,
   mergeDuplicateEvents,
   rangeDays,
   shiftDateKey,
@@ -49,7 +48,7 @@ import type { Planner } from "@/lib/crm/task-blocks";
 import { durationLabel, taskDueDay } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
 import { LONG_PRESS_MS } from "@/lib/pointer-gesture";
-import { isUpcomingTaskId, taskBlocks, upcomingBlocks, type TaskBlock } from "@/lib/task-blocks";
+import { clashWith, dropRefusal, isUpcomingTaskId, openDayChips, taskBlocks, upcomingBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { panelTaskFor } from "@/lib/task-done";
 import { placedTask, placementLanded, slotDateLabel, type DropPlacement } from "@/lib/task-drag";
 import {
@@ -79,7 +78,6 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 
 const MOVE_FAILED = "Couldn't move the task. Try again.";
-const PAST_DAY = "Choose today or a later day.";
 const PLAN_FAILED = "Couldn't plan your tasks. Try again.";
 const APPLY_FAILED = "Couldn't put the tasks on your calendar. Try again.";
 
@@ -350,13 +348,14 @@ export default function CalendarScreen({
 
   const { sections, toggle: toggleSection } = useCalendarSections();
   const [placed, setPlaced] = useState<Placed>({});
-  const [moved, setMoved] = useState<Record<string, { startsAt: string; endsAt: string; durationMinutes: number }>>({});
+  const [moved, setMoved] = useState<Record<string, { startsAt: string; endsAt: string; durationMinutes: number; pending: boolean }>>({});
   const [plannerSeen, setPlannerSeen] = useState(planner);
   if (plannerSeen !== planner) {
     setPlannerSeen(planner);
     const kept = unsettled(placed, planner.tasks);
     if (Object.keys(kept).length !== Object.keys(placed).length) setPlaced(kept);
-    if (Object.keys(moved).length > 0) setMoved({});
+    const stillSaving = Object.fromEntries(Object.entries(moved).filter(([, entry]) => entry.pending));
+    if (Object.keys(stillSaving).length !== Object.keys(moved).length) setMoved(stillSaving);
   }
   const placeSeq = useRef(0);
   const latestPlace = useRef(new Map<string, number>());
@@ -435,21 +434,21 @@ export default function CalendarScreen({
     onCancel: cancelPlan,
     onApply: applyPlan,
   };
-  const moveUpcoming = useUpcomingMove();
+  const moveUpcoming = useUpcomingMove(today);
   const place = (task: Task, placement: DropPlacement) => {
     if (isUpcomingTaskId(task.id)) {
       const block = upcoming.find((item) => item.task.id === task.id);
       if (!block || placement.dateOnly === true) return;
-      if (dateKey(placement.at) < today) {
-        setError(PAST_DAY);
-        return;
-      }
       setError(null);
-      const startsAt = new Date(placement.at).toISOString();
-      const endsAt = new Date(Date.parse(placement.at) + placement.durationMinutes * 60_000).toISOString();
-      setMoved((current) => ({ ...current, [task.id]: { startsAt, endsAt, durationMinutes: placement.durationMinutes } }));
-      moveUpcoming(block, placement, () =>
+      if (!dropRefusal(block, placement.at, today)) {
+        const startsAt = new Date(placement.at).toISOString();
+        const endsAt = new Date(Date.parse(placement.at) + placement.durationMinutes * 60_000).toISOString();
+        setMoved((current) => ({ ...current, [task.id]: { startsAt, endsAt, durationMinutes: placement.durationMinutes, pending: true } }));
+      }
+      moveUpcoming(block, placement, (saved) =>
         setMoved((current) => {
+          if (!current[task.id]) return current;
+          if (saved) return { ...current, [task.id]: { ...current[task.id], pending: false } };
           const rest = { ...current };
           delete rest[task.id];
           return rest;
@@ -524,20 +523,21 @@ export default function CalendarScreen({
     tasks.filter((task) => !proposedIds.has(task.id)),
     { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done },
   );
-  const upcoming = upcomingBlocks(planner.series, {
-    viewerId: viewer.id,
-    from: days[0] < date ? days[0] : date,
-    to: days[days.length - 1] > date ? days[days.length - 1] : date,
-    today,
-    meetings: shown,
-    workspaces: planner.workspaces,
-  }).map((block) => {
+  const expanded = useMemo(() => {
+    const range = rangeDays(date, desktopMode);
+    const first = range[0] < date ? range[0] : date;
+    const last = range[range.length - 1] > date ? range[range.length - 1] : date;
+    return upcomingBlocks(planner.series, { viewerId: viewer.id, from: shiftDateKey(first, -1), to: last, today, workspaces: planner.workspaces });
+  }, [planner.series, planner.workspaces, viewer.id, date, desktopMode, today]);
+  const upcoming = expanded.map((block) => {
     const shift = moved[block.task.id];
-    if (!shift) return block;
-    return { ...block, startsAt: shift.startsAt, endsAt: shift.endsAt, durationMinutes: shift.durationMinutes, task: { ...block.task, dueAt: shift.startsAt, durationMinutes: shift.durationMinutes } };
+    const placedBlock = shift
+      ? { ...block, startsAt: shift.startsAt, endsAt: shift.endsAt, durationMinutes: shift.durationMinutes, task: { ...block.task, dueAt: shift.startsAt, durationMinutes: shift.durationMinutes } }
+      : block;
+    return placedBlock.task.dueHasTime ? { ...placedBlock, clash: clashWith(Date.parse(placedBlock.startsAt), Date.parse(placedBlock.endsAt), shown) } : placedBlock;
   });
   const upcomingTimed = upcoming.filter((block) => block.task.dueHasTime);
-  const upcomingDays = upcoming.filter((block) => !block.task.dueHasTime);
+  const upcomingDays = [...openDayChips(tasks.filter((task) => !done.has(task.id)), viewer.id, planner.workspaces), ...upcoming.filter((block) => !block.task.dueHasTime)];
   const shownBlocks = [...blocks, ...upcomingTimed];
   const [upcomingOpen, setUpcomingOpen] = useState<TaskBlock | null>(null);
   const proposals =
@@ -545,7 +545,7 @@ export default function CalendarScreen({
       ? previewBlocks(preview, tasks, {
           workspaces: planner.workspaces,
           meetings: shown,
-          blocks: blocks.filter((block) => !block.done).map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
+          blocks: [...blocks.filter((block) => !block.done), ...upcomingTimed].map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
         })
       : [];
   const clashes = Object.fromEntries(proposals.flatMap((block) => (block.clash ? [[block.task.id, block.clash]] : [])));
@@ -786,6 +786,7 @@ export default function CalendarScreen({
               onSlot={(day, time) => startInvite({ date: day, time })}
               blocks={shownBlocks}
               chips={upcomingDays}
+              dayHref={(day) => calendarHref(day, "day")}
               taskHandlers={taskHandlers}
               drag={drag}
               blockDrag={blockDrag}
@@ -842,7 +843,12 @@ export default function CalendarScreen({
       <InviteNotice message={notice} onDone={clearNotice} />
       {drag?.mode === "move" && <LiftedTask drag={drag} />}
       {press && <PressRing press={press} />}
-      <UpcomingDialog block={upcomingOpen} onClose={() => setUpcomingOpen(null)} onOpenTask={(id) => setOpenTaskId(id)} />
+      <UpcomingDialog
+        block={upcomingOpen}
+        onClose={() => setUpcomingOpen(null)}
+        onOpenTask={(id) => setOpenTaskId(id)}
+        canOpen={(id) => tasks.some((task) => task.id === id) || planner.seriesTasks.some((task) => task.id === id)}
+      />
       <HomeWorkspace.Provider value={viewer.workspaceId ?? null}>
         <TaskPanel
           task={shownTask}

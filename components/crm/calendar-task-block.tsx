@@ -130,7 +130,12 @@ export function UpcomingChip({ block, onOpen }: { block: TaskBlock; onOpen: Task
       aria-label={taskBlockLabel(block)}
       title={taskBlockLabel(block)}
       onClick={(event) => onOpen(block, event.currentTarget)}
-      className="focus-visible:ring-ring/60 flex h-5 w-full min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-left text-[11.5px] leading-5 text-foreground/70 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--violet)_34%,transparent)] outline-none focus-visible:ring-2 [@media(pointer:coarse)]:h-8"
+      className={cn(
+        "focus-visible:ring-ring/60 hit relative flex h-5 w-full min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-left text-[11.5px] leading-5 outline-none focus-visible:ring-2",
+        block.upcoming
+          ? "text-foreground/70 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--violet)_34%,transparent)]"
+          : "text-foreground bg-[color-mix(in_srgb,var(--violet)_15%,#1b1b1b)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--violet)_42%,transparent)]",
+      )}
     >
       <RepeatIcon aria-hidden className="text-violet size-2.5 shrink-0" />
       <span className="min-w-0 truncate">{block.title}</span>
