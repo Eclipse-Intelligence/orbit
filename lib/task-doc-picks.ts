@@ -62,14 +62,37 @@ export function removeDocQuery(text: string, found: DocQuerySpan) {
   return { text: before + rest, caret: before.length };
 }
 
+const CLOSED_REFERENCE = /\[\[[^[\]\n]*\]\]/g;
+
+function pastClosedReference(text: string, at: number) {
+  for (const match of text.matchAll(CLOSED_REFERENCE)) {
+    if (match.index <= at && at <= match.index + match[0].length) return match.index + match[0].length;
+  }
+  return at;
+}
+
+function pastWord(text: string, at: number) {
+  let next = at;
+  if (next > 0 && /\S/.test(text[next - 1] ?? "")) while (next < text.length && /\S/.test(text[next])) next += 1;
+  return next;
+}
+
+export function insertionPoint(text: string, caret: number) {
+  const typed = Math.min(Math.max(0, caret), text.length);
+  const open = /\[\[[^[\]\n]*$/.exec(text.slice(0, typed));
+  if (open && !/^[^[\]\n]*\]\]/.test(text.slice(typed))) return open.index;
+  let at = pastClosedReference(text, typed);
+  for (let moved = true; moved; ) {
+    const next = pastClosedReference(text, pastWord(text, at));
+    moved = next !== at;
+    at = next;
+  }
+  return at;
+}
+
 export function insertReferenceAt(text: string, caret: number, title: string | null | undefined) {
   const typed = Math.min(Math.max(0, caret), text.length);
-  let at = typed;
-  const inside = /\[\[[^[\]\n]*$/.exec(text.slice(0, at));
-  if (inside) {
-    const closing = /^[^[\]\n]*\]\]/.exec(text.slice(at));
-    at = closing ? at + closing[0].length : at - inside[0].length;
-  }
+  const at = insertionPoint(text, typed);
   const before = text.slice(0, at);
   const after = text.slice(at);
   const reference = `[[${docReferenceTitle(title)}]]`;

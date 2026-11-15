@@ -12,6 +12,7 @@ import {
   docReferenceTitle,
   hasDocReference,
   insertReferenceAt,
+  insertionPoint,
   insideClosedReference,
   textEdit,
   partsSourceOffset,
@@ -20,7 +21,7 @@ import {
   showsDescriptionLinks,
 } from "@/lib/task-doc-picks";
 import { docQueryAt, parseTaskText, withoutDocQuery } from "@/lib/task-pad";
-import { clearLinkUndo, forgetLinkUndo, linkUndoOffered, linkUndoPending, offerLinkUndo, undoLinkChange } from "@/lib/task-link-undo";
+import { claimUndoKey, clearLinkUndo, forgetLinkUndo, linkUndoOffered, linkUndoPending, offerLinkUndo, undoLinkChange, zUndoes } from "@/lib/task-link-undo";
 import { createUser, resetDatabase } from "./helpers";
 
 const WEB = { operation: "link_task_doc", source: "web" } as const;
@@ -73,6 +74,29 @@ describe("[[ in a task's title and description", () => {
       "a [[ query typed while linking stays whole, the reference goes before it and the caret stays at its end",
     );
   });
+
+  it("never splits a word or a bracket pair when naming a doc", () => {
+    assert.equal(insertReferenceAt("and then call Bob", 6, "Plan").text, "and then [[Plan]] call Bob", "a caret mid-word moves to the end of the word");
+    assert.equal(insertReferenceAt("and then call Bob", 17, "Plan").text, "and then call Bob [[Plan]] ");
+    assert.equal(insertReferenceAt("call Bob, then", 7, "Plan").text, "call Bob, [[Plan]] then", "punctuation stuck to a word counts as the word");
+    assert.equal(insertReferenceAt("see [[foo]] now", 5, "Plan").text, "see [[foo]] [[Plan]] now", "a caret between [ and [ is inside the reference");
+    assert.equal(insertReferenceAt("see [[foo]] now", 10, "Plan").text, "see [[foo]] [[Plan]] now", "a caret between ] and ] is inside the reference");
+    assert.equal(insertReferenceAt("see [[foo]] now", 4, "Plan").text, "see [[foo]] [[Plan]] now", "a caret touching [[ counts as inside");
+    assert.equal(insertReferenceAt("see [[foo]] now", 11, "Plan").text, "see [[foo]] [[Plan]] now", "a caret touching ]] counts as inside");
+    assert.equal(insertReferenceAt("x[[foo]]y z", 1, "Plan").text, "x[[foo]]y [[Plan]] z", "a word that wraps a reference is kept whole");
+    const typed = insertReferenceAt("call [[Bo", 7, "Plan");
+    assert.deepEqual(typed, { text: "call [[Plan]] [[Bo", caret: 16 }, "an open [[ query being typed stays whole and the caret stays in it");
+    for (const [text, caret] of [
+      ["and then call Bob", 6],
+      ["see [[foo]] now", 5],
+      ["see [[foo]] now", 10],
+      ["x[[foo]]y z", 1],
+    ] as const) {
+      const at = insertionPoint(text, caret);
+      assert.ok(at === 0 || at === text.length || /\s/.test(text[at - 1]) || /\s/.test(text[at]), `${text} at ${caret} lands on a word boundary`);
+    }
+  });
+
   it("only links a private doc and never writes its title into the description", () => {
     const text = "Use the numbers in [[Renewal plan]] and [[my d";
     const found = docQueryAt(text, text.length)!;
@@ -86,6 +110,7 @@ describe("[[ in a task's title and description", () => {
     assert.deepEqual(removeDocQuery("Ask [[my d about it", { start: 4, end: 10 }), { text: "Ask about it", caret: 4 });
     assert.deepEqual(removeDocQuery("Ask [[my d]] now", { start: 4, end: 10 }), { text: "Ask now", caret: 4 });
   });
+
   it("shows the read view for a description with a doc reference on rows and in the panel, until it is being edited", () => {
     assert.equal(hasDocReference("Use [[Renewal plan]]"), true);
     assert.equal(hasDocReference("Use [[Renewal plan"), false);
@@ -198,6 +223,28 @@ describe("Z after removing an email", () => {
   });
 });
 
+describe("the Z hint", () => {
+  it("shows on exactly the toast Z would undo, across Done, reopen and email-link toasts", () => {
+    const email = () => undefined;
+    assert.equal(zUndoes({ kind: "done", id: "a" }, "a", 1000), false, "no Z on pages where Z isn't wired");
+    const release = claimUndoKey();
+    try {
+      assert.equal(zUndoes({ kind: "done", id: "a" }, "a", 1000), true);
+      assert.equal(zUndoes({ kind: "done", id: "a" }, "b", 1000), false, "with two Done toasts only the newest shows Z");
+      assert.equal(zUndoes({ kind: "done", id: "b" }, "b", 1000), true);
+      assert.equal(zUndoes({ kind: "reopen" }, "b", 1000), false, "Z never redoes a reopen");
+      offerLinkUndo(email, 8000, 1000);
+      assert.equal(zUndoes({ kind: "link", run: email }, null, 2000), true);
+      assert.equal(zUndoes({ kind: "done", id: "b" }, "b", 2000), false, "a newer email removal takes Z from the Done");
+      clearLinkUndo();
+      assert.equal(zUndoes({ kind: "link", run: email }, null, 2000), false, "a Done after the removal takes Z back");
+      assert.equal(zUndoes({ kind: "done", id: "b" }, "b", 2000), true);
+    } finally {
+      release();
+    }
+  });
+});
+
 describe("chips and doc links on an existing task", () => {
   let mark: UserActor;
   let priya: UserActor;
@@ -252,8 +299,6 @@ describe("chips and doc links on an existing task", () => {
       "a shared doc that is no longer linked shows as written",
     );
   });
-
-
 
   it("only lets the assignee or creator change links, and a tagged teammate can't link a doc", async () => {
     const task = (await createTask(mark, { title: "Book the Q1 review", ownerId: mark.userId })).body.task;

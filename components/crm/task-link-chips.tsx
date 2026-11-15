@@ -7,7 +7,7 @@ import Button from "@/components/_ui/button";
 import { SearchChip } from "@/components/crm/task-pad";
 import { useComposer } from "@/components/mail/compose-dock";
 import { EditTaskDocs, TASK_EDIT_CHIP, TaskDocChips } from "@/components/crm/task-docs";
-import { forgetLinkUndo, linkUndoOffered, offerLinkUndo } from "@/lib/task-link-undo";
+import { forgetLinkUndo, offerLinkUndo, zUndoes } from "@/lib/task-link-undo";
 import { relinkTaskAction, undoTaskLinkAction } from "@/app/(crm)/task-act";
 import { taskLinkCandidatesAction } from "@/app/(crm)/records";
 import type { PadOption } from "@/lib/crm/task-pad";
@@ -169,7 +169,7 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
           });
       };
       offerLinkUndo(undo, EMAIL_UNDO_MS);
-      toast = composer.showToast({ message: "Email link removed.", duration: EMAIL_UNDO_MS, action: { label: "Undo", run: undo, shortcut: () => linkUndoOffered(undo) }, onDismiss: () => forgetLinkUndo(undo) });
+      toast = composer.showToast({ message: "Email link removed.", duration: EMAIL_UNDO_MS, action: { label: "Undo", run: undo, shortcut: () => zUndoes({ kind: "link", run: undo }, null) }, onDismiss: () => forgetLinkUndo(undo) });
     });
   }
 

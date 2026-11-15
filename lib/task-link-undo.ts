@@ -52,3 +52,22 @@ export function watchLinkUndo(listener: () => void) {
 export function linkUndoVersion() {
   return version;
 }
+
+let undoKeys = 0;
+
+export function claimUndoKey() {
+  undoKeys += 1;
+  changed();
+  return () => {
+    undoKeys -= 1;
+    changed();
+  };
+}
+
+export type UndoToast = { kind: "link"; run: () => void } | { kind: "done"; id: string } | { kind: "reopen" };
+
+export function zUndoes(toast: UndoToast, newestDone: string | null, now = Date.now()) {
+  if (undoKeys === 0 || toast.kind === "reopen") return false;
+  if (toast.kind === "link") return linkUndoOffered(toast.run, now);
+  return !linkUndoPending(now) && newestDone === toast.id;
+}

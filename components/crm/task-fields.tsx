@@ -297,6 +297,26 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     saveText();
   }
 
+  const textToSave = useRef(false);
+  const latestSaveText = useRef(saveText);
+  useEffect(() => {
+    latestSaveText.current = saveText;
+  });
+  useEffect(() => {
+    if (!textToSave.current) return;
+    textToSave.current = false;
+    latestSaveText.current();
+  }, [text]);
+
+  function writeText(update: (current: string) => string) {
+    textToSave.current = true;
+    setText((current) => {
+      const next = update(current);
+      if (next === current) textToSave.current = false;
+      return next;
+    });
+  }
+
   function onDraftChange(change: DraftChange) {
     if (change.id !== task.id) return;
     const field = change.field;
@@ -397,6 +417,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     changeDuration,
     changeReminder,
     assign,
+    writeText,
   };
 }
 
@@ -780,16 +801,12 @@ function Description({ details, layout, warn }: { details: TaskDetailsState; lay
     mode: "description",
     value: details.text,
     onChange: details.setText,
-    onWritten: () => {
-      storeAfter.current = true;
-    },
+    onWrite: (update) => latestDetails.current.writeText(update),
   });
-  const storeAfter = useRef(false);
+  const latestDetails = useRef(details);
   useEffect(() => {
-    if (!storeAfter.current) return;
-    storeAfter.current = false;
-    details.saveText();
-  }, [details]);
+    latestDetails.current = details;
+  });
   const attachMention = mention.attach;
   const attach = useCallback(
     (node: HTMLTextAreaElement | null) => {

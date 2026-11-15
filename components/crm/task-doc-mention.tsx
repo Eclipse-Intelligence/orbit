@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { DocPickHeader, DocPickNotice, DocPickOptions, useDocPicks } from "@/components/crm/task-doc-picker";
 import { useDocChange } from "@/components/crm/task-docs";
 import type { Task } from "@/lib/crm/types";
@@ -17,15 +17,15 @@ export function useDocMention({
   mode,
   value,
   onChange,
-  onWritten,
+  onWrite,
 }: {
   task: Pick<Task, "id" | "docIds">;
   enabled: boolean;
   warn: boolean;
   mode: Mode;
   value: string;
-  onChange: Dispatch<SetStateAction<string>>;
-  onWritten?: () => void;
+  onChange: (value: string) => void;
+  onWrite?: (update: (current: string) => string) => void;
 }) {
   const id = useId();
   const listId = `${id}-docs-list`;
@@ -82,11 +82,13 @@ export function useDocMention({
         return;
       }
       onChange(next);
+      refresh(next, caret);
       window.requestAnimationFrame(() => field.current?.setSelectionRange(caret, caret));
       return;
     }
-    onChange(next);
-    onWritten?.();
+    setQuery(null);
+    if (onWrite) onWrite(() => next);
+    else onChange(next);
   }
 
   function name(doc: DocPick, where: { before: string; caret: number }) {
@@ -97,8 +99,7 @@ export function useDocMention({
       write(next.text, next.caret);
       return;
     }
-    onChange((current) => insertReferenceAt(current, current.startsWith(where.before) ? where.caret : current.length, doc.title).text);
-    onWritten?.();
+    onWrite?.((current) => insertReferenceAt(current, current.startsWith(where.before) ? where.caret : current.length, doc.title).text);
   }
 
   function pick(doc: DocPick) {
