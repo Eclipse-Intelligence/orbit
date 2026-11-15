@@ -401,7 +401,8 @@ export async function cancelDeferral(caller: UserActor, id: string) {
   return withActor(actor, async (db) => {
     const row = await lockDeferral(db, actor, id);
     await db.query("update crm.mail_reminders set state = 'done' where id = $1", [row.id]);
-    const task = await openTask(db, actor, row.task_id);
+    const open = await openTask(db, actor, row.task_id);
+    const task = open?.repeat?.current && !open.repeat.ended ? null : open;
     if (task) {
       await archiveTaskInDb(db, actor, task.id, { operation: "cancel_deferred_follow_up", source: "mail", sourceUrl: threadHref(row.source_id, row.thread_key) });
     }

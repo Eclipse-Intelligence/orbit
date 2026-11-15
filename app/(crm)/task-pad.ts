@@ -70,6 +70,7 @@ export async function addPadTaskAction(input: {
   mailThreadKey?: string | null;
   docIds?: string[];
   repeat?: RepeatInput;
+  key?: string;
 }): Promise<{ ok?: boolean; error?: string; warning?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
@@ -91,7 +92,7 @@ export async function addPadTaskAction(input: {
         ...(input.repeat && typeof input.repeat === "object" ? { repeat: input.repeat } : {}),
       },
       input.clickupListId || null,
-      { provenance: { operation: "create_task", source: "web" } },
+      { provenance: { operation: "create_task", source: "web" }, ...(typeof input.key === "string" && isUuid(input.key) ? { idempotencyKey: input.key } : {}) },
     );
     revalidatePath(TASKS_PATH);
     revalidateRecordPages();

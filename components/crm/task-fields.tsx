@@ -12,7 +12,8 @@ import { Monogram } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
-import { isRepeating, ownsRepeat, RepeatField, runsSeries, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
+import { isRepeating, ownsRepeat, RepeatField, runsSeries, SCOPE_LATER, SkipButton, useRepeatScope, type RepeatScope } from "@/components/crm/task-repeat";
+import { scopeChange, skipsBesideRepeat, waitsForScope } from "@/lib/task-repeat-menu";
 import TaskLinkChips from "@/components/crm/task-link-chips";
 import { useDocMention } from "@/components/crm/task-doc-mention";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
@@ -35,7 +36,7 @@ import { draftAfterSave, draftCommit, taskDrafts, type DraftChange, type DraftFi
 import { applyDraftNews, clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
-import { clockLabel, durationLabel, localInstant, taskDueDay } from "@/lib/crm/task-time";
+import { durationLabel, localInstant } from "@/lib/crm/task-time";
 import { taskDueLabel } from "@/lib/crm/task-views";
 import { appTimeZone, dateTimeInputValue, toIsoInstant } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -146,19 +147,6 @@ function touchesTiming(write: TaskDetails) {
   return write.dueAt !== undefined || write.dueDate !== undefined || write.remindMinutes !== undefined || write.durationMinutes !== undefined;
 }
 
-function scopeChange(task: Task, write: TaskDetails): ScopeChange | null {
-  if (!isRepeating(task)) return null;
-  if (write.title !== undefined) return { kind: "title" };
-  if (write.description !== undefined) return { kind: "description" };
-  if (write.dueAt) {
-    const sameDay = taskDueDay(write.dueAt) === (task.dueDate ?? taskDueDay(task.dueAt));
-    if (sameDay && (!task.dueHasTime || !task.dueAt || clockLabel(write.dueAt) !== clockLabel(task.dueAt))) return { kind: "time", to: clockLabel(write.dueAt) };
-  }
-  if (write.durationMinutes !== undefined) return { kind: "duration" };
-  if (write.remindMinutes !== undefined && write.dueAt === undefined && write.dueDate === undefined) return { kind: "reminder" };
-  return null;
-}
-
 function sourceOf(task: Task): Source {
   return {
     title: task.title,
@@ -247,10 +235,16 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const ticket = timed ? timing.start() : 0;
     const fields = fieldsOf(write);
     setNotice(null);
+    if (!ask && waitsForScope(task, viewerId, write)) return false;
     const change = ask && ownsRepeat(task, viewerId) ? scopeChange(task, write) : null;
     let scope: RepeatScope | undefined = task.repeat?.current && !task.completedAt ? "this" : undefined;
     if (change) {
       const picked = await repeatScope.ask(change);
+      if (picked === SCOPE_LATER) {
+        const restore = timed ? timing.fail(ticket) : null;
+        if (restore) show(restore);
+        return false;
+      }
       if (!picked) {
         const restore = timed ? timing.fail(ticket) : null;
         if (restore) show(restore);
@@ -413,7 +407,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
 
   async function assign(ownerId: string) {
     const scope = isRepeating(task) && ownsRepeat(task, viewerId) ? await repeatScope.ask({ kind: "assignee" }) : undefined;
-    if (scope === null) return;
+    if (scope === null || scope === SCOPE_LATER) return;
     setBusy(true);
     setError(null);
     const result = await assignTaskAction(task.id, ownerId, scope).catch(() => ({ error: "Couldn't assign the task. Try again." }));
@@ -1014,6 +1008,7 @@ export default function TaskFields({
         {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && (
           <Field label="Repeat">
             <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="panel" />
+            {skipsBesideRepeat(task, viewer.id, details.canChange && !done) && <SkipButton task={task} className="max-md:hidden" />}
           </Field>
         )}
         {details.canChange && (

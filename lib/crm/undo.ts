@@ -1,4 +1,5 @@
 import { durationLabel } from "@/lib/crm/task-time";
+import { shortDay } from "@/lib/task-repeat";
 import type { Db } from "@/lib/db/pool";
 import { formatDate, HEALTH_LABELS, lifecycleLabel } from "@/lib/companies";
 import {
@@ -23,7 +24,7 @@ import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { linkableDocIdsInDb } from "@/lib/crm/task-docs";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
-import { readSeriesSnapshot, restoreOccurrenceInDb, restoreSeriesInDb, restoreSeriesLinksInDb } from "@/lib/crm/task-series";
+import { readSeriesSnapshot, restoreOccurrenceInDb, restoreSeriesInDb, restoreSeriesLinksInDb, seriesState } from "@/lib/crm/task-series";
 import type { SeriesRights } from "@/lib/crm/task-rights";
 
 type TaskValues = { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null; seriesId?: string | null; completedAt?: string | null };
@@ -160,6 +161,24 @@ const DATE_TIME_FIELDS = new Set(["occurredAt"]);
 const TIMING_DETAILS = new Set(["dueHasTime", "scheduledBy"]);
 const AUTOMATIC_SOURCES = ["microsoft", "microsoft_teams", "granola", "communication"];
 const REPEAT_MOVES = new Set(["repeat_roll", "repeat_task"]);
+
+const REPEAT_CHANGED = "Can't undo: how it repeats has changed since.";
+
+async function stateMoved(db: Db, series: Record<string, unknown> | null) {
+  const id = series?.id ?? series?.seriesId;
+  if (!series || typeof series.state !== "string" || typeof id !== "string" || !isUuid(id)) return false;
+  const scope = series.stateScope;
+  const day = record(scope)?.day;
+  return (await seriesState(db, id, typeof day === "string" ? { day } : scope === "open" ? "open" : "all")) !== series.state;
+}
+
+async function partOfSeriesDelete(db: Db, event: AuditRow) {
+  const found = await db.query(
+    "select 1 from crm.audit_events e join crm.audit_events d on d.entity_id = e.entity_id and d.created_at = e.created_at and d.event_type = 'task_series.deleted' where e.id = $1",
+    [event.id],
+  );
+  return (found.rowCount ?? 0) > 0;
+}
 const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Activity" };
 
 type AuditRow = {
@@ -446,7 +465,7 @@ function archiveRun(db: Db, actor: Actor, entity: EntityType, id: string, proven
     if (entity === "company") return archiveCompanyInDb(db, actor, id, provenance);
     if (entity === "contact") return archiveContactInDb(db, actor, id, provenance);
     if (entity === "opportunity") return archiveOpportunityInDb(db, actor, id, provenance);
-    if (entity === "task") return archiveTaskInDb(db, actor, id, provenance, { series });
+    if (entity === "task") return archiveTaskInDb(db, actor, id, provenance, { series, noSkip: true });
     return archiveActivityInDb(db, actor, id, provenance);
   };
 }
@@ -520,11 +539,12 @@ async function describeEvent(
   if (entity === "task" && event.event_type.startsWith("task_series.")) {
     const kind = event.event_type.slice("task_series.".length);
     const seriesChanges = record(event.changes) ?? {};
+    if (seriesChanges.undoing) return refuse(`Undid a change to how ${entityName} repeats`, "This is already an undo.");
     if (seriesChanges.splitFrom) return refuse(`Split ${entityName} from its series`, "Undo the change that split it instead.");
     if (seriesChanges.handedOver) return refuse(`Took over the series ${entityName}`, "Can't undo: it was handed over when someone left the workspace.");
     if (seriesChanges.followsChange) {
       if (undone) return refuse(`Changed the links of ${entityName}'s series`, "This change has already been undone.");
-      return { entityName, summary: `Changed the links of ${entityName}'s series`, plan: { ok: true, restores: "Puts back its links with the change to the task.", run: async () => undefined } };
+      return refuse(`Changed the links of ${entityName}'s series`, "Undo the change to the task instead.");
     }
     const made = kind === "created";
     const summary =
@@ -542,7 +562,8 @@ async function describeEvent(
     if (!hasScope(actor.scopes, SCOPES.task)) return refuse(summary, `You don't have permission to change this ${noun}.`);
     const after = record(record(seriesChanges.series)?.after);
     const now = after && typeof record(seriesChanges.series)?.id === "string" ? await readSeriesSnapshot(db, String(record(seriesChanges.series)?.id)) : null;
-    if (after && now && !same(now, after)) return refuse(summary, "Can't undo: how it repeats has changed since.");
+    if (after && now && !same(now, after)) return refuse(summary, REPEAT_CHANGED);
+    if (await stateMoved(db, record(seriesChanges.series))) return refuse(summary, REPEAT_CHANGED);
     return { entityName, summary, plan: { ok: true, restores, run: () => restoreSeriesInDb(db, actor, seriesChanges, provenance) } };
   }
 
@@ -592,10 +613,16 @@ async function describeEvent(
       summary = `Changed ${noun} ${entityName}: ${parts.join("; ")}`;
       restores = `Puts back ${shown.map((field) => `${labels[field]}: ${shownValue(field, fields.before[field], names)}`).join("; ")}.`;
     }
+    const repeatMove = updateEntity === "task" ? record(changes?.repeat) : null;
+    if (repeatMove && (repeatMove.kind === "skipped" || repeatMove.kind === "missed") && typeof repeatMove.from === "string") {
+      summary = repeatMove.kind === "skipped" ? `Skipped task ${entityName} on ${shortDay(repeatMove.from)}` : `Moved task ${entityName} on from ${shortDay(repeatMove.from)}`;
+      restores = `Puts ${entityName} back on ${shortDay(repeatMove.from)}.`;
+    }
     if (current) {
       const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
       if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
       else if (current.archivedAt) check = `Can't undo: ${entityName} is archived.`;
+      else if (repeatMove && (await stateMoved(db, repeatMove))) check = REPEAT_CHANGED;
       else if (updateEntity === "task" && fields.fields.includes("docIds") && record(changes?.movedFrom)) check = movedDocsReason(record(changes?.movedFrom));
       else if (updateEntity === "task" && fields.fields.length === 1 && fields.fields[0] === "docIds") check = await docsUndoCheck(db, actor, current.values, fields.before);
     }
@@ -626,6 +653,8 @@ async function describeEvent(
     }
     const stageId = before.stageId;
     run = () => updateOpportunityInDb(db, actor, event.entity_id, { stageId }, provenance, { wonEffects: false });
+  } else if (entity === "task" && event.event_type === "task.archived" && (await partOfSeriesDelete(db, event))) {
+    return refuse(`Archived task ${entityName}`, "Undo deleting the series instead.");
   } else if (event.event_type === `${entity}.archived` && before && after && before.archivedAt === null && typeof after.archivedAt === "string") {
     summary = entity === "activity" ? `Deleted ${entityName}` : `Archived ${noun} ${entityName}`;
     restores = entity === "activity" ? `Restores ${entityName}.` : `Restores ${noun} ${entityName} from the archive.`;
@@ -736,7 +765,12 @@ async function undoTaskEventsInDb(db: Db, actor: Actor, taskId: string, eventIds
   if (found.rows.length === 0 || found.rows.length !== ids.length) throw new CrmError("cannot_undo", "Couldn't undo. Try again.", 409);
   await lockUndo(db, actor, "task", taskId, ids);
   for (const id of ids) if ((await actionIds(db, actor, id)).some((other) => !ids.includes(other))) throw new CrmError("cannot_undo", ONE_AT_A_TIME, 409);
-  const ordered = [...found.rows].sort((left, right) => Number(right.event_type.startsWith("task_series.")) - Number(left.event_type.startsWith("task_series.")));
+  const ordered = [...found.rows].sort(
+    (left, right) =>
+      Number(right.event_type.startsWith("task_series.")) - Number(left.event_type.startsWith("task_series.")) ||
+      new Date(right.created_at).getTime() - new Date(left.created_at).getTime() ||
+      right.id.localeCompare(left.id),
+  );
   let undone = 0;
   for (const event of ordered) {
     const { described } = await describeById(db, actor, event.id, provenance);

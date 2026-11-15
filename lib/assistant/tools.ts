@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { repeatAnchorDay, type RepeatAnchorTask } from "@/lib/assistant/repeat-anchor";
 import { after } from "next/server";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
@@ -138,7 +139,6 @@ import { addTags, listTags, removeTags } from "@/lib/crm/tags";
 import { archiveTask, listTasks } from "@/lib/crm/tasks";
 import { readRepeat, readSeriesTitle, REPEAT_SCOPES, seriesRightsRefusal, updateTaskFromApi } from "@/lib/crm/task-series";
 import { endWords, ruleWords, shortDay } from "@/lib/task-repeat";
-import { dayKeyAt } from "@/lib/crm/working-days";
 import { emailThreadKey } from "@/lib/crm/task-mail";
 import { directTaskSql } from "@/lib/crm/task-access";
 import { logActivity } from "@/lib/crm/activities";
@@ -743,12 +743,32 @@ function scheduleItems(value: unknown) {
   return (Array.isArray(value) ? value : []).filter((item): item is Args => Boolean(item) && typeof item === "object");
 }
 
+const REPEATING_KEY = "repeating";
+
+async function repeatingTaskDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
+  const ids = [...new Set(strings(value))].filter(isUuid);
+  if (ids.length === 0) return {};
+  const rows = await withActor(actor, (db) =>
+    db.query<{ id: string; occurs_on: string }>(
+      `select t.id, t.occurs_on::text as occurs_on
+       from crm.tasks t join crm.task_series s on s.id = t.series_id and s.current_task_id = t.id
+       where t.id = any($1::uuid[]) and t.workspace_id = $2 and t.completed_at is null and t.archived_at is null
+         and s.ended_at is null and s.archived_at is null and t.occurs_on is not null`,
+      [ids, actor.workspaceId],
+    ),
+  );
+  return Object.fromEntries(rows.rows.map((row) => [`${row.id}:${REPEATING_KEY}`, row.occurs_on]));
+}
+
 async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
   const id = str(value);
   if (!isUuid(id)) return { [TASK_SELF_KEY]: actor.userId };
   const rows = await withActor(actor, (db) =>
-    db.query<{ owner_id: string | null; created_by_user_id: string | null; timed: boolean; due_at: Date | null }>(
-      "select owner_id, created_by_user_id, (due_has_time and due_at is not null) as timed, due_at from crm.tasks where id = $1 and workspace_id = $2",
+    db.query<{ owner_id: string | null; created_by_user_id: string | null; timed: boolean; due_at: Date | null; occurs_on: string | null; live: boolean }>(
+      `select t.owner_id, t.created_by_user_id, (t.due_has_time and t.due_at is not null) as timed, t.due_at, t.occurs_on::text as occurs_on,
+         (s.id is not null and s.ended_at is null and s.archived_at is null) as live
+       from crm.tasks t left join crm.task_series s on s.id = t.series_id
+       where t.id = $1 and t.workspace_id = $2`,
       [id, actor.workspaceId],
     ),
   );
@@ -773,6 +793,8 @@ async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Recor
     [`${id}:creator`]: row.created_by_user_id ?? "none",
     [`${id}:timed`]: row.timed ? "yes" : "no",
     ...(row.due_at ? { [`${id}:dueAt`]: row.due_at.toISOString() } : {}),
+    ...(row.occurs_on ? { [`${id}:occursOn`]: row.occurs_on } : {}),
+    [`${id}:live`]: row.live ? "yes" : "no",
   };
 }
 
@@ -1291,11 +1313,6 @@ const REPEAT_PARAM = {
 const REPEAT_KEY = "repeat:title";
 const REPEAT_OBJECT = "Send repeat as an object, such as { \"every\": \"week\" }.";
 
-function anchorDay(args: Record<string, unknown>, dueAt: string | null) {
-  const given = typeof args.dueDate === "string" && args.dueDate ? args.dueDate : typeof args.dueAt === "string" && args.dueAt ? taskDueDay(localInstant(args.dueAt)) : null;
-  return given ?? taskDueDay(dueAt) ?? dayKeyAt(new Date());
-}
-
 function repeatWordsOf(value: unknown, anchor: string) {
   if (!value || typeof value !== "object") return null;
   try {
@@ -1308,10 +1325,10 @@ function repeatWordsOf(value: unknown, anchor: string) {
   }
 }
 
-function repeatLines(args: Record<string, unknown>, dueAt: string | null = null) {
+function repeatLines(args: Record<string, unknown>, task: RepeatAnchorTask | null = null) {
   const lines: string[] = [];
   if (args.repeat === null) lines.push("Stop repeating. This one stays.");
-  else if (args.repeat !== undefined) lines.push(`Repeats: ${repeatWordsOf(args.repeat, anchorDay(args, dueAt)) ?? "a pattern Orbit can't read"}`);
+  else if (args.repeat !== undefined) lines.push(`Repeats: ${repeatWordsOf(args.repeat, repeatAnchorDay(task, args)) ?? "a pattern Orbit can't read"}`);
   const day = typeof args.occursOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.occursOn) ? shortDay(args.occursOn) : null;
   if (args.skip === true) lines.push(day ? `Skip ${day} only` : "Skip this one");
   if (args.repeatScope === "this") lines.push(day ? `Only ${day}` : "This one only");
@@ -3732,14 +3749,14 @@ const TOOL_LIST: AssistantTool[] = [
         contactId: { type: "string", description: "Person id the task is about, or null to take the person off." },
         companyId: { type: "string", description: "Company id the task is about, or null to take the company off." },
         opportunityId: { type: "string", description: "Opportunity id the task is about, or null to take the opportunity off." },
-        repeat: { ...REPEAT_PARAM, description: "Changes how a task repeats, for this one and every later one; on a task that doesn't repeat, makes it repeat. null stops it repeating: this one stays, nothing comes after it." },
+        repeat: { ...REPEAT_PARAM, description: "Changes how a task repeats, for this one and every later one, keeping to the open one's date; on a task that doesn't repeat, makes it repeat from its due day (the new one, when sent with it). null stops it repeating: this one stays, nothing comes after it." },
         repeatScope: {
           type: "string",
           enum: ["this", "following", "all"],
           description:
             "Required when the task repeats and you change its time, title, detail, priority, assignee, duration or reminder. Links on the open one apply to every later one without it; this keeps them to this one. this: only this date. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope. Ask the user which they mean when it isn't clear.",
         },
-        skip: { type: "boolean", description: "True skips this date of a repeating task: the open one moves to its next date, or the upcoming date in occursOn is left out. Send it on its own." },
+        skip: { type: "boolean", description: "True skips this date of a repeating task: the open one moves to its next date, or the upcoming date in occursOn is left out. Send it on its own. Each approved call skips once, so never send it again to skip a second date: say the dates to skip in occursOn." },
         occursOn: { type: "string", description: "An upcoming date of a repeating task (YYYY-MM-DD, from its repeat.next or the pattern), to change or skip just that date. Send with taskId or seriesId." },
         seriesId: { type: "string", description: "The repeating task's seriesId, with occursOn, instead of taskId." },
         schedule: {
@@ -3773,6 +3790,7 @@ const TOOL_LIST: AssistantTool[] = [
       const id = str(args.taskId);
       const owner = detail(name, `${id}:owner`);
       const current = owner ? { ownerId: owner === "none" ? null : owner, timed: detail(name, `${id}:timed`) === "yes", dueAt: detail(name, `${id}:dueAt`) || null } : null;
+      const anchorTask = owner ? { occursOn: detail(name, `${id}:occursOn`) || null, dueAt: current?.dueAt ?? null, live: detail(name, `${id}:live`) === "yes" } : null;
       const self = detail(name, TASK_SELF_KEY);
       const role = detail(name, TASK_ROLE_KEY);
       const creator = detail(name, `${id}:creator`);
@@ -3792,12 +3810,12 @@ const TOOL_LIST: AssistantTool[] = [
           losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
-          ...repeatLines(args, current?.dueAt ?? null),
+          ...repeatLines(args, anchorTask),
           ...taskDocLines(args, name, id),
         ],
       };
     },
-    run: async (actor, args) => {
+    run: async (actor, args, context) => {
       const scheduling = args.schedule !== undefined && args.schedule !== null;
       const single = optionalStr(args.taskId) !== undefined || optionalStr(args.seriesId) !== undefined;
       if (scheduling === single) throw new CrmError("invalid_input", "Send either taskId or schedule, not both.", 400, { field: "schedule" });
@@ -3829,7 +3847,7 @@ const TOOL_LIST: AssistantTool[] = [
           ...(await taskEmailArgs(actor, args)),
           ...taskDocArgs(args),
         },
-        { provenance: { operation: completing ? "complete_task" : "update_task", ...provenanceSource() } },
+        { provenance: { operation: completing ? "complete_task" : "update_task", ...provenanceSource() }, ...(args.skip === true && context.callId ? { idempotencyKey: keyFor(context.callId) } : {}) },
       );
       await pushIfLinked(actor, updated.body.task);
       return { task: withTask(updated.body.task) };
@@ -4415,7 +4433,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "archive_records",
     label: "Archiving records",
     write: true,
-    description: `Archive companies, people, opportunities or tasks by id, for duplicates or records the user no longer wants. Nothing is deleted. Archived tasks leave task lists, and ClickUp isn't changed. Up to ${BULK_LIMIT} of each per call. To take a company off a board, use remove_from_board.`,
+    description: `Archive companies, people, opportunities or tasks by id, for duplicates or records the user no longer wants. Nothing is deleted. Archived tasks leave task lists, and ClickUp isn't changed. The open one of a repeating task isn't archived: that date is skipped and it moves to its next one (update_task with repeat null stops it repeating). Up to ${BULK_LIMIT} of each per call. To take a company off a board, use remove_from_board.`,
     parameters: {
       type: "object",
       properties: {
@@ -4425,20 +4443,26 @@ const TOOL_LIST: AssistantTool[] = [
         taskIds: { type: "array", items: { type: "string" }, description: "Task ids from list_tasks." },
       },
     },
+    details: (actor, args) => repeatingTaskDetails(actor, args.taskIds),
     describe: (args, name) => {
+      const taskIds = [...new Set(strings(args.taskIds))];
+      const skips = taskIds.filter((id) => detail(name, `${id}:${REPEATING_KEY}`));
       const groups = [
         { ids: [...new Set(strings(args.companyIds))], noun: "Companies" },
         { ids: [...new Set(strings(args.contactIds))], noun: "Contacts" },
         { ids: [...new Set(strings(args.opportunityIds))], noun: "Opportunities" },
-        { ids: [...new Set(strings(args.taskIds))], noun: "Tasks" },
+        { ids: taskIds.filter((id) => !skips.includes(id)), noun: "Tasks" },
       ].filter((group) => group.ids.length > 0);
       const total = groups.reduce((sum, group) => sum + group.ids.length, 0);
+      const skipping = `${skips.length} repeating ${skips.length === 1 ? "task" : "tasks"}`;
       return {
-        title: `Archive ${total} ${total === 1 ? "record" : "records"}`,
+        title: total === 0 ? `Skip ${skipping}` : `Archive ${total} ${total === 1 ? "record" : "records"}${skips.length > 0 ? ` and skip ${skipping}` : ""}`,
         lines: [
           ...groups.map((group) => nameList(group.ids, name, group.noun)),
-          "Nothing is deleted.",
-          strings(args.taskIds).length > 0 ? "ClickUp isn't changed." : "",
+          skips.length > 0 ? nameList(skips, name, "Repeats, so skips this one") : "",
+          skips.length > 0 ? `${skips.length === 1 ? "It moves" : "They move"} to the next date and keep repeating.` : "",
+          total > 0 ? "Nothing is deleted." : "",
+          groups.some((group) => group.noun === "Tasks") ? "ClickUp isn't changed." : "",
         ],
       };
     },
@@ -4448,15 +4472,21 @@ const TOOL_LIST: AssistantTool[] = [
         { ids: strings(args.companyIds), scope: "companies:write" as const, archive: (id: string) => archiveCompany(actor, id, options) },
         { ids: strings(args.contactIds), scope: "contacts:write" as const, archive: (id: string) => archiveContact(actor, id, options) },
         { ids: strings(args.opportunityIds), scope: "opportunities:write" as const, archive: (id: string) => archiveOpportunity(actor, id, options) },
-        { ids: strings(args.taskIds), scope: "tasks:write" as const, archive: (id: string) => archiveTask(actor, id, options) },
+        { ids: strings(args.taskIds), scope: "tasks:write" as const, archive: (id: string) => archiveOrSkipTask(id) },
       ].filter((group) => group.ids.length > 0);
       if (groups.length === 0) return { error: "Say which records, using their ids." };
+      const skipped: { taskId: string; title: string; skipped: string; next: { dueAt: string | null; dueHasTime: boolean } }[] = [];
+      async function archiveOrSkipTask(id: string) {
+        const outcome = await archiveTask(actor, id, options);
+        const body = outcome.body as { task: Task; skipped?: string };
+        if (body.skipped) skipped.push({ taskId: id, title: body.task.title, skipped: body.skipped, next: { dueAt: body.task.dueAt, dueHasTime: body.task.dueHasTime } });
+      }
       const outcomes = [];
       for (const group of groups) outcomes.push(...(await runBulk(actor, group.scope, group.ids, group.archive)));
       const failed = outcomes.flatMap((outcome) => (outcome.ok ? [] : [{ id: outcome.id, error: outcome.error }]));
-      const archived = outcomes.length - failed.length;
-      if (archived === 0) return { error: failed[0]?.error ?? "Nothing was archived.", failed };
-      return { archived, failed };
+      const archived = outcomes.length - failed.length - skipped.length;
+      if (archived === 0 && skipped.length === 0) return { error: failed[0]?.error ?? "Nothing was archived.", failed };
+      return { archived, ...(skipped.length > 0 ? { skipped, note: "Repeating tasks weren't archived: each skipped this date and moved to its next one." } : {}), failed };
     },
   },
   {
