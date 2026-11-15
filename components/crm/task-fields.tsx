@@ -530,7 +530,7 @@ export function TaskTitleField({
     );
   }
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <div className="relative flex min-w-0 flex-1 flex-col gap-1">
       <Textarea
         ref={field}
         id={`${id}-title`}
@@ -901,7 +901,7 @@ function Description({ details, layout, warn }: { details: TaskDetailsState; lay
     );
   }
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div className="relative flex min-w-0 flex-col gap-1">
       <Textarea
         ref={attach}
         aria-label="Description"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { DocPickHeader, DocPickNotice, DocPickOptions, useDocPicks } from "@/components/crm/task-doc-picker";
 import { useDocChange } from "@/components/crm/task-docs";
 import type { Task } from "@/lib/crm/types";
@@ -9,6 +9,51 @@ import { insertReferenceAt, insideClosedReference, PRIVATE_DOC_NOTE, removeDocQu
 import { docQueryAt, withoutDocQuery, type DocQuery } from "@/lib/task-pad";
 
 type Mode = "title" | "description";
+
+const MIRRORED = [
+  "boxSizing",
+  "width",
+  "paddingTop",
+  "paddingRight",
+  "paddingBottom",
+  "paddingLeft",
+  "borderTopWidth",
+  "borderRightWidth",
+  "borderBottomWidth",
+  "borderLeftWidth",
+  "fontFamily",
+  "fontSize",
+  "fontWeight",
+  "fontStyle",
+  "letterSpacing",
+  "lineHeight",
+  "textTransform",
+  "wordSpacing",
+  "textIndent",
+  "tabSize",
+] as const;
+
+function caretBelow(field: HTMLTextAreaElement, index: number) {
+  const style = window.getComputedStyle(field);
+  const mirror = document.createElement("div");
+  for (const name of MIRRORED) mirror.style[name] = style[name];
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.overflowWrap = "break-word";
+  mirror.style.top = "0";
+  mirror.style.left = "-9999px";
+  mirror.textContent = field.value.slice(0, index);
+  const marker = document.createElement("span");
+  marker.textContent = field.value.slice(index, index + 1) || ".";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const line = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.4;
+  const top = field.offsetTop + marker.offsetTop - field.scrollTop + line;
+  const left = field.offsetLeft + marker.offsetLeft;
+  mirror.remove();
+  return { top, left };
+}
 
 export function useDocMention({
   task,
@@ -35,6 +80,8 @@ export function useDocMention({
   const [query, setQuery] = useState<DocQuery | null>(null);
   const [highlight, setHighlight] = useState(0);
   const [note, setNote] = useState<string | null>(null);
+  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const found = useDocPicks(query ? query.query : null, task.id);
   const change = useDocChange(task.id);
   const options = found.docs ? (mode === "title" ? found.docs.filter((doc) => !task.docIds.includes(doc.id)) : found.docs) : null;
@@ -46,6 +93,23 @@ export function useDocMention({
     },
     [],
   );
+
+  const start = query?.start ?? null;
+  useLayoutEffect(() => {
+    const element = field.current;
+    if (start === null || !element) {
+      setPlace(null);
+      return;
+    }
+    const caret = caretBelow(element, start);
+    const room = Math.max(0, element.offsetLeft + element.clientWidth - Math.min(384, element.clientWidth));
+    setPlace({ top: caret.top, left: Math.min(caret.left, room) });
+  }, [start, value]);
+
+  const shown = options?.length ?? -1;
+  useEffect(() => {
+    if (place) menuRef.current?.scrollIntoView({ block: "nearest" });
+  }, [place, shown, found.loading]);
 
   const attach = useCallback((node: HTMLTextAreaElement | null) => {
     field.current = node;
@@ -177,10 +241,12 @@ export function useDocMention({
 
   const menu = query ? (
     <div
+      ref={menuRef}
       role="group"
       aria-label="Link a doc"
       onMouseDown={(event) => event.preventDefault()}
-      className="bg-popover border-line-strong shadow-overlay mt-1.5 w-full max-w-[24rem] overflow-hidden rounded-xl border p-1"
+      style={place ? { top: place.top, left: place.left } : undefined}
+      className="bg-popover border-line-strong shadow-overlay absolute z-30 mt-1.5 scroll-mt-4 scroll-mb-32 w-full max-w-[24rem] overflow-hidden rounded-xl border p-1"
     >
       <DocPickHeader query={query.query} docs={options} loading={found.loading} />
       <DocPickNotice query={query.query} docs={options} failed={found.failed} />
