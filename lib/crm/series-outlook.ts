@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { actingActor, graphFailure, openOutlook, taskBlockLink, type Access, type Failure, type Outlook } from "@/lib/crm/task-outlook";
 import { clockLabel, dayStartIso, wallInstant } from "@/lib/crm/task-time";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
+import { withActor } from "@/lib/crm/context";
+import { readStored } from "@/lib/crm/inbox";
 import { query } from "@/lib/db/pool";
 import {
   createGraphEvent,
@@ -82,6 +84,7 @@ export type MasterSpec = {
   title: string;
   link: string | null;
   recurrence: GraphRecurrence;
+  datesPending?: boolean;
 };
 
 export type DateWant = { skip: true } | { skip?: false; start: string; end: string; title: string };
@@ -285,7 +288,7 @@ function stable(value: unknown): string {
 }
 
 function sameMaster(left: MasterSpec | null, right: MasterSpec) {
-  return stable(left) === stable(right);
+  return stable(left ? { ...left, datesPending: undefined } : null) === stable(right);
 }
 
 class Throttled extends Error {
@@ -381,7 +384,7 @@ async function findInstance(outlook: Outlook, masterId: string, occursOn: string
 async function ensureMaster(outlook: Outlook, row: SeriesOutlookRow, master: MasterSpec, context: Context, now: number) {
   const token = outlook.token.accessToken;
   if (row.master_id) {
-    if (sameMaster(row.written, master)) return { masterId: row.master_id, rewritten: false, created: false };
+    if (sameMaster(row.written, master)) return { masterId: row.master_id, rewritten: Boolean(row.written?.datesPending), created: false };
     try {
       await graphWrite(context, outlook, () => patchGraphEvent(token, row.master_id!, masterPatch(master, context.timeZone), context.fetchImpl));
       return { masterId: row.master_id, rewritten: true, created: false };
@@ -528,7 +531,7 @@ async function writeSeries(outlook: Outlook, row: SeriesOutlookRow, plan: Extrac
     const ensured = await ensureMaster(outlook, row, plan.master, context, now);
     masterId = ensured.masterId;
     rewritten = ensured.rewritten;
-    await save(row, { userId: outlook.actor.userId, masterId, written: plan.master, dates }, ensured.created || masterId !== row.master_id);
+    await save(row, { userId: outlook.actor.userId, masterId, written: rewritten ? { ...plan.master, datesPending: true } : plan.master, dates }, ensured.created || masterId !== row.master_id);
   } else if (row.master_id) {
     await graphWrite(context, outlook, () => deleteGraphEvent(outlook.token.accessToken, row.master_id!, context.fetchImpl));
     masterId = null;
@@ -540,7 +543,7 @@ async function writeSeries(outlook: Outlook, row: SeriesOutlookRow, plan: Extrac
     }
     await save(row, { userId: outlook.actor.userId, masterId: null, written: null, dates }, true);
   }
-  const state = () => ({ userId: outlook.actor.userId, masterId, written: plan.master, dates });
+  const state = (done = false) => ({ userId: outlook.actor.userId, masterId, written: plan.master && rewritten && !done ? { ...plan.master, datesPending: true } : plan.master, dates });
   const keys = [...new Set([...Object.keys(plan.dates), ...Object.keys(dates)])].sort();
   let wrote = rewritten;
   for (const occursOn of keys) {
@@ -557,6 +560,7 @@ async function writeSeries(outlook: Outlook, row: SeriesOutlookRow, plan: Extrac
     else delete dates[occursOn];
     await save(row, state());
   }
+  if (rewritten) await save(row, state(true));
   return wrote;
 }
 
@@ -570,6 +574,19 @@ async function settle(row: SeriesOutlookRow, requeue = false) {
 
 async function defer(row: SeriesOutlookRow, ms = RETRY_MS) {
   await query("select private.defer_series_outlook($1, $2)", [row.series_id, new Date(Date.now() + Math.min(ms * Math.max(1, row.attempts + 1), 60 * MINUTE_MS)).toISOString()]);
+}
+
+async function holderAccess(userId: string, workspaceId: string, context: Context): Promise<Access | "gone"> {
+  try {
+    const actor = await actingActor(userId, workspaceId, true);
+    if (!actor) return "gone";
+    const stored = await withActor(actor, (db) => readStored(db, actor));
+    if (!stored) return "gone";
+    return await openOutlook(actor, context.fetchImpl);
+  } catch (error) {
+    console.error("Opening Outlook for repeating tasks failed", error);
+    return "retry";
+  }
 }
 
 async function access(userId: string, workspaceId: string, context: Context): Promise<Access> {
@@ -591,13 +608,13 @@ async function runRow(row: SeriesOutlookRow, context: Context, now: number, thro
       run.throttled += 1;
       return;
     }
-    const held = await access(holder, row.workspace_id, context);
+    const held = await holderAccess(holder, row.workspace_id, context);
     if (held === "retry" || (held === "orbit_only" && holds(row))) {
       await defer(row);
       run.deferred += 1;
       return;
     }
-    if (held !== "orbit_only") await removeAll(held, row, context);
+    if (held !== "orbit_only" && held !== "gone") await removeAll(held, row, context);
     else await save(row, { userId: null, masterId: null, written: null, dates: {} }, true);
     run.removed += 1;
     if (plan.kind === "remove") {

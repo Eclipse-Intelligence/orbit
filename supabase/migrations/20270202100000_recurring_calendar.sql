@@ -323,7 +323,8 @@ grant execute on function private.series_outlook_events(uuid) to crm_app;
 
 insert into crm.task_series_outlook (series_id)
 select s.id from crm.task_series s
-where s.at is not null and s.ended_at is null and s.archived_at is null
+where s.ended_at is null and s.archived_at is null
+  and (s.at is not null or exists (select 1 from crm.task_occurrence_changes c where c.series_id = s.id and c.due_has_time))
 on conflict (series_id) do nothing;
 
 reset lock_timeout;

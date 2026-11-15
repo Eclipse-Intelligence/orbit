@@ -15,6 +15,8 @@ import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import type { GraphEvent } from "@/lib/microsoft/calendar";
+import { readFileSync } from "node:fs";
+import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { createUser, resetDatabase } from "./helpers";
 
 const WRITE_SCOPES = "https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Mail.Read offline_access";
@@ -563,6 +565,68 @@ describe("repeating tasks in Outlook", () => {
     await syncSeriesOutlook({ fetchImpl: graph.fetch, throttled });
     assert.ok(throttled.has(mark.userId));
     assert.equal(throttled.has(sam.userId), false);
+  });
+
+  it("redoes every changed date after a series rewrite that a run couldn't finish", async () => {
+    const monday = nextWeekday(1);
+    const task = await repeating("Rewrite", monday, "09:00", { every: "week" });
+    const skipped = [1, 2, 3].map((week) => shiftDay(monday, week * 7));
+    for (const date of skipped) await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: date });
+    await sync();
+    for (const date of skipped) assert.equal(graph.onDay(date).length, 0);
+    await updateOccurrence(mark, { taskId: task.id }, { dueAt: london(monday, "09:30") }, "all");
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId, limit: 2 });
+    for (let run = 0; run < 4; run += 1) {
+      await admin().query("update crm.task_series_outlook set retry_at = null where series_id = $1", [task.seriesId]);
+      await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId, limit: 2 });
+    }
+    for (const date of skipped) assert.equal(graph.onDay(date).length, 0, date);
+    assert.deepEqual(graph.onDay(shiftDay(monday, 28)).map((item) => item.start), [london(shiftDay(monday, 28), "09:30")]);
+  });
+
+  it("redoes every changed date after a failure part way through a series rewrite", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating("Failing", tuesday, "09:00", { every: "week" });
+    const skipped = [1, 2].map((week) => shiftDay(tuesday, week * 7));
+    for (const date of skipped) await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: date });
+    await sync();
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Failing, renamed" }, "all");
+    graph.throttleDeletes = true;
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    graph.throttleDeletes = false;
+    await admin().query("update crm.task_series_outlook set retry_at = null where series_id = $1", [task.seriesId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    for (const date of skipped) assert.equal(graph.onDay(date).length, 0, date);
+  });
+
+  for (const gone of ["removed their Microsoft account", "left every workspace"]) {
+    it(`gives the series to the new owner when the previous holder ${gone}`, async () => {
+      const sam = await createUser(`sam-gone${seq}${gone.length}@series-outlook.test`, "Sam Okafor");
+      await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+      await connect({ ...sam, workspaceId: mark.workspaceId });
+      const wednesday = nextWeekday(3);
+      const task = await repeating("Handed on", wednesday, "16:00", { every: "week" });
+      await sync();
+      assert.equal(graph.masters.size, 1);
+      await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
+      if (gone === "removed their Microsoft account") await admin().query("delete from crm.mailbox_connections where user_id = $1", [mark.userId]);
+      else await admin().query("delete from crm.workspace_members where user_id = $1", [mark.userId]);
+      await syncSeriesOutlook({ fetchImpl: graph.fetch });
+      const row = (await admin().query<{ user_id: string | null; version: string; settled_version: string }>("select user_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+      assert.equal(row.user_id, sam.userId);
+      assert.equal(Number(row.version), Number(row.settled_version));
+      assert.equal(graph.masters.size, 2);
+    });
+  }
+
+  it("queues a date-only series with a timed date when the migration runs", async () => {
+    const thursday = nextWeekday(4);
+    const task = await repeating("Backfill", thursday, null, { every: "week" });
+    const later = shiftDay(thursday, 7);
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "10:00") }, "this", { provenance: DRAG });
+    await admin().query("delete from crm.task_series_outlook where series_id = $1", [task.seriesId]);
+    await applyMigrationSql(admin(), readFileSync("supabase/migrations/20270202100000_recurring_calendar.sql", "utf8"));
+    assert.ok(await version(task.seriesId!));
   });
 });
 
