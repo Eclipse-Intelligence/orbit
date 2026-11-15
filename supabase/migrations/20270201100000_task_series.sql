@@ -593,11 +593,13 @@ begin
     from crm.task_series c
     join crm.task_series p on p.id = c.split_from_id
     where p.id = any(v_followed) and c.workspace_id = p_source and c.current_task_id is null
-    union all
+      and not exists (select 1 from crm.tasks t where t.series_id = c.id)
+    union
     select c.id, later.parent_owner
     from crm.task_series c
     join later on c.split_from_id = later.id
     where c.workspace_id = p_source and c.current_task_id is null
+      and not exists (select 1 from crm.tasks t where t.series_id = c.id)
   )
   update crm.task_series s
   set workspace_id = p_target,

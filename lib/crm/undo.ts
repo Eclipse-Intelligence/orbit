@@ -695,79 +695,64 @@ const DEFERS = /already been undone|is already (restored|archived|deleted)|Undo 
 
 const ONE_STEP = "Can't undo: this change can't be put back in one step.";
 
-type Step = { event: AuditRow; described: Described; covered: boolean };
+type Step = { event: AuditRow; described: Described };
 
 function snapshotKey(row: AuditRow, side: "before" | "after") {
   return JSON.stringify(record(record(row.changes)?.series)?.[side] ?? null);
 }
 
-function coveredBySeriesChain(rows: AuditRow[]) {
-  const covered = new Set<string>();
+function undoOrder(rows: AuditRow[]) {
   const bySeries = new Map<string, AuditRow[]>();
-  for (const row of rows) {
+  const rest: AuditRow[] = [];
+  for (const row of [...rows].sort((left, right) => left.id.localeCompare(right.id))) {
     const changes = record(row.changes);
     const seriesId = record(changes?.series)?.id;
-    if (!row.event_type.startsWith("task_series.") || changes?.followsChange || typeof seriesId !== "string") continue;
-    bySeries.set(seriesId, [...(bySeries.get(seriesId) ?? []), row]);
+    if (row.event_type.startsWith("task_series.") && !changes?.followsChange && typeof seriesId === "string") bySeries.set(seriesId, [...(bySeries.get(seriesId) ?? []), row]);
+    else rest.push(row);
   }
-  for (const list of bySeries.values()) {
-    if (list.length < 2) continue;
+  const ordered: AuditRow[] = [];
+  for (const [, list] of [...bySeries].sort(([left], [right]) => left.localeCompare(right))) {
     const afters = list.map((row) => snapshotKey(row, "after"));
     const firsts = list.filter((row) => !afters.includes(snapshotKey(row, "before")));
     if (firsts.length !== 1) return null;
-    const seen = new Set([firsts[0].id]);
-    for (let current = firsts[0]; ; ) {
-      const next = list.find((row) => !seen.has(row.id) && snapshotKey(row, "before") === snapshotKey(current, "after"));
-      if (!next) break;
-      seen.add(next.id);
-      current = next;
+    const chain = [firsts[0]];
+    while (chain.length < list.length) {
+      const last = chain[chain.length - 1];
+      const next = list.find((row) => !chain.includes(row) && snapshotKey(row, "before") === snapshotKey(last, "after"));
+      if (!next) return null;
+      chain.push(next);
     }
-    if (seen.size !== list.length) return null;
-    for (const row of list) if (row.id !== firsts[0].id) covered.add(row.id);
+    ordered.push(...chain.reverse());
   }
-  return covered;
-}
-
-function stepOrder(left: AuditRow, right: AuditRow) {
-  const series = Number(right.event_type.startsWith("task_series.")) - Number(left.event_type.startsWith("task_series."));
-  if (series !== 0) return series;
-  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  return [...ordered, ...rest];
 }
 
 async function stepsFor(db: Db, actor: Actor, ids: string[], provenance: Provenance) {
-  const rows = (await db.query<AuditRow>(`${AUDIT_SQL} where e.id = any($1::uuid[]) and e.workspace_id = $2`, [ids, actor.workspaceId])).rows.sort(stepOrder);
-  const covered = coveredBySeriesChain(rows);
+  const rows = (await db.query<AuditRow>(`${AUDIT_SQL} where e.id = any($1::uuid[]) and e.workspace_id = $2`, [ids, actor.workspaceId])).rows;
+  const ordered = undoOrder(rows);
   const steps: Step[] = [];
-  for (const row of rows) steps.push({ event: row, described: (await describeById(db, actor, row.id, provenance)).described, covered: Boolean(covered?.has(row.id)) });
-  return { rows, steps, chained: covered !== null };
+  for (const row of ordered ?? rows) steps.push({ event: row, described: (await describeById(db, actor, row.id, provenance)).described });
+  return { steps, chained: ordered !== null };
 }
 
 function combine(steps: Step[], chained: boolean, grouped: boolean, first: Described): Described {
-  const shown = steps.filter((step) => !step.covered && !record(step.event.changes)?.followsChange);
-  const summaries = [...new Set((shown.length ? shown : steps).filter((step) => step.described.plan.ok || !shown.length).map((step) => step.described.summary))];
-  const summary = summaries.join("; ") || first.summary;
-  if (!chained) return { entityName: first.entityName, summary, plan: { ok: false, reason: ONE_STEP } };
-  const blocking = steps.find((step) => !step.covered && !step.described.plan.ok && !(grouped ? DEFERS : ALREADY).test(step.described.plan.reason));
-  if (blocking && !blocking.described.plan.ok) return { entityName: first.entityName, summary, plan: { ok: false, reason: blocking.described.plan.reason } };
-  const runnable = steps.filter((step) => !step.covered && step.described.plan.ok);
-  if (!runnable.length) {
-    const refused = steps.find((step) => !step.described.plan.ok);
-    return { entityName: first.entityName, summary, plan: { ok: false, reason: refused && !refused.described.plan.ok ? refused.described.plan.reason : "This change can't be undone." } };
-  }
-  const restores = [...new Set(runnable.filter((step) => !record(step.event.changes)?.followsChange).map((step) => (step.described.plan.ok ? step.described.plan.restores : "")))].filter(Boolean).join(" ");
-  return { entityName: first.entityName, summary, plan: { ok: true, restores: restores || "Puts the change back.", run: async () => undefined } };
+  const shown = steps.filter((step) => !record(step.event.changes)?.followsChange);
+  const summary = [...new Set(shown.map((step) => step.described.summary))].join("; ") || first.summary;
+  const refuse = (reason: string): Described => ({ entityName: first.entityName, summary, plan: { ok: false, reason } });
+  if (!chained) return refuse(ONE_STEP);
+  const allowed = grouped ? DEFERS : ALREADY;
+  for (const step of steps) if (!step.described.plan.ok && !allowed.test(step.described.plan.reason)) return refuse(step.described.plan.reason);
+  const restores = shown.flatMap((step) => (step.described.plan.ok ? [step.described.plan.restores] : []));
+  if (!steps.some((step) => step.described.plan.ok)) return refuse(steps.flatMap((step) => (step.described.plan.ok ? [] : [step.described.plan.reason]))[0] ?? "This change can't be undone.");
+  return { entityName: first.entityName, summary, plan: { ok: true, restores: [...new Set(restores)].join(" ") || "Puts the change back.", run: async () => undefined } };
 }
 
 async function runSteps(db: Db, actor: Actor, steps: Step[], provenance: Provenance) {
   let undone = 0;
-  for (const step of steps) {
-    if (!step.described.plan.ok && (!step.covered || ALREADY.test(step.described.plan.reason))) continue;
-    if (!step.covered && step.described.plan.ok) await step.described.plan.run();
-    await recordAudit(db, actor, `${step.event.entity_type}.undone`, step.event.entity_type, step.event.entity_id, provenance, {
-      undoes: step.event.id,
-      undoneEventType: step.event.event_type,
-      restored: step.described.plan.ok ? step.described.plan.restores : "",
-    });
+  for (const { event, described } of steps) {
+    if (!described.plan.ok) continue;
+    await described.plan.run();
+    await recordAudit(db, actor, `${event.entity_type}.undone`, event.entity_type, event.entity_id, provenance, { undoes: event.id, undoneEventType: event.event_type, restored: described.plan.restores });
     undone += 1;
   }
   return undone;
@@ -809,7 +794,8 @@ async function sameActionIds(db: Db, actor: Actor, eventId: string) {
 async function describeAction(db: Db, actor: Actor, eventId: string, provenance: Provenance) {
   const { event, described } = await describeById(db, actor, eventId, provenance);
   const ids = event.entity_type === "task" ? await sameActionIds(db, actor, event.id) : [event.id];
-  if (ids.length < 2) return { event, ids, steps: [{ event, described, covered: false }], described };
+  if (!ids.includes(event.id)) return { event, ids, steps: [], described: { ...described, plan: { ok: false as const, reason: "This change can't be undone." } } };
+  if (ids.length < 2) return { event, ids, steps: [{ event, described }], described };
   const { steps, chained } = await stepsFor(db, actor, ids, provenance);
   return { event, ids, steps, described: combine(steps, chained, true, described) };
 }

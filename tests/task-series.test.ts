@@ -1458,6 +1458,35 @@ describe("repeating task review round 17", () => {
   });
 });
 
+describe("repeating task review round 18", () => {
+  it("keeps a This one move when a pattern change and an All change in one call are undone", async () => {
+    const { updateTaskFromApi } = await import("@/lib/crm/task-series");
+    const { listRecentChanges } = await import("@/lib/crm/undo");
+    for (const path of ["assistant", "toast"] as const) {
+      const task = (await createRepeatingTask(mark, { title: `Moved one ${path}`, dueAt: at("2031-06-03", "14:00") }, { every: "week" })).body.task;
+      await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2031-06-17" }, { dueAt: at("2031-06-17", "16:00"), dueHasTime: true }, "this");
+      const moved = async () => (await sql<{ due_at: Date | null }>("select due_at from crm.task_occurrence_changes where series_id = $1 and occurs_on = '2031-06-17'", [task.seriesId]))[0]?.due_at?.toISOString() ?? null;
+      assert.equal(await moved(), "2031-06-17T16:00:00.000Z");
+      const shape = async () => (await sql<{ ends: unknown; at: string | null; rule: unknown }>("select ends, to_char(at, 'HH24:MI') as at, rule from crm.task_series where id = $1", [task.seriesId]))[0];
+      const before = await shape();
+      await updateTaskFromApi(mark, { taskId: task.id }, { repeat: { every: "week", ends: { on: "2031-12-30" } }, dueAt: at("2031-06-03", "10:00"), repeatScope: "all" });
+      if (path === "assistant") {
+        const newest = (await listRecentChanges(mark, { entityType: "task", limit: 20 })).filter((change) => change.entityId === task.id)[0];
+        await undoAuditEvent(mark, newest.id, { operation: "undo_change" });
+      } else {
+        const ids = await sql<{ id: string }>(
+          "select id from crm.audit_events where entity_id = $1 and created_at = (select max(created_at) from crm.audit_events where entity_id = $1)",
+          [task.id],
+        );
+        await undoTaskEvents(mark, task.id, ids.map((row) => row.id), { operation: "undo_change" });
+      }
+      assert.equal(await moved(), "2031-06-17T16:00:00.000Z", `${path}: the This one move survives`);
+      assert.deepEqual(await shape(), before, `${path}: the pattern and time are back`);
+      assert.equal((await getTask(mark, task.id)).dueAt, at("2031-06-03", "14:00"));
+    }
+  });
+});
+
 describe("repeating tasks and docs", () => {
   it("carries the open one's doc links to the next one", async () => {
     const doc = (await createDoc(mark, { title: "Weekly agenda", content: "Points to cover." })).id;
