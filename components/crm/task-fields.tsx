@@ -311,7 +311,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
       if (!ok && sent.current[field] === next) sent.current[field] = previous;
       const declinedNow = !ok && declined.current[field] === next;
       if (declinedNow) setErrors((current) => clearFields(current, [field]));
-      if (draftAfterSave(ok, declinedNow) === "drop") drafts.drop(self, task.id, field, sent.current[field]);
+      if (draftAfterSave(ok, declinedNow) === "drop") drafts.drop(self, task.id, field, ok ? next : sent.current[field]);
       else drafts.keep(self, task.id, field, next, sent.current[field]);
     });
   }

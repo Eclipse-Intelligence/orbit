@@ -992,6 +992,19 @@ describe("repeating task review round 7", () => {
 });
 
 describe("repeating task review round 8", () => {
+  it("doesn't let an assignee who isn't the series' owner change its bookkeeping by raw SQL", async () => {
+    const { queryAsUser } = await import("./helpers");
+    const task = (await createRepeatingTask(mark, { title: "Guarded", dueAt: at("2028-02-07", "09:00") }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");
+    const refused = /Only the repeating task's assignee or creator can change every date|row-level/;
+    await sql("update crm.task_series set roll_pending = true where id = $1", [task.seriesId]);
+    for (const change of ["roll_retry_at = 'infinity'", "roll_at = 'infinity'", "roll_pending = false", "created_at = now() - interval '1 year'", "created_by_user_id = null", "title = 'Taken'"]) {
+      await assert.rejects(queryAsUser(priya.userId, `update crm.task_series set ${change} where id = $1 returning id`, [task.seriesId]), refused, change);
+    }
+    const flagged = await queryAsUser(priya.userId, "update crm.task_series set roll_pending = true where id = $1 returning id", [task.seriesId]);
+    assert.equal(flagged.length, 1, "anyone who can see it can still flag it for a refresh");
+  });
+
   it("keeps a colleague's pending change when a roll fails, and only waits before trying again", async () => {
     const task = (await createRepeatingTask(mark, { title: "Fails once", dueAt: at("2028-01-03", "09:00") }, { every: "week" })).body.task;
     await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");

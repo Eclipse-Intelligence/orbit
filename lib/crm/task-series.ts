@@ -466,7 +466,7 @@ async function insertOccurrence(db: Db, actor: Actor, row: SeriesRow, occurrence
 
 async function finishSeries(db: Db, actor: Actor, row: SeriesRow, previous: Task | null, provenance: Provenance | undefined) {
   if (!ownsSeries(actor, row)) return;
-  await db.query("update crm.task_series set ended_at = coalesce(ended_at, now()), roll_at = null, roll_pending = false where id = $1", [row.id]);
+  await db.query("update crm.task_series set ended_at = coalesce(ended_at, now()), roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
   const child = await db.query<SeriesRow>(
     `${SERIES_SQL} where s.split_from_id = $1 and s.current_task_id is null and s.archived_at is null and s.ended_at is null for update`,
     [row.id],
@@ -477,7 +477,7 @@ async function finishSeries(db: Db, actor: Actor, row: SeriesRow, previous: Task
     if (changes.find((change) => change.occursOn === split.starts_on)?.skip) continue;
     await consumeChanges(db, split.id, split.starts_on);
     const created = await insertOccurrence(db, actor, split, first, previous, provenance);
-    await db.query("update crm.task_series set roll_at = $3, roll_pending = false where id = $1 and current_task_id = $2", [
+    await db.query("update crm.task_series set roll_at = $3, roll_pending = false, roll_retry_at = null where id = $1 and current_task_id = $2", [
       split.id,
       created.id,
       rollAtFor(split, first, changes.filter((change) => change.occursOn > split.starts_on)),
@@ -487,7 +487,7 @@ async function finishSeries(db: Db, actor: Actor, row: SeriesRow, previous: Task
 
 async function advanceFrom(db: Db, actor: Actor, row: SeriesRow, done: Task, provenance: Provenance | undefined, now = Date.now()) {
   if (stopped(row) || !done.occursOn) {
-    await db.query("update crm.task_series set roll_at = null, roll_pending = false where id = $1", [row.id]);
+    await db.query("update crm.task_series set roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
     return null;
   }
   const changes = await changesOf(db, row.id, done.occursOn);
@@ -501,10 +501,10 @@ async function advanceFrom(db: Db, actor: Actor, row: SeriesRow, done: Task, pro
   const rollAt = rollAtFor(row, next, changes.filter((change) => change.occursOn > next.occursOn));
   const owner = (await memberOrNull(db, row.workspace_id, row.owner_id)) ?? (await memberOrNull(db, row.workspace_id, done.ownerId));
   const owns = ownsSeries(actor, row);
-  if (owns) await db.query("update crm.task_series set roll_at = $2, roll_pending = false, owner_id = $3 where id = $1", [row.id, rollAt, owner]);
+  if (owns) await db.query("update crm.task_series set roll_at = $2, roll_pending = false, roll_retry_at = null, owner_id = $3 where id = $1", [row.id, rollAt, owner]);
   else await db.query("update crm.task_series set roll_pending = true where id = $1 and not roll_pending", [row.id]);
   const created = await insertOccurrence(db, actor, { ...row, owner_id: owner }, next, done, provenance);
-  if (owns) await db.query("update crm.task_series set roll_at = $3, roll_pending = false where id = $1 and current_task_id = $2", [row.id, created.id, rollAt]);
+  if (owns) await db.query("update crm.task_series set roll_at = $3, roll_pending = false, roll_retry_at = null where id = $1 and current_task_id = $2", [row.id, created.id, rollAt]);
   return created;
 }
 
@@ -578,7 +578,7 @@ export async function seriesBeforeReopen(db: Db, actor: Actor, task: Task, prove
 export async function seriesAfterArchive(db: Db, actor: Actor, task: Task) {
   const row = await lockSeries(db, task.seriesId);
   if (!row || row.current_task_id !== task.id || stopped(row) || !ownsSeries(actor, row)) return;
-  await db.query("update crm.task_series set ended_at = now(), roll_at = null, roll_pending = false where id = $1", [row.id]);
+  await db.query("update crm.task_series set ended_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
 }
 
 export async function seriesBeforeUnarchive(db: Db, task: Task) {
@@ -698,7 +698,7 @@ export async function rollSeriesInDb(db: Db, actor: Actor, seriesId: string, now
   const changes = await changesOf(db, row.id, from);
   const first = nextOccurrence(pattern, changes, from);
   if (!first) {
-    await db.query("update crm.task_series set roll_at = null, roll_pending = false where id = $1", [row.id]);
+    await db.query("update crm.task_series set roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
     return null;
   }
   const { target, passed } = latestDue(row, changes, first, now);
@@ -1109,7 +1109,7 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
   }
   if (repeat === null) {
     if (!row || stopped(row)) return task;
-    await db.query("update crm.task_series set ended_at = now(), roll_at = null, roll_pending = false where id = $1", [row.id]);
+    await db.query("update crm.task_series set ended_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
     const dropped = await changesOf(db, row.id, task.occursOn);
     await db.query("delete from crm.task_occurrence_changes where series_id = $1", [row.id]);
     const after = await readSeries(db, row.id);
@@ -1212,7 +1212,7 @@ export async function deleteSeriesInDb(db: Db, actor: Actor, taskId: string, pro
   if (row.current_task_id && row.current_task_id !== openId) await lockOccurrence(db, row.current_task_id);
   const open = row.current_task_id ? await readTaskInDb(db, actor, row.current_task_id) : null;
   assertSeriesChange(actor, row);
-  await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false where id = $1", [row.id]);
+  await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
   const anchor = open && !open.completedAt && !open.archivedAt ? open : given;
   if (anchor === open) await writeOccurrence(db, actor, row, open, {}, provenance, { archive: true });
   const after = await readSeries(db, row.id);
@@ -1309,7 +1309,7 @@ export async function restoreSeriesInDb(db: Db, actor: Actor, changes: Record<st
   if (!row) throw new CrmError("cannot_undo", "Can't undo: you can't change how this task repeats.", 409);
   const before = series.before;
   if (!before) {
-    await db.query("update crm.task_series set archived_at = coalesce(archived_at, now()), roll_at = null, roll_pending = false where id = $1", [row.id]);
+    await db.query("update crm.task_series set archived_at = coalesce(archived_at, now()), roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
     if (row.current_task_id) {
       const task = await readTaskInDb(db, actor, row.current_task_id);
       if (task && changes.withTask && !task.archivedAt) await writeOccurrence(db, actor, row, task, {}, provenance, { archive: true });
@@ -1324,7 +1324,7 @@ export async function restoreSeriesInDb(db: Db, actor: Actor, changes: Record<st
       const created = await readTaskInDb(db, actor, child.current_task_id);
       if (created && !created.archivedAt) await writeOccurrence(db, actor, child, created, {}, provenance, { archive: true });
     }
-    await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false where id = $1", [split.seriesId]);
+    await db.query("update crm.task_series set archived_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [split.seriesId]);
   }
   await db.query(
     `update crm.task_series set title = $2, description = $3, priority = $4, owner_id = $5, company_id = $6, contact_id = $7, opportunity_id = $8,

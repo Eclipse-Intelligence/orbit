@@ -616,7 +616,11 @@ begin
     and not v_owns
     and (
       old.roll_at is distinct from new.roll_at
+      or old.roll_retry_at is distinct from new.roll_retry_at
       or (old.roll_pending and not new.roll_pending)
+      or old.id is distinct from new.id or old.workspace_id is distinct from new.workspace_id
+      or old.created_by_user_id is distinct from new.created_by_user_id or old.created_by_agent_id is distinct from new.created_by_agent_id
+      or old.created_at is distinct from new.created_at
       or (old.current_task_id is not null and new.current_task_id is null)
       or
       old.rule is distinct from new.rule or old.ends is distinct from new.ends or old.starts_on is distinct from new.starts_on
@@ -656,7 +660,7 @@ set search_path = ''
 as $$
 begin
   update crm.task_series
-  set current_task_id = null, roll_at = null, roll_pending = false, ended_at = coalesce(ended_at, now())
+  set current_task_id = null, roll_at = null, roll_pending = false, roll_retry_at = null, ended_at = coalesce(ended_at, now())
   where id = old.series_id and current_task_id = new.id;
   return null;
 end;
