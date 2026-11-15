@@ -22,7 +22,7 @@ import {
   removeDocQuery,
   showsDescriptionLinks,
 } from "@/lib/task-doc-picks";
-import { docQueryAt, withoutDocQuery } from "@/lib/task-pad";
+import { docQueryAt, parseTaskText, withoutDocQuery } from "@/lib/task-pad";
 import { createUser, resetDatabase } from "./helpers";
 
 const WEB = { operation: "link_task_doc", source: "web" } as const;
@@ -118,6 +118,23 @@ describe("[[ in a task's title and description", () => {
     assert.deepEqual(withoutDocQuery(text, found), { text: "Check today", caret: 6 });
     assert.deepEqual(docQueryAt("Call [[renewal now", 10), { start: 5, end: 14, query: "renewal" }, "an unclosed query still stops at the word");
     assert.equal(insideClosedReference("[[a]] b [[c", docQueryAt("[[a]] b [[c", 3)!), true);
+  });
+
+  it("never reads a date inside [[...]], open or closed, before or after picking", () => {
+    const now = new Date("2026-11-12T09:00:00Z");
+    const typing = "Check [[friday review 3pm";
+    assert.equal(parseTaskText(typing, now).due, null);
+    const found = docQueryAt(typing, typing.length)!;
+    assert.deepEqual(found, { start: 6, end: 25, query: "friday review 3pm" });
+    const picked = withoutDocQuery(typing, found);
+    assert.equal(picked.text, "Check ");
+    const closed = "Check [[Friday review 3pm]] with Jane";
+    assert.equal(parseTaskText(closed, now).due, null);
+    assert.equal(parseTaskText(closed, now).title, closed);
+    const inside = docQueryAt(closed, 10)!;
+    assert.deepEqual(inside, { start: 6, end: 25, query: "Friday review 3pm" });
+    assert.equal(insertDocReference(closed, inside, "Friday review 3pm").text, closed);
+    assert.equal(parseTaskText(`${closed} tomorrow`, now).due, "2026-11-13");
   });
 
   it("takes out the inserted reference nearest where it was put when linking fails, and edits only what changed", () => {
