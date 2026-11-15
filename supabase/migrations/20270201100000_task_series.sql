@@ -488,7 +488,11 @@ set search_path = ''
 as $$
   update crm.task_series s set roll_at = greatest(coalesce(s.roll_at, p_until), p_until), roll_pending = false
   where s.id = p_series and s.ended_at is null and s.archived_at is null
-    and (s.roll_pending or s.roll_at is null or s.roll_at <= p_now);
+    and (
+      s.roll_pending
+      or s.roll_at <= p_now
+      or (s.roll_at is null and exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.completed_at is not null))
+    );
 $$;
 
 revoke all on function private.delay_series_roll(uuid, timestamptz, timestamptz) from public;
@@ -568,6 +572,8 @@ begin
   return new;
 end;
 $$;
+
+revoke all on function private.tasks_keep_completion() from public;
 
 drop trigger if exists tasks_keep_completion on crm.tasks;
 create trigger tasks_keep_completion

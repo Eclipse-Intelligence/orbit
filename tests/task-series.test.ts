@@ -969,6 +969,28 @@ describe("repeating task review round 6", () => {
   });
 });
 
+describe("repeating task review round 7", () => {
+  it("leaves a series with nothing left to roll alone", async () => {
+    const first = (await createRepeatingTask(mark, { title: "Twice only", dueDate: "2027-12-06" }, { every: "week", ends: { after: 2 } })).body.task;
+    await completeTask(mark, first.id);
+    const last = (await occurrences(first.seriesId!)).find((row) => !row.completed)!;
+    await updateOccurrence(mark, { taskId: last.id }, { ownerId: priya.userId }, "this");
+    await updateOccurrence(priya, { taskId: last.id }, { dueDate: "2027-12-15" }, "this");
+    const audits = async () => (await sql("select 1 from crm.audit_events where entity_id = $1", [last.id])).length;
+    const before = await audits();
+    const runs = [];
+    for (const day of ["2027-12-14", "2027-12-16", "2027-12-20", "2027-12-27"]) {
+      runs.push((await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse(`${day}T09:00:00Z`) })).due);
+    }
+    assert.ok(runs.slice(1).every((due) => due === 0), JSON.stringify(runs));
+    const [row] = await sql<{ roll_at: Date | null; roll_pending: boolean }>("select roll_at, roll_pending from crm.task_series where id = $1", [first.seriesId]);
+    assert.deepEqual([row.roll_at, row.roll_pending], [null, false]);
+    assert.equal(await audits(), before);
+    const open = await getTask(priya, last.id);
+    assert.deepEqual([open.occursOn, open.dueDate, open.completedAt], ["2027-12-13", "2027-12-15", null]);
+  });
+});
+
 describe("repeating tasks and docs", () => {
   it("carries the open one's doc links to the next one", async () => {
     const doc = (await createDoc(mark, { title: "Weekly agenda", content: "Points to cover." })).id;

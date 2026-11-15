@@ -313,6 +313,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
         return;
       }
       if (sent.current[field] === next) sent.current[field] = previous;
+      if (declined.current[field] === next) return;
       drafts.keep(self, task.id, field, next, sent.current[field]);
     });
   }
