@@ -932,8 +932,8 @@ describe("repeating task review round 6", () => {
     const now = Date.parse("2027-11-16T01:00:00Z");
     const first = await rollDueSeries({ deadline: Date.now() + 10_000, now });
     assert.ok(first.due >= 1);
-    const [row] = await sql<{ roll_at: string }>("select roll_at::text from crm.task_series where id = $1", [task.seriesId]);
-    assert.ok(Date.parse(row.roll_at) > now, "pushed back");
+    const [row] = await sql<{ roll_retry_at: string }>("select roll_retry_at::text from crm.task_series where id = $1", [task.seriesId]);
+    assert.ok(Date.parse(row.roll_retry_at) > now, "pushed back");
     const again = await rollDueSeries({ deadline: Date.now() + 10_000, now });
     assert.equal(again.due, 0);
   });
@@ -988,6 +988,38 @@ describe("repeating task review round 7", () => {
     assert.equal(await audits(), before);
     const open = await getTask(priya, last.id);
     assert.deepEqual([open.occursOn, open.dueDate, open.completedAt], ["2027-12-13", "2027-12-15", null]);
+  });
+});
+
+describe("repeating task review round 8", () => {
+  it("keeps a colleague's pending change when a roll fails, and only waits before trying again", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Fails once", dueAt: at("2028-01-03", "09:00") }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");
+    await updateOccurrence(priya, { taskId: task.id }, { dueDate: "2028-01-04" }, "this");
+    const state = async () =>
+      (await sql<{ roll_pending: boolean; roll_at: string | null; roll_retry_at: string | null }>("select roll_pending, roll_at::text, roll_retry_at::text from crm.task_series where id = $1", [task.seriesId]))[0];
+    assert.equal((await state()).roll_pending, true);
+    const rollAt = (await state()).roll_at;
+    await sql(`create or replace function public.fail_series_roll() returns trigger language plpgsql as $$ begin raise exception 'forced roll failure'; end; $$`);
+    await sql(`create trigger fail_series_roll before update of occurs_on on crm.tasks for each row when (old.id = '${task.id}') execute function public.fail_series_roll()`);
+    const now = Date.parse("2028-01-12T09:00:00Z");
+    try {
+      const failed = await rollDueSeries({ deadline: Date.now() + 10_000, now });
+      assert.equal(failed.failed, 1);
+      const after = await state();
+      assert.equal(after.roll_pending, true, "the colleague's change still gets its refresh");
+      assert.equal(after.roll_at, rollAt);
+      assert.ok(Date.parse(after.roll_retry_at!) > now);
+      assert.equal((await rollDueSeries({ deadline: Date.now() + 10_000, now })).due, 0);
+    } finally {
+      await sql("drop trigger if exists fail_series_roll on crm.tasks");
+      await sql("drop function if exists public.fail_series_roll()");
+    }
+    const later = await rollDueSeries({ deadline: Date.now() + 10_000, now: now + 20 * 60_000 });
+    assert.equal(later.rolled, 1);
+    const done = await state();
+    assert.deepEqual([done.roll_pending, done.roll_retry_at], [false, null]);
+    assert.equal((await getTask(mark, task.id)).occursOn, "2028-01-10");
   });
 });
 

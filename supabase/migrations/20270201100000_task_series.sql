@@ -21,6 +21,7 @@ create table if not exists crm.task_series (
   current_task_id uuid references crm.tasks (id) on delete set null,
   roll_at timestamptz,
   roll_pending boolean not null default false,
+  roll_retry_at timestamptz,
   split_from_id uuid references crm.task_series (id) on delete set null,
   ended_at timestamptz,
   archived_at timestamptz,
@@ -84,6 +85,8 @@ begin
   end if;
 end
 $$;
+
+alter table crm.task_series add column if not exists roll_retry_at timestamptz;
 
 alter table crm.task_series enable row level security;
 alter table crm.task_series force row level security;
@@ -412,6 +415,7 @@ as $$
       or (s.roll_at is not null and s.roll_at <= p_now)
       or (t.completed_at is not null and (s.roll_at is null or s.roll_at <= p_now))
     )
+    and (s.roll_retry_at is null or s.roll_retry_at <= p_now)
     and s.ended_at is null
     and s.archived_at is null
     and t.archived_at is null
@@ -486,7 +490,7 @@ language sql
 security definer
 set search_path = ''
 as $$
-  update crm.task_series s set roll_at = greatest(coalesce(s.roll_at, p_until), p_until), roll_pending = false
+  update crm.task_series s set roll_retry_at = p_until
   where s.id = p_series and s.ended_at is null and s.archived_at is null
     and (
       s.roll_pending

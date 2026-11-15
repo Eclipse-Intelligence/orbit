@@ -213,7 +213,10 @@ async function refreshRoll(db: Db, actor: Actor, seriesId: string) {
   }
   const task = await readTask(db, actor, row.current_task_id);
   const changes = await changesOf(db, row.id, task?.occursOn ?? null);
-  await db.query("update crm.task_series set roll_at = $2, roll_pending = false where id = $1 and (roll_pending or roll_at is distinct from $2::timestamptz)", [row.id, rollAtFor(row, task, changes)]);
+  await db.query(
+    "update crm.task_series set roll_at = $2, roll_pending = false, roll_retry_at = null where id = $1 and (roll_pending or roll_retry_at is not null or roll_at is distinct from $2::timestamptz)",
+    [row.id, rollAtFor(row, task, changes)],
+  );
 }
 
 const WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];

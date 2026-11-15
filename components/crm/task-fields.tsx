@@ -32,7 +32,7 @@ import type { Task } from "@/lib/crm/types";
 import { recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
-import { draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
+import { draftAfterSave, draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
 import { applyDraftNews, clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
@@ -308,13 +308,11 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const next = commit.value;
     sent.current[field] = next;
     void save(field === "title" ? { title: next } : { description: next || null }, ask).then((ok) => {
-      if (ok) {
-        drafts.drop(self, task.id, field, next);
-        return;
-      }
-      if (sent.current[field] === next) sent.current[field] = previous;
-      if (declined.current[field] === next) return;
-      drafts.keep(self, task.id, field, next, sent.current[field]);
+      if (!ok && sent.current[field] === next) sent.current[field] = previous;
+      const declinedNow = !ok && declined.current[field] === next;
+      if (declinedNow) setErrors((current) => clearFields(current, [field]));
+      if (draftAfterSave(ok, declinedNow) === "drop") drafts.drop(self, task.id, field, sent.current[field]);
+      else drafts.keep(self, task.id, field, next, sent.current[field]);
     });
   }
 
