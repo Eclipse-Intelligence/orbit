@@ -564,6 +564,7 @@ set search_path = ''
 as $$
 declare
   v_moved integer := 0;
+  v_followed uuid[];
 begin
   with followed as (
     update crm.task_series s
@@ -584,7 +585,28 @@ begin
       and t.workspace_id = p_target
     returning s.id
   )
-  select count(*) into v_moved from followed;
+  select coalesce(array_agg(id), '{}') into v_followed from followed;
+  v_moved := coalesce(array_length(v_followed, 1), 0);
+
+  with recursive later as (
+    select c.id, p.owner_id as parent_owner
+    from crm.task_series c
+    join crm.task_series p on p.id = c.split_from_id
+    where p.id = any(v_followed) and c.workspace_id = p_source and c.current_task_id is null
+    union all
+    select c.id, later.parent_owner
+    from crm.task_series c
+    join later on c.split_from_id = later.id
+    where c.workspace_id = p_source and c.current_task_id is null
+  )
+  update crm.task_series s
+  set workspace_id = p_target,
+      owner_id = case
+        when exists (select 1 from crm.workspace_members m where m.workspace_id = p_target and m.user_id = s.owner_id) then s.owner_id
+        else later.parent_owner
+      end
+  from later
+  where s.id = later.id;
 
   update crm.tasks t
   set series_id = null, occurs_on = null
@@ -597,7 +619,7 @@ begin
   set company_id = case when s.company_id is not null and not exists (select 1 from crm.companies c where c.id = s.company_id and c.workspace_id = s.workspace_id) then null else s.company_id end,
       contact_id = case when s.contact_id is not null and not exists (select 1 from crm.contacts c where c.id = s.contact_id and c.workspace_id = s.workspace_id) then null else s.contact_id end,
       opportunity_id = case when s.opportunity_id is not null and not exists (select 1 from crm.opportunities o where o.id = s.opportunity_id and o.workspace_id = s.workspace_id) then null else s.opportunity_id end
-  where s.workspace_id = p_source
+  where s.workspace_id in (p_source, p_target)
     and (
       (s.company_id is not null and not exists (select 1 from crm.companies c where c.id = s.company_id and c.workspace_id = s.workspace_id))
       or (s.contact_id is not null and not exists (select 1 from crm.contacts c where c.id = s.contact_id and c.workspace_id = s.workspace_id))

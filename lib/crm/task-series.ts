@@ -960,15 +960,15 @@ export async function countResetDates(actor: Actor, taskId: string) {
 }
 
 function seriesUpdate(row: SeriesRow, task: Task, input: TaskWrite, timeTouched: boolean) {
-  const relinks = input.companyId !== undefined || input.contactId !== undefined || input.opportunityId !== undefined;
+  const relinked = (field: (typeof LINK_FIELDS)[number]) => input[field] !== undefined;
   const next = {
     title: input.title !== undefined ? task.title : row.title,
     description: input.description !== undefined ? task.description : row.description,
     priority: input.priority !== undefined ? task.priority : row.priority,
     owner_id: input.ownerId !== undefined ? task.ownerId : row.owner_id,
-    company_id: relinks ? task.companyId : row.company_id,
-    contact_id: relinks ? task.contactId : row.contact_id,
-    opportunity_id: relinks ? task.opportunityId : row.opportunity_id,
+    company_id: relinked("companyId") ? task.companyId : row.company_id,
+    contact_id: relinked("contactId") ? task.contactId : row.contact_id,
+    opportunity_id: relinked("opportunityId") ? task.opportunityId : row.opportunity_id,
     duration_minutes: input.durationMinutes !== undefined ? task.durationMinutes : row.duration_minutes,
     at: timeTouched ? (task.dueHasTime && task.dueAt ? clockLabel(task.dueAt) : null) : row.at,
     remind_minutes: row.remind_minutes as number | null,
