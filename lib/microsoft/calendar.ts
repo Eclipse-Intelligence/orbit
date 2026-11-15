@@ -89,6 +89,7 @@ export type GraphEvent = {
   showAs?: string | null;
   responseStatus?: { response?: string | null } | null;
   seriesMasterId?: string | null;
+  originalStart?: string | null;
 };
 
 type GraphCalendar = {
@@ -615,7 +616,7 @@ export async function listSeriesInstances(accessToken: string, masterId: string,
   const url = new URL(`${eventUrl(masterId)}/instances`);
   url.searchParams.set("startDateTime", start.toISOString());
   url.searchParams.set("endDateTime", end.toISOString());
-  url.searchParams.set("$select", "id,start,end");
+  url.searchParams.set("$select", "id,start,end,originalStart");
   const response = await fetchImpl(url.toString(), {
     headers: { authorization: `Bearer ${accessToken}`, prefer: PLAIN_PREFER },
     signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),

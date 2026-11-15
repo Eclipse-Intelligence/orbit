@@ -178,7 +178,7 @@ export function planSeriesOutlook(row: SeriesOutlookRow, now: number, timeZone =
     row.at && startDay
       ? { startDay, at: row.at, durationMinutes: row.duration_minutes, title: row.title, link, recurrence: seriesRecurrence(pattern, startDay, lastDay, timeZone) }
       : null;
-  const hasInstance = (occursOn: string) => Boolean(master && startDay && occursOn >= startDay && (!lastDay || occursOn <= lastDay));
+  const hasInstance = (occursOn: string) => Boolean(master && startDay && occursOn >= startDay && occurrenceOnOrAfter(pattern, occursOn) === occursOn);
   const dates: Record<string, DateWant | null> = {};
   for (const change of changesOf(row)) {
     if ((occurs && change.occursOn <= occurs) || (lastDay && change.occursOn > lastDay)) continue;
@@ -193,7 +193,9 @@ export function planSeriesOutlook(row: SeriesOutlookRow, now: number, timeZone =
     dates[change.occursOn] = { start, end: new Date(Date.parse(start) + minutes * MINUTE_MS).toISOString(), title: occurrence.title ?? row.title };
   }
   for (const occursOn of Object.keys(row.dates ?? {})) {
-    if (!(occursOn in dates)) dates[occursOn] = hasInstance(occursOn) ? defaultWant(row, occursOn, timeZone) : null;
+    if (occursOn in dates) continue;
+    if (hasInstance(occursOn)) dates[occursOn] = defaultWant(row, occursOn, timeZone);
+    else dates[occursOn] = master && startDay && occursOn >= startDay ? { skip: true } : null;
   }
   const timedDates = Object.values(dates).some((want) => want !== null && !want.skip);
   if (!master && !timedDates && !holds(row)) return { kind: "remove" };
@@ -375,7 +377,8 @@ async function findInstance(outlook: Outlook, masterId: string, occursOn: string
   const end = new Date(dayStartIso(shiftDay(occursOn, 1), context.timeZone));
   const found = await graphRead(context, outlook, () => listSeriesInstances(outlook.token.accessToken, masterId, start, end, context.fetchImpl));
   const match = found.find((event) => {
-    const at = graphInstant(event.start);
+    const original = event.originalStart ? Date.parse(event.originalStart) : NaN;
+    const at = Number.isNaN(original) ? graphInstant(event.start) : new Date(original).toISOString();
     return at !== null && dayKeyAt(new Date(at), context.timeZone) === occursOn;
   });
   return match?.id ?? null;
@@ -589,16 +592,6 @@ async function holderAccess(userId: string, workspaceId: string, context: Contex
   }
 }
 
-async function access(userId: string, workspaceId: string, context: Context): Promise<Access> {
-  try {
-    const actor = await actingActor(userId, workspaceId, true);
-    return actor ? await openOutlook(actor, context.fetchImpl) : "orbit_only";
-  } catch (error) {
-    console.error("Opening Outlook for repeating tasks failed", error);
-    return "retry";
-  }
-}
-
 async function runRow(row: SeriesOutlookRow, context: Context, now: number, throttled: Set<string>, run: SeriesRun) {
   const plan = planSeriesOutlook(row, now, context.timeZone);
   const holder = row.user_id ?? (row.create_key ? row.create_user_id : null);
@@ -633,7 +626,13 @@ async function runRow(row: SeriesOutlookRow, context: Context, now: number, thro
     run.throttled += 1;
     return;
   }
-  const outlook = await access(plan.userId, row.workspace_id, context);
+  const outlook = await holderAccess(plan.userId, row.workspace_id, context);
+  if (outlook === "gone") {
+    if (holds(row)) await save(row, { userId: null, masterId: null, written: null, dates: {} }, true);
+    await settle(row);
+    run.orbitOnly += 1;
+    return;
+  }
   if (outlook === "retry" || (outlook === "orbit_only" && holds(row))) {
     await defer(row);
     run.deferred += 1;

@@ -5,7 +5,7 @@ import { storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { seriesRecurrence, syncSeriesOutlook } from "@/lib/crm/series-outlook";
-import { createRepeatingTask, deleteSeries, endSeriesOn, setTaskRepeat, skipOccurrence, updateOccurrence } from "@/lib/crm/task-series";
+import { createRepeatingTask, deleteSeries, endSeriesOn, rollDueSeries, setTaskRepeat, skipOccurrence, updateOccurrence } from "@/lib/crm/task-series";
 import { syncTaskBlocks } from "@/lib/crm/task-outlook";
 import { completeTask } from "@/lib/crm/tasks";
 import type { Task, UserActor } from "@/lib/crm/types";
@@ -15,6 +15,8 @@ import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import type { GraphEvent } from "@/lib/microsoft/calendar";
+import { scopesForRole } from "@/lib/crm/scopes";
+import { upcomingAfter, upcomingBetween, type OccurrenceChange, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
 import { readFileSync } from "node:fs";
 import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { createUser, resetDatabase } from "./helpers";
@@ -27,8 +29,8 @@ type Recurrence = {
   pattern: { type: string; interval: number; daysOfWeek?: string[] };
   range: { type: string; startDate: string; endDate?: string };
 };
-type Master = { subject: string; at: string; minutes: number; recurrence: Recurrence; transactionId: string; key: string | null; body: string };
-type Plain = { subject: string; start: string; end: string; transactionId: string; key: string | null };
+type Master = { subject: string; at: string; minutes: number; recurrence: Recurrence; transactionId: string; key: string | null; body: string; owner?: string };
+type Plain = { subject: string; start: string; end: string; transactionId: string; key: string | null; owner?: string };
 type Instance = { start: string; end: string; subject: string };
 
 function json(body: unknown, status = 200) {
@@ -85,6 +87,10 @@ class FakeGraph {
   refuseInstancePatch = false;
   keepExceptions = false;
   throttleDeletes = false;
+  strict = false;
+  faultRate = 0;
+  faults = { throttled: 0, unavailable: 0, network: 0 };
+  random: () => number = Math.random;
   created = 0;
   everCreated = new Map<string, string>();
 
@@ -97,12 +103,12 @@ class FakeGraph {
         const day = instance.split("::")[1];
         const start = fromGraph({ dateTime: `${day}T${master.at}:00`, timeZone: "GMT Standard Time" });
         const own = this.overrides.get(instance);
-        return { id: instance, start: own?.start ?? start, end: own?.end ?? new Date(Date.parse(start) + master.minutes * 60_000).toISOString(), subject: own?.subject ?? master.subject, seriesMasterId: id };
+        return { id: instance, start: own?.start ?? start, end: own?.end ?? new Date(Date.parse(start) + master.minutes * 60_000).toISOString(), subject: own?.subject ?? master.subject, seriesMasterId: id, originalStart: start };
       });
   }
 
   everything() {
-    const items: { id: string; start: string; end: string; subject: string; seriesMasterId?: string }[] = [];
+    const items: { id: string; start: string; end: string; subject: string; seriesMasterId?: string; originalStart?: string }[] = [];
     for (const id of this.masters.keys()) items.push(...this.instancesOf(id));
     for (const [id, plain] of this.plains) items.push({ id, start: plain.start, end: plain.end, subject: plain.subject });
     return items;
@@ -112,21 +118,43 @@ class FakeGraph {
     return this.everything().filter((item) => dayKeyAt(new Date(item.start)) === day);
   }
 
-  graph(item: { id: string; start: string; end: string; subject: string; seriesMasterId?: string }): GraphEvent {
-    return { id: item.id, subject: item.subject, start: utc(item.start), end: utc(item.end), isAllDay: false, isCancelled: false, showAs: "busy", attendees: [], ...(item.seriesMasterId ? { seriesMasterId: item.seriesMasterId } : {}) };
+  graph(item: { id: string; start: string; end: string; subject: string; seriesMasterId?: string; originalStart?: string }): GraphEvent {
+    return { id: item.id, subject: item.subject, start: utc(item.start), end: utc(item.end), isAllDay: false, isCancelled: false, showAs: "busy", attendees: [], ...(item.seriesMasterId ? { seriesMasterId: item.seriesMasterId } : {}), ...(item.originalStart ? { originalStart: item.originalStart } : {}) };
   }
 
   fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
-    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+    let body: Record<string, unknown> | null = null;
+    if (typeof init?.body === "string") {
+      try {
+        body = JSON.parse(init.body) as Record<string, unknown>;
+      } catch {
+        body = null;
+      }
+    }
     this.calls.push({ method, url, body });
     const parsed = new URL(url);
     if (parsed.hostname === "login.microsoftonline.com") return json({ access_token: "fresh", refresh_token: "refresh", expires_in: 3600, scope: WRITE_SCOPES });
+    const auth = String((init?.headers as Record<string, string> | undefined)?.authorization ?? "");
+    const mine = (item: { owner?: string } | undefined) => Boolean(item) && (!this.strict || item!.owner === auth);
+    if (this.faultRate > 0 && this.random() < this.faultRate) {
+      const pick = this.random();
+      if (pick < 0.34) {
+        this.faults.throttled += 1;
+        return new Response(JSON.stringify({ error: { code: "TooManyRequests", message: "Slow down" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "1" } });
+      }
+      if (pick < 0.67) {
+        this.faults.unavailable += 1;
+        return json({ error: { code: "ServiceUnavailable", message: "Busy" } }, 503);
+      }
+      this.faults.network += 1;
+      throw new TypeError("fetch failed");
+    }
     const property = (value: Record<string, unknown> | null) =>
       ((value?.singleValueExtendedProperties as { value: string }[] | undefined) ?? [])[0]?.value ?? null;
     if (method === "POST" && parsed.pathname === "/v1.0/me/events") {
-      const same = this.everCreated.get(String(body!.transactionId));
+      const same = this.everCreated.get(`${this.strict ? auth : ""}|${String(body!.transactionId)}`);
       if (same) return json({ id: same }, 201);
       this.created += 1;
       if (body!.recurrence) {
@@ -134,25 +162,25 @@ class FakeGraph {
         const start = body!.start as { dateTime: string };
         const end = fromGraph(body!.end);
         const minutes = (Date.parse(end) - Date.parse(fromGraph(body!.start))) / 60_000;
-        this.masters.set(id, { subject: String(body!.subject), at: start.dateTime.slice(11, 16), minutes, recurrence: body!.recurrence as Recurrence, transactionId: String(body!.transactionId), key: property(body), body: String((body!.body as { content: string }).content) });
-        this.everCreated.set(String(body!.transactionId), id);
+        this.masters.set(id, { subject: String(body!.subject), at: start.dateTime.slice(11, 16), minutes, recurrence: body!.recurrence as Recurrence, transactionId: String(body!.transactionId), key: property(body), body: String((body!.body as { content: string }).content), owner: auth });
+        this.everCreated.set(`${this.strict ? auth : ""}|${String(body!.transactionId)}`, id);
         return json({ id }, 201);
       }
       const id = `single-${this.created}`;
-      this.plains.set(id, { subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end), transactionId: String(body!.transactionId), key: property(body) });
-      this.everCreated.set(String(body!.transactionId), id);
+      this.plains.set(id, { subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end), transactionId: String(body!.transactionId), key: property(body), owner: auth });
+      this.everCreated.set(`${this.strict ? auth : ""}|${String(body!.transactionId)}`, id);
       return json({ id }, 201);
     }
     if (method === "GET" && parsed.pathname === "/v1.0/me/events") {
       const filter = parsed.searchParams.get("$filter") ?? "";
       const value = /ep\/value eq '([^']+)'/.exec(filter)?.[1];
-      const found = [...this.masters, ...this.plains].filter(([, item]) => item.key === value).map(([id]) => ({ id }));
+      const found = [...this.masters, ...this.plains].filter(([, item]) => item.key === value && mine(item)).map(([id]) => ({ id }));
       return json({ value: found });
     }
     const instances = /^\/v1\.0\/me\/events\/([^/]+)\/instances$/.exec(parsed.pathname);
     if (instances && method === "GET") {
       const id = decodeURIComponent(instances[1]);
-      if (!this.masters.has(id)) return json({ error: { code: "ErrorItemNotFound" } }, 404);
+      if (!mine(this.masters.get(id))) return json({ error: { code: "ErrorItemNotFound" } }, 404);
       const from = Date.parse(parsed.searchParams.get("startDateTime")!);
       const to = Date.parse(parsed.searchParams.get("endDateTime")!);
       return json({ value: this.instancesOf(id).filter((item) => Date.parse(item.start) < to && Date.parse(item.end) > from).map((item) => this.graph(item)) });
@@ -160,6 +188,8 @@ class FakeGraph {
     const one = /^\/v1\.0\/me\/events\/([^/]+)$/.exec(parsed.pathname);
     if (one) {
       const id = decodeURIComponent(one[1]);
+      const owned = mine(this.masters.get(id.split("::")[0])) || mine(this.plains.get(id));
+      if (!owned && (method === "DELETE" || method === "PATCH")) return json({ error: { code: "ErrorItemNotFound" } }, 404);
       if (method === "DELETE") {
         if (this.throttleDeletes) return new Response(JSON.stringify({ error: { code: "TooManyRequests", message: "Slow down" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "1" } });
         if (this.masters.delete(id)) return json(null, 204);
@@ -223,8 +253,8 @@ function london(day: string, time: string) {
   return fromGraph({ dateTime: `${day}T${time}:00`, timeZone: "GMT Standard Time" });
 }
 
-async function connect(actor: UserActor) {
-  await saveMailbox(actor, { email: `${actor.email}`, refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + HOUR).toISOString() });
+async function connect(actor: UserActor, token = "access") {
+  await saveMailbox(actor, { email: `${actor.email}`, refreshToken: "refresh", accessToken: token, expiresAt: new Date(Date.now() + HOUR).toISOString() });
   const connection = await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [actor.userId]);
   const id = connection.rows[0].id;
   await withActor(actor, (db) => storeGrantedScopes(db, actor, id, WRITE_SCOPES));
@@ -630,3 +660,248 @@ describe("repeating tasks in Outlook", () => {
   });
 });
 
+function seeded(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const SEQUENCES = Number(process.env.SERIES_SEQUENCES ?? 300);
+const FIRST_SEED = Number(process.env.SERIES_SEED ?? 9100);
+const HORIZON_DAYS = 70;
+
+type SeriesTimingRow = {
+  id: string;
+  owner_id: string;
+  title: string;
+  starts_on: string;
+  at: string | null;
+  duration_minutes: number;
+  rule: RepeatRule;
+  ends: RepeatEnds;
+  current_occurs_on: string | null;
+  current_due_at: Date | null;
+  changes: (OccurrenceChange & { dueAt: string | null })[];
+};
+
+function dayStartFor(day: string) {
+  return Date.parse(fromGraph({ dateTime: `${day}T00:00:00`, timeZone: "GMT Standard Time" }));
+}
+
+async function expectedEvents(owners: string[]) {
+  const rows = await admin().query<SeriesTimingRow>(
+    `select s.id, s.owner_id, s.title, s.starts_on::text as starts_on, to_char(s.at, 'HH24:MI') as at, s.duration_minutes, s.rule, s.ends,
+       t.occurs_on::text as current_occurs_on, t.due_at as current_due_at,
+       coalesce((select jsonb_agg(jsonb_build_object('occursOn', c.occurs_on::text, 'skip', c.skip, 'dueAt', c.due_at, 'dueHasTime', c.due_has_time,
+         'durationMinutes', c.duration_minutes, 'title', c.title) order by c.occurs_on)
+         from crm.task_occurrence_changes c where c.series_id = s.id and (t.occurs_on is null or c.occurs_on > t.occurs_on)), '[]'::jsonb) as changes
+     from crm.task_series s
+     left join crm.tasks t on t.id = s.current_task_id
+     where s.owner_id = any($1::uuid[]) and s.ended_at is null and s.archived_at is null
+       and exists (select 1 from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id)`,
+    [owners],
+  );
+  const expected = new Map<string, string[]>(owners.map((person) => [person, []]));
+  const horizon = shiftDay(today, HORIZON_DAYS);
+  for (const row of rows.rows) {
+    const dueAt = row.current_due_at ? new Date(row.current_due_at).toISOString() : null;
+    const timing = {
+      startsOn: row.starts_on,
+      at: row.at,
+      rule: row.rule,
+      ends: row.ends,
+      durationMinutes: row.duration_minutes,
+      after: upcomingAfter(row.current_occurs_on, dueAt),
+      afterOccurs: row.current_occurs_on,
+      changes: row.changes.map((change) => ({ ...change, dueAt: change.dueAt ? new Date(change.dueAt).toISOString() : null })),
+    };
+    for (const occurrence of upcomingBetween(timing, today, horizon, today)) {
+      if (!occurrence.dueHasTime) continue;
+      const end = new Date(Date.parse(occurrence.dueAt) + occurrence.durationMinutes * 60_000).toISOString();
+      expected.get(row.owner_id)!.push(`${occurrence.dueAt}|${end}|${occurrence.title ?? row.title}`);
+    }
+  }
+  return expected;
+}
+
+function actualEvents(fake: FakeGraph, tokens: Map<string, string>) {
+  const horizonEnd = dayStartFor(shiftDay(today, HORIZON_DAYS + 1));
+  const todayStart = dayStartFor(today);
+  const actual = new Map<string, string[]>([...tokens.keys()].map((person) => [person, []]));
+  const ownerOf = new Map([...tokens].map(([person, token]) => [`Bearer ${token}`, person]));
+  const push = (auth: string | undefined, start: string, end: string, subject: string) => {
+    const person = ownerOf.get(auth ?? "");
+    if (!person || Date.parse(start) >= horizonEnd || Date.parse(start) < todayStart) return;
+    actual.get(person)!.push(`${start}|${end}|${subject}`);
+  };
+  for (const [id, master] of fake.masters) for (const item of fake.instancesOf(id)) push(master.owner, item.start, item.end, item.subject);
+  for (const plain of fake.plains.values()) if (plain.key?.startsWith("series:")) push(plain.owner, plain.start, plain.end, plain.subject);
+  return actual;
+}
+
+async function dueDayOf(taskId: string) {
+  const row = await admin().query<{ due_at: Date | null }>("select due_at from crm.tasks where id = $1", [taskId]);
+  const due = row.rows[0]?.due_at;
+  return due ? dayKeyAt(new Date(due)) : today;
+}
+
+describe("repeating tasks in Outlook, random sequences", () => {
+  it(`keeps each owner's Outlook exactly in step with their series across ${SEQUENCES} random sequences`, { timeout: 3_600_000 }, async () => {
+    const owner = await createUser("random-owner@series-outlook.test", "Ola Owner");
+    const teammate: UserActor = { ...(await createUser("random-mate@series-outlook.test", "Tom Mate")), workspaceId: owner.workspaceId, workspaceName: owner.workspaceName, role: "member", scopes: scopesForRole("member") };
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, teammate.userId]);
+    const people = [owner, teammate];
+    const tokens = new Map(people.map((person) => [person.userId, `access-${person.userId}`]));
+    const totals = { throttled: 0, unavailable: 0, network: 0, budgetCuts: 0, timeStops: 0, operations: 0, refused: 0, workerRuns: 0, keptExceptions: 0 };
+    for (let sequence = 0; sequence < SEQUENCES; sequence += 1) {
+      const seed = FIRST_SEED + sequence;
+      const random = seeded(seed);
+      const pick = <T,>(items: T[]) => items[Math.floor(random() * items.length)];
+      const fake = new FakeGraph();
+      fake.strict = true;
+      fake.random = random;
+      fake.keepExceptions = random() < 0.5;
+      if (fake.keepExceptions) totals.keptExceptions += 1;
+      await admin().query("update crm.task_series set archived_at = now() where archived_at is null");
+      await admin().query("update crm.tasks set archived_at = now() where archived_at is null");
+      await admin().query("delete from crm.task_series_outlook");
+      await admin().query("delete from crm.calendars where user_id = any($1::uuid[])", [[...tokens.keys()]]);
+      await admin().query("delete from crm.mailbox_connections where user_id = any($1::uuid[])", [[...tokens.keys()]]);
+      for (const person of people) await connect(person, tokens.get(person.userId)!);
+      const log: string[] = [];
+      const series: { id: string; creator: UserActor }[] = [];
+      const undo: { actor: UserActor; taskId: string; events: string[] }[] = [];
+      const stateOf = async (id: string) =>
+        (await admin().query<{ current_task_id: string | null; owner_id: string | null }>("select current_task_id, owner_id from crm.task_series where id = $1", [id])).rows[0];
+      const laterDate = () => shiftDay(today, 1 + Math.floor(random() * 30));
+      const hour = () => `${String(8 + Math.floor(random() * 9)).padStart(2, "0")}:${random() < 0.5 ? "00" : "30"}`;
+      const runWorker = async () => {
+        totals.workerRuns += 1;
+        fake.faultRate = random() < 0.7 ? 0.05 + random() * 0.35 : 0;
+        const limit = random() < 0.4 ? 1 + Math.floor(random() * 4) : 50;
+        if (limit < 50) totals.budgetCuts += 1;
+        const short = random() < 0.15;
+        if (short) totals.timeStops += 1;
+        await syncSeriesOutlook({ fetchImpl: fake.fetch, limit, deadline: Date.now() + (short ? 4_000 + Math.floor(random() * 15) : 20_000) });
+        fake.faultRate = 0;
+      };
+      const steps = 5 + Math.floor(random() * 11);
+      for (let step = 0; step < steps; step += 1) {
+        totals.operations += 1;
+        const live = series.length > 0 ? pick(series) : null;
+        const choice = !live ? "create" : pick(["create", "move", "move", "skip", "skip", "undo", "all", "following", "stop", "end", "delete", "done", "roll", "owner", "unlink", "worker", "worker"]);
+        let note: string = choice;
+        try {
+          if (choice === "create") {
+            if (series.length >= 3) note = "create (enough)";
+            else {
+              const actor = pick(people);
+              const timed = random() < 0.75;
+              const start = shiftDay(today, Math.floor(random() * 5));
+              const interval = random() < 0.3 ? { interval: 2 } : {};
+              const repeat = random() < 0.5 ? { every: "day", ...interval } : { every: "week", days: [...new Set([pick(["mo", "tu", "we", "th", "fr"]), pick(["sa", "su", "we"])])], ...interval };
+              const ends = random() < 0.25 ? { ends: { after: 3 + Math.floor(random() * 6) } } : random() < 0.2 ? { ends: { on: shiftDay(today, 10 + Math.floor(random() * 20)) } } : {};
+              const at = hour();
+              const made = (await createRepeatingTask(actor, { title: `S${series.length} ${seed}`, ...(timed ? { dueAt: london(start, at) } : { dueDate: start }) }, { ...repeat, ...ends })).body.task;
+              series.push({ id: made.seriesId!, creator: actor });
+              note = `create ${actor === owner ? "owner" : "mate"} ${timed ? at : "date only"} ${JSON.stringify({ ...repeat, ...ends })} from ${start}`;
+            }
+          } else if (live) {
+            const state = await stateOf(live.id);
+            const actor = people.find((person) => person.userId === state?.owner_id) ?? live.creator;
+            const current = state?.current_task_id ?? null;
+            note = `${choice} on ${series.indexOf(live)}`;
+            if (choice === "move") {
+              const date = laterDate();
+              const target = random() < 0.4 ? shiftDay(date, random() < 0.5 ? 1 : 2) : date;
+              const at = hour();
+              note += ` ${date} to ${target} ${at}`;
+              const result = await updateOccurrence(actor, { seriesId: live.id, occursOn: date }, { dueAt: london(target, at) }, "this");
+              undo.push({ actor, taskId: result.body.task.id, events: result.body.undo });
+            } else if (choice === "skip") {
+              const date = laterDate();
+              note += ` ${date}`;
+              const result = await skipOccurrence(actor, { seriesId: live.id, occursOn: date });
+              undo.push({ actor, taskId: result.body.task.id, events: result.body.undo });
+            } else if (choice === "undo") {
+              const last = undo.pop();
+              if (last) await undoTaskEvents(last.actor, last.taskId, last.events, { operation: "undo_change", source: "web" });
+              else note += " (nothing)";
+            } else if (choice === "all" && current) {
+              const kind = pick(["time", "title", "pattern"]);
+              note += ` ${kind}`;
+              if (kind === "time") await updateOccurrence(actor, { taskId: current }, { dueAt: london(await dueDayOf(current), hour()) }, "all");
+              else if (kind === "title") await updateOccurrence(actor, { taskId: current }, { title: `R${step} ${seed}` }, "all");
+              else await setTaskRepeat(actor, current, random() < 0.5 ? { every: "day" } : { every: "week", days: [pick(["mo", "we", "fr"])] });
+            } else if (choice === "following") {
+              const date = laterDate();
+              note += ` ${date}`;
+              await updateOccurrence(actor, { seriesId: live.id, occursOn: date }, { dueAt: london(date, hour()) }, "following");
+              const split = (await admin().query<{ id: string }>("select id from crm.task_series where split_from_id = $1 and archived_at is null order by created_at desc limit 1", [live.id])).rows[0];
+              if (split && !series.some((item) => item.id === split.id)) series.push({ id: split.id, creator: actor });
+            } else if (choice === "stop" && current) await setTaskRepeat(actor, current, null);
+            else if (choice === "end" && current) {
+              const date = laterDate();
+              note += ` ${date}`;
+              await endSeriesOn(actor, current, date);
+            } else if (choice === "delete" && current) {
+              const result = await deleteSeries(actor, current);
+              undo.push({ actor, taskId: result.body.task.id, events: result.body.undo });
+            } else if (choice === "done" && current) await completeTask(actor, current);
+            else if (choice === "roll") {
+              const days = 1 + Math.floor(random() * 3);
+              note += ` +${days}d`;
+              await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.now() + days * 86_400_000 });
+            } else if (choice === "owner") {
+              const next = people.find((person) => person.userId !== state?.owner_id)!;
+              note += ` to ${next === owner ? "owner" : "mate"}`;
+              await admin().query("update crm.task_series set owner_id = $2 where id = $1", [live.id, next.userId]);
+            } else if (choice === "unlink") {
+              const person = pick(people);
+              note += ` ${person === owner ? "owner" : "mate"}`;
+              await admin().query("delete from crm.calendars where user_id = $1", [person.userId]);
+              await admin().query("delete from crm.mailbox_connections where user_id = $1", [person.userId]);
+            } else if (choice === "worker") await runWorker();
+            else note += " (nothing)";
+          }
+        } catch (error) {
+          totals.refused += 1;
+          note += ` refused: ${(error as Error).message.slice(0, 70)}`;
+        }
+        log.push(note);
+        if (random() < 0.6) await runWorker();
+      }
+      for (let round = 0; round < 40; round += 1) {
+        await admin().query("update crm.task_series_outlook set retry_at = null, claimed_at = null, create_sent_at = create_sent_at - interval '10 minutes'");
+        await syncSeriesOutlook({ fetchImpl: fake.fetch, limit: 500, deadline: Date.now() + 60_000 });
+        const left = await admin().query("select 1 from crm.task_series_outlook where version > settled_version");
+        if (left.rows.length === 0) break;
+      }
+      const pending = await admin().query("select series_id from crm.task_series_outlook where version > settled_version");
+      const linked = (await admin().query<{ user_id: string }>("select user_id from crm.mailbox_connections where user_id = any($1::uuid[])", [[...tokens.keys()]])).rows.map((row) => row.user_id);
+      const expected = await expectedEvents(linked);
+      const actual = actualEvents(fake, tokens);
+      const failure: string[] = [];
+      if (pending.rows.length > 0) failure.push(`${pending.rows.length} series never settled`);
+      for (const person of linked) {
+        const want = [...(expected.get(person) ?? [])].sort();
+        const have = [...(actual.get(person) ?? [])].sort();
+        if (JSON.stringify(want) !== JSON.stringify(have)) {
+          const missing = want.filter((item) => !have.includes(item));
+          const extra = have.filter((item) => !want.includes(item));
+          failure.push(`${person === owner.userId ? "owner" : "mate"}: missing ${JSON.stringify(missing.slice(0, 4))} extra ${JSON.stringify(extra.slice(0, 4))} (${missing.length}/${extra.length})`);
+        }
+      }
+      totals.throttled += fake.faults.throttled;
+      totals.unavailable += fake.faults.unavailable;
+      totals.network += fake.faults.network;
+      assert.deepEqual(failure, [], `seed ${seed} (keep exceptions ${fake.keepExceptions}):\n${log.join("\n")}`);
+    }
+    console.log(`series sequences ${SEQUENCES}`, JSON.stringify(totals));
+  });
+});
