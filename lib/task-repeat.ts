@@ -617,3 +617,26 @@ export function repeatInputOf(rule: RepeatRule, ends: RepeatEnds): RepeatInput {
   return input;
 }
 
+
+export type SeriesTiming = RepeatPattern & {
+  durationMinutes: number;
+  after: string | null;
+  changes: OccurrenceChange[];
+};
+
+export type UpcomingOccurrence = Occurrence & { durationMinutes: number };
+
+export function upcomingAfter(occursOn: string | null, dueAt: string | null, timeZone = appTimeZone()) {
+  const due = dueAt && !Number.isNaN(Date.parse(dueAt)) ? dayKeyAt(new Date(dueAt), timeZone) : null;
+  if (!occursOn) return due;
+  return due && due > occursOn ? due : occursOn;
+}
+
+export function upcomingBetween(series: SeriesTiming, from: string, to: string, today: string, timeZone = appTimeZone()): UpcomingOccurrence[] {
+  const start = from > today ? from : today;
+  if (start > to) return [];
+  const pattern: RepeatPattern = { startsOn: series.startsOn, at: series.at, rule: series.rule, ends: series.ends };
+  return occurrencesBetween(pattern, series.changes, start, to, { after: series.after ?? undefined, timeZone })
+    .filter((occurrence) => !series.after || occurrence.occursOn > series.after)
+    .map((occurrence) => ({ ...occurrence, durationMinutes: occurrence.durationMinutes ?? series.durationMinutes }));
+}

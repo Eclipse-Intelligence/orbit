@@ -27,13 +27,13 @@ import {
   packColumns,
   wallMinutes,
 } from "@/lib/calendar-view";
-import { GridTaskBlock, type TaskBlockDrag, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import { GridTaskBlock, UpcomingChip, type TaskBlockDrag, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import type { TaskDrag } from "@/hooks/use-task-drag";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
 import { durationLabel } from "@/lib/crm/task-time";
 import { runLabel, type PreviewRun } from "@/lib/plan-preview";
-import type { TaskBlock } from "@/lib/task-blocks";
+import { upcomingDayBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { slotDayLabel, slotRange, type GridSlot } from "@/lib/task-drag";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -245,6 +245,7 @@ export default function CalendarGrid({
   proposals = [],
   proposalDrag,
   runs = [],
+  chips = [],
 }: {
   days: string[];
   today: string;
@@ -259,6 +260,7 @@ export default function CalendarGrid({
   proposals?: TaskBlock[];
   proposalDrag?: TaskBlockDrag;
   runs?: PreviewRun[];
+  chips?: TaskBlock[];
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
@@ -339,10 +341,11 @@ export default function CalendarGrid({
         {days.map((key) => {
           const heading = dayHeading(key);
           const isToday = key === today;
+          const dayChips = taskHandlers ? upcomingDayBlocks(chips, key) : [];
           return (
             <div
               key={key}
-              className="border-border flex items-center gap-1.5 border-l px-2 py-2.5"
+              className="border-border flex min-w-0 flex-wrap items-center gap-1.5 border-l px-2 py-2.5"
             >
               <span className="caption-style text-subtle">
                 {heading.weekday}
@@ -357,6 +360,13 @@ export default function CalendarGrid({
               >
                 {heading.day}
               </span>
+              {dayChips.length > 0 && (
+                <span className="flex w-full min-w-0 flex-col gap-1">
+                  {dayChips.map((block) => (
+                    <UpcomingChip key={block.id} block={block} onOpen={taskHandlers!.onOpen} />
+                  ))}
+                </span>
+              )}
             </div>
           );
         })}

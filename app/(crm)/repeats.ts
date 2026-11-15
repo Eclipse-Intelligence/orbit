@@ -13,12 +13,15 @@ import {
   readRepeatHistory,
   REPEAT_SAVE_FAILED,
   setTaskRepeat,
+  REPEAT_SCOPES,
   skipOccurrence,
   type RepeatHistoryItem,
+  type RepeatScope,
   type RepeatInput,
 } from "@/lib/crm/task-series";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import type { Task, UserActor } from "@/lib/crm/types";
+import type { Task, TaskWrite, UserActor } from "@/lib/crm/types";
+import { moveUpcoming } from "@/lib/crm/upcoming";
 import { undoTaskEvents } from "@/lib/crm/undo";
 import { isPgError } from "@/lib/crm/errors";
 import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
@@ -72,6 +75,42 @@ export async function setRepeatAction(id: string, repeat: RepeatInput | null): P
 export async function skipOccurrenceAction(id: string, occursOn?: string | null): Promise<RepeatActionResult> {
   return run(id, async (user) =>
     (await skipOccurrence(user, { taskId: id }, { provenance: { operation: "skip_occurrence", source: "web" }, ...(typeof occursOn === "string" ? { expect: occursOn } : {}) })).body,
+  );
+}
+
+export type UpcomingTarget = { currentTaskId: string; seriesId: string; occursOn: string };
+
+function readTarget(target: UpcomingTarget) {
+  if (!target || typeof target !== "object" || !isUuid(target.currentTaskId) || !isUuid(target.seriesId) || typeof target.occursOn !== "string") return null;
+  return { currentTaskId: target.currentTaskId, seriesId: target.seriesId, occursOn: target.occursOn };
+}
+
+export async function skipUpcomingAction(target: UpcomingTarget): Promise<RepeatActionResult> {
+  const read = readTarget(target);
+  if (!read) return { error: REPEAT_SAVE_FAILED };
+  return run(read.currentTaskId, async (user) =>
+    (await skipOccurrence(user, { seriesId: read.seriesId, occursOn: read.occursOn }, { provenance: { operation: "skip_occurrence", source: "web" } })).body,
+  );
+}
+
+export async function moveUpcomingAction(
+  target: UpcomingTarget,
+  move: { dueAt?: string; durationMinutes?: number },
+  scope: RepeatScope,
+  replaces: string[] = [],
+): Promise<RepeatActionResult> {
+  const read = readTarget(target);
+  if (!read || !REPEAT_SCOPES.includes(scope) || !move || typeof move !== "object") return { error: REPEAT_SAVE_FAILED };
+  const write: TaskWrite = {};
+  if (typeof move.dueAt === "string") {
+    write.dueAt = move.dueAt;
+    write.dueHasTime = true;
+  }
+  if (typeof move.durationMinutes === "number") write.durationMinutes = move.durationMinutes;
+  if (Object.keys(write).length === 0) return { error: REPEAT_SAVE_FAILED };
+  const undone = (Array.isArray(replaces) ? replaces : []).filter((event) => typeof event === "string" && isUuid(event));
+  return run(read.currentTaskId, (user) =>
+    moveUpcoming(user, { seriesId: read.seriesId, occursOn: read.occursOn }, write, scope, undone, { operation: "drag_task", source: "web" }),
   );
 }
 

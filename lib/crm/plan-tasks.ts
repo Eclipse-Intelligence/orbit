@@ -115,6 +115,7 @@ export type PlanProposal = {
 export type PackInput = {
   tasks: PlanTask[];
   meetings: PlanMeeting[];
+  upcoming?: { startsAt: string; endsAt: string }[];
   viewerId: string;
   now: number;
   hours?: WorkingHours;
@@ -284,6 +285,12 @@ export function packPlan(input: PackInput): PlanProposal {
     const end = new Date(meeting.endsAt).getTime();
     if (Number.isNaN(start) || Number.isNaN(end) || end <= start) continue;
     busy.push({ start, end: end + MEETING_GAP_MINUTES * MINUTE });
+  }
+  for (const occurrence of input.upcoming ?? []) {
+    const start = Date.parse(occurrence.startsAt);
+    const end = Date.parse(occurrence.endsAt);
+    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) continue;
+    busy.push({ start, end });
   }
 
   const dated: Item[] = [];

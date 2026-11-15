@@ -1,6 +1,7 @@
 import { dateKey, shiftDateKey, weekday } from "@/lib/calendar-view";
 import { clockMinutes, WEEKDAYS, type WeeklyHours } from "@/lib/booking/rules";
-import { startOfDay, zonedParts, zonedTimeToDate } from "@/lib/time";
+import { upcomingBetween, type SeriesTiming } from "@/lib/task-repeat";
+import { appTimeZone, startOfDay, zonedParts, zonedTimeToDate } from "@/lib/time";
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
@@ -23,6 +24,23 @@ type SlotQuery = {
   now: number;
   busy: BusyInterval[];
 };
+
+export function seriesBusy(series: SeriesTiming[], from: number, to: number, now: number, timeZone = appTimeZone()): BusyInterval[] {
+  if (!(to > from)) return [];
+  const first = dateKey(from - DAY, timeZone);
+  const last = dateKey(to, timeZone);
+  const today = dateKey(now, timeZone);
+  const busy: BusyInterval[] = [];
+  for (const item of series) {
+    for (const occurrence of upcomingBetween(item, first, last, today, timeZone)) {
+      if (!occurrence.dueHasTime) continue;
+      const start = Date.parse(occurrence.dueAt);
+      const end = start + occurrence.durationMinutes * MINUTE;
+      if (end > from && start < to) busy.push({ start, end });
+    }
+  }
+  return busy;
+}
 
 function slotStep(durationMinutes: number) {
   return durationMinutes <= 30 ? durationMinutes : 30;

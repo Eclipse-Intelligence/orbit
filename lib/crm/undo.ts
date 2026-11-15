@@ -730,7 +730,7 @@ async function describeAction(db: Db, actor: Actor, eventId: string, provenance:
   return { event: series[0].event, ids, described: { entityName: one.described.entityName, summary: live.map((part) => part.summary).join("; "), plan: { ok: true, restores: live.map((part) => (part.plan.ok ? part.plan.restores : "")).join(" "), run } } };
 }
 
-async function undoTaskEventsInDb(db: Db, actor: Actor, taskId: string, eventIds: string[], provenance: Provenance) {
+export async function undoTaskEventsInDb(db: Db, actor: Actor, taskId: string, eventIds: string[], provenance: Provenance) {
   const ids = [...new Set(eventIds.filter(isUuid))].slice(0, 10);
   const found = await db.query<AuditRow>(`${AUDIT_SQL} where e.id = any($1::uuid[]) and e.workspace_id = $2 and e.entity_type = 'task' and e.entity_id = $3`, [ids, actor.workspaceId, taskId]);
   if (found.rows.length === 0 || found.rows.length !== ids.length) throw new CrmError("cannot_undo", "Couldn't undo. Try again.", 409);

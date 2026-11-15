@@ -25,8 +25,12 @@ import {
   type BookingImageKind,
   type WeeklyHours,
 } from "@/lib/booking/rules";
-import type { SlotRules } from "@/lib/booking/slots";
+import { seriesBusy, type SlotRules } from "@/lib/booking/slots";
+import { dateKey } from "@/lib/calendar-view";
+import { loadBookingSeries } from "@/lib/crm/upcoming";
 import { isTimeZone } from "@/lib/time";
+
+const DAY = 86_400_000;
 
 const NOTICE_MAX = 20160;
 
@@ -515,15 +519,21 @@ export async function loadBookingImage(raw: string, kind: BookingImageKind) {
   return row?.data && row.mime ? { data: row.data, mime: row.mime } : null;
 }
 
-export async function loadBusy(userId: string, from: number, to: number) {
-  const result = await query<{ starts_at: Date; ends_at: Date }>(
-    "select starts_at, ends_at from private.booking_busy($1, $2, $3)",
-    [userId, new Date(from).toISOString(), new Date(to).toISOString()],
-  );
-  return result.rows.map((row) => ({
-    start: new Date(row.starts_at).getTime(),
-    end: new Date(row.ends_at).getTime(),
-  }));
+export async function loadBusy(userId: string, from: number, to: number, now = Date.now()) {
+  const [result, series] = await Promise.all([
+    query<{ starts_at: Date; ends_at: Date }>(
+      "select starts_at, ends_at from private.booking_busy($1, $2, $3)",
+      [userId, new Date(from).toISOString(), new Date(to).toISOString()],
+    ),
+    loadBookingSeries(userId, dateKey(from - DAY), dateKey(to)),
+  ]);
+  return [
+    ...result.rows.map((row) => ({
+      start: new Date(row.starts_at).getTime(),
+      end: new Date(row.ends_at).getTime(),
+    })),
+    ...seriesBusy(series, from, to, now),
+  ];
 }
 
 export async function loadBookingOwner(raw: string): Promise<UserActor | null> {

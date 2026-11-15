@@ -8,6 +8,7 @@ import type { TaskBlock } from "@/lib/task-blocks";
 import { cn } from "@/lib/utils";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import CloseIcon from "@/public/assets/images/mail/close.svg";
+import RepeatIcon from "@/public/assets/images/workflows/repeat.svg";
 
 const TWO_LINES_PX = 28;
 
@@ -26,6 +27,10 @@ function clashing(block: TaskBlock) {
 }
 
 function tone(block: TaskBlock) {
+  if (block.upcoming)
+    return block.clash
+      ? "bg-white/[0.012] shadow-[inset_3px_0_0_var(--warning),inset_0_0_0_1px_color-mix(in_srgb,var(--warning)_35%,transparent)]"
+      : "bg-white/[0.012] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--violet)_32%,transparent)]";
   if (block.proposed)
     return "bg-[color-mix(in_srgb,var(--violet)_7%,transparent)] outline-1 outline-offset-[-1px] outline-dashed outline-[color-mix(in_srgb,var(--violet)_70%,transparent)]";
   if (block.done) return "bg-white/[0.035] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]";
@@ -39,8 +44,8 @@ function tone(block: TaskBlock) {
 export function taskBlockLabel(block: TaskBlock) {
   return [
     block.title,
-    `${formatTime(block.startsAt)} to ${formatTime(block.endsAt)}`,
-    block.proposed ? "proposed by Plan" : "task",
+    block.upcoming && !block.task.dueHasTime ? null : `${formatTime(block.startsAt)} to ${formatTime(block.endsAt)}`,
+    block.upcoming ? (block.task.dueHasTime ? "upcoming, repeats" : "all day, upcoming, repeats") : block.proposed ? "proposed by Plan" : "task",
     block.done ? "done" : null,
     block.overdue ? "overdue" : null,
     block.clash ? `clashes with ${block.clash}` : null,
@@ -106,6 +111,33 @@ function Detail({ block }: { block: TaskBlock }) {
   );
 }
 
+function UpcomingDetail({ block }: { block: TaskBlock }) {
+  const parts = [
+    "Upcoming",
+    block.clash ? `Clashes with ${block.clash}` : null,
+    block.workspaceName,
+    block.task.dueHasTime ? durationLabel(block.durationMinutes) : null,
+  ].filter(Boolean);
+  return <>{parts.join(" · ")}</>;
+}
+
+export function UpcomingChip({ block, onOpen }: { block: TaskBlock; onOpen: TaskBlockHandlers["onOpen"] }) {
+  return (
+    <button
+      type="button"
+      data-list-row=""
+      data-task-id={block.task.id}
+      aria-label={taskBlockLabel(block)}
+      title={taskBlockLabel(block)}
+      onClick={(event) => onOpen(block, event.currentTarget)}
+      className="focus-visible:ring-ring/60 flex h-5 w-full min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-left text-[11.5px] leading-5 text-foreground/70 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--violet)_34%,transparent)] outline-none focus-visible:ring-2 [@media(pointer:coarse)]:h-8"
+    >
+      <RepeatIcon aria-hidden className="text-violet size-2.5 shrink-0" />
+      <span className="min-w-0 truncate">{block.title}</span>
+    </button>
+  );
+}
+
 export function GridTaskBlock({
   block,
   style,
@@ -162,7 +194,7 @@ export function GridTaskBlock({
           className={cn(
             "min-w-0 truncate text-[12px] font-medium",
             two ? "leading-[15px]" : "flex-1 leading-[18px]",
-            block.done ? "text-subtle decoration-white/25 line-through" : "text-foreground",
+            block.done ? "text-subtle decoration-white/25 line-through" : block.upcoming ? "text-foreground/70 font-normal" : "text-foreground",
           )}
         >
           {block.title}
@@ -178,7 +210,9 @@ export function GridTaskBlock({
         )}
       </button>
       <span className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}>
-        {block.proposed ? (
+        {block.upcoming ? (
+          <RepeatIcon aria-hidden className="size-2.5 text-[color-mix(in_srgb,var(--violet)_80%,white_15%)]" />
+        ) : block.proposed ? (
           <TaskKindIcon title={block.title} className="text-violet size-3" />
         ) : (
           <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="sm" />
@@ -222,15 +256,21 @@ export function AgendaTaskBlock({ block, past, onOpen, onComplete }: TaskBlockHa
         onClick={(event) => onOpen(block, event.currentTarget)}
         className="focus-visible:ring-ring/60 flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md text-left outline-none focus-visible:ring-2"
       >
-        <span className="caption-style text-soft w-[76px] shrink-0 tabular-nums">{formatTime(block.startsAt)}</span>
+        <span className="caption-style text-soft w-[76px] shrink-0 tabular-nums">{block.upcoming && !block.task.dueHasTime ? "All day" : formatTime(block.startsAt)}</span>
         <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className={cn("truncate text-[14px] leading-5", block.done && "text-subtle decoration-white/25 line-through")}>{block.title}</span>
+          <span className={cn("truncate text-[14px] leading-5", block.done && "text-subtle decoration-white/25 line-through", block.upcoming && "text-foreground/70")}>{block.title}</span>
           <span className="caption-style text-subtle truncate">
-            <Detail block={block} />
+            {block.upcoming ? <UpcomingDetail block={block} /> : <Detail block={block} />}
           </span>
         </span>
       </button>
-      <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="lg" />
+      {block.upcoming ? (
+        <span className="flex size-[22px] shrink-0 items-center justify-center">
+          <RepeatIcon aria-hidden className="text-violet size-3.5" />
+        </span>
+      ) : (
+        <DoneCircle block={block} onOpen={onOpen} onComplete={onComplete} size="lg" />
+      )}
     </div>
   );
 }
