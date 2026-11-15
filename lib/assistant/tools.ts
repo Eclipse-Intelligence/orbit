@@ -136,7 +136,7 @@ import { isRelationshipLabel, RELATIONSHIP_LABELS, RELATIONSHIP_META } from "@/l
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
-import { archiveTask, listTasks, readTaskInDb } from "@/lib/crm/tasks";
+import { archiveTask, archiveTaskInDb, listTasks, readTaskInDb } from "@/lib/crm/tasks";
 import { dayKeyAt } from "@/lib/crm/working-days";
 import { firstDay, readRepeat, readSeriesTitle, REPEAT_SCOPES, seriesRightsRefusal, updateTaskFromApi } from "@/lib/crm/task-series";
 import { endWords, occurrenceTiming, ruleWords, shortDay } from "@/lib/task-repeat";
@@ -156,7 +156,7 @@ import {
   type UserActor,
 } from "@/lib/crm/types";
 import { withActor } from "@/lib/crm/context";
-import { isUuid } from "@/lib/crm/mutate";
+import { isUuid, replayOrRun, requestHash } from "@/lib/crm/mutate";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { taskDetail } from "@/lib/crm/task-detail";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
@@ -751,6 +751,12 @@ function scheduleItems(value: unknown) {
 
 const REPEATING_KEY = "repeating";
 
+const TASK_CHANGED_SINCE_CARD = "This task changed since the card was shown, so nothing was done to it. Ask again to see what it will do now.";
+
+function skipDayOf(actor: UserActor, task: Task | null) {
+  return task && task.workspaceId === actor.workspaceId && !task.completedAt && !task.archivedAt && task.occursOn && task.repeat?.current && task.repeat.next ? task.occursOn : "";
+}
+
 async function repeatingTaskDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
   const ids = [...new Set(strings(value))].filter(isUuid);
   if (ids.length === 0) return {};
@@ -762,11 +768,7 @@ async function repeatingTaskDetails(actor: UserActor, value: unknown): Promise<R
     }
     return found;
   });
-  return Object.fromEntries(
-    tasks.flatMap((task) =>
-      task.workspaceId === actor.workspaceId && !task.completedAt && !task.archivedAt && task.occursOn && task.repeat?.current && task.repeat.next ? [[`${task.id}:${REPEATING_KEY}`, task.occursOn]] : [],
-    ),
-  );
+  return Object.fromEntries(tasks.flatMap((task) => (skipDayOf(actor, task) ? [[`${task.id}:${REPEATING_KEY}`, skipDayOf(actor, task)]] : [])));
 }
 
 async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
@@ -1314,7 +1316,7 @@ const REPEAT_PARAM = {
       },
       required: ["n", "weekday"],
     },
-    ends: { type: "object", description: "{ after: N } times, or { on: YYYY-MM-DD }. Leave out to repeat for ever.", properties: { after: { type: "integer", minimum: 1, maximum: 999, description: "Stops after this many times, counted from the first." }, on: { type: "string", description: "The last day it can fall on, YYYY-MM-DD." } } },
+    ends: { type: "object", description: "{ after: N } times, or { on: YYYY-MM-DD }. null removes the end so it repeats for ever. Leave out to keep the task's current end (a new repeat never ends).", properties: { after: { type: "integer", minimum: 1, maximum: 999, description: "Stops after this many times, counted from the first." }, on: { type: "string", description: "The last day it can fall on, YYYY-MM-DD." } } },
   },
   required: ["every"],
 };
@@ -1326,6 +1328,18 @@ const REPEAT_END_KEY = "repeatEnd";
 
 function endsKept(value: unknown) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && !("ends" in value));
+}
+
+function repeatPinned(args: Args, taskId: string) {
+  return isUuid(taskId) && Boolean(args.repeat) && typeof args.repeat === "object" && !Array.isArray(args.repeat);
+}
+
+function repeatShown(occursOn: string | null, end: string) {
+  return `${occursOn ?? ""}|${end}`;
+}
+
+function endsRemoved(value: unknown) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && (value as { ends?: unknown }).ends === null);
 }
 
 function repeatWordsOf(value: unknown, anchor: string) {
@@ -1345,7 +1359,8 @@ function repeatLines(args: Record<string, unknown>, task: RepeatAnchorTask | nul
   if (args.repeat === null) lines.push("Stop repeating. This one stays.");
   else if (args.repeat !== undefined) {
     const words = repeatWordsOf(args.repeat, repeatAnchorDay(task, args));
-    lines.push(`Repeats: ${words ?? "a pattern Orbit can't read"}${words && words !== "a pattern Orbit can't read" && keptEnd && endsKept(args.repeat) ? `, ${keptEnd}` : ""}`);
+    const readable = words && words !== "a pattern Orbit can't read";
+    lines.push(`Repeats: ${words ?? "a pattern Orbit can't read"}${readable && keptEnd && endsKept(args.repeat) ? `, ${keptEnd}` : readable && endsRemoved(args.repeat) ? ", no end" : ""}`);
   }
   const day = typeof args.occursOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.occursOn) ? shortDay(args.occursOn) : null;
   if (args.skip === true) lines.push(day ? `Skip ${day} only` : "Skip this one");
@@ -3857,7 +3872,9 @@ const TOOL_LIST: AssistantTool[] = [
       const role = detail(name, TASK_ROLE_KEY);
       const creator = detail(name, `${id}:creator`);
       const losesChange = args.ownerId === null && Boolean(self) && owner === self && role === "member" && creator !== self;
+      const keptEnd = detail(name, `${id}:${REPEAT_END_KEY}`);
       return {
+        ...(anchorTask && repeatPinned(args, id) ? { approval: { tasks: { [id]: repeatShown(anchorTask?.occursOn ?? null, endsKept(args.repeat) ? keptEnd : "") } } } : {}),
         title: titled(
           args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task",
           optionalStr(args.taskId) ? name(args.taskId) : detail(name, REPEAT_KEY) || "a repeating task",
@@ -3872,7 +3889,7 @@ const TOOL_LIST: AssistantTool[] = [
           losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
-          ...repeatLines(args, anchorTask, detail(name, `${id}:${REPEAT_END_KEY}`)),
+          ...repeatLines(args, anchorTask, keptEnd),
           ...taskDocLines(args, name, id),
         ],
       };
@@ -3890,6 +3907,11 @@ const TOOL_LIST: AssistantTool[] = [
       if (args.skip !== undefined && args.skip !== true) throw new CrmError("invalid_input", "Send skip: true, or leave it out.", 400, { field: "skip" });
       if (args.repeatScope !== undefined && !oneOf(args.repeatScope, REPEAT_SCOPES)) throw new CrmError("invalid_input", "repeatScope is this, following or all.", 400, { field: "repeatScope" });
       if (optionalStr(args.seriesId) && !optionalStr(args.occursOn) && !optionalStr(args.taskId)) throw new CrmError("invalid_input", "Send occursOn with seriesId, or send the open task's taskId.", 400, { field: "occursOn" });
+      const shownRepeat = repeatPinned(args, str(args.taskId)) ? context.approval?.tasks?.[str(args.taskId)] : undefined;
+      if (shownRepeat !== undefined) {
+        const task = await withActor(actor, (db) => readTaskInDb(db, actor, str(args.taskId)));
+        if (task && repeatShown(task.occursOn, endsKept(args.repeat) ? (task.repeat?.end ?? "") : "") !== shownRepeat) throw new CrmError("conflict", TASK_CHANGED_SINCE_CARD, 409);
+      }
       const updated = await updateTaskFromApi(
         actor,
         { taskId: optionalStr(args.taskId), seriesId: optionalStr(args.seriesId), occursOn: optionalStr(args.occursOn) },
@@ -4517,7 +4539,9 @@ const TOOL_LIST: AssistantTool[] = [
       ].filter((group) => group.ids.length > 0);
       const total = groups.reduce((sum, group) => sum + group.ids.length, 0);
       const skipping = `${skips.length} repeating ${skips.length === 1 ? "task" : "tasks"}`;
+      const shown = Object.fromEntries(taskIds.filter(isUuid).map((id) => [id, detail(name, `${id}:${REPEATING_KEY}`)]));
       return {
+        ...(taskIds.some(isUuid) ? { approval: { tasks: shown } } : {}),
         title: total === 0 ? `Skip ${skipping}` : `Archive ${total} ${total === 1 ? "record" : "records"}${skips.length > 0 ? ` and skip ${skipping}` : ""}`,
         lines: [
           ...groups.map((group) => nameList(group.ids, name, group.noun)),
@@ -4538,8 +4562,19 @@ const TOOL_LIST: AssistantTool[] = [
       ].filter((group) => group.ids.length > 0);
       if (groups.length === 0) return { error: "Say which records, using their ids." };
       const skipped: { taskId: string; title: string; skipped: string; next: { dueAt: string | null; dueHasTime: boolean } }[] = [];
+      const shownTasks = context.approval?.tasks;
       async function archiveOrSkipTask(id: string) {
-        const outcome = await archiveTask(actor, id, { ...options, ...(context.callId ? { idempotencyKey: keyFor(`${context.callId}:${id}`) } : {}) });
+        const key = context.callId ? keyFor(`${context.callId}:${id}`) : undefined;
+        const shown = shownTasks?.[id];
+        const outcome =
+          shown === undefined
+            ? await archiveTask(actor, id, { ...options, ...(key ? { idempotencyKey: key } : {}) })
+            : await withActor(actor, (db) =>
+                replayOrRun(db, actor, key, requestHash("archive_task", { id, provenance: options.provenance, shown }), 200, async () => {
+                  if (skipDayOf(actor, await readTaskInDb(db, actor, id)) !== shown) throw new CrmError("conflict", TASK_CHANGED_SINCE_CARD, 409);
+                  return archiveTaskInDb(db, actor, id, options.provenance, shown ? { expect: shown } : {});
+                }),
+              );
         const body = outcome.body as { task: Task; skipped?: string };
         if (body.skipped) skipped.push({ taskId: id, title: body.task.title, skipped: body.skipped, next: { dueAt: body.task.dueAt, dueHasTime: body.task.dueHasTime } });
       }

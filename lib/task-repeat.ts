@@ -47,6 +47,7 @@ export type Occurrence = {
   changed: boolean;
 };
 
+export const END_BEFORE_THIS = "The end date is before this one.";
 export const MAX_INTERVAL = 99;
 export const MAX_COUNT = 999;
 export const MAX_UNTIL_YEARS = 10;
@@ -290,6 +291,10 @@ export function chainEnds(first: RepeatPattern, parts: RepeatPattern[]): RepeatE
 export function sameEnds(left: RepeatEnds, right: RepeatEnds) {
   if ("count" in left || "count" in right) return "count" in left && "count" in right && left.count === right.count;
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function lostChangeDays(changeDays: string[], pattern: RepeatPattern): string[] {
+  return changeDays.filter((day) => day <= pattern.startsOn || !isOccurrenceDay(pattern, day));
 }
 
 export function occurrenceDays(pattern: RepeatPattern, from: string, to: string, limit = MAX_EXPANSION) {
@@ -565,7 +570,7 @@ export function checkEnds(ends: unknown, startsOn: string, today: string): strin
   }
   if ("until" in value) {
     if (!isDayKey(value.until)) return "Choose an end date.";
-    if ((value.until as string) < startsOn) return "The end date is before the first one.";
+    if ((value.until as string) < startsOn) return END_BEFORE_THIS;
     const { year, month, day } = dayParts(today);
     const limit = dayKey(year + MAX_UNTIL_YEARS, month, Math.min(day, daysInMonth(year + MAX_UNTIL_YEARS, month)));
     if ((value.until as string) > limit) return `Choose an end date within ${MAX_UNTIL_YEARS} years.`;
@@ -649,9 +654,10 @@ export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): Task
       : "count" in ends && view.current
         ? `${Math.max(0, (remainingCount(pattern, after) ?? 0) - skipped) + later} more`
         : endWords({ ...pattern, ends }, view.current ? after : null),
-    rrule: toRrule(pattern, timeZone),
+    rrule: toRrule({ ...pattern, ends }, timeZone),
     changedDates: view.changes.filter((change) => change.occursOn > after && !change.skip && change.dueAt).length,
     skippedDates: view.changes.filter((change) => change.occursOn > after && change.skip).map((change) => change.occursOn),
+    changeDays: view.changes.filter((change) => change.occursOn > after).map((change) => change.occursOn),
   };
 }
 

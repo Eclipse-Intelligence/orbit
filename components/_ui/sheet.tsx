@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ComponentProps } from "react";
+import { createContext, useContext, type ComponentProps, type MouseEvent } from "react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
@@ -28,9 +28,9 @@ function SheetClose(props: ComponentProps<typeof SheetPrimitive.Close>) {
   return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
 }
 
-function SheetCloseButton({ className, label = "Close" }: { className?: string; label?: string }) {
+function SheetCloseButton({ className, label = "Close", onClick }: { className?: string; label?: string; onClick?: (event: MouseEvent<HTMLButtonElement>) => void }) {
   return (
-    <SheetPrimitive.Close asChild>
+    <SheetPrimitive.Close asChild onClick={onClick}>
       <Button variant="ghost" size="icon-sm" className={cn("-mr-1", className)} aria-label={label}>
         <XIcon aria-hidden className="text-foreground size-4" />
       </Button>

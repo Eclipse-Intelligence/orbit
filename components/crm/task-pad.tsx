@@ -536,7 +536,7 @@ export default function TaskPad({
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
   const [chosenDuration, setDuration] = useState<number | null>(null);
   const [repeatPick, setRepeatPick] = useState<Override<RepeatDraft | null>>(unset);
-  const [repeatOver, setRepeatOver] = useState("");
+  const [repeatOver, setRepeatOver] = useState<RepeatDraft | null>(null);
   const [askingTime, setAskingTime] = useState(false);
   const [addedTime, setAddedTime] = useState<{ date: string; time: string } | null>(null);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
@@ -643,7 +643,7 @@ export default function TaskPad({
   function derive(value: PadAiParse | null) {
     const keptKeys = keptAsText.map((entry) => entry.key);
     const shown = padReading(text, parsed, value, keptKeys);
-    const confirmed = chipOverrides(shown, due.set, repeatPick.set ? repeatPick.value : null, repeatOver) ? padReading(text, parsed, value, [...keptKeys, shown.key]) : shown;
+    const confirmed = chipOverrides(shown, due, repeatPick.set ? repeatPick.value : null, repeatOver) ? padReading(text, parsed, value, [...keptKeys, shown.key]) : shown;
     const typedRepeat = confirmed.repeat ?? null;
     const repeat = repeatPick.set ? repeatPick.value : typedRepeat;
     const timed = addedTime && confirmed.due === addedTime.date ? `${addedTime.date}T${addedTime.time}` : confirmed.due;
@@ -894,7 +894,7 @@ export default function TaskPad({
     setReminder(unset());
     setDuration(null);
     setRepeatPick(unset());
-    setRepeatOver("");
+    setRepeatOver(null);
     setAskingTime(false);
     setAddedTime(null);
     setCompany(startCompany());
@@ -1123,11 +1123,11 @@ export default function TaskPad({
         setReminder(pickedReminder);
       }
       setRepeatPick(unset());
-      setRepeatOver("");
+      setRepeatOver(null);
       focusAt();
       return;
     }
-    setRepeatOver(read.typedRepeat ? key : "");
+    setRepeatOver(read.typedRepeat);
     setRepeatPick({ set: true, value });
   }
 
@@ -1147,10 +1147,10 @@ export default function TaskPad({
       variant="chip"
       size="none"
       aria-label={repeatWords ? `${repeatWords}. Change` : "Repeat"}
-      className={repeatWords ? "hit min-w-0 shrink gap-1.5 text-inherit hover:bg-transparent hover:text-inherit" : chipClass("empty", variant)}
+      className={repeatWords ? "hit min-w-0 shrink gap-1.5 text-inherit hover:bg-transparent hover:text-inherit h-auto text-left leading-snug whitespace-normal" : chipClass("empty", variant)}
     >
       <RepeatIcon aria-hidden className={cn(repeatWords && "!text-(--tag-purple-text)")} />
-      {repeatWords && <span className="truncate">{repeatWords}</span>}
+      {repeatWords && <span className="min-w-0">{repeatWords}</span>}
     </Button>
   );
 
@@ -1170,7 +1170,7 @@ export default function TaskPad({
       )}
     />,
     repeatWords ? (
-      <span key="repeat" className={cn(chipClass("on", variant), "max-w-[min(22rem,calc(100vw-5.5rem))] cursor-default gap-1 pr-1 max-md:pr-1 [@media(pointer:coarse)]:mr-1.5 md:[@media(pointer:coarse)]:my-1.5")}>
+      <span key="repeat" className={cn(chipClass("on", variant), "h-auto max-w-full cursor-default gap-1 py-1.5 pr-1 whitespace-normal max-md:max-w-[calc(100vw-5.5rem)] max-md:h-auto max-md:pr-1 [@media(pointer:coarse)]:mr-1.5 md:[@media(pointer:coarse)]:my-1.5", card ? "min-h-7 max-md:min-h-[34px]" : "min-h-[26px]")}>
         <RepeatPicker anchor={repeatAnchor} at={repeatAt} value={read.repeat} onChange={pickRepeat} onClosed={() => focusAt()} trigger={repeatTrigger} />
         <Button
           variant="ghost"
@@ -1346,7 +1346,7 @@ export default function TaskPad({
               setDue(unset());
               setReminder(unset());
               setRepeatPick(unset());
-              setRepeatOver("");
+              setRepeatOver(null);
               setAddedTime(null);
               setCompany(startCompany());
               setContact(startContact());

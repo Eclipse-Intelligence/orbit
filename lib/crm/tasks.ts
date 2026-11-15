@@ -97,6 +97,7 @@ const TASK_SQL = `
     rs.current_task_id as series_current_task_id,
     rs.owner_id as series_owner_id,
     rs.created_by_user_id as series_creator_id,
+    rs.created_by_agent_id as series_creator_agent_id,
     (rs.ended_at is not null or rs.archived_at is not null) as series_stopped,
     rc.rows as series_changes,
     rp.parts as series_parts,
@@ -122,20 +123,9 @@ const TASK_SQL = `
     ) c
   ) rc on rs.id is not null
   left join lateral (
-    with recursive chain as (
-      select lp.id, lp.starts_on, lp.at, lp.rule, lp.ends, lp.current_task_id, lp.ended_at, lp.archived_at, 1 as depth
-      from crm.task_series lp
-      where lp.split_from_id = rs.id and lp.workspace_id = rs.workspace_id
-        and rs.current_task_id = t.id and rs.ended_at is null and rs.archived_at is null
-      union all
-      select lp.id, lp.starts_on, lp.at, lp.rule, lp.ends, lp.current_task_id, lp.ended_at, lp.archived_at, chain.depth + 1
-      from crm.task_series lp
-      join chain on lp.split_from_id = chain.id
-      where chain.depth < 20 and lp.workspace_id = rs.workspace_id
-    )
-    select jsonb_agg(jsonb_build_object('startsOn', c.starts_on::text, 'at', to_char(c.at, 'HH24:MI'), 'rule', c.rule, 'ends', c.ends) order by c.starts_on) as parts
-    from chain c
-    where c.current_task_id is null and c.ended_at is null and c.archived_at is null
+    select jsonb_agg(jsonb_build_object('startsOn', v.starts_on::text, 'at', to_char(v.at, 'HH24:MI'), 'rule', v.rule, 'ends', v.ends) order by v.starts_on) as parts
+    from (select rs.id where rs.current_task_id = t.id and rs.ended_at is null and rs.archived_at is null) open_series
+    cross join lateral crm.series_view_parts(open_series.id) v
   ) rp on rs.id is not null
 `;
 
@@ -184,6 +174,7 @@ type TaskRow = {
   series_current_task_id: string | null;
   series_owner_id: string | null;
   series_creator_id: string | null;
+  series_creator_agent_id: string | null;
   series_stopped: boolean | null;
   series_changes: OccurrenceChange[] | null;
   series_parts: RepeatPattern[] | null;
@@ -627,6 +618,10 @@ export async function createTaskInDb(
   } catch (error) {
     taskConstraintError(error);
   }
+}
+
+function seriesRightsOfRow(row: TaskRow): SeriesRights | undefined {
+  return row.series_id ? { id: row.series_id, ownerId: row.series_owner_id, createdByUserId: row.series_creator_id, createdByAgentId: row.series_creator_agent_id } : undefined;
 }
 
 function taskRights(row: TaskRow) {
@@ -1150,12 +1145,16 @@ export async function archiveTaskInDb(
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
-  if (!canChangeTask(actor, taskRights(current), options.series)) throw cannotChange();
-  if (current.series_id && !options.keepSeries && !options.noSkip && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
+  const skips = Boolean(current.series_id && !options.keepSeries && !options.noSkip && !current.completed_at);
+  const own = canChangeTask(actor, taskRights(current), options.series);
+  const viaSeries = !own && skips && current.series_current_task_id === current.id && canChangeTask(actor, taskRights(current), seriesRightsOfRow(current));
+  if (!own && !viaSeries) throw cannotChange();
+  if (skips) {
     if (options.expect !== undefined && current.occurs_on !== options.expect) throw new CrmError("conflict", SKIP_MOVED_ON, 409, { field: "occursOn" });
     const skipped = await archiveAsSkipInDb(db, actor, mapTask(current), provenance);
     if (skipped) return { task: skipped, skipped: current.occurs_on ?? undefined };
   }
+  if (viaSeries) throw cannotChange();
   const keeper = await ownerForAgent(db, actor, current);
   const archived = await db.query(
     `update crm.tasks set archived_at = now(), owner_id = coalesce(owner_id, $3::uuid),

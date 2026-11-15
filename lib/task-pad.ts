@@ -8,6 +8,8 @@ import {
   daysInMonth,
   firstPatternDay,
   normalRule,
+  sameEnds,
+  sameRule,
   weekdayOf,
   WEEKDAYS as TASK_WEEKDAYS,
   WORKWEEK,
@@ -685,7 +687,7 @@ const REPEAT_BARE = /^(?:daily|weekly|monthly|yearly|annually)/i;
 const REPEAT_NOUN_BEFORE = /\b(?:the|a|an|my|our|your|their|his|her|its|this|that|these|those)\s+$/i;
 const REPEAT_TIME = new RegExp(`^\\s*,?\\s*(?:(?:at\\s+)?${CLOCK}|at\\s+\\d{1,2}\\b(?![:.]\\d))`, "i");
 const REPEAT_END = new RegExp(
-  `^\\s*,?\\s*(?:(?:until|till)\\s+(${REPEAT_DATE}(?:,?\\s+\\d{4})?)|for\\s+(\\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\\s+(days?|weeks?|months?|years?)\\b|(?:for\\s+)?(\\d{1,3})\\s+times\\b)`,
+  `^\\s*,?\\s*(?:(?:until|till)\\s+(${REPEAT_DATE}(?:,?\\s+\\d{4})?)|for\\s+(\\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\\s+(days?|weeks?|months?|years?)\\b|(for\\s+)?(\\d{1,3})\\s+times\\b)`,
   "i",
 );
 const REPEAT_START = /^\s*,?\s*(?:from|starting(?:\s+(?:on|from))?|beginning|commencing)\b(?=\s+\S)/i;
@@ -699,7 +701,7 @@ const REPEAT_DUE_BEFORE = /\bdue\s+$/i;
 const REPEAT_EXCEPT_AFTER = /^\s*,?\s*(?:except|excluding|but|unless|apart|other\s+than|besides|bar|or|when|whenever|while|whilst|once|as|so|if|not|instead|rather|only|until|till|til|through|thru|between)\b/i;
 const REPEAT_CLAUSE_BEFORE = /\b(?:who|whom|whose|which|that|where|when|whenever|if|whether|because|cause|since|unless|while|whilst|though|although|how|what|why)\b/i;
 const REPEAT_NEGATION_BEFORE =
-  /\b(?:not|never|no\s+(?:longer|more)|cannot|without|instead\s+of|rather\s+than|stop(?:s|ped|ping)?|cancel(?:s|led|ed|ling|ing)?|quit(?:s|ting)?|unsubscribe|pause|halt|cease|suspend|discontinue|terminate|skip|avoid|(?:do|does|did|is|are|was|were|has|have|had|wo|ca|could|should|would|must|need|might)n['’]t|dont|doesnt|didnt|isnt|arent|wasnt|werent|hasnt|havent|hadnt|wont|cant|couldnt|shouldnt|wouldnt|mustnt|neednt)(?![\w'’])/i;
+  /\b(?:not|never|no(?![\w'’-])|almost|nearly|hardly|barely|rarely|seldom|no\s+(?:longer|more)|cannot|without|instead\s+of|rather\s+than|stop(?:s|ped|ping)?|cancel(?:s|led|ed|ling|ing)?|quit(?:s|ting)?|unsubscribe|pause|halt|cease|suspend|discontinue|terminate|skip|avoid|(?:do|does|did|is|are|was|were|has|have|had|wo|ca|could|should|would|must|need|might)n['’]t|dont|doesnt|didnt|isnt|arent|wasnt|werent|hasnt|havent|hadnt|wont|cant|couldnt|shouldnt|wouldnt|mustnt|neednt)(?![\w'’])/i;
 const REPEAT_VERBS_BEFORE = new Set(
   "is are was were be been being am do does did has have had will would shall should can could may might must gets got it's that's there's he's she's they're we're it’s that’s there’s he’s she’s they’re we’re i'm i’m i've i’ve i'll i’ll i'd i’d you're you’re you've you’ve we've we’ve they've they’ve".split(" "),
 );
@@ -715,13 +717,13 @@ const CUE_ORDINAL =
   "(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|\\d{1,2}(?:st|nd|rd|th))";
 const REPEAT_CUES = new RegExp(
   [
-    `\\b(?:every|each|evry|evrey|evey|eveyr|eveery|everey|ervery|eevry|everry|evvery|evety)\\s+(?:(?:other|alternate|few|couple(?:\\s+of)?|single|working|business|last|${CUE_ORDINAL}|${CUE_NUMBER})\\s+){0,2}(?:days?|nights?|mornings?|afternoons?|evenings?|weeks?|weekdays?|weekends?|fortnights?|months?|quarters?|years?|hours?|hrs?|minutes?|mins?|${REPEAT_DAY}s?|${REPEAT_MONTH}|${CUE_ORDINAL})(?![\\w-])`,
+    `\\b(?:every|each|evry|evrey|evey|eveyr|eveery|everey|ervery|eevry|everry|evvery|evety)\\s+(?:(?:other|alternate|few|couple(?:\\s+of)?|single|working|business|last|${CUE_ORDINAL})\\s+|${CUE_NUMBER}\\s*){0,2}(?:days?|nights?|mornings?|afternoons?|evenings?|weeks?|wks?|weekdays?|weekends?|fortnights?|months?|mths?|mos?|quarters?|qtrs?|years?|yrs?|hours?|hrs?|minutes?|mins?|${REPEAT_DAY}s?|[a-z]+days?|${REPEAT_MONTH}|${CUE_ORDINAL})(?![\\w-])`,
     `\\b(?:once|twice|thrice|${CUE_NUMBER}\\s*(?:x|times?))\\s+(?:a|an|per|each|every)\\s+(?:day|night|week|fortnight|month|quarter|year)\\b`,
     "\\b(?:(?:mon|tues|wednes|thurs|fri|satur|sun)days|weekdays|weekends)\\b",
   ].join("|"),
   "gi",
 );
-const BARE_CUES = /\b(?:daily|weekly|fortnightly|monthly|quarterly|yearly|annually|biannually|bi-?weekly|bi-?monthly|semi-?annually|nightly|hourly)\b/gi;
+const BARE_CUES = /\b(?:everyday(?![.-]\w)|daily|weekly|fortnightly|monthly|quarterly|yearly|annually|biannually|bi-?weekly|bi-?monthly|semi-?annually|nightly|hourly)\b/gi;
 
 function adjectiveUse(text: string, start: number, end: number) {
   const before = text.slice(0, start);
@@ -849,6 +851,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
   let cursor = hit.end;
   let timed = false;
   let ended = false;
+  let bareCount = false;
   for (let step = 0; step < 3; step += 1) {
     const rest = text.slice(cursor);
     const time = timed ? null : REPEAT_TIME.exec(rest);
@@ -865,7 +868,10 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
       if (!until || (endRolledOver(end[1], until, todayKey) && until > shiftDay(todayKey, 92))) return "unsure";
       ends.until = until;
     } else if (end[2]) ends.span = { amount: repeatNumber(end[2]), unit: end[3].toLowerCase().replace(/s$/, "") };
-    else ends.count = Number(end[4]);
+    else {
+      ends.count = Number(end[5]);
+      bareCount = !end[4] && !timed;
+    }
     spans.push({ start: cursor + (end[0].length - end[0].trimStart().length), end: cursor + end[0].length, kind: "when" });
     cursor += end[0].length;
   }
@@ -895,6 +901,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
     return { freq: "yearly", interval };
   };
   const fixed = hit.kind !== "daily" && (hit.kind !== "weekly" || named.length > 0) && (hit.kind !== "monthly" || Boolean(nth || ord || ordWord)) && (hit.kind !== "yearly" || fixedDay !== null);
+  if (bareCount && !fixed) return "unsure";
   return { spans, startCue: started ? cursor + started[0].length : null, rule, fixedDay, fixed, ends };
 }
 
@@ -985,6 +992,7 @@ function parseRepeatText(text: string, now: Date): PadParse | null {
   const uncued = inner.marks.filter((mark) => mark.kind === "when" && DATE_MARK.test(text.slice(mark.start, mark.end)) && !(found.startCue !== null && /^\s*$/.test(text.slice(found.startCue, mark.start))));
   const repeatStart = found.spans[0].start;
   const repeatEnd = found.spans[found.spans.length - 1].end;
+  if (uncued.some((mark) => /^\W*(?:by|before)\b/i.test(text.slice(mark.start, mark.end)) || (mark.end <= repeatStart && /\b(?:today|tonight|tomorrow|tmrw|tmr)\b/i.test(text.slice(mark.start, mark.end))))) return unsureRepeat(text);
   let markless = "";
   let last = 0;
   for (const mark of [...inner.marks].sort((a, b) => a.start - b.start)) {
@@ -1482,11 +1490,20 @@ export function padReading(
   return { ...reading, phrase, key };
 }
 
-export function chipOverrides(shown: Pick<PadReading, "key" | "due" | "repeat">, dueSet: boolean, picked: PadRepeat | null, pickedOver: string) {
+export function chipOverrides(shown: Pick<PadReading, "key" | "due" | "repeat">, due: { set: boolean; value: string | null }, picked: PadRepeat | null, pickedOver: PadRepeat | null) {
   if (!shown.key) return false;
-  if (dueSet && !shown.repeat) return true;
+  if (due.set && !shown.repeat) return true;
+  if (due.set && shown.repeat && !picked && due.value && padRepeatDue(shown.repeat, due.value) !== due.value) return true;
   if (!picked) return false;
-  return shown.repeat ? shown.key !== pickedOver : padRepeatDue(picked, shown.due) !== shown.due;
+  if (shown.repeat) return !pickedOver || !sameTypedRepeat(shown.repeat, pickedOver);
+  return padRepeatDue(picked, shown.due) !== shown.due;
+}
+
+function sameTypedRepeat(left: PadRepeat, right: PadRepeat) {
+  if (!sameEnds(left.ends, right.ends)) return false;
+  if (sameRule(left.rule, right.rule)) return true;
+  const startDay = (rule: RepeatRule) => (rule.freq === "weekly" && rule.weekdays?.length === 1) || (rule.freq === "monthly" && !rule.monthWeek) || rule.freq === "yearly";
+  return left.rule.freq === right.rule.freq && left.rule.interval === right.rule.interval && startDay(left.rule) && startDay(right.rule);
 }
 
 export const AI_SETTLE_MS = 300;

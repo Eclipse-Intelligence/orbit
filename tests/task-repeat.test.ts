@@ -121,7 +121,7 @@ describe("repeat ends", () => {
     assert.equal(checkRule({ freq: "monthly", interval: 1, monthDay: 3, monthWeek: { n: 1, weekday: "mo" } }), "Choose a day of the month or a weekday, not both.");
     assert.equal(occurrenceOnOrAfter(pattern({ freq: "yearly", interval: 1 }, "9998-06-01"), "9998-06-02"), null);
     assert.equal(checkRule({ freq: "monthly", interval: 1, monthWeek: { n: -1, weekday: "fr" } }), null);
-    assert.equal(checkEnds({ until: "2026-11-01" }, "2026-11-14", "2026-11-14"), "The end date is before the first one.");
+    assert.equal(checkEnds({ until: "2026-11-01" }, "2026-11-14", "2026-11-14"), "The end date is before this one.");
     assert.equal(checkEnds({ until: "2037-11-14" }, "2026-11-14", "2026-11-14"), "Choose an end date within 10 years.");
     assert.equal(checkEnds({ count: 0 }, "2026-11-14", "2026-11-14"), "End after 1 to 999 times.");
     assert.equal(checkEnds({ count: 1000 }, "2026-11-14", "2026-11-14"), "End after 1 to 999 times.");

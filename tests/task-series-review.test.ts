@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact, updateContact } from "@/lib/crm/contacts";
+import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { withActor } from "@/lib/crm/context";
 import { scopesForRole } from "@/lib/crm/scopes";
 import {
   createRepeatingTask,
   createTaskFromApi,
+  deleteSeries,
   DONE_ALREADY,
   endSeriesOn,
   NEW_DAY_OPEN,
@@ -16,6 +18,7 @@ import {
   skipDeletedOccurrenceInDb,
   skipOccurrence,
   SKIP_MOVED_ON,
+  SPLIT_AGAIN,
   SPLITS_WEEKS,
   TOO_FEW_TIMES,
   TOO_MANY_SERIES,
@@ -23,9 +26,10 @@ import {
 } from "@/lib/crm/task-series";
 import { addTaskParticipants, archiveTask, completeTask, getTask, reopenTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
-import { undoAuditEvent, undoTaskEvents } from "@/lib/crm/undo";
+import { describeUndo, undoAuditEvent, undoTaskEvents } from "@/lib/crm/undo";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { reachesEnd, repeatInputOf, repeatPresets, type RepeatEnds } from "@/lib/task-repeat";
+import { dayKeyAt } from "@/lib/crm/working-days";
+import { lostChangeDays, reachesEnd, repeatInputOf, repeatPresets, type RepeatEnds } from "@/lib/task-repeat";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
 let mark: UserActor;
@@ -134,6 +138,29 @@ describe("split series", () => {
     assert.deepEqual(open.map((row) => row.id), [task.id]);
     assert.equal((await series(part.id)).current_task_id, null);
     assert.equal((await series(task.seriesId!)).ended_at, null);
+  });
+
+  it("changes every part of a split series with All, from the open task or a later date, including who it's for", async () => {
+    const task = await weekly("All parts");
+    const part = await splitAt(task, "2027-03-16", "Later part");
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Every part" }, "all");
+    assert.equal((await series(part.id)).title, "Every part");
+    await updateOccurrence(mark, { seriesId: part.id, occursOn: "2027-03-23" }, { durationMinutes: 45 }, "all");
+    assert.equal((await series(task.seriesId!)).duration_minutes, 45);
+    assert.equal((await series(part.id)).duration_minutes, 45);
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "all");
+    const [owner] = await sql<{ owner_id: string }>("select owner_id from crm.task_series where id = $1", [part.id]);
+    assert.equal(owner.owner_id, sam.userId);
+  });
+
+  it("leaves a later part not started when Done on the last one before it is undone, so Done again starts it", async () => {
+    const task = await weekly("Undo keeps part");
+    const part = await splitAt(task, "2027-03-09", "Part kept");
+    await completeTask(mark, task.id);
+    await reopenTask(mark, task.id);
+    assert.equal((await series(part.id)).ended_at, null);
+    await completeTask(mark, task.id);
+    assert.deepEqual((await openTasks([part.id])).map((row) => row.occurs_on), ["2027-03-09"]);
   });
 
   it("starts a later part after the done one's day when the last one was moved past it (45)", async () => {
@@ -254,10 +281,13 @@ describe("Done and Undo", () => {
 });
 
 describe("rolls and skips", () => {
-  it("rolls an open one moved later to the date after its new day (19)", async () => {
+  it("rolls an open one moved later at the start of the next date after its new day (19)", async () => {
     const task = (await createRepeatingTask(mark, { title: "Moved later", dueAt: at("2027-03-01", "10:00") }, { every: "day" })).body.task;
     await updateTask(mark, task.id, { dueAt: at("2027-03-02", "17:00") });
-    await rollDueSeries({ deadline: Date.now() + 30_000, now: Date.parse("2027-03-02T17:16:00Z") });
+    assert.equal((await series(task.seriesId!)).roll_at?.toISOString(), "2027-03-03T00:00:00.000Z");
+    await rollDueSeries({ deadline: Date.now() + 30_000, now: Date.parse("2027-03-02T18:16:00Z") });
+    assert.equal((await getTask(mark, task.id)).occursOn, "2027-03-01");
+    await rollDueSeries({ deadline: Date.now() + 30_000, now: Date.parse("2027-03-03T00:01:00Z") });
     const moved = await getTask(mark, task.id);
     assert.equal(moved.occursOn, "2027-03-03");
     assert.equal(moved.dueAt, at("2027-03-03", "10:00"));
@@ -457,5 +487,259 @@ describe("ends and limits", () => {
   it("refuses a malformed monthWeek and a falsy repeat on create (nit)", async () => {
     assert.throws(() => readRepeat({ every: "month", monthWeek: 0 }, "2027-03-02"), /which week of the month/);
     await assert.rejects(createTaskFromApi(mark, { title: "Falsy repeat", dueDate: "2027-03-02", repeat: false }), /Choose how it repeats/);
+  });
+});
+
+describe("final review", () => {
+  async function changeRows(seriesId: string) {
+    return sql<{ occurs_on: string; skip: boolean; title: string | null; duration_minutes: number | null; due_at: Date | null }>(
+      "select occurs_on::text as occurs_on, skip, title, duration_minutes, due_at from crm.task_occurrence_changes where series_id = $1 order by occurs_on",
+      [seriesId],
+    );
+  }
+
+  it("keeps later skips, titles and lengths on their paired dates when This and following moves the day (6)", async () => {
+    const task = await weekly("Paired days");
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-30" });
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-04-06" }, { title: "Special" }, "this");
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-04-13" }, { durationMinutes: 90 }, "this");
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-23" }, { dueAt: at("2027-03-24", "14:00") }, "following");
+    const part = await later(task.seriesId!);
+    assert.deepEqual(
+      (await changeRows(part.id)).map((row) => [row.occurs_on, row.skip, row.title, row.duration_minutes]),
+      [["2027-03-31", true, null, null], ["2027-04-07", false, "Special", null], ["2027-04-14", false, null, 90]],
+    );
+  });
+
+  it("refuses This and following moved onto or before the date before it once that one was moved earlier (7)", async () => {
+    const task = await weekly("Moved before");
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-16" }, { dueAt: at("2027-03-11", "14:00") }, "this");
+    await assert.rejects(updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-23" }, { dueAt: at("2027-03-12", "14:00") }, "following"), /Choose a day after Tue 16 Mar/);
+  });
+
+  it("keeps the assignee's times when the creator resends an unchanged time (8)", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Resent time", dueDate: "2027-03-02", ownerId: sam.userId }, { every: "week" })).body.task;
+    await updateOccurrence(sam, { taskId: task.id }, { dueAt: at("2027-03-02", "10:00") }, "all");
+    await updateOccurrence(sam, { taskId: task.id }, { dueAt: at("2027-03-02", "11:00") }, "this");
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Resent renamed", dueAt: at("2027-03-02", "11:00") }, "all");
+    assert.equal((await series(task.seriesId!)).at, "10:00");
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-16" }, { title: "One date", dueAt: at("2027-03-16", "10:00") }, "this");
+    const [row] = await changeRows(task.seriesId!);
+    assert.deepEqual([row.title, row.due_at], ["One date", null]);
+  });
+
+  it("keeps changed dates that are still dates of the new pattern, and Undo brings back the rest (5)", async () => {
+    const task = await weekly("Pattern keeps");
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-16" });
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-23" }, { title: "Kept title" }, "this");
+    assert.deepEqual((await getTask(mark, task.id)).repeat?.changeDays, ["2027-03-16", "2027-03-23"]);
+    await setTaskRepeat(mark, task.id, { every: "week", days: ["mo", "tu"] });
+    assert.deepEqual((await changeRows(task.seriesId!)).map((row) => row.occurs_on), ["2027-03-16", "2027-03-23"]);
+    const pattern = { startsOn: "2027-03-02", at: "14:00", rule: { freq: "weekly" as const, interval: 1, weekdays: ["we" as const] }, ends: { never: true as const } };
+    assert.deepEqual(lostChangeDays(["2027-03-16", "2027-03-17"], pattern), ["2027-03-16"]);
+    const changed = (await setTaskRepeat(mark, task.id, { every: "week", days: ["we"] })).body;
+    assert.deepEqual(await changeRows(task.seriesId!), []);
+    await undoTaskEvents(mark, task.id, changed.undo, { operation: "undo_change" });
+    assert.deepEqual((await changeRows(task.seriesId!)).map((row) => [row.occurs_on, row.skip, row.title]), [["2027-03-16", true, null], ["2027-03-23", false, "Kept title"]]);
+  });
+
+  it("keeps changed dates when only the end of a 29 Feb yearly series changes (5)", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Leap day", dueDate: "2028-02-29" }, { every: "year" })).body.task;
+    await completeTask(mark, task.id);
+    const [open] = await openTasks([task.seriesId!]);
+    assert.equal(open.occurs_on, "2029-02-28");
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2030-02-28" });
+    await endSeriesOn(mark, open.id, "2034-01-01");
+    assert.deepEqual((await changeRows(task.seriesId!)).map((row) => row.occurs_on), ["2030-02-28"]);
+  });
+
+  it("follows an opportunity that moved company when the next one is made", async () => {
+    const other = (await createCompany(mark, { name: "Opportunity moved", domain: "opp-moved-review.test" })).body.company.id;
+    const deal = (await createOpportunity(mark, { companyId, name: "Moving deal" })).body.opportunity.id;
+    const task = (await createRepeatingTask(mark, { title: "Deal follows", dueDate: "2027-03-02", opportunityId: deal }, { every: "week" })).body.task;
+    await updateOpportunity(mark, deal, { companyId: other });
+    await completeTask(mark, task.id);
+    const [next] = await sql<{ company_id: string | null; opportunity_id: string | null }>("select company_id, opportunity_id from crm.tasks where series_id = $1 and completed_at is null", [task.seriesId]);
+    assert.deepEqual(next, { company_id: other, opportunity_id: deal });
+  });
+
+  it("keeps the opportunity on the next one after its contact moves company", async () => {
+    const other = (await createCompany(mark, { name: "Contact moved", domain: "contact-moved-review.test" })).body.company.id;
+    const contact = (await createContact(mark, { firstName: "Kept", lastName: "Deal", email: "kept-deal@review.test", companyId })).body.contact.id;
+    const deal = (await createOpportunity(mark, { companyId, name: "Staying deal" })).body.opportunity.id;
+    const task = (await createRepeatingTask(mark, { title: "Both kept", dueDate: "2027-03-02", contactId: contact, opportunityId: deal }, { every: "week" })).body.task;
+    await updateContact(mark, contact, { companyId: other });
+    await completeTask(mark, task.id);
+    const [next] = await sql<{ contact_id: string | null; opportunity_id: string | null }>("select contact_id, opportunity_id from crm.tasks where series_id = $1 and completed_at is null", [task.seriesId]);
+    assert.deepEqual(next, { contact_id: contact, opportunity_id: deal });
+  });
+
+  it("puts a skipped last one back in its own part when the Skip is undone", async () => {
+    const task = await weekly("Skip back");
+    const part = await splitAt(task, "2027-03-09", "Skip back later");
+    const skipped = (await skipOccurrence(mark, { taskId: task.id })).body;
+    await undoTaskEvents(mark, task.id, skipped.undo, { operation: "undo_change" });
+    const back = await getTask(mark, task.id);
+    assert.deepEqual([back.seriesId, back.occursOn], [task.seriesId, "2027-03-02"]);
+    assert.deepEqual([(await series(part.id)).current_task_id, (await series(part.id)).ended_at], [null, null]);
+  });
+
+  it("refuses undoing a split whose later dates were split again", async () => {
+    const task = await weekly("Split twice");
+    const first = await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-16" }, { title: "First split" }, "following");
+    const part = await later(task.seriesId!);
+    await updateOccurrence(mark, { seriesId: part.id, occursOn: "2027-04-06" }, { title: "Second split" }, "following");
+    await assert.rejects(undoTaskEvents(mark, task.id, first.body.undo, { operation: "undo_change" }), new RegExp(SPLIT_AGAIN.slice(0, 20)));
+  });
+
+  it("keeps an unassigned series unassigned after This one goes to someone", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Nobody's", dueDate: "2027-03-02", ownerId: null }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await completeTask(mark, task.id);
+    const [next] = await sql<{ owner_id: string | null }>("select owner_id from crm.tasks where series_id = $1 and completed_at is null", [task.seriesId]);
+    assert.equal(next.owner_id, null);
+  });
+
+  it("drops the old owner's times on changed dates when a date-only series goes to a colleague with All", async () => {
+    const task = await weekly("Date only handed", {}, null);
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-16" }, { dueAt: at("2027-03-16", "09:00") }, "this");
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "all");
+    assert.deepEqual(await changeRows(task.seriesId!), []);
+  });
+
+  it("keeps a handed-on assignee's own time when the owner changes the time with All from the open one", async () => {
+    const task = await weekly("Handed open time");
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await updateOccurrence(sam, { taskId: task.id }, { dueAt: at("2027-03-02", "16:00") }, "this");
+    await updateOccurrence(mark, { taskId: task.id }, { dueAt: at("2027-03-02", "09:00") }, "all");
+    const open = await getTask(sam, task.id);
+    assert.deepEqual([open.dueAt, open.dueHasTime], [at("2027-03-02", "16:00"), true]);
+    assert.equal((await series(task.seriesId!)).at, "09:00");
+  });
+
+  it("lets the series owner delete a handed-on occurrence, which skips it", async () => {
+    const task = (await createRepeatingTask(sam, { title: "Sam made it", dueDate: "2027-03-02", ownerId: mark.userId }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");
+    const result = (await archiveTask(mark, task.id)).body;
+    assert.deepEqual([result.skipped, result.task.occursOn, result.task.archivedAt], ["2027-03-02", "2027-03-09", null]);
+  });
+
+  it("refuses a new day with All on the open one when other fields come with it", async () => {
+    const task = await weekly("Half applied");
+    await assert.rejects(updateOccurrence(mark, { taskId: task.id }, { title: "Moved too", dueAt: at("2027-03-04", "16:00") }, "all"), new RegExp(NEW_DAY_OPEN.slice(0, 20)));
+    assert.equal((await getTask(mark, task.id)).title, "Half applied");
+  });
+
+  it("keeps the last date when This and following moves later on a series with an end date", async () => {
+    const task = await weekly("End kept", { ends: { on: "2027-03-30" } });
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-23" }, { dueAt: at("2027-03-25", "14:00") }, "following");
+    assert.deepEqual((await later(task.seriesId!)).ends, { until: "2027-04-01" });
+  });
+
+  it("deletes the part that carries on when Delete the series comes from a done task of an earlier part", async () => {
+    const task = await weekly("Delete from done");
+    const part = await splitAt(task, "2027-03-09", "Delete later");
+    await completeTask(mark, task.id);
+    await deleteSeries(mark, task.id);
+    const [row] = await sql<{ archived: boolean }>("select archived_at is not null as archived from crm.task_series where id = $1", [part.id]);
+    assert.equal(row.archived, true);
+    assert.equal((await openTasks([part.id])).length, 0);
+  });
+
+  it("puts the task back on its stopped series when making it repeat again is undone", async () => {
+    const task = await weekly("Repeat again");
+    await setTaskRepeat(mark, task.id, null);
+    const again = (await setTaskRepeat(mark, task.id, { every: "day" })).body;
+    await undoTaskEvents(mark, task.id, again.undo, { operation: "undo_change" });
+    assert.equal((await getTask(mark, task.id)).seriesId, task.seriesId);
+  });
+
+  it("moves the next one back to the old link when a link change is undone after Done", async () => {
+    const other = (await createCompany(mark, { name: "Link undo", domain: "link-undo-review.test" })).body.company.id;
+    const task = await weekly("Link undo");
+    await updateOccurrence(mark, { taskId: task.id }, { companyId: other }, undefined);
+    const [changed] = await sql<{ id: string }>("select id from crm.audit_events where entity_id = $1 and event_type = 'task.updated' and changes ? 'seriesLinks'", [task.id]);
+    await completeTask(mark, task.id);
+    await undoAuditEvent(mark, changed.id, { operation: "undo_change" });
+    assert.equal((await openTasks([task.seriesId!]))[0].company_id, companyId);
+  });
+
+  it("lets only one of an unassigned and an own series in at 199 (66)", async () => {
+    const values: string[] = [];
+    for (let index = 0; index < 199; index += 1) values.push(`('${mark.workspaceId}', '${mark.userId}', '${mark.userId}', 'Near ${index}', '2027-03-01', '{"freq":"daily","interval":1}'::jsonb)`);
+    await sql(`insert into crm.task_series (workspace_id, created_by_user_id, owner_id, title, starts_on, rule) values ${values.join(", ")}`);
+    try {
+      const results = await Promise.allSettled([
+        createRepeatingTask(mark, { title: "Race own", dueDate: "2027-03-02" }, { every: "week" }),
+        createRepeatingTask(mark, { title: "Race nobody", dueDate: "2027-03-02", ownerId: null }, { every: "week" }),
+      ]);
+      assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    } finally {
+      await sql("update crm.task_series set archived_at = now() where title like 'Near %'");
+    }
+  });
+
+  it("stops retrying a roll with no free date to move to", async () => {
+    const task = await weekly("Nowhere", { ends: { after: 2 } });
+    await sql(
+      `insert into crm.tasks (workspace_id, title, due_at, owner_id, created_by_user_id, series_id, occurs_on, completed_at)
+       select workspace_id, title, due_at + interval '7 days', owner_id, created_by_user_id, series_id, '2027-03-09', now() from crm.tasks where id = $1`,
+      [task.id],
+    );
+    await rollDueSeries({ deadline: Date.now() + 30_000, now: Date.parse("2027-03-09T00:01:00Z") });
+    const [row] = await sql<{ roll_at: Date | null; roll_retry_at: Date | null }>("select roll_at, roll_retry_at from crm.task_series where id = $1", [task.seriesId]);
+    assert.deepEqual([row.roll_at, row.roll_retry_at], [null, null]);
+  });
+
+  it("starts a timed repeat made for a colleague today, date only, after that time has passed", async () => {
+    const today = dayKeyAt(new Date());
+    const task = (await createRepeatingTask(mark, { title: "For Sam today", dueAt: new Date(Date.now() - 60_000).toISOString(), ownerId: sam.userId }, { every: "day" })).body.task;
+    assert.deepEqual([task.occursOn, task.dueHasTime], [today, false]);
+  });
+
+  it("gives skip, move and retitle of an upcoming date their own line in Recent changes", async () => {
+    const task = await weekly("Lines");
+    const skipped = (await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-16" })).body.undo[0];
+    const moved = (await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-23" }, { dueAt: at("2027-03-24", "14:00") }, "this")).body.undo[0];
+    const renamed = (await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-30" }, { title: "Renamed" }, "this")).body.undo[0];
+    assert.deepEqual(
+      [(await describeUndo(mark, skipped)).summary, (await describeUndo(mark, moved)).summary, (await describeUndo(mark, renamed)).summary],
+      ["Skipped task Lines on Tue 16 Mar", "Moved task Lines on Tue 23 Mar", "Changed task Lines on Tue 30 Mar"],
+    );
+  });
+
+  it("keeps an agent's later part its own when the owner splits it (depends on the split insert policy)", async () => {
+    const { actor: agent } = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"], "Split agent");
+    const task = (await createRepeatingTask(agent, { title: "Agent split", dueDate: "2027-03-02" }, { every: "week" })).body.task;
+    const part = await splitAt(task, "2027-03-16", "Agent later");
+    const [row] = await sql<{ created_by_agent_id: string | null; owner_id: string | null }>("select created_by_agent_id, owner_id from crm.task_series where id = $1", [part.id]);
+    assert.deepEqual(row, { created_by_agent_id: agent.agentId, owner_id: mark.userId });
+    await updateOccurrence(mark, { seriesId: part.id, occursOn: "2027-03-23" }, { title: "Still Mark's" }, "this");
+  });
+
+  it("starts a later part at the next roll when someone other than the owner completes the last task before it", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Sam finishes", dueDate: "2027-03-02" }, { every: "week" })).body.task;
+    const part = await splitAt(task, "2027-03-16", "Sam finishes later");
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-09" });
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await completeTask(sam, task.id);
+    await rollDueSeries({ deadline: Date.now() + 30_000, now: Date.parse("2027-03-02T12:00:00Z") });
+    assert.deepEqual((await openTasks([part.id])).map((row) => row.occurs_on), ["2027-03-16"]);
+  });
+
+  it("shows a tagged person the end of the whole split series", async () => {
+    const task = await weekly("Tagged end");
+    await splitAt(task, "2027-03-16", "Tagged later");
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    const repeat = (await getTask(priya, task.id)).repeat!;
+    assert.deepEqual([repeat.ends, repeat.end], [{ never: true }, ""]);
+  });
+
+  it("gives the whole series' end in rrule on a split series", async () => {
+    const task = await weekly("Rrule end");
+    await splitAt(task, "2027-03-16", "Rrule later");
+    const repeat = (await getTask(mark, task.id)).repeat!;
+    assert.deepEqual(repeat.ends, { never: true });
+    assert.equal(repeat.rrule.includes("UNTIL"), false);
   });
 });

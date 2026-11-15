@@ -1556,7 +1556,7 @@ export async function decideActions(
       const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, chosenAlternative ? chosenAlternative.args(callArgs) : callArgs, {
         deadline: options.deadline - 20_000,
         callId: call.id,
-        approval: action.name === "save_doc" ? approvalFor(action) : undefined,
+        approval: action.name === "save_doc" ? approvalFor(action) : action.approval,
         source: options.headless ? "email" : undefined,
         fence,
       })) as Record<string, unknown> | null;

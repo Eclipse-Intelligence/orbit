@@ -712,9 +712,7 @@ describe("database backstops", () => {
 
   it("rebuilds an index a failed concurrent build left invalid when the migration runs again (72)", async () => {
     await sql("update pg_index set indisvalid = false where indexrelid = 'crm.tasks_series_open_idx'::regclass");
-    const file = readFileSync("supabase/migrations/20270203100000_recurring_engine_fixes.sql", "utf8");
-    await applyMigrationSql(getAdminPool(), file);
-    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270203300000_recurring_review_fixes.sql", "utf8"));
+    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270203100000_recurring_tasks.sql", "utf8"));
     const [index] = await sql<{ valid: boolean }>("select indisvalid as valid from pg_index where indexrelid = 'crm.tasks_series_open_idx'::regclass");
     assert.equal(index.valid, true);
   });

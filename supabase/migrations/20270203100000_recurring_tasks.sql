@@ -1,37 +1,69 @@
 set lock_timeout = '5s';
 
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint
-    where conname = 'task_series_ends_shape' and conrelid = 'crm.task_series'::regclass
-      and pg_get_constraintdef(oid) like '%''spent''%'
-  ) then
-    alter table crm.task_series drop constraint if exists task_series_ends_shape;
-    alter table crm.task_series add constraint task_series_ends_shape check (
-      jsonb_typeof(ends) = 'object'
-      and (
-        ends = '{"never": true}'::jsonb
-        or (
-          (ends - 'count' - 'spent') = '{}'::jsonb
-          and jsonb_typeof(ends -> 'count') = 'number'
-          and (ends ->> 'count') ~ '^[1-9][0-9]{0,2}$'
-          and (not (ends ? 'spent') or (jsonb_typeof(ends -> 'spent') = 'number' and (ends ->> 'spent') ~ '^(0|[1-9][0-9]{0,5})$'))
-        )
-        or (
-          (ends - 'until') = '{}'::jsonb
-          and jsonb_typeof(ends -> 'until') = 'string'
-          and (ends ->> 'until') ~ '^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$'
-        )
+alter table crm.task_series drop constraint if exists task_series_rule_shape;
+alter table crm.task_series add constraint task_series_rule_shape check (
+  coalesce(
+    jsonb_typeof(rule) = 'object'
+    and rule ->> 'freq' in ('daily', 'weekly', 'monthly', 'yearly')
+    and (rule - 'freq' - 'interval' - 'weekdays' - 'monthDay' - 'monthWeek') = '{}'::jsonb
+    and jsonb_typeof(rule -> 'interval') = 'number'
+    and (rule ->> 'interval') ~ '^[1-9][0-9]?$'
+    and (not (rule ? 'monthDay') or (jsonb_typeof(rule -> 'monthDay') = 'number' and (rule ->> 'monthDay') ~ '^([1-9]|[12][0-9]|3[01])$'))
+    and case
+      when rule ->> 'freq' = 'weekly' then
+        jsonb_typeof(rule -> 'weekdays') = 'array'
+        and jsonb_array_length(rule -> 'weekdays') between 1 and 7
+        and (rule -> 'weekdays') <@ '["mo", "tu", "we", "th", "fr", "sa", "su"]'::jsonb
+        and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
+      when rule ->> 'freq' = 'monthly' then
+        not (rule ? 'weekdays')
+        and not (rule ? 'monthDay' and rule ? 'monthWeek')
+        and (not (rule ? 'monthWeek') or (
+          jsonb_typeof(rule -> 'monthWeek') = 'object'
+          and ((rule -> 'monthWeek') - 'n' - 'weekday') = '{}'::jsonb
+          and jsonb_typeof(rule -> 'monthWeek' -> 'n') = 'number'
+          and (rule -> 'monthWeek' ->> 'n') in ('1', '2', '3', '4', '-1')
+          and jsonb_typeof(rule -> 'monthWeek' -> 'weekday') = 'string'
+          and (rule -> 'monthWeek' ->> 'weekday') in ('mo', 'tu', 'we', 'th', 'fr', 'sa', 'su')
+        ))
+      when rule ->> 'freq' = 'yearly' then
+        not (rule ? 'weekdays') and not (rule ? 'monthWeek')
+      else not (rule ? 'weekdays') and not (rule ? 'monthDay') and not (rule ? 'monthWeek')
+    end,
+    false
+  )
+);
+
+alter table crm.task_series drop constraint if exists task_series_ends_shape;
+alter table crm.task_series add constraint task_series_ends_shape check (
+  coalesce(
+    jsonb_typeof(ends) = 'object'
+    and (
+      ends = '{"never": true}'::jsonb
+      or (
+        (ends - 'count' - 'spent') = '{}'::jsonb
+        and jsonb_typeof(ends -> 'count') = 'number'
+        and (ends ->> 'count') ~ '^[1-9][0-9]{0,2}$'
+        and (not (ends ? 'spent') or (jsonb_typeof(ends -> 'spent') = 'number' and (ends ->> 'spent') ~ '^(0|[1-9][0-9]{0,5})$'))
       )
-    );
-  end if;
-end
-$$;
+      or (
+        (ends - 'until') = '{}'::jsonb
+        and jsonb_typeof(ends -> 'until') = 'string'
+        and case
+          when (ends ->> 'until') ~ '^[1-9][0-9]{3}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' then
+            substr(ends ->> 'until', 9, 2)::integer <= extract(day from make_date(substr(ends ->> 'until', 1, 4)::integer, substr(ends ->> 'until', 6, 2)::integer, 1) + interval '1 month' - interval '1 day')
+          else false
+        end
+      )
+    ),
+    false
+  )
+);
 
 drop function if exists crm.series_active_count(uuid, uuid);
+drop function if exists crm.series_at_limit(uuid, uuid, integer);
 
-create or replace function crm.series_at_limit(p_workspace uuid, p_owner uuid, p_limit integer)
+create or replace function crm.series_at_limit(p_workspace uuid, p_owner uuid)
 returns table (at_limit boolean, keeper uuid)
 language sql
 stable
@@ -56,7 +88,7 @@ as $$
         and s.ended_at is null
         and not (s.split_from_id is not null and s.current_task_id is null)
         and (s.owner_id = wanted.id or (s.owner_id is null and wanted.id = (select user_id from head)))
-    ) >= p_limit,
+    ) >= 200,
     (select id from wanted)
   where (
     current_setting('role') = 'authenticated'
@@ -67,10 +99,138 @@ as $$
   )
 $$;
 
-revoke all on function crm.series_at_limit(uuid, uuid, integer) from public;
-grant execute on function crm.series_at_limit(uuid, uuid, integer) to authenticated, crm_agent;
+revoke all on function crm.series_at_limit(uuid, uuid) from public;
+grant execute on function crm.series_at_limit(uuid, uuid) to authenticated, crm_agent;
 
-create or replace function private.series_occurrence_allowed(p_series uuid, p_workspace uuid, p_user uuid, p_agent uuid, p_owner uuid)
+create or replace function crm.series_taken_days(p_series uuid, p_except uuid)
+returns table (day date)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select t.occurs_on
+  from crm.task_series s
+  join crm.tasks t on t.series_id = s.id and t.workspace_id = s.workspace_id
+  where s.id = p_series
+    and t.archived_at is null
+    and t.id is distinct from p_except
+    and (
+      (
+        current_setting('role') = 'authenticated'
+        and s.workspace_id in (select private.user_workspace_ids())
+        and (
+          s.owner_id = (select private.session_user_id())
+          or s.created_by_user_id = (select private.session_user_id())
+          or exists (
+            select 1 from crm.tasks c
+            where c.id = s.current_task_id
+              and (c.owner_id = (select private.session_user_id()) or c.created_by_user_id = (select private.session_user_id()))
+          )
+        )
+      )
+      or (
+        current_setting('role') = 'crm_agent'
+        and s.workspace_id = (select private.request_workspace_id())
+        and (
+          s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+          or exists (
+            select 1 from crm.tasks c
+            where c.id = s.current_task_id and c.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+          )
+        )
+      )
+    )
+$$;
+
+revoke all on function crm.series_taken_days(uuid, uuid) from public;
+grant execute on function crm.series_taken_days(uuid, uuid) to authenticated, crm_agent;
+
+create or replace function crm.series_end_with_archived(p_task uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update crm.task_series s
+  set ended_at = coalesce(s.ended_at, now()), roll_at = null, roll_pending = false, roll_retry_at = null
+  from crm.tasks t
+  where t.id = p_task
+    and s.id = t.series_id
+    and s.workspace_id = t.workspace_id
+    and s.current_task_id = t.id
+    and t.archived_at is not null
+    and s.ended_at is null
+    and s.archived_at is null
+    and s.ends <> '{"never": true}'::jsonb
+    and (
+      (
+        current_setting('role') = 'authenticated'
+        and t.workspace_id in (select private.user_workspace_ids())
+        and (t.owner_id = (select private.session_user_id()) or t.created_by_user_id = (select private.session_user_id()))
+      )
+      or (
+        current_setting('role') = 'crm_agent'
+        and t.workspace_id = (select private.request_workspace_id())
+        and t.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+      )
+    )
+$$;
+
+revoke all on function crm.series_end_with_archived(uuid) from public;
+grant execute on function crm.series_end_with_archived(uuid) to authenticated, crm_agent;
+
+create or replace function crm.series_tag_owner(p_task uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into crm.task_participants (task_id, user_id, added_by)
+  select t.id, s.owner_id, null
+  from crm.tasks t
+  join crm.task_series s on s.id = t.series_id and s.workspace_id = t.workspace_id
+  join crm.workspace_members m on m.workspace_id = t.workspace_id and m.user_id = s.owner_id
+  where t.id = p_task
+    and s.current_task_id = t.id
+    and s.owner_id is distinct from t.owner_id
+    and current_setting('role') = 'crm_agent'
+    and t.workspace_id = (select private.request_workspace_id())
+    and (
+      s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+      or t.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+    )
+  on conflict (task_id, user_id) do nothing
+$$;
+
+revoke all on function crm.series_tag_owner(uuid) from public;
+grant execute on function crm.series_tag_owner(uuid) to crm_agent;
+
+create or replace function private.series_next_bound(p_series crm.task_series, p_after date)
+returns date
+language sql
+stable
+set search_path = ''
+as $$
+  select (
+    greatest(coalesce(p_after, current_date), current_date)
+    + (
+      1
+      + (select count(*) from crm.task_occurrence_changes x where x.series_id = p_series.id and x.occurs_on > p_after)
+      + (select count(*) from crm.tasks y where y.series_id = p_series.id and y.occurs_on > p_after)
+    ) * (p_series.rule ->> 'interval')::integer * case p_series.rule ->> 'freq'
+      when 'daily' then interval '1 day'
+      when 'weekly' then interval '7 days'
+      when 'monthly' then interval '1 month'
+      else interval '1 year'
+    end
+    + interval '7 days'
+  )::date
+$$;
+
+revoke all on function private.series_next_bound(crm.task_series, date) from public;
+
+create or replace function private.series_occurrence_allowed(p_series uuid, p_workspace uuid, p_user uuid, p_agent uuid, p_owner uuid, p_occurs date)
 returns boolean
 language sql
 stable
@@ -100,6 +260,7 @@ as $$
                   (select m.user_id from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id),
                   c.owner_id
                 )
+                and p_occurs <= private.series_next_bound(s, c.occurs_on)
             )
           )
         )
@@ -116,6 +277,7 @@ as $$
                   (select m.user_id from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id),
                   c.owner_id
                 )
+                and p_occurs <= private.series_next_bound(s, c.occurs_on)
             )
           )
         )
@@ -123,8 +285,8 @@ as $$
   )
 $$;
 
-revoke all on function private.series_occurrence_allowed(uuid, uuid, uuid, uuid, uuid) from public;
-grant execute on function private.series_occurrence_allowed(uuid, uuid, uuid, uuid, uuid) to authenticated, crm_agent;
+revoke all on function private.series_occurrence_allowed(uuid, uuid, uuid, uuid, uuid, date) from public;
+grant execute on function private.series_occurrence_allowed(uuid, uuid, uuid, uuid, uuid, date) to authenticated, crm_agent;
 
 drop policy if exists tasks_insert_series_member on crm.tasks;
 create policy tasks_insert_series_member on crm.tasks
@@ -132,7 +294,7 @@ create policy tasks_insert_series_member on crm.tasks
   with check (
     series_id is not null
     and workspace_id in (select private.user_workspace_ids())
-    and private.series_occurrence_allowed(series_id, workspace_id, created_by_user_id, created_by_agent_id, owner_id)
+    and private.series_occurrence_allowed(series_id, workspace_id, created_by_user_id, created_by_agent_id, owner_id, occurs_on)
     and ((completed_at is null and archived_at is null) or private.session_owns_series(series_id, workspace_id))
   );
 
@@ -142,9 +304,138 @@ create policy tasks_insert_series_agent on crm.tasks
   with check (
     series_id is not null
     and workspace_id = (select private.request_workspace_id())
-    and private.series_occurrence_allowed(series_id, workspace_id, created_by_user_id, created_by_agent_id, owner_id)
+    and private.series_occurrence_allowed(series_id, workspace_id, created_by_user_id, created_by_agent_id, owner_id, occurs_on)
     and ((completed_at is null and archived_at is null) or private.agent_owns_series(series_id, workspace_id))
   );
+
+drop policy if exists tasks_series_binding on crm.tasks;
+create policy tasks_series_binding on crm.tasks
+  as restrictive
+  for insert to authenticated, crm_agent
+  with check (series_id is null or private.series_occurrence_allowed(series_id, workspace_id, created_by_user_id, created_by_agent_id, owner_id, occurs_on));
+
+drop function if exists private.series_occurrence_allowed(uuid, uuid, uuid, uuid);
+drop function if exists private.series_occurrence_allowed(uuid, uuid, uuid, uuid, uuid);
+
+create or replace function private.series_part_allowed(p_parent uuid, p_workspace uuid, p_user uuid, p_agent uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from crm.task_series p
+    where p.id = p_parent
+      and p.workspace_id = p_workspace
+      and p.created_by_user_id is not distinct from p_user
+      and p.created_by_agent_id is not distinct from p_agent
+      and (
+        (
+          current_setting('role') = 'authenticated'
+          and (select private.session_user_id()) is not null
+          and (p.owner_id = (select private.session_user_id()) or p.created_by_user_id = (select private.session_user_id()))
+        )
+        or (
+          current_setting('role') = 'crm_agent'
+          and nullif(current_setting('app.agent_id', true), '')::uuid is not null
+          and p.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+        )
+      )
+  )
+$$;
+
+revoke all on function private.series_part_allowed(uuid, uuid, uuid, uuid) from public;
+grant execute on function private.series_part_allowed(uuid, uuid, uuid, uuid) to authenticated, crm_agent;
+
+drop policy if exists task_series_insert_member on crm.task_series;
+create policy task_series_insert_member on crm.task_series
+  for insert to authenticated
+  with check (
+    workspace_id in (select private.user_workspace_ids())
+    and (
+      (created_by_user_id = (select private.session_user_id()) and created_by_agent_id is null)
+      or (split_from_id is not null and private.series_part_allowed(split_from_id, workspace_id, created_by_user_id, created_by_agent_id))
+    )
+  );
+
+drop policy if exists task_series_insert_agent on crm.task_series;
+create policy task_series_insert_agent on crm.task_series
+  for insert to crm_agent
+  with check (
+    workspace_id = (select private.request_workspace_id())
+    and (
+      (created_by_user_id is null and created_by_agent_id = (select nullif(current_setting('app.agent_id', true), '')::uuid))
+      or (split_from_id is not null and private.series_part_allowed(split_from_id, workspace_id, created_by_user_id, created_by_agent_id))
+    )
+  );
+
+drop policy if exists tasks_update_series_member on crm.tasks;
+create policy tasks_update_series_member on crm.tasks
+  for update to authenticated
+  using (
+    series_id is not null
+    and completed_at is null
+    and workspace_id in (select private.user_workspace_ids())
+    and private.session_owns_series(series_id, workspace_id)
+    and (
+      owner_id = (select private.session_user_id())
+      or created_by_user_id = (select private.session_user_id())
+      or id in (select private.my_task_ids())
+    )
+  )
+  with check (workspace_id in (select private.user_workspace_ids()));
+
+drop policy if exists tasks_update_series_agent on crm.tasks;
+create policy tasks_update_series_agent on crm.tasks
+  for update to crm_agent
+  using (
+    series_id is not null
+    and completed_at is null
+    and workspace_id = (select private.request_workspace_id())
+    and private.agent_owns_series(series_id, workspace_id)
+  )
+  with check (workspace_id = (select private.request_workspace_id()));
+
+create or replace function private.task_series_take_occurrence()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_source uuid;
+begin
+  select coalesce(
+    s.current_task_id,
+    (select p.current_task_id from crm.task_series p where p.id = s.split_from_id and p.workspace_id = s.workspace_id)
+  )
+  into v_source
+  from crm.task_series s
+  where s.id = new.series_id;
+  if v_source is not null and v_source is distinct from new.id then
+    insert into crm.task_participants (task_id, user_id, added_by)
+    select new.id, p.user_id, p.added_by
+    from crm.task_participants p
+    join crm.workspace_members m on m.workspace_id = new.workspace_id and m.user_id = p.user_id
+    where p.task_id = v_source
+      and p.user_id is distinct from new.owner_id
+    on conflict (task_id, user_id) do nothing;
+    insert into crm.task_docs (task_id, page_id, workspace_id, created_by, created_by_agent_id, page_archived)
+    select new.id, d.page_id, new.workspace_id, d.created_by, d.created_by_agent_id, d.page_archived
+    from crm.task_docs d
+    where d.task_id = v_source
+      and d.workspace_id = new.workspace_id
+    on conflict (task_id, page_id) do nothing;
+  end if;
+  update crm.task_series
+  set current_task_id = new.id, roll_retry_at = null, roll_pending = (roll_pending or roll_at is null or roll_at <= now())
+  where id = new.series_id and current_task_id is distinct from new.id;
+  return null;
+end;
+$$;
+
+revoke all on function private.task_series_take_occurrence() from public;
 
 create or replace function private.tasks_bind_series()
 returns trigger
@@ -338,7 +629,7 @@ security definer
 set search_path = ''
 as $$
 begin
-  if current_setting('role') is distinct from 'authenticated' or old.user_id is not distinct from (select private.session_user_id()) then
+  if current_setting('role') is distinct from 'authenticated' then
     return old;
   end if;
   if exists (
@@ -713,7 +1004,7 @@ begin
   select s.current_task_id, p_actor, p_actor
   from crm.task_series s
   join crm.tasks t on t.id = s.current_task_id
-  where s.workspace_id = p_workspace and (s.owner_id = p_user or s.created_by_user_id = p_user)
+  where s.workspace_id = p_workspace and (s.owner_id = p_user or (s.owner_id is null and s.created_by_user_id = p_user))
     and t.owner_id is distinct from p_actor and t.created_by_user_id is distinct from p_actor
   on conflict do nothing;
   with series_events as (
@@ -721,7 +1012,7 @@ begin
     select p_workspace, 'task_series.updated', 'task', handed_series.anchor, 'user', p_actor, p_source, p_source_url, p_operation,
       jsonb_build_object(
         'series', jsonb_build_object('id', handed_series.id),
-        'handedOver', jsonb_build_object('from', p_user, 'to', p_actor, 'owner', handed_series.owner_id = p_user, 'creator', handed_series.created_by_user_id = p_user)
+        'handedOver', jsonb_build_object('from', p_user, 'to', case when handed_series.owner_id is null or handed_series.owner_id = p_user then p_actor else handed_series.owner_id end, 'owner', handed_series.owner_id = p_user, 'creator', handed_series.created_by_user_id = p_user)
       )
     from (
       select s.id, s.owner_id, s.created_by_user_id, coalesce(s.current_task_id, private.series_anchor_task(s.id)) as anchor
@@ -756,7 +1047,7 @@ begin
       remind_minutes = null,
       roll_pending = case when s.ended_at is null and s.archived_at is null then true else s.roll_pending end
   where s.workspace_id = p_workspace and s.owner_id = p_user;
-  update crm.task_series s set created_by_user_id = p_actor
+  update crm.task_series s set created_by_user_id = coalesce(s.owner_id, p_actor)
   where s.workspace_id = p_workspace and s.created_by_user_id = p_user;
 
   with items as (
@@ -823,127 +1114,6 @@ $$;
 
 revoke all on function private.team_remove_records(uuid, uuid, uuid, text, text, text) from public;
 grant execute on function private.team_remove_records(uuid, uuid, uuid, text, text, text) to crm_app;
-
-drop function if exists private.claim_series_outlook(uuid[], uuid, integer);
-create function private.claim_series_outlook(p_task_ids uuid[], p_user_id uuid, p_limit integer)
-returns table (
-  series_id uuid,
-  workspace_id uuid,
-  owner_id uuid,
-  owner_member boolean,
-  title text,
-  starts_on text,
-  at text,
-  duration_minutes integer,
-  rule jsonb,
-  ends jsonb,
-  ended boolean,
-  current_task_id uuid,
-  current_occurs_on text,
-  current_due_at timestamptz,
-  changes jsonb,
-  user_id uuid,
-  master_id text,
-  create_key uuid,
-  create_user_id uuid,
-  create_sent_at timestamptz,
-  written jsonb,
-  dates jsonb,
-  version bigint,
-  attempts integer,
-  lease text
-)
-language plpgsql
-security definer
-set search_path = ''
-as $$
-#variable_conflict use_column
-declare
-  v_claimed uuid[];
-begin
-  with picked as (
-    select o.series_id
-    from crm.task_series_outlook o
-    join crm.task_series s on s.id = o.series_id
-    where o.version > o.settled_version
-      and (o.claimed_at is null or o.claimed_at < clock_timestamp() - interval '2 minutes')
-      and (o.retry_at is null or o.retry_at <= clock_timestamp())
-      and (p_task_ids is null or s.current_task_id = any(p_task_ids))
-      and (p_user_id is null or s.owner_id = p_user_id or o.user_id = p_user_id or o.create_user_id = p_user_id)
-    order by o.updated_at
-    limit greatest(1, least(coalesce(p_limit, 50), 200))
-    for update of o skip locked
-  ), claimed as (
-    update crm.task_series_outlook o
-    set claimed_at = clock_timestamp()
-    from picked
-    where o.series_id = picked.series_id
-    returning o.series_id
-  )
-  select coalesce(array_agg(claimed.series_id), '{}') into v_claimed from claimed;
-
-  return query
-  select s.id, s.workspace_id, s.owner_id,
-    exists (select 1 from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id),
-    s.title, s.starts_on::text, to_char(s.at, 'HH24:MI'), s.duration_minutes, s.rule, s.ends,
-    (s.ended_at is not null or s.archived_at is not null),
-    s.current_task_id, t.occurs_on::text, t.due_at,
-    coalesce((
-      select jsonb_agg(jsonb_build_object(
-        'occursOn', ch.occurs_on::text, 'skip', ch.skip, 'dueAt', ch.due_at, 'dueHasTime', ch.due_has_time,
-        'durationMinutes', ch.duration_minutes, 'title', ch.title
-      ) order by ch.occurs_on)
-      from crm.task_occurrence_changes ch
-      where ch.series_id = s.id and (t.occurs_on is null or ch.occurs_on > t.occurs_on)
-    ), '[]'::jsonb),
-    c.user_id, c.master_id, c.create_key, c.create_user_id, c.create_sent_at, c.written, c.dates, c.version, c.attempts, c.claimed_at::text
-  from crm.task_series_outlook c
-  join crm.task_series s on s.id = c.series_id
-  left join crm.tasks t on t.id = s.current_task_id
-  where c.series_id = any(v_claimed);
-end;
-$$;
-
-revoke all on function private.claim_series_outlook(uuid[], uuid, integer) from public;
-grant execute on function private.claim_series_outlook(uuid[], uuid, integer) to crm_app;
-
-drop function if exists private.settle_series_outlook(uuid, bigint, boolean, boolean);
-create or replace function private.settle_series_outlook(p_series uuid, p_version bigint, p_requeue boolean, p_waiting boolean, p_lease text)
-returns void
-language sql
-security definer
-set search_path = ''
-as $$
-  update crm.task_series_outlook
-  set settled_version = case when p_requeue then settled_version else greatest(settled_version, p_version) end,
-      claimed_at = null,
-      retry_at = null,
-      attempts = 0,
-      waiting = p_waiting and not p_requeue
-  where series_id = p_series
-    and (p_lease is null or claimed_at = p_lease::timestamptz);
-$$;
-
-revoke all on function private.settle_series_outlook(uuid, bigint, boolean, boolean, text) from public;
-grant execute on function private.settle_series_outlook(uuid, bigint, boolean, boolean, text) to crm_app;
-
-drop function if exists private.defer_series_outlook(uuid, timestamptz);
-create or replace function private.defer_series_outlook(p_series uuid, p_until timestamptz, p_version bigint, p_lease text)
-returns void
-language sql
-security definer
-set search_path = ''
-as $$
-  update crm.task_series_outlook
-  set claimed_at = null,
-      retry_at = case when version > p_version then null else p_until end,
-      attempts = case when version > p_version then 0 else attempts + 1 end
-  where series_id = p_series
-    and (p_lease is null or claimed_at = p_lease::timestamptz);
-$$;
-
-revoke all on function private.defer_series_outlook(uuid, timestamptz, bigint, text) from public;
-grant execute on function private.defer_series_outlook(uuid, timestamptz, bigint, text) to crm_app;
 
 create or replace function private.merge_company_references(
   p_workspace uuid,
@@ -1244,6 +1414,94 @@ revoke all on function private.merge_contact_references(uuid, uuid, uuid, uuid, 
 grant execute on function private.merge_company_references(uuid, uuid, uuid, uuid, uuid) to crm_app;
 grant execute on function private.merge_contact_references(uuid, uuid, uuid, uuid, uuid) to crm_app;
 
+create or replace function private.booking_series(p_user_id uuid, p_from date, p_to date)
+returns table (
+  starts_on date,
+  at text,
+  duration_minutes integer,
+  rule jsonb,
+  ends jsonb,
+  current_occurs_on date,
+  current_due_at timestamptz,
+  changes jsonb
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_from is null or p_to is null or p_to < p_from or p_to - p_from > 102 then
+    raise exception 'invalid busy window' using errcode = '22023';
+  end if;
+  if not exists (select 1 from crm.booking_pages b where b.user_id = p_user_id and b.enabled) then
+    return;
+  end if;
+
+  return query
+  select s.starts_on, to_char(s.at, 'HH24:MI'), s.duration_minutes, s.rule, s.ends, t.occurs_on, t.due_at,
+    coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'occursOn', c.occurs_on::text, 'skip', c.skip, 'dueAt', c.due_at, 'dueHasTime', c.due_has_time,
+        'durationMinutes', c.duration_minutes
+      ) order by c.occurs_on)
+      from crm.task_occurrence_changes c
+      where c.series_id = s.id and (t.occurs_on is null or c.occurs_on > t.occurs_on)
+    ), '[]'::jsonb)
+  from crm.task_series s
+  join crm.workspace_members m on m.workspace_id = s.workspace_id and m.user_id = s.owner_id
+  left join crm.tasks t on t.id = s.current_task_id
+  where s.owner_id = p_user_id
+    and s.ended_at is null
+    and s.archived_at is null
+    and s.starts_on <= p_to
+    and (
+      s.at is not null
+      or exists (
+        select 1 from crm.task_occurrence_changes c
+        where c.series_id = s.id and c.due_has_time
+      )
+    )
+  order by s.created_at, s.id;
+end;
+$$;
+
+revoke all on function private.booking_series(uuid, date, date) from public;
+grant execute on function private.booking_series(uuid, date, date) to crm_app;
+
+create table if not exists crm.task_series_outlook (
+  series_id uuid primary key references crm.task_series (id) on delete cascade,
+  user_id uuid references crm.profiles (id) on delete set null,
+  master_id text,
+  create_key uuid,
+  create_user_id uuid references crm.profiles (id) on delete set null,
+  create_sent_at timestamptz,
+  written jsonb,
+  dates jsonb not null default '{}'::jsonb,
+  version bigint not null default 1,
+  settled_version bigint not null default 0,
+  claimed_at timestamptz,
+  retry_at timestamptz,
+  attempts integer not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+alter table crm.task_series_outlook add column if not exists waiting boolean not null default false;
+alter table crm.task_series_outlook add column if not exists leftovers jsonb not null default '[]'::jsonb;
+
+alter table crm.task_series_outlook enable row level security;
+alter table crm.task_series_outlook force row level security;
+revoke all on crm.task_series_outlook from public, anon, authenticated, crm_agent;
+
+do $$
+begin
+  execute 'drop policy if exists task_series_outlook_definer on crm.task_series_outlook';
+  if not exists (select 1 from pg_roles r where r.rolname = current_user and (r.rolsuper or r.rolbypassrls)) then
+    execute format('create policy task_series_outlook_definer on crm.task_series_outlook for all to %I using (true) with check (true)', current_user);
+  end if;
+end;
+$$;
+
 create or replace function private.series_outlook_touch(p_series uuid)
 returns void
 language sql
@@ -1263,6 +1521,224 @@ $$;
 
 revoke all on function private.series_outlook_touch(uuid) from public;
 
+create or replace function private.task_series_outlook_enqueue()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_table_name = 'task_series' then
+    perform private.series_outlook_touch(new.id);
+  elsif tg_table_name = 'task_occurrence_changes' then
+    perform private.series_outlook_touch(case when tg_op = 'DELETE' then old.series_id else new.series_id end);
+  elsif tg_table_name = 'tasks' then
+    perform private.series_outlook_touch(new.series_id);
+    if old.series_id is distinct from new.series_id and old.series_id is not null then
+      perform private.series_outlook_touch(old.series_id);
+    end if;
+  end if;
+  return null;
+end;
+$$;
+
+revoke all on function private.task_series_outlook_enqueue() from public;
+
+drop trigger if exists task_series_outlook_enqueue on crm.task_series;
+create trigger task_series_outlook_enqueue
+  after insert or update of workspace_id, owner_id, title, starts_on, at, duration_minutes, rule, ends, current_task_id, ended_at, archived_at
+  on crm.task_series
+  for each row execute function private.task_series_outlook_enqueue();
+
+drop trigger if exists task_occurrence_changes_outlook_enqueue on crm.task_occurrence_changes;
+create trigger task_occurrence_changes_outlook_enqueue
+  after insert or update or delete on crm.task_occurrence_changes
+  for each row execute function private.task_series_outlook_enqueue();
+
+drop trigger if exists tasks_series_outlook_enqueue on crm.tasks;
+create trigger tasks_series_outlook_enqueue
+  after update of due_at, occurs_on, series_id on crm.tasks
+  for each row
+  when (new.series_id is not null or old.series_id is not null)
+  execute function private.task_series_outlook_enqueue();
+
+drop function if exists private.claim_series_outlook(uuid[], uuid, integer);
+create function private.claim_series_outlook(p_task_ids uuid[], p_user_id uuid, p_limit integer)
+returns table (
+  series_id uuid,
+  workspace_id uuid,
+  owner_id uuid,
+  owner_member boolean,
+  title text,
+  starts_on text,
+  at text,
+  duration_minutes integer,
+  rule jsonb,
+  ends jsonb,
+  ended boolean,
+  current_task_id uuid,
+  current_occurs_on text,
+  current_due_at timestamptz,
+  changes jsonb,
+  user_id uuid,
+  master_id text,
+  create_key uuid,
+  create_user_id uuid,
+  create_sent_at timestamptz,
+  written jsonb,
+  dates jsonb,
+  version bigint,
+  attempts integer,
+  lease text,
+  leftovers jsonb
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_claimed uuid[];
+begin
+  with picked as (
+    select o.series_id
+    from crm.task_series_outlook o
+    join crm.task_series s on s.id = o.series_id
+    where o.version > o.settled_version
+      and (o.claimed_at is null or o.claimed_at < clock_timestamp() - interval '2 minutes')
+      and (o.retry_at is null or o.retry_at <= clock_timestamp())
+      and (p_task_ids is null or s.current_task_id = any(p_task_ids))
+      and (
+        p_user_id is null or s.owner_id = p_user_id or o.user_id = p_user_id or o.create_user_id = p_user_id
+        or o.leftovers @> jsonb_build_array(jsonb_build_object('userId', p_user_id))
+      )
+    order by o.updated_at
+    limit greatest(1, least(coalesce(p_limit, 50), 200))
+    for update of o skip locked
+  ), claimed as (
+    update crm.task_series_outlook o
+    set claimed_at = clock_timestamp()
+    from picked
+    where o.series_id = picked.series_id
+    returning o.series_id
+  )
+  select coalesce(array_agg(claimed.series_id), '{}') into v_claimed from claimed;
+
+  return query
+  select s.id, s.workspace_id, s.owner_id,
+    exists (select 1 from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id),
+    s.title, s.starts_on::text, to_char(s.at, 'HH24:MI'), s.duration_minutes, s.rule, s.ends,
+    (s.ended_at is not null or s.archived_at is not null),
+    s.current_task_id, t.occurs_on::text, t.due_at,
+    coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'occursOn', ch.occurs_on::text, 'skip', ch.skip, 'dueAt', ch.due_at, 'dueHasTime', ch.due_has_time,
+        'durationMinutes', ch.duration_minutes, 'title', ch.title
+      ) order by ch.occurs_on)
+      from crm.task_occurrence_changes ch
+      where ch.series_id = s.id and (t.occurs_on is null or ch.occurs_on > t.occurs_on)
+    ), '[]'::jsonb),
+    c.user_id, c.master_id, c.create_key, c.create_user_id, c.create_sent_at, c.written, c.dates, c.version, c.attempts, c.claimed_at::text, c.leftovers
+  from crm.task_series_outlook c
+  join crm.task_series s on s.id = c.series_id
+  left join crm.tasks t on t.id = s.current_task_id
+  where c.series_id = any(v_claimed);
+end;
+$$;
+
+revoke all on function private.claim_series_outlook(uuid[], uuid, integer) from public;
+grant execute on function private.claim_series_outlook(uuid[], uuid, integer) to crm_app;
+
+drop function if exists private.begin_series_outlook_create(uuid, uuid);
+create or replace function private.begin_series_outlook_create(p_series uuid, p_user_id uuid, p_lease text)
+returns uuid
+language sql
+security definer
+set search_path = ''
+as $$
+  update crm.task_series_outlook
+  set create_key = case when create_key is not null and create_user_id = p_user_id then create_key else gen_random_uuid() end,
+      create_user_id = p_user_id,
+      create_sent_at = clock_timestamp()
+  where series_id = p_series
+    and (p_lease is null or claimed_at = p_lease::timestamptz)
+  returning create_key;
+$$;
+
+revoke all on function private.begin_series_outlook_create(uuid, uuid, text) from public;
+grant execute on function private.begin_series_outlook_create(uuid, uuid, text) to crm_app;
+
+drop function if exists private.save_series_outlook(uuid, uuid, text, jsonb, jsonb, boolean);
+create or replace function private.save_series_outlook(p_series uuid, p_user_id uuid, p_master_id text, p_written jsonb, p_dates jsonb, p_clear_key boolean, p_lease text)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update crm.task_series_outlook
+  set user_id = p_user_id,
+      master_id = p_master_id,
+      written = p_written,
+      dates = coalesce(p_dates, '{}'::jsonb),
+      create_key = case when p_clear_key then null else create_key end,
+      create_user_id = case when p_clear_key then null else create_user_id end,
+      create_sent_at = case when p_clear_key then null else create_sent_at end,
+      updated_at = now()
+  where series_id = p_series
+    and (p_lease is null or claimed_at = p_lease::timestamptz);
+  if found then
+    return true;
+  end if;
+  update crm.task_series_outlook
+  set version = version + 1, written = null, updated_at = now()
+  where series_id = p_series;
+  return false;
+end;
+$$;
+
+revoke all on function private.save_series_outlook(uuid, uuid, text, jsonb, jsonb, boolean, text) from public;
+grant execute on function private.save_series_outlook(uuid, uuid, text, jsonb, jsonb, boolean, text) to crm_app;
+
+create or replace function private.save_series_outlook_leftovers(p_series uuid, p_leftovers jsonb, p_lease text)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update crm.task_series_outlook
+  set leftovers = coalesce(p_leftovers, '[]'::jsonb), updated_at = now()
+  where series_id = p_series
+    and (p_lease is null or claimed_at = p_lease::timestamptz);
+  return found;
+end;
+$$;
+
+revoke all on function private.save_series_outlook_leftovers(uuid, jsonb, text) from public;
+grant execute on function private.save_series_outlook_leftovers(uuid, jsonb, text) to crm_app;
+
+drop function if exists private.settle_series_outlook(uuid, bigint, boolean);
+drop function if exists private.settle_series_outlook(uuid, bigint, boolean, boolean);
+create or replace function private.settle_series_outlook(p_series uuid, p_version bigint, p_requeue boolean, p_waiting boolean, p_lease text)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update crm.task_series_outlook
+  set settled_version = case when p_requeue then settled_version else greatest(settled_version, p_version) end,
+      claimed_at = null,
+      retry_at = null,
+      attempts = 0,
+      waiting = p_waiting and not p_requeue
+  where series_id = p_series
+    and (p_lease is null or claimed_at = p_lease::timestamptz);
+$$;
+
+revoke all on function private.settle_series_outlook(uuid, bigint, boolean, boolean, text) from public;
+grant execute on function private.settle_series_outlook(uuid, bigint, boolean, boolean, text) to crm_app;
+
 create or replace function private.wake_series_outlook(p_user_id uuid)
 returns integer
 language sql
@@ -1273,8 +1749,11 @@ as $$
     select o.series_id
     from crm.task_series_outlook o
     join crm.task_series s on s.id = o.series_id
-    where o.waiting
-      and (s.owner_id = p_user_id or o.user_id = p_user_id or o.create_user_id = p_user_id)
+    where (
+        o.waiting
+        and (s.owner_id = p_user_id or o.user_id = p_user_id or o.create_user_id = p_user_id)
+      )
+      or o.leftovers @> jsonb_build_array(jsonb_build_object('userId', p_user_id))
     for update of o skip locked
   ), woken as (
     update crm.task_series_outlook o
@@ -1288,6 +1767,85 @@ $$;
 
 revoke all on function private.wake_series_outlook(uuid) from public;
 grant execute on function private.wake_series_outlook(uuid) to crm_app;
+
+drop function if exists private.defer_series_outlook(uuid, timestamptz);
+create or replace function private.defer_series_outlook(p_series uuid, p_until timestamptz, p_version bigint, p_lease text)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update crm.task_series_outlook
+  set claimed_at = null,
+      retry_at = case when version > p_version then null else p_until end,
+      attempts = case when version > p_version then 0 else attempts + 1 end
+  where series_id = p_series
+    and (p_lease is null or claimed_at = p_lease::timestamptz);
+$$;
+
+revoke all on function private.defer_series_outlook(uuid, timestamptz, bigint, text) from public;
+grant execute on function private.defer_series_outlook(uuid, timestamptz, bigint, text) to crm_app;
+
+create or replace function private.series_outlook_events(p_user_id uuid)
+returns table (event_id text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.master_id from crm.task_series_outlook o where o.user_id = p_user_id and o.master_id is not null
+  union
+  select d.value ->> 'single'
+  from crm.task_series_outlook o, jsonb_each(o.dates) d
+  where o.user_id = p_user_id and d.value ->> 'single' is not null
+  union
+  select l ->> 'masterId'
+  from crm.task_series_outlook o, jsonb_array_elements(o.leftovers) l
+  where l ->> 'userId' = p_user_id::text and l ->> 'masterId' is not null
+  union
+  select single.value
+  from crm.task_series_outlook o, jsonb_array_elements(o.leftovers) l, jsonb_array_elements_text(coalesce(l -> 'singles', '[]'::jsonb)) single
+  where l ->> 'userId' = p_user_id::text;
+$$;
+
+revoke all on function private.series_outlook_events(uuid) from public;
+grant execute on function private.series_outlook_events(uuid) to crm_app;
+
+create or replace function private.queue_series_outlook(p_user_id uuid)
+returns integer
+language sql
+security definer
+set search_path = ''
+as $$
+  with wanted as (
+    select s.id from crm.task_series s
+    where (
+        s.owner_id = p_user_id
+        and s.ended_at is null and s.archived_at is null
+        and (s.at is not null or exists (select 1 from crm.task_occurrence_changes c where c.series_id = s.id and c.due_has_time))
+      )
+      or exists (select 1 from crm.task_series_outlook x where x.series_id = s.id and (x.user_id = p_user_id or x.create_user_id = p_user_id))
+      or exists (select 1 from crm.task_series_outlook x where x.series_id = s.id and x.leftovers @> jsonb_build_array(jsonb_build_object('userId', p_user_id)))
+  ), held as (
+    select o.series_id from crm.task_series_outlook o join wanted on wanted.id = o.series_id
+    for update of o skip locked
+  ), bumped as (
+    update crm.task_series_outlook o
+    set version = o.version + 1, retry_at = null, attempts = 0, waiting = false, updated_at = now()
+    from held
+    where o.series_id = held.series_id
+    returning 1
+  ), added as (
+    insert into crm.task_series_outlook (series_id)
+    select wanted.id from wanted where not exists (select 1 from crm.task_series_outlook x where x.series_id = wanted.id)
+    on conflict (series_id) do nothing
+    returning 1
+  )
+  select (select count(*) from bumped)::integer + (select count(*) from added)::integer;
+$$;
+
+revoke all on function private.queue_series_outlook(uuid) from public;
+grant execute on function private.queue_series_outlook(uuid) to crm_app;
 
 create or replace function private.series_due_to_roll(p_now timestamptz, p_limit integer)
 returns table (
@@ -1331,6 +1889,9 @@ as $$
         (7, (select o.user_id from crm.workspace_members o where o.workspace_id = s.workspace_id and o.role = 'owner' order by o.created_at limit 1))
     ) as wanted (rank, user_id)
     join crm.workspace_members candidate on candidate.workspace_id = s.workspace_id and candidate.user_id = wanted.user_id
+    where wanted.rank >= 5
+      or wanted.user_id in (t.owner_id, t.created_by_user_id)
+      or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = wanted.user_id)
     order by wanted.rank
     limit 1
   ) m on true
@@ -1371,13 +1932,68 @@ $$;
 revoke all on function private.series_due_to_roll(timestamptz, integer) from public;
 grant execute on function private.series_due_to_roll(timestamptz, integer) to crm_app;
 
-reset lock_timeout;
+create or replace function crm.series_view_parts(p_series uuid)
+returns table (starts_on date, at time, rule jsonb, ends jsonb)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with recursive head as (
+    select s.id, s.workspace_id
+    from crm.task_series s
+    join crm.tasks t on t.id = s.current_task_id
+    where s.id = p_series
+      and (
+        (
+          current_setting('role') = 'authenticated'
+          and s.workspace_id in (select private.user_workspace_ids())
+          and (
+            t.owner_id = (select private.session_user_id())
+            or t.created_by_user_id = (select private.session_user_id())
+            or exists (select 1 from crm.task_participants p where p.task_id = t.id and p.user_id = (select private.session_user_id()))
+          )
+        )
+        or (
+          current_setting('role') = 'crm_agent'
+          and s.workspace_id = (select private.request_workspace_id())
+          and t.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+        )
+      )
+  ),
+  parts as (
+    select c.id, c.workspace_id, c.starts_on, c.at, c.rule, c.ends, c.current_task_id, c.ended_at, c.archived_at, 1 as depth
+    from crm.task_series c
+    join head on c.split_from_id = head.id and c.workspace_id = head.workspace_id
+    union all
+    select c.id, c.workspace_id, c.starts_on, c.at, c.rule, c.ends, c.current_task_id, c.ended_at, c.archived_at, parts.depth + 1
+    from crm.task_series c
+    join parts on c.split_from_id = parts.id and c.workspace_id = parts.workspace_id
+    where parts.depth < 20
+  )
+  select parts.starts_on, parts.at, parts.rule, parts.ends
+  from parts
+  where parts.current_task_id is null and parts.ended_at is null and parts.archived_at is null
+  order by parts.starts_on
+$$;
 
-create index concurrently if not exists task_series_created_by_user_idx on crm.task_series (created_by_user_id) where created_by_user_id is not null;
+revoke all on function crm.series_view_parts(uuid) from public;
+grant execute on function crm.series_view_parts(uuid) to authenticated, crm_agent;
 
-create index concurrently if not exists task_series_created_by_agent_idx on crm.task_series (created_by_agent_id) where created_by_agent_id is not null;
+update crm.task_series s
+set roll_pending = true
+where s.ended_at is null and s.archived_at is null and s.current_task_id is not null and s.roll_at is null and not s.roll_pending
+  and exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.completed_at is null and t.archived_at is null);
 
-set lock_timeout = '5s';
+update crm.task_series s
+set ended_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null
+where s.ended_at is null and s.archived_at is null and s.current_task_id is null and s.split_from_id is null;
+
+insert into crm.task_series_outlook (series_id)
+select s.id from crm.task_series s
+where s.ended_at is null and s.archived_at is null
+  and (s.at is not null or exists (select 1 from crm.task_occurrence_changes c where c.series_id = s.id and c.due_has_time))
+on conflict (series_id) do nothing;
 
 insert into crm.task_participants (task_id, user_id, added_by)
 select s.current_task_id, s.owner_id, null
@@ -1392,4 +2008,36 @@ where s.ended_at is null
   and t.created_by_user_id is distinct from s.owner_id
 on conflict (task_id, user_id) do nothing;
 
+do $$
+declare
+  v_index text;
+begin
+  foreach v_index in array array[
+    'tasks_series_occurs_idx', 'tasks_series_open_idx', 'tasks_series_idx',
+    'task_series_owner_active_idx', 'task_series_created_by_user_idx', 'task_series_created_by_agent_idx'
+  ] loop
+    if exists (
+      select 1 from pg_index i
+      join pg_class c on c.oid = i.indexrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'crm' and c.relname = v_index and not i.indisvalid
+    ) then
+      execute format('drop index crm.%I', v_index);
+    end if;
+  end loop;
+end
+$$;
+
 reset lock_timeout;
+
+create unique index concurrently if not exists tasks_series_occurs_idx on crm.tasks (series_id, occurs_on) where series_id is not null and archived_at is null;
+
+create unique index concurrently if not exists tasks_series_open_idx on crm.tasks (series_id) where series_id is not null and completed_at is null and archived_at is null;
+
+create index concurrently if not exists tasks_series_idx on crm.tasks (series_id, occurs_on desc) where series_id is not null;
+
+create index concurrently if not exists task_series_owner_active_idx on crm.task_series (owner_id) where archived_at is null and ended_at is null;
+
+create index concurrently if not exists task_series_created_by_user_idx on crm.task_series (created_by_user_id) where created_by_user_id is not null;
+
+create index concurrently if not exists task_series_created_by_agent_idx on crm.task_series (created_by_agent_id) where created_by_agent_id is not null;

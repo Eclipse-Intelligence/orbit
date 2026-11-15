@@ -49,7 +49,7 @@ const REPEATS: [string, Repeat][] = [
   ["Review churn every 4 weeks", { title: "Review churn", due: "2026-11-14", rule: weekly(["sa"], 4), ends: NEVER }],
   ["Gym every Monday from 30 Nov at 6pm", { title: "Gym", due: "2026-11-30T18:00", rule: weekly(["mo"], 1), ends: NEVER }],
   ["Review every other Friday from Monday", { title: "Review", due: "2026-11-20", rule: weekly(["fr"], 2), ends: NEVER }],
-  ["Send invoice reminders every day 10 times", { title: "Send invoice reminders", due: "2026-11-14", rule: daily(1), ends: { count: 10 } }],
+  ["Send invoice reminders every day for 10 times", { title: "Send invoice reminders", due: "2026-11-14", rule: daily(1), ends: { count: 10 } }],
   ["Ring Mum every Sunday", { title: "Ring Mum", due: "2026-11-15", rule: weekly(["su"], 1), ends: NEVER }],
   ["Prepare weekly report every Friday", { title: "Prepare weekly report", due: "2026-11-20", rule: weekly(["fr"], 1), ends: NEVER }],
   ["Clear the Capture queue every day at 4pm", { title: "Clear the Capture queue", due: "2026-11-14T16:00", rule: daily(1), ends: NEVER }],

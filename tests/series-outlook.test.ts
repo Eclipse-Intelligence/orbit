@@ -765,7 +765,7 @@ describe("repeating tasks in Outlook", () => {
     const later = shiftDay(thursday, 7);
     await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "10:00") }, "this", { provenance: DRAG });
     await admin().query("delete from crm.task_series_outlook where series_id = $1", [task.seriesId]);
-    for (const file of readdirSync("supabase/migrations").filter((name) => name.endsWith(".sql") && name >= "20270203200000").sort()) {
+    for (const file of readdirSync("supabase/migrations").filter((name) => name.endsWith(".sql") && name >= "20270203100000").sort()) {
       await applyMigrationSql(admin(), readFileSync(`supabase/migrations/${file}`, "utf8"));
     }
     assert.ok(await version(task.seriesId!));
@@ -1274,6 +1274,94 @@ describe("Outlook whole-review fixes", () => {
     const row = (await admin().query<{ retry_at: Date | null; attempts: number }>("select retry_at, attempts from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
     assert.ok(row.retry_at);
     assert.equal(row.attempts, 3);
+  });
+
+  it("makes the master again when it was deleted in Outlook and a later date changes", async () => {
+    const monday = nextWeekday(1);
+    const task = await repeating("Deleted by hand", monday, "10:00", { every: "week" });
+    await sync();
+    graph.masters.clear();
+    const skipped = shiftDay(monday, 14);
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: skipped });
+    await sync();
+    assert.equal(graph.masters.size, 1);
+    assert.equal(graph.onDay(skipped).length, 0);
+    assert.equal(graph.onDay(shiftDay(monday, 21)).length, 1);
+    const state = await version(task.seriesId!);
+    assert.equal(state!.version, state!.settled);
+  });
+
+  it("moves a series to a newly connected Microsoft account", async () => {
+    graph.strict = true;
+    const task = await repeating("Switched", nextWeekday(2), "14:00", { every: "week" });
+    await sync();
+    await admin().query("delete from crm.calendars where user_id = $1", [mark.userId]);
+    await admin().query("delete from crm.mailbox_connections where user_id = $1", [mark.userId]);
+    await saveMailbox(mark, { email: `other-${mark.email}`, refreshToken: "refresh", accessToken: "access-other", expiresAt: new Date(Date.now() + HOUR).toISOString() });
+    const connection = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await withActor(mark, (db) => storeGrantedScopes(db, mark, connection, WRITE_SCOPES));
+    await flushTaskBlocks(mark, connection, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    assert.equal([...graph.masters.values()].filter((master) => master.owner === "Bearer access-other").length, 1);
+    assert.ok(task.seriesId);
+  });
+
+  it("tries again when Outlook throttles while taking a removed person's series out", async () => {
+    const sam = await soleMember("sam-throttled", "member");
+    await createRepeatingTask(sam, { title: "Sam's throttled call", dueAt: london(nextWeekday(4), "10:00") }, { every: "week" });
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: sam.userId });
+    assert.equal(mastersOf(sam).length, 1);
+    let throttled = false;
+    const once = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!throttled && init?.method === "DELETE") {
+        throttled = true;
+        return new Response(JSON.stringify({ error: { code: "TooManyRequests", message: "Slow down" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "1" } });
+      }
+      return graph.fetch(input, init);
+    }) as typeof fetch;
+    await removeMember(mark, sam.userId, { operation: "remove_member" }, { fetchImpl: once });
+    assert.ok(throttled);
+    assert.equal(mastersOf(sam).length, 0);
+  });
+
+  it("puts Outlook right after a worker outlives its claim", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating("Lease v1", tuesday, "10:00", { every: "week" });
+    await sync();
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Lease v2" }, "all");
+    let fired = false;
+    const slow = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!fired && init?.method === "PATCH" && String(input).includes("master-")) {
+        fired = true;
+        await admin().query("update crm.task_series_outlook set claimed_at = claimed_at - interval '3 minutes' where series_id = $1", [task.seriesId]);
+        await updateOccurrence(mark, { taskId: task.id }, { title: "Lease v3" }, "all");
+        await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+      }
+      return graph.fetch(input, init);
+    }) as typeof fetch;
+    await syncSeriesOutlook({ fetchImpl: slow, userId: mark.userId });
+    assert.ok(fired);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.deepEqual([...graph.masters.values()].map((master) => master.subject), ["Lease v3"]);
+    const state = await version(task.seriesId!);
+    assert.equal(state!.version, state!.settled);
+  });
+
+  it("takes a handed-on series out of the previous holder's Outlook once they reconnect", async () => {
+    const sam = await createUser(`sam-later${seq}@series-outlook.test`, "Sam Okafor");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+    await connect({ ...sam, workspaceId: mark.workspaceId }, `access-${sam.userId}`);
+    const task = await repeating("Handed while away", nextWeekday(3), "16:00", { every: "week" });
+    await sync();
+    await disconnectMailbox(mark);
+    await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: sam.userId });
+    const owners = () => [...graph.masters.values()].map((master) => master.owner).sort();
+    assert.equal(owners().length, 2);
+    assert.ok(owners().includes(`Bearer access-${sam.userId}`));
+    await saveMailbox(mark, { email: mark.email, refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + HOUR).toISOString() });
+    const connection = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await flushTaskBlocks(mark, connection, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    assert.deepEqual(owners(), [`Bearer access-${sam.userId}`]);
   });
 
   it("gives a master on a clock change day an end after its start", () => {

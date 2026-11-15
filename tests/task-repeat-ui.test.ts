@@ -10,11 +10,15 @@ import {
   draftOf,
   endsOf,
   endsOnFirst,
+  keepsSeriesOwner,
+  lostOnChange,
   menuFocus,
   monthlyLabel,
   nextDetail,
   nextLabel,
   patternInputOf,
+  repeatSavedMessage,
+  resetsLine,
   ruleOf,
   sameEnds,
   sameRepeat,
@@ -47,6 +51,7 @@ function repeat(overrides: Partial<TaskRepeat> = {}): TaskRepeat {
     rrule: "RRULE:FREQ=WEEKLY;BYDAY=MO",
     changedDates: 0,
     skippedDates: [],
+    changeDays: [],
     ...overrides,
   };
 }
@@ -216,5 +221,73 @@ describe("repeat menu and fields", () => {
     assert.equal(endsOnFirst({ count: 1 }, "2026-11-16"), true);
     assert.equal(endsOnFirst({ until: "2026-11-16" }, "2026-11-16"), true);
     assert.equal(endsOnFirst({ until: "2026-11-17" }, "2026-11-16"), false);
+  });
+
+  it("asks This one or All before the panel closes on a repeating task, and keeps the typed text when the question is cancelled", () => {
+    const panel = source("components/crm/task-panel.tsx");
+    for (const handler of ["onEscapeKeyDown", "onPointerDownOutside"]) assert.match(panel.slice(panel.indexOf(handler)), /closeAfterSaving\(event/, handler);
+    assert.match(panel, /<SheetCloseButton label="Close" className="hit" onClick=\{\(event\) => void closeAfterSaving\(event\)\} \/>/);
+    assert.match(panel, /void details\.settle\(\)\.then\(\(ok\) => \{/);
+    const fields = source("components/crm/task-fields.tsx");
+    assert.match(fields, /if \(running && running\.value === commit\.value\) return running\.done;/);
+    assert.doesNotMatch(fields, /declinedNow/);
+    assert.match(source("components/beautifui/action-task.tsx"), /details\.holding\(\)/);
+  });
+
+  it("changes the end only when a count is typed or chosen, never on focus", () => {
+    const file = source("components/crm/task-repeat.tsx");
+    assert.doesNotMatch(file, /onFocus=\{\(\) => update\(\{ ends/);
+    assert.equal((file.match(/onFocus=\{\(event\) => event\.currentTarget\.select\(\)\}/g) ?? []).length, 2);
+  });
+
+  it("counts the changed dates a new pattern resets before saving, and says so after", () => {
+    const changed = task({ repeat: repeat({ changeDays: ["2026-11-23", "2026-11-30", "2026-12-07"] }) });
+    assert.equal(lostOnChange(changed, { freq: "weekly", interval: 1, weekdays: ["mo", "we"] }), 0);
+    assert.equal(lostOnChange(changed, { freq: "weekly", interval: 2, weekdays: ["mo"] }), 2);
+    assert.equal(lostOnChange(task({ repeat: null }), { freq: "daily", interval: 1 }), 0);
+    assert.equal(resetsLine(1), "Resets 1 changed date.");
+    assert.equal(resetsLine(0), null);
+    assert.equal(repeatSavedMessage(changed, changed, 2), "Saved. Reset 2 changed dates.");
+    assert.equal(repeatSavedMessage(changed, changed, 0), "Saved");
+    assert.match(source("components/crm/task-repeat.tsx"), /resetsLine\(resets\(pattern\.rule\)\)/);
+  });
+
+  it("says where an overdue task moved when it starts repeating", () => {
+    const moved = { dueAt: "2026-12-16T09:00:00.000Z", dueHasTime: true, occursOn: "2026-12-16" };
+    assert.equal(repeatSavedMessage({ dueAt: "2026-11-02T09:00:00.000Z" }, moved, 0), "Saved. Moved to Wed 16 Dec, 09:00.");
+  });
+
+  it("runs a second Repeat choice after the first instead of dropping it", () => {
+    const file = source("components/crm/task-repeat.tsx");
+    assert.doesNotMatch(file, /if \(running\.current\) return false;/);
+    assert.match(file, /const run = queue\.current\.then\(/);
+  });
+
+  it("lets Done through while a field is being edited", () => {
+    assert.match(source("components/crm/task-panel.tsx"), /onMouseDown=\{\(event\) => event\.preventDefault\(\)\}\s*onClick=\{onClick\}/);
+    assert.match(source("components/crm/task-panel.tsx"), /afterSaving\(\(\) => onComplete\(task\)\)/);
+  });
+
+  it("keeps the series owner tagged on an occurrence someone else holds", () => {
+    const handed = task({ ownerId: SAM, repeat: repeat({ ownerId: MARK }) });
+    assert.equal(keepsSeriesOwner(handed, MARK), true);
+    assert.equal(keepsSeriesOwner(handed, SAM), false);
+    assert.equal(keepsSeriesOwner(task({ repeat: repeat({ ownerId: MARK }) }), MARK), false);
+    assert.equal(keepsSeriesOwner({ ...handed, repeat: repeat({ ownerId: MARK, ended: true }) }, MARK), false);
+  });
+
+  it("fixes the small things: the yearly preset ticks, far dates show their year, and phone controls stay reachable", () => {
+    assert.equal(sameRepeat({ freq: "yearly", interval: 1, monthDay: 29 }, { freq: "yearly", interval: 1 }), true);
+    assert.equal(nextDetail({ occursOn: "2099-02-28", dueAt: "2099-02-28T09:00:00.000Z", dueHasTime: false }), "Next: Sat 28 Feb 2099");
+    assert.match(source("components/crm/task-repeat.tsx"), /HoldButton onConfirm=\{\(\) => void settle\(actions\.remove\)\} className="\[@media\(pointer:coarse\)\]:h-11"/);
+    assert.match(source("components/mail/compose-dock.tsx"), /body:has\(\[data-task-actions\]\)_&\]:top-/);
+    for (const file of ["components/crm/calendar-task-block.tsx", "components/crm/calendar-grid.tsx"]) assert.doesNotMatch(source(file), /text-\[11\.5px\]/);
+    assert.doesNotMatch(source("components/crm/task-repeat.tsx"), /md:truncate/);
+  });
+
+  it("clears a block's earlier move toast on a new drag, and gives Move all an Undo", () => {
+    const file = source("components/crm/calendar-upcoming.tsx");
+    assert.match(file, /if \(earlier !== undefined\) composer\.dismissToast\(earlier\);/);
+    assert.match(file, /choices: \[\{ label: "Move all", run: \(\) => rescope\("all", undo, "Moved every one\."\) \}\],\s*\.\.\.\(action \? \{ action \} : \{\}\),/);
   });
 });

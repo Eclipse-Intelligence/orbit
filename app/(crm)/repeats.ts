@@ -93,11 +93,11 @@ function readTarget(target: UpcomingTarget) {
   return { currentTaskId: target.currentTaskId, seriesId: target.seriesId, occursOn: target.occursOn };
 }
 
-export async function skipUpcomingAction(target: UpcomingTarget): Promise<RepeatActionResult> {
+export async function skipUpcomingAction(target: UpcomingTarget, key?: string): Promise<RepeatActionResult> {
   const read = readTarget(target);
   if (!read) return { error: REPEAT_SAVE_FAILED };
   return run(read.currentTaskId, async (user) =>
-    (await skipOccurrence(user, { seriesId: read.seriesId, occursOn: read.occursOn }, { provenance: { operation: "skip_occurrence", source: "web" } })).body,
+    (await skipOccurrence(user, { seriesId: read.seriesId, occursOn: read.occursOn }, { provenance: { operation: "skip_occurrence", source: "web" }, ...keyed(key) })).body,
   );
 }
 
@@ -106,6 +106,7 @@ export async function moveUpcomingAction(
   move: { dueAt?: string; durationMinutes?: number },
   scope: RepeatScope,
   replaces: string[] = [],
+  key?: string,
 ): Promise<RepeatActionResult> {
   const read = readTarget(target);
   if (!read || !REPEAT_SCOPES.includes(scope) || !move || typeof move !== "object") return { error: REPEAT_SAVE_FAILED };
@@ -122,7 +123,7 @@ export async function moveUpcomingAction(
   if (Object.keys(write).length === 0) return { error: REPEAT_SAVE_FAILED };
   const undone = (Array.isArray(replaces) ? replaces : []).filter((event) => typeof event === "string" && isUuid(event));
   return run(read.currentTaskId, (user) =>
-    moveUpcoming(user, { seriesId: read.seriesId, occursOn: read.occursOn }, write, scope, undone, { operation: "drag_task", source: "web" }),
+    moveUpcoming(user, { seriesId: read.seriesId, occursOn: read.occursOn }, write, scope, undone, { operation: "drag_task", source: "web" }, keyed(key).idempotencyKey),
   );
 }
 

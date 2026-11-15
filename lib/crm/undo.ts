@@ -1,5 +1,5 @@
 import { durationLabel } from "@/lib/crm/task-time";
-import { shortDay } from "@/lib/task-repeat";
+import { isDayKey, shortDay } from "@/lib/task-repeat";
 import type { Db } from "@/lib/db/pool";
 import { formatDate, HEALTH_LABELS, lifecycleLabel } from "@/lib/companies";
 import {
@@ -441,7 +441,7 @@ function restoreFields(
       const completedAt = fields.includes("completedAt") ? ((before.completedAt as string | null) ?? null) : undefined;
       await restoreTaskInDb(db, actor, id, write as TaskWrite, completedAt, provenance, undoing, series);
       if (repeat) await restoreOccurrenceInDb(db, actor, id, repeat);
-      if (seriesLinks) await restoreSeriesLinksInDb(db, actor, seriesLinks);
+      if (seriesLinks) await restoreSeriesLinksInDb(db, actor, seriesLinks, provenance, id);
     }
     if ((entity === "company" || entity === "contact") && fields.some((field) => RELATIONSHIP_FIELDS.has(field))) {
       const label = before.relationshipOverride;
@@ -561,16 +561,20 @@ async function describeEvent(
       return refuse(`Changed the links of ${entityName}'s series`, "Undo the change to the task instead.");
     }
     const made = kind === "created";
-    const summary =
-      kind === "created"
+    const onDay = typeof seriesChanges.skipped === "string" ? seriesChanges.skipped : typeof seriesChanges.changed === "string" ? seriesChanges.changed : null;
+    const dayWord = onDay && isDayKey(onDay) ? shortDay(onDay) : null;
+    const summary = dayWord
+      ? `${typeof seriesChanges.skipped === "string" ? "Skipped" : seriesChanges.moved ? "Moved" : "Changed"} task ${entityName} on ${dayWord}`
+      : kind === "created"
         ? `Made task ${entityName} repeat`
         : kind === "ended"
           ? `Stopped task ${entityName} repeating`
           : kind === "deleted"
             ? `Deleted the series ${entityName}`
             : `Changed how task ${entityName} repeats`;
-    const restores =
-      made ? (seriesChanges.withTask ? `Archives ${entityName}.` : `Stops ${entityName} repeating.`) : kind === "deleted" ? `Restores ${entityName} and its series.` : `Puts back how ${entityName} repeated.`;
+    const restores = dayWord
+      ? `Puts back ${entityName} on ${dayWord}.`
+      : made ? (seriesChanges.withTask ? `Archives ${entityName}.` : `Stops ${entityName} repeating.`) : kind === "deleted" ? `Restores ${entityName} and its series.` : `Puts back how ${entityName} repeated.`;
     if (undone) return refuse(summary, "This change has already been undone.");
     if (!current) return refuse(summary, notFoundMessage(noun));
     if (!hasScope(actor.scopes, SCOPES.task)) return refuse(summary, `You don't have permission to change this ${noun}.`);

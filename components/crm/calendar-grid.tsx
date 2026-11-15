@@ -380,7 +380,7 @@ export default function CalendarGrid({
                     <UpcomingChip key={block.id} block={block} onOpen={taskHandlers!.onOpen} />
                   ))}
                   {more > 0 && dayHref && (
-                    <Button variant="ghost" size="sm" href={dayHref(key)} className="hit text-subtle h-5 justify-start px-1.5 text-[11.5px]">
+                    <Button variant="ghost" size="sm" href={dayHref(key)} className="hit text-subtle h-5 justify-start px-1.5 text-[12px]">
                       +{more} more
                     </Button>
                   )}

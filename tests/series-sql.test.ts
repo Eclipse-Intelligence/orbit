@@ -128,12 +128,30 @@ describe("repeating tasks when someone is removed", () => {
   });
 });
 
+describe("repeating tasks made for a colleague when their creator is removed", () => {
+  it("hands the creator role to the assignee and keeps the task hidden from the remover", async () => {
+    const leaving = await join(await createUser("lee-maker@series-sql.test", "Lee Maker"), "member");
+    const task = (await createRepeatingTask(leaving, { title: "Made for Priya", dueAt: at("2031-05-06", "09:00"), ownerId: priya.userId }, { every: "week" })).body.task;
+    await removeMember(mark, leaving.userId);
+    const [row] = await sql<{ created_by_user_id: string }>("select created_by_user_id from crm.task_series where id = $1", [task.seriesId]);
+    assert.equal(row.created_by_user_id, priya.userId);
+    await assert.rejects(getTask(mark, task.id));
+  });
+});
+
 describe("repeating task database backstops", () => {
   it("keeps the series' owner tagged on a handed-on open task (13)", async () => {
     const task = (await createRepeatingTask(mark, { title: "Keep me tagged", dueAt: at("2031-06-03", "09:00") }, { every: "week" })).body.task;
     await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");
     await assert.rejects(removeTaskParticipant(priya, task.id, mark.userId), /can't remove them/);
     assert.equal((await getTask(mark, task.id)).ownerId, priya.userId);
+  });
+
+  it("keeps the series' owner from untagging themselves from a handed-on open task", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Stay tagged", dueDate: "2032-09-07" }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await assert.rejects(removeTaskParticipant(mark, task.id, mark.userId), /can't remove them/);
+    assert.equal((await getTask(mark, task.id)).id, task.id);
   });
 
   it("keeps an agent's series rolling after the assignee tries to untag the owner (12)", async () => {
@@ -148,8 +166,50 @@ describe("repeating task database backstops", () => {
 
   it("tells a colleague only whether someone is at the limit, not how many they have (71)", async () => {
     await createRepeatingTask(mark, { title: "Counted", dueDate: "2031-08-05" }, { every: "week" });
-    const rows = await as(sam, "select * from crm.series_at_limit($1, $2, 1)", [mark.workspaceId, mark.userId]);
-    assert.deepEqual(rows, [{ at_limit: true, keeper: mark.userId }]);
+    assert.deepEqual(await as(sam, "select * from crm.series_at_limit($1, $2)", [mark.workspaceId, mark.userId]), [{ at_limit: false, keeper: mark.userId }]);
+    await assert.rejects(as(sam, "select * from crm.series_at_limit($1, $2, 1)", [mark.workspaceId, mark.userId]), /does not exist/);
+  });
+
+  it("refuses an untagged owner taking a handed-on task back (79)", async () => {
+    const task = (await createRepeatingTask(priya, { title: "No blind re-own", dueDate: "2032-04-06", ownerId: mark.userId }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await sql("delete from crm.task_participants where task_id = $1 and user_id = $2", [task.id, mark.userId]);
+    assert.deepEqual(await as(mark, "update crm.tasks set owner_id = $2 where id = $1 returning id", [task.id, mark.userId]), []);
+  });
+
+  it("refuses a handed-on assignee ending a series that never ends (80)", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Not yours to end", dueDate: "2032-05-04" }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await as(sam, "update crm.tasks set archived_at = now() where id = $1", [task.id]);
+    await as(sam, "select crm.series_end_with_archived($1)", [task.id]);
+    const [row] = await sql<{ ended: boolean }>("select ended_at is not null as ended from crm.task_series where id = $1", [task.seriesId]);
+    assert.equal(row.ended, false);
+  });
+
+  it("refuses a done occurrence's assignee inserting a far-off task in the owner's name (78)", async () => {
+    const task = (await createRepeatingTask(mark, { title: "No far date", dueDate: "2032-06-01" }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");
+    await sql("update crm.tasks set completed_at = now() where id = $1", [task.id]);
+    await assert.rejects(
+      as(priya, "insert into crm.tasks (workspace_id, title, owner_id, created_by_user_id, series_id, occurs_on, due_at) values ($1, 'Far', $2, $2, $3, '2040-06-05', now())", [mark.workspaceId, mark.userId, task.seriesId]),
+      /row-level security/,
+    );
+  });
+
+  it("lets the owner start a later part of an agent's series with the agent kept as creator, and no one else", async () => {
+    const { actor: agent } = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"], "Series SQL agent three");
+    const task = (await createRepeatingTask(agent, { title: "Agent split", dueDate: "2032-08-03" }, { every: "week" })).body.task;
+    const part = "insert into crm.task_series (workspace_id, created_by_agent_id, owner_id, title, starts_on, rule, split_from_id) values ($1, $2, $3, 'Agent split later', '2032-08-17', '{\"freq\":\"weekly\",\"interval\":1,\"weekdays\":[\"tu\"]}'::jsonb, $4) returning id";
+    const values = [mark.workspaceId, agent.agentId, mark.userId, task.seriesId];
+    await assert.rejects(as(sam, part, values));
+    assert.equal((await as(mark, part, values)).length, 1);
+  });
+
+  it("shows a split series' later parts only to people who can see its open task", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Parts", dueDate: "2032-07-06" }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2032-07-20" }, { title: "Parts later" }, "following");
+    assert.equal((await as(mark, "select * from crm.series_view_parts($1)", [task.seriesId])).length, 1);
+    assert.deepEqual(await as(sam, "select * from crm.series_view_parts($1)", [task.seriesId]), []);
   });
 
   it("refuses a done occurrence's assignee inserting done tasks into the series (78)", async () => {
@@ -198,10 +258,13 @@ describe("repeating task database backstops", () => {
     }
   });
 
-  it("refuses malformed ends (84)", async () => {
+  it("refuses malformed ends and rules (84)", async () => {
     const task = (await createRepeatingTask(mark, { title: "Ends shape", dueDate: "2032-01-06" }, { every: "week" })).body.task;
-    for (const ends of ['{"count": 2.5}', '{"count": 3, "until": "2032-02-01"}', '{"until": "2032-13-40"}', '{"never": true, "count": 2}']) {
+    for (const ends of ['{"count": 2.5}', '{"count": 3, "until": "2032-02-01"}', '{"until": "2032-13-40"}', '{"never": true, "count": 2}', "{}", '{"until": "2032-02-30"}']) {
       await assert.rejects(sql("update crm.task_series set ends = $2::jsonb where id = $1", [task.seriesId, ends]), /task_series_ends_shape/, ends);
+    }
+    for (const rule of ['{"interval": 1}', '{"freq": "weekly", "interval": 1}', '{"freq": "monthly", "interval": 1, "monthWeek": {}}', '{"freq": "monthly", "interval": 1, "monthWeek": {"n": "1", "weekday": "mo"}}']) {
+      await assert.rejects(sql("update crm.task_series set rule = $2::jsonb where id = $1", [task.seriesId, rule]), /task_series_rule_shape/, rule);
     }
     await sql("update crm.task_series set ends = '{\"count\": 3, \"spent\": 1}'::jsonb where id = $1", [task.seriesId]);
   });

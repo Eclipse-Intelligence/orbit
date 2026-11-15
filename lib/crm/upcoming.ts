@@ -2,6 +2,7 @@ import type { Db } from "@/lib/db/pool";
 import { query } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
+import { replayOrRun, requestHash } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { unstartedAnchor, updateOccurrenceInDb, type RepeatScope } from "@/lib/crm/task-series";
 import type { Provenance, Task, TaskWrite, UserActor } from "@/lib/crm/types";
@@ -147,6 +148,7 @@ export async function moveUpcoming(
   scope: RepeatScope,
   replaces: string[],
   provenance: Provenance,
+  idempotencyKey?: string,
 ): Promise<{ task: Task; undo: string[] }> {
   assertScope(actor.scopes, "tasks:write");
   if (input.dueAt !== undefined && (typeof input.dueAt !== "string" || Number.isNaN(Date.parse(input.dueAt)))) throw new CrmError("invalid_input", "Choose a day and time.", 400, { field: "dueAt" });
@@ -154,7 +156,8 @@ export async function moveUpcoming(
     throw new CrmError("invalid_input", "Choose a duration between 5 and 480 minutes.", 400, { field: "durationMinutes" });
   }
   if (input.dueAt && dayKeyAt(new Date(input.dueAt)) < dayKeyAt(new Date())) throw new CrmError("invalid_input", PAST_DAY, 400, { field: "dueAt" });
-  return withActor(actor, async (db) => {
+  const hash = requestHash("move_upcoming", { target, input, scope, replaces, provenance });
+  return withActor(actor, async (db) => (await replayOrRun(db, actor, idempotencyKey, hash, 200, async () => {
     if (replaces.length > 0) {
       const events = await db.query<{ entity_id: string }>(
         `select distinct entity_id from crm.audit_events
@@ -174,5 +177,5 @@ export async function moveUpcoming(
     }
     const task = await updateOccurrenceInDb(db, actor, target, input, scope, provenance);
     return { task, undo: await freshEvents(db, task.id) };
-  });
+  })).body);
 }

@@ -62,7 +62,7 @@ const CARD_DIFF_LINES = 200;
 const CARD_LINE_CHARS = 2_000;
 const UNDO_MAX = 200_000;
 
-export type DocApproval = { matches?: number; base?: string; undo?: TextEdit[]; diff?: DocDiffLine[]; revision?: number };
+export type DocApproval = { matches?: number; base?: string; undo?: TextEdit[]; diff?: DocDiffLine[]; revision?: number; tasks?: Record<string, string> };
 
 function fingerprint(text: string) {
   return createHash("sha256").update(text).digest("hex");

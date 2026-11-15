@@ -51,8 +51,8 @@ async function repeating(actor: UserActor, title: string, day: string, time: str
 }
 
 async function seriesRow(id: string) {
-  const [row] = await sql<{ at: string | null; ends: Record<string, unknown>; ended_at: Date | null }>(
-    "select to_char(at, 'HH24:MI') as at, ends, ended_at from crm.task_series where id = $1",
+  const [row] = await sql<{ at: string | null; ends: Record<string, unknown>; ended_at: Date | null; owner_id: string | null }>(
+    "select to_char(at, 'HH24:MI') as at, ends, ended_at, owner_id from crm.task_series where id = $1",
     [id],
   );
   return row;
@@ -173,6 +173,19 @@ describe("moving an upcoming date", () => {
     assert.equal(all.task.id, task.id);
   });
 
+  it("writes one change and one audit event when a keyed move is sent again", async () => {
+    const thursday = nextWeekday(4);
+    const task = await repeating(mark, "Retried drag", thursday, "11:00", { every: "week" });
+    const target = { seriesId: task.seriesId!, occursOn: shiftDay(thursday, 7) };
+    const key = crypto.randomUUID();
+    const drag = { operation: "drag_task", source: "web" };
+    const first = await moveUpcoming(mark, target, { dueAt: london(target.occursOn, "15:00"), dueHasTime: true }, "this", [], drag, key);
+    const again = await moveUpcoming(mark, target, { dueAt: london(target.occursOn, "15:00"), dueHasTime: true }, "this", [], drag, key);
+    assert.deepEqual(again.undo, first.undo);
+    const [events] = await sql<{ total: number }>("select count(*)::int as total from crm.audit_events where entity_id = $1 and event_type = 'task_series.updated'", [task.id]);
+    assert.equal(events.total, 1);
+  });
+
   it("resizes This one without moving it", async () => {
     const thursday = nextWeekday(4);
     const task = await repeating(mark, "Read", thursday, "11:00", { every: "week" });
@@ -206,8 +219,8 @@ describe("moving an upcoming date", () => {
     assert.equal(moved.task.id, task.id);
     const all = await moveUpcoming(mark, { seriesId: split.id, occursOn: shiftDay(from, 14) }, { dueAt: london(shiftDay(from, 14), "17:00"), dueHasTime: true }, "all", moved.undo, { operation: "drag_task", source: "web" });
     assert.equal((await seriesRow(split.id)).at, "17:00");
-    assert.equal((await seriesRow(task.seriesId!)).at, "14:00");
-    assert.equal((await getTask(mark, task.id)).dueAt, london(tuesday, "14:00"));
+    assert.equal((await seriesRow(task.seriesId!)).at, "17:00");
+    assert.equal((await getTask(mark, task.id)).dueAt, london(tuesday, "17:00"));
     await undoTaskEvents(mark, task.id, all.undo, { operation: "undo_change", source: "web" });
     assert.equal((await seriesRow(split.id)).at, "15:00");
   });
@@ -480,19 +493,23 @@ describe("review of the whole branch", () => {
     assert.equal((await seriesRow(split)).at, "12:00");
   });
 
-  it("keeps an unstarted part with its owner and never hands out a task id a teammate can't read", async () => {
+  it("hands an unstarted part over only with the open task, and never hands out a task id a teammate can't read", async () => {
     const thursday = nextWeekday(4);
     const task = await repeating(mark, "Mine to keep", thursday, "09:00", { every: "week" });
     const from = shiftDay(thursday, 14);
     const split = await splitAt(task, from, "10:00");
-    await assert.rejects(
-      () => updateOccurrence(mark, { seriesId: split, occursOn: from }, { ownerId: sam.userId }, "all", { provenance: drag }),
-      /once they start/,
-    );
     await assert.rejects(() => updateOccurrence(mark, { seriesId: split, occursOn: from }, { completed: true }, "all", { provenance: drag }), /haven't started/);
-    await sql("update crm.task_series set owner_id = $2 where id = $1", [split, sam.userId]);
-    const samSeries = (await readPlanner(sam)).series.find((item) => item.id === split);
-    assert.equal(samSeries?.anchorTaskId ?? null, null);
+    await updateOccurrence(mark, { seriesId: split, occursOn: from }, { ownerId: sam.userId }, "all", { provenance: drag });
+    assert.deepEqual([(await getTask(sam, task.id)).ownerId, (await seriesRow(task.seriesId!)).owner_id, (await seriesRow(split)).owner_id], [sam.userId, sam.userId, sam.userId]);
+    assert.equal((await readPlanner(sam)).series.find((item) => item.id === split)?.anchorTaskId, task.id);
+    await skipOccurrence(sam, { seriesId: split, occursOn: shiftDay(from, 7) });
+    await moveUpcoming(sam, { seriesId: split, occursOn: shiftDay(from, 14) }, { dueAt: london(shiftDay(from, 14), "11:00"), dueHasTime: true }, "this", [], drag);
+    assert.deepEqual((await changeRows(split)).map((row) => [row.occurs_on, row.skip]), [[shiftDay(from, 7), true], [shiftDay(from, 14), false]]);
+
+    const other = await repeating(mark, "Part alone", thursday, "09:00", { every: "week" });
+    const alone = await splitAt(other, from, "10:00");
+    await sql("update crm.task_series set owner_id = $2 where id = $1", [alone, sam.userId]);
+    assert.equal((await readPlanner(sam)).series.find((item) => item.id === alone)?.anchorTaskId ?? null, null);
   });
 
   it("keeps a This one move on the next date when Done is undone", async () => {

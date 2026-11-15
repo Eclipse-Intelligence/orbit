@@ -127,6 +127,30 @@ describe("assistant repeat review fixes", () => {
     const changed = await card("update_task", { taskId: ending.id, repeat: { every: "day" } });
     assert.ok(changed.lines.some((line) => /^Repeats: Every day, until /.test(line)), changed.lines.join(" | "));
   });
+
+  it("removes a repeat's end with ends null, and the card says so", async () => {
+    const ending = (await createRepeatingTask(mark, { title: "Ends soon", dueAt: "2027-03-02T14:00:00.000Z" }, { every: "week", ends: { on: "2027-06-01" } })).body.task;
+    const args = { taskId: ending.id, repeat: { every: "day", ends: null } };
+    assert.ok((await card("update_task", args)).lines.includes("Repeats: Every day, no end"));
+    const result = (await runTool(mark, "update_task", args)) as { task?: Task; error?: string };
+    assert.equal(result.error, undefined);
+    assert.deepEqual((await getTask(mark, ending.id)).repeat?.ends, { never: true });
+  });
+
+  it("refuses archive_records and a pattern change approved after the task changed from its card", async () => {
+    const task = await weekly("Moved on");
+    const plain = (await createTask(mark, { title: "Became repeating", dueDate: "2027-03-02" })).body.task;
+    const archiveCard = await card("archive_records", { taskIds: [task.id, plain.id] });
+    const patternCard = await card("update_task", { taskId: task.id, repeat: { every: "week", days: ["mo"] } });
+    await runTool(mark, "update_task", { taskId: task.id, skip: true, occursOn: "2027-03-02" }, { callId: "call-moved-on" });
+    await runTool(mark, "update_task", { taskId: plain.id, repeat: { every: "week" } });
+    const archived = (await runTool(mark, "archive_records", { taskIds: [task.id, plain.id] }, { callId: "call-stale-card", approval: archiveCard.approval })) as { error?: string };
+    assert.match(archived.error ?? "", /changed since the card/);
+    assert.equal((await getTask(mark, task.id)).occursOn, "2027-03-09");
+    assert.equal((await getTask(mark, plain.id)).archivedAt, null);
+    const changed = (await runTool(mark, "update_task", { taskId: task.id, repeat: { every: "week", days: ["mo"] } }, { approval: patternCard.approval })) as { error?: string };
+    assert.match(changed.error ?? "", /changed since the card/);
+  });
 });
 
 describe("MCP repeat retries", () => {

@@ -195,15 +195,14 @@ describe("task area UI", () => {
     assert.equal(views.get("panel")!.heard, 0);
   });
 
-  it("drops a field's draft when it saves or the This one or All question is cancelled, and keeps it only when saving failed", () => {
-    assert.equal(draftAfterSave(true, false), "drop");
-    assert.equal(draftAfterSave(false, true), "drop");
-    assert.equal(draftAfterSave(false, false), "keep");
+  it("drops a field's draft only when it saves, so cancelling the This one or All question keeps the typed text", () => {
+    assert.equal(draftAfterSave(true), "drop");
+    assert.equal(draftAfterSave(false), "keep");
     const store = taskDrafts();
     const panel = {};
-    store.keep(panel, "t1", "title", "Old failed title", "Call Jane");
-    if (draftAfterSave(false, true) === "drop") store.drop(panel, "t1", "title", "Call Jane");
-    assert.equal(store.get("t1"), undefined);
+    store.keep(panel, "t1", "text", "A long paragraph", "");
+    if (draftAfterSave(false) === "drop") store.drop(panel, "t1", "text", "");
+    assert.deepEqual(store.get("t1"), { text: "A long paragraph" });
   });
 
   it("puts the saved title back when the title is emptied, and saves only real changes", () => {

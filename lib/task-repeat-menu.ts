@@ -1,7 +1,7 @@
 import { clockLabel, taskDueDay } from "@/lib/crm/task-time";
 import type { Task, TaskWrite } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
-import { DAY_NAMES, monthWeekOf, repeatInputOf, sameRule, shortDay, weekdayOf, WEEKDAYS, type MonthWeek, type RepeatEnds, type RepeatFreq, type RepeatInput, type RepeatRule, type Weekday } from "@/lib/task-repeat";
+import { DAY_NAMES, lostChangeDays, monthWeekOf, repeatInputOf, sameRule, shortDay, weekdayOf, WEEKDAYS, type MonthWeek, type RepeatEnds, type RepeatFreq, type RepeatInput, type RepeatRule, type Weekday } from "@/lib/task-repeat";
 
 export const REPEAT_SAVE_FAILED = "Couldn't save the repeat. Try again.";
 export const SKIP_FAILED = "Couldn't skip this one. Try again.";
@@ -18,14 +18,45 @@ export function nextDay(next: NextDate) {
   return taskDueDay(next.dueAt) ?? next.occursOn;
 }
 
+export function dayWithYear(day: string, today = dayKeyAt(new Date())) {
+  return day.slice(0, 4) === today.slice(0, 4) ? shortDay(day) : `${shortDay(day)} ${day.slice(0, 4)}`;
+}
+
+function farDay(day: string, today = dayKeyAt(new Date())) {
+  return day > shiftDay(today, 180) ? dayWithYear(day, today) : shortDay(day);
+}
+
 export function nextLabel(next: NextDate | null | undefined) {
   if (!next) return null;
-  const day = nextDay(next);
-  return next.dueHasTime ? `${shortDay(day)}, ${clockLabel(next.dueAt)}` : shortDay(day);
+  const day = farDay(nextDay(next));
+  return next.dueHasTime ? `${day}, ${clockLabel(next.dueAt)}` : day;
+}
+
+export function keepsSeriesOwner(task: Pick<Task, "ownerId" | "repeat" | "completedAt">, person: string) {
+  return Boolean(task.repeat?.current && !task.repeat.ended && !task.completedAt && task.repeat.ownerId === person && task.ownerId !== person);
+}
+
+export function resetsLine(count: number) {
+  return count > 0 ? `Resets ${count} changed date${count === 1 ? "" : "s"}.` : null;
+}
+
+export function lostOnChange(task: Task, rule: RepeatRule) {
+  const repeat = task.repeat;
+  if (!repeat || repeat.ended || !repeat.current || task.completedAt) return 0;
+  return lostChangeDays(repeat.changeDays ?? [], { startsOn: anchorOf(task), at: repeat.at, rule, ends: repeat.ends }).length;
+}
+
+export function repeatSavedMessage(before: Pick<Task, "dueAt">, after: Pick<Task, "dueAt" | "dueHasTime" | "occursOn"> | null | undefined, lost: number) {
+  const parts: string[] = [];
+  if (after?.dueAt && before.dueAt && Date.parse(after.dueAt) !== Date.parse(before.dueAt)) {
+    parts.push(`Moved to ${nextLabel({ dueAt: after.dueAt, dueHasTime: after.dueHasTime, occursOn: after.occursOn ?? "" })}.`);
+  }
+  if (lost > 0) parts.push(`Reset ${lost} changed date${lost === 1 ? "" : "s"}.`);
+  return parts.length > 0 ? `Saved. ${parts.join(" ")}` : "Saved";
 }
 
 export function nextDetail(next: NextDate | null | undefined) {
-  return next ? `Next: ${shortDay(nextDay(next))}` : null;
+  return next ? `Next: ${farDay(nextDay(next))}` : null;
 }
 
 export function skippedMessage(task: Pick<Task, "dueAt" | "dueHasTime" | "occursOn"> | null | undefined) {
@@ -140,8 +171,13 @@ function everyDayOf(rule: RepeatRule): RepeatRule {
   return rule.freq === "weekly" && rule.interval === 1 && WEEKDAYS.every((day) => rule.weekdays?.includes(day)) ? { freq: "daily", interval: 1 } : rule;
 }
 
+function comparable(rule: RepeatRule): RepeatRule {
+  const plain = everyDayOf(rule);
+  return plain.freq === "yearly" ? { freq: "yearly", interval: plain.interval } : plain;
+}
+
 export function sameRepeat(left: RepeatRule, right: RepeatRule) {
-  return sameRule(everyDayOf(left), everyDayOf(right));
+  return sameRule(comparable(left), comparable(right));
 }
 
 export function endsOnFirst(ends: RepeatEnds, anchor: string) {

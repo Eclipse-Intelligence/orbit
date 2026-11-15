@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
@@ -12,7 +12,7 @@ import { clockLabel, durationLabel } from "@/lib/crm/task-time";
 import { dropRefusal, NOT_HERE, resetsFor, type TaskBlock } from "@/lib/task-blocks";
 import type { DropPlacement } from "@/lib/task-drag";
 import { shortDay } from "@/lib/task-repeat";
-import { MOVE_FAILED, SKIP_FAILED } from "@/lib/task-repeat-menu";
+import { MOVE_FAILED, newActionKey, SKIP_FAILED } from "@/lib/task-repeat-menu";
 
 const UNDO_FAILED = "Couldn't undo. Try again.";
 
@@ -31,6 +31,7 @@ export function useUpcomingMove(today: string) {
   const composer = useComposer();
   const router = useRouter();
   const undoToast = useUndoToast();
+  const toasts = useRef(new Map<string, number>());
   const failed = useCallback(
     (message?: string, action?: { label: string; run: () => void }) => composer.showToast({ message: message || MOVE_FAILED, tone: "alert", ...(action ? { action } : {}) }),
     [composer],
@@ -59,6 +60,7 @@ export function useUpcomingMove(today: string) {
       const day = shortDay(landed);
       const sameDay = landed === block.upcoming!.occursOn;
       const verb = move.dueAt ? "Moved" : "Changed";
+      const keys = { this: newActionKey(), following: newActionKey(), all: newActionKey() };
       const undoMove = (undo: string[]) =>
         undo.length > 0
           ? {
@@ -73,14 +75,14 @@ export function useUpcomingMove(today: string) {
             }
           : undefined;
       const rescope = (scope: "following" | "all", undo: string[], message: string) =>
-        void moveUpcomingAction(target, move, scope, undo)
+        void moveUpcomingAction(target, move, scope, undo, keys[scope])
           .catch((): RepeatActionResult => ({ error: MOVE_FAILED }))
           .then((result) => {
             if (result.error) failed(result.error, undoMove(undo));
             else undoToast(target.currentTaskId, message, result.undo);
             router.refresh();
           });
-      void moveUpcomingAction(target, move, "this")
+      void moveUpcomingAction(target, move, "this", [], keys.this)
         .catch((): RepeatActionResult => ({ error: MOVE_FAILED }))
         .then((result) => {
           if (result.error) {
@@ -92,14 +94,21 @@ export function useUpcomingMove(today: string) {
           router.refresh();
           const undo = result.undo ?? [];
           const resets = move.dueAt ? resetsFor(block) : 0;
-          const confirmAll = () =>
-            composer.showToast({
-              message: `Resets ${resets} changed date${resets === 1 ? "" : "s"}.`,
-              duration: 10_000,
-              action: { label: "Move all", run: () => rescope("all", undo, "Moved every one.") },
-            });
+          const key = `${target.seriesId}|${target.occursOn}`;
+          const earlier = toasts.current.get(key);
+          if (earlier !== undefined) composer.dismissToast(earlier);
           const action = undoMove(undo);
-          composer.showToast({
+          const confirmAll = () =>
+            toasts.current.set(
+              key,
+              composer.showToast({
+                message: `Resets ${resets} changed date${resets === 1 ? "" : "s"}.`,
+                duration: 10_000,
+                choices: [{ label: "Move all", run: () => rescope("all", undo, "Moved every one.") }],
+                ...(action ? { action } : {}),
+              }),
+            );
+          const id = composer.showToast({
             message: `${verb} ${day} only.`,
             duration: 10_000,
             ...(sameDay
@@ -112,6 +121,7 @@ export function useUpcomingMove(today: string) {
               : {}),
             ...(action ? { action } : {}),
           });
+          toasts.current.set(key, id);
         });
     },
     [composer, failed, router, today, undoToast],
@@ -134,13 +144,17 @@ export default function UpcomingDialog({
   const undoToast = useUndoToast();
   const [busy, setBusy] = useState(false);
   const [shown, setShown] = useState(block);
-  if (block && block !== shown) setShown(block);
+  const [skipKey, setSkipKey] = useState(newActionKey);
+  if (block && block !== shown) {
+    setShown(block);
+    setSkipKey(newActionKey());
+  }
   const target = shown ? targetOf(shown) : null;
   const openable = Boolean(target && canOpen(target.currentTaskId));
   const skip = async () => {
     if (!shown || !target) return;
     setBusy(true);
-    const result = await skipUpcomingAction(target).catch((): RepeatActionResult => ({ error: SKIP_FAILED }));
+    const result = await skipUpcomingAction(target, skipKey).catch((): RepeatActionResult => ({ error: SKIP_FAILED }));
     setBusy(false);
     if (result.error) {
       composer.showToast({ message: result.error, tone: "alert" });

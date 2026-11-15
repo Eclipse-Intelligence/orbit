@@ -13,7 +13,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import { isRepeating, ownsRepeat, RepeatField, runsSeries, SCOPE_LATER, SkipButton, useRepeatScope, type RepeatScope } from "@/components/crm/task-repeat";
-import { scopeChange, skipsBesideRepeat, waitsForScope } from "@/lib/task-repeat-menu";
+import { keepsSeriesOwner, scopeChange, skipsBesideRepeat, waitsForScope } from "@/lib/task-repeat-menu";
 import TaskLinkChips from "@/components/crm/task-link-chips";
 import { useDocMention } from "@/components/crm/task-doc-mention";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
@@ -97,8 +97,8 @@ export function canChangeTaskAs(viewer: Pick<Viewer, "id">, task: Pick<Task, "ow
   return task.ownerId === viewer.id || task.createdByUserId === viewer.id;
 }
 
-export function canRemoveTag(viewer: Pick<Viewer, "id">, task: Pick<Task, "ownerId" | "createdByUserId">, person: string) {
-  return person === viewer.id || canChangeTaskAs(viewer, task);
+export function canRemoveTag(viewer: Pick<Viewer, "id">, task: Pick<Task, "ownerId" | "createdByUserId" | "repeat" | "completedAt">, person: string) {
+  return !keepsSeriesOwner(task, person) && (person === viewer.id || canChangeTaskAs(viewer, task));
 }
 
 export function changersLine(names: string[]) {
@@ -164,6 +164,7 @@ function dueWrite(value: string): TaskDetails {
 }
 
 const drafts = taskDrafts();
+const DRAFT_FIELDS: DraftField[] = ["title", "text"];
 
 export function useTaskDetails(task: Task, canChange: boolean, shown = true, viewerId: string | null = null) {
   const router = useRouter();
@@ -193,6 +194,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
   const repeatScope = useRepeatScope(task);
   const declined = useRef<{ title?: string; text?: string }>({});
+  const inflight = useRef<Partial<Record<DraftField, { value: string; done: Promise<boolean>; scoped: boolean }>>>({});
   const visible = useRef(shown);
   useEffect(() => {
     visible.current = shown;
@@ -288,39 +290,67 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     return true;
   }
 
-  function saveDraft(field: DraftField, ask = true) {
-    if (!canChange) return;
+  function draftWrite(field: DraftField, value: string): TaskDetails {
+    return field === "title" ? { title: value } : { description: value || null };
+  }
+
+  function saveDraft(field: DraftField, ask = true): Promise<boolean> {
+    if (!canChange) return Promise.resolve(true);
     const previous = sent.current[field];
     const commit = draftCommit(field, field === "title" ? title : text, previous);
-    if (!ask && declined.current[field] === commit.value) return;
+    const running = inflight.current[field];
+    if (running && running.value === commit.value) return running.done;
+    if (!ask && declined.current[field] === commit.value) return Promise.resolve(false);
     if (ask) delete declined.current[field];
     if (!commit.save) {
       if (field === "title" && commit.value !== title) setTitle(commit.value);
       setErrors((current) => clearFields(current, [field]));
       drafts.drop(self, task.id, field, previous);
-      return;
+      return Promise.resolve(true);
     }
     const next = commit.value;
+    const write = draftWrite(field, next);
     sent.current[field] = next;
-    void save(field === "title" ? { title: next } : { description: next || null }, ask).then((ok) => {
+    const done: Promise<boolean> = save(write, ask).then((ok) => {
+      if (inflight.current[field]?.done === done) delete inflight.current[field];
       if (!ok && sent.current[field] === next) sent.current[field] = previous;
-      const declinedNow = !ok && declined.current[field] === next;
-      if (declinedNow) {
-        setErrors((current) => clearFields(current, [field]));
-        if (field === "title") setTitle((shown) => (shown.trim() === next ? sent.current.title : shown));
-        else setText((shown) => (shown.trim() === next ? sent.current.text : shown));
-      }
-      if (draftAfterSave(ok, declinedNow) === "drop") drafts.drop(self, task.id, field, ok ? next : sent.current[field]);
+      if (!ok && declined.current[field] === next) setErrors((current) => clearFields(current, [field]));
+      if (draftAfterSave(ok) === "drop") drafts.drop(self, task.id, field, next);
       else drafts.keep(self, task.id, field, next, sent.current[field]);
+      return ok;
     });
+    inflight.current[field] = { value: next, done, scoped: ask && waitsForScope(task, viewerId, write) };
+    return done;
+  }
+
+  function waiting(field: DraftField) {
+    const commit = draftCommit(field, field === "title" ? title : text, sent.current[field]);
+    return commit.save && waitsForScope(task, viewerId, draftWrite(field, commit.value));
+  }
+
+  function holding() {
+    if (!canChange) return false;
+    return DRAFT_FIELDS.some((field) => inflight.current[field]?.scoped || waiting(field));
+  }
+
+  async function settle() {
+    for (const field of DRAFT_FIELDS) {
+      const running = inflight.current[field];
+      if (running && !(await running.done)) return false;
+    }
+    for (const field of DRAFT_FIELDS) {
+      if (!waiting(field)) continue;
+      if (!(await saveDraft(field, true))) return false;
+    }
+    return true;
   }
 
   function saveTitle(ask = true) {
-    saveDraft("title", ask);
+    void saveDraft("title", ask);
   }
 
   function saveText(ask = true) {
-    saveDraft("text", ask);
+    void saveDraft("text", ask);
   }
 
   function flush() {
@@ -444,6 +474,8 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     saveTitle,
     saveText,
     flush,
+    holding,
+    settle,
     changeDue,
     removeTime,
     remindAt,

@@ -43,7 +43,7 @@ const ENDS = [
   { words: "", ends: () => ({ never: true }) },
   { words: " until 18 Dec", ends: () => ({ until: "2026-12-18" }) },
   { words: " for 6 weeks", ends: (first: string) => ({ until: shiftDay(first, 41) }) },
-  { words: " 10 times", ends: () => ({ count: 10 }) },
+  { words: " for 10 times", ends: () => ({ count: 10 }) },
 ];
 
 const NEGATIVES = [
@@ -193,6 +193,28 @@ describe("typed repeats", () => {
     }
   });
 
+  it("goes unsure on a bare count after a repeat with no set day, which can mean times a day", () => {
+    for (const typed of ["Take tablets every day 3 times", "Take tablets daily 3 times", "Post every week 3 times"]) assert.equal(parse(typed).unsure, true, typed);
+    assert.deepEqual(parse("Take tablets every day for 3 times").repeat?.ends, { count: 3 });
+    assert.deepEqual(parse("Review proposals every Wednesday 5 times").repeat?.ends, { count: 5 });
+  });
+
+  it("goes unsure on misspelt repeats instead of saving a one-off", () => {
+    for (const typed of ["Gym everyday", "Gym everyday at 7am", "Gym every Wedensday at 9am", "Gym every 2wks", "Gym every 3 mths"]) {
+      const read = parse(typed);
+      assert.deepEqual({ unsure: read.unsure, due: read.due }, { unsure: true, due: null }, typed);
+    }
+    assert.equal(parse("Buy everyday items").unsure, false);
+  });
+
+  it("goes unsure on a deadline, a day word before the repeat, a negation or a hedge", () => {
+    for (const typed of ["Gym every day by 15 Dec", "Plan tomorrow every day", "No gym every Monday", "Gym almost every Monday", "Tidy nearly every day"]) {
+      const read = parse(typed);
+      assert.deepEqual({ unsure: read.unsure, repeat: read.repeat }, { unsure: true, repeat: undefined }, typed);
+    }
+    assert.equal(parse("Gym every day from tomorrow").due, "2026-11-15");
+  });
+
   it("goes unsure on numbers out of range and counts it can't place", () => {
     for (const typed of ["Gym every 0 days", "Invoice every month on the 0th", "Invoice every month on the 32nd", "Stretch 3 times daily", "Stretch 3 times every Monday", "Stretch twice daily"]) {
       const read = parse(typed);
@@ -241,13 +263,30 @@ describe("typed repeats", () => {
     const daily = { rule: { freq: "daily", interval: 1 } as RepeatRule, ends: { never: true as const } };
     const friday = { rule: { freq: "weekly", interval: 1, weekdays: ["fr"] } as RepeatRule, ends: { never: true as const } };
     const shown = (typed: string) => padReading(typed, parse(typed), null, []);
-    assert.equal(chipOverrides(shown("Call Sam every Friday"), false, daily, ""), true, "a repeat typed after the pick");
-    assert.equal(chipOverrides(shown("Call Sam every Friday until 18 Dec"), false, daily, ""), true, "an end typed after the pick");
-    assert.equal(chipOverrides(shown("Gym Tuesday"), false, friday, ""), true, "a date off the picked pattern");
-    assert.equal(chipOverrides(shown("Gym Friday 10am"), false, friday, ""), false, "a date and time on the picked pattern stay lit");
+    const none = { set: false, value: null };
+    assert.equal(chipOverrides(shown("Call Sam every Friday"), none, daily, null), true, "a repeat typed after the pick");
+    assert.equal(chipOverrides(shown("Call Sam every Friday until 18 Dec"), none, daily, null), true, "an end typed after the pick");
+    assert.equal(chipOverrides(shown("Gym Tuesday"), none, friday, null), true, "a date off the picked pattern");
+    assert.equal(chipOverrides(shown("Gym Friday 10am"), none, friday, null), false, "a date and time on the picked pattern stay lit");
     const typed = shown("Standup every Monday at 10am");
-    assert.equal(chipOverrides(typed, false, daily, typed.key), false, "the typed repeat the chip changed stays lit");
-    assert.equal(chipOverrides(shown("Gym tomorrow"), true, null, ""), true, "a picked due date still wins over a typed one");
+    assert.equal(chipOverrides(typed, none, daily, typed.repeat!), false, "the typed repeat the chip changed stays lit");
+    assert.equal(chipOverrides(shown("Gym tomorrow"), { set: true, value: "2026-11-16" }, null, null), true, "a picked due date still wins over a typed one");
+  });
+
+  it("keeps a time typed after the chip changed a typed repeat", () => {
+    const daily = { rule: { freq: "daily", interval: 1 } as RepeatRule, ends: { never: true as const } };
+    const shown = (typed: string) => padReading(typed, parse(typed), null, []);
+    const before = shown("Gym every Monday");
+    const after = shown("Gym every Monday at 10am");
+    assert.equal(chipOverrides(after, { set: false, value: null }, daily, before.repeat!), false);
+    assert.equal(after.due, "2026-11-16T10:00");
+    assert.equal(chipOverrides(shown("Gym every week at 9am"), { set: false, value: null }, daily, shown("Gym every week").repeat!), false, "a time that moves the first day");
+  });
+
+  it("drops a typed repeat when a due date off its pattern is picked", () => {
+    const shown = padReading("Gym every Monday", parse("Gym every Monday"), null, []);
+    assert.equal(chipOverrides(shown, { set: true, value: "2026-11-18" }, null, null), true, "Wednesday is off every Monday");
+    assert.equal(chipOverrides(shown, { set: true, value: "2026-11-23" }, null, null), false, "a later Monday keeps it");
   });
 
   it("works out the first occurrence for a repeat picked from the menu", () => {
