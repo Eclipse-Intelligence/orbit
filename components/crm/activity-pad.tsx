@@ -218,7 +218,7 @@ export default function ActivityPad({
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      <div className="bg-secondary focus-within:border-ring border-line-strong flex items-end gap-2 rounded-2xl border py-1.5 pr-1.5 pl-3.5 transition-[border-color] duration-150">
+      <div className="bg-surface-panel focus-within:border-ring border-line-strong flex items-end gap-2 rounded-2xl border py-1.5 pr-1.5 pl-3.5 transition-[border-color] duration-150">
         <div className="min-w-0 flex-1 py-0.5">
           <MentionInput
             id={`${id}-activity`}

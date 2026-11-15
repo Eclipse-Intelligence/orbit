@@ -80,7 +80,7 @@ function DraftBody({ preparation }: { preparation: TaskPreparation }) {
 
   return (
     <>
-      <div className="bg-secondary rounded-[10px] px-3 py-2.5 text-[13.5px] leading-[21px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
+      <div className="bg-surface-panel rounded-[10px] px-3 py-2.5 text-[13.5px] leading-[21px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
         <div className="caption-style text-subtle border-line-subtle mb-2 flex min-w-0 flex-wrap gap-x-1.5 gap-y-0.5 border-b pb-2">
           {to && (
             <>
