@@ -101,7 +101,7 @@ export function RepeatMark({ task, short = false, className }: { task: Task; sho
   );
 }
 
-function useUndoToast() {
+export function useUndoToast() {
   const composer = useComposer();
   const router = useRouter();
   return useCallback(

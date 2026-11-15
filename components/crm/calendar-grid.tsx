@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import Button from "@/components/_ui/button";
 import {
   Popover,
   PopoverContent,
@@ -27,13 +28,13 @@ import {
   packColumns,
   wallMinutes,
 } from "@/lib/calendar-view";
-import { GridTaskBlock, type TaskBlockDrag, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import { GridTaskBlock, UpcomingChip, type TaskBlockDrag, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import type { TaskDrag } from "@/hooks/use-task-drag";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
 import { durationLabel } from "@/lib/crm/task-time";
 import { runLabel, type PreviewRun } from "@/lib/plan-preview";
-import type { TaskBlock } from "@/lib/task-blocks";
+import { upcomingDayBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { slotDayLabel, slotRange, type GridSlot } from "@/lib/task-drag";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -45,6 +46,7 @@ const FOCUS_HOURS = 12;
 const MIN_MINUTES = 20;
 const MIN_TASK_MINUTES = 15;
 const COMPACT_BELOW_PX = 44;
+const CHIPS_SHOWN = 2;
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 export function eventStyle(
@@ -245,6 +247,8 @@ export default function CalendarGrid({
   proposals = [],
   proposalDrag,
   runs = [],
+  chips = [],
+  dayHref,
 }: {
   days: string[];
   today: string;
@@ -259,6 +263,8 @@ export default function CalendarGrid({
   proposals?: TaskBlock[];
   proposalDrag?: TaskBlockDrag;
   runs?: PreviewRun[];
+  chips?: TaskBlock[];
+  dayHref?: (day: string) => string;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
@@ -324,6 +330,7 @@ export default function CalendarGrid({
     }
   }
   const hasAllDay = days.some((key) => (allDay.get(key)?.length ?? 0) > 0);
+  const hasChips = Boolean(taskHandlers) && days.some((key) => upcomingDayBlocks(chips, key).length > 0);
   const nowMinutes = wallMinutes(current);
   const columns = {
     gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))`,
@@ -342,7 +349,7 @@ export default function CalendarGrid({
           return (
             <div
               key={key}
-              className="border-border flex items-center gap-1.5 border-l px-2 py-2.5"
+              className="border-border flex min-w-0 items-center gap-1.5 border-l px-2 py-2.5"
             >
               <span className="caption-style text-subtle">
                 {heading.weekday}
@@ -360,6 +367,28 @@ export default function CalendarGrid({
             </div>
           );
         })}
+        {hasChips && (
+          <>
+            <div aria-hidden className="border-border border-t" />
+            {days.map((key) => {
+              const dayChips = upcomingDayBlocks(chips, key);
+              const visibleChips = days.length > 1 ? dayChips.slice(0, CHIPS_SHOWN) : dayChips;
+              const more = dayChips.length - visibleChips.length;
+              return (
+                <div key={key} className="border-border flex min-w-0 flex-col gap-1 border-t border-l px-1 pt-1 pb-1.5 [@media(pointer:coarse)]:gap-6 [@media(pointer:coarse)]:py-3">
+                  {visibleChips.map((block) => (
+                    <UpcomingChip key={block.id} block={block} onOpen={taskHandlers!.onOpen} />
+                  ))}
+                  {more > 0 && dayHref && (
+                    <Button variant="ghost" size="sm" href={dayHref(key)} className="hit text-subtle h-5 justify-start px-1.5 text-[11.5px]">
+                      +{more} more
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
         {hasAllDay && (
           <>
             <div className="caption-style text-subtle border-border flex items-start justify-end border-t px-2 py-1.5">

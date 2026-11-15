@@ -20,6 +20,7 @@ import type { TaskBlockDrag, TaskBlockHandlers } from "@/components/crm/calendar
 import TaskKindIcon from "@/components/crm/task-kind-icon";
 import { useGridDrag, useTaskDrag, type TaskDrag, type TaskPress } from "@/hooks/use-task-drag";
 import TaskPanel from "@/components/crm/task-panel";
+import UpcomingDialog, { useUpcomingMove } from "@/components/crm/calendar-upcoming";
 import { HomeWorkspace } from "@/components/crm/task-workspace";
 import { useTaskDone } from "@/components/crm/use-task-done";
 import InviteDialog, {
@@ -47,7 +48,7 @@ import type { Planner } from "@/lib/crm/task-blocks";
 import { durationLabel, taskDueDay } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
 import { LONG_PRESS_MS } from "@/lib/pointer-gesture";
-import { taskBlocks, type TaskBlock } from "@/lib/task-blocks";
+import { clashWith, dropRefusal, isUpcomingTaskId, openDayChips, taskBlocks, upcomingBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { panelTaskFor } from "@/lib/task-done";
 import { placedTask, placementLanded, slotDateLabel, type DropPlacement } from "@/lib/task-drag";
 import {
@@ -347,11 +348,14 @@ export default function CalendarScreen({
 
   const { sections, toggle: toggleSection } = useCalendarSections();
   const [placed, setPlaced] = useState<Placed>({});
+  const [moved, setMoved] = useState<Record<string, { startsAt: string; endsAt: string; durationMinutes: number; pending: boolean }>>({});
   const [plannerSeen, setPlannerSeen] = useState(planner);
   if (plannerSeen !== planner) {
     setPlannerSeen(planner);
     const kept = unsettled(placed, planner.tasks);
     if (Object.keys(kept).length !== Object.keys(placed).length) setPlaced(kept);
+    const stillSaving = Object.fromEntries(Object.entries(moved).filter(([, entry]) => entry.pending));
+    if (Object.keys(stillSaving).length !== Object.keys(moved).length) setMoved(stillSaving);
   }
   const placeSeq = useRef(0);
   const latestPlace = useRef(new Map<string, number>());
@@ -430,7 +434,28 @@ export default function CalendarScreen({
     onCancel: cancelPlan,
     onApply: applyPlan,
   };
+  const moveUpcoming = useUpcomingMove(today);
   const place = (task: Task, placement: DropPlacement) => {
+    if (isUpcomingTaskId(task.id)) {
+      const block = upcoming.find((item) => item.task.id === task.id);
+      if (!block || placement.dateOnly === true) return;
+      setError(null);
+      if (!dropRefusal(block, placement.at, today)) {
+        const startsAt = new Date(placement.at).toISOString();
+        const endsAt = new Date(Date.parse(placement.at) + placement.durationMinutes * 60_000).toISOString();
+        setMoved((current) => ({ ...current, [task.id]: { startsAt, endsAt, durationMinutes: placement.durationMinutes, pending: true } }));
+      }
+      moveUpcoming(block, placement, (saved) =>
+        setMoved((current) => {
+          if (!current[task.id]) return current;
+          if (saved) return { ...current, [task.id]: { ...current[task.id], pending: false } };
+          const rest = { ...current };
+          delete rest[task.id];
+          return rest;
+        }),
+      );
+      return;
+    }
     if (preview?.entries.some((entry) => entry.taskId === task.id)) {
       const own = planner.tasks.find((item) => item.id === task.id) ?? task;
       setPreview((current) =>
@@ -464,16 +489,24 @@ export default function CalendarScreen({
   const { drag, press, pickUpFromList, pickUpBlock, resizeBlock } = useTaskDrag({
     onPlace: place,
     onCarry: () => setDrawerOpen(false),
-    onOpen: (task, from) => openTask(task, from),
+    onOpen: (task, from) => {
+      const block = isUpcomingTaskId(task.id) ? upcoming.find((item) => item.task.id === task.id) : null;
+      if (block) {
+        setOpener(from);
+        setUpcomingOpen(block);
+        return;
+      }
+      openTask(task, from);
+    },
   });
   const blockDrag: TaskBlockDrag | undefined = gridDrag && !planning ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const proposalDrag: TaskBlockDrag | undefined = gridDrag && !planLoading && !applying ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const heldFromList = drag?.source === "list" ? drag.task.id : null;
-  const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed && !planning ? drag : null;
+  const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed && !planning && !isUpcomingTaskId(drag.task.id) ? drag : null;
   const { done, complete: markDone, reopen } = useTaskDone(tasks);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [keptTask, setKeptTask] = useState<Task | null>(null);
-  const listedTask = openTaskId ? (tasks.find((task) => task.id === openTaskId) ?? null) : null;
+  const listedTask = openTaskId ? (tasks.find((task) => task.id === openTaskId) ?? planner.seriesTasks.find((task) => task.id === openTaskId) ?? null) : null;
   if (listedTask && listedTask !== keptTask) setKeptTask(listedTask);
   const [reopenedId, setReopenedId] = useState<string | null>(null);
   const panelTask = panelTaskFor(openTaskId, listedTask, keptTask, (id) => done.has(id) || id === reopenedId);
@@ -490,12 +523,29 @@ export default function CalendarScreen({
     tasks.filter((task) => !proposedIds.has(task.id)),
     { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done },
   );
+  const expanded = useMemo(() => {
+    const range = rangeDays(date, desktopMode);
+    const first = range[0] < date ? range[0] : date;
+    const last = range[range.length - 1] > date ? range[range.length - 1] : date;
+    return upcomingBlocks(planner.series, { viewerId: viewer.id, from: shiftDateKey(first, -1), to: last, today, workspaces: planner.workspaces });
+  }, [planner.series, planner.workspaces, viewer.id, date, desktopMode, today]);
+  const upcoming = expanded.map((block) => {
+    const shift = moved[block.task.id];
+    const placedBlock = shift
+      ? { ...block, startsAt: shift.startsAt, endsAt: shift.endsAt, durationMinutes: shift.durationMinutes, task: { ...block.task, dueAt: shift.startsAt, durationMinutes: shift.durationMinutes } }
+      : block;
+    return placedBlock.task.dueHasTime ? { ...placedBlock, clash: clashWith(Date.parse(placedBlock.startsAt), Date.parse(placedBlock.endsAt), shown) } : placedBlock;
+  });
+  const upcomingTimed = upcoming.filter((block) => block.task.dueHasTime);
+  const upcomingDays = [...openDayChips(tasks.filter((task) => !done.has(task.id)), viewer.id, planner.workspaces), ...upcoming.filter((block) => !block.task.dueHasTime)];
+  const shownBlocks = [...blocks, ...upcomingTimed];
+  const [upcomingOpen, setUpcomingOpen] = useState<TaskBlock | null>(null);
   const proposals =
     preview && planning
       ? previewBlocks(preview, tasks, {
           workspaces: planner.workspaces,
           meetings: shown,
-          blocks: blocks.filter((block) => !block.done).map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
+          blocks: [...blocks.filter((block) => !block.done), ...upcomingTimed].map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
         })
       : [];
   const clashes = Object.fromEntries(proposals.flatMap((block) => (block.clash ? [[block.task.id, block.clash]] : [])));
@@ -509,6 +559,10 @@ export default function CalendarScreen({
   const taskHandlers: TaskBlockHandlers = {
     onOpen: (block: TaskBlock, from: HTMLElement | null) => {
       setOpener(from);
+      if (block.upcoming) {
+        setUpcomingOpen(block);
+        return;
+      }
       setOpenTaskId(block.task.id);
     },
     onComplete: (block: TaskBlock) => markDone(block.task),
@@ -730,7 +784,9 @@ export default function CalendarScreen({
               calendars={calendars}
               now={now}
               onSlot={(day, time) => startInvite({ date: day, time })}
-              blocks={blocks}
+              blocks={shownBlocks}
+              chips={upcomingDays}
+              dayHref={(day) => calendarHref(day, "day")}
               taskHandlers={taskHandlers}
               drag={drag}
               blockDrag={blockDrag}
@@ -769,7 +825,8 @@ export default function CalendarScreen({
               calendars={calendars}
               now={now}
               onNew={() => startInvite(date === today ? {} : { date })}
-              blocks={blocks}
+              blocks={shownBlocks}
+              chips={upcomingDays}
               taskHandlers={taskHandlers}
             />
           </div>
@@ -786,6 +843,12 @@ export default function CalendarScreen({
       <InviteNotice message={notice} onDone={clearNotice} />
       {drag?.mode === "move" && <LiftedTask drag={drag} />}
       {press && <PressRing press={press} />}
+      <UpcomingDialog
+        block={upcomingOpen}
+        onClose={() => setUpcomingOpen(null)}
+        onOpenTask={(id) => setOpenTaskId(id)}
+        canOpen={(id) => tasks.some((task) => task.id === id) || planner.seriesTasks.some((task) => task.id === id)}
+      />
       <HomeWorkspace.Provider value={viewer.workspaceId ?? null}>
         <TaskPanel
           task={shownTask}

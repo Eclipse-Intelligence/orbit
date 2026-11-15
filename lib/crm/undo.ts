@@ -736,6 +736,7 @@ async function actionIds(db: Db, actor: Actor, eventId: string) {
      where e.workspace_id = t.workspace_id and e.entity_type = 'task' and e.entity_id = t.entity_id and e.created_at = t.created_at
        and e.actor_user_id is not distinct from t.actor_user_id and e.actor_agent_id is not distinct from t.actor_agent_id
        and e.event_type not like '%.undone' and e.event_type not like 'task.participant_%' and not coalesce((e.changes ->> 'followsChange')::boolean, false)
+       and (e.changes ->> 'undoing') is distinct from 'true'
        and not (e.event_type = 'task.archived' and exists (select 1 from crm.audit_events d where d.entity_id = e.entity_id and d.created_at = e.created_at and d.event_type = 'task_series.deleted'))
        and not (e.event_type = 'task.created' and e.changes -> 'after' ->> 'seriesId' is not null)`,
     [eventId, actor.workspaceId],
@@ -759,7 +760,7 @@ async function describeAction(db: Db, actor: Actor, eventId: string, provenance:
   return { event: series[0].event, ids, described: { entityName: one.described.entityName, summary: live.map((part) => part.summary).join("; "), plan: { ok: true, restores: live.map((part) => (part.plan.ok ? part.plan.restores : "")).join(" "), run } } };
 }
 
-async function undoTaskEventsInDb(db: Db, actor: Actor, taskId: string, eventIds: string[], provenance: Provenance) {
+export async function undoTaskEventsInDb(db: Db, actor: Actor, taskId: string, eventIds: string[], provenance: Provenance) {
   const ids = [...new Set(eventIds.filter(isUuid))].slice(0, 10);
   const found = await db.query<AuditRow>(`${AUDIT_SQL} where e.id = any($1::uuid[]) and e.workspace_id = $2 and e.entity_type = 'task' and e.entity_id = $3`, [ids, actor.workspaceId, taskId]);
   if (found.rows.length === 0 || found.rows.length !== ids.length) throw new CrmError("cannot_undo", "Couldn't undo. Try again.", 409);

@@ -30,6 +30,7 @@ type Toast = {
   tone?: "status" | "alert";
   action?: { label: string; run: () => void; shortcut?: () => boolean };
   extra?: { label: string; short?: string; run: () => void };
+  choices?: { label: string; run: () => void }[];
   duration?: number;
   onDismiss?: () => void;
 };
@@ -413,10 +414,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
 
   const showToast = useCallback(
     (toast: Toast) => {
-      const repeat = toast.action ? undefined : shownMessages.current.get(toast.message);
+      const repeat = toast.action || toast.choices ? undefined : shownMessages.current.get(toast.message);
       if (repeat !== undefined) return repeat;
       const id = ++toastCounter.current;
-      if (!toast.action) shownMessages.current.set(toast.message, id);
+      if (!toast.action && !toast.choices) shownMessages.current.set(toast.message, id);
       if (toast.action && toast.onDismiss) toastEnds.current.set(id, toast.onDismiss);
       setToasts((current) => [...current.slice(-2), { ...toast, id }]);
       toastTimers.current.set(
@@ -671,6 +672,20 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               )}
               <span className={cn(toast.extra ? "shrink-0 whitespace-nowrap" : "min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
               {toast.extra && <span aria-hidden className="w-6 shrink-0" />}
+              {toast.choices?.map((choice) => (
+                <Button
+                  key={choice.label}
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    choice.run();
+                    dismiss(toast.id);
+                  }}
+                >
+                  {choice.label}
+                </Button>
+              ))}
               {toast.action ? (
                 <Button
                   variant="ghost"

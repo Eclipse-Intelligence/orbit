@@ -8,7 +8,11 @@ async function run(taskIds: string[]) {
   if (taskIds.length === 0) return;
   try {
     const { syncTaskBlocks } = await import("@/lib/crm/task-outlook");
-    await syncTaskBlocks({ taskIds, deadline: Date.now() + RUN_MS });
+    const { SERIES_SHARE, syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
+    const deadline = Date.now() + RUN_MS;
+    const throttled = new Set<string>();
+    const series = await syncSeriesOutlook({ taskIds, deadline, throttled, limit: SERIES_SHARE });
+    await syncTaskBlocks({ taskIds, deadline, throttled, limit: Math.max(1, 50 - series.requests) });
   } catch (error) {
     console.error("Outlook task blocks failed", error);
   }
