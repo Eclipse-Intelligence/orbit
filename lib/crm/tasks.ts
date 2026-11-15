@@ -676,7 +676,7 @@ async function applyTask(
     throw new CrmError("forbidden", OWNER_SETS_LENGTH, 403, { field: "durationMinutes" });
   }
   settleReminder(write, { dueHasTime: Boolean(current.due_has_time), remindMinutes: current.remind_minutes });
-  if (!options.restoring && typeof write.remindMinutes === "number" && (write.remindMinutes !== current.remind_minutes || write.dueAt !== undefined)) {
+  if (!options.restoring && !current.series_id && typeof write.remindMinutes === "number" && (write.remindMinutes !== current.remind_minutes || write.dueAt !== undefined)) {
     assertReminderCanFire(write.dueAt === undefined ? iso(current.due_at) : write.dueAt, write.remindMinutes);
   }
   if (write.mailThreadKey !== undefined && write.mailThreadKey === current.mail_thread_key) delete write.mailThreadKey;
