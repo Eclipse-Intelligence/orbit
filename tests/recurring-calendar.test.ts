@@ -4,7 +4,7 @@ import { runTool } from "@/lib/assistant/tools";
 import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
 import { loadBusy, saveBookingPage } from "@/lib/booking/pages";
 import { seriesBusy } from "@/lib/booking/slots";
-import { buildPlan } from "@/lib/crm/plan-schedule";
+import { buildPlan, scheduleTasks } from "@/lib/crm/plan-schedule";
 import { packPlan } from "@/lib/crm/plan-tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { readPlanner } from "@/lib/crm/task-blocks";
@@ -207,6 +207,19 @@ describe("Plan and booking pages", () => {
     assert.equal(plan.placed.some((entry) => entry.taskId === report.id), false);
     assert.ok(plan.unplaced.some((entry) => entry.taskId === report.id));
     assert.equal(plan.placed.some((entry) => entry.title === "Deep work"), false);
+  });
+
+  it("refuses an agent schedule over an upcoming date", async () => {
+    const tuesday = nextWeekday(2);
+    const wednesday = shiftDay(tuesday, 1);
+    await repeating(mark, "Standing call", tuesday, "10:00", { every: "day" }, { durationMinutes: 60 });
+    const note = (await createTask(mark, { title: "Write notes", dueDate: wednesday, durationMinutes: 30 })).body.task;
+    await assert.rejects(
+      () => scheduleTasks(mark, [{ taskId: note.id, at: london(wednesday, "10:15"), durationMinutes: 30 }], { mode: "agent", provenance: { operation: "schedule_tasks", source: "mcp" } }),
+      /clashes with Standing call/,
+    );
+    const [placed] = await scheduleTasks(mark, [{ taskId: note.id, at: london(wednesday, "11:30"), durationMinutes: 30 }], { mode: "agent", provenance: { operation: "schedule_tasks", source: "mcp" } });
+    assert.equal(placed.task.dueAt, london(wednesday, "11:30"));
   });
 
   it("packs around upcoming dates passed to the packer", () => {

@@ -56,7 +56,7 @@ export type PlanContext = {
   tasks: Task[];
   hours: WorkingHours;
   meetings: PlanMeeting[];
-  upcoming: { startsAt: string; endsAt: string }[];
+  upcoming: { title: string; startsAt: string; endsAt: string }[];
   preferences: PlanPreferences;
 };
 
@@ -94,11 +94,13 @@ export async function readPlanContextInDb(
   const tasks: Task[] = [];
   for (const target of actors) tasks.push(...(await listPlannerTasksInDb(db, target, now)));
   const series = await listOwnSeriesInDb(db, actor, actors.map((target) => target.workspaceId));
-  const lastDay = shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 1);
+  const coverDays = covers.map((cover) => dayKeyAt(new Date(cover.end + DAY_MS)));
+  const lastDay = [shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 1), ...coverDays].sort().at(-1)!;
   const upcoming = series.flatMap((item) =>
     upcomingBetween(item, today, lastDay, today)
       .filter((occurrence) => occurrence.dueHasTime)
       .map((occurrence) => ({
+        title: occurrence.title ?? item.title,
         startsAt: occurrence.dueAt,
         endsAt: new Date(Date.parse(occurrence.dueAt) + occurrence.durationMinutes * 60_000).toISOString(),
       })),
@@ -275,7 +277,7 @@ export async function scheduleTasks(
             now,
             mode: options.mode,
             hours: context?.hours,
-            meetings: context?.meetings,
+            meetings: context ? [...context.meetings, ...context.upcoming.map((item) => ({ subject: item.title, startsAt: item.startsAt, endsAt: item.endsAt, isAllDay: false, showAs: "busy" }))] : undefined,
             others: context?.tasks,
             batch,
           });

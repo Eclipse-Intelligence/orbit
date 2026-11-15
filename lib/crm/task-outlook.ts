@@ -122,10 +122,10 @@ export function taskBlockLink(taskId: string, workspaceId: string) {
   return origin ? `${origin}${openLink(workspaceId, taskPanelHref(taskId))}` : null;
 }
 
-type Outlook = { token: MicrosoftToken; connectionId: string; email: string; actor: UserActor };
-type Access = Outlook | "orbit_only" | "retry";
+export type Outlook = { token: MicrosoftToken; connectionId: string; email: string; actor: UserActor };
+export type Access = Outlook | "orbit_only" | "retry";
 
-async function actingActor(userId: string, workspaceId: string, anyWorkspace = false): Promise<UserActor | null> {
+export async function actingActor(userId: string, workspaceId: string, anyWorkspace = false): Promise<UserActor | null> {
   const memberships = await query<{ workspace_id: string; workspace_name: string; role: WorkspaceRole }>(
     "select workspace_id, workspace_name, role from private.memberships_for($1)",
     [userId],
@@ -166,7 +166,7 @@ function stopped(error: unknown) {
   return error instanceof MicrosoftError && (error.stopsRun || error.message === MICROSOFT_REJECTED);
 }
 
-async function openOutlook(actor: UserActor, fetchImpl: typeof fetch): Promise<Access> {
+export async function openOutlook(actor: UserActor, fetchImpl: typeof fetch): Promise<Access> {
   const source = await withActor(actor, (db) => mainSource(db, actor));
   if (!source) return "orbit_only";
   try {
@@ -180,9 +180,9 @@ async function openOutlook(actor: UserActor, fetchImpl: typeof fetch): Promise<A
   }
 }
 
-type Failure = "orbit_only" | "gone" | "refused" | "denied" | "throttled" | "retry";
+export type Failure = "orbit_only" | "gone" | "refused" | "denied" | "throttled" | "retry";
 
-function graphFailure(error: unknown): Failure {
+export function graphFailure(error: unknown): Failure {
   if (error instanceof CalendarWriteScopeError) return "orbit_only";
   if (error instanceof CalendarWriteError) {
     if (error.status === 404) return "gone";
@@ -589,13 +589,13 @@ function emptyRun(): BlockRun {
 }
 
 export async function syncTaskBlocks(
-  options: { taskIds?: string[]; userId?: string; fetchImpl?: typeof fetch; now?: number; deadline?: number; limit?: number } = {},
+  options: { taskIds?: string[]; userId?: string; fetchImpl?: typeof fetch; now?: number; deadline?: number; limit?: number; throttled?: Set<string> } = {},
 ): Promise<BlockRun> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + 25_000;
   const result = emptyRun();
   if (options.taskIds && options.taskIds.length === 0) return result;
-  const throttledUsers = new Set<string>();
+  const throttledUsers = options.throttled ?? new Set<string>();
   for (let round = 0; round < RUN_ROUNDS; round += 1) {
     if (deadline - Date.now() < RESERVE_MS) break;
     const claimed = await query<BlockRow>("select * from private.claim_task_blocks($1::uuid[], $2::uuid, $3)", [
@@ -669,9 +669,20 @@ export async function flushTaskBlocks(
   const writes = grantsCalendarWrite(scope);
   if (writes !== null) {
     const fresh = await noteTaskBlocksWrite(connectionId, writes);
-    if (writes) await queueOwnTaskBlocks(actor.userId, options.now, fresh);
+    if (writes) {
+      await queueOwnTaskBlocks(actor.userId, options.now, fresh);
+      if (fresh) await query("select private.queue_series_outlook($1)", [actor.userId]);
+    }
   }
-  return syncTaskBlocks({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now });
+  const throttled = new Set<string>();
+  const blocks = await syncTaskBlocks({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled });
+  const { syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
+  await syncSeriesOutlook({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled, limit: Math.max(0, RUN_LIMIT - blockWrites(blocks)) });
+  return blocks;
+}
+
+export function blockWrites(run: BlockRun) {
+  return run.created + run.updated + run.removed;
 }
 
 type ReadBackRow = {

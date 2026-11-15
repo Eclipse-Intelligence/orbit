@@ -62,6 +62,7 @@ const EVENT_FIELDS = [
   "attendees",
   "showAs",
   "responseStatus",
+  "seriesMasterId",
 ].join(",");
 
 export const VIEW_PREFER = 'outlook.timezone="UTC", outlook.body-content-type="text"';
@@ -87,6 +88,7 @@ export type GraphEvent = {
   attendees?: (GraphAddress & { type?: string | null; status?: { response?: string | null } | null })[] | null;
   showAs?: string | null;
   responseStatus?: { response?: string | null } | null;
+  seriesMasterId?: string | null;
 };
 
 type GraphCalendar = {
@@ -131,6 +133,7 @@ export type CalendarEvent = {
   attendees: CalendarAttendee[];
   showAs: string | null;
   responseStatus: string | null;
+  seriesMasterId?: string;
 };
 
 export type CalendarFetch = { events: CalendarEvent[]; complete: boolean; pages: number };
@@ -289,6 +292,7 @@ export function toCalendarEvent(event: GraphEvent, options: { ownLink?: string |
     attendees,
     showAs: showAs(event.showAs),
     responseStatus: responseStatus(event.responseStatus?.response),
+    ...(event.seriesMasterId?.trim() ? { seriesMasterId: event.seriesMasterId.trim() } : {}),
   };
 }
 
@@ -584,6 +588,43 @@ export function taskBlockPatch(input: { title: string; start?: Date; end?: Date;
   };
 }
 
+export type GraphRecurrence = {
+  pattern: {
+    type: "daily" | "weekly" | "absoluteMonthly" | "relativeMonthly" | "absoluteYearly";
+    interval: number;
+    daysOfWeek?: string[];
+    firstDayOfWeek?: string;
+    dayOfMonth?: number;
+    month?: number;
+    index?: "first" | "second" | "third" | "fourth" | "last";
+  };
+  range: { type: "noEnd" | "endDate"; startDate: string; endDate?: string; recurrenceTimeZone: string };
+};
+
+export type SeriesMasterDraft = Omit<ReturnType<typeof taskBlockDraft>, "start" | "end"> & {
+  start: { dateTime: string; timeZone: string };
+  end: { dateTime: string; timeZone: string };
+  recurrence: GraphRecurrence;
+};
+
+export function graphTimeZoneName(timeZone: string) {
+  return windowsTimeZone(timeZone) ?? "UTC";
+}
+
+export async function listSeriesInstances(accessToken: string, masterId: string, start: Date, end: Date, fetchImpl: typeof fetch = fetch) {
+  const url = new URL(`${eventUrl(masterId)}/instances`);
+  url.searchParams.set("startDateTime", start.toISOString());
+  url.searchParams.set("endDateTime", end.toISOString());
+  url.searchParams.set("$select", "id,start,end");
+  const response = await fetchImpl(url.toString(), {
+    headers: { authorization: `Bearer ${accessToken}`, prefer: PLAIN_PREFER },
+    signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+  });
+  if (!response.ok) throw await writeError(response, "find");
+  const body = (await response.json().catch(() => ({}))) as { value?: GraphEvent[] };
+  return (body.value ?? []).filter((event) => Boolean(event.id?.trim()));
+}
+
 export function taskBlockSearchUrl(key: string) {
   const filter = `singleValueExtendedProperties/Any(ep: ep/id eq '${TASK_BLOCK_PROPERTY.replace(/'/g, "''")}' and ep/value eq '${key.replace(/'/g, "''")}')`;
   return `https://graph.microsoft.com/v1.0/me/events?$filter=${encodeURIComponent(filter)}&$select=${encodeURIComponent("id,subject,start,end")}&$top=10`;
@@ -706,7 +747,7 @@ async function graphWrite(
 
 export async function createGraphEvent(
   accessToken: string,
-  draft: GraphEventDraft | ReturnType<typeof personalDraft> | ReturnType<typeof taskBlockDraft>,
+  draft: GraphEventDraft | ReturnType<typeof personalDraft> | ReturnType<typeof taskBlockDraft> | SeriesMasterDraft,
   options: { calendarId?: string | null; fetchImpl?: typeof fetch } = {},
 ) {
   const response = await graphWrite(eventsUrl(options.calendarId), accessToken, draft, options.fetchImpl ?? fetch, true);
@@ -772,7 +813,7 @@ export async function moveGraphEvent(
 export async function patchGraphEvent(
   accessToken: string,
   eventId: string,
-  patch: ReturnType<typeof taskBlockPatch>,
+  patch: ReturnType<typeof taskBlockPatch> | Partial<SeriesMasterDraft>,
   fetchImpl: typeof fetch = fetch,
 ) {
   const response = await graphWrite(eventUrl(eventId), accessToken, patch, fetchImpl, true, "PATCH");
