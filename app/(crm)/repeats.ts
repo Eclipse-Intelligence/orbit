@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
 import { clickupToken } from "@/lib/clickup";
@@ -11,50 +10,62 @@ import {
   deleteSeries,
   endSeriesOn,
   readRepeatHistory,
-  REPEAT_SAVE_FAILED,
   setTaskRepeat,
+  REPEAT_SCOPES,
   skipOccurrence,
   type RepeatHistoryItem,
+  type RepeatScope,
   type RepeatInput,
 } from "@/lib/crm/task-series";
-import { TASKS_PATH } from "@/lib/crm/task-views";
-import type { Task, UserActor } from "@/lib/crm/types";
+import type { Task, TaskWrite, UserActor } from "@/lib/crm/types";
+import { moveUpcoming } from "@/lib/crm/upcoming";
 import { undoTaskEvents } from "@/lib/crm/undo";
 import { isPgError } from "@/lib/crm/errors";
 import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
-import { revalidateRecordPages } from "@/lib/revalidate";
+import { revalidateTaskPages } from "@/lib/revalidate";
+import { REPEAT_SAVE_FAILED } from "@/lib/task-repeat-menu";
 
 const UNDO_FAILED = "Couldn't undo. Try again.";
 
 export type RepeatActionResult = { ok?: true; error?: string; task?: Task; undo?: string[]; skipped?: string };
 
-async function taskUser(id: unknown) {
+const SESSION_ENDED = "Your session ended. Sign in again.";
+
+async function taskUser(id: unknown): Promise<{ user: UserActor; error?: undefined } | { user?: undefined; error: string }> {
   const user = await getUserActor();
-  if (!user) return null;
-  return (await taskActorOrError(user, id)).actor ?? null;
+  if (!user) return { error: SESSION_ENDED };
+  const found = await taskActorOrError(user, id);
+  return found.actor ? { user: found.actor } : { error: found.error ?? TASK_LOOKUP_FAILED };
 }
 
 function refresh() {
-  revalidatePath(TASKS_PATH);
-  revalidatePath("/calendar");
-  revalidateRecordPages();
+  revalidateTaskPages();
+}
+
+function keyed(key: unknown) {
+  return typeof key === "string" && isUuid(key) ? { idempotencyKey: key } : {};
 }
 
 function pushLater(user: UserActor, id: string) {
   if (!clickupToken()) return;
-  after(async () => {
-    try {
-      await pushClickUpTask(user, id);
-    } catch (error) {
-      console.error("ClickUp push failed", error);
-    }
-  });
+  try {
+    after(async () => {
+      try {
+        await pushClickUpTask(user, id);
+      } catch (error) {
+        console.error("ClickUp push failed", error);
+      }
+    });
+  } catch (error) {
+    console.error("ClickUp push failed", error);
+  }
 }
 
 async function run(id: string, work: (user: UserActor) => Promise<{ task: Task; undo: string[]; skipped?: string }>): Promise<RepeatActionResult> {
   if (!isUuid(id)) return { error: REPEAT_SAVE_FAILED };
-  const user = await taskUser(id);
-  if (!user) return { error: TASK_LOOKUP_FAILED };
+  const found = await taskUser(id);
+  if (!found.user) return { error: found.error };
+  const user = found.user;
   try {
     const result = await work(user);
     pushLater(user, result.task.id);
@@ -65,28 +76,70 @@ async function run(id: string, work: (user: UserActor) => Promise<{ task: Task; 
   }
 }
 
-export async function setRepeatAction(id: string, repeat: RepeatInput | null): Promise<RepeatActionResult> {
-  return run(id, async (user) => (await setTaskRepeat(user, id, repeat, { provenance: { operation: repeat === null ? "stop_repeating" : "set_repeat", source: "web" } })).body);
+export async function setRepeatAction(id: string, repeat: RepeatInput | null, key?: string): Promise<RepeatActionResult> {
+  return run(id, async (user) => (await setTaskRepeat(user, id, repeat, { provenance: { operation: repeat === null ? "stop_repeating" : "set_repeat", source: "web" }, ...keyed(key) })).body);
 }
 
-export async function skipOccurrenceAction(id: string, occursOn?: string | null): Promise<RepeatActionResult> {
+export async function skipOccurrenceAction(id: string, occursOn?: string | null, key?: string): Promise<RepeatActionResult> {
   return run(id, async (user) =>
-    (await skipOccurrence(user, { taskId: id }, { provenance: { operation: "skip_occurrence", source: "web" }, ...(typeof occursOn === "string" ? { expect: occursOn } : {}) })).body,
+    (await skipOccurrence(user, { taskId: id }, { provenance: { operation: "skip_occurrence", source: "web" }, ...(typeof occursOn === "string" ? { expect: occursOn } : {}), ...keyed(key) })).body,
   );
 }
 
-export async function endSeriesAction(id: string, until: string): Promise<RepeatActionResult> {
-  return run(id, async (user) => (await endSeriesOn(user, id, until, { provenance: { operation: "end_repeat", source: "web" } })).body);
+export type UpcomingTarget = { currentTaskId: string; seriesId: string; occursOn: string };
+
+function readTarget(target: UpcomingTarget) {
+  if (!target || typeof target !== "object" || !isUuid(target.currentTaskId) || !isUuid(target.seriesId) || typeof target.occursOn !== "string") return null;
+  return { currentTaskId: target.currentTaskId, seriesId: target.seriesId, occursOn: target.occursOn };
 }
 
-export async function deleteSeriesAction(id: string): Promise<RepeatActionResult> {
-  return run(id, async (user) => (await deleteSeries(user, id, { provenance: { operation: "delete_series", source: "web" } })).body);
+export async function skipUpcomingAction(target: UpcomingTarget, key?: string): Promise<RepeatActionResult> {
+  const read = readTarget(target);
+  if (!read) return { error: REPEAT_SAVE_FAILED };
+  return run(read.currentTaskId, async (user) =>
+    (await skipOccurrence(user, { seriesId: read.seriesId, occursOn: read.occursOn }, { provenance: { operation: "skip_occurrence", source: "web" }, ...keyed(key) })).body,
+  );
+}
+
+export async function moveUpcomingAction(
+  target: UpcomingTarget,
+  move: { dueAt?: string; durationMinutes?: number },
+  scope: RepeatScope,
+  replaces: string[] = [],
+  key?: string,
+): Promise<RepeatActionResult> {
+  const read = readTarget(target);
+  if (!read || !REPEAT_SCOPES.includes(scope) || !move || typeof move !== "object") return { error: REPEAT_SAVE_FAILED };
+  const write: TaskWrite = {};
+  if (move.dueAt !== undefined) {
+    if (typeof move.dueAt !== "string" || Number.isNaN(Date.parse(move.dueAt))) return { error: REPEAT_SAVE_FAILED };
+    write.dueAt = new Date(move.dueAt).toISOString();
+    write.dueHasTime = true;
+  }
+  if (move.durationMinutes !== undefined) {
+    if (!Number.isInteger(move.durationMinutes) || move.durationMinutes < 5 || move.durationMinutes > 480) return { error: "Choose a duration between 5 and 480 minutes." };
+    write.durationMinutes = move.durationMinutes;
+  }
+  if (Object.keys(write).length === 0) return { error: REPEAT_SAVE_FAILED };
+  const undone = (Array.isArray(replaces) ? replaces : []).filter((event) => typeof event === "string" && isUuid(event));
+  return run(read.currentTaskId, (user) =>
+    moveUpcoming(user, { seriesId: read.seriesId, occursOn: read.occursOn }, write, scope, undone, { operation: "drag_task", source: "web" }, keyed(key).idempotencyKey),
+  );
+}
+
+export async function endSeriesAction(id: string, until: string, key?: string): Promise<RepeatActionResult> {
+  return run(id, async (user) => (await endSeriesOn(user, id, until, { provenance: { operation: "end_repeat", source: "web" }, ...keyed(key) })).body);
+}
+
+export async function deleteSeriesAction(id: string, key?: string): Promise<RepeatActionResult> {
+  return run(id, async (user) => (await deleteSeries(user, id, { provenance: { operation: "delete_series", source: "web" }, ...keyed(key) })).body);
 }
 
 export async function repeatHistoryAction(id: string): Promise<{ items?: RepeatHistoryItem[]; error?: string }> {
   if (!isUuid(id)) return { items: [] };
-  const user = await taskUser(id);
-  if (!user) return { error: TASK_LOOKUP_FAILED };
+  const found = await taskUser(id);
+  if (!found.user) return { error: found.error };
+  const user = found.user;
   try {
     return { items: await readRepeatHistory(user, id) };
   } catch (error) {
@@ -96,8 +149,9 @@ export async function repeatHistoryAction(id: string): Promise<{ items?: RepeatH
 
 export async function undoRepeatAction(id: string, events: string[]): Promise<{ ok?: true; error?: string }> {
   if (!isUuid(id)) return { error: UNDO_FAILED };
-  const user = await taskUser(id);
-  if (!user) return { error: TASK_LOOKUP_FAILED };
+  const found = await taskUser(id);
+  if (!found.user) return { error: found.error };
+  const user = found.user;
   const ids = (Array.isArray(events) ? events : []).filter((event) => typeof event === "string" && isUuid(event));
   if (ids.length === 0) return { error: UNDO_FAILED };
   try {

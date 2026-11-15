@@ -19,7 +19,7 @@ import { eventStyle } from "@/components/crm/calendar-grid";
 import { AgendaTaskBlock, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import { allDayKeys, daySpan } from "@/lib/calendar-view";
 import type { CalendarItem } from "@/lib/crm/calendars";
-import type { TaskBlock } from "@/lib/task-blocks";
+import { upcomingDayBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { cn } from "@/lib/utils";
 
 export default function CalendarAgenda({
@@ -30,6 +30,7 @@ export default function CalendarAgenda({
   now,
   onNew,
   blocks = [],
+  chips = [],
   taskHandlers,
 }: {
   date: string;
@@ -39,6 +40,7 @@ export default function CalendarAgenda({
   now: number;
   onNew?: () => void;
   blocks?: TaskBlock[];
+  chips?: TaskBlock[];
   taskHandlers?: TaskBlockHandlers;
 }) {
   const [open, setOpen] = useState<CalendarItem | null>(null);
@@ -58,6 +60,7 @@ export default function CalendarAgenda({
   const dayBlocks = taskHandlers ? blocks.filter((block) => daySpan(block.startsAt, block.endsAt, date)) : [];
   type Row = { kind: "event"; item: CalendarItem } | { kind: "task"; block: TaskBlock };
   const list: Row[] = [
+    ...(taskHandlers ? upcomingDayBlocks(chips, date) : []).map((block) => ({ kind: "task" as const, block })),
     ...allDay.map((item) => ({ kind: "event" as const, item })),
     ...[
       ...timed.map((item) => ({ kind: "event" as const, item, at: item.startsAt, until: item.endsAt })),
@@ -87,7 +90,7 @@ export default function CalendarAgenda({
                 <li key={row.block.id}>
                   <AgendaTaskBlock
                     block={row.block}
-                    past={date < today || new Date(row.block.endsAt).getTime() <= now}
+                    past={date < today || (row.block.task.dueHasTime && new Date(row.block.endsAt).getTime() <= now)}
                     onOpen={taskHandlers!.onOpen}
                     onComplete={taskHandlers!.onComplete}
                   />

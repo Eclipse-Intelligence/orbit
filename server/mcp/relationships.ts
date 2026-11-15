@@ -61,7 +61,7 @@ function provenance(args: { provenanceSource?: string | null; provenanceUrl?: st
   };
 }
 
-function mcpIdempotencyKey(value: string | undefined) {
+export function mcpIdempotencyKey(value: string | undefined) {
   const key = value?.trim();
   if (!key) return null;
   if (!/^[\x21-\x7E]+$/.test(key)) throw new CrmError("invalid_input", "Invalid idempotency_key.", 400, { field: "idempotency_key" });

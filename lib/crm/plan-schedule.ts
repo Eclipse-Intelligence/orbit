@@ -23,6 +23,8 @@ import { learningActors, planPreferencesInDb } from "@/lib/crm/schedule-preferen
 import { isBlockOverdue } from "@/lib/task-blocks";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, localInstant, taskDueDay } from "@/lib/crm/task-time";
 import { listPlannerTasksInDb, scheduleTaskInDb } from "@/lib/crm/tasks";
+import { listOwnSeriesInDb } from "@/lib/crm/upcoming";
+import { upcomingBetween } from "@/lib/task-repeat";
 import type { Provenance, Task, UserActor } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { readWorkingHoursInDb } from "@/lib/crm/working-hours";
@@ -54,6 +56,7 @@ export type PlanContext = {
   tasks: Task[];
   hours: WorkingHours;
   meetings: PlanMeeting[];
+  upcoming: { seriesId: string; title: string; startsAt: string; endsAt: string }[];
   preferences: PlanPreferences;
 };
 
@@ -90,6 +93,19 @@ export async function readPlanContextInDb(
   );
   const tasks: Task[] = [];
   for (const target of actors) tasks.push(...(await listPlannerTasksInDb(db, target, now)));
+  const series = await listOwnSeriesInDb(db, actor, actors.map((target) => target.workspaceId));
+  const coverDays = covers.map((cover) => dayKeyAt(new Date(cover.end + DAY_MS)));
+  const lastDay = [shiftDay(today, PLAN_DAYS + LOOK_BEYOND_DAYS + 1), ...coverDays].sort().at(-1)!;
+  const upcoming = series.flatMap((item) =>
+    upcomingBetween(item, today, lastDay, today)
+      .filter((occurrence) => occurrence.dueHasTime)
+      .map((occurrence) => ({
+        seriesId: item.id,
+        title: occurrence.title ?? item.title,
+        startsAt: occurrence.dueAt,
+        endsAt: new Date(Date.parse(occurrence.dueAt) + occurrence.durationMinutes * 60_000).toISOString(),
+      })),
+  );
   return {
     now,
     tasks: tasks.filter((task) => task.ownerId === actor.userId),
@@ -102,6 +118,7 @@ export async function readPlanContextInDb(
       showAs: row.show_as,
       myResponse: row.response_status,
     })),
+    upcoming,
     preferences: learn ? await planPreferencesInDb(db, actor, actors, now, learn) : DEFAULT_PLAN_PREFERENCES,
   };
 }
@@ -175,6 +192,7 @@ export async function buildPlan(
   return packPlan({
     tasks: open,
     meetings: context.meetings,
+    upcoming: context.upcoming,
     viewerId: actor.userId,
     now,
     hours: context.hours,
@@ -260,7 +278,14 @@ export async function scheduleTasks(
             now,
             mode: options.mode,
             hours: context?.hours,
-            meetings: context?.meetings,
+            meetings: context
+              ? [
+                  ...context.meetings,
+                  ...context.upcoming
+                    .filter((item) => item.seriesId !== task.seriesId)
+                    .map((item) => ({ subject: item.title, startsAt: item.startsAt, endsAt: item.endsAt, isAllDay: false, showAs: "busy" })),
+                ]
+              : undefined,
             others: context?.tasks,
             batch,
           });

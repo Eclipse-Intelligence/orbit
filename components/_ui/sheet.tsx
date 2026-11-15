@@ -1,12 +1,16 @@
 "use client";
 
-import { createContext, useContext, type ComponentProps } from "react";
+import { createContext, useContext, type ComponentProps, type MouseEvent } from "react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 const SheetModeContext = createContext(true);
+
+export function onToast(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest("[data-toast-layer], [data-toast]"));
+}
 
 function Sheet({ modal = true, ...props }: ComponentProps<typeof SheetPrimitive.Root>) {
   return (
@@ -24,9 +28,9 @@ function SheetClose(props: ComponentProps<typeof SheetPrimitive.Close>) {
   return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
 }
 
-function SheetCloseButton({ className, label = "Close" }: { className?: string; label?: string }) {
+function SheetCloseButton({ className, label = "Close", onClick }: { className?: string; label?: string; onClick?: (event: MouseEvent<HTMLButtonElement>) => void }) {
   return (
-    <SheetPrimitive.Close asChild>
+    <SheetPrimitive.Close asChild onClick={onClick}>
       <Button variant="ghost" size="icon-sm" className={cn("-mr-1", className)} aria-label={label}>
         <XIcon aria-hidden className="text-foreground size-4" />
       </Button>
@@ -72,7 +76,7 @@ function SheetContent({
         aria-modal={modal ? true : undefined}
         onInteractOutside={(event) => {
           onInteractOutside?.(event);
-          if (beside) event.preventDefault();
+          if (beside || onToast(event.target)) event.preventDefault();
         }}
         className={cn(
           "bg-background text-foreground data-[state=closed]:animate-out data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:ease-power3-out fixed z-50 flex w-full flex-col duration-350 outline-none data-[state=closed]:duration-250",

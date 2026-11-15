@@ -126,7 +126,7 @@ export async function listSlots(
   const empty = { month, timeZone, first: months.first, last: months.last, days: {} };
   if (month < months.first || month > months.last) return empty;
   const window = monthWindow(month, timeZone);
-  const busy = await loadBusy(page.userId, window.from - DAY, window.to + DAY);
+  const busy = await loadBusy(page.userId, window.from - DAY, window.to + DAY, now);
   const slots = generateSlots(page.rules, { from: window.from, to: window.to, now, busy });
   return { ...empty, days: groupSlots(slots, timeZone) };
 }
@@ -245,7 +245,7 @@ export async function bookSlot(slug: string, input: BookingInput, context: Booki
   const now = context.now ?? Date.now();
   const end = start + page.rules.durationMinutes * MINUTE;
   const busyWindow = { from: start - DAY, to: end + DAY };
-  if (!isOpenSlot(page.rules, start, now, await loadBusy(page.userId, busyWindow.from, busyWindow.to))) {
+  if (!isOpenSlot(page.rules, start, now, await loadBusy(page.userId, busyWindow.from, busyWindow.to, now))) {
     throw new CrmError("conflict", SLOT_TAKEN, 409, { field: "start" });
   }
   await consume(
@@ -264,7 +264,7 @@ export async function bookSlot(slug: string, input: BookingInput, context: Booki
     mailbox: null,
   };
   const result = await withBookingLock(page.userId, async () => {
-    const busy = await loadBusy(page.userId, busyWindow.from, busyWindow.to);
+    const busy = await loadBusy(page.userId, busyWindow.from, busyWindow.to, now);
     if (!isOpenSlot(page.rules, start, now, busy)) throw new CrmError("conflict", SLOT_TAKEN, 409, { field: "start" });
     const sender = await openOwnerSender(owner, fetchImpl);
     booked.mailbox = sender.mainEmail;

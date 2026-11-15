@@ -30,6 +30,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import { withActor } from "@/lib/crm/context";
 import { completeTask, createTask, getTask, unarchiveTaskInDb, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
+import { createTaskFromApi } from "@/lib/crm/task-series";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { runWorkflowTick } from "@/lib/workflows/engine";
@@ -1200,6 +1201,48 @@ describe("clickup sync", () => {
       await getAdminPool().query("update crm.tasks set archived_at = now() where created_by_user_id = $1", [ghost]);
       await leave(kim);
     }
+  });
+
+  it("deletes a colleague's undone next occurrence from ClickUp on someone else's sync", async () => {
+    const kim = await colleague("kim-repeat@orbit.test", "Kim Repeat");
+    try {
+      const task = (await createTaskWithClickUp(kim, { title: "Kim weekly", contactId: janeId, dueAt: "2027-03-02T10:00", repeat: { every: "week" } }, RELATIONSHIPS, { fetchImpl })).task;
+      await completeTask(kim, task.id);
+      await syncClickUp({ actor: kim, force: true, fetchImpl });
+      const next = (await getAdminPool().query<{ clickup_task_id: string | null }>("select clickup_task_id from crm.tasks where series_id = $1 and completed_at is null", [task.seriesId])).rows[0];
+      assert.ok(next.clickup_task_id);
+      await updateTask(kim, task.id, { completed: false });
+      await syncClickUp({ actor: owner, force: true, fetchImpl });
+      assert.ok(fake.requests.some((request) => request.method === "DELETE" && request.path === `/task/${next.clickup_task_id}`));
+    } finally {
+      await leave(kim);
+    }
+  });
+
+  it("keeps a done repeating task done when ClickUp's own recurrence reopens it with a later date", async () => {
+    const task = (await createTaskWithClickUp(owner, { title: "Mark weekly", contactId: janeId, dueAt: "2027-03-02T10:00", repeat: { every: "week" } }, RELATIONSHIPS, { fetchImpl })).task;
+    const { remote } = await remoteOf(task.id);
+    await completeTask(owner, task.id);
+    await pushClickUpTask(owner, task.id, { fetchImpl });
+    remote.status = { status: "to do", type: "open" };
+    remote.due_date = String(Date.UTC(2027, 2, 9, 10, 0));
+    remote.due_date_time = true;
+    remote.date_updated = String(Date.now() + 5_000);
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    assert.ok((await getTask(owner, task.id)).completedAt);
+    const open = await getAdminPool().query<{ n: number }>("select count(*)::int as n from crm.tasks where series_id = $1 and completed_at is null and archived_at is null", [task.seriesId]);
+    assert.equal(open.rows[0].n, 1);
+    assert.equal(await pushClickUpTask(owner, task.id, { fetchImpl }), "unchanged");
+  });
+
+  it("sends a replayed save to its ClickUp list when the first try stopped before that step", async () => {
+    const input = { title: "Replayed save", contactId: janeId };
+    const provenance = { operation: "create_task", source: "web" };
+    const key = "6f0c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f";
+    const first = await createTaskFromApi(owner, input, { provenance, idempotencyKey: key });
+    const again = await createTaskWithClickUp(owner, input, RELATIONSHIPS, { fetchImpl, provenance, idempotencyKey: key });
+    assert.equal(again.task.id, first.body.task.id);
+    assert.ok((await taskRow(first.body.task.id)).clickup_task_id);
   });
 
   it("adds a clickup step for the workspace in scheduled sync", async () => {

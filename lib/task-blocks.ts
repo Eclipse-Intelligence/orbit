@@ -1,6 +1,7 @@
 import { dateKey, shiftDateKey, weekStartKey } from "@/lib/calendar-view";
 import { DEFAULT_TASK_DURATION, isTaskOverdue } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
+import { shortDay, upcomingBetween, type SeriesTiming, type UpcomingOccurrence } from "@/lib/task-repeat";
 import { appTimeZone, startOfDay } from "@/lib/time";
 
 const MINUTE_MS = 60_000;
@@ -31,7 +32,19 @@ export type TaskBlock = {
   clash: string | null;
   proposed?: boolean;
   suggested?: boolean;
+  upcoming?: UpcomingRef;
 };
+
+export type UpcomingSeries = SeriesTiming & {
+  id: string;
+  workspaceId: string;
+  title: string;
+  description: string | null;
+  currentTaskId: string | null;
+  anchorTaskId: string | null;
+};
+
+export type UpcomingRef = { seriesId: string; occursOn: string; currentTaskId: string | null; workspaceId: string; after: string | null; changedOn: string[] };
 
 export type TaskListGroupKind = "overdue" | "today" | "week" | "later" | "none";
 
@@ -125,6 +138,153 @@ export function taskBlocks(
       };
     })
     .sort((left, right) => left.startsAt.localeCompare(right.startsAt) || left.title.localeCompare(right.title));
+}
+
+const UPCOMING_PREFIX = "upcoming:";
+
+export const PAST_DAY = "Choose today or a later day.";
+export const NOT_HERE = "This date can't be changed from the Calendar yet.";
+
+export function dropRefusal(block: TaskBlock, at: string, today: string) {
+  const day = dateKey(at);
+  if (day < today) return PAST_DAY;
+  const after = block.upcoming?.after;
+  if (after && day <= after) return `Move it to a day after the open one (${shortDay(after)}).`;
+  if (!block.upcoming?.currentTaskId) return NOT_HERE;
+  return null;
+}
+
+export function resetsFor(block: TaskBlock) {
+  return (block.upcoming?.changedOn ?? []).filter((day) => day !== block.upcoming?.occursOn).length;
+}
+
+export function upcomingTaskId(seriesId: string, occursOn: string) {
+  return `${UPCOMING_PREFIX}${seriesId}:${occursOn}`;
+}
+
+export function isUpcomingTaskId(id: string) {
+  return id.startsWith(UPCOMING_PREFIX);
+}
+
+export function upcomingTask(series: UpcomingSeries, occurrence: UpcomingOccurrence, viewerId: string): Task {
+  return {
+    id: upcomingTaskId(series.id, occurrence.occursOn),
+    workspaceId: series.workspaceId,
+    title: occurrence.title ?? series.title,
+    description: occurrence.description ?? series.description,
+    dueAt: occurrence.dueAt,
+    dueDate: occurrence.day,
+    dueHasTime: occurrence.dueHasTime,
+    durationMinutes: occurrence.durationMinutes,
+    scheduledBy: occurrence.dueHasTime ? "person" : null,
+    remindMinutes: null,
+    completedAt: null,
+    priority: "normal",
+    ownerId: viewerId,
+    ownerName: null,
+    companyId: null,
+    companyName: null,
+    companyPhone: null,
+    contactId: null,
+    contactCompanyId: null,
+    contactName: null,
+    contactFirstName: null,
+    contactLastName: null,
+    contactJobTitle: null,
+    contactPhone: null,
+    contactEmail: null,
+    opportunityId: null,
+    opportunityName: null,
+    createdByUserId: null,
+    createdByAgentId: null,
+    archivedAt: null,
+    clickupTaskId: null,
+    clickupListId: null,
+    clickupUrl: null,
+    clickupError: null,
+    inOutlook: false,
+    mailThreadKey: null,
+    mailThread: null,
+    seriesId: series.id,
+    occursOn: occurrence.occursOn,
+    repeat: null,
+    docIds: [],
+    docs: [],
+    canLinkDocs: false,
+    createdAt: occurrence.dueAt,
+    updatedAt: occurrence.dueAt,
+  };
+}
+
+export function upcomingBlocks(
+  series: UpcomingSeries[],
+  options: {
+    viewerId: string;
+    from: string;
+    to: string;
+    today: string;
+    meetings?: ClashCandidate[];
+    workspaces?: PlannerWorkspace[];
+    timeZone?: string;
+  },
+): TaskBlock[] {
+  const timeZone = options.timeZone ?? appTimeZone();
+  const names = (options.workspaces ?? []).length > 1 ? new Map(options.workspaces!.map((item) => [item.id, item.name])) : null;
+  const meetings = [...(options.meetings ?? [])].sort((left, right) => left.startsAt.localeCompare(right.startsAt));
+  return series
+    .flatMap((item) =>
+      upcomingBetween(item, options.from, options.to, options.today, timeZone).map((occurrence) => {
+        const task = upcomingTask(item, occurrence, options.viewerId);
+        const start = Date.parse(occurrence.dueAt);
+        const durationMinutes = occurrence.dueHasTime ? occurrence.durationMinutes || DEFAULT_TASK_DURATION : 0;
+        const end = start + durationMinutes * MINUTE_MS;
+        return {
+          id: taskBlockId(task.id),
+          task,
+          title: task.title,
+          startsAt: new Date(start).toISOString(),
+          endsAt: new Date(end).toISOString(),
+          durationMinutes: occurrence.durationMinutes,
+          person: null,
+          workspaceName: names?.get(item.workspaceId) ?? null,
+          done: false,
+          overdue: false,
+          clash: occurrence.dueHasTime ? clashWith(start, end, meetings) : null,
+          upcoming: {
+            seriesId: item.id,
+            occursOn: occurrence.occursOn,
+            currentTaskId: item.anchorTaskId,
+            workspaceId: item.workspaceId,
+            after: item.after,
+            changedOn: item.changes.filter((change) => !change.skip && change.dueAt && (!item.afterOccurs || change.occursOn > item.afterOccurs)).map((change) => change.occursOn),
+          },
+        };
+      }),
+    )
+    .sort((left, right) => left.startsAt.localeCompare(right.startsAt) || left.title.localeCompare(right.title));
+}
+
+export function upcomingDayBlocks(blocks: TaskBlock[], day: string) {
+  return blocks.filter((block) => !block.task.dueHasTime && block.task.dueDate === day);
+}
+
+export function openDayChips(tasks: Task[], viewerId: string, workspaces: PlannerWorkspace[] = []): TaskBlock[] {
+  const names = workspaces.length > 1 ? new Map(workspaces.map((item) => [item.id, item.name])) : null;
+  return tasks
+    .filter((task) => task.seriesId && task.repeat?.current && !task.dueHasTime && task.dueDate && task.ownerId === viewerId && !task.completedAt && !task.archivedAt)
+    .map((task) => ({
+      id: taskBlockId(task.id),
+      task,
+      title: task.title,
+      startsAt: task.dueAt ?? "",
+      endsAt: task.dueAt ?? "",
+      durationMinutes: task.durationMinutes,
+      person: taskPerson(task),
+      workspaceName: names?.get(task.workspaceId) ?? null,
+      done: false,
+      overdue: false,
+      clash: null,
+    }));
 }
 
 export function blocksInRange(blocks: TaskBlock[], range: { start: Date; end: Date }) {

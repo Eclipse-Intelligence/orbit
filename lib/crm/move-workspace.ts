@@ -523,6 +523,26 @@ async function auditCopy(db: Db, source: UserActor, target: UserActor, plan: Pla
   }
 }
 
+type SeriesMove = { series_id: string; task_id: string | null; workspace_id: string; before: Record<string, unknown>; after: Record<string, unknown> };
+
+const SERIES_MOVE_FIELDS = ["workspaceId", "ownerId", "companyId", "contactId", "opportunityId", "at", "remindMinutes"];
+
+async function auditSeriesMoves(db: Db, source: UserActor, target: UserActor, plan: Plan, moves: SeriesMove[], provenance: Provenance) {
+  for (const move of moves) {
+    if (!move.task_id) continue;
+    const fields = SERIES_MOVE_FIELDS.filter((field) => JSON.stringify(move.before[field] ?? null) !== JSON.stringify(move.after[field] ?? null));
+    if (fields.length === 0) continue;
+    const there = move.workspace_id === target.workspaceId;
+    await recordAudit(db, there ? target : source, "task_series.updated", "task", move.task_id, provenance, {
+      series: { id: move.series_id },
+      fields,
+      before: Object.fromEntries(fields.map((field) => [field, move.before[field] ?? null])),
+      after: Object.fromEntries(fields.map((field) => [field, move.after[field] ?? null])),
+      ...(there ? { movedFrom: plan.source } : { companyMovedTo: plan.target }),
+    });
+  }
+}
+
 function moved(records: PlanRecord[]): MovedRecord[] {
   return records
     .filter((item): item is PlanRecord & { targetId: string } => Boolean(item.targetId))
@@ -534,6 +554,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
   const input = moveInput(request);
   let plan: Plan | null = null;
   let dropped: { taskId: string; docIds: string[] }[] = [];
+  let seriesMoves: SeriesMove[] = [];
   return withActorAfterAppStep(
     source,
     async (db) => {
@@ -544,7 +565,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
       }
       const linksBefore = await docLinksIn(db, source.workspaceId);
       plan = await runPlan(db, source, target, input, false);
-      if (input.copy !== true) await db.query("select private.task_series_follow_move($1, $2)", [source.workspaceId, target.workspaceId]);
+      if (input.copy !== true) seriesMoves = (await db.query<SeriesMove>("select * from private.series_follow_move($1, $2)", [source.workspaceId, target.workspaceId])).rows;
       dropped = linksBefore.size > 0 ? await droppedDocLinks(db, linksBefore, await docLinksIn(db, source.workspaceId), target.workspaceId) : [];
     },
     async (db) => {
@@ -566,6 +587,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
       }
       if (done.copy) await auditCopy(db, source, target, done, fills, provenance);
       else await auditMove(db, source, target, done, fills, provenance);
+      if (!done.copy) await auditSeriesMoves(db, source, target, done, seriesMoves, provenance);
       const docsUnlinked = done.copy ? 0 : await auditDroppedDocs(db, target, done, dropped, provenance);
       return {
         copy: done.copy,

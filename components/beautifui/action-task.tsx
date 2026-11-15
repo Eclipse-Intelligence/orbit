@@ -91,6 +91,7 @@ function DoneButton({ task, completed, overdue, onComplete, onReopen }: { task: 
     <button
       type="button"
       disabled={completed ? !onReopen : !onComplete}
+      onMouseDown={(event) => event.preventDefault()}
       onClick={completed ? onReopen : onComplete}
       aria-label={completed ? (onReopen ? `Reopen “${task.title}”` : "Done") : `Mark “${task.title}” done`}
       title={completed ? (onReopen ? "Reopen" : "Done") : "Mark done"}
@@ -199,6 +200,15 @@ function ActionTask({
   const due = dueBadge ? { kind: taskDueState(task.dueAt, now).kind, label: taskDueLabel(task, now) } : null;
   const canChange = canChangeTaskAs(viewer, task);
   const details = useTaskDetails(task, canChange, expanded, viewer.id);
+  const finish = complete
+    ? () => {
+        if (expanded) {
+          void details.settle().then((ok) => ok && complete());
+          return;
+        }
+        complete();
+      }
+    : undefined;
   const flushDetails = useRef(details.flush);
   const wasExpanded = useRef(expanded);
   useEffect(() => {
@@ -275,7 +285,17 @@ function ActionTask({
     };
   }, [swipeable]);
 
+  const settling = useRef(false);
   const toggle = () => {
+    if (expanded && (settling.current || details.holding())) {
+      if (settling.current) return;
+      settling.current = true;
+      void details.settle().then((ok) => {
+        settling.current = false;
+        if (ok) toggle();
+      });
+      return;
+    }
     if (expanded) details.flush();
     onToggle(task);
     window.requestAnimationFrame(() => {
@@ -313,7 +333,7 @@ function ActionTask({
       >
         <div className={cn("flex items-start gap-2.5 px-2.5 py-2.5 @xl:min-h-11 @xl:py-1.5", expanded ? "@xl:items-start @xl:pt-3" : "@xl:items-center")}>
           <span className={cn("flex", expanded && "@xl:mt-px")}>
-            <DoneButton task={task} completed={completed} overdue={overdue} onComplete={complete} onReopen={reopen} />
+            <DoneButton task={task} completed={completed} overdue={overdue} onComplete={finish} onReopen={reopen} />
           </span>
           {expanded ? (
             <div className="flex min-w-0 flex-1 items-start gap-2">
@@ -446,8 +466,8 @@ function ActionTask({
                           Reopen
                         </Button>
                       )}
-                      {complete && !completed && (
-                        <Button variant="secondary" size="md" onClick={complete} shortcut={keyboard ? ["E"] : undefined} className="hit max-sm:flex-1">
+                      {finish && !completed && (
+                        <Button variant="secondary" size="md" onMouseDown={(event) => event.preventDefault()} onClick={finish} shortcut={keyboard ? ["E"] : undefined} className="hit max-sm:flex-1">
                           <CheckIcon aria-hidden className="size-3.5" />
                           Done
                         </Button>

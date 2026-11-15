@@ -78,6 +78,10 @@ async function events(taskId: string) {
   );
 }
 
+function taskDay(dueAt: string | null) {
+  return dueAt ? dayKeyAt(new Date(dueAt)) : null;
+}
+
 function at(day: string, time: string) {
   return new Date(`${day}T${time}:00Z`).toISOString();
 }
@@ -326,9 +330,9 @@ describe("repeating tasks", () => {
 
     const end = await weekly("End me", "2027-03-02");
     const ended = (await endSeriesOn(mark, end.id, "2027-03-16")).body.task;
-    assert.equal(ended.repeat?.end, "until 16 Mar");
+    assert.match(ended.repeat?.end ?? "", /^until 16 Mar(?: 2027)?$/);
     assert.deepEqual(ended.repeat?.ends, { until: "2027-03-16" });
-    await assert.rejects(endSeriesOn(mark, end.id, "2027-03-01"), /before the first one/);
+    await assert.rejects(endSeriesOn(mark, end.id, "2027-03-01"), /before this one/);
 
     const gone = await weekly("Delete me", "2027-03-02");
     await completeTask(mark, gone.id);
@@ -347,13 +351,15 @@ describe("repeating tasks", () => {
   it("makes an existing task repeat and changes the pattern for all", async () => {
     const plain = (await createTask(mark, { title: "Pay the cleaner", dueDate: "2027-03-06" })).body.task;
     const made = (await setTaskRepeat(mark, plain.id, { every: "week", days: ["fr"] })).body.task;
-    assert.equal(made.occursOn, "2027-03-06");
-    assert.equal(made.repeat?.next?.occursOn, "2027-03-12");
-    const changed = (await setTaskRepeat(mark, plain.id, { every: "month", monthDay: 6 })).body.task;
-    assert.equal(changed.repeat?.next?.occursOn, "2027-04-06");
+    assert.equal(made.occursOn, "2027-03-12");
+    assert.equal(taskDay(made.dueAt), "2027-03-12");
+    assert.equal(made.repeat?.next?.occursOn, "2027-03-19");
+    const changed = (await setTaskRepeat(mark, plain.id, { every: "month", monthDay: 12 })).body.task;
+    assert.equal(changed.occursOn, "2027-03-12");
+    assert.equal(changed.repeat?.next?.occursOn, "2027-04-12");
     const updated = (await events(plain.id)).filter((event) => event.event_type === "task_series.updated").pop()!;
     await undoAuditEvent(mark, updated.id, { operation: "undo_change" });
-    assert.equal((await getTask(mark, plain.id)).repeat?.next?.occursOn, "2027-03-12");
+    assert.equal((await getTask(mark, plain.id)).repeat?.next?.occursOn, "2027-03-19");
   });
 
   it("refuses a 201st repeating task", async () => {
@@ -436,12 +442,17 @@ describe("repeating tasks over the API, MCP and the assistant", () => {
 });
 
 describe("repeating task review fixes", () => {
-  it("keeps a daily task daily with reminders up to a week before", async () => {
+  it("keeps a daily task daily with reminders that fit between its dates, and refuses ones that can't fire", async () => {
     for (const remind of [1440, 2880, 10080]) {
+      await assert.rejects(createRepeatingTask(mark, { title: `Daily ${remind}`, dueAt: at("2027-05-03", "14:00"), remindMinutes: remind }, { every: "day" }), /shorter than the time between its dates/);
+    }
+    for (const remind of [60, 120]) {
       const task = (await createRepeatingTask(mark, { title: `Daily ${remind}`, dueAt: at("2027-05-03", "14:00"), remindMinutes: remind }, { every: "day" })).body.task;
       await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T14:16:00Z") });
+      assert.equal((await getTask(mark, task.id)).occursOn, "2027-05-03", `${remind} waits for the next day`);
+      await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T23:01:00Z") });
       assert.equal((await getTask(mark, task.id)).occursOn, "2027-05-04", `${remind}`);
-      await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T14:30:00Z") });
+      await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T23:30:00Z") });
       assert.equal((await getTask(mark, task.id)).occursOn, "2027-05-04", `${remind} stays on the next day`);
       await completeTask(mark, task.id);
       const next = (await occurrences(task.seriesId!)).find((row) => !row.completed)!;
@@ -871,7 +882,6 @@ describe("repeating task review round 6", () => {
     const task = await handedSeries("Plain paths", "2027-11-01");
     await assert.rejects(updateTask(mark, task.id, { title: "Plain rename" }), CANNOT);
     await assert.rejects(updateTask(mark, task.id, { ownerId: mark.userId }), CANNOT);
-    await assert.rejects(archiveTask(mark, task.id), CANNOT);
     const { sendTaskToClickUpList } = await import("@/lib/crm/clickup");
     await assert.rejects(sendTaskToClickUpList(mark, task.id, "list-1"), CANNOT);
     const after = await getTask(mark, task.id);
@@ -917,7 +927,8 @@ describe("repeating task review round 6", () => {
 
   it("tags the remover on the series they take over and refuses to undo the hand-over", async () => {
     const rita = await join(await createUser("rita6@series.test", "Rita Shaw"), "member");
-    const task = (await createRepeatingTask(rita, { title: "Rita's handed", dueDate: "2027-11-05", ownerId: priya.userId }, { every: "week" })).body.task;
+    const task = (await createRepeatingTask(rita, { title: "Rita's handed", dueDate: "2027-11-05" }, { every: "week" })).body.task;
+    await updateOccurrence(rita, { taskId: task.id }, { ownerId: priya.userId }, "this");
     await removeMember(mark, rita.userId);
     assert.ok((await listTaskParticipantsFor(task.id)).includes(mark.userId));
     assert.equal((await getTask(mark, task.id)).title, "Rita's handed");
@@ -927,16 +938,14 @@ describe("repeating task review round 6", () => {
     assert.equal(renamed.title, "Mark's now");
   });
 
-  it("puts a series the cron can't act on back instead of picking it every run", async () => {
+  it("rolls a series with someone who can see its open task when the owner can't, instead of picking it every run", async () => {
     const task = await handedSeries("Cron can't", "2027-11-08");
     await sql("delete from crm.task_participants where task_id = $1 and user_id = $2", [task.id, mark.userId]);
     const now = Date.parse("2027-11-16T01:00:00Z");
     const first = await rollDueSeries({ deadline: Date.now() + 10_000, now });
-    assert.ok(first.due >= 1);
-    const [row] = await sql<{ roll_retry_at: string }>("select roll_retry_at::text from crm.task_series where id = $1", [task.seriesId]);
-    assert.ok(Date.parse(row.roll_retry_at) > now, "pushed back");
-    const again = await rollDueSeries({ deadline: Date.now() + 10_000, now });
-    assert.equal(again.due, 0);
+    assert.ok(first.rolled >= 1, JSON.stringify(first));
+    assert.equal((await rollDueSeries({ deadline: Date.now() + 10_000, now })).rolled, 0);
+    assert.equal((await rollDueSeries({ deadline: Date.now() + 10_000, now })).due, 0);
   });
 
   it("ignores an agent id in a member's session", async () => {

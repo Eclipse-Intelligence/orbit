@@ -15,6 +15,7 @@ import { WEBHOOK_EVENTS, createWebhook, listWebhookDeliveries } from "@/lib/crm/
 import { OPPORTUNITY_STATUSES, TASK_PRIORITIES, type Actor } from "@/lib/crm/types";
 import { agentSource, repeatSchema } from "@/lib/crm/validation";
 import { withTaskWorkspaceHint } from "@/lib/crm/workspaces";
+import { mcpIdempotencyKey } from "@/server/mcp/relationships";
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -37,6 +38,12 @@ const provenanceFields = {
   provenanceSource: z.string().nullable().optional(),
   provenanceUrl: z.string().nullable().optional(),
 };
+
+const IDEMPOTENCY_KEY = z
+  .string()
+  .max(200)
+  .optional()
+  .describe("Up to 200 printable characters with no spaces. Reuse it when retrying a call whose answer was lost: the same key and arguments change the task once and answer with it again. A key belongs to one request.");
 
 function provenance(args: { provenanceSource?: string | null; provenanceUrl?: string | null }, operation: string) {
   return { operation, source: agentSource(args.provenanceSource), sourceUrl: args.provenanceUrl };
@@ -146,9 +153,10 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
         repeat: repeatSchema.nullable().optional().describe("Changes how it repeats, for this and every later one, as on create_next_action. null stops it repeating: this one stays and nothing comes after it."),
         repeatScope: z.enum(["this", "following", "all"]).optional().describe("Required when the task repeats and you change its time, title, description, priority, assignee, duration or reminder. Links on the open one apply to every later one without it; this keeps them to this one. this: only this one. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope."),
-        skip: z.boolean().optional().describe("true skips this date of a repeating task: the open one moves to its next date, or an upcoming date (occursOn) is left out. Send it on its own."),
+        skip: z.boolean().optional().describe("true skips this date of a repeating task: the open one moves to its next date, or an upcoming date (occursOn) is left out. Send it on its own, with occursOn set to the date to skip (the open one's occursOn to skip it) or an idempotency_key, so a retried call never skips a second date."),
         occursOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "occursOn takes a day, such as 2027-03-04.").optional().describe("An upcoming date of this repeating task, YYYY-MM-DD, to change or skip just that date instead of the open one."),
         docIds: z.array(z.uuid()).max(20).nullable().optional().describe("Docs linked to the task: the whole list of doc ids from search_docs or list_docs, in this workspace. [] or null takes them all off. You can only link docs you can read; agent tokens only see shared docs. Docs can also mention a task with @[Title](task:id)."),
+        idempotency_key: IDEMPOTENCY_KEY,
         ...provenanceFields,
       },
     },
@@ -177,7 +185,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
               mailThreadKey: args.mailThreadKey,
               docIds: args.docIds,
             },
-            { provenance: provenance(args, "update_task") },
+            { provenance: provenance(args, "update_task"), idempotencyKey: mcpIdempotencyKey(args.idempotency_key) },
           ))
         ).body,
       ),
@@ -186,12 +194,22 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "archive_next_action",
     {
-      description: "Archive a task without marking it complete.",
-      inputSchema: { id: z.uuid(), ...provenanceFields },
+      description:
+        "Archive a task without marking it complete. The open one of a repeating task isn't archived: that date is skipped and the task moves to its next one, and the answer gives skipped (the date skipped) with the task at its next date. Stop it repeating with update_next_action repeat null first to archive it.",
+      inputSchema: {
+        id: z.uuid(),
+        occurs_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "occurs_on takes a day, such as 2027-03-04.").optional().describe("For a repeating task, the open one's occursOn you saw. If it has moved on since, nothing is skipped and the call is refused, so a retry never skips a second date."),
+        idempotency_key: IDEMPOTENCY_KEY,
+        ...provenanceFields,
+      },
     },
     async (args) =>
       run(async () =>
-        (await withTaskWorkspaceHint(actor, args.id, () => archiveTask(actor, args.id, { provenance: provenance(args, "archive_task") }))).body,
+        (
+          await withTaskWorkspaceHint(actor, args.id, () =>
+            archiveTask(actor, args.id, { provenance: provenance(args, "archive_task"), idempotencyKey: mcpIdempotencyKey(args.idempotency_key), ...(args.occurs_on ? { expect: args.occurs_on } : {}) }),
+          )
+        ).body,
       ),
   );
 

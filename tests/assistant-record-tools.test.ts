@@ -157,6 +157,7 @@ describe("assistant record tools", () => {
     assert.deepEqual(describeAction("archive_records", archiveArgs, await recordNames(owner, [archiveArgs])), {
       title: "Archive 1 record",
       lines: ["Tasks: Old follow up", "Nothing is deleted.", "ClickUp isn't changed."],
+      approval: { tasks: { [task]: "" } },
     });
     const sam: UserActor = { ...owner, userId: samId, email: "sam@records-tools.test", fullName: "Sam Taylor", role: "member", scopes: scopesForRole("member") };
     const refused = (await runTool(sam, "archive_records", archiveArgs)) as { error: string };

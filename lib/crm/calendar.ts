@@ -740,6 +740,7 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
     if (!listed.complete) outcome.complete = false;
     const targets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed));
     if (source.kind === "connection") await flushBlocks(actor, source.id, token.scope ?? null, context);
+    const seriesEvents = await ownSeriesEvents(actor.userId);
     for (const calendar of targets) {
       if (context.deadline - Date.now() < CALENDAR_RESERVE_MS) {
         outcome.complete = false;
@@ -747,12 +748,15 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
       }
       try {
         const fetchStartedAt = await databaseNow();
-        const fetched = await fetchCalendarView(token.accessToken, window, {
-          fetchImpl: context.fetchImpl,
-          deadline: context.deadline,
-          calendarId: calendar.providerCalendarId,
-          ownLink: context.ownLink,
-        });
+        const fetched = withoutSeriesEvents(
+          await fetchCalendarView(token.accessToken, window, {
+            fetchImpl: context.fetchImpl,
+            deadline: context.deadline,
+            calendarId: calendar.providerCalendarId,
+            ownLink: context.ownLink,
+          }),
+          seriesEvents,
+        );
         const saved = await withActor(actor, (db) =>
           saveCalendarEvents(db, actor, source, calendar, fetched, window, context.now, fetchStartedAt),
         );
@@ -785,6 +789,19 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
     await finishSource(actor, source, { error: message, scopeMissing: false });
     return { ...outcome, complete: false, error: message };
   }
+}
+
+async function ownSeriesEvents(userId: string) {
+  const { seriesOutlookEvents } = await import("@/lib/crm/series-outlook");
+  return seriesOutlookEvents(userId);
+}
+
+export function withoutSeriesEvents(fetched: CalendarFetch, seriesEvents: Set<string>): CalendarFetch {
+  if (seriesEvents.size === 0) return fetched;
+  return {
+    ...fetched,
+    events: fetched.events.filter((event) => !seriesEvents.has(event.providerEventId) && !(event.seriesMasterId && seriesEvents.has(event.seriesMasterId))),
+  };
 }
 
 async function databaseNow() {

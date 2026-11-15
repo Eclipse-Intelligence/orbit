@@ -12,9 +12,10 @@ import { setRelationshipOverride } from "@/lib/crm/relationship-override";
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { addTags } from "@/lib/crm/tags";
-import { completeTask, createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { archiveTask, completeTask, createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { createRepeatingTask, setTaskRepeat, updateTaskFromApi } from "@/lib/crm/task-series";
 import type { UserActor } from "@/lib/crm/types";
-import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
+import { describeUndo, listRecentChanges, undoAuditEvent, undoTaskEvents } from "@/lib/crm/undo";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -418,6 +419,32 @@ describe("undoing changes", () => {
 
     const stranger = await createUser("undo-stranger@orbit.test", "Stranger");
     await assert.rejects(undoAuditEvent(stranger, mine.id, UNDO), (error: unknown) => error instanceof CrmError && error.code === "not_found");
+  });
+
+  it("refuses undoing Stop repeating once its open task was deleted, and the archive a reopen made", async () => {
+    const walk = (await createRepeatingTask(owner, { title: "Walk", dueAt: "2027-03-02T14:00:00.000Z" }, { every: "week" })).body.task;
+    const stop = (await setTaskRepeat(owner, walk.id, null)).body;
+    await archiveTask(owner, walk.id);
+    await assert.rejects(undoTaskEvents(owner, walk.id, stop.undo, UNDO), refused(/open task was deleted/));
+
+    const swim = (await createRepeatingTask(owner, { title: "Swim", dueAt: "2027-03-02T14:00:00.000Z" }, { every: "week" })).body.task;
+    await completeTask(owner, swim.id);
+    const next = (await getAdminPool().query<{ id: string }>("select id from crm.tasks where series_id = $1 and completed_at is null", [swim.seriesId])).rows[0].id;
+    await updateTask(owner, swim.id, { completed: false });
+    const archived = await latest(owner, next, "task.archived");
+    assert.equal(archived.canUndo, false);
+    assert.match(archived.reason ?? "", /archived when the one before it was reopened/);
+  });
+
+  it("names both halves of a change that also made a task repeat, and of its undo", async () => {
+    const task = (await createTask(owner, { title: "Plain", dueAt: "2027-03-02T14:00" })).body.task;
+    await updateTaskFromApi(owner, { taskId: task.id }, { title: "Renamed", repeat: { every: "week" } });
+    const made = (await listRecentChanges(owner, { limit: 50 })).find((change) => change.entityId === task.id)!;
+    assert.match(made.summary, /Title from Plain to Renamed; Made task Renamed repeat/);
+    await undoAuditEvent(owner, made.id, UNDO);
+    const summaries = (await listRecentChanges(owner, { limit: 50 })).filter((change) => change.entityId === task.id).map((change) => change.summary);
+    assert.ok(summaries.some((summary) => /Title from Renamed to Plain; Undid a change to how Plain repeats/.test(summary)), summaries.join(" | "));
+    assert.ok(summaries.some((summary) => /Title from Plain to Renamed; Made task Plain repeat/.test(summary)), summaries.join(" | "));
   });
 
   it("lists changes and undoes them from the assistant, with what will be restored on the card", async () => {

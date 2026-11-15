@@ -47,12 +47,14 @@ export type Occurrence = {
   changed: boolean;
 };
 
+export const END_BEFORE_THIS = "The end date is before this one.";
 export const MAX_INTERVAL = 99;
 export const MAX_COUNT = 999;
 export const MAX_UNTIL_YEARS = 10;
 export const MAX_EXPANSION = 400;
 export const WORKWEEK: Weekday[] = ["mo", "tu", "we", "th", "fr"];
 const LAST_YEAR = 9999;
+const LAST_END = "4500-01-01";
 
 export function occurrenceEnd(occurrence: { dueAt: string | null; dueHasTime: boolean; durationMinutes?: number | null }, timeZone = appTimeZone()) {
   if (!occurrence.dueAt) return null;
@@ -61,7 +63,7 @@ export function occurrenceEnd(occurrence: { dueAt: string | null; dueHasTime: bo
   return Date.parse(dayStartIso(shiftDay(dayKeyAt(new Date(start), timeZone), 1), timeZone));
 }
 
-const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+export const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const SHORT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const ORDINAL_WORDS: Record<number, string> = { 1: "first", 2: "second", 3: "third", 4: "fourth", [-1]: "last" };
@@ -139,9 +141,25 @@ function monthDate(year: number, month: number, rule: RepeatRule, anchor: string
   return dayKey(year, month, Math.min(wanted, daysInMonth(year, month)));
 }
 
-function yearDate(year: number, anchor: string) {
+function yearDate(year: number, rule: RepeatRule, anchor: string) {
   const { month, day } = dayParts(anchor);
-  return dayKey(year, month, Math.min(day, daysInMonth(year, month)));
+  return dayKey(year, month, Math.min(rule.monthDay ?? day, daysInMonth(year, month)));
+}
+
+function anniversaryDay(rule: RepeatRule, startsOn: string) {
+  return rule.monthDay ?? dayParts(startsOn).day;
+}
+
+function anniversary(rule: RepeatRule, startsOn: string) {
+  return `${anniversaryDay(rule, startsOn)} ${MONTHS[dayParts(startsOn).month - 1]}`;
+}
+
+export function anchoredRule(rule: RepeatRule, from: { rule: RepeatRule; startsOn: string } | null, startsOn: string): RepeatRule {
+  if (rule.freq !== "yearly") return rule;
+  const wanted = rule.monthDay ?? (from && from.rule.freq === "yearly" && dayParts(from.startsOn).month === dayParts(startsOn).month ? anniversaryDay(from.rule, from.startsOn) : dayParts(startsOn).day);
+  const next: RepeatRule = { freq: "yearly", interval: rule.interval };
+  if (wanted !== dayParts(startsOn).day) next.monthDay = wanted;
+  return next;
 }
 
 function patternOnOrAfter(pattern: RepeatPattern, from: string): string | null {
@@ -190,7 +208,7 @@ function patternOnOrAfter(pattern: RepeatPattern, from: string): string | null {
   const behind = (year - startYear) % interval;
   if (behind !== 0) year += interval - behind;
   for (let guard = 0; guard < 3; guard += 1) {
-    const candidate = yearDate(year, startsOn);
+    const candidate = yearDate(year, rule, startsOn);
     if (candidate >= day) return candidate;
     year += interval;
   }
@@ -214,13 +232,23 @@ function rawOnOrAfter(pattern: RepeatPattern, from: string) {
   return inRange(patternOnOrAfter(pattern, from));
 }
 
+export function countLeft(ends: RepeatEnds) {
+  return "count" in ends ? Math.max(1, ends.count - (ends.spent ?? 0)) : null;
+}
+
+export function reachesEnd(pattern: RepeatPattern) {
+  if (!("count" in pattern.ends)) return true;
+  const last = lastOccurrence(pattern);
+  return last !== null && last < LAST_END;
+}
+
 const lastDays = new Map<string, string | null>();
 
 export function lastOccurrence(pattern: RepeatPattern): string | null {
   const ends = pattern.ends;
   if ("never" in ends) return null;
   if ("until" in ends) return ends.until;
-  const count = Math.max(1, ends.count - (ends.spent ?? 0));
+  const count = countLeft(ends)!;
   const key = JSON.stringify([pattern.startsOn, pattern.rule, count]);
   if (lastDays.has(key)) return lastDays.get(key) ?? null;
   let day: string | null = pattern.startsOn;
@@ -245,6 +273,28 @@ export function occurrenceAfter(pattern: RepeatPattern, day: string): string | n
 
 export function isOccurrenceDay(pattern: RepeatPattern, day: string) {
   return occurrenceOnOrAfter(pattern, day) === day;
+}
+
+export function datesIn(pattern: RepeatPattern) {
+  const last = lastOccurrence(pattern);
+  return last ? occurrenceDays(pattern, pattern.startsOn, last, MAX_COUNT + 1).length : 0;
+}
+
+export function chainEnds(first: RepeatPattern, parts: RepeatPattern[]): RepeatEnds {
+  const last = parts.at(-1);
+  if (!last) return first.ends;
+  if (!("count" in last.ends)) return last.ends;
+  const before = [first, ...parts.slice(0, -1)].reduce((sum, part) => sum + datesIn(part), 0);
+  return { count: Math.min(MAX_COUNT, before + (countLeft(last.ends) ?? 0)) };
+}
+
+export function sameEnds(left: RepeatEnds, right: RepeatEnds) {
+  if ("count" in left || "count" in right) return "count" in left && "count" in right && left.count === right.count;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function lostChangeDays(changeDays: string[], pattern: RepeatPattern, movedDays: string[] = []): string[] {
+  return changeDays.filter((day) => day <= pattern.startsOn || !isOccurrenceDay(pattern, day) || movedDays.includes(day));
 }
 
 export function occurrenceDays(pattern: RepeatPattern, from: string, to: string, limit = MAX_EXPANSION) {
@@ -368,6 +418,10 @@ function isWorkweek(days: Weekday[]) {
   return days.length === 5 && WORKWEEK.every((day) => days.includes(day));
 }
 
+function isEveryDay(days: Weekday[]) {
+  return days.length === WEEKDAYS.length;
+}
+
 function monthPart(rule: RepeatRule, startsOn: string) {
   if (rule.monthWeek) return `the ${ORDINAL_WORDS[rule.monthWeek.n]} ${dayName(rule.monthWeek.weekday)}`;
   return `the ${ordinal(rule.monthDay ?? dayParts(startsOn).day)}`;
@@ -384,11 +438,11 @@ export function ruleWords(pattern: Pick<RepeatPattern, "rule" | "startsOn">) {
   if (rule.freq === "weekly") {
     const days = sortedWeekdays(rule.weekdays);
     const names = joinNames(days.map(dayName));
-    if (interval === 1) return isWorkweek(days) ? "Every weekday" : `Every ${names}`;
+    if (interval === 1) return isEveryDay(days) ? "Every day" : isWorkweek(days) ? "Every weekday" : `Every ${names}`;
     return `Every ${plural(interval, "week")} on ${names}`;
   }
   if (rule.freq === "monthly") return `${interval === 1 ? "Every month" : `Every ${plural(interval, "month")}`} on ${monthPart(rule, startsOn)}`;
-  return `${interval === 1 ? "Every year" : `Every ${plural(interval, "year")}`} on ${dayMonth(startsOn)}`;
+  return `${interval === 1 ? "Every year" : `Every ${plural(interval, "year")}`} on ${anniversary(rule, startsOn)}`;
 }
 
 export function repeatChip(pattern: RepeatPattern) {
@@ -402,6 +456,7 @@ export function repeatShort(pattern: Pick<RepeatPattern, "rule" | "startsOn">) {
   if (rule.freq === "weekly") {
     if (interval > 1) return `Every ${plural(interval, "week")}`;
     const days = sortedWeekdays(rule.weekdays);
+    if (isEveryDay(days)) return "Every day";
     if (isWorkweek(days)) return "Every weekday";
     return days.length === 1 ? `Every ${dayName(days[0])}` : "Every week";
   }
@@ -414,7 +469,7 @@ export function repeatPhrase(pattern: RepeatPattern) {
   const time = pattern.at ? ` at ${pattern.at}` : "";
   if (rule.interval === 1 && rule.freq === "daily") return `Repeats daily${time}`;
   if (rule.interval === 1 && rule.freq === "monthly") return `Repeats monthly on ${monthPart(rule, startsOn)}${time}`;
-  if (rule.interval === 1 && rule.freq === "yearly") return `Repeats yearly on ${dayMonth(startsOn)}${time}`;
+  if (rule.interval === 1 && rule.freq === "yearly") return `Repeats yearly on ${anniversary(rule, startsOn)}${time}`;
   const words = ruleWords(pattern);
   return `Repeats ${words.charAt(0).toLowerCase()}${words.slice(1)}${time}`;
 }
@@ -426,12 +481,13 @@ export function remainingCount(pattern: RepeatPattern, afterDay: string) {
   return occurrenceDays(pattern, shiftDay(afterDay, 1), last, MAX_COUNT + 1).length;
 }
 
-export function endWords(pattern: RepeatPattern, afterDay: string | null = null) {
+export function endWords(pattern: RepeatPattern, afterDay: string | null = null, today = dayKeyAt(new Date())) {
   const ends = pattern.ends;
   if ("never" in ends) return "";
-  if ("until" in ends) return `until ${dayMonth(ends.until)}`;
+  if ("until" in ends) return `until ${ends.until.slice(0, 4) === today.slice(0, 4) ? dayMonth(ends.until) : longDay(ends.until)}`;
   if (afterDay) return `${remainingCount(pattern, afterDay)} more`;
-  return `${ends.count} time${ends.count === 1 ? "" : "s"}`;
+  const count = countLeft(ends)!;
+  return `${count} time${count === 1 ? "" : "s"}`;
 }
 
 export function repeatSummary(pattern: RepeatPattern) {
@@ -439,12 +495,13 @@ export function repeatSummary(pattern: RepeatPattern) {
   const base = repeatChip(pattern);
   if ("never" in ends) return `${base}.`;
   if ("until" in ends) return `${base}, until ${longDay(ends.until)}.`;
-  return `${base}, ${ends.count} time${ends.count === 1 ? "" : "s"}.`;
+  const count = countLeft(ends)!;
+  return `${base}, ${count} time${count === 1 ? "" : "s"}.`;
 }
 
 export type RepeatPreset = { id: string; label: string; rule: RepeatRule };
 
-export function repeatPresets(day: string): RepeatPreset[] {
+export function repeatPresets(day: string, series: Pick<RepeatPattern, "rule" | "startsOn"> | null = null): RepeatPreset[] {
   const name = dayName(weekdayOf(day));
   const { day: date } = dayParts(day);
   const week = monthWeekOf(day);
@@ -454,9 +511,12 @@ export function repeatPresets(day: string): RepeatPreset[] {
     { id: "weekly", label: `Every week on ${name}`, rule: { freq: "weekly", interval: 1, weekdays: [weekdayOf(day)] } },
     { id: "monthly-day", label: `Every month on the ${ordinal(date)}`, rule: { freq: "monthly", interval: 1, monthDay: date } },
   ];
-  const monthWeek: MonthWeek = isLastWeekOfMonth(day) ? { n: -1, weekday: week.weekday } : week;
+  const last = isLastWeekOfMonth(day);
+  if (last && week.n === 4) presets.push({ id: "monthly-fourth", label: `Every month on the fourth ${name}`, rule: { freq: "monthly", interval: 1, monthWeek: week } });
+  const monthWeek: MonthWeek = last ? { n: -1, weekday: week.weekday } : week;
   presets.push({ id: "monthly-week", label: `Every month on the ${ORDINAL_WORDS[monthWeek.n]} ${name}`, rule: { freq: "monthly", interval: 1, monthWeek } });
-  presets.push({ id: "yearly", label: `Every year on ${dayMonth(day)}`, rule: { freq: "yearly", interval: 1 } });
+  const yearly = anchoredRule({ freq: "yearly", interval: 1 }, series, day);
+  presets.push({ id: "yearly", label: `Every year on ${anniversary(yearly, day)}`, rule: { freq: "yearly", interval: 1 } });
   return presets;
 }
 
@@ -471,6 +531,7 @@ export function normalRule(rule: RepeatRule): RepeatRule {
     if (rule.monthWeek) next.monthWeek = { n: rule.monthWeek.n, weekday: rule.monthWeek.weekday };
     else if (rule.monthDay) next.monthDay = rule.monthDay;
   }
+  if (rule.freq === "yearly" && rule.monthDay) next.monthDay = rule.monthDay;
   return next;
 }
 
@@ -482,12 +543,13 @@ export function checkRule(rule: unknown): string | null {
     return `Repeat every 1 to ${MAX_INTERVAL}.`;
   }
   if (value.freq !== "weekly" && value.weekdays !== undefined) return "Days only go with a weekly repeat.";
-  if (value.freq !== "monthly" && (value.monthDay !== undefined || value.monthWeek !== undefined)) return "A day of the month only goes with a monthly repeat.";
+  if (value.freq !== "monthly" && (value.monthWeek !== undefined || (value.monthDay !== undefined && value.freq !== "yearly"))) return "A day of the month only goes with a monthly repeat.";
   if (value.monthDay !== undefined && value.monthWeek !== undefined) return "Choose a day of the month or a weekday, not both.";
   if (value.freq === "weekly") {
     if (!Array.isArray(value.weekdays) || value.weekdays.length === 0) return "Choose at least one day.";
     if (!value.weekdays.every((day) => WEEKDAYS.includes(day))) return "Choose at least one day.";
   }
+  if (value.freq === "yearly" && value.monthDay !== undefined && (!Number.isInteger(value.monthDay) || value.monthDay < 1 || value.monthDay > 31)) return "Choose a day from 1 to 31.";
   if (value.freq === "monthly") {
     if (value.monthWeek !== undefined) {
       const week = value.monthWeek;
@@ -508,8 +570,9 @@ export function checkEnds(ends: unknown, startsOn: string, today: string): strin
   }
   if ("until" in value) {
     if (!isDayKey(value.until)) return "Choose an end date.";
-    if ((value.until as string) < startsOn) return "The end date is before the first one.";
-    const limit = dayKey(dayParts(today).year + MAX_UNTIL_YEARS, dayParts(today).month, Math.min(dayParts(today).day, 28));
+    if ((value.until as string) < startsOn) return END_BEFORE_THIS;
+    const { year, month, day } = dayParts(today);
+    const limit = dayKey(year + MAX_UNTIL_YEARS, month, Math.min(day, daysInMonth(year + MAX_UNTIL_YEARS, month)));
     if ((value.until as string) > limit) return `Choose an end date within ${MAX_UNTIL_YEARS} years.`;
     return null;
   }
@@ -534,11 +597,12 @@ export function toRrule(pattern: RepeatPattern, timeZone = appTimeZone()) {
     }
   }
   if (rule.freq === "yearly") {
-    const { month, day } = dayParts(pattern.startsOn);
+    const { month } = dayParts(pattern.startsOn);
+    const day = anniversaryDay(rule, pattern.startsOn);
     parts.push(`BYMONTH=${month}`, month === 2 && day === 29 ? "BYMONTHDAY=-1" : `BYMONTHDAY=${day}`);
   }
   const ends = pattern.ends;
-  if ("count" in ends) parts.push(`COUNT=${ends.count}`);
+  if ("count" in ends) parts.push(`COUNT=${countLeft(ends)}`);
   if ("until" in ends) parts.push(`UNTIL=${pattern.at ? untilInstant(ends.until, timeZone) : ends.until.replace(/-/g, "")}`);
   return `RRULE:${parts.join(";")}`;
 }
@@ -556,14 +620,21 @@ export type SeriesView = {
   occursOn: string | null;
   dueDay?: string | null;
   changes: OccurrenceChange[];
+  parts?: RepeatPattern[];
 };
 
 export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): TaskRepeat {
   const pattern: RepeatPattern = { startsOn: view.startsOn, at: view.at, rule: view.rule, ends: view.ends };
   const after = view.occursOn ?? view.startsOn;
+  const parts = view.stopped ? [] : (view.parts ?? []);
   let next = view.current && !view.stopped ? nextOccurrence(pattern, view.changes, after, timeZone) : null;
   for (let guard = 0; next && view.dueDay && next.day <= view.dueDay && guard < MAX_EXPANSION; guard += 1) next = nextOccurrence(pattern, view.changes, next.occursOn, timeZone);
-  const skipped = view.changes.filter((change) => change.skip && change.occursOn > after).length;
+  if (!next && view.current && parts.length > 0) next = nextOccurrence(parts[0], [], shiftDay(parts[0].startsOn, -1), timeZone);
+  const last = lastOccurrence(pattern);
+  const skipped = view.changes.filter((change) => change.skip && change.occursOn > after && (last === null || change.occursOn <= last)).length;
+  const ends = chainEnds(pattern, parts);
+  const lastPart = parts.at(-1);
+  const later = parts.slice(0, -1).reduce((sum, part) => sum + datesIn(part), 0) + (lastPart && "count" in lastPart.ends ? (countLeft(lastPart.ends) ?? 0) : 0);
   return {
     seriesId: view.seriesId,
     ownerId: view.ownerId ?? null,
@@ -571,17 +642,24 @@ export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): Task
     startsOn: view.startsOn,
     at: view.at,
     rule: view.rule,
-    ends: view.ends,
+    ends,
     current: view.current,
     ended: view.stopped || (view.current && !next),
     next: next ? { occursOn: next.occursOn, dueAt: next.dueAt, dueHasTime: next.dueHasTime } : null,
     text: repeatChip(pattern),
     phrase: repeatPhrase(pattern),
     short: repeatShort(pattern),
-    end: view.stopped ? "" : "count" in view.ends && view.current ? `${Math.max(0, (remainingCount(pattern, after) ?? 0) - skipped)} more` : endWords(pattern, view.current ? after : null),
-    rrule: toRrule(pattern),
+    end: view.stopped
+      ? ""
+      : "count" in ends && view.current
+        ? `${Math.max(0, (remainingCount(pattern, after) ?? 0) - skipped) + later} more`
+        : endWords({ ...pattern, ends }, view.current ? after : null),
+    rrule: toRrule({ ...pattern, ends }, timeZone),
     changedDates: view.changes.filter((change) => change.occursOn > after && !change.skip && change.dueAt).length,
     skippedDates: view.changes.filter((change) => change.occursOn > after && change.skip).map((change) => change.occursOn),
+    changeDays: view.changes.filter((change) => change.occursOn > after).map((change) => change.occursOn),
+    movedDays: view.changes.filter((change) => change.occursOn > after && change.dueAt && dayKeyAt(new Date(change.dueAt), timeZone) !== change.occursOn).map((change) => change.occursOn),
+    laterFrom: parts[0]?.startsOn ?? null,
   };
 }
 
@@ -597,7 +675,6 @@ export type RepeatInput = {
   ends?: { after: number } | { on: string } | null;
 };
 
-
 export function repeatInputOf(rule: RepeatRule, ends: RepeatEnds): RepeatInput {
   const input: RepeatInput =
     rule.freq === "daily"
@@ -612,8 +689,31 @@ export function repeatInputOf(rule: RepeatRule, ends: RepeatEnds): RepeatInput {
             : { every: "month", monthDay: rule.monthDay }
           : { every: "year" };
   if (rule.interval > 1) input.interval = rule.interval;
-  if ("count" in ends) input.ends = { after: ends.count };
-  if ("until" in ends) input.ends = { on: ends.until };
+  input.ends = "count" in ends ? { after: ends.count } : "until" in ends ? { on: ends.until } : null;
   return input;
 }
 
+export type SeriesTiming = RepeatPattern & {
+  durationMinutes: number;
+  after: string | null;
+  afterOccurs?: string | null;
+  changes: OccurrenceChange[];
+};
+
+export type UpcomingOccurrence = Occurrence & { durationMinutes: number };
+
+export function upcomingAfter(occursOn: string | null, dueAt: string | null, timeZone = appTimeZone()) {
+  const due = dueAt && !Number.isNaN(Date.parse(dueAt)) ? dayKeyAt(new Date(dueAt), timeZone) : null;
+  if (!occursOn) return due;
+  return due && due > occursOn ? due : occursOn;
+}
+
+export function upcomingBetween(series: SeriesTiming, from: string, to: string, today: string, timeZone = appTimeZone()): UpcomingOccurrence[] {
+  const start = from > today ? from : today;
+  if (start > to) return [];
+  const pattern: RepeatPattern = { startsOn: series.startsOn, at: series.at, rule: series.rule, ends: series.ends };
+  const afterOccurs = series.afterOccurs === undefined ? series.after : series.afterOccurs;
+  return occurrencesBetween(pattern, series.changes, start, to, { after: afterOccurs ?? undefined, timeZone })
+    .filter((occurrence) => (!afterOccurs || occurrence.occursOn > afterOccurs) && (!series.after || occurrence.day > series.after))
+    .map((occurrence) => ({ ...occurrence, durationMinutes: occurrence.durationMinutes ?? series.durationMinutes }));
+}

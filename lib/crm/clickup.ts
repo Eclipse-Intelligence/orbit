@@ -973,6 +973,13 @@ function mergeFields(local: Fields, incoming: Fields, snap: Snapshot, localTime:
   return { write, next };
 }
 
+async function recurredInClickUp(db: Db, row: SyncRow, write: TaskWrite) {
+  const local = localFields(row);
+  if (!local.done || !local.dueAt || !write.dueAt || dayKeyIn(new Date(write.dueAt)) <= dayKeyIn(new Date(local.dueAt))) return false;
+  const found = await db.query("select 1 from crm.tasks where id = $1 and series_id is not null", [row.id]);
+  return (found.rowCount ?? 0) > 0;
+}
+
 type PullOutcome = "imported" | "updated" | "unchanged" | "ignored" | "archived";
 
 async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): Promise<PullOutcome> {
@@ -1017,6 +1024,14 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
         delete write.dueAt;
         delete write.dueDate;
         delete write.dueHasTime;
+      }
+      if (write.completed === false && (await recurredInClickUp(db, row, write))) {
+        const kept = localFields(row);
+        delete write.completed;
+        delete write.dueAt;
+        delete write.dueDate;
+        delete write.dueHasTime;
+        Object.assign(next, { done: kept.done, dueAt: kept.dueAt, dueHasTime: kept.dueHasTime });
       }
       const changed = Object.keys(write).length > 0;
       if (changed) {
@@ -1112,17 +1127,27 @@ async function pushQueue(actor: UserActor) {
 }
 
 async function remoteDeletes(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ id: string; clickup_task_id: string }>(
-      `select t.id, t.clickup_task_id from crm.tasks t
-       where t.workspace_id = $1 and t.archived_at is not null and t.clickup_task_id is not null
-         and t.clickup_sync ? 'deleteRemote' and ${directTaskSql("t")}
-       order by t.archived_at
-       limit $2`,
-      [actor.workspaceId, PUSH_BATCH],
+  const members = await withActor(actor, (db) =>
+    db.query<{ user_id: string }>("select user_id from crm.workspace_members where workspace_id = $1 order by (user_id = $2) desc, user_id", [actor.workspaceId, actor.userId]),
+  );
+  const found = new Map<string, { id: string; clickup_task_id: string; actor: UserActor }>();
+  for (const { user_id } of members.rows) {
+    if (found.size >= PUSH_BATCH) break;
+    const member = user_id === actor.userId ? actor : await memberOf(actor.workspaceId, user_id);
+    if (!member) continue;
+    const result = await withActor(member, (db) =>
+      db.query<{ id: string; clickup_task_id: string }>(
+        `select t.id, t.clickup_task_id from crm.tasks t
+         where t.workspace_id = $1 and t.archived_at is not null and t.clickup_task_id is not null
+           and t.clickup_sync ? 'deleteRemote' and ${directTaskSql("t")}
+         order by t.archived_at
+         limit $2`,
+        [actor.workspaceId, PUSH_BATCH],
+      ),
     );
-    return result.rows;
-  });
+    for (const row of result.rows) if (!found.has(row.id) && found.size < PUSH_BATCH) found.set(row.id, { ...row, actor: member });
+  }
+  return [...found.values()];
 }
 
 async function staleLinks(actor: UserActor) {
@@ -1253,7 +1278,7 @@ export async function syncClickUp(
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
       try {
         await s.api.deleteTask(row.clickup_task_id);
-        await withActor(actor, (db) =>
+        await withActor(row.actor, (db) =>
           db.query(
             `update crm.tasks set clickup_task_id = null, clickup_url = null, clickup_error = null, clickup_synced_at = now(),
                clickup_sync = clickup_sync - 'deleteRemote'
@@ -1367,7 +1392,7 @@ export async function createTaskWithClickUp(
   actor: UserActor,
   input: TaskWrite & { repeat?: unknown },
   clickupListId: string | null,
-  options: ClickUpOptions & { provenance?: Provenance } = {},
+  options: ClickUpOptions & { provenance?: Provenance; idempotencyKey?: string | null } = {},
 ): Promise<{ task: Task; clickupError: string | null }> {
   let listId: string | null = null;
   if (clickupListId && clickupToken()) {
@@ -1382,9 +1407,14 @@ export async function createTaskWithClickUp(
   }
   const created = await createTaskFromApi(actor, input, {
     provenance: options.provenance ?? { operation: "create_task", source: "web" },
+    idempotencyKey: options.idempotencyKey,
   });
   const task = created.body.task;
   if (!listId) return { task, clickupError: null };
+  if (created.replayed) {
+    const current = await withActor(actor, (db) => readTaskInDb(db, actor, task.id));
+    if (!current || current.archivedAt || current.clickupListId || current.clickupTaskId) return { task: current ?? task, clickupError: null };
+  }
   const clickupError = await sendTaskToClickUpList(actor, task.id, listId, options);
   return { task: { ...task, clickupListId: listId }, clickupError };
 }

@@ -87,6 +87,7 @@ function refresh() {
   revalidatePath("/boards", "layout");
   revalidatePath(SETTINGS_PATHS.activity);
   revalidatePath(TASKS_PATH);
+  revalidatePath("/calendar");
 }
 
 export async function saveTaskDetailsAction(id: string, input: TaskDetails, scope?: RepeatScope): Promise<{ ok?: true; error?: string; saved?: SavedTiming }> {
@@ -103,13 +104,17 @@ export async function saveTaskDetailsAction(id: string, input: TaskDetails, scop
       ? await updateOccurrence(actor, { taskId: id }, write, REPEAT_SCOPES.includes(scope as RepeatScope) ? scope : "this", options)
       : await updateTask(actor, id, write, options);
     if (clickupToken()) {
-      after(async () => {
-        try {
-          await pushClickUpTask(actor, id);
-        } catch (error) {
-          console.error("ClickUp push failed", error);
-        }
-      });
+      try {
+        after(async () => {
+          try {
+            await pushClickUpTask(actor, id);
+          } catch (error) {
+            console.error("ClickUp push failed", error);
+          }
+        });
+      } catch (error) {
+        console.error("ClickUp push failed", error);
+      }
     }
     refresh();
     return { ok: true, saved: timingOf(updated.body.task) };

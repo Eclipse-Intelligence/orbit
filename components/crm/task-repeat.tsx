@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { DatePicker } from "@/components/_ui/date-picker";
@@ -12,12 +12,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popove
 import { Radio } from "@/components/_ui/radio";
 import { useComposer } from "@/components/mail/compose-dock";
 import { deleteSeriesAction, endSeriesAction, repeatHistoryAction, setRepeatAction, skipOccurrenceAction, undoRepeatAction, type RepeatActionResult } from "@/app/(crm)/repeats";
-import { clockLabel, taskDueDay } from "@/lib/crm/task-time";
+import { clockLabel } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import {
   checkEnds,
   checkRule,
+  DAY_NAMES,
   isLastWeekOfMonth,
   monthWeekOf,
   normalRule,
@@ -25,16 +26,50 @@ import {
   repeatInputOf,
   repeatPresets,
   repeatSummary,
-  sameRule,
   shortDay,
-  weekdayOf,
   WEEKDAYS,
   type RepeatEnds,
   type RepeatFreq,
   type RepeatPattern,
   type RepeatRule,
-  type Weekday,
 } from "@/lib/task-repeat";
+import {
+  anchorOf,
+  countLeft,
+  dayWithYear,
+  DELETE_FAILED,
+  draftOf,
+  END_FAILED,
+  endsOf,
+  endsOnFirst,
+  ENDS_ON_FIRST,
+  isRepeating,
+  keptMonthly,
+  menuFocus,
+  monthlyLabel,
+  newActionKey,
+  nextDetail,
+  nextLabel,
+  ownsRepeat,
+  patternInputOf,
+  changeWarning,
+  laterReplaced,
+  lostOnChange,
+  REPEAT_SAVE_FAILED,
+  repeatSavedMessage,
+  ruleOf,
+  SCOPE_LATER,
+  runsSeries,
+  sameEnds,
+  sameRepeat,
+  scopeTexts,
+  SKIP_FAILED,
+  skippedMessage,
+  STOP_FAILED,
+  type Draft,
+  type ScopeAnswer,
+  type ScopeChange,
+} from "@/lib/task-repeat-menu";
 import { cn } from "@/lib/utils";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
@@ -44,13 +79,11 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 export { RepeatIcon };
 
+export { isRepeating, nextLabel, ownsRepeat, REPEAT_SAVE_FAILED, runsSeries, SCOPE_LATER, type ScopeAnswer, type ScopeChange };
+
 export type RepeatScope = "this" | "all";
 
-export const REPEAT_SAVE_FAILED = "Couldn't save the repeat. Try again.";
-
-const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
-const ORDINAL_WORDS: Record<number, string> = { 1: "first", 2: "second", 3: "third", 4: "fourth", [-1]: "last" };
 const UNITS: { freq: RepeatFreq; one: string; many: string }[] = [
   { freq: "daily", one: "day", many: "days" },
   { freq: "weekly", one: "week", many: "weeks" },
@@ -58,37 +91,13 @@ const UNITS: { freq: RepeatFreq; one: string; many: string }[] = [
   { freq: "yearly", one: "year", many: "years" },
 ];
 
-export function nextLabel(next: { dueAt: string; dueHasTime: boolean; occursOn: string } | null | undefined) {
-  if (!next) return null;
-  const day = taskDueDay(next.dueAt) ?? next.occursOn;
-  return next.dueHasTime ? `${shortDay(day)}, ${clockLabel(next.dueAt)}` : shortDay(day);
-}
-
 export function doneMessage(task: Task) {
   const next = task.repeat?.current ? nextLabel(task.repeat.next) : null;
-  return next ? `Done. Next: ${next}` : "Task done.";
-}
-
-function anchorOf(task: Task) {
-  if (task.repeat?.current && !task.completedAt && task.occursOn) return task.occursOn;
-  return task.dueDate ?? taskDueDay(task.dueAt) ?? dayKeyAt(new Date());
+  return next ? `Done. Next: ${next}.` : "Task done.";
 }
 
 function atOf(task: Task) {
   return task.dueHasTime && task.dueAt ? clockLabel(task.dueAt) : null;
-}
-
-export function isRepeating(task: Task) {
-  return Boolean(task.repeat && task.repeat.current && !task.completedAt && !task.repeat.ended);
-}
-
-export function runsSeries(task: Task, viewerId: string | null | undefined) {
-  return isRepeating(task) && !task.archivedAt && Boolean(viewerId) && (task.repeat?.ownerId === viewerId || task.repeat?.creatorId === viewerId);
-}
-
-export function ownsRepeat(task: Task, viewerId: string | null | undefined) {
-  if (!task.repeat || task.repeat.ended) return true;
-  return Boolean(viewerId) && (task.repeat.ownerId === viewerId || task.repeat.creatorId === viewerId);
 }
 
 function plural(count: number, one: string, many: string) {
@@ -106,7 +115,7 @@ export function RepeatMark({ task, short = false, className }: { task: Task; sho
   );
 }
 
-function useUndoToast() {
+export function useUndoToast() {
   const composer = useComposer();
   const router = useRouter();
   return useCallback(
@@ -134,65 +143,112 @@ function useUndoToast() {
   );
 }
 
-export function useRepeatActions(task: Task) {
+export function useRepeatActions(task: Task, onDeleted?: () => void) {
   const composer = useComposer();
   const router = useRouter();
   const toast = useUndoToast();
   const [busy, setBusy] = useState(false);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const pending = useRef(0);
   const act = useCallback(
-    async (work: () => Promise<RepeatActionResult>, message: (result: RepeatActionResult) => string) => {
+    (work: (key: string) => Promise<RepeatActionResult>, message: (result: RepeatActionResult) => string, failed: string, saved?: (result: RepeatActionResult) => void) => {
+      pending.current += 1;
       setBusy(true);
-      const result = await work().catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }));
-      setBusy(false);
-      if (result.error) {
-        composer.showToast({ message: result.error, tone: "alert" });
-        return false;
-      }
-      toast(task.id, message(result), result.undo);
-      router.refresh();
-      return true;
+      const run = queue.current.then(async () => {
+        const key = newActionKey();
+        const result = await work(key).catch((): RepeatActionResult => ({ error: failed }));
+        if (result.error) {
+          composer.showToast({ message: result.error, tone: "alert" });
+          return false;
+        }
+        toast(result.task?.id ?? task.id, message(result), result.undo);
+        saved?.(result);
+        router.refresh();
+        return true;
+      });
+      queue.current = run.finally(() => {
+        pending.current -= 1;
+        if (pending.current === 0) setBusy(false);
+      });
+      return run;
     },
     [composer, router, task.id, toast],
   );
   return {
     busy,
-    skip: () => act(() => skipOccurrenceAction(task.id, task.occursOn), (result) => `Skipped. Next: ${nextLabel(result.task ? { dueAt: result.task.dueAt ?? "", dueHasTime: result.task.dueHasTime, occursOn: result.task.occursOn ?? "" } : null) ?? "none"}`),
-    stop: () => act(() => setRepeatAction(task.id, null), () => "Stopped repeating."),
-    end: (until: string) => act(() => endSeriesAction(task.id, until), () => "Saved."),
-    remove: () => act(() => deleteSeriesAction(task.id), () => "Deleted the series."),
-    set: (rule: RepeatRule, ends: RepeatEnds) => act(() => setRepeatAction(task.id, repeatInputOf(rule, ends)), () => "Saved."),
+    skip: () => act((key) => skipOccurrenceAction(task.id, task.occursOn, key), (result) => skippedMessage(result.task), SKIP_FAILED),
+    stop: () => act((key) => setRepeatAction(task.id, null, key), () => "Stopped repeating.", STOP_FAILED),
+    end: (until: string) => act((key) => endSeriesAction(task.id, until, key), () => "Saved", END_FAILED),
+    remove: () =>
+      act(
+        (key) => deleteSeriesAction(task.id, key),
+        () => "Deleted the series.",
+        DELETE_FAILED,
+        (result) => {
+          if (result.task?.id === task.id && result.task.archivedAt) onDeleted?.();
+        },
+      ),
+    set: (rule: RepeatRule, ends?: RepeatEnds) => {
+      const lost = lostOnChange(task, rule);
+      const later = laterReplaced(task, rule);
+      return act((key) => setRepeatAction(task.id, ends ? repeatInputOf(rule, ends) : patternInputOf(rule), key), (result) => repeatSavedMessage(task, result.task, lost, later), REPEAT_SAVE_FAILED);
+    },
   };
 }
 
-type View = "menu" | "custom" | "stop" | "end" | "delete";
+type View = "menu" | "custom" | "stop" | "end" | "delete" | "resets";
 
-function MenuOption({ checked, onSelect, children, detail, danger, icon }: { checked?: boolean; onSelect: () => void; children: ReactNode; detail?: string | null; danger?: boolean; icon?: ReactNode }) {
+function MenuOption({
+  checked,
+  onSelect,
+  children,
+  detail,
+  danger,
+  icon,
+  active = false,
+}: {
+  checked?: boolean;
+  onSelect: () => void;
+  children: ReactNode;
+  detail?: string | null;
+  danger?: boolean;
+  icon?: ReactNode;
+  active?: boolean;
+}) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="item"
+      size="none"
       role={checked === undefined ? "menuitem" : "menuitemradio"}
       aria-checked={checked}
+      tabIndex={active ? 0 : -1}
       onClick={onSelect}
       className={cn(
-        "ui-style hit flex min-h-8 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none hover:bg-white/[0.06] focus-visible:bg-white/[0.06] [@media(pointer:coarse)]:min-h-11",
+        "ui-style flex min-h-8 items-center gap-2 px-2 py-1.5 leading-snug hover:bg-white/[0.06] focus-visible:bg-white/[0.06] focus-visible:ring-0 [@media(pointer:coarse)]:min-h-11",
         danger ? "text-danger" : "text-foreground",
       )}
     >
       <span className="flex size-4 shrink-0 items-center justify-center">{icon ?? (checked ? <CheckIcon aria-hidden className="size-3.5" /> : null)}</span>
       <span className="min-w-0 flex-1">{children}</span>
       {detail && <span className="caption-style text-subtle shrink-0">{detail}</span>}
-    </button>
+    </Button>
   );
 }
 
-function Panel({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
+function Panel({ title, onClose, onEnter, children, footer }: { title: string; onClose: () => void; onEnter?: () => void; children: ReactNode; footer: ReactNode }) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     root.current?.querySelector<HTMLElement>("input, select, button[aria-pressed], [role='radio'], button:not([aria-label='Close'])")?.focus({ preventScroll: true });
   }, []);
+  const enter = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!onEnter || event.key !== "Enter" || event.nativeEvent.isComposing || !(event.target instanceof HTMLInputElement) || event.target.type !== "text") return;
+    event.preventDefault();
+    event.stopPropagation();
+    onEnter();
+  };
   return (
-    <div ref={root} role="group" aria-labelledby={id} className="flex flex-col gap-3 p-3.5">
+    <div ref={root} role="group" aria-labelledby={id} onKeyDown={enter} className="flex flex-col gap-3 p-3.5">
       <div className="flex items-center justify-between gap-2">
         <h3 id={id}>{title}</h3>
         <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose} className="hit">
@@ -205,54 +261,34 @@ function Panel({ title, onClose, children, footer }: { title: string; onClose: (
   );
 }
 
-type Draft = {
-  interval: string;
-  freq: RepeatFreq;
-  weekdays: Weekday[];
-  monthly: "day" | "week" | "last";
-  ends: "never" | "count" | "until";
-  count: string;
-  until: string;
-};
+type CustomFrom = { start: { rule: RepeatRule; ends: RepeatEnds } | null | undefined; kept: RepeatRule | null; at: string | null; left?: { ends: RepeatEnds; end: string } | null };
 
-function draftOf(repeat: { rule: RepeatRule; ends: RepeatEnds } | null | undefined, anchor: string): Draft {
-  const rule = repeat?.rule;
-  const ends = repeat?.ends;
-  return {
-    interval: String(rule?.interval ?? 1),
-    freq: rule?.freq ?? "weekly",
-    weekdays: rule?.weekdays?.length ? [...rule.weekdays] : [weekdayOf(anchor)],
-    monthly: rule?.monthWeek ? (rule.monthWeek.n === -1 ? "last" : "week") : "day",
-    ends: ends && "count" in ends ? "count" : ends && "until" in ends ? "until" : "never",
-    count: ends && "count" in ends ? String(ends.count) : "10",
-    until: ends && "until" in ends ? ends.until : "",
-  };
+function pickAll(field: HTMLInputElement) {
+  field.select();
+  field.dataset.picked = "";
 }
 
-function ruleOf(draft: Draft, anchor: string, original: RepeatRule | null = null): RepeatRule {
-  const interval = Number(draft.interval);
-  const base: RepeatRule = { freq: draft.freq, interval: Number.isInteger(interval) ? interval : 0 };
-  if (draft.freq === "weekly") base.weekdays = draft.weekdays;
-  const kept = original?.freq === "monthly" ? (original.monthWeek ? (original.monthWeek.n === -1 ? "last" : "week") : "day") : null;
-  if (draft.freq === "monthly" && kept === draft.monthly) {
-    if (original?.monthWeek) base.monthWeek = original.monthWeek;
-    else base.monthDay = original?.monthDay ?? Number(anchor.slice(8, 10));
-  } else if (draft.freq === "monthly") {
-    if (draft.monthly === "day") base.monthDay = Number(anchor.slice(8, 10));
-    else base.monthWeek = draft.monthly === "last" ? { n: -1, weekday: weekdayOf(anchor) } : monthWeekOf(anchor).n === -1 ? { n: 4, weekday: weekdayOf(anchor) } : monthWeekOf(anchor);
-  }
-  return base;
+function keepPicked(event: MouseEvent<HTMLInputElement>) {
+  if (event.currentTarget.dataset.picked === undefined) return;
+  delete event.currentTarget.dataset.picked;
+  event.preventDefault();
 }
 
-function endsOf(draft: Draft): RepeatEnds {
-  if (draft.ends === "count") return { count: Number(draft.count) };
-  if (draft.ends === "until") return { until: draft.until };
-  return { never: true };
-}
-
-type CustomFrom = { start: { rule: RepeatRule; ends: RepeatEnds } | null | undefined; kept: RepeatRule | null; at: string | null };
-
-function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; anchor: string; onCancel: () => void; onSave: (rule: RepeatRule, ends: RepeatEnds) => void }) {
+function CustomRepeat({
+  from,
+  anchor,
+  onCancel,
+  onSave,
+  busy = false,
+  resets,
+}: {
+  from: CustomFrom;
+  anchor: string;
+  onCancel: () => void;
+  onSave: (rule: RepeatRule, ends: RepeatEnds) => void;
+  busy?: boolean;
+  resets?: (rule: RepeatRule) => string | null;
+}) {
   const id = useId();
   const [draft, setDraft] = useState(() => draftOf(from.start, anchor));
   const [shown, setShown] = useState<string | null>(null);
@@ -262,11 +298,17 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
   };
   const rule = ruleOf(draft, anchor, from.kept);
   const ends = endsOf(draft);
-  const problem = checkRule(rule) ?? (draft.ends === "until" && !draft.until ? "Choose an end date." : checkEnds(ends, anchor, dayKeyAt(new Date())));
+  const ruleProblem = checkRule(rule);
+  const problem =
+    ruleProblem ??
+    (draft.ends === "until" && !draft.until ? "Choose an end date." : checkEnds(ends, anchor, dayKeyAt(new Date()))) ??
+    (!from.left && endsOnFirst(ends, anchor) ? ENDS_ON_FIRST : null);
   const pattern: RepeatPattern = { startsOn: anchor, at: from.at, rule: normalRule({ ...rule, interval: Math.max(1, rule.interval || 1) }), ends: problem ? { never: true } : ends };
-  const interval = Math.max(1, Number(draft.interval) || 1);
-  const name = DAY_NAMES[WEEKDAYS.indexOf(weekdayOf(anchor))];
+  const interval = Math.max(1, rule.interval || 1);
   const week = monthWeekOf(anchor);
+  const kept = keptMonthly(from.kept);
+  const left = draft.ends === "count" ? countLeft(from.left, draft.count) : null;
+  const times = "count" in ends && ends.count === 1 ? "time" : "times";
   const save = () => {
     if (problem) {
       setShown(problem);
@@ -278,12 +320,13 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
     <Panel
       title="Custom repeat"
       onClose={onCancel}
+      onEnter={save}
       footer={
         <>
           <Button variant="secondary" size="sm" onClick={onCancel} className="hit">
             Cancel
           </Button>
-          <Button variant="primary" size="sm" onClick={save} className="hit">
+          <Button variant="primary" size="sm" disabled={busy} onClick={save} className="hit">
             Save
           </Button>
         </>
@@ -297,7 +340,9 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
             aria-label="Repeat every"
             inputMode="numeric"
             value={draft.interval}
-            onChange={(event) => update({ interval: event.target.value.replace(/\D/g, "").slice(0, 2) })}
+            onFocus={(event) => pickAll(event.currentTarget)}
+            onMouseUp={keepPicked}
+            onChange={(event) => update({ interval: event.target.value })}
             className="w-14 tabular-nums"
           />
           <NativeSelect aria-label="Unit" value={draft.freq} onChange={(event) => update({ freq: event.target.value as RepeatFreq })} className="w-auto">
@@ -318,74 +363,83 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
             {WEEKDAYS.map((day, index) => {
               const on = draft.weekdays.includes(day);
               return (
-                <button
+                <Button
                   key={day}
-                  type="button"
+                  variant="ghost"
+                  size="none"
                   aria-pressed={on}
                   aria-label={DAY_NAMES[index]}
                   onClick={() => update({ weekdays: on ? draft.weekdays.filter((item) => item !== day) : [...draft.weekdays, day] })}
                   className={cn(
-                    "hit flex size-8 items-center justify-center rounded-full text-[12px] font-medium transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--primary)",
-                    on ? "bg-primary text-primary-foreground" : "border-line-strong text-soft border hover:bg-white/[0.06]",
+                    "caption-style hit size-8 font-medium focus-visible:ring-(--primary) active:scale-100",
+                    on ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground" : "border-line-strong text-soft border hover:bg-white/[0.06] hover:text-soft",
                   )}
                 >
                   {DAY_LETTERS[index]}
-                </button>
+                </Button>
               );
             })}
           </div>
         </div>
       )}
       {draft.freq === "monthly" && (
-        <fieldset className="flex flex-col gap-2">
+        <fieldset className="flex flex-col gap-2 [@media(pointer:coarse)]:gap-4">
           <legend className="caption-style text-subtle mb-1.5">Monthly on</legend>
-          <label className="ui-style flex items-center gap-2">
+          <label className="ui-style hit flex items-center gap-2">
             <Radio name={`${id}-monthly`} checked={draft.monthly === "day"} onChange={() => update({ monthly: "day" })} />
-            Day {Number(anchor.slice(8, 10))}
+            {monthlyLabel("day", anchor, from.kept)}
           </label>
-          {week.n !== -1 && (
-            <label className="ui-style flex items-center gap-2">
+          {(week.n !== -1 || kept === "week") && (
+            <label className="ui-style hit flex items-center gap-2">
               <Radio name={`${id}-monthly`} checked={draft.monthly === "week"} onChange={() => update({ monthly: "week" })} />
-              The {ORDINAL_WORDS[week.n]} {name}
+              {monthlyLabel("week", anchor, from.kept)}
             </label>
           )}
-          {isLastWeekOfMonth(anchor) && (
-            <label className="ui-style flex items-center gap-2">
+          {(isLastWeekOfMonth(anchor) || kept === "last") && (
+            <label className="ui-style hit flex items-center gap-2">
               <Radio name={`${id}-monthly`} checked={draft.monthly === "last"} onChange={() => update({ monthly: "last" })} />
-              The last {name}
+              {monthlyLabel("last", anchor, from.kept)}
             </label>
           )}
         </fieldset>
       )}
-      <fieldset className="flex flex-col gap-2">
+      <fieldset className="flex flex-col gap-2 [@media(pointer:coarse)]:gap-3">
         <legend className="caption-style text-subtle mb-1.5">Ends</legend>
-        <label className="ui-style flex min-h-8 items-center gap-2">
+        <label className="ui-style hit flex min-h-8 items-center gap-2">
           <Radio name={`${id}-ends`} checked={draft.ends === "never"} onChange={() => update({ ends: "never" })} />
           Never
         </label>
         <div className="ui-style flex min-h-8 items-center gap-2">
-          <Radio id={`${id}-after`} name={`${id}-ends`} checked={draft.ends === "count"} onChange={() => update({ ends: "count" })} />
-          <label htmlFor={`${id}-after`}>After</label>
+          <label className="hit flex items-center gap-2">
+            <Radio name={`${id}-ends`} checked={draft.ends === "count"} onChange={() => update({ ends: "count" })} />
+            After
+          </label>
           <Input
             aria-label="Times"
             inputMode="numeric"
             value={draft.count}
-            onFocus={() => update({ ends: "count" })}
-            onChange={(event) => update({ ends: "count", count: event.target.value.replace(/\D/g, "").slice(0, 3) })}
+            onFocus={(event) => pickAll(event.currentTarget)}
+            onMouseUp={keepPicked}
+            onChange={(event) => update({ ends: "count", count: event.target.value })}
             className="w-16 tabular-nums"
           />
-          <span>times</span>
+          <span>{times}</span>
+          {left !== null && <span className="caption-style text-subtle">{left} more</span>}
         </div>
         <div className="ui-style flex min-h-8 items-center gap-2">
-          <Radio id={`${id}-until`} name={`${id}-ends`} checked={draft.ends === "until"} onChange={() => update({ ends: "until" })} />
-          <label htmlFor={`${id}-until`}>On</label>
-          <DatePicker id={`${id}-until-date`} aria-label="End date" placeholder="Pick a date" value={draft.until} onChange={(value) => update({ ends: "until", until: value })} className="w-auto" />
+          <label className="hit flex items-center gap-2">
+            <Radio name={`${id}-ends`} checked={draft.ends === "until"} onChange={() => update({ ends: "until" })} />
+            On
+          </label>
+          <DatePicker id={`${id}-until-date`} aria-label="End date" placeholder="Choose a date" value={draft.until} onChange={(value) => update({ ends: "until", until: value })} className="w-auto" />
         </div>
       </fieldset>
-      <p className="caption-style text-soft flex items-start gap-2 rounded-lg bg-white/[0.04] px-2.5 py-2">
-        <RepeatIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-purple-text)" />
-        <span>{repeatSummary(pattern)}</span>
-      </p>
+      {!ruleProblem && (
+        <p className="caption-style text-soft flex items-start gap-2 rounded-lg bg-white/[0.04] px-2.5 py-2">
+          <RepeatIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-purple-text)" />
+          <span>{[repeatSummary(pattern), resets ? resets(pattern.rule) : null].filter(Boolean).join(" ")}</span>
+        </p>
+      )}
       {shown && (
         <p role="alert" className="caption-style text-danger">
           {shown}
@@ -395,7 +449,7 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
   );
 }
 
-function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => void; onSave: (until: string) => void }) {
+function EndOnDate({ task, onCancel, onSave, busy = false }: { task: Task; onCancel: () => void; onSave: (until: string) => void; busy?: boolean }) {
   const id = useId();
   const repeat = task.repeat!;
   const [until, setUntil] = useState(() => ("until" in repeat.ends ? repeat.ends.until : ""));
@@ -404,7 +458,7 @@ function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => voi
   const days = until && until >= from ? occurrenceDays(pattern, shiftDay(from, 1), until, 5000).filter((day) => !repeat.skippedDates.includes(day)) : null;
   const left = days ? days.length : null;
   const lastDay = days && days.length > 0 ? days[days.length - 1] : from;
-  const problem = until && until < from ? "The end date is before the first one." : null;
+  const problem = until && until < from ? "The end date is before this one." : null;
   return (
     <Panel
       title="End on a date"
@@ -414,13 +468,13 @@ function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => voi
           <Button variant="secondary" size="sm" onClick={onCancel} className="hit">
             Cancel
           </Button>
-          <Button variant="primary" size="sm" disabled={!until || Boolean(problem)} onClick={() => onSave(until)} className="hit">
+          <Button variant="primary" size="sm" disabled={busy || !until || Boolean(problem)} onClick={() => onSave(until)} className="hit">
             Save
           </Button>
         </>
       }
     >
-      <DatePicker id={`${id}-until`} aria-label="Last day" placeholder="Pick a date" value={until} onChange={setUntil} />
+      <DatePicker id={`${id}-until`} aria-label="Last day" placeholder="Choose a date" value={until} onChange={setUntil} />
       {problem ? (
         <p role="alert" className="caption-style text-danger">
           {problem}
@@ -437,10 +491,6 @@ function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => voi
   );
 }
 
-function dayWithYear(day: string) {
-  return day.slice(0, 4) === dayKeyAt(new Date()).slice(0, 4) ? shortDay(day) : `${shortDay(day)} ${day.slice(0, 4)}`;
-}
-
 function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
   if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
   const items = [...event.currentTarget.querySelectorAll<HTMLElement>("[role^='menuitem']")];
@@ -448,7 +498,9 @@ function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
   event.preventDefault();
   const at = items.indexOf(document.activeElement as HTMLElement);
   const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : event.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
-  items[next]?.focus();
+  for (const item of items) item.tabIndex = -1;
+  items[next].tabIndex = 0;
+  items[next].focus();
 }
 
 function RepeatChoices({
@@ -458,6 +510,7 @@ function RepeatChoices({
   onDontRepeat,
   onPick,
   onCustom,
+  summary,
   children,
 }: {
   presets: ReturnType<typeof repeatPresets>;
@@ -466,28 +519,34 @@ function RepeatChoices({
   onDontRepeat: () => void;
   onPick: (rule: RepeatRule) => void;
   onCustom: () => void;
+  summary?: string | null;
   children?: ReactNode;
 }) {
-  const matched = current ? presets.find((preset) => sameRule(preset.rule, current)) : null;
+  const matched = current ? presets.find((preset) => sameRepeat(preset.rule, current)) : null;
+  const custom = Boolean(current && !matched);
+  const active = menuFocus(repeating, matched?.id ?? null, custom);
   return (
-    <div role="menu" aria-label="Repeat" onKeyDown={moveFocus} className="flex flex-col p-1">
-      <MenuOption checked={!repeating} onSelect={onDontRepeat}>
+    <>
+      {summary && <p className="caption-style text-soft px-3 pt-2.5 pb-1 md:hidden">{summary}</p>}
+      <div role="menu" aria-label="Repeat" onKeyDown={moveFocus} className="flex flex-col p-1">
+      <MenuOption checked={!repeating} active={active === "none"} onSelect={onDontRepeat}>
         Don&apos;t repeat
       </MenuOption>
       {presets.map((preset) => (
-        <MenuOption key={preset.id} checked={matched?.id === preset.id} onSelect={() => onPick(preset.rule)}>
+        <MenuOption key={preset.id} checked={matched?.id === preset.id} active={active === preset.id} onSelect={() => onPick(preset.rule)}>
           {preset.label}
         </MenuOption>
       ))}
       <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
-      <MenuOption checked={Boolean(current && !matched)} onSelect={onCustom} detail={null} icon={current && !matched ? <CheckIcon aria-hidden className="size-3.5" /> : null}>
+      <MenuOption checked={custom} active={active === "custom"} onSelect={onCustom} detail={null} icon={custom ? <CheckIcon aria-hidden className="size-3.5" /> : null}>
         <span className="flex items-center justify-between gap-2">
           Custom
           <ChevronRightIcon aria-hidden className="text-subtle size-3" />
         </span>
       </MenuOption>
       {children}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -512,10 +571,7 @@ export function RepeatPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"menu" | "custom">("menu");
-  const close = () => {
-    setOpen(false);
-    setView("menu");
-  };
+  const close = () => setOpen(false);
   const choose = (next: RepeatDraft | null) => {
     close();
     onChange(next);
@@ -525,13 +581,13 @@ export function RepeatPicker({
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (!next) setView("menu");
+        if (next) setView("menu");
       }}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         align={align}
-        className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain"
+        className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain [@media(pointer:coarse)]:w-[min(22rem,calc(100vw-2rem))]"
         onCloseAutoFocus={(event) => {
           if (!onClosed) return;
           event.preventDefault();
@@ -540,12 +596,13 @@ export function RepeatPicker({
       >
         {view === "menu" && (
           <RepeatChoices
-            presets={repeatPresets(anchor)}
+            presets={repeatPresets(anchor, value ? { rule: value.rule, startsOn: anchor } : null)}
             current={value?.rule ?? null}
             repeating={Boolean(value)}
             onDontRepeat={() => choose(null)}
             onPick={(rule) => choose({ rule, ends: value?.ends ?? { never: true } })}
             onCustom={() => setView("custom")}
+            summary={value ? repeatSummary({ startsOn: anchor, at, rule: value.rule, ends: value.ends }) : null}
           />
         )}
         {view === "custom" && <CustomRepeat from={{ start: value, kept: value?.rule ?? null, at }} anchor={anchor} onCancel={close} onSave={(rule, ends) => choose({ rule, ends })} />}
@@ -554,43 +611,82 @@ export function RepeatPicker({
   );
 }
 
-export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; trigger: ReactNode; align?: "start" | "end" }) {
+function repeatWords(task: Task) {
+  const repeat = task.repeat;
+  return repeat ? `${repeat.text}${repeat.end ? `, ${repeat.end}` : ""}` : "";
+}
+
+export function RepeatMenu({ task, trigger, align = "start", onDeleted }: { task: Task; trigger: ReactNode; align?: "start" | "end"; onDeleted?: () => void }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("menu");
-  const actions = useRepeatActions(task);
+  const [picked, setPicked] = useState<{ rule: RepeatRule; label: string } | null>(null);
+  const shownAt = useRef(0);
+  const actions = useRepeatActions(task, onDeleted);
   const anchor = anchorOf(task);
   const repeating = isRepeating(task);
   const series = Boolean(task.repeat?.current && !task.completedAt);
-  const presets = repeatPresets(anchor);
+  const presets = repeatPresets(anchor, task.repeat && !task.repeat.ended ? { rule: task.repeat.rule, startsOn: task.repeat.startsOn } : null);
   const current = task.repeat && !task.repeat.ended ? task.repeat.rule : null;
   const keptEnds: RepeatEnds = task.repeat && !task.repeat.ended ? task.repeat.ends : { never: true };
+  const show = (next: View) => {
+    shownAt.current += 1;
+    setView(next);
+  };
   const close = () => {
+    shownAt.current += 1;
     setOpen(false);
-    setView("menu");
+  };
+  const settle = async (work: () => Promise<boolean>) => {
+    const shown = shownAt.current;
+    if ((await work()) && shownAt.current === shown) close();
   };
   const pick = (rule: RepeatRule) => {
-    close();
-    if (current && sameRule(current, rule)) return;
-    void actions.set(rule, keptEnds);
+    if (current && sameRepeat(current, rule)) {
+      close();
+      return;
+    }
+    if (changeWarning(task, rule)) {
+      setPicked({ rule, label: presets.find((preset) => sameRepeat(preset.rule, rule))?.label ?? "Repeat" });
+      show("resets");
+      return;
+    }
+    void settle(() => actions.set(rule));
+  };
+  const saveCustom = (rule: RepeatRule, ends: RepeatEnds) => {
+    const keepsEnd = Boolean(current) && sameEnds(keptEnds, ends);
+    if (current && keepsEnd && sameRepeat(current, rule)) {
+      close();
+      return;
+    }
+    const kept = current && sameRepeat(current, rule) ? current : rule;
+    void settle(() => actions.set(kept, keepsEnd ? undefined : ends));
   };
   return (
     <Popover
       open={open}
       onOpenChange={(next) => {
+        shownAt.current += 1;
         setOpen(next);
-        if (!next) setView("menu");
+        if (next) setView("menu");
       }}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align={align} className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain">
+      <PopoverContent align={align} className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain [@media(pointer:coarse)]:w-[min(22rem,calc(100vw-2rem))]">
         {view === "menu" && (
-          <RepeatChoices presets={presets} current={current} repeating={repeating} onDontRepeat={() => (repeating ? setView("stop") : close())} onPick={pick} onCustom={() => setView("custom")}>
+          <RepeatChoices
+            presets={presets}
+            current={current}
+            repeating={repeating}
+            onDontRepeat={() => (repeating ? show("stop") : close())}
+            onPick={pick}
+            onCustom={() => show("custom")}
+          >
             {repeating && series && (
               <>
                 <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
                 <MenuOption
                   icon={<RepeatIcon aria-hidden className="text-subtle size-3.5" />}
-                  detail={task.repeat?.next ? `Next: ${shortDay(task.repeat.next.occursOn)}` : null}
+                  detail={nextDetail(task.repeat?.next)}
                   onSelect={() => {
                     close();
                     void actions.skip();
@@ -598,13 +694,13 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
                 >
                   Skip this one
                 </MenuOption>
-                <MenuOption icon={<XIcon aria-hidden className="text-subtle size-3" />} onSelect={() => setView("stop")}>
+                <MenuOption icon={<XIcon aria-hidden className="text-subtle size-3" />} onSelect={() => show("stop")}>
                   Stop repeating
                 </MenuOption>
-                <MenuOption icon={<CalendarIcon aria-hidden className="text-subtle size-3.5" />} onSelect={() => setView("end")}>
+                <MenuOption icon={<CalendarIcon aria-hidden className="text-subtle size-3.5" />} onSelect={() => show("end")}>
                   End on a date
                 </MenuOption>
-                <MenuOption danger onSelect={() => setView("delete")}>
+                <MenuOption danger onSelect={() => show("delete")}>
                   Delete the series
                 </MenuOption>
               </>
@@ -613,14 +709,31 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
         )}
         {view === "custom" && (
           <CustomRepeat
-            from={{ start: task.repeat, kept: task.repeat && !task.repeat.ended ? task.repeat.rule : null, at: atOf(task) }}
+            from={{ start: task.repeat, kept: task.repeat && !task.repeat.ended ? task.repeat.rule : null, at: atOf(task), left: task.repeat && !task.repeat.ended ? task.repeat : null }}
             anchor={anchor}
+            busy={actions.busy}
             onCancel={close}
-            onSave={(rule, ends) => {
-              close();
-              void actions.set(rule, ends);
-            }}
+            onSave={saveCustom}
+            resets={(rule) => changeWarning(task, rule)}
           />
+        )}
+        {view === "resets" && picked && (
+          <Panel
+            title={picked.label}
+            onClose={close}
+            footer={
+              <>
+                <Button variant="secondary" size="sm" onClick={close} className="hit">
+                  Cancel
+                </Button>
+                <Button variant="primary" size="sm" disabled={actions.busy} onClick={() => void settle(() => actions.set(picked.rule))} className="hit">
+                  Save
+                </Button>
+              </>
+            }
+          >
+            <p className="ui-style text-soft">{changeWarning(task, picked.rule)}</p>
+          </Panel>
         )}
         {view === "stop" && (
           <Panel
@@ -631,15 +744,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
                 <Button variant="secondary" size="sm" onClick={close} className="hit">
                   Cancel
                 </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => {
-                    close();
-                    void actions.stop();
-                  }}
-                  className="hit"
-                >
+                <Button variant="primary" size="sm" disabled={actions.busy} onClick={() => void settle(actions.stop)} className="hit">
                   Stop repeating
                 </Button>
               </>
@@ -649,14 +754,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
           </Panel>
         )}
         {view === "end" && task.repeat && (
-          <EndOnDate
-            task={task}
-            onCancel={close}
-            onSave={(until) => {
-              close();
-              void actions.end(until);
-            }}
-          />
+          <EndOnDate task={task} busy={actions.busy} onCancel={close} onSave={(until) => void settle(() => actions.end(until))} />
         )}
         {view === "delete" && (
           <Panel
@@ -667,12 +765,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
                 <Button variant="secondary" size="sm" onClick={close} className="hit">
                   Cancel
                 </Button>
-                <HoldButton
-                  onConfirm={() => {
-                    close();
-                    void actions.remove();
-                  }}
-                >
+                <HoldButton onConfirm={() => void settle(actions.remove)} className="[@media(pointer:coarse)]:h-11">
                   Hold to delete
                 </HoldButton>
               </>
@@ -689,12 +782,12 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
 const CHIP =
   "h-7 w-auto max-w-full min-w-0 gap-1.5 rounded-full border-transparent bg-white/[0.06] px-2.5 text-[12.5px] leading-none text-soft hover:bg-white/10 hover:text-foreground";
 
-export function RepeatField({ task, canChange, layout }: { task: Task; canChange: boolean; layout: "panel" | "row" }) {
+export function RepeatField({ task, canChange, layout, onDeleted }: { task: Task; canChange: boolean; layout: "panel" | "row"; onDeleted?: () => void }) {
   const repeat = task.repeat;
   const live = Boolean(repeat && repeat.current && !task.completedAt);
   const stopped = live && repeat!.ended && !repeat!.next;
   const halted = stopped && !("never" in repeat!.ends) && !repeat!.end;
-  const words = live && !stopped ? `${repeat!.text}${repeat!.end ? `, ${repeat!.end}` : ""}` : null;
+  const words = live && !stopped ? repeatWords(task) : null;
   const next = live && !stopped ? nextLabel(repeat!.next) : null;
   if (!canChange || task.completedAt) {
     if (!words) return null;
@@ -706,15 +799,20 @@ export function RepeatField({ task, canChange, layout }: { task: Task; canChange
     );
   }
   const trigger = (
-    <Button variant="chip" size="none" aria-label={words ? `Repeat: ${words}. Change` : "Repeat"} className={cn(CHIP, "hit", !words && "text-subtle")}>
+    <Button
+      variant="chip"
+      size="none"
+      aria-label={words ? `Repeat: ${words}. Change` : "Repeat"}
+      className={cn(CHIP, "hit", !words && "text-subtle", words && "h-auto min-h-7 py-1.5 text-left leading-snug whitespace-normal")}
+    >
       <RepeatIcon aria-hidden className={cn("size-3.5 shrink-0", words && "text-(--tag-purple-text)")} />
-      {words ? <span className="truncate">{words}</span> : layout === "panel" && <span>Repeat</span>}
+      {words ? <span className="min-w-0">{words}</span> : layout === "panel" && <span>Repeat</span>}
     </Button>
   );
   return (
     <>
-      <RepeatMenu task={task} trigger={trigger} />
-      {next && <span className="caption-style text-subtle">Next: {shortDay(repeat!.next!.occursOn)}</span>}
+      <RepeatMenu task={task} trigger={trigger} onDeleted={onDeleted} />
+      {next && <span className="caption-style text-subtle">Next: {next}</span>}
       {stopped && <span className="caption-style text-subtle">{halted || "never" in repeat!.ends ? "Stopped. This is the last one." : "This is the last one."}</span>}
     </>
   );
@@ -769,61 +867,48 @@ export function RepeatEarlier({ task, section }: { task: Task; section: (childre
   );
 }
 
-export type ScopeChange = { kind: "time" | "title" | "description" | "assignee" | "duration" | "reminder"; to?: string };
-
-const CHANGE_LINES: Record<ScopeChange["kind"], string> = {
-  time: "Moving",
-  title: "Renaming.",
-  description: "Changing the description.",
-  assignee: "Reassigning.",
-  duration: "Changing the length.",
-  reminder: "Changing the reminder.",
-};
-
-function scopeTexts(task: Task, change: ScopeChange) {
-  const today = dayKeyAt(new Date());
-  const day = taskDueDay(task.dueAt) ?? task.occursOn ?? anchorOf(task);
-  const own = day === today ? "today's" : shortDay(day);
-  const ownCapital = day === today ? "Today" : shortDay(day);
-  const next = task.repeat?.next?.occursOn;
-  const nextName = next ? (next === shiftDay(today, 1) ? "Tomorrow" : shortDay(next)) : null;
-  const time = change.kind === "time";
-  const resets = time && task.repeat && task.repeat.changedDates > 0 ? ` Resets ${task.repeat.changedDates} changed date${task.repeat.changedDates === 1 ? "" : "s"}.` : "";
-  return {
-    line: time ? `Moving ${own} to ${change.to}.` : CHANGE_LINES[change.kind],
-    one: time ? `Only ${own} moves.${nextName && task.repeat?.at ? ` ${nextName} is back at ${task.repeat.at}.` : ""}` : `Only ${own} changes.`,
-    all: time ? `${ownCapital} and every later one move to ${change.to}.${resets}` : `${ownCapital} and every later one change.`,
-  };
-}
-
 export function useRepeatScope(task: Task) {
-  const [asking, setAsking] = useState<{ change: ScopeChange; resolve: (scope: RepeatScope | null) => void } | null>(null);
+  const [asking, setAsking] = useState<{ change: ScopeChange; resolve: (scope: ScopeAnswer<RepeatScope>) => void } | null>(null);
   const [choice, setChoice] = useState<RepeatScope>("this");
   const latest = useRef(asking);
-  useEffect(() => {
-    latest.current = asking;
-  });
   useEffect(
     () => () => {
-      const pending = latest.current;
-      if (pending) pending.resolve(pending.change.kind === "title" || pending.change.kind === "description" ? "this" : null);
+      latest.current?.resolve(SCOPE_LATER);
+      latest.current = null;
     },
     [],
   );
+  const home = useRef<HTMLSpanElement>(null);
   const ask = useCallback((change: ScopeChange) => {
     latest.current?.resolve(null);
     setChoice("this");
-    return new Promise<RepeatScope | null>((resolve) => setAsking({ change, resolve }));
+    return new Promise<ScopeAnswer<RepeatScope>>((resolve) => {
+      const pending = { change, resolve };
+      latest.current = pending;
+      setAsking(pending);
+    });
   }, []);
   const finish = (scope: RepeatScope | null) => {
     asking?.resolve(scope);
+    if (latest.current === asking) latest.current = null;
     setAsking(null);
   };
   const texts = asking ? scopeTexts(task, asking.change) : null;
   const name = useId();
   const dialog = (
     <Dialog open={Boolean(asking)} onOpenChange={(open) => !open && finish(null)}>
-      <DialogContent className="max-w-[420px]">
+      <DialogContent
+        className="max-w-[420px]"
+        onCloseAutoFocus={() => {
+          window.requestAnimationFrame(() => {
+            const active = document.activeElement;
+            if (active && active !== document.body) return;
+            const area = home.current?.parentElement?.closest<HTMLElement>("[role='dialog'], [data-task-id]");
+            const target = area?.querySelector<HTMLElement>("button[aria-label='Edit title']") ?? area;
+            target?.focus({ preventScroll: true });
+          });
+        }}
+      >
         <DialogHeader className="pr-12">
           <DialogTitle className="flex min-w-0 gap-1">
             <span className="truncate">{task.title}</span>
@@ -831,6 +916,12 @@ export function useRepeatScope(task: Task) {
           </DialogTitle>
           <DialogDescription>{texts?.line}</DialogDescription>
         </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            finish(choice);
+          }}
+        >
         <fieldset className="flex flex-col gap-1 px-3 pb-2">
           <legend className="sr-only">Apply to</legend>
           {(["this", "all"] as const).map((scope) => (
@@ -849,11 +940,13 @@ export function useRepeatScope(task: Task) {
               Cancel
             </Button>
           </DialogClose>
-          <Button variant="primary" size="md" onClick={() => finish(choice)} className="hit">
+          <Button type="submit" variant="primary" size="md" className="hit">
             Save
           </Button>
         </DialogFooter>
+        </form>
       </DialogContent>
+      <span ref={home} hidden />
     </Dialog>
   );
   return { ask, dialog };

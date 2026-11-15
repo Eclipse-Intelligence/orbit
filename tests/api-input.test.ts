@@ -6,6 +6,8 @@ import { GET as listContacts } from "@/app/api/v1/contacts/route";
 import { POST as bulkLeads } from "@/app/api/v1/leads/bulk/route";
 import { POST as createLead } from "@/app/api/v1/leads/route";
 import { POST as createOpportunity } from "@/app/api/v1/opportunities/route";
+import { DELETE as deleteTaskRoute, PATCH as updateTaskRoute } from "@/app/api/v1/tasks/[id]/route";
+import { POST as createTaskRoute } from "@/app/api/v1/tasks/route";
 import { GET as staleRelationships } from "@/app/api/v1/relationships/stale/route";
 import { bulkUpsertCompanies, createCompany } from "@/lib/crm/companies";
 import { bulkIngestLeads } from "@/lib/crm/leads";
@@ -160,5 +162,29 @@ describe("API input checks", () => {
     assert.equal(itemFailure(Object.assign(new Error("duplicate"), { code: "23505" }))?.code, "conflict");
     assert.equal(itemFailure(Object.assign(new Error("connection reset"), { code: "ECONNRESET" })), null);
     assert.equal(itemFailure(new Error("boom")), null);
+  });
+
+  it("reads null fields inside repeat as left out, and names occursOn when it isn't a day", async () => {
+    const created = await createTaskRoute(request("/tasks", "POST", { title: "Null repeat", dueAt: "2027-03-02T14:00", repeat: { every: "week", interval: null, days: null, monthDay: null, monthWeek: null } }));
+    assert.equal(created.status, 201);
+    const task = ((await created.json()) as { task: { id: string; repeat: { text: string } } }).task;
+    assert.match(task.repeat.text, /^Every Tuesday/);
+    const response = await updateTaskRoute(request(`/tasks/${task.id}`, "PATCH", { skip: true, occursOn: "9 Mar" }), { params: Promise.resolve({ id: task.id }) });
+    assert.equal(response.status, 400);
+    const body = (await response.json()) as ErrorBody;
+    assert.equal(body.error.details?.field, "occursOn");
+    assert.match(body.error.message, /occursOn takes a day, such as 2027-03-04\.$/);
+  });
+
+  it("skips a repeating task's open date once on a retried DELETE that names the date", async () => {
+    const created = await createTaskRoute(request("/tasks", "POST", { title: "Retried delete", dueAt: "2027-03-02T14:00", repeat: { every: "week" } }));
+    const id = ((await created.json()) as { task: { id: string } }).task.id;
+    const remove = () => deleteTaskRoute(request(`/tasks/${id}?occursOn=2027-03-02`, "DELETE"), { params: Promise.resolve({ id }) });
+    const first = await remove();
+    assert.equal(((await first.json()) as { skipped?: string }).skipped, "2027-03-02");
+    const again = await remove();
+    assert.equal(again.status, 409);
+    const bad = await deleteTaskRoute(request(`/tasks/${id}?occursOn=9%20Mar`, "DELETE"), { params: Promise.resolve({ id }) });
+    assert.equal(((await bad.json()) as ErrorBody).error.details?.field, "occursOn");
   });
 });

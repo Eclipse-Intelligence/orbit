@@ -19,7 +19,7 @@ import { followsUpRepeat, runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import type { WorkflowDefinition } from "@/lib/workflows/definition";
 import { dayWindow } from "@/lib/time";
-import { createRepeatingTask } from "@/lib/crm/task-series";
+import { createRepeatingTask, updateOccurrence } from "@/lib/crm/task-series";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
 const DAY = 86_400_000;
@@ -242,6 +242,19 @@ describe("tasks, proactive", () => {
     assert.equal(followsUpRepeat(handMade, { task: { repeats: true } }), false, "a workflow you built still runs");
     assert.equal(followsUpRepeat(older, { task: { repeats: false } }), false);
     await setWorkflowStatus(owner, workflow.id, "paused");
+  });
+
+  it("treats a handed-on repeating task as repeating when its assignee ticks it off", async () => {
+    const workflow = await createWorkflow(sam, { template: "next-step" });
+    await setWorkflowStatus(sam, workflow.id, "active");
+    const llm = scripted(() => ({ nextTask: "", dueOn: "", why: "" }));
+    const call = (await createRepeatingTask(owner, { title: "Weekly call Sam takes", contactId, ownerId: owner.userId }, { every: "week" })).body.task;
+    await updateOccurrence(owner, { taskId: call.id }, { ownerId: sam.userId }, "this");
+    await completeTask(sam, call.id);
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    assert.equal((await listRuns(sam, workflow.id)).length, 1);
+    assert.equal(llm.seen.length, 0, "no model call for a repeating task");
+    await setWorkflowStatus(sam, workflow.id, "paused");
   });
 
   it("refuses Same as the task outside a task trigger", async () => {
