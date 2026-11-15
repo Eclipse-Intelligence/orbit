@@ -11,6 +11,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
+import { undoAuditEvent } from "@/lib/crm/undo";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
 import type { LookupState } from "@/lib/enrichment/contacts";
 
@@ -38,7 +39,7 @@ export type TaskOutcome = {
   next: { title: string; dueAt: string | null } | null;
 };
 
-export type LinkChange = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
+export type LinkChange = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null; mailThreadKey?: null };
 
 const OUTCOME_KINDS: OutcomeKind[] = ["call", "email", "meeting"];
 const PEOPLE_SHOWN = 8;
@@ -49,6 +50,8 @@ const EMAIL_DEADLINE_MS = 800;
 function cannotChange() {
   return new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
 }
+
+const LINK_FIELDS = ["companyId", "contactId", "opportunityId", "mailThreadKey"];
 
 export function linkedThread(task: Pick<Task, "mailThreadKey">) {
   const value = task.mailThreadKey;
@@ -265,24 +268,54 @@ function linkValue(value: unknown) {
   return value.toLowerCase();
 }
 
-export async function relinkTask(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
+export async function relinkTaskUndoable(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(taskId)) throw notFound("task");
+  if (change.mailThreadKey !== undefined && change.mailThreadKey !== null) {
+    throw new CrmError("invalid_input", "A linked email can only be removed here.", 400, { field: "mailThreadKey" });
+  }
   const write = {
     companyId: linkValue(change.companyId),
     contactId: linkValue(change.contactId),
     opportunityId: linkValue(change.opportunityId),
+    ...(change.mailThreadKey === null ? { mailThreadKey: null } : {}),
   };
-  if (write.companyId === undefined && write.contactId === undefined && write.opportunityId === undefined) {
+  if (write.companyId === undefined && write.contactId === undefined && write.opportunityId === undefined && write.mailThreadKey === undefined) {
     throw new CrmError("invalid_input", "Choose a person, company or opportunity.", 400);
   }
   return withActor(actor, async (db) => {
     const task = await lockedTask(db, actor, taskId);
     const same = (Object.keys(write) as (keyof typeof write)[]).every((key) => write[key] === undefined || write[key] === (task[key]?.toLowerCase() ?? null));
-    if (same) return task;
+    if (same) return { task, undo: null };
     const updated = await updateTaskInDb(db, actor, taskId, write, provenance);
-    return updated.task;
+    const event = await db.query<{ id: string }>(
+      `select id from crm.audit_events
+       where workspace_id = $1 and entity_type = 'task' and entity_id = $2 and event_type = 'task.updated' and created_at = now()
+       order by id desc limit 1`,
+      [actor.workspaceId, taskId],
+    );
+    return { task: updated.task, undo: event.rows[0]?.id ?? null };
   });
+}
+
+export async function relinkTask(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
+  return (await relinkTaskUndoable(actor, taskId, change, provenance)).task;
+}
+
+export async function undoTaskLinkChange(actor: UserActor, taskId: string, eventId: string) {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(taskId) || !isUuid(eventId)) throw notFound("change");
+  const event = await withActor(actor, (db) =>
+    db.query<{ id: string }>(
+      `select id from crm.audit_events
+       where id = $1 and workspace_id = $2 and entity_type = 'task' and entity_id = $3 and event_type = 'task.updated'
+         and jsonb_typeof(changes->'fields') = 'array' and jsonb_array_length(changes->'fields') > 0
+         and not exists (select 1 from jsonb_array_elements_text(changes->'fields') as field where field <> all($4::text[]))`,
+      [eventId, actor.workspaceId, taskId, LINK_FIELDS],
+    ),
+  );
+  if (!event.rows[0]) throw notFound("change");
+  return undoAuditEvent(actor, eventId, { operation: "undo_change", source: "web" });
 }
 
 function cleanOutcome(input: TaskOutcome) {

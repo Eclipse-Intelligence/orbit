@@ -8,7 +8,7 @@ import { actionError } from "@/lib/companies";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { getInviteSetup, type InviteSetup } from "@/lib/crm/invites";
 import { isUuid } from "@/lib/crm/mutate";
-import { completeTaskWithOutcome, relinkTask, taskContext, type LinkChange, type TaskContext, type TaskOutcome } from "@/lib/crm/task-act";
+import { completeTaskWithOutcome, relinkTaskUndoable, taskContext, undoTaskLinkChange, type LinkChange, type TaskContext, type TaskOutcome } from "@/lib/crm/task-act";
 import { setTaskPrepareSettings, type TaskPrepareSettings } from "@/lib/crm/task-prepare";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { UserActor } from "@/lib/crm/types";
@@ -67,13 +67,33 @@ export async function taskInviteSetupAction(): Promise<{ setup?: InviteSetup; er
   }
 }
 
-export async function relinkTaskAction(id: string, change: LinkChange): Promise<{ ok?: boolean; error?: string }> {
+export async function relinkTaskAction(id: string, change: LinkChange): Promise<{ ok?: boolean; undo?: string | null; error?: string }> {
   const user = await taskUser(id);
   if (!user) return { error: SIGN_IN };
   if (typeof user === "string") return { error: user };
   if (typeof id !== "string" || !isUuid(id) || !change || typeof change !== "object") return { error: "Couldn't link the task. Try again." };
   try {
-    await relinkTask(user, id, { companyId: change.companyId, contactId: change.contactId, opportunityId: change.opportunityId }, { operation: "link_task", source: "web" });
+    const result = await relinkTaskUndoable(
+      user,
+      id,
+      { companyId: change.companyId, contactId: change.contactId, opportunityId: change.opportunityId, ...(change.mailThreadKey === null ? { mailThreadKey: null } : {}) },
+      { operation: "link_task", source: "web" },
+    );
+    pushLater(user, [id]);
+    refresh();
+    return { ok: true, undo: result.undo };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function undoTaskLinkAction(id: string, eventId: string): Promise<{ ok?: boolean; error?: string }> {
+  const user = await taskUser(id);
+  if (!user) return { error: SIGN_IN };
+  if (typeof user === "string") return { error: user };
+  if (typeof id !== "string" || !isUuid(id) || typeof eventId !== "string" || !isUuid(eventId)) return { error: "Couldn't undo. Try again." };
+  try {
+    await undoTaskLinkChange(user, id, eventId);
     pushLater(user, [id]);
     refresh();
     return { ok: true };

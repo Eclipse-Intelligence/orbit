@@ -63,9 +63,9 @@ export function TaskDocChips({ task }: { task: Pick<Task, "docs"> }) {
   );
 }
 
-function useDocChange(taskId: string, onDone?: () => void) {
+export function useDocChange(taskId: string, onDone?: () => void) {
   const router = useRouter();
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const queue = useRef<Promise<boolean>>(Promise.resolve(true));
   const [pending, setPending] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,10 +79,11 @@ function useDocChange(taskId: string, onDone?: () => void) {
       setPending((count) => count - 1);
       if (result.error) {
         setError(result.error);
-        return;
+        return false;
       }
       onDone?.();
       router.refresh();
+      return true;
     });
     queue.current = next;
     return next;
@@ -91,7 +92,7 @@ function useDocChange(taskId: string, onDone?: () => void) {
   return { busy: pending > 0, error, link: (doc: DocPick) => run("link", doc.id), unlink: (pageId: string) => run("unlink", pageId) };
 }
 
-const EDIT_CHIP =
+export const TASK_EDIT_CHIP =
   "[@media(pointer:coarse)]:mr-2.5 inline-flex h-7 max-w-[16rem] min-w-0 items-center gap-1.5 rounded-full bg-white/[0.07] pr-1 pl-2.5 text-[12.5px] leading-none text-foreground [&_svg]:size-3 [&_svg]:shrink-0 [&_svg]:text-subtle max-md:h-[34px] max-md:text-[14px]";
 const EMPTY_CHIP =
   "inline-flex h-7 min-w-0 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12.5px] leading-none whitespace-nowrap text-subtle shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] outline-none transition-[background-color,color] duration-150 ease-power3-out hover:bg-white/[0.03] hover:text-soft focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3 [&_svg]:shrink-0 max-md:h-[34px] max-md:px-[13px] max-md:text-[14px]";
@@ -104,7 +105,7 @@ export function EditTaskDocs({ task, warn }: { task: Pick<Task, "id" | "docs" | 
       {task.docs.map((doc) => {
         const name = doc.readable ? docName(doc) : "Doc";
         return (
-          <span key={doc.id} className={EDIT_CHIP}>
+          <span key={doc.id} className={TASK_EDIT_CHIP}>
             <DocIcon aria-hidden />
             <span className="truncate">{name}</span>
             {!doc.readable && <LockIcon aria-hidden />}
@@ -122,7 +123,7 @@ export function EditTaskDocs({ task, warn }: { task: Pick<Task, "id" | "docs" | 
         );
       })}
       <DocPickPopover taskId={task.id} warn={warn} exclude={task.docIds} onPick={(doc) => void change.link(doc)} onClosed={() => trigger.current?.focus()}>
-        <button ref={trigger} type="button" aria-label="Link a doc" aria-busy={change.busy || undefined} className={EMPTY_CHIP}>
+        <button ref={trigger} type="button" aria-label="Link a doc" aria-busy={change.busy || undefined} className={cn(EMPTY_CHIP, "hit")}>
           <DocIcon aria-hidden />
           Doc
         </button>
@@ -286,13 +287,12 @@ function DocRow({ entry, removable, onRemove, onMenu }: { entry: TaskDocEntry; r
   );
 }
 
-export default function TaskDocs({ task, canChange, warn }: { task: Task; canChange: boolean; warn: boolean }) {
+export default function TaskDocs({ task, canChange }: { task: Task; canChange: boolean }) {
   const list = useTaskDocList(task);
   const change = useDocChange(task.id, list.reload);
   const note = useNewNote({ kind: "task", id: task.id, name: task.title }, "Couldn't create the doc. Try again.");
   const [menu, setMenu] = useState<TaskDocEntry | null>(null);
   const shown = list.docs ?? list.stale;
-  const linkedIds = task.docIds;
 
   return (
     <section aria-label="Docs" className="flex flex-col gap-2">
@@ -308,24 +308,9 @@ export default function TaskDocs({ task, canChange, warn }: { task: Task; canCha
           </span>
         )}
         {canChange && (
-          <>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={note.creating}
-              aria-label={`New doc about ${task.title}`}
-              onClick={() => void note.create()}
-              className="hit"
-            >
-              New doc
-            </Button>
-            <DocPickPopover taskId={task.id} warn={warn} exclude={linkedIds} align="end" onPick={(doc) => void change.link(doc)}>
-              <Button variant="secondary" size="sm" aria-busy={change.busy || undefined} className="hit">
-                <LinkIcon aria-hidden className="size-3" />
-                Link a doc
-              </Button>
-            </DocPickPopover>
-          </>
+          <Button variant="ghost" size="sm" disabled={note.creating} aria-label={`New doc about ${task.title}`} onClick={() => void note.create()} className="hit">
+            New doc
+          </Button>
         )}
       </div>
       {note.error && (

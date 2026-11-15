@@ -13,16 +13,13 @@ import { UseTemplateButton } from "@/components/crm/email-template-picker";
 import FindDetailButton from "@/components/crm/find-detail";
 import { useFindAvailability } from "@/components/crm/find-availability";
 import type { InvitePrefill } from "@/components/crm/invite-dialog";
-import { SearchChip } from "@/components/crm/task-pad";
-import { EditTaskDocs } from "@/components/crm/task-docs";
-import { relinkChange, relinkNote } from "@/lib/task-pad";
 import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { useComposer } from "@/components/mail/compose-dock";
 import { relinkTaskAction, taskContextAction, taskInviteSetupAction } from "@/app/(crm)/task-act";
 import { renderTemplate, type EmailTemplate } from "@/lib/crm/email-template-rules";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
 import type { InviteSetup } from "@/lib/crm/invites";
-import type { LinkChange, TaskContext, TaskPerson } from "@/lib/crm/task-act";
+import type { TaskContext, TaskPerson } from "@/lib/crm/task-act";
 import type { LookupState } from "@/lib/enrichment/contacts";
 import { taskKind, type TaskKind } from "@/lib/crm/task-kind";
 import type { TitleHere } from "@/lib/crm/task-title";
@@ -37,10 +34,8 @@ import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
-import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import MailIcon from "@/public/assets/images/mail/mail-open.svg";
 import ReplyIcon from "@/public/assets/images/mail/reply.svg";
-import UserIcon from "@/public/assets/images/tasks/user.svg";
 
 const InviteDialog = dynamic(() => import("@/components/crm/invite-dialog"), { ssr: false });
 
@@ -555,95 +550,6 @@ export function TaskAct({ task, here, canChange }: { task: Task; here?: TitleHer
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-export function EditLinks({ task, warn, docs }: { task: Task; warn: boolean; docs: boolean }) {
-  const router = useRouter();
-  const group = useRef<HTMLDivElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-
-  async function change(kind: "company" | "contact" | "opportunity", option: Parameters<typeof relinkChange>[2]) {
-    if (busy) return;
-    const next: LinkChange = relinkChange(task, kind, option);
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    const result = await relinkTaskAction(task.id, next).catch(() => ({ error: "Couldn't link the task. Try again." }));
-    setBusy(false);
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    setNote(relinkNote(task, kind, next));
-    router.refresh();
-  }
-
-  function refocus(slot: string) {
-    window.requestAnimationFrame(() => group.current?.querySelector<HTMLElement>(`[data-link-slot="${slot}"] button`)?.focus());
-  }
-
-  const record = (id: string | null, name: string | null) => (id && name ? { id, name } : null);
-  return (
-    <div ref={group} role="group" aria-label="Edit links" aria-busy={busy || undefined} className="flex flex-wrap items-center gap-1.5">
-      <span data-link-slot="contact" className="inline-flex">
-        <SearchChip
-          kind="contact"
-          icon={UserIcon}
-          label="Person"
-          value={record(task.contactId, task.contactName)}
-          companyId={task.companyId}
-          variant="card"
-          taskId={task.id}
-          onPick={(option) => void change("contact", option)}
-          onClosed={() => refocus("contact")}
-        />
-      </span>
-      <span data-link-slot="company" className="inline-flex">
-        <SearchChip
-          kind="company"
-          icon={BuildingIcon}
-          label="Company"
-          value={record(task.companyId, task.companyName)}
-          companyId={null}
-          variant="card"
-          taskId={task.id}
-          onPick={(option) => void change("company", option)}
-          onClosed={() => refocus("company")}
-        />
-      </span>
-      <span data-link-slot="opportunity" className="inline-flex">
-        <SearchChip
-          kind="opportunity"
-          icon={OpportunityIcon}
-          label="Opportunity"
-          value={record(task.opportunityId, task.opportunityName)}
-          companyId={null}
-          variant="card"
-          taskId={task.id}
-          onPick={(option) => void change("opportunity", option)}
-          onClosed={() => refocus("opportunity")}
-        />
-      </span>
-      {docs && <EditTaskDocs task={task} warn={warn} />}
-      {busy && (
-        <span role="status" className="caption-style text-subtle">
-          Saving…
-        </span>
-      )}
-      {error && (
-        <p role="alert" className="caption-style text-danger basis-full">
-          {error}
-        </p>
-      )}
-      {note && !error && (
-        <p role="status" className="caption-style text-subtle basis-full">
-          {note}
         </p>
       )}
     </div>
