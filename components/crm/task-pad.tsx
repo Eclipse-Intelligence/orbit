@@ -1120,9 +1120,9 @@ export default function TaskPad({
       )}
     />,
     repeatWords ? (
-      <span key="repeat" className={cn(chipClass("on", variant), "max-w-[22rem] cursor-default gap-1 pr-1 max-md:pr-1")}>
+      <span key="repeat" className={cn(chipClass("on", variant), "max-w-[22rem] cursor-default gap-1 pr-1 max-md:pr-1 [@media(pointer:coarse)]:mr-1.5 md:[@media(pointer:coarse)]:my-1.5")}>
         <RepeatPicker anchor={repeatAnchor} at={repeatAt} value={read.repeat} onChange={pickRepeat} onClosed={() => focusAt()} trigger={repeatTrigger} />
-        <button type="button" aria-label="Don't repeat" onClick={() => pickRepeat(null)} className="hit text-subtle hover:text-foreground flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring/60 [@media(pointer:coarse)]:ml-2">
+        <button type="button" aria-label="Don't repeat" onClick={() => pickRepeat(null)} className="hit text-subtle hover:text-foreground flex size-5 shrink-0 [@media(pointer:coarse)]:size-6 cursor-pointer items-center justify-center rounded-full outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring/60 [@media(pointer:coarse)]:ml-3">
           <XIcon aria-hidden />
         </button>
       </span>

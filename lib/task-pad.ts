@@ -664,7 +664,8 @@ const REPEAT_DAY = "(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|
 const REPEAT_DAYS = `${REPEAT_DAY}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*)${REPEAT_DAY})*`;
 const REPEAT_COUNT = "(?:other|\\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)";
 const REPEAT_NTH = "(?:first|second|third|fourth|last|1st|2nd|3rd|4th)";
-const REPEAT_ORD = "\\d{1,2}(?:st|nd|rd|th)";
+const REPEAT_ORD = "(?:\\d{1,2}(?:st|nd|rd|th)|first|second|third|fourth)";
+const ORDINAL_WORDS = ["first", "second", "third", "fourth"];
 const REPEAT_MONTH = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
 const REPEAT_DATE = `(?:\\d{1,2}(?:st|nd|rd|th)?(?:\\s+of)?\\s+${REPEAT_MONTH}|${REPEAT_MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?)\\b`;
 type RepeatKind = "daily" | "weekdays" | "weekly" | "month-week" | "month-day" | "monthly" | "yearly";
@@ -673,8 +674,8 @@ const REPEAT_PATTERNS: { kind: RepeatKind; pattern: RegExp }[] = [
   { kind: "weekdays", pattern: /\b(?:every|each)\s+weekday\b/gi },
   { kind: "weekly", pattern: new RegExp(`\\b(?:(?:every|each)\\s+${REPEAT_COUNT}\\s+weeks?|(?:every|each)\\s+week|weekly)(?:\\s+on\\s+${REPEAT_DAYS})?\\b|\\b(?:every|each)\\s+(?:other\\s+)?${REPEAT_DAYS}\\b`, "gi") },
   { kind: "month-week", pattern: new RegExp(`(?:\\bon\\s+)?(?:\\bthe\\s+)?\\b${REPEAT_NTH}\\s+${REPEAT_DAY}\\s+of\\s+(?:every|each|the)\\s+month\\b`, "gi") },
-  { kind: "month-day", pattern: new RegExp(`(?:\\bon\\s+)?\\bthe\\s+${REPEAT_ORD}\\s+of\\s+(?:every|each|the)\\s+month\\b`, "gi") },
-  { kind: "monthly", pattern: new RegExp(`\\b(?:(?:every|each)\\s+${REPEAT_COUNT}\\s+months?|(?:every|each)\\s+month|monthly)(?:\\s+on\\s+the\\s+(?:${REPEAT_ORD}|${REPEAT_NTH}\\s+${REPEAT_DAY}))?\\b`, "gi") },
+  { kind: "month-day", pattern: new RegExp(`(?:\\bon\\s+)?\\bthe\\s+\\b${REPEAT_ORD}\\s+of\\s+(?:every|each|the)\\s+month\\b`, "gi") },
+  { kind: "monthly", pattern: new RegExp(`\\b(?:(?:every|each)\\s+${REPEAT_COUNT}\\s+months?|(?:every|each)\\s+month|monthly)(?:\\s+on\\s+the\\s+(?:${REPEAT_NTH}\\s+${REPEAT_DAY}|${REPEAT_ORD}))?\\b`, "gi") },
   { kind: "yearly", pattern: new RegExp(`\\b(?:(?:every|each)\\s+${REPEAT_COUNT}\\s+years?|(?:every|each)\\s+year|yearly|annually)(?:\\s+on\\s+(?:the\\s+)?${REPEAT_DATE})?|\\b(?:every|each)\\s+${REPEAT_DATE}`, "gi") },
 ];
 const REPEAT_BARE = /^(?:daily|weekly|monthly|yearly|annually)/i;
@@ -685,6 +686,9 @@ const REPEAT_END = new RegExp(
   "i",
 );
 const REPEAT_START = /^\s*,?\s*(?:from|starting(?:\s+(?:on|from))?|beginning|commencing)\b(?=\s+\S)/i;
+const REPEAT_LABEL = /^\s*:/;
+const REPEAT_TIMES_BEFORE = /\b(?:\d{1,3}\s+times?|once|twice|thrice)\s*,?\s*(?:a\s+|per\s+)?$/i;
+const REPEAT_ON_THE = /^\s*,?\s*on\s+the\b/i;
 const REPEAT_TITLE_WORDS = /\b(?:daily|weekly|monthly|yearly|annually)\b/gi;
 
 function repeatNumber(word: string | undefined) {
@@ -739,6 +743,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
       const end = start + match[0].length;
       if (docs.some((doc) => start < doc.end && end > doc.start)) continue;
       if (REPEAT_BARE.test(match[0]) && REPEAT_NOUN_BEFORE.test(text.slice(0, start))) continue;
+      if (REPEAT_BARE.test(match[0]) && !text.slice(0, start).trim() && REPEAT_LABEL.test(text.slice(end))) continue;
       hits.push({ start, end, kind });
     }
   }
@@ -748,6 +753,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
   if (chosen.length === 0) return null;
   if (chosen.length > 1) return "unsure";
   const hit = chosen[0];
+  if (REPEAT_TIMES_BEFORE.test(text.slice(0, hit.start)) || REPEAT_ON_THE.test(text.slice(hit.end))) return "unsure";
   const spans: Span[] = [{ start: hit.start, end: hit.end, kind: "when" }];
   const ends: FoundRepeat["ends"] = {};
   let cursor = hit.end;
@@ -773,6 +779,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
     spans.push({ start: cursor + (end[0].length - end[0].trimStart().length), end: cursor + end[0].length, kind: "when" });
     cursor += end[0].length;
   }
+  if (REPEAT_ON_THE.test(text.slice(cursor))) return "unsure";
   const started = REPEAT_START.exec(text.slice(cursor));
   if (started) spans.push({ start: cursor + (started[0].length - started[0].trimStart().length), end: cursor + started[0].length, kind: "when" });
   else if (!FREE_AFTER.test(text.slice(cursor))) return null;
@@ -781,6 +788,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
   const named = repeatDays(words);
   const nth = new RegExp(`\\b(${REPEAT_NTH})\\s+(${REPEAT_DAY})\\b`, "i").exec(words);
   const ord = /\b(\d{1,2})(?:st|nd|rd|th)\b/.exec(words);
+  const ordWord = nth ? null : /\bthe\s+(first|second|third|fourth)\b/.exec(words);
   let fixedDay: string | null = null;
   if (hit.kind === "yearly" && new RegExp(`\\b${REPEAT_MONTH}\\b`, "i").test(words)) {
     fixedDay = readDayMonth(words, todayKey);
@@ -791,7 +799,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
     if (hit.kind === "weekdays") return { freq: "weekly", interval: 1, weekdays: [...WORKWEEK] };
     if (hit.kind === "weekly") return { freq: "weekly", interval, weekdays: named.length > 0 ? named : [weekdayOf(start)] };
     if (nth && (hit.kind === "month-week" || hit.kind === "monthly")) return { freq: "monthly", interval, monthWeek: { n: repeatNth(nth[1]), weekday: repeatWeekday(nth[2]) } };
-    if (hit.kind === "month-day" || hit.kind === "monthly") return { freq: "monthly", interval, monthDay: ord ? Number(ord[1]) : Number(start.slice(8, 10)) };
+    if (hit.kind === "month-day" || hit.kind === "monthly") return { freq: "monthly", interval, monthDay: ord ? Number(ord[1]) : ordWord ? ORDINAL_WORDS.indexOf(ordWord[1]) + 1 : Number(start.slice(8, 10)) };
     return { freq: "yearly", interval };
   };
   return { spans, startCue: started ? cursor + started[0].length : null, rule, fixedDay, ends };
@@ -838,8 +846,9 @@ function parseRepeatText(text: string, now: Date): PadParse | null {
   if (found.startCue !== null && !inner.marks.some((mark) => mark.kind === "when" && /^\s*$/.test(text.slice(found.startCue!, mark.start)))) return unsureRepeat(text);
   if (found.fixedDay && innerDay && innerDay !== todayKey && innerDay !== shiftDay(todayKey, 1)) return unsureRepeat(text);
   const start = found.fixedDay ?? innerDay ?? todayKey;
-  const rule = normalRule(found.rule(start));
-  if (checkRule(rule)) return unsureRepeat(text);
+  const built = found.rule(start);
+  if (checkRule(built)) return unsureRepeat(text);
+  const rule = normalRule(built);
   const due = padRepeatDue({ rule, ends: { never: true } }, at ? `${start}T${at}` : start, now);
   if (!due) return unsureRepeat(text);
   const first = due.slice(0, 10);
@@ -909,7 +918,7 @@ function aiRepeatRule(input: PadAiRepeat, start: string): RepeatRule | null {
   return null;
 }
 
-function aiRepeatAgrees(phrase: string, rule: RepeatRule, ends: RepeatEnds, first: string) {
+function aiRepeatAgrees(phrase: string, rule: RepeatRule, ends: RepeatEnds, first: string, anchor: string) {
   const all = phrase.toLowerCase();
   const words = all.replace(/\b(?:until|till|for)\b.*$/, " ").replace(/\b\d{1,3}\s+times\b/, " ");
   const named = repeatDays(words.replace(/\bweekdays?\b/g, " "));
@@ -924,10 +933,24 @@ function aiRepeatAgrees(phrase: string, rule: RepeatRule, ends: RepeatEnds, firs
   if (named.length > 0 ? named.join() !== [...shown].sort((a, b) => TASK_WEEKDAYS.indexOf(a) - TASK_WEEKDAYS.indexOf(b)).join() : rule.freq === "weekly" && !/\bweekdays?\b/.test(words) && shown.length !== 1) return false;
   if (/\bweekdays?\b/.test(words) && named.length === 0 && (rule.freq !== "weekly" || shown.length !== 5 || !WORKWEEK.every((day) => shown.includes(day)))) return false;
   const counted = /\b(other|alternate|\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:days?|weeks?|months?|years?)\b/.exec(words);
-  const wanted = /\bfortnightly\b/.test(words) ? 2 : counted ? repeatNumber(counted[1] === "alternate" ? "other" : counted[1]) : /\b(?:other|alternate)\b/.test(words) ? 2 : null;
-  if (wanted !== null ? wanted !== rule.interval : rule.interval !== 1 && !/\b(?:first|second|third|fourth)\b/.test(words)) return false;
+  const ordinal = new RegExp(`\\b(?:every|each)\\s+(second|third|fourth)\\s+(?:days?|weeks?|months?|years?|${REPEAT_DAY})\\b`).exec(words);
+  const wanted = /\bfortnightly\b/.test(words)
+    ? 2
+    : counted
+      ? repeatNumber(counted[1] === "alternate" ? "other" : counted[1])
+      : /\b(?:other|alternate)\b/.test(words)
+        ? 2
+        : ordinal && !rule.monthWeek
+          ? ORDINAL_WORDS.indexOf(ordinal[1]) + 1
+          : 1;
+  if (wanted !== rule.interval) return false;
   if (rule.monthWeek && !new RegExp(`\\b(?:${["", "first", "second", "third", "fourth"][rule.monthWeek.n] || "last"}|${rule.monthWeek.n === -1 ? "last" : `${rule.monthWeek.n}(?:st|nd|rd|th)`})\\b`).test(words)) return false;
-  if (rule.monthDay !== undefined && /\b\d{1,2}(?:st|nd|rd|th)\b/.test(words) && !new RegExp(`\\b${rule.monthDay}(?:st|nd|rd|th)\\b`).test(words)) return false;
+  if (rule.freq === "monthly" && !rule.monthWeek) {
+    const digits = /\b(\d{1,2})(?:st|nd|rd|th)\b/.exec(words);
+    const spelled = new RegExp(`\\b(first|second|third|fourth)\\b(?!\\s+(?:${REPEAT_DAY}|days?|weeks?|months?|years?)\\b)`).exec(words);
+    const stated = digits ? Number(digits[1]) : spelled ? ORDINAL_WORDS.indexOf(spelled[1]) + 1 : Number(anchor.slice(8, 10));
+    if (rule.monthDay !== stated) return false;
+  }
   if (rule.freq === "yearly" && monthWord) {
     const day = readDayMonth(words, first);
     if (!day || day.slice(5) !== first.slice(5)) return false;
@@ -940,7 +963,14 @@ function aiRepeatAgrees(phrase: string, rule: RepeatRule, ends: RepeatEnds, firs
   return Boolean(span) && "until" in ends && untilAfter(first, { amount: repeatNumber(span![1]), unit: span![2] }) === ends.until;
 }
 
-function acceptAiRepeat(text: string, input: PadAiRepeat, due: string, now: Date): { span: Span; repeat: PadRepeat } | null {
+const AI_REPEAT_LISTED_AFTER = new RegExp(`^\\s*(?:,|&|\\band\\b)\\s*${REPEAT_DAY}s?\\b`, "i");
+const AI_REPEAT_LISTED_BEFORE = new RegExp(`\\b${REPEAT_DAY}s?\\s*(?:,|&|\\band\\b)\\s*$`, "i");
+const AI_REPEAT_END_WORDS = /\b(?:until|till)\b|\b\d{1,3}\s+times\b|\bfor\s+(?:\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:days?|weeks?|months?|years?)\b/i;
+function aiStartWords() {
+  return new RegExp([AI_DAY_MONTH, AI_NUMERIC_DATE, AI_IN_UNITS, `\\b${WEEKDAY_ANY}\\b`, "\\b(?:today|tomorrow|tmrw|tmr|tonight)\\b", "\\bnext\\s+(?:week|month)\\b", "\\bweekend\\b"].join("|"), "i");
+}
+
+function acceptAiRepeat(text: string, input: PadAiRepeat, due: string, now: Date, said: string): { span: Span; repeat: PadRepeat } | null {
   const phrase = input.phrase?.trim() ?? "";
   if (!phrase || !AI_REPEAT_CUE.test(phrase)) return null;
   if (!phrase.split(/[\s,]+/).filter(Boolean).every((word) => AI_REPEAT_WORD.test(word.replace(/[.!?]+$/, "")))) return null;
@@ -949,15 +979,20 @@ function acceptAiRepeat(text: string, input: PadAiRepeat, due: string, now: Date
   const start = found[0].index;
   const end = start + found[0][0].length;
   if ([...text.matchAll(DOC_REFERENCE)].some((doc) => start < doc.index + doc[0].length && end > doc.index)) return null;
+  if (AI_REPEAT_LISTED_AFTER.test(text.slice(end)) || AI_REPEAT_LISTED_BEFORE.test(text.slice(0, start))) return null;
+  if (AI_REPEAT_END_WORDS.test(`${text.slice(0, start)} ${text.slice(end)}`)) return null;
   const wall = londonParts(now);
   const todayKey = dayKey(wall.year, wall.month, wall.day);
-  const rule = aiRepeatRule(input, due.slice(0, 10));
+  const at = padDueHasTime(due) ? due.slice(11, 16) : null;
+  const yearDay = input.every === "year" && new RegExp(`\\b${REPEAT_MONTH}\\b`, "i").test(phrase.replace(/\b(?:until|till)\b.*$/i, " ")) ? readDayMonth(phrase.replace(/\b(?:until|till)\b.*$/i, " "), todayKey) : null;
+  const anchor = aiStartWords().test(said.replace(new RegExp(AI_CLOCK, "gi"), " ")) ? due.slice(0, 10) : (yearDay ?? todayKey);
+  const rule = aiRepeatRule(input, anchor);
   if (!rule || checkRule(rule)) return null;
   const ends: RepeatEnds = input.ends?.after != null ? { count: input.ends.after } : input.ends?.on ? { until: input.ends.on } : { never: true };
   const repeat = { rule: normalRule(rule), ends };
-  if (padRepeatDue(repeat, due, now) !== due) return null;
+  if (padRepeatDue(repeat, at ? `${anchor}T${at}` : anchor, now) !== due) return null;
   if (checkEnds(ends, due.slice(0, 10), todayKey)) return null;
-  if (!aiRepeatAgrees(phrase, repeat.rule, ends, due.slice(0, 10))) return null;
+  if (!aiRepeatAgrees(phrase, repeat.rule, ends, due.slice(0, 10), anchor)) return null;
   return { span: { start, end, kind: "when" }, repeat };
 }
 
@@ -1201,7 +1236,7 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
       ? answer.durationMinutes
       : null;
   if (!dueAgrees(said, day, time, wall, duration)) return kept;
-  const repeated = answer.repeat ? acceptAiRepeat(text, answer.repeat, answer.due, now) : null;
+  const repeated = answer.repeat ? acceptAiRepeat(text, answer.repeat, answer.due, now, said) : null;
   if (answer.repeat && (!repeated || spans.some((other) => repeated.span.start < other.end && repeated.span.end > other.start))) return kept;
   if (repeated) spans.push(repeated.span);
   const asksReminder = new RegExp(AI_REMIND, "i").test(said);

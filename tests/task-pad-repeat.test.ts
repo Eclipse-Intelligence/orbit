@@ -78,6 +78,16 @@ const NEGATIVES = [
   "Check each invoice",
   "every 1000 users",
   "every first-time buyer",
+  "Monthly: send invoices tomorrow",
+  "Daily: stand-up notes",
+  "3 times daily",
+  "twice daily",
+  "Stretch 3 times every Monday",
+  "every 0 days",
+  "every month on the 0th",
+  "every month on the 32nd",
+  "Pay rent every month on the last",
+  "Pay rent every month at 9am on the 1st",
 ];
 
 describe("typed repeats", () => {
@@ -146,6 +156,33 @@ describe("typed repeats", () => {
     }
   });
 
+  it("reads a word ordinal as the day of the month and never falls back to today", () => {
+    for (const typed of ["Pay rent every month on the first", "Pay rent monthly on the first", "Pay rent the first of every month", "Pay rent on the first of the month"]) {
+      const read = parse(typed);
+      assert.equal(read.title, "Pay rent", typed);
+      assert.equal(read.due, "2026-12-01", typed);
+      assert.deepEqual(read.repeat?.rule, { freq: "monthly", interval: 1, monthDay: 1 }, typed);
+    }
+    assert.deepEqual(parse("Report every month on the third").repeat?.rule, { freq: "monthly", interval: 1, monthDay: 3 });
+    for (const typed of ["Pay rent every month on the last", "Pay rent every month on the fifth", "Pay rent monthly at 9am on the 1st"]) {
+      const read = parse(typed);
+      assert.deepEqual({ unsure: read.unsure, due: read.due, repeat: read.repeat }, { unsure: true, due: null, repeat: undefined }, typed);
+    }
+  });
+
+  it("goes unsure on numbers out of range and counts it can't place", () => {
+    for (const typed of ["Gym every 0 days", "Invoice every month on the 0th", "Invoice every month on the 32nd", "Stretch 3 times daily", "Stretch 3 times every Monday", "Stretch twice daily"]) {
+      const read = parse(typed);
+      assert.deepEqual({ unsure: read.unsure, due: read.due, repeat: read.repeat, title: read.title }, { unsure: true, due: null, repeat: undefined, title: typed }, typed);
+    }
+  });
+
+  it("reads a Daily, Weekly, Monthly or Yearly label at the start as it did before repeats", () => {
+    const monthly = parse("Monthly: send invoices tomorrow");
+    assert.deepEqual({ title: monthly.title, due: monthly.due, unsure: monthly.unsure, repeat: monthly.repeat }, { title: "Monthly: send invoices", due: "2026-11-15", unsure: false, repeat: undefined });
+    assert.ok(!parse("Weekly: team update Monday 10am").repeat);
+  });
+
   it("Keep as text keeps the repeat words and saves no repeat", () => {
     const typed = "Walk the dog every day at 2pm";
     const read = parse(typed);
@@ -208,6 +245,25 @@ describe("AI read repeats", () => {
     assert.deepEqual(await ask("every day counts", { ...base, phrases: [], due: "2026-11-14", repeat: { phrase: "every day", every: "day" } }), nothing("every day counts"), "a noun after the pattern");
     assert.deepEqual(await ask("Email every client", { ...base, phrases: [], due: "2026-11-14", repeat: { phrase: "every client", every: "day" } }), nothing("Email every client"), "no pattern");
     assert.deepEqual(await ask("Physio every second day 6 times", { ...base, phrases: [], due: "2026-11-14", repeat: { phrase: "every second day 6 times", every: "day", interval: 2, ends: { after: 7 } } }), nothing("Physio every second day 6 times"));
+  });
+
+  it("checks the month day, interval and days against the words", async () => {
+    const text = "Pay rent on the first of every month";
+    const right = { phrase: "on the first of every month", every: "month" as const, monthDay: 1 };
+    assert.deepEqual((await ask(text, { ...base, phrases: [], due: "2026-12-01", repeat: right }))?.repeat, { rule: { freq: "monthly", interval: 1, monthDay: 1 }, ends: { never: true } });
+    assert.deepEqual(await ask(text, { ...base, phrases: [], due: "2026-12-05", repeat: { ...right, monthDay: 5 } }), nothing(text), "another month day");
+    assert.deepEqual(await ask(text, { ...base, phrases: [], due: "2026-11-14", repeat: { phrase: right.phrase, every: "month" } }), nothing(text), "no month day");
+    assert.deepEqual(await ask(text, { ...base, phrases: [], due: "2026-12-01", repeat: { ...right, interval: 2 } }), nothing(text), "an interval the words don't give");
+    assert.deepEqual(await ask("Gym Mondays and Wednesdays", { ...base, phrases: [], due: "2026-11-16", repeat: { phrase: "Mondays", every: "week", days: ["mo"] } }), nothing("Gym Mondays and Wednesdays"), "a listed day left out");
+    assert.deepEqual((await ask("Gym Mondays and Wednesdays", { ...base, phrases: [], due: "2026-11-16", repeat: { phrase: "Mondays and Wednesdays", every: "week", days: ["mo", "we"] } }))?.title, "Gym");
+  });
+
+  it("takes only the first occurrence from now and keeps a stated end", async () => {
+    const text = "Payroll fortnightly on Thursdays";
+    const right = { phrase: "fortnightly on Thursdays", every: "week" as const, interval: 2, days: ["th"] };
+    for (const due of ["2026-12-03", "2027-03-04"]) assert.deepEqual(await ask(text, { ...base, phrases: [], due, repeat: right }), nothing(text), due);
+    assert.deepEqual(await ask("Stretch every day until Friday", { ...base, phrases: ["until Friday"], due: "2026-11-20", repeat: { phrase: "every day", every: "day" } }), nothing("Stretch every day until Friday"));
+    assert.deepEqual(await ask("Stretch every day for 2 weeks", { ...base, phrases: [], due: "2026-11-14", repeat: { phrase: "every day", every: "day" } }), nothing("Stretch every day for 2 weeks"));
   });
 
   it("never turns repeat words into a one-off date", async () => {
