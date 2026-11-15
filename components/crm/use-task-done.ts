@@ -8,6 +8,7 @@ import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
 import { reconcileDone, stillOpenIds } from "@/lib/task-done";
 import { movedMessage } from "@/lib/task-pad";
+import { clearLinkUndo } from "@/lib/task-link-undo";
 import type { Task } from "@/lib/crm/types";
 
 export const TASK_UNDO_MS = 8_000;
@@ -221,6 +222,7 @@ export function useTaskDone(tasks: Task[]) {
   const complete = useCallback(
     (task: Task, options: { hold?: boolean } = {}) => {
       if (entries.current.has(task.id)) return;
+      clearLinkUndo();
       withdrawn.current.delete(task.id);
       undone.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));

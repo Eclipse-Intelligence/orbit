@@ -7,7 +7,7 @@ import Button from "@/components/_ui/button";
 import { SearchChip } from "@/components/crm/task-pad";
 import { useComposer } from "@/components/mail/compose-dock";
 import { EditTaskDocs, TASK_EDIT_CHIP, TaskDocChips } from "@/components/crm/task-docs";
-import { forgetLinkUndo, offerLinkUndo } from "@/components/crm/task-link-undo";
+import { forgetLinkUndo, offerLinkUndo } from "@/lib/task-link-undo";
 import { relinkTaskAction, undoTaskLinkAction } from "@/app/(crm)/task-act";
 import { taskLinkCandidatesAction } from "@/app/(crm)/records";
 import type { PadOption } from "@/lib/crm/task-pad";
@@ -93,13 +93,19 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
   const busy = pending > 0;
   if (hiddenEmail && hiddenEmail !== task.mailThreadKey) setHiddenEmail(null);
 
-  function save(next: LinkChange, message: string | null): Promise<Saved> {
+  function save(next: LinkChange, message: string | null, options: { quiet?: boolean } = {}): Promise<Saved> {
     setPending((count) => count + 1);
     setError(null);
     setNote(null);
     const run = queue.current.then(async (): Promise<Saved> => {
-      const result: Saved = await relinkTaskAction(task.id, next).catch(() => ({ error: LINK_FAILED }));
-      setPending((count) => count - 1);
+      let result: Saved;
+      try {
+        result = await relinkTaskAction(task.id, next);
+      } catch {
+        result = { error: LINK_FAILED };
+      } finally {
+        setPending((count) => count - 1);
+      }
       const slot = lastSlot.current;
       if (slot) {
         window.requestAnimationFrame(() => {
@@ -108,15 +114,15 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
         });
       }
       if (result.error) {
-        setError(result.error);
+        if (!options.quiet) setError(result.error);
         return result;
       }
       setNote(message);
       router.refresh();
       return result;
     });
-    queue.current = run;
-    return run;
+    queue.current = run.catch(() => undefined);
+    return run.catch((): Saved => ({ error: LINK_FAILED }));
   }
 
   function change(kind: "company" | "contact" | "opportunity", option: Parameters<typeof relinkChange>[2]) {
@@ -139,7 +145,7 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
     setHiddenEmail(key);
     window.requestAnimationFrame(() => focus?.focus());
     lastSlot.current = null;
-    void save({ mailThreadKey: null }, null).then((result) => {
+    void save({ mailThreadKey: null }, null, { quiet: true }).then((result) => {
       if (result.error) {
         setHiddenEmail(null);
         composer.showToast({ message: result.error, tone: "alert" });
@@ -147,8 +153,10 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
       }
       const eventId = result.undo;
       if (!eventId) return;
+      let toast: number | null = null;
       const undo = () => {
         forgetLinkUndo(undo);
+        if (toast !== null) composer.dismissToast(toast);
         void undoTaskLinkAction(taskId, eventId)
           .catch(() => ({ error: UNDO_FAILED }))
           .then((undone) => {
@@ -160,8 +168,8 @@ export default function TaskLinkChips({ task, warn }: { task: Task; warn: boolea
             router.refresh();
           });
       };
+      toast = composer.showToast({ message: "Email link removed.", duration: EMAIL_UNDO_MS, action: { label: "Undo", run: undo }, onDismiss: () => forgetLinkUndo(undo) });
       offerLinkUndo(undo, EMAIL_UNDO_MS);
-      composer.showToast({ message: "Email link removed.", duration: EMAIL_UNDO_MS, action: { label: "Undo", run: undo } });
     });
   }
 

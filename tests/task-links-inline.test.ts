@@ -23,6 +23,7 @@ import {
   showsDescriptionLinks,
 } from "@/lib/task-doc-picks";
 import { docQueryAt, parseTaskText, withoutDocQuery } from "@/lib/task-pad";
+import { clearLinkUndo, forgetLinkUndo, offerLinkUndo, undoLinkChange } from "@/lib/task-link-undo";
 import { createUser, resetDatabase } from "./helpers";
 
 const WEB = { operation: "link_task_doc", source: "web" } as const;
@@ -141,6 +142,10 @@ describe("[[ in a task's title and description", () => {
     assert.equal(withoutReferenceNear("See [[Plan]] then [[Plan]] here", "[[Plan]]", 18), "See [[Plan]] then here");
     assert.equal(withoutReferenceNear("See [[Plan]] then [[Plan]] here", "[[Plan]]", 2), "See then [[Plan]] here");
     assert.equal(withoutReferenceNear("Nothing here", "[[Plan]]", 0), "Nothing here");
+    assert.equal(withoutReferenceNear("see [[P]].", "[[P]]", 4), "see.");
+    assert.equal(withoutReferenceNear("[[P]] then more", "[[P]]", 0), "then more");
+    assert.equal(withoutReferenceNear("Line one\n[[P]] two", "[[P]]", 9), "Line one\ntwo");
+    assert.equal(withoutReferenceNear("Ask [[P]]\nnext", "[[P]]", 4), "Ask\nnext");
     assert.deepEqual(textEdit("Check [[pri now", "Check [[Pricing notes]] now"), { start: 8, end: 11, insert: "Pricing notes]]" });
     assert.deepEqual(textEdit("Ask [[my d about", "Ask about"), { start: 4, end: 11, insert: "" });
     const removal = textEdit("See [[Plan]] and more", "See and more");
@@ -156,6 +161,28 @@ describe("[[ in a task's title and description", () => {
       { id: "second", title: "plan", readable: true },
     ]);
     assert.deepEqual(parts, [{ kind: "doc", id: "first", label: "Plan", start: 0 }]);
+  });
+});
+
+describe("Z after removing an email", () => {
+  it("undoes the newest undoable action: a Done after the removal clears the link offer", () => {
+    const runs: string[] = [];
+    const link = () => runs.push("link");
+    offerLinkUndo(link, 8000, 1000);
+    clearLinkUndo();
+    assert.equal(undoLinkChange(2000), false, "a Done after the removal means Z undoes the Done");
+    assert.deepEqual(runs, []);
+
+    offerLinkUndo(link, 8000, 1000);
+    assert.equal(undoLinkChange(2000), true);
+    assert.deepEqual(runs, ["link"]);
+    assert.equal(undoLinkChange(2001), false, "the offer is used once");
+
+    offerLinkUndo(link, 8000, 1000);
+    forgetLinkUndo(link);
+    assert.equal(undoLinkChange(2000), false, "a toast that has gone clears the offer");
+    offerLinkUndo(link, 8000, 1000);
+    assert.equal(undoLinkChange(9001), false, "an expired offer does nothing");
   });
 });
 

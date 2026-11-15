@@ -780,16 +780,7 @@ function Description({ details, layout, warn }: { details: TaskDetailsState; lay
     mode: "description",
     value: details.text,
     onChange: details.setText,
-    onStore: () => {
-      storeAfter.current = true;
-    },
   });
-  const storeAfter = useRef(false);
-  useEffect(() => {
-    if (!storeAfter.current) return;
-    storeAfter.current = false;
-    details.saveText();
-  }, [details]);
   const attachMention = mention.attach;
   const attach = useCallback(
     (node: HTMLTextAreaElement | null) => {

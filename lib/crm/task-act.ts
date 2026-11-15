@@ -51,6 +51,8 @@ function cannotChange() {
   return new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
 }
 
+const LINK_FIELDS = ["companyId", "contactId", "opportunityId", "mailThreadKey"];
+
 export function linkedThread(task: Pick<Task, "mailThreadKey">) {
   const value = task.mailThreadKey;
   if (!value) return null;
@@ -305,8 +307,11 @@ export async function undoTaskLinkChange(actor: UserActor, taskId: string, event
   if (!isUuid(taskId) || !isUuid(eventId)) throw notFound("change");
   const event = await withActor(actor, (db) =>
     db.query<{ id: string }>(
-      "select id from crm.audit_events where id = $1 and workspace_id = $2 and entity_type = 'task' and entity_id = $3 and event_type = 'task.updated'",
-      [eventId, actor.workspaceId, taskId],
+      `select id from crm.audit_events
+       where id = $1 and workspace_id = $2 and entity_type = 'task' and entity_id = $3 and event_type = 'task.updated'
+         and jsonb_typeof(changes->'fields') = 'array' and jsonb_array_length(changes->'fields') > 0
+         and not exists (select 1 from jsonb_array_elements_text(changes->'fields') as field where field <> all($4::text[]))`,
+      [eventId, actor.workspaceId, taskId, LINK_FIELDS],
     ),
   );
   if (!event.rows[0]) throw notFound("change");

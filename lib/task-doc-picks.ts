@@ -79,7 +79,11 @@ export function withoutReferenceNear(text: string, reference: string, at: number
     if (best < 0 || Math.abs(index - at) < Math.abs(best - at)) best = index;
   }
   if (best < 0) return text;
-  return removeDocQuery(text, { start: best, end: best + reference.length }).text;
+  let before = text.slice(0, best);
+  let after = text.slice(best + reference.length);
+  if (/^[.,;:!?)]/.test(after) || !after || /^\n/.test(after)) before = before.replace(/[ \t]+$/, "");
+  else if (!before || /\n$/.test(before) || SPACE_END.test(before)) after = after.replace(/^[ \t]+/, "");
+  return before + after;
 }
 
 export function textEdit(before: string, after: string) {

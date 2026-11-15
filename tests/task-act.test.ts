@@ -9,7 +9,7 @@ import { completeTaskWithOutcome, relinkTask, relinkTaskUndoable, taskContext, u
 import { taskKind } from "@/lib/crm/task-kind";
 import { GET as restGetTask } from "@/app/api/v1/tasks/[id]/route";
 import { randomUUID } from "node:crypto";
-import { addTaskParticipants, createTask, getTask, listTasks, reopenTask, restoreTaskInDb } from "@/lib/crm/tasks";
+import { addTaskParticipants, createTask, getTask, listTasks, reopenTask, restoreTaskInDb, updateTask } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -363,6 +363,14 @@ describe("relinking from the task", () => {
     assert.equal(restored.mailThread?.subject, "Renewal terms, v2");
     assert.equal((await audits(task.id, "task.undone")).length, 1);
     await assert.rejects(() => undoTaskLinkChange(mark, task.id, removed.undo!), "a change is undone once");
+  });
+
+  it("undoes only link changes from the task's chips, never other edits", async () => {
+    const task = (await createTask(mark, { title: "Plan the order", contactId: jane })).body.task;
+    await updateTask(mark, task.id, { title: "Plan the big order" });
+    const [edit] = await sql<{ id: string }>("select id from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at desc limit 1", [task.id]);
+    await assert.rejects(() => undoTaskLinkChange(mark, task.id, edit.id), /not found/i);
+    assert.equal((await getTask(mark, task.id)).title, "Plan the big order");
   });
 });
 

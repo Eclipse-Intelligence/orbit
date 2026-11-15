@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { DocPickHeader, DocPickNotice, DocPickOptions, useDocPicks } from "@/components/crm/task-doc-picker";
 import { useDocChange } from "@/components/crm/task-docs";
+import { saveTaskDetailsAction } from "@/app/(crm)/discussions";
 import type { Task } from "@/lib/crm/types";
 import type { DocPick } from "@/lib/docs/client-types";
 import { caretAfterEdit, insideClosedReference, pickIntoDescription, textEdit, withoutReferenceNear } from "@/lib/task-doc-picks";
@@ -17,7 +18,6 @@ export function useDocMention({
   mode,
   value,
   onChange,
-  onStore,
 }: {
   task: Pick<Task, "id" | "docIds">;
   enabled: boolean;
@@ -25,12 +25,12 @@ export function useDocMention({
   mode: Mode;
   value: string;
   onChange: (value: string) => void;
-  onStore?: () => void;
 }) {
   const id = useId();
   const listId = `${id}-docs-list`;
   const field = useRef<HTMLTextAreaElement | null>(null);
   const latest = useRef(value);
+  const mounted = useRef(false);
   const muted = useRef<number | null>(null);
   const closing = useRef<number | null>(null);
   const [query, setQuery] = useState<DocQuery | null>(null);
@@ -44,12 +44,13 @@ export function useDocMention({
   useEffect(() => {
     latest.current = value;
   }, [value]);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       if (closing.current !== null) window.clearTimeout(closing.current);
-    },
-    [],
-  );
+    };
+  }, []);
 
   const attach = useCallback((node: HTMLTextAreaElement | null) => {
     field.current = node;
@@ -116,8 +117,8 @@ export function useDocMention({
       const caret = element?.selectionStart ?? current.length;
       const edit = textEdit(current, cleaned);
       const kept = caretAfterEdit(edit, caret);
-      onChange(cleaned);
-      onStore?.();
+      if (mounted.current) onChange(cleaned);
+      if (mode === "description") void saveTaskDetailsAction(task.id, { description: cleaned.trim() || null }).catch(() => null);
       if (focused) {
         window.requestAnimationFrame(() => {
           const target = field.current;
