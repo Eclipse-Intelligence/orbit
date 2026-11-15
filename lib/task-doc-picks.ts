@@ -63,16 +63,20 @@ export function removeDocQuery(text: string, found: DocQuerySpan) {
 }
 
 export function insertReferenceAt(text: string, caret: number, title: string | null | undefined) {
-  let at = Math.min(Math.max(0, caret), text.length);
+  const typed = Math.min(Math.max(0, caret), text.length);
+  let at = typed;
   const inside = /\[\[[^[\]\n]*$/.exec(text.slice(0, at));
-  const closing = inside ? /^[^[\]\n]*\]\]/.exec(text.slice(at)) : null;
-  if (closing) at += closing[0].length;
+  if (inside) {
+    const closing = /^[^[\]\n]*\]\]/.exec(text.slice(at));
+    at = closing ? at + closing[0].length : at - inside[0].length;
+  }
   const before = text.slice(0, at);
   const after = text.slice(at);
   const reference = `[[${docReferenceTitle(title)}]]`;
   const lead = before && !/[\s(]$/.test(before) ? " " : "";
   const trail = /^[\s.,;:!?)]/.test(after) ? "" : " ";
-  return { text: before + lead + reference + trail + after, caret: before.length + lead.length + reference.length + trail.length };
+  const added = lead.length + reference.length + trail.length;
+  return { text: before + lead + reference + trail + after, caret: at < typed ? typed + added : at + added };
 }
 
 export function insideClosedReference(text: string, found: DocQuerySpan) {

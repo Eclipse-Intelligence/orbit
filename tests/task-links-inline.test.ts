@@ -66,6 +66,12 @@ describe("[[ in a task's title and description", () => {
     );
     assert.equal(insertReferenceAt(handwritten, handwritten.length, "Pricing notes").text, "Read [[Board minutes]] first [[Pricing notes]] ");
     assert.equal(insertReferenceAt(handwritten, 0, "Pricing notes").text, "[[Pricing notes]] Read [[Board minutes]] first");
+    const typingNext = "Check [[Boa";
+    assert.deepEqual(
+      insertReferenceAt(typingNext, typingNext.length, "Pricing notes"),
+      { text: "Check [[Pricing notes]] [[Boa", caret: 29 },
+      "a [[ query typed while linking stays whole, the reference goes before it and the caret stays at its end",
+    );
   });
   it("only links a private doc and never writes its title into the description", () => {
     const text = "Use the numbers in [[Renewal plan]] and [[my d";
