@@ -827,6 +827,21 @@ function untilAfter(first: string, span: { amount: number; unit: string }) {
   return shiftDay(dayKey(toYear, toMonth, Math.min(day, daysInMonth(toYear, toMonth))), -1);
 }
 
+const LEFTOVER_ORDINAL =
+  /\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|last|\d{1,2}(?:st|nd|rd|th))\b/i;
+const LEFTOVER_DAY = new RegExp(`\\b${REPEAT_DAY}s?\\b|\\b${REPEAT_MONTH}\\b`, "i");
+
+function repeatLeftover(text: string, spans: Span[]) {
+  const glued = withGlue(text, spans);
+  const rest = cleanTitle(text, glued).replace(DOC_REFERENCE, " ");
+  if (LEFTOVER_ORDINAL.test(rest) || LEFTOVER_DAY.test(rest)) return true;
+  return glued.some((span, index) => {
+    const after = glued[index + 1]?.start === span.end ? "" : text.slice(span.end);
+    const before = index > 0 && glued[index - 1].end === span.start ? "" : text.slice(0, span.start);
+    return /^\s*(?:[,&]|and\b)\s*\S/i.test(after) || /\S\s*(?:[,&]|\band)\s*$/i.test(before);
+  });
+}
+
 function unsureRepeat(text: string): PadParse {
   return { title: typedTitle(text), due: null, remindMinutes: null, durationMinutes: null, unsure: true, marks: [], guess: null };
 }
@@ -864,7 +879,7 @@ function parseRepeatText(text: string, now: Date): PadParse | null {
   const glued = withGlue(text, spans);
   const title = cleanTitle(text, glued);
   const docFree = title.replace(DOC_REFERENCE, " ");
-  if (!title || debris(text, spans) || LEFTOVER.test(docFree.replace(REPEAT_TITLE_WORDS, " "))) return unsureRepeat(text);
+  if (!title || debris(text, spans) || LEFTOVER.test(docFree.replace(REPEAT_TITLE_WORDS, " ")) || repeatLeftover(text, spans)) return unsureRepeat(text);
   return {
     title,
     due,
@@ -932,6 +947,7 @@ function aiRepeatAgrees(phrase: string, rule: RepeatRule, ends: RepeatEnds, firs
   const shown = rule.freq === "weekly" ? (rule.weekdays ?? []) : rule.monthWeek ? [rule.monthWeek.weekday] : [];
   if (named.length > 0 ? named.join() !== [...shown].sort((a, b) => TASK_WEEKDAYS.indexOf(a) - TASK_WEEKDAYS.indexOf(b)).join() : rule.freq === "weekly" && !/\bweekdays?\b/.test(words) && shown.length !== 1) return false;
   if (/\bweekdays?\b/.test(words) && named.length === 0 && (rule.freq !== "weekly" || shown.length !== 5 || !WORKWEEK.every((day) => shown.includes(day)))) return false;
+  if (named.length === 0 && (rule.monthWeek || (rule.freq === "weekly" && !/\bweekdays?\b/.test(words) && shown.join() !== weekdayOf(anchor)))) return false;
   const counted = /\b(other|alternate|\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:days?|weeks?|months?|years?)\b/.exec(words);
   const ordinal = new RegExp(`\\b(?:every|each)\\s+(second|third|fourth)\\s+(?:days?|weeks?|months?|years?|${REPEAT_DAY})\\b`).exec(words);
   const wanted = /\bfortnightly\b/.test(words)
@@ -1239,6 +1255,7 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
   const repeated = answer.repeat ? acceptAiRepeat(text, answer.repeat, answer.due, now, said) : null;
   if (answer.repeat && (!repeated || spans.some((other) => repeated.span.start < other.end && repeated.span.end > other.start))) return kept;
   if (repeated) spans.push(repeated.span);
+  if (repeated && repeatLeftover(text, spans)) return kept;
   const asksReminder = new RegExp(AI_REMIND, "i").test(said);
   const reminder =
     !asksReminder || answer.remindMinutes === null || !Number.isFinite(answer.remindMinutes) || answer.remindMinutes < 0 ? null : nearestReminder(answer.remindMinutes);
