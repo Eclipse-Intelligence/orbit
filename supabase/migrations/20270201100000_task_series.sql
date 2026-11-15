@@ -360,7 +360,7 @@ begin
     and d.workspace_id = new.workspace_id
   on conflict (task_id, page_id) do nothing;
   update crm.task_series
-  set current_task_id = new.id, roll_pending = (roll_pending or roll_at is null or roll_at <= now())
+  set current_task_id = new.id, roll_retry_at = null, roll_pending = (roll_pending or roll_at is null or roll_at <= now())
   where id = new.series_id and current_task_id is distinct from new.id;
   return null;
 end;
@@ -391,7 +391,8 @@ stable
 security definer
 set search_path = ''
 as $$
-  select s.id, t.id, w.id, w.name, m.user_id, m.role, p.email, p.full_name
+  select due.series_id, due.task_id, due.workspace_id, due.workspace_name, due.user_id, due.role, due.email, due.full_name from (
+  select s.id, t.id, w.id, w.name, m.user_id, m.role, p.email, p.full_name, s.roll_pending as pending, s.roll_at as due
   from crm.task_series s
   join crm.tasks t on t.id = s.current_task_id
   join crm.workspaces w on w.id = s.workspace_id
@@ -420,7 +421,29 @@ as $$
     and s.archived_at is null
     and t.archived_at is null
     and t.series_id = s.id
-  order by s.roll_pending desc, s.roll_at
+  union all
+  select c.id, null::uuid, w.id, w.name, m.user_id, m.role, p.email, p.full_name, true, null::timestamptz
+  from crm.task_series c
+  join crm.task_series parent on parent.id = c.split_from_id
+  left join crm.tasks pt on pt.id = parent.current_task_id
+  join crm.workspaces w on w.id = c.workspace_id
+  join lateral (
+    select candidate.user_id, candidate.role
+    from (values (1, c.owner_id), (2, c.created_by_user_id)) as wanted (rank, user_id)
+    join crm.workspace_members candidate on candidate.workspace_id = c.workspace_id and candidate.user_id = wanted.user_id
+    order by wanted.rank
+    limit 1
+  ) m on true
+  left join crm.profiles p on p.id = m.user_id
+  where c.current_task_id is null
+    and c.ended_at is null
+    and c.archived_at is null
+    and (c.roll_retry_at is null or c.roll_retry_at <= p_now)
+    and parent.ended_at is not null
+    and parent.archived_at is null
+    and (pt.id is null or pt.completed_at is not null or pt.archived_at is not null)
+  ) due (series_id, task_id, workspace_id, workspace_name, user_id, role, email, full_name, pending, due_at)
+  order by due.pending desc, due.due_at
   limit greatest(1, least(coalesce(p_limit, 50), 200))
 $$;
 

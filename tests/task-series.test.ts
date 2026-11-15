@@ -16,7 +16,7 @@ import {
   updateOccurrence,
 } from "@/lib/crm/task-series";
 import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, listTasks, reopenTask, updateTask } from "@/lib/crm/tasks";
-import type { Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
+import type { AgentActor, Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { undoAuditEvent, undoTaskEvents } from "@/lib/crm/undo";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -1033,6 +1033,86 @@ describe("repeating task review round 8", () => {
     const done = await state();
     assert.deepEqual([done.roll_pending, done.roll_retry_at], [false, null]);
     assert.equal((await getTask(mark, task.id)).occursOn, "2028-01-10");
+  });
+});
+
+describe("repeating task review round 10", () => {
+  it("never lets a series write fail for someone who isn't its owner, whatever state the series is in", async () => {
+    const { CrmError } = await import("@/lib/crm/errors");
+    const { actor: agent } = await createAgent(mark.workspaceId, ["crm:read", "tasks:write"], "Round 10 agent");
+    const olly = await join(await createUser("olly10@series.test", "Olly Ross"), "member");
+    const problems: string[] = [];
+    let day = 0;
+    const setup = async (state: string) => {
+      day += 7;
+      const due = shiftDay("2028-03-06", day);
+      const made = (await createTask(agent, { title: `Walk ${state} ${day}`, dueAt: at(due, "09:00"), ownerId: mark.userId })).body.task;
+      const task = (await setTaskRepeat(mark, made.id, { every: "week" })).body.task;
+      await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");
+      await addTaskParticipants(priya, task.id, [olly.userId]);
+      if (state === "stopped") await setTaskRepeat(mark, task.id, null);
+      if (state === "archived") await deleteSeries(mark, task.id);
+      if (state === "split") await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: shiftDay(due, 14) }, { title: `Later ${day}` }, "following");
+      return task;
+    };
+    const undoLast = async (actor: UserActor | AgentActor, taskId: string) => {
+      const column = actor.type === "user" ? "actor_user_id" : "actor_agent_id";
+      const [event] = await sql<{ id: string }>(
+        `select id from crm.audit_events where entity_id = $1 and ${column} = $2 and event_type not like '%.undone' order by created_at desc, id desc limit 1`,
+        [taskId, actor.type === "user" ? actor.userId : actor.agentId],
+      );
+      if (event) await undoAuditEvent(actor, event.id, { operation: "undo_change" });
+    };
+    for (const state of ["live", "stopped", "archived", "split"]) {
+      for (const [name, actor] of [["assignee", priya], ["tagged", olly], ["agent", agent]] as const) {
+        const task = await setup(state);
+        const steps: [string, () => Promise<unknown>][] = [
+          ["complete", () => completeTask(actor, task.id)],
+          ["reopen", () => reopenTask(actor, task.id)],
+          ["complete again", () => completeTask(actor, task.id)],
+          ["reopen again", () => reopenTask(actor, task.id)],
+          ["retime", () => updateTask(actor, task.id, { dueDate: shiftDay(task.occursOn!, 1) })],
+          ["undo", () => undoLast(actor, task.id)],
+          ["archive", () => archiveTask(actor, task.id)],
+          ["restore", () => undoLast(actor, task.id)],
+          ["undo again", () => undoLast(actor, task.id)],
+        ];
+        for (const [label, run] of steps) {
+          try {
+            await run();
+          } catch (error) {
+            const refusal = error instanceof CrmError;
+            if (!refusal || (name === "assignee" && state !== "archived")) problems.push(`${state} ${name} ${label}: ${refusal ? "" : "unexpected "}${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(problems, []);
+  });
+
+  it("starts a split's later part even when the person who finishes the earlier part can't see it", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Split unseen", dueDate: "2029-03-06", ownerId: priya.userId }, { every: "week" })).body.task;
+    await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2029-03-13" }, { title: "Split unseen later" }, "following");
+    const [child] = await sql<{ id: string; current_task_id: string | null }>("select id, current_task_id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    assert.equal(child.current_task_id, null);
+    await completeTask(mark, task.id);
+    assert.ok((await seriesRow(task.seriesId!)).ended_at);
+    const run = await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-03-07T09:00:00Z") });
+    assert.ok(run.rolled >= 1, JSON.stringify(run));
+    const [started] = await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where id = $1", [child.id]);
+    assert.ok(started.current_task_id);
+    const open = await getTask(priya, started.current_task_id!);
+    assert.deepEqual([open.title, open.occursOn], ["Split unseen later", "2029-03-13"]);
+    assert.equal((await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-03-07T09:01:00Z") })).due, 0);
+  });
+
+  it("doesn't start a split's later part when the earlier part was stopped by hand", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Split stopped", dueDate: "2029-05-01", ownerId: priya.userId }, { every: "week" })).body.task;
+    await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2029-05-15" }, { title: "Split stopped later" }, "following");
+    await setTaskRepeat(mark, task.id, null);
+    const run = await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-05-02T09:00:00Z") });
+    const [child] = await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    assert.equal(child.current_task_id, null, JSON.stringify(run));
   });
 });
 
