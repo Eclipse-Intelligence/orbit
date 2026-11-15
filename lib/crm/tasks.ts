@@ -1236,8 +1236,11 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
   });
 }
 
-export async function listPlannerTasks(actor: UserActor, now = Date.now()): Promise<Task[]> {
-  return withActor(actor, (db) => listPlannerTasksInDb(db, actor, now));
+export async function listPlannerTasks(actor: UserActor, now = Date.now(), options: { links?: boolean } = {}): Promise<Task[]> {
+  return withActor(actor, async (db) => {
+    const tasks = await listPlannerTasksInDb(db, actor, now);
+    return options.links ? withViewerLinksInDb(db, actor, tasks) : tasks;
+  });
 }
 
 export async function listPlannerTasksInDb(db: Db, actor: UserActor, now = Date.now()): Promise<Task[]> {

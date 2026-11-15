@@ -28,9 +28,10 @@ const TOAST_MS = 5_000;
 type Toast = {
   message: string;
   tone?: "status" | "alert";
-  action?: { label: string; run: () => void };
+  action?: { label: string; run: () => void; shortcut?: () => boolean };
   extra?: { label: string; short?: string; run: () => void };
   duration?: number;
+  onDismiss?: () => void;
 };
 
 type ShownToast = Toast & { id: number };
@@ -283,6 +284,10 @@ const ComposeCard = memo(function ComposeCard({
   );
 });
 
+function showUndoHint(button: HTMLElement, action: Toast["action"]) {
+  button.title = action?.label === "Undo" && (action.shortcut?.() ?? true) ? "Undo (Z)" : "";
+}
+
 export function ComposerProvider({ children }: { children: ReactNode }) {
   const [cards, setCards] = useState<Card[]>([]);
   const [accounts, setAccounts] = useState<ComposeAccount[] | null>(null);
@@ -294,6 +299,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const toastCounter = useRef(0);
   const shownMessages = useRef(new Map<string, number>());
   const toastTimers = useRef(new Map<number, number>());
+  const toastEnds = useRef(new Map<number, () => void>());
   const outgoing = useRef(new Map<number, Outgoing>());
   const [viewport, setViewport] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
   const cardsRef = useRef<Card[]>([]);
@@ -398,6 +404,9 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const dismiss = useCallback((id: number) => {
     window.clearTimeout(toastTimers.current.get(id));
     toastTimers.current.delete(id);
+    const ended = toastEnds.current.get(id);
+    toastEnds.current.delete(id);
+    ended?.();
     for (const [message, shownId] of shownMessages.current) if (shownId === id) shownMessages.current.delete(message);
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
@@ -408,6 +417,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       if (repeat !== undefined) return repeat;
       const id = ++toastCounter.current;
       if (!toast.action) shownMessages.current.set(toast.message, id);
+      if (toast.action && toast.onDismiss) toastEnds.current.set(id, toast.onDismiss);
       setToasts((current) => [...current.slice(-2), { ...toast, id }]);
       toastTimers.current.set(
         id,
@@ -669,7 +679,9 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
                     toast.action!.run();
                     dismiss(toast.id);
                   }}
-                  title={toast.action.label === "Undo" ? "Undo (Z)" : undefined}
+                  onPointerEnter={(event) => showUndoHint(event.currentTarget, toast.action)}
+                  onPointerMove={(event) => showUndoHint(event.currentTarget, toast.action)}
+                  onFocus={(event) => showUndoHint(event.currentTarget, toast.action)}
                 >
                   {toast.action.label}
                 </Button>

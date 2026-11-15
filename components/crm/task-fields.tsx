@@ -7,21 +7,20 @@ import { useComposer } from "@/components/mail/compose-dock";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
 import { DueDatePicker } from "@/components/_ui/date-picker";
-import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
 import { Monogram } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
-import { EditLinks } from "@/components/crm/task-actions";
 import { isRepeating, ownsRepeat, RepeatField, runsSeries, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
+import TaskLinkChips from "@/components/crm/task-link-chips";
+import { useDocMention } from "@/components/crm/task-doc-mention";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
 import LinkedText from "@/components/_ui/linked-text";
-import { showsDescriptionLinks, sourceOffset } from "@/lib/task-doc-picks";
+import { descriptionParts, partsSourceOffset, showsDescriptionLinks, type DescriptionPart } from "@/lib/task-doc-picks";
 import type { Viewer } from "@/components/crm/viewer";
-import { assignTaskAction, linkTaskAction, searchTaskLinkTargetsAction, taskLinkCandidatesAction } from "@/app/(crm)/records";
+import { assignTaskAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
-import type { LinkCandidate } from "@/lib/crm/task-links";
 import { TaskRecordLink } from "@/components/crm/task-workspace";
 import { saveTaskDetailsAction, type TaskDetails } from "@/app/(crm)/discussions";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
@@ -29,7 +28,7 @@ import { reminderLabel } from "@/lib/crm/reminder-options";
 import { taskSnoozeChoices } from "@/lib/crm/task-snooze";
 import type { TitleColleague, TitleHere } from "@/lib/crm/task-title";
 import type { Task } from "@/lib/crm/types";
-import { recordHref } from "@/lib/docs/routes";
+import { pageHref, recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
 import { draftAfterSave, draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
@@ -41,7 +40,6 @@ import { taskDueLabel } from "@/lib/crm/task-views";
 import { appTimeZone, dateTimeInputValue, toIsoInstant } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
-import LinkIcon from "@/public/assets/images/settings/link.svg";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import ContactIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import OpportunityIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
@@ -329,6 +327,26 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     saveText(false);
   }
 
+  const textToSave = useRef(false);
+  const latestSaveText = useRef(saveText);
+  useEffect(() => {
+    latestSaveText.current = saveText;
+  });
+  useEffect(() => {
+    if (!textToSave.current) return;
+    textToSave.current = false;
+    latestSaveText.current();
+  }, [text]);
+
+  function writeText(update: (current: string) => string) {
+    textToSave.current = true;
+    setText((current) => {
+      const next = update(current);
+      if (next === current) textToSave.current = false;
+      return next;
+    });
+  }
+
   function onDraftChange(change: DraftChange) {
     if (change.id !== task.id) return;
     const field = change.field;
@@ -432,6 +450,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     changeReminder,
     assign,
     scopeDialog: repeatScope.dialog,
+    writeText,
   };
 }
 
@@ -443,17 +462,35 @@ export function TaskTitleField({
   viewerId,
   here,
   size = "panel",
+  docWarn = false,
 }: {
   details: TaskDetailsState;
   colleagues: TitleColleague[];
   viewerId: string;
   here?: TitleHere;
   size?: "panel" | "row";
+  docWarn?: boolean;
 }) {
   const id = useId();
   const [editing, setEditing] = useState<number | null>(null);
-  const field = useAutoSize(details.title);
+  const autoSize = useAutoSize(details.title);
   const task = details.task;
+  const mention = useDocMention({
+    task,
+    enabled: details.canChange && task.canLinkDocs && !task.completedAt,
+    warn: docWarn,
+    mode: "title",
+    value: details.title,
+    onChange: details.setTitle,
+  });
+  const attachMention = mention.attach;
+  const field = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      attachMention(node);
+      autoSize(node);
+    },
+    [autoSize, attachMention],
+  );
   const text = size === "panel" ? "leading-[1.3]" : "text-[15px] leading-[1.35] font-medium";
   if (!details.canChange) {
     const Heading = size === "panel" ? "h2" : "span";
@@ -465,7 +502,7 @@ export function TaskTitleField({
   }
   if (editing === null) {
     const Heading = size === "panel" ? "h2" : "span";
-    return (
+    const heading = (
       <div className="relative min-w-0 flex-1">
         <button
           type="button"
@@ -484,33 +521,55 @@ export function TaskTitleField({
         </Heading>
       </div>
     );
+    if (!mention.status) return heading;
+    return (
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        {heading}
+        {mention.status}
+      </div>
+    );
   }
   return (
-    <Textarea
-      ref={field}
-      id={`${id}-title`}
-      aria-label="Title"
-      rows={1}
-      value={details.title}
-      maxLength={200}
-      autoFocus
-      onFocus={(event) => event.currentTarget.setSelectionRange(editing, editing)}
-      onChange={(event) => details.setTitle(event.target.value.replace(/\n/g, " "))}
-      onBlur={() => {
-        details.saveTitle(true);
-        setEditing(null);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          event.currentTarget.blur();
-        }
-      }}
-      className={cn(
-        "min-h-0 min-w-0 flex-1 resize-none overflow-hidden rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0",
-        size === "panel" ? "h2-style leading-[1.3]" : text,
-      )}
-    />
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <Textarea
+        ref={field}
+        id={`${id}-title`}
+        aria-label="Title"
+        rows={1}
+        value={details.title}
+        maxLength={200}
+        autoFocus
+        {...mention.fieldProps}
+        onFocus={(event) => {
+          mention.keepOpen();
+          event.currentTarget.setSelectionRange(editing, editing);
+        }}
+        onChange={(event) => {
+          const value = event.target.value.replace(/\n/g, " ");
+          details.setTitle(value);
+          mention.refresh(value, event.target.selectionStart ?? value.length);
+        }}
+        onSelect={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
+        onBlur={() => {
+          mention.close();
+          details.saveTitle();
+          setEditing(null);
+        }}
+        onKeyDown={(event) => {
+          if (mention.onKeyDown(event)) return;
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
+        className={cn(
+          "min-h-0 min-w-0 flex-1 resize-none overflow-hidden rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0",
+          size === "panel" ? "h2-style leading-[1.3]" : text,
+        )}
+      />
+      {mention.menu}
+      {mention.status}
+    </div>
   );
 }
 
@@ -538,20 +597,11 @@ export function taskIsLinked(task: Task) {
   return Boolean(task.companyId || task.contactId || task.opportunityId || task.mailThreadKey || task.docs.length > 0);
 }
 
-function LinksEditor({ task, canEdit, label, warn, docs }: { task: Task; canEdit: boolean; label?: boolean; warn: boolean; docs: boolean }) {
-  const [editing, setEditing] = useState(false);
+function LinkedReadOnly({ task, label }: { task: Task; label: boolean }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
-        {label && <span className="caption-style text-subtle mr-1">Linked</span>}
-        <TaskLinks task={task} />
-        {canEdit && (
-          <Button variant={editing ? "secondary" : "ghost"} size="sm" aria-expanded={editing} onClick={() => setEditing((current) => !current)} className="hit">
-            Edit links
-          </Button>
-        )}
-      </div>
-      {editing && canEdit && <EditLinks task={task} warn={warn} docs={docs} />}
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
+      {label && <span className="caption-style text-subtle mr-1">Linked</span>}
+      <TaskLinks task={task} />
     </div>
   );
 }
@@ -581,154 +631,6 @@ export function TaskLinks({ task }: { task: Task }) {
       <MailChip task={task} />
       <TaskDocChips task={task} />
     </div>
-  );
-}
-
-function CandidateRow({ candidate, busy, onLink }: { candidate: LinkCandidate; busy: string | null; onLink: (candidate: LinkCandidate) => void }) {
-  return (
-    <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-white/[0.04]">
-      <Monogram name={candidate.name} className="size-6 rounded-full text-[10px]" />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="ui-style text-foreground truncate">{candidate.name}</span>
-        {candidate.detail && <span className="caption-style text-subtle truncate">{candidate.detail}</span>}
-      </span>
-      <Button
-        variant="secondary"
-        size="sm"
-        disabled={Boolean(busy)}
-        aria-busy={busy === candidate.id || undefined}
-        aria-label={`Link ${candidate.name}`}
-        onClick={() => onLink(candidate)}
-        className="hit"
-      >
-        {busy === candidate.id ? "Linking…" : "Link"}
-      </Button>
-    </div>
-  );
-}
-
-const SEARCH_FAILED = "Couldn't search. Try again.";
-
-export function LinkPerson({ taskId, title, onLinked }: { taskId: string; title: string; onLinked: () => void }) {
-  const searchId = useId();
-  const [found, setFound] = useState<{ candidates: LinkCandidate[]; reason: string | null } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ query: string; items: LinkCandidate[] } | null>(null);
-  const shownFor = `${taskId}|${title}`;
-  const [seenFor, setSeenFor] = useState(shownFor);
-  if (seenFor !== shownFor) {
-    setSeenFor(shownFor);
-    setBusy(null);
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    void taskLinkCandidatesAction(taskId)
-      .catch(() => ({ error: "Couldn't find people to link. Try again." }))
-      .then((result) => {
-        if (cancelled) return;
-        if ("candidates" in result && result.candidates) {
-          setFound({ candidates: result.candidates, reason: result.reason ?? null });
-          setError(null);
-        } else setError(result.error ?? "Couldn't find people to link. Try again.");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [taskId, title]);
-
-  useEffect(() => {
-    const text = query.trim();
-    if (text.length < 2) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void searchTaskLinkTargetsAction(taskId, text)
-        .then((result) => {
-          if (cancelled) return;
-          if ("error" in result && result.error) {
-            setError(result.error);
-            return;
-          }
-          const { contacts: found, companies } = result;
-          setError((current) => (current === SEARCH_FAILED ? null : current));
-          setResults({
-            query: text,
-            items: [
-              ...found.slice(0, 6).map((person) => ({
-                kind: "contact" as const,
-                id: person.id,
-                name: person.name,
-                detail: [person.jobTitle, person.companyName].filter(Boolean).join(" · ") || null,
-              })),
-              ...companies.slice(0, 4).map((company) => ({ kind: "company" as const, id: company.id, name: company.name, detail: company.domain })),
-            ],
-          });
-        })
-        .catch(() => !cancelled && setError(SEARCH_FAILED));
-    }, 200);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [query, taskId]);
-
-  async function link(candidate: LinkCandidate) {
-    if (busy) return;
-    setBusy(candidate.id);
-    setError(null);
-    const result = await linkTaskAction(taskId, candidate.kind === "contact" ? { contactId: candidate.id } : { companyId: candidate.id }).catch(() => ({
-      error: "Couldn't link the task. Try again.",
-    }));
-    if (result.error) {
-      setBusy(null);
-      setError(result.error);
-      return;
-    }
-    onLinked();
-  }
-
-  const candidates = found?.candidates ?? [];
-  const withCompanies = candidates.some((candidate) => candidate.kind === "company");
-  const heading = withCompanies ? "Link a person or company" : "Link a person";
-  const offered = new Set(candidates.map((candidate) => `${candidate.kind}:${candidate.id}`));
-  const searched = results && results.query === query.trim() ? results.items.filter((item) => !offered.has(`${item.kind}:${item.id}`)) : null;
-  return (
-    <section aria-label={heading} className="flex flex-col gap-1 rounded-xl bg-white/[0.04] p-2.5 [@media(pointer:coarse)]:gap-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 pb-1">
-        <LinkIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
-        <h3>{heading}</h3>
-        {found && <span className="caption-style text-subtle">{found.reason ?? (candidates.length === 0 ? "No one in Orbit matches a name in this task." : null)}</span>}
-      </div>
-      {!found && !error && (
-        <p role="status" className="caption-style text-subtle px-0.5">
-          Looking…
-        </p>
-      )}
-      {candidates.map((candidate) => (
-        <CandidateRow key={`${candidate.kind}:${candidate.id}`} candidate={candidate} busy={busy} onLink={(item) => void link(item)} />
-      ))}
-      <label htmlFor={searchId} className="sr-only">
-        Someone else
-      </label>
-      <Input
-        id={searchId}
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Someone else"
-        autoComplete="off"
-        className="mt-1"
-      />
-      {query.trim().length >= 2 && searched && searched.length === 0 && <p className="caption-style text-subtle px-0.5">No matches.</p>}
-      {query.trim().length >= 2 &&
-        searched?.map((candidate) => <CandidateRow key={`found:${candidate.kind}:${candidate.id}`} candidate={candidate} busy={busy} onLink={(item) => void link(item)} />)}
-      {error && (
-        <p role="alert" className="caption-style text-danger px-0.5">
-          {error}
-        </p>
-      )}
-    </section>
   );
 }
 
@@ -907,15 +809,45 @@ function QuickDates({ details }: { details: TaskDetailsState }) {
   );
 }
 
-function Description({ details, layout }: { details: TaskDetailsState; layout: "panel" | "row" }) {
-  const field = useAutoSize(details.text);
+const DOC_LINK = "text-soft underline decoration-white/35 underline-offset-[3px] [overflow-wrap:anywhere] hover:text-foreground hover:decoration-current";
+
+function DescriptionText({ parts }: { parts: DescriptionPart[] }) {
+  return parts.map((part) =>
+    part.kind === "doc" ? (
+      <Link key={part.start} href={pageHref(part.id)} className={DOC_LINK}>
+        {part.label}
+      </Link>
+    ) : (
+      <LinkedText key={part.start} text={part.text} />
+    ),
+  );
+}
+
+function Description({ details, layout, warn }: { details: TaskDetailsState; layout: "panel" | "row"; warn: boolean }) {
+  const task = details.task;
+  const autoSize = useAutoSize(details.text);
   const own = useRef<HTMLTextAreaElement | null>(null);
+  const mention = useDocMention({
+    task,
+    enabled: details.canChange && task.canLinkDocs && !task.completedAt,
+    warn,
+    mode: "description",
+    value: details.text,
+    onChange: details.setText,
+    onWrite: (update) => latestDetails.current.writeText(update),
+  });
+  const latestDetails = useRef(details);
+  useEffect(() => {
+    latestDetails.current = details;
+  });
+  const attachMention = mention.attach;
   const attach = useCallback(
     (node: HTMLTextAreaElement | null) => {
       own.current = node;
-      field(node);
+      attachMention(node);
+      autoSize(node);
     },
-    [field],
+    [autoSize, attachMention],
   );
   const [editing, setEditing] = useState<number | null>(null);
   useEffect(() => {
@@ -927,56 +859,83 @@ function Description({ details, layout }: { details: TaskDetailsState; layout: "
     window.addEventListener("focus", later);
     return () => window.removeEventListener("focus", later);
   }, [editing]);
+  const parts = descriptionParts(details.text, task.docs);
   if (!details.canChange) {
     if (layout === "row" && !details.text) return null;
-    return <p className="text-soft break-words whitespace-pre-wrap">{details.text ? <LinkedText text={details.text} /> : "No description"}</p>;
+    return (
+      <p className={cn("text-soft break-words whitespace-pre-wrap", layout === "row" && "text-[13.5px] leading-[1.5]")}>
+        {details.text ? <DescriptionText parts={parts} /> : "No description"}
+      </p>
+    );
   }
   if (showsDescriptionLinks(details.text, layout, editing !== null)) {
     return (
-      <div className="relative min-w-0">
-        <button
-          type="button"
-          aria-label="Edit description"
-          onClick={() => setEditing(details.text.length)}
-          className="pointer-events-none absolute inset-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
-        />
-        <p
-          onClick={(event) => {
-            if ((event.target as HTMLElement).closest("a")) return;
-            const selection = window.getSelection();
-            if (selection && !selection.isCollapsed && selection.anchorNode && event.currentTarget.contains(selection.anchorNode)) return;
-            const shown = caretAt(event.currentTarget, event.clientX, event.clientY);
-            setEditing(shown === null ? details.text.length : sourceOffset(details.text, shown));
-          }}
-          className="border-line-strong bg-secondary text-foreground relative min-h-16 cursor-text rounded-lg border px-3 py-2 text-[14px] leading-5 break-words whitespace-pre-wrap"
-        >
-          <LinkedText text={details.text} />
-        </p>
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="relative min-w-0">
+          <button
+            type="button"
+            aria-label="Edit description"
+            onClick={() => setEditing(details.text.length)}
+            className="pointer-events-none absolute inset-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-(--primary)"
+          />
+          <p
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("a")) return;
+              const selection = window.getSelection();
+              if (selection && !selection.isCollapsed && selection.anchorNode && event.currentTarget.contains(selection.anchorNode)) return;
+              const shown = caretAt(event.currentTarget, event.clientX, event.clientY);
+              setEditing(shown === null ? details.text.length : partsSourceOffset(details.text, parts, shown));
+            }}
+            className={cn(
+              "relative cursor-text break-words whitespace-pre-wrap",
+              layout === "panel"
+                ? "border-line-strong bg-secondary text-foreground min-h-16 rounded-lg border px-3 py-2 text-[14px] leading-5"
+                : "-mx-2 rounded-lg px-2 py-1.5 text-[13.5px] leading-[1.5] hover:bg-white/[0.04]",
+            )}
+          >
+            <DescriptionText parts={parts} />
+          </p>
+        </div>
+        {mention.status}
       </div>
     );
   }
   return (
-    <Textarea
-      ref={attach}
-      aria-label="Description"
-      value={details.text}
-      placeholder="Add a description"
-      autoFocus={editing !== null}
-      onFocus={(event) => {
-        if (editing !== null) event.currentTarget.setSelectionRange(editing, editing);
-        else setEditing(event.currentTarget.selectionStart ?? details.text.length);
-      }}
-      onChange={(event) => details.setText(event.target.value)}
-      onBlur={() => {
-        details.saveText(true);
-        if (document.hasFocus()) setEditing(null);
-      }}
-      className={cn(
-        "resize-none overflow-hidden",
-        layout === "panel" ? "min-h-16" : "min-h-0 rounded-lg border-transparent bg-transparent px-2 py-1.5 text-[13.5px] leading-[1.5] shadow-none hover:bg-white/[0.04] focus-visible:bg-white/[0.04] -mx-2",
-      )}
-      rows={layout === "row" ? 1 : undefined}
-    />
+    <div className="flex min-w-0 flex-col gap-1">
+      <Textarea
+        ref={attach}
+        aria-label="Description"
+        value={details.text}
+        placeholder="Add a description"
+        autoFocus={editing !== null}
+        {...mention.fieldProps}
+        onFocus={(event) => {
+          mention.keepOpen();
+          if (editing !== null) event.currentTarget.setSelectionRange(editing, editing);
+          else setEditing(event.currentTarget.selectionStart ?? details.text.length);
+        }}
+        onChange={(event) => {
+          details.setText(event.target.value);
+          mention.refresh(event.target.value, event.target.selectionStart ?? event.target.value.length);
+        }}
+        onSelect={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
+        onKeyDown={(event) => {
+          mention.onKeyDown(event);
+        }}
+        onBlur={() => {
+          mention.close();
+          details.saveText();
+          if (document.hasFocus()) setEditing(null);
+        }}
+        className={cn(
+          "resize-none overflow-hidden",
+          layout === "panel" ? "min-h-16" : "min-h-0 rounded-lg border-transparent bg-transparent px-2 py-1.5 text-[13.5px] leading-[1.5] shadow-none hover:bg-white/[0.04] focus-visible:bg-white/[0.04] -mx-2",
+        )}
+        rows={layout === "row" ? 1 : undefined}
+      />
+      {mention.menu}
+      {mention.status}
+    </div>
   );
 }
 
@@ -1007,17 +966,16 @@ export default function TaskFields({
   tagging?: TaskTagging;
   done?: boolean;
 }) {
-  const router = useRouter();
   const task = details.task;
-  const unlinked = !task.companyId && !task.contactId && !task.opportunityId;
-  const linkPerson = unlinked && details.canChange && !done;
+  const editLinks = details.canChange && !done;
+  const warn = othersSeeTask(task, viewer.id, tagged);
   const people = tagged.filter((person) => person !== task.ownerId);
   const team = members.length > 1;
   const seriesOnly = !details.canChange && !done && runsSeries(task, viewer.id);
 
   if (layout === "row") {
     return (
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3 [@media(pointer:coarse)]:gap-4">
         <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
           {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="row" />}
@@ -1031,9 +989,8 @@ export default function TaskFields({
           )}
           {seriesOnly && <SkipButton task={task} />}
         </div>
-        <Description details={details} layout="row" />
-        {taskIsLinked(task) && <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} label warn={othersSeeTask(task, viewer.id, tagged)} docs={task.canLinkDocs} />}
-        {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
+        {editLinks ? <TaskLinkChips task={task} warn={warn} /> : taskIsLinked(task) && <LinkedReadOnly task={task} label />}
+        <Description details={details} layout="row" warn={warn} />
         {details.error && (
           <p role="alert" className="caption-style text-danger">
             {details.error}
@@ -1046,7 +1003,6 @@ export default function TaskFields({
 
   return (
     <>
-      {linkPerson && <LinkPerson taskId={task.id} title={task.title} onLinked={() => router.refresh()} />}
       {extra}
       <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-2.5 max-md:grid-cols-[5.5rem_minmax(0,1fr)] [@media(pointer:coarse)]:gap-y-4">
         <Field label="Assignee">
@@ -1070,15 +1026,13 @@ export default function TaskFields({
             <ReminderChip details={details} id={task.id} />
           </Field>
         )}
+        {(editLinks || taskIsLinked(task)) && (
+          <Field label="Linked">{editLinks ? <TaskLinkChips task={task} warn={warn} /> : <TaskLinks task={task} />}</Field>
+        )}
         {team && <TaggedField details={details} viewer={viewer} members={members} people={people} tagging={tagging} />}
       </dl>
-      {taskIsLinked(task) && (
-        <Section label="Linked">
-          <LinksEditor task={task} canEdit={details.canChange && !done && !unlinked} warn={othersSeeTask(task, viewer.id, tagged)} docs={task.canLinkDocs} />
-        </Section>
-      )}
       <Section label="Description">
-        <Description details={details} layout="panel" />
+        <Description details={details} layout="panel" warn={warn} />
       </Section>
       <SavedNote details={details} />
     </>

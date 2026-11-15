@@ -9,6 +9,7 @@ import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
 import { reconcileDone, stillOpenIds } from "@/lib/task-done";
 import { doneMessage } from "@/components/crm/task-repeat";
 import { movedMessage } from "@/lib/task-pad";
+import { clearLinkUndo, zUndoes } from "@/lib/task-link-undo";
 import type { Task } from "@/lib/crm/types";
 
 export const TASK_UNDO_MS = 8_000;
@@ -219,14 +220,19 @@ export function useTaskDone(tasks: Task[]) {
     [composer, expire, router],
   );
 
+  function newestDone() {
+    return [...entries.current.keys()].at(-1) ?? null;
+  }
+
   const complete = useCallback(
     (task: Task, options: { hold?: boolean } = {}) => {
       if (entries.current.has(task.id)) return;
+      clearLinkUndo();
       withdrawn.current.delete(task.id);
       undone.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));
       setMessage(null);
-      const toast = composer.showToast({ message: doneMessage(task), action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
+      const toast = composer.showToast({ message: doneMessage(task), action: { label: "Undo", run: () => void undo(task.id), shortcut: () => zUndoes({ kind: "done", id: task.id }, newestDone()) }, duration: TASK_UNDO_MS });
       const timer = options.hold ? 0 : window.setTimeout(() => commit(task.id), TASK_UNDO_MS);
       entries.current.set(task.id, { toast, timer, until: Date.now() + TASK_UNDO_MS, sent: false });
     },
@@ -287,6 +293,7 @@ export function useTaskDone(tasks: Task[]) {
 
   const reopen = useCallback(
     (task: Task) => {
+      clearLinkUndo();
       if (entries.current.has(task.id)) return undo(task.id);
       if (reopening.current.has(task.id)) return false;
       reopening.current.add(task.id);
@@ -316,6 +323,7 @@ export function useTaskDone(tasks: Task[]) {
           duration: TASK_UNDO_MS,
           action: {
             label: "Undo",
+            shortcut: () => zUndoes({ kind: "reopen" }, newestDone()),
             run: () =>
               void completeTaskAction(task.id)
                 .catch((): Outcome => ({ error: NOT_DONE }))

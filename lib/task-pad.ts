@@ -989,7 +989,8 @@ export function docQueryAt(text: string, caret: number): DocQuery | null {
   const before = text.slice(0, caret);
   const open = before.lastIndexOf("[[");
   if (open < 0) return null;
-  const rest = /^[^\s\]]*/.exec(text.slice(caret))?.[0] ?? "";
+  const closed = /^[^[\]\n]*(?=\]\])/.exec(text.slice(caret))?.[0];
+  const rest = closed ?? /^[^\s\]]*/.exec(text.slice(caret))?.[0] ?? "";
   const query = before.slice(open + 2) + rest;
   if (/[\]\n]/.test(query) || query.length > 80) return null;
   return { start: open, end: caret + rest.length, query };
