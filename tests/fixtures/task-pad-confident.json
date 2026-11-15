@@ -3824,5 +3824,17 @@
     "sat14": "2026-11-20 | - | - | Call Sam",
     "wed18": "2026-11-20 | - | - | Call Sam",
     "dec31": "2027-01-01 | - | - | Call Sam"
+  },
+  "Every Monday send report": {
+    "monAM": "2026-11-16 | - | - | send report",
+    "friPM": "2026-11-23 | - | - | send report",
+    "sunNight": "2026-11-23 | - | - | send report",
+    "satBeforeSpring": "2027-03-29 | - | - | send report",
+    "sunSpring": "2027-03-29 | - | - | send report",
+    "satBeforeAutumn": "2026-10-26 | - | - | send report",
+    "sunAutumn": "2026-10-26 | - | - | send report",
+    "sat14": "2026-11-16 | - | - | send report",
+    "wed18": "2026-11-23 | - | - | send report",
+    "dec31": "2027-01-04 | - | - | send report"
   }
 }

@@ -673,10 +673,11 @@ const REPEAT_ORD = "(?:\\d{1,2}(?:st|nd|rd|th)|first|second|third|fourth)";
 const ORDINAL_WORDS = ["first", "second", "third", "fourth"];
 const REPEAT_MONTH = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
 const REPEAT_DATE = `(?:\\d{1,2}(?:st|nd|rd|th)?(?:\\s+of)?\\s+${REPEAT_MONTH}|${REPEAT_MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?)\\b`;
-type RepeatKind = "daily" | "weekdays" | "weekly" | "month-week" | "month-day" | "monthly" | "yearly";
+type RepeatKind = "daily" | "weekdays" | "weekly" | "weekly-times" | "month-week" | "month-day" | "monthly" | "yearly";
 const REPEAT_PATTERNS: { kind: RepeatKind; pattern: RegExp }[] = [
   { kind: "daily", pattern: new RegExp(`\\b(?:every|each)\\s+${REPEAT_COUNT}\\s+days?\\b|\\b(?:every|each)\\s+day\\b|\\bdaily\\b`, "gi") },
   { kind: "weekdays", pattern: /\b(?:every|each)\s+weekday\b/gi },
+  { kind: "weekly-times", pattern: /\b(?:once|twice|thrice|(?:[1-7]|one|two|three|four|five|six|seven)\s*(?:times|x))\s+(?:a|per|each|every)\s+week\b/gi },
   { kind: "weekly", pattern: new RegExp(`\\b(?:(?:every|each)\\s+${REPEAT_COUNT}\\s+weeks?|(?:every|each)\\s+week|weekly)(?:\\s+on\\s+${REPEAT_DAYS})?\\b|\\b(?:every|each)\\s+(?:other\\s+)?${REPEAT_DAYS}\\b`, "gi") },
   { kind: "month-week", pattern: new RegExp(`(?:\\bon\\s+)?(?:\\bthe\\s+)?\\b${REPEAT_NTH}\\s+${REPEAT_DAY}\\s+of\\s+(?:every|each)\\s+month\\b`, "gi") },
   { kind: "month-day", pattern: new RegExp(`(?:\\bon\\s+)?\\bthe\\s+\\b${REPEAT_ORD}\\s+of\\s+(?:every|each)\\s+month\\b`, "gi") },
@@ -707,6 +708,7 @@ const REPEAT_VERBS_BEFORE = new Set(
 );
 const REPEAT_IMPERATIVES = new Set("do have be will may can".split(" "));
 const REPEAT_SUBJECTS = new Set("i we they he she".split(" "));
+const REPEAT_NOUN_RUNS = new Set(["school run", "morning run", "evening run", "park run", "supply run", "test run", "trial run", "dry run", "pilot run", "coffee run", "food run", "shopping run", "milk run", "bank run", "post run", "tip run", "dump run", "nursery run"]);
 const REPEAT_EVENTS_BEFORE = new Set(
   "run runs ran come comes came go goes went happen happens happened occur occurs occurred meet meets met arrive arrives arrived recur recurs repeat repeats renew renews renewed expire expires sync syncs synced reset resets rotate rotates close closes open opens start starts started land lands works post posts published posted held scheduled generated issued done made sent collected updated reviewed delivered emptied serviced".split(" "),
 );
@@ -789,7 +791,7 @@ function doubtfulRepeat(text: string, start: number, end: number) {
     return word === key || shouting || /^i['’]/i.test(word);
   };
   if (words.some(clause)) return true;
-  if (words.length > 1 && REPEAT_EVENTS_BEFORE.has(last) && !REPEAT_DETERMINERS.has(words[words.length - 2].toLowerCase())) return true;
+  if (words.length > 1 && REPEAT_EVENTS_BEFORE.has(last) && !REPEAT_DETERMINERS.has(words[words.length - 2].toLowerCase()) && !REPEAT_NOUN_RUNS.has(`${words[words.length - 2]} ${last}`.toLowerCase())) return true;
   if (REPEAT_PREPOSITIONS_BEFORE.has(last)) return true;
   if (words.length > 1 && /^[A-Z]/.test(text.slice(start, end)) && /^[A-Z]/.test(words[words.length - 1]) && text !== text.toUpperCase()) return true;
   return false;
@@ -842,6 +844,25 @@ type FoundRepeat = {
   fixed: boolean;
   ends: { until?: string; span?: { amount: number; unit: string }; count?: number };
 };
+
+const WEEK_ORDER: Weekday[] = ["mo", "tu", "we", "th", "fr", "sa", "su"];
+
+function timesAWeek(words: string) {
+  const found = /\b(once|twice|thrice|one|two|three|four|five|six|seven)\b|\b([1-7])\s*(?:times|x)\b/.exec(words);
+  const count = found?.[1] ?? found?.[2] ?? "1";
+  return count === "once" ? 1 : count === "twice" ? 2 : count === "thrice" ? 3 : repeatNumber(count);
+}
+
+function spreadWeekdays(start: string, times: number): Weekday[] {
+  const first = WEEK_ORDER.indexOf(weekdayOf(start));
+  const days = new Set<Weekday>();
+  for (let index = 0; index < times; index += 1) days.add(WEEK_ORDER[(first + Math.round((index * 7) / times)) % 7]);
+  return WEEK_ORDER.filter((day) => days.has(day));
+}
+
+function leadingRepeat(text: string, start: number, end: number) {
+  return /^\s*$/.test(text.slice(0, start)) && /^(?:every|each)\b/i.test(text.slice(start)) && !/^\s+[a-z]*[^s\s]s\b/i.test(text.slice(end));
+}
 
 function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | null {
   const docs = [...text.matchAll(DOC_REFERENCE)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
@@ -898,7 +919,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
   if (/^(?:daily|weekly|monthly|yearly|annually)$/i.test(text.slice(hit.start, hit.end)) && cursor === hit.end && /^[\s.!]*$/.test(text.slice(cursor)) && wordsBefore(text.slice(0, hit.start)).length === 1) return "unsure";
   const started = REPEAT_START.exec(text.slice(cursor));
   if (started) spans.push({ start: cursor + (started[0].length - started[0].trimStart().length), end: cursor + started[0].length, kind: "when" });
-  else if (REPEAT_EXCEPT_AFTER.test(text.slice(cursor)) || !FREE_AFTER.test(text.slice(cursor))) return "unsure";
+  else if (REPEAT_EXCEPT_AFTER.test(text.slice(cursor)) || (!FREE_AFTER.test(text.slice(cursor)) && !(leadingRepeat(text, hit.start, cursor) && NOUN_AFTER.test(text.slice(cursor))))) return "unsure";
   if (cuesOutside(text, [{ start: hit.start, end: cursor }])) return "unsure";
   const words = text.slice(hit.start, hit.end).toLowerCase();
   const interval = /\b(?:every|each)\s+other\b/.test(words) ? 2 : repeatNumber(/\b(?:every|each)\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:days?|weeks?|months?|years?)\b/.exec(words)?.[1]);
@@ -915,11 +936,12 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
     if (hit.kind === "daily") return { freq: "daily", interval };
     if (hit.kind === "weekdays") return { freq: "weekly", interval: 1, weekdays: [...WORKWEEK] };
     if (hit.kind === "weekly") return { freq: "weekly", interval, weekdays: named.length > 0 ? named : [weekdayOf(start)] };
+    if (hit.kind === "weekly-times") return { freq: "weekly", interval: 1, weekdays: spreadWeekdays(start, timesAWeek(words)) };
     if (nth && (hit.kind === "month-week" || hit.kind === "monthly")) return { freq: "monthly", interval, monthWeek: { n: repeatNth(nth[1]), weekday: repeatWeekday(nth[2]) } };
     if (hit.kind === "month-day" || hit.kind === "monthly") return { freq: "monthly", interval, monthDay: ord ? Number(ord[1]) : ordWord ? ORDINAL_WORDS.indexOf(ordWord[1]) + 1 : Number(start.slice(8, 10)) };
     return { freq: "yearly", interval };
   };
-  const fixed = hit.kind !== "daily" && (hit.kind !== "weekly" || named.length > 0) && (hit.kind !== "monthly" || Boolean(nth || ord || ordWord)) && (hit.kind !== "yearly" || fixedDay !== null);
+  const fixed = hit.kind !== "daily" && hit.kind !== "weekly-times" && (hit.kind !== "weekly" || named.length > 0) && (hit.kind !== "monthly" || Boolean(nth || ord || ordWord)) && (hit.kind !== "yearly" || fixedDay !== null);
   if (bareCount && hit.kind === "daily") return "unsure";
   return { spans, startCue: started ? cursor + started[0].length : null, rule, fixedDay, fixed, ends };
 }

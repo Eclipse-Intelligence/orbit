@@ -63,7 +63,6 @@ const NEGATIVES = [
   "Fix the weekly digest",
   "Daily Mail interview",
   "Annually reviewed accounts",
-  "every Monday call notes",
   "Thank everyone who came",
   "Everyday carry list",
   "Review every page of the contract",
@@ -498,5 +497,28 @@ describe("saving a typed repeat", () => {
       assert.equal(task.title, read.title, typed);
       assert.deepEqual(task.repeat?.rule, read.repeat.rule, typed);
     }
+  });
+});
+
+describe("times a week and leading repeats", () => {
+  it("reads a count a week as that many days spread from the first one, and leaves other uses alone", async () => {
+    const { parseTaskText } = await import("@/lib/task-pad");
+    const sunday = new Date("2026-11-15T12:00:00Z");
+    const twice = parseTaskText("Take vitamin D twice a week for 7 weeks", sunday);
+    assert.equal(twice.title, "Take vitamin D");
+    assert.deepEqual(twice.repeat?.rule, { freq: "weekly", interval: 1, weekdays: ["th", "su"] });
+    assert.deepEqual(twice.repeat?.ends, { until: "2027-01-02" });
+    assert.deepEqual(parseTaskText("Run 2x a week until 20 Dec", sunday).repeat?.rule.weekdays, ["th", "su"]);
+    assert.deepEqual(parseTaskText("Gym three times per week at 7am", sunday).repeat?.rule.weekdays, ["mo", "we", "sa"]);
+    assert.deepEqual(parseTaskText("Call mum once a week", sunday).repeat?.rule.weekdays, ["su"]);
+    for (const plain of ["Twice a week is plenty", "Take pills twice a day"]) assert.ok(!parseTaskText(plain, sunday).repeat, plain);
+    const leading = parseTaskText("Every Wednesday ask nerves at 9am", sunday);
+    assert.equal(leading.title, "ask nerves");
+    assert.equal(leading.due, "2026-11-18T09:00");
+    assert.deepEqual(leading.repeat?.rule.weekdays, ["we"]);
+    const school = parseTaskText("School run every day at 3pm", sunday);
+    assert.equal(school.title, "School run");
+    assert.equal(school.due, "2026-11-15T15:00");
+    for (const plain of ["every day counts", "Tell Bob the bins go every Thursday"]) assert.ok(!parseTaskText(plain, sunday).repeat, plain);
   });
 });
