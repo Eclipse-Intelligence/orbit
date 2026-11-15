@@ -15,6 +15,7 @@ import {
   type PadSearchKind,
 } from "@/lib/crm/task-pad";
 import { isTaskDuration } from "@/lib/crm/task-time";
+import type { RepeatInput } from "@/lib/task-repeat";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { taskActorOrError } from "@/lib/crm/workspaces";
@@ -68,6 +69,7 @@ export async function addPadTaskAction(input: {
   durationMinutes?: number | null;
   mailThreadKey?: string | null;
   docIds?: string[];
+  repeat?: RepeatInput;
 }): Promise<{ ok?: boolean; error?: string; warning?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
@@ -86,6 +88,7 @@ export async function addPadTaskAction(input: {
         ...(typeof input.mailThreadKey === "string" && input.mailThreadKey ? { mailThreadKey: input.mailThreadKey } : {}),
         ...(Array.isArray(input.docIds) && input.docIds.length > 0 ? { docIds: input.docIds } : {}),
         priority: "normal",
+        ...(input.repeat && typeof input.repeat === "object" ? { repeat: input.repeat } : {}),
       },
       input.clickupListId || null,
       { provenance: { operation: "create_task", source: "web" } },
