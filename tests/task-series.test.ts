@@ -15,7 +15,7 @@ import {
   TOO_MANY_SERIES,
   updateOccurrence,
 } from "@/lib/crm/task-series";
-import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, listTasks, reopenTask, updateTask } from "@/lib/crm/tasks";
+import { addTaskParticipants, archiveTask, completeTask, createTask, getTask, listTasks, reopenTask, unarchiveTaskInDb, updateTask } from "@/lib/crm/tasks";
 import type { AgentActor, Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { undoAuditEvent, undoTaskEvents } from "@/lib/crm/undo";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
@@ -1158,13 +1158,88 @@ describe("repeating task review round 10", () => {
     assert.equal((await ended(later.id)).ended_at, null, "undoing the stop restarts it");
   });
 
-  it("never starts a later part of a deleted series", async () => {
-    const task = (await createRepeatingTask(mark, { title: "Split deleted", dueDate: "2029-07-03", ownerId: priya.userId }, { every: "week" })).body.task;
-    await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2029-07-17" }, { title: "Split deleted later" }, "following");
-    await deleteSeries(mark, task.id);
+  it("treats Delete the series like a stop for later parts: yours end, a colleague's starts", async () => {
+    const own = await weekly("Own split deleted", "2029-07-03");
+    await updateOccurrence(mark, { seriesId: own.seriesId!, occursOn: "2029-07-17" }, { title: "Own split deleted later" }, "following");
+    const [ownLater] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [own.seriesId]);
+    const deleted = (await deleteSeries(mark, own.id)).body;
+    const state = async (id: string) => (await sql<{ ended_at: Date | null; current_task_id: string | null }>("select ended_at, current_task_id from crm.task_series where id = $1", [id]))[0];
+    assert.ok((await state(ownLater.id)).ended_at);
+
+    const theirs = (await createRepeatingTask(mark, { title: "Split deleted", dueDate: "2029-07-04", ownerId: priya.userId }, { every: "week" })).body.task;
+    await updateOccurrence(priya, { seriesId: theirs.seriesId!, occursOn: "2029-07-18" }, { title: "Split deleted later" }, "following");
+    const [theirLater] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [theirs.seriesId]);
+    await deleteSeries(mark, theirs.id);
+    assert.equal((await state(theirLater.id)).ended_at, null);
+
     await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-07-20T09:00:00Z") });
-    const [child] = await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where split_from_id = $1", [task.seriesId]);
-    assert.equal(child.current_task_id, null);
+    assert.equal((await state(ownLater.id)).current_task_id, null, "your own later part never starts");
+    const started = (await state(theirLater.id)).current_task_id;
+    assert.ok(started, "a colleague's later part starts once the earlier part is deleted");
+    assert.equal((await getTask(priya, started!)).occursOn, "2029-07-18");
+
+    await undoTaskEvents(mark, own.id, deleted.undo, { operation: "undo_change" });
+    assert.equal((await state(ownLater.id)).ended_at, null, "undoing the delete restores your later part");
+  });
+
+  it("starts a later part on its first date that isn't skipped, and ends it when every date is skipped", async () => {
+    const task = await weekly("Skipped start", "2030-01-01");
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2030-01-15" });
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2030-01-15" }, { title: "Skipped start later" }, "following");
+    const [later] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    await completeTask(mark, task.id);
+    const second = (await occurrences(task.seriesId!)).find((row) => !row.completed)!;
+    await completeTask(mark, second.id);
+    const [row] = await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where id = $1", [later.id]);
+    assert.ok(row.current_task_id);
+    assert.deepEqual([(await getTask(mark, row.current_task_id!)).occursOn, (await getTask(mark, row.current_task_id!)).title], ["2030-01-22", "Skipped start later"]);
+    assert.equal((await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2030-01-16T09:00:00Z") })).due, 0, "the started part isn't listed every run");
+
+    const short = (await createRepeatingTask(mark, { title: "All skipped", dueDate: "2030-03-05" }, { every: "week", ends: { after: 3 } })).body.task;
+    await skipOccurrence(mark, { seriesId: short.seriesId!, occursOn: "2030-03-19" });
+    await updateOccurrence(mark, { seriesId: short.seriesId!, occursOn: "2030-03-19" }, { title: "All skipped later" }, "following");
+    const [last] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [short.seriesId]);
+    await completeTask(mark, short.id);
+    const middle = (await occurrences(short.seriesId!)).find((one) => !one.completed)!;
+    await completeTask(mark, middle.id);
+    const [ended] = await sql<{ ended_at: Date | null; current_task_id: string | null }>("select ended_at, current_task_id from crm.task_series where id = $1", [last.id]);
+    assert.deepEqual([Boolean(ended.ended_at), ended.current_task_id], [true, null]);
+    const due = await sql<{ series_id: string }>("select series_id from private.series_due_to_roll($1, 200)", [new Date(Date.parse("2030-03-20T09:00:00Z")).toISOString()]);
+    assert.ok(!due.some((row) => row.series_id === last.id), "the ended part isn't listed again");
+  });
+
+  it("backs off a later part with no task when it can't be started", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Backs off", dueDate: "2030-05-07", ownerId: priya.userId }, { every: "week" })).body.task;
+    await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2030-05-21" }, { title: "Backs off later" }, "following");
+    const [later] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    const now = Date.parse("2030-05-08T09:00:00Z");
+    await sql("select private.delay_series_roll($1, $2, $3)", [later.id, new Date(now + 15 * 60_000).toISOString(), new Date(now).toISOString()]);
+    const [row] = await sql<{ roll_retry_at: Date | null }>("select roll_retry_at from crm.task_series where id = $1", [later.id]);
+    assert.ok(row.roll_retry_at && row.roll_retry_at.getTime() > now);
+  });
+
+  it("starts a colleague's later part from the cron with the earlier part's ClickUp list and assignee", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Split list", dueDate: "2030-07-02", ownerId: priya.userId }, { every: "week" })).body.task;
+    await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2030-07-09" }, { title: "Split list later" }, "following");
+    const [later] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    await sql("update crm.tasks set clickup_list_id = 'list-9' where id = $1", [task.id]);
+    await sql("update crm.task_series set owner_id = null where id = $1", [later.id]);
+    await completeTask(mark, task.id);
+    await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2030-07-03T09:00:00Z") });
+    const [row] = await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where id = $1", [later.id]);
+    const started = await getTask(priya, row.current_task_id!);
+    assert.deepEqual([started.clickupListId, started.ownerId], ["list-9", priya.userId]);
+  });
+
+  it("won't bring back a deleted series whose open task has left it", async () => {
+    const original = (await createTask(sam, { title: "Left behind", dueAt: at("2030-09-03", "09:00"), ownerId: mark.userId })).body.task;
+    const task = (await setTaskRepeat(mark, original.id, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: priya.userId }, "this");
+    const deleted = (await deleteSeries(mark, task.id)).body;
+    const restored = await withActor(priya, (db) => unarchiveTaskInDb(db, priya, task.id, { operation: "unarchive_task" }));
+    assert.deepEqual([restored.task.archivedAt, restored.task.seriesId], [null, null]);
+    await assert.rejects(undoTaskEvents(mark, task.id, deleted.undo, { operation: "undo_change" }), /open task has left/);
+    assert.ok((await seriesRow(task.seriesId!)).archived_at);
   });
 
   it("doesn't make your reopened task the open one past an occurrence you can't see", async () => {

@@ -438,8 +438,7 @@ as $$
     and c.ended_at is null
     and c.archived_at is null
     and (c.roll_retry_at is null or c.roll_retry_at <= p_now)
-    and parent.ended_at is not null
-    and parent.archived_at is null
+    and (parent.ended_at is not null or parent.archived_at is not null)
   ) due (series_id, task_id, workspace_id, workspace_name, user_id, role, email, full_name, pending, due_at)
   order by due.pending desc, due.due_at
   limit greatest(1, least(coalesce(p_limit, 50), 200))
@@ -525,6 +524,36 @@ $$;
 
 revoke all on function crm.series_later_parts(uuid) from public;
 grant execute on function crm.series_later_parts(uuid) to authenticated, crm_agent;
+
+create or replace function crm.series_split_previous(p_series uuid)
+returns table (id uuid, owner_id uuid, clickup_list_id text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p.id, p.owner_id, p.clickup_list_id
+  from crm.task_series s
+  join crm.tasks p on p.series_id = s.split_from_id
+  where s.id = p_series
+    and (
+      (
+        current_setting('role') = 'authenticated'
+        and s.workspace_id in (select private.user_workspace_ids())
+        and (s.owner_id = (select private.session_user_id()) or s.created_by_user_id = (select private.session_user_id()))
+      )
+      or (
+        current_setting('role') = 'crm_agent'
+        and s.workspace_id = (select private.request_workspace_id())
+        and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+      )
+    )
+  order by p.archived_at is not null, p.occurs_on desc nulls last, p.created_at desc
+  limit 1
+$$;
+
+revoke all on function crm.series_split_previous(uuid) from public;
+grant execute on function crm.series_split_previous(uuid) to authenticated, crm_agent;
 grant execute on function private.series_due_to_roll(timestamptz, integer) to crm_app;
 
 create or replace function private.task_series_follow_move(p_source uuid, p_target uuid)
@@ -595,6 +624,7 @@ as $$
     and (
       s.roll_pending
       or s.roll_at <= p_now
+      or s.current_task_id is null
       or (s.roll_at is null and exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.completed_at is not null))
     );
 $$;

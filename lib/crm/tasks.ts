@@ -1166,7 +1166,8 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
     ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
   if (task.seriesId) await seriesAfterUnarchive(db, actor, task);
-  return { task: (await withViewerLinksInDb(db, actor, [task]))[0] };
+  const fresh = task.seriesId ? ((await readTask(db, actor, id)) ?? saved) : saved;
+  return { task: (await withViewerLinksInDb(db, actor, [mapTask(fresh)]))[0] };
 }
 
 export async function readTaskInDb(db: Db, actor: Actor, id: string) {
