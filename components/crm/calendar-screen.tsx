@@ -36,6 +36,7 @@ import { applyPlanAction, planAction } from "@/app/(crm)/calendar/plan-actions";
 import PlanPanel, { type PlanPanelHandlers } from "@/components/crm/calendar-plan";
 import { placeTaskAction } from "@/app/(crm)/records";
 import {
+  dateKey,
   mergeDuplicateEvents,
   rangeDays,
   shiftDateKey,
@@ -532,7 +533,7 @@ export default function CalendarScreen({
   const upcoming = expanded.map((block) => {
     const shift = moved[block.task.id];
     const placedBlock = shift
-      ? { ...block, startsAt: shift.startsAt, endsAt: shift.endsAt, durationMinutes: shift.durationMinutes, task: { ...block.task, dueAt: shift.startsAt, durationMinutes: shift.durationMinutes } }
+      ? { ...block, startsAt: shift.startsAt, endsAt: shift.endsAt, durationMinutes: shift.durationMinutes, task: { ...block.task, dueAt: shift.startsAt, dueDate: dateKey(shift.startsAt), durationMinutes: shift.durationMinutes } }
       : block;
     return placedBlock.task.dueHasTime ? { ...placedBlock, clash: clashWith(Date.parse(placedBlock.startsAt), Date.parse(placedBlock.endsAt), shown) } : placedBlock;
   });

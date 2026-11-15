@@ -1,11 +1,15 @@
 import { clockLabel, taskDueDay } from "@/lib/crm/task-time";
 import type { Task, TaskWrite } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
-import { monthWeekOf, shortDay, weekdayOf, WEEKDAYS, type MonthWeek, type RepeatEnds, type RepeatFreq, type RepeatRule, type Weekday } from "@/lib/task-repeat";
+import { DAY_NAMES, monthWeekOf, repeatInputOf, sameRule, shortDay, weekdayOf, WEEKDAYS, type MonthWeek, type RepeatEnds, type RepeatFreq, type RepeatInput, type RepeatRule, type Weekday } from "@/lib/task-repeat";
 
 export const REPEAT_SAVE_FAILED = "Couldn't save the repeat. Try again.";
-
-const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+export const SKIP_FAILED = "Couldn't skip this one. Try again.";
+export const STOP_FAILED = "Couldn't stop repeating. Try again.";
+export const END_FAILED = "Couldn't save the end date. Try again.";
+export const DELETE_FAILED = "Couldn't delete the series. Try again.";
+export const MOVE_FAILED = "Couldn't move it. Try again.";
+export const ENDS_ON_FIRST = "That ends on the first one. Choose a later end.";
 const ORDINAL_WORDS: Record<number, string> = { 1: "first", 2: "second", 3: "third", 4: "fourth", [-1]: "last" };
 
 type NextDate = { dueAt: string; dueHasTime: boolean; occursOn: string };
@@ -75,7 +79,7 @@ export function draftOf(repeat: { rule: RepeatRule; ends: RepeatEnds } | null | 
   };
 }
 
-function keptMonthly(original: RepeatRule | null) {
+export function keptMonthly(original: RepeatRule | null) {
   if (original?.freq !== "monthly") return null;
   return original.monthWeek ? (original.monthWeek.n === -1 ? "last" : "week") : "day";
 }
@@ -102,8 +106,12 @@ export function monthlyLabel(kind: Draft["monthly"], anchor: string, original: R
   return `The ${ORDINAL_WORDS[choice.monthWeek.n]} ${name}`;
 }
 
+function wholeNumber(text: string) {
+  return /^\s*\d+\s*$/.test(text) ? Number(text) : Number.NaN;
+}
+
 export function ruleOf(draft: Draft, anchor: string, original: RepeatRule | null = null): RepeatRule {
-  const interval = Number(draft.interval);
+  const interval = wholeNumber(draft.interval);
   const base: RepeatRule = { freq: draft.freq, interval: Number.isInteger(interval) ? interval : 0 };
   if (draft.freq === "weekly") base.weekdays = draft.weekdays;
   if (draft.freq === "monthly") Object.assign(base, monthlyChoice(draft.monthly, anchor, original));
@@ -111,15 +119,39 @@ export function ruleOf(draft: Draft, anchor: string, original: RepeatRule | null
 }
 
 export function endsOf(draft: Draft): RepeatEnds {
-  if (draft.ends === "count") return { count: Number(draft.count) };
+  if (draft.ends === "count") return { count: wholeNumber(draft.count) };
   if (draft.ends === "until") return { until: draft.until };
   return { never: true };
+}
+
+export function patternInputOf(rule: RepeatRule): RepeatInput {
+  const input = repeatInputOf(rule, { never: true });
+  delete input.ends;
+  return input;
+}
+
+export function sameEnds(left: RepeatEnds, right: RepeatEnds) {
+  if ("never" in left || "never" in right) return "never" in left && "never" in right;
+  if ("count" in left || "count" in right) return "count" in left && "count" in right && left.count === right.count;
+  return left.until === right.until;
+}
+
+function everyDayOf(rule: RepeatRule): RepeatRule {
+  return rule.freq === "weekly" && rule.interval === 1 && WEEKDAYS.every((day) => rule.weekdays?.includes(day)) ? { freq: "daily", interval: 1 } : rule;
+}
+
+export function sameRepeat(left: RepeatRule, right: RepeatRule) {
+  return sameRule(everyDayOf(left), everyDayOf(right));
+}
+
+export function endsOnFirst(ends: RepeatEnds, anchor: string) {
+  return ("count" in ends && ends.count === 1) || ("until" in ends && ends.until === anchor);
 }
 
 export function countLeft(repeat: { ends: RepeatEnds; end: string } | null | undefined, draftCount: string) {
   if (!repeat || !("count" in repeat.ends)) return null;
   const found = /^(\d+) more$/.exec(repeat.end);
-  const wanted = Number(draftCount);
+  const wanted = wholeNumber(draftCount);
   if (!found || !Number.isInteger(wanted) || wanted < 1) return null;
   return Math.max(0, Number(found[1]) + wanted - repeat.ends.count);
 }

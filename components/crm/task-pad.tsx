@@ -27,6 +27,7 @@ import {
   padFits,
   padNeedsConfirm,
   padRelease,
+  chipOverrides,
   padDueHasTime,
   padRepeatDue,
   padSaveIds,
@@ -79,7 +80,7 @@ function readKey(value: string) {
 
 const unset = <T,>(): Override<T> => ({ set: false, value: undefined as T });
 
-const FOLLOWS_DATE = ["weekly", "monthly-day", "monthly-week"];
+const FOLLOWS_DATE = ["weekly", "monthly-day", "monthly-fourth", "monthly-week"];
 
 function notBefore(instant: number) {
   return new Date(Math.max(instant, Date.now()));
@@ -535,6 +536,7 @@ export default function TaskPad({
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
   const [chosenDuration, setDuration] = useState<number | null>(null);
   const [repeatPick, setRepeatPick] = useState<Override<RepeatDraft | null>>(unset);
+  const [repeatOver, setRepeatOver] = useState("");
   const [askingTime, setAskingTime] = useState(false);
   const [addedTime, setAddedTime] = useState<{ date: string; time: string } | null>(null);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
@@ -585,7 +587,7 @@ export default function TaskPad({
   }
   const fromAi = aiValue !== null && key !== "";
   const aiShown = useRef<{ id: string; at: number } | null>(null);
-  const saveKey = useRef<{ request: string; key: string } | null>(null);
+  const saveKey = useRef<{ typed: string; request: Parameters<typeof addPadTaskAction>[0]; key: string } | null>(null);
   const aiShownId = fromAi ? `${text}\u0000${key}` : null;
   useEffect(() => {
     if (aiShownId === null) aiShown.current = null;
@@ -641,7 +643,7 @@ export default function TaskPad({
   function derive(value: PadAiParse | null) {
     const keptKeys = keptAsText.map((entry) => entry.key);
     const shown = padReading(text, parsed, value, keptKeys);
-    const confirmed = due.set && shown.key && !shown.repeat ? padReading(text, parsed, value, [...keptKeys, shown.key]) : shown;
+    const confirmed = chipOverrides(shown, due.set, repeatPick.set ? repeatPick.value : null, repeatOver) ? padReading(text, parsed, value, [...keptKeys, shown.key]) : shown;
     const typedRepeat = confirmed.repeat ?? null;
     const repeat = repeatPick.set ? repeatPick.value : typedRepeat;
     const timed = addedTime && confirmed.due === addedTime.date ? `${addedTime.date}T${addedTime.time}` : confirmed.due;
@@ -892,6 +894,7 @@ export default function TaskPad({
     setReminder(unset());
     setDuration(null);
     setRepeatPick(unset());
+    setRepeatOver("");
     setAskingTime(false);
     setAddedTime(null);
     setCompany(startCompany());
@@ -968,12 +971,14 @@ export default function TaskPad({
       mailThreadKey: pinned?.key ?? null,
       ...(docs.length > 0 ? { docIds: docs.map((doc) => doc.id) } : {}),
     };
-    const sent = JSON.stringify(request);
-    if (saveKey.current?.request !== sent) saveKey.current = { request: sent, key: crypto.randomUUID() };
-    const result = await addPadTaskAction({ ...request, key: saveKey.current.key }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined }));
+    const typed = JSON.stringify({ ...request, dueAt: null, repeat: null, text, due, repeatPick, addedTime });
+    if (saveKey.current?.typed !== typed) saveKey.current = { typed, request, key: crypto.randomUUID() };
+    const attempt = saveKey.current;
+    const result = await addPadTaskAction({ ...attempt.request, key: attempt.key }).catch(() => null);
     setBusy(false);
-    if (result.error) {
-      setError(result.error);
+    if (!result || result.error) {
+      if (result) saveKey.current = null;
+      setError(result?.error ?? "Couldn't add the task. Try again.");
       return;
     }
     saveKey.current = null;
@@ -1110,17 +1115,19 @@ export default function TaskPad({
 
   function pickRepeat(value: RepeatDraft | null) {
     if (!value) {
-      const shownDue = finalDue;
-      const shownReminder = finalReminder;
+      const pickedDue = due;
+      const pickedReminder = reminder;
       if (read.typedRepeat) keepAsText();
-      setRepeatPick(unset());
-      if (shownDue) {
-        setDue({ set: true, value: shownDue });
-        if (shownReminder !== null) setReminder({ set: true, value: shownReminder });
+      if (pickedDue.set) {
+        setDue(pickedDue);
+        setReminder(pickedReminder);
       }
+      setRepeatPick(unset());
+      setRepeatOver("");
       focusAt();
       return;
     }
+    setRepeatOver(read.typedRepeat ? key : "");
     setRepeatPick({ set: true, value });
   }
 
@@ -1129,7 +1136,9 @@ export default function TaskPad({
     const current = read.repeat;
     if (!repeatPick.set || !current || !value) return;
     const followed = repeatPresets(repeatAnchor).find((preset) => FOLLOWS_DATE.includes(preset.id) && sameRule(preset.rule, current.rule));
-    const moved = followed ? repeatPresets(value.slice(0, 10)).find((preset) => preset.id === followed.id) : null;
+    const next = repeatPresets(value.slice(0, 10));
+    const fourth = followed?.rule.monthWeek?.n === 4;
+    const moved = followed ? (fourth && next.find((preset) => preset.id === "monthly-fourth")) || next.find((preset) => preset.id === (followed.id === "monthly-fourth" ? "monthly-week" : followed.id)) : null;
     if (moved) setRepeatPick({ set: true, value: { rule: moved.rule, ends: current.ends } });
   }
 
@@ -1138,7 +1147,7 @@ export default function TaskPad({
       variant="chip"
       size="none"
       aria-label={repeatWords ? `${repeatWords}. Change` : "Repeat"}
-      className={repeatWords ? "min-w-0 shrink gap-1.5 text-inherit hover:bg-transparent hover:text-inherit" : chipClass("empty", variant)}
+      className={repeatWords ? "hit min-w-0 shrink gap-1.5 text-inherit hover:bg-transparent hover:text-inherit" : chipClass("empty", variant)}
     >
       <RepeatIcon aria-hidden className={cn(repeatWords && "!text-(--tag-purple-text)")} />
       {repeatWords && <span className="truncate">{repeatWords}</span>}
@@ -1312,7 +1321,7 @@ export default function TaskPad({
           </div>
         </div>
         <p role="status" className="sr-only">
-          {phrase && !due.set ? (read.typedRepeat ? `Repeat read from “${phrase}”.` : `Due date read from “${phrase}”.`) : justKept ? "Kept as text. No date." : ""}
+          {phrase && !due.set ? (read.typedRepeat ? `Repeat read from “${phrase}”.` : `Due date read from “${phrase}”.`) : justKept ? (finalDue ? "Kept as text." : "Kept as text. No date.") : ""}
         </p>
         <textarea
           id={`${id}-text`}
@@ -1337,6 +1346,7 @@ export default function TaskPad({
               setDue(unset());
               setReminder(unset());
               setRepeatPick(unset());
+              setRepeatOver("");
               setAddedTime(null);
               setCompany(startCompany());
               setContact(startContact());

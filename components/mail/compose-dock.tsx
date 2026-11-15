@@ -642,75 +642,75 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         </div>
       )}
       <LaterPicker request={later} onClose={() => setLater(null)} />
-      {(notice || toasts.length > 0) && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-50 flex flex-col items-center gap-2 px-4 max-md:[body:has([data-compose-fab])_&]:bottom-[calc(env(safe-area-inset-bottom)+8.25rem)] max-md:[body:has([data-compose-tray])_&]:bottom-[calc(env(safe-area-inset-bottom)+11rem)]">
-          {notice && (
-            <p role="status" className="bg-popover border-line-strong shadow-overlay animate-rise-in rounded-full border px-4 py-2 text-[13px]">
-              {notice}
-            </p>
-          )}
-          {toasts.map((toast) => (
-            <div
-              key={toast.id}
-              role={toast.tone === "alert" ? "alert" : "status"}
-              className="bg-popover border-line-strong shadow-overlay animate-rise-in pointer-events-auto flex max-w-[min(36rem,100%)] items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]"
-            >
-              {toast.extra && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="-ml-2.5 min-w-0 shrink px-[9px]"
-                  aria-label={toast.extra.label}
-                  onClick={() => {
-                    toast.extra!.run();
-                    dismiss(toast.id);
-                  }}
-                >
-                  <span className={cn("truncate", toast.extra.short && "max-sm:hidden")}>{toast.extra.label}</span>
-                  {toast.extra.short && <span className="sm:hidden">{toast.extra.short}</span>}
-                </Button>
-              )}
-              <span className={cn(toast.extra ? "shrink-0 whitespace-nowrap" : "min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
-              {toast.extra && <span aria-hidden className="w-6 shrink-0" />}
-              {toast.choices?.map((choice) => (
-                <Button
-                  key={choice.label}
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={() => {
-                    choice.run();
-                    dismiss(toast.id);
-                  }}
-                >
-                  {choice.label}
-                </Button>
-              ))}
-              {toast.action ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    toast.action!.run();
-                    dismiss(toast.id);
-                  }}
-                  onPointerEnter={(event) => showUndoHint(event.currentTarget, toast.action)}
-                  onPointerMove={(event) => showUndoHint(event.currentTarget, toast.action)}
-                  onFocus={(event) => showUndoHint(event.currentTarget, toast.action)}
-                >
-                  {toast.action.label}
-                </Button>
-              ) : toast.tone === "alert" ? (
-                <Button variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={() => dismiss(toast.id)}>
-                  <XIcon aria-hidden className="size-3.5" />
-                </Button>
-              ) : (
-                <span aria-hidden className="w-2" />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      <div data-toast-layer="" aria-live="off" className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-[55] flex flex-col items-center gap-2 px-4 max-md:[body:has([data-compose-fab])_&]:bottom-[calc(env(safe-area-inset-bottom)+8.25rem)] max-md:[body:has([data-compose-tray])_&]:bottom-[calc(env(safe-area-inset-bottom)+11rem)]">
+        {notice && (
+          <p role="status" className="bg-popover border-line-strong shadow-overlay animate-rise-in rounded-full border px-4 py-2 text-[13px]">
+            {notice}
+          </p>
+        )}
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            data-toast=""
+            role={toast.tone === "alert" ? "alert" : "status"}
+            className="bg-popover border-line-strong shadow-overlay animate-rise-in pointer-events-auto flex max-w-[min(36rem,100%)] items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]"
+          >
+            {toast.extra && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="-ml-2.5 min-w-0 shrink px-[9px]"
+                aria-label={toast.extra.label}
+                onClick={() => {
+                  toast.extra!.run();
+                  dismiss(toast.id);
+                }}
+              >
+                <span className={cn("truncate", toast.extra.short && "max-sm:hidden")}>{toast.extra.label}</span>
+                {toast.extra.short && <span className="sm:hidden">{toast.extra.short}</span>}
+              </Button>
+            )}
+            <span className={cn(toast.extra ? "shrink-0 whitespace-nowrap" : "min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
+            {toast.extra && <span aria-hidden className="w-6 shrink-0" />}
+            {toast.choices?.map((choice) => (
+              <Button
+                key={choice.label}
+                variant="ghost"
+                size="sm"
+                className="hit shrink-0"
+                onClick={() => {
+                  choice.run();
+                  dismiss(toast.id);
+                }}
+              >
+                {choice.label}
+              </Button>
+            ))}
+            {toast.action ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="hit"
+                onClick={() => {
+                  toast.action!.run();
+                  dismiss(toast.id);
+                }}
+                onPointerEnter={(event) => showUndoHint(event.currentTarget, toast.action)}
+                onPointerMove={(event) => showUndoHint(event.currentTarget, toast.action)}
+                onFocus={(event) => showUndoHint(event.currentTarget, toast.action)}
+              >
+                {toast.action.label}
+              </Button>
+            ) : toast.tone === "alert" ? (
+              <Button variant="ghost" size="icon-sm" aria-label="Dismiss" className="hit" onClick={() => dismiss(toast.id)}>
+                <XIcon aria-hidden className="size-3.5" />
+              </Button>
+            ) : (
+              <span aria-hidden className="w-2" />
+            )}
+          </div>
+        ))}
+      </div>
     </ComposerContext.Provider>
   );
 }

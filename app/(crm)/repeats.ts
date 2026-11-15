@@ -29,10 +29,13 @@ const UNDO_FAILED = "Couldn't undo. Try again.";
 
 export type RepeatActionResult = { ok?: true; error?: string; task?: Task; undo?: string[]; skipped?: string };
 
-async function taskUser(id: unknown) {
+const SESSION_ENDED = "Your session ended. Sign in again.";
+
+async function taskUser(id: unknown): Promise<{ user: UserActor; error?: undefined } | { user?: undefined; error: string }> {
   const user = await getUserActor();
-  if (!user) return null;
-  return (await taskActorOrError(user, id)).actor ?? null;
+  if (!user) return { error: SESSION_ENDED };
+  const found = await taskActorOrError(user, id);
+  return found.actor ? { user: found.actor } : { error: found.error ?? TASK_LOOKUP_FAILED };
 }
 
 function refresh() {
@@ -45,19 +48,24 @@ function keyed(key: unknown) {
 
 function pushLater(user: UserActor, id: string) {
   if (!clickupToken()) return;
-  after(async () => {
-    try {
-      await pushClickUpTask(user, id);
-    } catch (error) {
-      console.error("ClickUp push failed", error);
-    }
-  });
+  try {
+    after(async () => {
+      try {
+        await pushClickUpTask(user, id);
+      } catch (error) {
+        console.error("ClickUp push failed", error);
+      }
+    });
+  } catch (error) {
+    console.error("ClickUp push failed", error);
+  }
 }
 
 async function run(id: string, work: (user: UserActor) => Promise<{ task: Task; undo: string[]; skipped?: string }>): Promise<RepeatActionResult> {
   if (!isUuid(id)) return { error: REPEAT_SAVE_FAILED };
-  const user = await taskUser(id);
-  if (!user) return { error: TASK_LOOKUP_FAILED };
+  const found = await taskUser(id);
+  if (!found.user) return { error: found.error };
+  const user = found.user;
   try {
     const result = await work(user);
     pushLater(user, result.task.id);
@@ -128,8 +136,9 @@ export async function deleteSeriesAction(id: string, key?: string): Promise<Repe
 
 export async function repeatHistoryAction(id: string): Promise<{ items?: RepeatHistoryItem[]; error?: string }> {
   if (!isUuid(id)) return { items: [] };
-  const user = await taskUser(id);
-  if (!user) return { error: TASK_LOOKUP_FAILED };
+  const found = await taskUser(id);
+  if (!found.user) return { error: found.error };
+  const user = found.user;
   try {
     return { items: await readRepeatHistory(user, id) };
   } catch (error) {
@@ -139,8 +148,9 @@ export async function repeatHistoryAction(id: string): Promise<{ items?: RepeatH
 
 export async function undoRepeatAction(id: string, events: string[]): Promise<{ ok?: true; error?: string }> {
   if (!isUuid(id)) return { error: UNDO_FAILED };
-  const user = await taskUser(id);
-  if (!user) return { error: TASK_LOOKUP_FAILED };
+  const found = await taskUser(id);
+  if (!found.user) return { error: found.error };
+  const user = found.user;
   const ids = (Array.isArray(events) ? events : []).filter((event) => typeof event === "string" && isUuid(event));
   if (ids.length === 0) return { error: UNDO_FAILED };
   try {

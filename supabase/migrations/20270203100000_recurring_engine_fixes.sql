@@ -1100,15 +1100,6 @@ $$;
 revoke all on function private.team_remove_records(uuid, uuid, uuid, text, text, text) from public;
 grant execute on function private.team_remove_records(uuid, uuid, uuid, text, text, text) to crm_app;
 
-update crm.task_series s
-set roll_pending = true
-where s.ended_at is null and s.archived_at is null and s.current_task_id is not null and s.roll_at is null and not s.roll_pending
-  and exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.completed_at is null and t.archived_at is null);
-
-update crm.task_series s
-set ended_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null
-where s.ended_at is null and s.archived_at is null and s.current_task_id is null and s.split_from_id is null;
-
 do $$
 declare
   v_index text;
@@ -1133,3 +1124,16 @@ create unique index concurrently if not exists tasks_series_occurs_idx on crm.ta
 create unique index concurrently if not exists tasks_series_open_idx on crm.tasks (series_id) where series_id is not null and completed_at is null and archived_at is null;
 
 create index concurrently if not exists tasks_series_idx on crm.tasks (series_id, occurs_on desc) where series_id is not null;
+
+set lock_timeout = '5s';
+
+update crm.task_series s
+set roll_pending = true
+where s.ended_at is null and s.archived_at is null and s.current_task_id is not null and s.roll_at is null and not s.roll_pending
+  and exists (select 1 from crm.tasks t where t.id = s.current_task_id and t.completed_at is null and t.archived_at is null);
+
+update crm.task_series s
+set ended_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null
+where s.ended_at is null and s.archived_at is null and s.current_task_id is null and s.split_from_id is null;
+
+reset lock_timeout;

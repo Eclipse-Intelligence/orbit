@@ -243,12 +243,15 @@ describe("rolls and moves", () => {
     assert.equal(live[0].title, "Two splits second");
   });
 
-  it("stops a later part when the earlier part is set to never end (11)", async () => {
+  it("sets never on the later part, not the earlier one, so the two never overlap (11)", async () => {
     const task = await weekly("Orphan", "2027-03-02");
     await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-16" }, { title: "Orphan later" }, "following");
+    await setTaskRepeat(mark, task.id, { every: "week", ends: { after: 3 } });
     await setTaskRepeat(mark, task.id, { every: "week", ends: null });
     const [later] = await parts(task.seriesId!);
-    assert.ok(later.ended_at, "the later part ends");
+    assert.equal(later.ended_at, null);
+    assert.deepEqual(later.ends, { never: true });
+    assert.deepEqual((await series(task.seriesId!)).ends, { until: "2027-03-15" });
   });
 
   it("makes a removed person's series date only, like their tasks, and doesn't tag the remover on their own task (12)", async () => {
@@ -687,7 +690,7 @@ describe("database backstops", () => {
     await assert.rejects(asMember(mark, "update crm.tasks set completed_at = now() where id = $1", [task.id]), /Only the assignee or the task's creator can complete/);
   });
 
-  it("asks for a fresh roll time when a move strips the time (70)", async () => {
+  it("asks for a fresh roll time after a move and keeps the time when the owner stays (70)", async () => {
     const task = await weekly("Moved timed", "2027-03-02");
     const other = await createWorkspace(mark, { name: "Elsewhere roll" });
     await sql("update crm.task_series set roll_pending = false where id = $1", [task.seriesId]);
@@ -697,7 +700,7 @@ describe("database backstops", () => {
     );
     await sql("select private.task_series_follow_move($1, $2)", [mark.workspaceId, other.id]);
     const row = await series(task.seriesId!);
-    assert.equal(row.at, null);
+    assert.notEqual(row.at, null);
     assert.equal(row.roll_pending, true);
   });
 
@@ -711,6 +714,7 @@ describe("database backstops", () => {
     await sql("update pg_index set indisvalid = false where indexrelid = 'crm.tasks_series_open_idx'::regclass");
     const file = readFileSync("supabase/migrations/20270203100000_recurring_engine_fixes.sql", "utf8");
     await applyMigrationSql(getAdminPool(), file);
+    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270203300000_recurring_review_fixes.sql", "utf8"));
     const [index] = await sql<{ valid: boolean }>("select indisvalid as valid from pg_index where indexrelid = 'crm.tasks_series_open_idx'::regclass");
     assert.equal(index.valid, true);
   });

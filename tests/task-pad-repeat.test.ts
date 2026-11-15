@@ -6,7 +6,7 @@ import { localInstant } from "@/lib/crm/task-time";
 import type { UserActor } from "@/lib/crm/types";
 import { shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { keptReading, padReading, padRepeatDue, parseTaskText, type PadAiAnswer } from "@/lib/task-pad";
+import { chipOverrides, keptReading, padReading, padRepeatDue, parseTaskText, type PadAiAnswer } from "@/lib/task-pad";
 import { repeatInputOf, type RepeatRule } from "@/lib/task-repeat";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -237,6 +237,19 @@ describe("typed repeats", () => {
     assert.deepEqual({ title: kept.title, due: kept.due, repeat: kept.repeat }, { title: typed, due: null, repeat: undefined });
   });
 
+  it("never lights typed words that a repeat picked from the chip would ignore", () => {
+    const daily = { rule: { freq: "daily", interval: 1 } as RepeatRule, ends: { never: true as const } };
+    const friday = { rule: { freq: "weekly", interval: 1, weekdays: ["fr"] } as RepeatRule, ends: { never: true as const } };
+    const shown = (typed: string) => padReading(typed, parse(typed), null, []);
+    assert.equal(chipOverrides(shown("Call Sam every Friday"), false, daily, ""), true, "a repeat typed after the pick");
+    assert.equal(chipOverrides(shown("Call Sam every Friday until 18 Dec"), false, daily, ""), true, "an end typed after the pick");
+    assert.equal(chipOverrides(shown("Gym Tuesday"), false, friday, ""), true, "a date off the picked pattern");
+    assert.equal(chipOverrides(shown("Gym Friday 10am"), false, friday, ""), false, "a date and time on the picked pattern stay lit");
+    const typed = shown("Standup every Monday at 10am");
+    assert.equal(chipOverrides(typed, false, daily, typed.key), false, "the typed repeat the chip changed stays lit");
+    assert.equal(chipOverrides(shown("Gym tomorrow"), true, null, ""), true, "a picked due date still wins over a typed one");
+  });
+
   it("works out the first occurrence for a repeat picked from the menu", () => {
     assert.equal(padRepeatDue({ rule: { freq: "weekly", interval: 1, weekdays: ["mo", "tu", "we", "th", "fr"] }, ends: { never: true } }, "2026-11-14", SATURDAY_10_20), "2026-11-16");
     assert.equal(padRepeatDue({ rule: { freq: "daily", interval: 1 }, ends: { never: true } }, "2026-11-14T09:00", SATURDAY_10_20), "2026-11-15T09:00");
@@ -374,6 +387,40 @@ describe("AI read repeats", () => {
     ];
     for (const [text, due, repeat] of cases) assert.deepEqual(await ask(text, { ...base, phrases: [], due, repeat }), nothing(text), text);
     assert.equal((await ask("Gym every Monday", { ...base, phrases: [], due: "2026-11-16", repeat: { phrase: "every Monday", every: "week", days: ["mo"] } }))?.title, "Gym");
+  });
+});
+
+describe("AI read repeats from the review", () => {
+  const ask = async (text: string, answer: PadAiAnswer) => {
+    const fetchImpl: typeof fetch = async () => Response.json({ model: "test", choices: [{ message: { content: JSON.stringify(answer) }, finish_reason: "stop" }] });
+    const previous = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "llm-test";
+    try {
+      const reading = await parsePadWithAi(text, SATURDAY_10_20, { fetchImpl });
+      return reading && { due: reading.due, repeat: reading.repeat ?? null };
+    } finally {
+      if (previous === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = previous;
+    }
+  };
+  const base = { remindMinutes: null, durationMinutes: null };
+  const monday = { phrase: "every Monday", every: "week" as const, days: ["mo"] };
+
+  it("rejects readings the typed rules also refuse", async () => {
+    const cases: [string, PadAiAnswer][] = [
+      ["Check every Monday.com board", { ...base, phrases: [], due: "2026-11-16", repeat: monday }],
+      ["Tell Sam I'm free every Monday", { ...base, phrases: [], due: "2026-11-16", repeat: monday }],
+      ["Is gym every Monday", { ...base, phrases: [], due: "2026-11-16", repeat: monday }],
+      ["Gym every Monday for 6 wks", { ...base, phrases: [], due: "2026-11-16", repeat: monday }],
+      ["Gym every Monday", { ...base, phrases: [], due: "2026-11-16", repeat: { ...monday, days: ["moon"] } }],
+      ["Review #weekly", { ...base, phrases: [], due: "2026-11-14", repeat: { phrase: "weekly", every: "week" } }],
+      ["Pay rent monthly on Friday", { ...base, phrases: ["on Friday"], due: "2026-11-20", repeat: { phrase: "monthly", every: "month", monthDay: 20 } }],
+      ["Stand-up every weekday until 13 Nov", { ...base, phrases: [], due: "2026-11-16", repeat: { phrase: "every weekday until 13 Nov", every: "weekday", ends: { on: "2027-11-13" } } }],
+      ["Call Sam Monday at 10", { ...base, phrases: ["Monday at 10"], due: "2026-11-16T22:00" }],
+    ];
+    for (const [text, answer] of cases) assert.deepEqual(await ask(text, answer), { due: null, repeat: null }, text);
+    assert.equal((await ask("Call Sam Monday at 10", { ...base, phrases: ["Monday at 10"], due: "2026-11-16T10:00" }))?.due, "2026-11-16T10:00");
+    assert.equal((await ask("Drinks Monday at 10", { ...base, phrases: ["Monday at 10"], due: "2026-11-16T22:00" }))?.due, "2026-11-16T22:00");
   });
 });
 

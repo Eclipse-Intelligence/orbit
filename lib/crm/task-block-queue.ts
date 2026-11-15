@@ -11,7 +11,10 @@ async function run(taskIds: string[]) {
     const { SERIES_SHARE, syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
     const deadline = Date.now() + RUN_MS;
     const throttled = new Set<string>();
-    const series = await syncSeriesOutlook({ taskIds, deadline, throttled, limit: SERIES_SHARE });
+    const series = await syncSeriesOutlook({ taskIds, deadline, throttled, limit: SERIES_SHARE }).catch((error) => {
+      console.error("Outlook repeating tasks failed", error);
+      return { requests: SERIES_SHARE };
+    });
     await syncTaskBlocks({ taskIds, deadline, throttled, limit: Math.max(1, 50 - series.requests) });
   } catch (error) {
     console.error("Outlook task blocks failed", error);

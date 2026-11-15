@@ -237,8 +237,10 @@ describe("repeat words", () => {
       repeatPresets("2026-11-14").map((preset) => preset.label),
       ["Every day", "Every weekday", "Every week on Saturday", "Every month on the 14th", "Every month on the second Saturday", "Every year on 14 Nov"],
     );
-    assert.deepEqual(repeatPresets("2026-11-27").map((preset) => preset.label).slice(3, 5), ["Every month on the 27th", "Every month on the last Friday"]);
-    assert.deepEqual(repeatPresets("2026-11-27")[4].rule, { freq: "monthly", interval: 1, monthWeek: { n: -1, weekday: "fr" } });
+    assert.deepEqual(repeatPresets("2026-11-27").map((preset) => preset.label).slice(3, 6), ["Every month on the 27th", "Every month on the fourth Friday", "Every month on the last Friday"]);
+    assert.deepEqual(repeatPresets("2026-11-27")[5].rule, { freq: "monthly", interval: 1, monthWeek: { n: -1, weekday: "fr" } });
+    assert.deepEqual(repeatPresets("2026-11-27")[4].rule, { freq: "monthly", interval: 1, monthWeek: { n: 4, weekday: "fr" } });
+    assert.equal(repeatPresets("2026-11-30").find((preset) => preset.id === "monthly-fourth"), undefined);
   });
 
   it("writes an RRULE for outside calendars", () => {

@@ -1,9 +1,11 @@
 import { requireAgent } from "@/lib/api/agent";
 import { idempotencyKey, readJson, withApi } from "@/lib/api/http";
 import { detailOfTask } from "@/lib/crm/task-detail";
+import { CrmError } from "@/lib/crm/errors";
 import { archiveTask, getTask } from "@/lib/crm/tasks";
+import { isDayKey } from "@/lib/task-repeat";
 import { updateTaskFromApi } from "@/lib/crm/task-series";
-import { parseInput, takeProvenance, taskUpdateSchema } from "@/lib/crm/validation";
+import { OCCURS_ON_DAY, parseInput, takeProvenance, taskUpdateSchema } from "@/lib/crm/validation";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -34,9 +36,12 @@ export async function DELETE(request: Request, context: Context) {
   return withApi(async () => {
     const actor = await requireAgent(request);
     const { id } = await context.params;
+    const occursOn = new URL(request.url).searchParams.get("occursOn");
+    if (occursOn !== null && !isDayKey(occursOn)) throw new CrmError("invalid_input", OCCURS_ON_DAY, 400, { field: "occursOn" });
     const result = await archiveTask(actor, id, {
       idempotencyKey: idempotencyKey(request),
       provenance: { operation: "archive_task" },
+      ...(occursOn !== null ? { expect: occursOn } : {}),
     });
     return Response.json(result.body, { status: result.status });
   });

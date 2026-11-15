@@ -1,9 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { actingActor, graphFailure, openOutlook, taskBlockLink, type Access, type Failure, type Outlook } from "@/lib/crm/task-outlook";
-import { clockLabel, dayStartIso, wallInstant } from "@/lib/crm/task-time";
+import { dayStartIso, wallInstant } from "@/lib/crm/task-time";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
-import { withActor } from "@/lib/crm/context";
-import { readStored } from "@/lib/crm/inbox";
 import { query } from "@/lib/db/pool";
 import {
   createGraphEvent,
@@ -75,6 +73,7 @@ export type SeriesOutlookRow = {
   dates: Record<string, DateRecord> | null;
   version: string | number;
   attempts: number;
+  lease?: string | null;
 };
 
 export type MasterSpec = {
@@ -95,7 +94,7 @@ export type DateRecord = {
   single?: string;
   createKey?: string;
   rev?: string;
-  written?: { start: string; end: string; title: string } | null;
+  written?: { start: string; end: string; title: string; link?: string | null } | null;
 };
 
 export type SeriesPlan =
@@ -210,9 +209,9 @@ export function seriesTransactionId(seriesId: string, key: string) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-function wall(instant: number, timeZone: string) {
-  const date = new Date(instant);
-  return `${dayKeyAt(date, timeZone)}T${clockLabel(date.toISOString(), timeZone)}:00`;
+function wallAfter(day: string, at: string, minutes: number) {
+  const [hour, minute] = at.split(":").map(Number);
+  return new Date(Date.parse(`${day}T00:00:00Z`) + (hour * 60 + minute + minutes) * MINUTE_MS).toISOString().slice(0, 19);
 }
 
 export function masterDraft(seriesId: string, spec: MasterSpec, key: string, timeZone = appTimeZone()): SeriesMasterDraft {
@@ -236,7 +235,7 @@ export function masterDraft(seriesId: string, spec: MasterSpec, key: string, tim
   return {
     ...base,
     start: { dateTime: `${spec.startDay}T${spec.at}:00`, timeZone: zone },
-    end: { dateTime: wall(end, timeZone), timeZone: zone },
+    end: { dateTime: wallAfter(spec.startDay, spec.at, spec.durationMinutes), timeZone: zone },
     recurrence: spec.recurrence,
   };
 }
@@ -276,8 +275,8 @@ function timesPatch(want: Extract<DateWant, { start: string }>, link: string | n
   return { subject: draft.subject, body: { contentType: "HTML" as const, content: taskBlockBodyHtml(link) }, start: draft.start, end: draft.end, showAs: "busy", sensitivity: "private", isReminderOn: false };
 }
 
-function written(want: Extract<DateWant, { start: string }>) {
-  return { start: want.start, end: want.end, title: want.title };
+function written(want: Extract<DateWant, { start: string }>, link: string | null) {
+  return { start: want.start, end: want.end, title: want.title, link };
 }
 
 function sameWritten(left: DateRecord["written"], right: Extract<DateWant, { start: string }>) {
@@ -364,7 +363,7 @@ async function save(row: SeriesOutlookRow, state: State, clearKey = false) {
 }
 
 function holds(row: SeriesOutlookRow) {
-  return Boolean(row.master_id) || Object.values(row.dates ?? {}).some((record) => record.single || record.createKey);
+  return Boolean(row.master_id || row.create_key) || Object.values(row.dates ?? {}).some((record) => record.single || record.createKey);
 }
 
 async function deleteByKey(outlook: Outlook, key: string, context: Context) {
@@ -408,6 +407,7 @@ async function ensureMaster(outlook: Outlook, row: SeriesOutlookRow, master: Mas
   const token = outlook.token.accessToken;
   if (row.master_id) {
     if (sameMaster(row.written, master)) return { masterId: row.master_id, revision: row.written?.revision ?? "first", created: false };
+    if (row.written) await save(row, { userId: outlook.actor.userId, masterId: row.master_id, written: null, dates: row.dates ?? {} });
     try {
       await graphWrite(context, outlook, () => patchGraphEvent(token, row.master_id!, masterPatch(master, context.timeZone), context.fetchImpl));
       return { masterId: row.master_id, revision: randomUUID(), created: false };
@@ -468,10 +468,14 @@ async function writeSingle(job: DateJob, record: DateRecord, want: Extract<DateW
   const { outlook, context, seriesId, link } = job;
   const token = outlook.token.accessToken;
   if (record.single) {
-    if (sameWritten(record.written, want)) return;
+    if (sameWritten(record.written, want) && record.written?.link === link) return;
+    if (record.written) {
+      record.written = null;
+      await job.persist({ ...record });
+    }
     try {
       await graphWrite(context, outlook, () => patchGraphEvent(token, record.single!, timesPatch(want, link, context.timeZone), context.fetchImpl));
-      record.written = written(want);
+      record.written = written(want, link);
       return;
     } catch (error) {
       if (!failed(error, "gone")) throw error;
@@ -485,7 +489,7 @@ async function writeSingle(job: DateJob, record: DateRecord, want: Extract<DateW
       for (const extra of found.slice(1)) if (extra.id) await graphWrite(context, outlook, () => deleteGraphEvent(token, extra.id!, context.fetchImpl));
       record.single = found[0].id;
       delete record.createKey;
-      record.written = written(want);
+      record.written = written(want, link);
       return;
     }
   } else {
@@ -496,7 +500,7 @@ async function writeSingle(job: DateJob, record: DateRecord, want: Extract<DateW
   if (!created.id) throw new Retry("no id");
   record.single = created.id;
   delete record.createKey;
-  record.written = written(want);
+  record.written = written(want, link);
 }
 
 async function reconcileDate(job: DateJob): Promise<DateRecord | null> {
@@ -529,13 +533,14 @@ async function reconcileDate(job: DateJob): Promise<DateRecord | null> {
     if (!id) id = await findInstance(outlook, masterId, occursOn, context);
     if (!id) break;
     const target = id;
-    if (record.instanceId !== target) {
+    if (record.instanceId !== target || record.written) {
       record.instanceId = target;
+      record.written = null;
       await job.persist({ ...record });
     }
     try {
       await graphWrite(context, outlook, () => patchGraphEvent(token, target, timesPatch(want, link, context.timeZone), context.fetchImpl));
-      return { instance: "patched", instanceId: target, written: written(want) };
+      return { instance: "patched", instanceId: target, written: written(want, link) };
     } catch (error) {
       if (failed(error, "gone") && record.instanceId === target) {
         delete record.instanceId;
@@ -599,7 +604,13 @@ async function writeSeries(outlook: Outlook, row: SeriesOutlookRow, plan: Extrac
       dates[occursOn] = next;
       await save(row, state());
     };
-    const next = await reconcileDate({ outlook, seriesId: row.series_id, record: record ?? {}, masterId, occursOn, want, rewritten, link: plan.link, context, persist });
+    let next: DateRecord | null;
+    try {
+      next = await reconcileDate({ outlook, seriesId: row.series_id, record: record ?? {}, masterId, occursOn, want, rewritten, link: plan.link, context, persist });
+    } catch (error) {
+      if (failed(error, "refused")) continue;
+      throw error;
+    }
     if (next && (!plan.master || !isDefaultRecord(row, occursOn, next, context.timeZone))) dates[occursOn] = { ...next, rev: revision };
     else delete dates[occursOn];
     await save(row, state());
@@ -611,19 +622,17 @@ function emptyRun(): SeriesRun {
 }
 
 async function settle(row: SeriesOutlookRow, requeue = false, waiting = false) {
-  await query("select private.settle_series_outlook($1, $2, $3, $4)", [row.series_id, row.version, requeue, waiting]);
+  await query("select private.settle_series_outlook($1, $2, $3, $4, $5)", [row.series_id, row.version, requeue, waiting, row.lease ?? null]);
 }
 
 async function defer(row: SeriesOutlookRow, ms = RETRY_MS) {
-  await query("select private.defer_series_outlook($1, $2)", [row.series_id, new Date(Date.now() + Math.min(ms * Math.max(1, row.attempts + 1), 60 * MINUTE_MS)).toISOString()]);
+  await query("select private.defer_series_outlook($1, $2, $3, $4)", [row.series_id, new Date(Date.now() + Math.min(ms * Math.max(1, row.attempts + 1), 60 * MINUTE_MS)).toISOString(), row.version, row.lease ?? null]);
 }
 
 async function holderAccess(userId: string, workspaceId: string, context: Context): Promise<Access | "gone"> {
   try {
     const actor = await actingActor(userId, workspaceId, true);
     if (!actor) return "gone";
-    const stored = await withActor(actor, (db) => readStored(db, actor));
-    if (!stored || stored.status !== "connected") return "gone";
     return await openOutlook(actor, context.fetchImpl);
   } catch (error) {
     console.error("Opening Outlook for repeating tasks failed", error);
@@ -641,9 +650,14 @@ async function runRow(row: SeriesOutlookRow, context: Context, now: number, thro
       return;
     }
     const held = await holderAccess(holder, row.workspace_id, context);
-    if (held === "retry" || (held === "orbit_only" && holds(row))) {
+    if (held === "retry") {
       await defer(row);
       run.deferred += 1;
+      return;
+    }
+    if (held === "orbit_only" && plan.kind === "remove" && holds(row)) {
+      await settle(row, false, true);
+      run.orbitOnly += 1;
       return;
     }
     if (held !== "orbit_only" && held !== "gone") await removeAll(held, row, context);
@@ -672,7 +686,7 @@ async function runRow(row: SeriesOutlookRow, context: Context, now: number, thro
     run.orbitOnly += 1;
     return;
   }
-  if (outlook === "retry" || (outlook === "orbit_only" && holds(row))) {
+  if (outlook === "retry") {
     await defer(row);
     run.deferred += 1;
     return;
@@ -756,25 +770,40 @@ function graphHost(input: RequestInfo | URL) {
   }
 }
 
-export async function removeSeriesOutlookFor(userId: string, workspaceId: string, options: { fetchImpl?: typeof fetch; deadline?: number } = {}) {
+export type SeriesOutlookRemoval = { run: (options?: { deadline?: number }) => Promise<void>; release: () => Promise<void> };
+
+export async function prepareSeriesOutlookRemoval(userId: string, workspaceId: string, options: { fetchImpl?: typeof fetch } = {}): Promise<SeriesOutlookRemoval | null> {
   const memberships = await query<{ workspace_id: string }>("select workspace_id from private.memberships_for($1)", [userId]);
-  if (memberships.rows.some((row) => row.workspace_id !== workspaceId)) return;
+  if (memberships.rows.some((row) => row.workspace_id !== workspaceId)) return null;
   await query("select private.queue_series_outlook($1)", [userId]);
   const claimed = await query<SeriesOutlookRow>("select * from private.claim_series_outlook(null, $1::uuid, 200)", [userId]);
-  const deadline = options.deadline ?? Date.now() + 20_000;
-  const context: Context = { fetchImpl: options.fetchImpl ?? fetch, timeZone: appTimeZone(), budget: { left: 200 }, stopAt: Math.min(deadline - RESERVE_MS, Date.now() + LEASE_MS) };
-  for (const row of claimed.rows) {
-    const holder = row.user_id ?? (row.create_key ? row.create_user_id : null);
-    try {
-      if (holder === userId && holds(row)) {
-        const held = await holderAccess(userId, row.workspace_id, context);
-        if (held !== "gone" && held !== "orbit_only" && held !== "retry") await removeAll(held, row, context);
-      }
-    } catch (error) {
-      console.error("Couldn't take a repeating task out of a removed person's Outlook", error);
-    }
-    await settle(row, true).catch(() => undefined);
+  const claimedAt = Date.now();
+  const release = async (rows: SeriesOutlookRow[]) => {
+    for (const row of rows) await settle(row, true).catch(() => undefined);
+  };
+  const held = claimed.rows.filter((row) => (row.user_id ?? (row.create_key ? row.create_user_id : null)) === userId && holds(row));
+  await release(claimed.rows.filter((row) => !held.includes(row)));
+  if (held.length === 0) return null;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const outlook = await holderAccess(userId, workspaceId, { fetchImpl, timeZone: appTimeZone(), budget: { left: 0 }, stopAt: claimedAt + LEASE_MS });
+  if (typeof outlook === "string") {
+    await release(held);
+    return null;
   }
+  return {
+    release: () => release(held),
+    run: async ({ deadline = Date.now() + 20_000 } = {}) => {
+      const context: Context = { fetchImpl, timeZone: appTimeZone(), budget: { left: 200 }, stopAt: Math.min(deadline - RESERVE_MS, claimedAt + LEASE_MS) };
+      for (const row of held) {
+        try {
+          await removeAll(outlook, row, context);
+        } catch (error) {
+          console.error("Couldn't take a repeating task out of a removed person's Outlook", error);
+        }
+      }
+      await release(held);
+    },
+  };
 }
 
 export async function seriesOutlookEvents(userId: string) {

@@ -172,6 +172,16 @@ async function stateMoved(db: Db, series: Record<string, unknown> | null) {
   return (await seriesState(db, id, typeof day === "string" ? { day } : scope === "open" ? "open" : "all")) !== series.state;
 }
 
+async function revivesDeletedTask(db: Db, series: Record<string, unknown> | null) {
+  const before = record(series?.before);
+  if (!before || before.endedAt || before.archivedAt || typeof series?.id !== "string" || !isUuid(series.id)) return false;
+  const found = await db.query(
+    "select 1 from crm.task_series s join crm.tasks t on t.id = s.current_task_id where s.id = $1 and s.ended_at is not null and s.archived_at is null and t.archived_at is not null",
+    [series.id],
+  );
+  return (found.rowCount ?? 0) > 0;
+}
+
 async function partOfSeriesDelete(db: Db, event: AuditRow) {
   const found = await db.query(
     "select 1 from crm.audit_events e join crm.audit_events d on d.entity_id = e.entity_id and d.created_at = e.created_at and d.event_type = 'task_series.deleted' where e.id = $1",
@@ -533,6 +543,9 @@ async function describeEvent(
   if (entity === "task" && REPEAT_MOVES.has(event.operation)) {
     return refuse(event.operation === "repeat_roll" ? `Moved ${entityName} on to its next date` : `Made the next ${entityName}`, "Can't undo a repeat. Undo the Done, or change or skip the task instead.");
   }
+  if (entity === "task" && event.operation === "undo_repeat") {
+    return refuse(`Archived task ${entityName}`, "Can't undo: it was archived when the one before it was reopened.");
+  }
   if (entity === "task" && event.event_type === "task.created" && typeof record(record(event.changes)?.after)?.seriesId === "string") {
     return refuse(`Created task ${entityName}`, "Undo making it repeat instead, or delete the series.");
   }
@@ -542,6 +555,7 @@ async function describeEvent(
     if (seriesChanges.undoing) return refuse(`Undid a change to how ${entityName} repeats`, "This is already an undo.");
     if (seriesChanges.splitFrom) return refuse(`Split ${entityName} from its series`, "Undo the change that split it instead.");
     if (seriesChanges.handedOver) return refuse(`Took over the series ${entityName}`, "Can't undo: it was handed over when someone left the workspace.");
+    if (seriesChanges.movedFrom || seriesChanges.companyMovedTo) return refuse(`Moved the series ${entityName}`, "Can't undo: its records moved workspace.");
     if (seriesChanges.followsChange) {
       if (undone) return refuse(`Changed the links of ${entityName}'s series`, "This change has already been undone.");
       return refuse(`Changed the links of ${entityName}'s series`, "Undo the change to the task instead.");
@@ -564,6 +578,7 @@ async function describeEvent(
     const now = after && typeof record(seriesChanges.series)?.id === "string" ? await readSeriesSnapshot(db, String(record(seriesChanges.series)?.id)) : null;
     if (after && now && !same(now, after)) return refuse(summary, REPEAT_CHANGED);
     if (await stateMoved(db, record(seriesChanges.series))) return refuse(summary, REPEAT_CHANGED);
+    if (await revivesDeletedTask(db, record(seriesChanges.series))) return refuse(summary, "Can't undo: its open task was deleted.");
     return { entityName, summary, plan: { ok: true, restores, run: () => restoreSeriesInDb(db, actor, seriesChanges, provenance) } };
   }
 
@@ -744,14 +759,32 @@ async function actionIds(db: Db, actor: Actor, eventId: string) {
   return found.rows.map((row) => row.id);
 }
 
+async function undidRepeatBeside(db: Db, workspaceId: string, event: AuditRow) {
+  if (event.entity_type !== "task" || event.event_type.startsWith("task_series.")) return false;
+  const found = await db.query(
+    `select 1 from crm.audit_events e join crm.audit_events t on t.id = $2 and t.workspace_id = $1
+     where e.workspace_id = t.workspace_id and e.entity_type = 'task' and e.entity_id = t.entity_id and e.created_at = t.created_at
+       and e.event_type like 'task_series.%' and (e.changes ->> 'undoing') = 'true'
+       and e.actor_user_id is not distinct from t.actor_user_id and e.actor_agent_id is not distinct from t.actor_agent_id`,
+    [workspaceId, event.id],
+  );
+  return (found.rowCount ?? 0) > 0;
+}
+
 async function describeAction(db: Db, actor: Actor, eventId: string, provenance: Provenance, pick = false): Promise<{ event: AuditRow; described: Described; ids: string[] }> {
+  const action = await describeActionParts(db, actor, eventId, provenance, pick);
+  if (!(await undidRepeatBeside(db, actor.workspaceId, action.event))) return action;
+  return { ...action, described: { ...action.described, summary: `${action.described.summary}; Undid a change to how ${action.described.entityName} repeats` } };
+}
+
+async function describeActionParts(db: Db, actor: Actor, eventId: string, provenance: Provenance, pick = false): Promise<{ event: AuditRow; described: Described; ids: string[] }> {
   const one = await describeById(db, actor, eventId, provenance);
   const ids = one.event.entity_type === "task" ? await actionIds(db, actor, one.event.id) : [one.event.id];
   if (!ids.includes(one.event.id)) return pick && ids.length === 1 ? { ...(await describeById(db, actor, ids[0], provenance)), ids } : { ...one, ids: [one.event.id] };
   if (ids.length < 2) return { ...one, ids };
   const parts = await Promise.all(ids.map((id) => describeById(db, actor, id, provenance)));
   const series = parts.filter((part) => part.event.event_type.startsWith("task_series."));
-  const refuse = (reason: string) => ({ event: one.event, ids, described: { ...one.described, plan: { ok: false as const, reason } } });
+  const refuse = (reason: string) => ({ event: one.event, ids, described: { ...one.described, summary: parts.map((part) => part.described.summary).join("; "), plan: { ok: false as const, reason } } });
   if (ids.length > 2 || series.length !== 1) return refuse(ONE_AT_A_TIME);
   const stuck = parts.find((part) => !part.described.plan.ok && !ALREADY.test(part.described.plan.reason)) ?? parts.find((part) => !part.described.plan.ok && parts.every((other) => !other.described.plan.ok));
   if (stuck && !stuck.described.plan.ok) return refuse(stuck.described.plan.reason);

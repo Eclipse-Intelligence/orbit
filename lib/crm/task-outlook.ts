@@ -676,7 +676,10 @@ export async function flushTaskBlocks(
   }
   const throttled = new Set<string>();
   const { SERIES_SHARE, syncSeriesOutlook } = await import("@/lib/crm/series-outlook");
-  const series = await syncSeriesOutlook({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled, limit: SERIES_SHARE });
+  const series = await syncSeriesOutlook({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled, limit: SERIES_SHARE }).catch((error) => {
+    console.error("Outlook repeating tasks failed", error);
+    return { requests: SERIES_SHARE };
+  });
   return syncTaskBlocks({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now, throttled, limit: Math.max(1, RUN_LIMIT - series.requests) });
 }
 

@@ -3776,5 +3776,53 @@
     "satBeforeAutumn": "2026-11-14 | - | - | Send NDA",
     "sunAutumn": "2026-11-14 | - | - | Send NDA",
     "sat14": "2026-11-14 | - | - | Send NDA"
+  },
+  "Standup 9am daily": {
+    "monAM": "2026-11-17T09:00 | - | - | Standup",
+    "friPM": "2026-11-21T09:00 | - | - | Standup",
+    "sunNight": "2026-11-23T09:00 | - | - | Standup",
+    "satBeforeSpring": "2027-03-28T09:00 | - | - | Standup",
+    "sunSpring": "2027-03-28T09:00 | - | - | Standup",
+    "satBeforeAutumn": "2026-10-25T09:00 | - | - | Standup",
+    "sunAutumn": "2026-10-25T09:00 | - | - | Standup",
+    "sat14": "2026-11-15T09:00 | - | - | Standup",
+    "wed18": "2026-11-19T09:00 | - | - | Standup",
+    "dec31": "2027-01-01T09:00 | - | - | Standup"
+  },
+  "Standup every Monday 9am": {
+    "monAM": "2026-11-23T09:00 | - | - | Standup",
+    "friPM": "2026-11-23T09:00 | - | - | Standup",
+    "sunNight": "2026-11-23T09:00 | - | - | Standup",
+    "satBeforeSpring": "2027-03-29T09:00 | - | - | Standup",
+    "sunSpring": "2027-03-29T09:00 | - | - | Standup",
+    "satBeforeAutumn": "2026-10-26T09:00 | - | - | Standup",
+    "sunAutumn": "2026-10-26T09:00 | - | - | Standup",
+    "sat14": "2026-11-16T09:00 | - | - | Standup",
+    "wed18": "2026-11-23T09:00 | - | - | Standup",
+    "dec31": "2027-01-04T09:00 | - | - | Standup"
+  },
+  "Call Jo daily": {
+    "monAM": "2026-11-16 | - | - | Call Jo",
+    "friPM": "2026-11-20 | - | - | Call Jo",
+    "sunNight": "2026-11-22 | - | - | Call Jo",
+    "satBeforeSpring": "2027-03-27 | - | - | Call Jo",
+    "sunSpring": "2027-03-28 | - | - | Call Jo",
+    "satBeforeAutumn": "2026-10-24 | - | - | Call Jo",
+    "sunAutumn": "2026-10-25 | - | - | Call Jo",
+    "sat14": "2026-11-14 | - | - | Call Jo",
+    "wed18": "2026-11-18 | - | - | Call Jo",
+    "dec31": "2026-12-31 | - | - | Call Jo"
+  },
+  "Call Sam every Friday": {
+    "monAM": "2026-11-20 | - | - | Call Sam",
+    "friPM": "2026-11-20 | - | - | Call Sam",
+    "sunNight": "2026-11-27 | - | - | Call Sam",
+    "satBeforeSpring": "2027-04-02 | - | - | Call Sam",
+    "sunSpring": "2027-04-02 | - | - | Call Sam",
+    "satBeforeAutumn": "2026-10-30 | - | - | Call Sam",
+    "sunAutumn": "2026-10-30 | - | - | Call Sam",
+    "sat14": "2026-11-20 | - | - | Call Sam",
+    "wed18": "2026-11-20 | - | - | Call Sam",
+    "dec31": "2027-01-01 | - | - | Call Sam"
   }
 }

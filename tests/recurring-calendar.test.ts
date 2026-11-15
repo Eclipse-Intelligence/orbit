@@ -574,6 +574,18 @@ describe("review of the whole branch", () => {
     assert.equal(resetsFor(block), 0);
   });
 
+  it("hides dates of a part that hasn't started on or before the day its open task was moved to", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating(mark, "Moved past the part", tuesday, "14:00", { every: "week" });
+    const from = shiftDay(tuesday, 14);
+    const split = await splitAt(task, from, "15:00");
+    await sql("update crm.tasks set due_at = $2 where id = $1", [task.id, london(shiftDay(from, 8), "14:00")]);
+    const part = (await readPlanner(mark)).series.find((item) => item.id === split)!;
+    assert.equal(part.anchorTaskId, task.id);
+    const blocks = upcomingBlocks([part], { viewerId: mark.userId, from, to: shiftDay(from, 21), today });
+    assert.deepEqual(blocks.map((block) => block.upcoming?.occursOn), [shiftDay(from, 14), shiftDay(from, 21)]);
+  });
+
   it("shows the open date-only occurrence as a chip on its day", async () => {
     const task = await repeating(mark, "Report", nextWeekday(3), null, { every: "week" });
     const planner = await readPlanner(mark);

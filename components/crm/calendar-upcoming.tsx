@@ -3,15 +3,16 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { useComposer } from "@/components/mail/compose-dock";
-import { REPEAT_SAVE_FAILED, RepeatIcon, useUndoToast } from "@/components/crm/task-repeat";
+import { RepeatIcon, useUndoToast } from "@/components/crm/task-repeat";
 import { moveUpcomingAction, skipUpcomingAction, undoRepeatAction, type RepeatActionResult, type UpcomingTarget } from "@/app/(crm)/repeats";
 import { dateKey } from "@/lib/calendar-view";
 import { clockLabel, durationLabel } from "@/lib/crm/task-time";
 import { dropRefusal, NOT_HERE, resetsFor, type TaskBlock } from "@/lib/task-blocks";
 import type { DropPlacement } from "@/lib/task-drag";
 import { shortDay } from "@/lib/task-repeat";
+import { MOVE_FAILED, SKIP_FAILED } from "@/lib/task-repeat-menu";
 
 const UNDO_FAILED = "Couldn't undo. Try again.";
 
@@ -30,7 +31,10 @@ export function useUpcomingMove(today: string) {
   const composer = useComposer();
   const router = useRouter();
   const undoToast = useUndoToast();
-  const failed = useCallback((message?: string) => composer.showToast({ message: message || REPEAT_SAVE_FAILED, tone: "alert" }), [composer]);
+  const failed = useCallback(
+    (message?: string, action?: { label: string; run: () => void }) => composer.showToast({ message: message || MOVE_FAILED, tone: "alert", ...(action ? { action } : {}) }),
+    [composer],
+  );
   return useCallback(
     (block: TaskBlock, placement: DropPlacement, onDone: (saved: boolean) => void) => {
       const target = targetOf(block);
@@ -54,16 +58,30 @@ export function useUpcomingMove(today: string) {
       const landed = dateKey(placement.at);
       const day = shortDay(landed);
       const sameDay = landed === block.upcoming!.occursOn;
+      const verb = move.dueAt ? "Moved" : "Changed";
+      const undoMove = (undo: string[]) =>
+        undo.length > 0
+          ? {
+              label: "Undo",
+              run: () =>
+                void undoRepeatAction(target.currentTaskId, undo)
+                  .catch(() => ({ error: UNDO_FAILED }))
+                  .then((undone: { error?: string }) => {
+                    if (undone.error) failed(undone.error);
+                    router.refresh();
+                  }),
+            }
+          : undefined;
       const rescope = (scope: "following" | "all", undo: string[], message: string) =>
         void moveUpcomingAction(target, move, scope, undo)
-          .catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }))
+          .catch((): RepeatActionResult => ({ error: MOVE_FAILED }))
           .then((result) => {
-            if (result.error) failed(result.error);
+            if (result.error) failed(result.error, undoMove(undo));
             else undoToast(target.currentTaskId, message, result.undo);
             router.refresh();
           });
       void moveUpcomingAction(target, move, "this")
-        .catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }))
+        .catch((): RepeatActionResult => ({ error: MOVE_FAILED }))
         .then((result) => {
           if (result.error) {
             onDone(false);
@@ -80,31 +98,19 @@ export function useUpcomingMove(today: string) {
               duration: 10_000,
               action: { label: "Move all", run: () => rescope("all", undo, "Moved every one.") },
             });
+          const action = undoMove(undo);
           composer.showToast({
-            message: `Moved ${day} only.`,
+            message: `${verb} ${day} only.`,
             duration: 10_000,
             ...(sameDay
               ? {
                   choices: [
-                    { label: "This and following", run: () => rescope("following", undo, `Moved ${day} and later.`) },
-                    { label: "All", run: () => (resets > 0 ? confirmAll() : rescope("all", undo, "Moved every one.")) },
+                    { label: "This and following", run: () => rescope("following", undo, `${verb} ${day} and later.`) },
+                    { label: "All", run: () => (resets > 0 ? confirmAll() : rescope("all", undo, `${verb} every one.`)) },
                   ],
                 }
               : {}),
-            ...(undo.length > 0
-              ? {
-                  action: {
-                    label: "Undo",
-                    run: () =>
-                      void undoRepeatAction(target.currentTaskId, undo)
-                        .catch(() => ({ error: UNDO_FAILED }))
-                        .then((undone: { error?: string }) => {
-                          if (undone.error) failed(undone.error);
-                          router.refresh();
-                        }),
-                  },
-                }
-              : {}),
+            ...(action ? { action } : {}),
           });
         });
     },
@@ -134,7 +140,7 @@ export default function UpcomingDialog({
   const skip = async () => {
     if (!shown || !target) return;
     setBusy(true);
-    const result = await skipUpcomingAction(target).catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }));
+    const result = await skipUpcomingAction(target).catch((): RepeatActionResult => ({ error: SKIP_FAILED }));
     setBusy(false);
     if (result.error) {
       composer.showToast({ message: result.error, tone: "alert" });
@@ -162,6 +168,11 @@ export default function UpcomingDialog({
           </p>
         )}
         <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="md" className="hit mr-auto">
+              Cancel
+            </Button>
+          </DialogClose>
           <Button variant="secondary" size="md" className="hit" disabled={busy || !target} onClick={() => void skip()}>
             Skip this one
           </Button>

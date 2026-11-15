@@ -331,7 +331,7 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
       opportunityName: task.opportunityName,
       openTasks: await openTasksBeside(actor, task),
       seriesId: task.seriesId,
-      repeats: Boolean(task.repeat && !task.repeat.ended),
+      repeats: Boolean(task.seriesId && !task.repeat?.ended),
       repeat: task.repeat && !task.repeat.ended ? task.repeat.text : null,
     };
     companyId = task.companyId;

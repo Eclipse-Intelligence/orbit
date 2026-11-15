@@ -44,8 +44,8 @@ import { assertOwnThreadInDb, readMailThreadKey } from "@/lib/crm/task-mail";
 import { canChangeTask, type SeriesRights } from "@/lib/crm/task-rights";
 import { planTaskDocsInDb, readDocIds, TASK_DOC_IDS_SQL, withoutViewerLinks, withViewerLinksInDb, writeTaskDocsInDb } from "@/lib/crm/task-docs";
 import { dayWindow, readDateTime } from "@/lib/time";
-import { describeRepeat, type OccurrenceChange, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
-import { archiveAsSkipInDb, seriesAfterArchive, seriesAfterTaskChange, seriesAfterUnarchive, seriesBeforeReopen, seriesBeforeUnarchive } from "@/lib/crm/task-series";
+import { describeRepeat, type OccurrenceChange, type RepeatEnds, type RepeatPattern, type RepeatRule } from "@/lib/task-repeat";
+import { archiveAsSkipInDb, SKIP_MOVED_ON, seriesAfterArchive, seriesAfterTaskChange, seriesAfterUnarchive, seriesBeforeReopen, seriesBeforeUnarchive } from "@/lib/crm/task-series";
 
 const TASK_SQL = `
   select
@@ -99,6 +99,7 @@ const TASK_SQL = `
     rs.created_by_user_id as series_creator_id,
     (rs.ended_at is not null or rs.archived_at is not null) as series_stopped,
     rc.rows as series_changes,
+    rp.parts as series_parts,
     ${TASK_DOC_IDS_SQL} as doc_ids,
     t.created_at,
     t.updated_at
@@ -120,6 +121,22 @@ const TASK_SQL = `
       limit 200
     ) c
   ) rc on rs.id is not null
+  left join lateral (
+    with recursive chain as (
+      select lp.id, lp.starts_on, lp.at, lp.rule, lp.ends, lp.current_task_id, lp.ended_at, lp.archived_at, 1 as depth
+      from crm.task_series lp
+      where lp.split_from_id = rs.id and lp.workspace_id = rs.workspace_id
+        and rs.current_task_id = t.id and rs.ended_at is null and rs.archived_at is null
+      union all
+      select lp.id, lp.starts_on, lp.at, lp.rule, lp.ends, lp.current_task_id, lp.ended_at, lp.archived_at, chain.depth + 1
+      from crm.task_series lp
+      join chain on lp.split_from_id = chain.id
+      where chain.depth < 20 and lp.workspace_id = rs.workspace_id
+    )
+    select jsonb_agg(jsonb_build_object('startsOn', c.starts_on::text, 'at', to_char(c.at, 'HH24:MI'), 'rule', c.rule, 'ends', c.ends) order by c.starts_on) as parts
+    from chain c
+    where c.current_task_id is null and c.ended_at is null and c.archived_at is null
+  ) rp on rs.id is not null
 `;
 
 type TaskRow = {
@@ -169,6 +186,7 @@ type TaskRow = {
   series_creator_id: string | null;
   series_stopped: boolean | null;
   series_changes: OccurrenceChange[] | null;
+  series_parts: RepeatPattern[] | null;
   doc_ids: string[] | null;
   created_at: Date | string;
   updated_at: Date | string;
@@ -189,6 +207,7 @@ function repeatOf(row: TaskRow) {
     occursOn: row.occurs_on,
     dueDay: taskDueDay(iso(row.due_at)),
     changes: (row.series_changes ?? []).map((change) => ({ ...change, dueAt: change.dueAt ? new Date(change.dueAt).toISOString() : null })),
+    parts: row.series_parts ?? [],
   });
 }
 
@@ -461,7 +480,7 @@ function taskAlerts(db: Db, actor: Actor, before: Task | null, task: Task, prove
 
 export { canChangeTask };
 
-async function workspaceOwner(db: Db, workspaceId: string) {
+export async function workspaceOwner(db: Db, workspaceId: string) {
   const result = await db.query<{ user_id: string }>(
     "select user_id from crm.workspace_members where workspace_id = $1 and role = 'owner' order by created_at, user_id limit 1",
     [workspaceId],
@@ -718,6 +737,7 @@ async function applyTask(
     if (change.sets.length === 0) change.sets.push("updated_at = now()");
   }
   const before = mapTask(current);
+  if (change.sets.length === 0 && options.seriesMove && options.auditExtra) change.sets.push("updated_at = now()");
   if (change.sets.length === 0) {
     return { task: (await withViewerLinksInDb(db, actor, [before]))[0], changed: false };
   }
@@ -789,7 +809,7 @@ async function applyTask(
       ...((options.beforeAudit ? await options.beforeAudit(task, change.fields) : null) ?? {}),
     },
   );
-  taskAlerts(db, actor, before, task, provenance);
+  if (!options.seriesMove) taskAlerts(db, actor, before, task, provenance);
   const settledTask = task.seriesId ? ((await seriesAfterTaskChange(db, actor, before, task, provenance)) ?? task) : task;
   return { task: (await withViewerLinksInDb(db, actor, [settledTask]))[0], changed: true };
 }
@@ -1109,14 +1129,14 @@ export async function reopenTask(
 export async function archiveTask(
   actor: Actor,
   id: string,
-  options: MutationOptions = {},
+  options: MutationOptions & { expect?: string } = {},
 ): Promise<MutationOutcome<{ task: Task; skipped?: string }>> {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(id)) throw notFound("task");
   const provenance = options.provenance ?? { operation: "archive_task" };
-  const hash = requestHash("archive_task", { id, provenance });
+  const hash = requestHash("archive_task", { id, provenance, expect: options.expect });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => archiveTaskInDb(db, actor, id, provenance)),
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => archiveTaskInDb(db, actor, id, provenance, { expect: options.expect })),
   );
 }
 
@@ -1125,13 +1145,14 @@ export async function archiveTaskInDb(
   actor: Actor,
   id: string,
   provenance: Provenance,
-  options: { goneFromClickUp?: boolean; keepSeries?: boolean; noSkip?: boolean; series?: SeriesRights } = {},
+  options: { goneFromClickUp?: boolean; keepSeries?: boolean; noSkip?: boolean; series?: SeriesRights; expect?: string } = {},
 ): Promise<{ task: Task; skipped?: string }> {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
   if (!canChangeTask(actor, taskRights(current), options.series)) throw cannotChange();
   if (current.series_id && !options.keepSeries && !options.noSkip && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
+    if (options.expect !== undefined && current.occurs_on !== options.expect) throw new CrmError("conflict", SKIP_MOVED_ON, 409, { field: "occursOn" });
     const skipped = await archiveAsSkipInDb(db, actor, mapTask(current), provenance);
     if (skipped) return { task: skipped, skipped: current.occurs_on ?? undefined };
   }
@@ -1184,7 +1205,7 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
     after: { archivedAt: null, ...(keeper ? { ownerId: task.ownerId } : {}) },
     ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
-  if (task.seriesId) await seriesAfterUnarchive(db, actor, task);
+  if (task.seriesId) await seriesAfterUnarchive(db, actor, task, iso(current.archived_at));
   const fresh = task.seriesId ? ((await readTask(db, actor, id)) ?? saved) : saved;
   return { task: (await withViewerLinksInDb(db, actor, [mapTask(fresh)]))[0] };
 }

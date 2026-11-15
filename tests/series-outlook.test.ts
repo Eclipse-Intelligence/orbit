@@ -18,7 +18,7 @@ import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import type { GraphEvent } from "@/lib/microsoft/calendar";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { upcomingAfter, upcomingBetween, type OccurrenceChange, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -119,7 +119,9 @@ class FakeGraph {
   keepExceptions = false;
   failLogin = false;
   loseCreates = 0;
+  losePatches = 0;
   refuseCreate = false;
+  refuseTitles = new Set<string>();
   throttleDeletes = false;
   strict = false;
   faultRate = 0;
@@ -202,7 +204,15 @@ class FakeGraph {
     this.clock += 1;
     const property = (value: Record<string, unknown> | null) =>
       ((value?.singleValueExtendedProperties as { value: string }[] | undefined) ?? [])[0]?.value ?? null;
-    if (method === "POST" && parsed.pathname === "/v1.0/me/events" && this.refuseCreate) return json({ error: { code: "ErrorInvalidRequest", message: "No" } }, 400);
+    if (method === "POST" && parsed.pathname === "/v1.0/me/events" && (this.refuseCreate || this.refuseTitles.has(String(body?.subject)))) return json({ error: { code: "ErrorInvalidRequest", message: "No" } }, 400);
+    if (method === "PATCH" && this.losePatches > 0) {
+      this.losePatches -= 1;
+      const held = this.losePatches;
+      this.losePatches = 0;
+      await this.handle(input, init);
+      this.losePatches = held;
+      throw new TypeError("fetch failed");
+    }
     if (method === "POST" && parsed.pathname === "/v1.0/me/events" && this.loseCreates > 0) {
       this.loseCreates -= 1;
       const held = this.loseCreates;
@@ -755,7 +765,9 @@ describe("repeating tasks in Outlook", () => {
     const later = shiftDay(thursday, 7);
     await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "10:00") }, "this", { provenance: DRAG });
     await admin().query("delete from crm.task_series_outlook where series_id = $1", [task.seriesId]);
-    await applyMigrationSql(admin(), readFileSync("supabase/migrations/20270203200000_recurring_calendar.sql", "utf8"));
+    for (const file of readdirSync("supabase/migrations").filter((name) => name.endsWith(".sql") && name >= "20270203200000").sort()) {
+      await applyMigrationSql(admin(), readFileSync(`supabase/migrations/${file}`, "utf8"));
+    }
     assert.ok(await version(task.seriesId!));
   });
 });
@@ -1100,5 +1112,180 @@ describe("Outlook review fixes", () => {
     }, "key", "Antarctica/Troll");
     assert.equal(draft.start.timeZone, "UTC");
     assert.equal(draft.recurrence.range.recurrenceTimeZone, "UTC");
+  });
+});
+
+describe("Outlook whole-review fixes", () => {
+  async function soleMember(name: string, role: "member" | "admin") {
+    const person = await createUser(`${name}${seq}@series-outlook.test`, "Sam Okafor");
+    const here: UserActor = { ...person, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role, scopes: scopesForRole(role) };
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, $3)", [mark.workspaceId, person.userId, role]);
+    await admin().query("delete from crm.workspace_members where user_id = $1 and workspace_id <> $2", [person.userId, mark.workspaceId]);
+    await connect(here, `access-${person.userId}`);
+    await admin().query("update crm.mailbox_connections set access_token = $2 where user_id = $1", [mark.userId, "access-mark"]);
+    graph.strict = true;
+    return here;
+  }
+
+  const mastersOf = (actor: UserActor) => [...graph.masters.values()].filter((master) => master.owner === `Bearer access-${actor.userId}`);
+
+  it("keeps the series' Outlook ids through a disconnect, so reconnecting never doubles it and a delete made meanwhile still reaches Outlook", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating("Reconnected", tuesday, "12:00", { every: "week" });
+    const gone = await repeating("Deleted offline", nextWeekday(3), "15:00", { every: "week" });
+    await sync();
+    await disconnectMailbox(mark);
+    await updateOccurrence(mark, { taskId: task.id }, { dueAt: london(tuesday, "13:00") }, "all");
+    await deleteSeries(mark, gone.id);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    await saveMailbox(mark, { email: mark.email, refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + HOUR).toISOString() });
+    const connection = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await flushTaskBlocks(mark, connection, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    assert.deepEqual([...graph.masters.values()].map((master) => [master.subject, master.at]), [["Reconnected", "13:00"]]);
+  });
+
+  it("sends nothing to Outlook when a removal is refused", async () => {
+    const sam = await soleMember("sam-refused", "admin");
+    const rita = await createUser(`rita-refused${seq}@series-outlook.test`, "Rita Gomez");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'admin')", [mark.workspaceId, rita.userId]);
+    const ritaHere: UserActor = { ...rita, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "admin", scopes: scopesForRole("admin") };
+    const task = (await createRepeatingTask(sam, { title: "Sam's review", dueAt: london(nextWeekday(4), "10:00") }, { every: "week" })).body.task;
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: sam.userId });
+    await assert.rejects(removeMember(ritaHere, sam.userId, { operation: "remove_member" }, { fetchImpl: graph.fetch }), /Only the owner can remove an admin/);
+    assert.equal(mastersOf(sam).length, 1);
+    const row = (await admin().query<{ claimed_at: Date | null }>("select claimed_at from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(row.claimed_at, null);
+  });
+
+  it("puts the master and a moved date back when a change whose answer was lost is undone", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating("Lost patch", tuesday, "14:00", { every: "week" });
+    const later = shiftDay(tuesday, 7);
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "16:00"), dueHasTime: true }, "this", [], DRAG);
+    await sync();
+    const masterId = [...graph.masters.keys()][0];
+    await updateOccurrence(mark, { taskId: task.id }, { dueAt: london(tuesday, "15:00") }, "all");
+    graph.losePatches = 2;
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.equal(graph.masters.get(masterId)!.at, "15:00");
+    await updateOccurrence(mark, { taskId: task.id }, { dueAt: london(tuesday, "14:00") }, "all");
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.equal(graph.masters.get(masterId)!.at, "14:00");
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "17:00"), dueHasTime: true }, "this", [], DRAG);
+    graph.losePatches = 2;
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "16:00"), dueHasTime: true }, "this", [], DRAG);
+    await admin().query("update crm.task_series_outlook set retry_at = null where series_id = $1", [task.seriesId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId });
+    assert.deepEqual(graph.onDay(later).map((item) => item.start), [london(later, "16:00")]);
+  });
+
+  it("doesn't park a change made during a failing run behind the back-off", async () => {
+    const task = await repeating("Changed meanwhile", nextWeekday(5), "10:00", { every: "week" });
+    let changed = false;
+    const failing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input)).hostname !== "graph.microsoft.com") return graph.fetch(input, init);
+      if (!changed) {
+        changed = true;
+        await updateOccurrence(mark, { taskId: task.id }, { title: "Changed meanwhile, renamed" }, "all");
+      }
+      return json({ error: { code: "ServiceUnavailable", message: "Busy" } }, 503);
+    }) as typeof fetch;
+    await syncSeriesOutlook({ fetchImpl: failing, userId: mark.userId });
+    const row = (await admin().query<{ retry_at: Date | null; attempts: number }>("select retry_at, attempts from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(row.retry_at, null);
+    assert.equal(row.attempts, 0);
+  });
+
+  it("hands a series to the new owner while the previous holder's Outlook is read only", async () => {
+    const sam = await createUser(`sam-read${seq}@series-outlook.test`, "Sam Okafor");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+    await connect({ ...sam, workspaceId: mark.workspaceId });
+    const task = await repeating("Read only", nextWeekday(3), "16:00", { every: "week" });
+    await sync();
+    const connection = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await withActor(mark, (db) => storeGrantedScopes(db, mark, connection, "https://graph.microsoft.com/Calendars.Read offline_access"));
+    await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
+    await syncSeriesOutlook({ fetchImpl: graph.fetch });
+    const row = (await admin().query<{ user_id: string | null; version: string; settled_version: string }>("select user_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(row.user_id, sam.userId);
+    assert.equal(Number(row.version), Number(row.settled_version));
+  });
+
+  it("takes a master whose create answer was lost out of the Outlook of someone removed from their only workspace", async () => {
+    const sam = await soleMember("sam-lost", "member");
+    graph.loseCreates = 2;
+    await createRepeatingTask(sam, { title: "Sam's lost call", dueAt: london(nextWeekday(4), "10:00") }, { every: "week" });
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: sam.userId });
+    assert.equal(mastersOf(sam).length, 1);
+    await removeMember(mark, sam.userId, { operation: "remove_member" }, { fetchImpl: graph.fetch });
+    assert.equal(mastersOf(sam).length, 0);
+  });
+
+  it("points a plain date event at the new open task after Done", async () => {
+    const wednesday = nextWeekday(3);
+    const task = await repeating("Linked", wednesday, null, { every: "week" });
+    const later = shiftDay(wednesday, 14);
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "09:30") }, "this", { provenance: DRAG });
+    await sync();
+    const single = [...graph.plains.keys()].find((id) => graph.plains.get(id)!.key?.startsWith("series:"))!;
+    await completeTask(mark, task.id);
+    const next = (await admin().query<{ current_task_id: string }>("select current_task_id from crm.task_series where id = $1", [task.seriesId])).rows[0].current_task_id;
+    graph.calls = [];
+    await sync();
+    const patch = graph.calls.find((call) => call.method === "PATCH" && call.url.endsWith(`/${single}`));
+    assert.match(JSON.stringify(patch?.body ?? null), new RegExp(next));
+  });
+
+  it("writes the other changed dates when Outlook refuses one", async () => {
+    graph.refuseInstancePatch = true;
+    const monday = nextWeekday(1);
+    const task = await repeating("Refusals", monday, "09:00", { every: "week" });
+    await sync();
+    const first = shiftDay(monday, 7);
+    const second = shiftDay(monday, 14);
+    graph.refuseTitles.add("Refused date");
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: first }, { title: "Refused date" }, "this");
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: second }, { dueAt: london(second, "16:00"), dueHasTime: true }, "this", [], DRAG);
+    await sync();
+    assert.deepEqual(graph.onDay(second).map((item) => item.start), [london(second, "16:00")]);
+  });
+
+  it("still writes task blocks when the repeating tasks' Outlook sync fails", async () => {
+    const tuesday = nextWeekday(2);
+    await repeating("Blocks", tuesday, "10:00", { every: "week" });
+    const connection = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await admin().query("revoke execute on function private.claim_series_outlook(uuid[], uuid, integer) from crm_app");
+    try {
+      await flushTaskBlocks(mark, connection, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    } finally {
+      await admin().query("grant execute on function private.claim_series_outlook(uuid[], uuid, integer) to crm_app");
+    }
+    assert.equal(graph.onDay(tuesday).length, 1);
+  });
+
+  it("leaves a series' back-off alone when the calendar syncs", async () => {
+    const task = await repeating("Backing off", nextWeekday(4), "10:00", { every: "week" });
+    const connection = (await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [mark.userId])).rows[0].id;
+    await flushTaskBlocks(mark, connection, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Backing off, renamed" }, "all");
+    await admin().query("update crm.task_series_outlook set retry_at = now() + interval '30 minutes', attempts = 3 where series_id = $1", [task.seriesId]);
+    await flushTaskBlocks(mark, connection, WRITE_SCOPES, { fetchImpl: graph.fetch });
+    const row = (await admin().query<{ retry_at: Date | null; attempts: number }>("select retry_at, attempts from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.ok(row.retry_at);
+    assert.equal(row.attempts, 3);
+  });
+
+  it("gives a master on a clock change day an end after its start", () => {
+    const draft = masterDraft("00000000-0000-4000-8000-000000000002", {
+      startDay: "2027-10-31",
+      at: "01:30",
+      durationMinutes: 30,
+      title: "Clocks",
+      link: null,
+      recurrence: seriesRecurrence({ startsOn: "2027-10-31", at: "01:30", rule: { freq: "daily", interval: 1 }, ends: { never: true } }, "2027-10-31", null),
+    }, "key");
+    assert.equal(draft.start.dateTime, "2027-10-31T01:30:00");
+    assert.equal(draft.end.dateTime, "2027-10-31T02:00:00");
   });
 });

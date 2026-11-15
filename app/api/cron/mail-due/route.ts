@@ -18,7 +18,10 @@ async function handle(request: Request) {
   if (auth === "unauthorized") return Response.json({ error: "Unauthorized." }, { status: 401 });
   const started = Date.now();
   const deadline = started + 45_000;
-  const users = await processAllDueMail(deadline - 10_000);
+  const users = await processAllDueMail(deadline - 10_000).catch((error) => {
+    console.error("Due mail failed", error instanceof Error ? error.name : "unknown");
+    return null;
+  });
   const calendar = await processAllCalendarAlerts(deadline).catch((error) => {
     console.error("Calendar alerts failed", error);
     return { users: 0, sent: 0 };

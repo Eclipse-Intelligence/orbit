@@ -53,6 +53,7 @@ export const MAX_UNTIL_YEARS = 10;
 export const MAX_EXPANSION = 400;
 export const WORKWEEK: Weekday[] = ["mo", "tu", "we", "th", "fr"];
 const LAST_YEAR = 9999;
+const LAST_END = "4500-01-01";
 
 export function occurrenceEnd(occurrence: { dueAt: string | null; dueHasTime: boolean; durationMinutes?: number | null }, timeZone = appTimeZone()) {
   if (!occurrence.dueAt) return null;
@@ -61,7 +62,7 @@ export function occurrenceEnd(occurrence: { dueAt: string | null; dueHasTime: bo
   return Date.parse(dayStartIso(shiftDay(dayKeyAt(new Date(start), timeZone), 1), timeZone));
 }
 
-const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+export const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const SHORT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const ORDINAL_WORDS: Record<number, string> = { 1: "first", 2: "second", 3: "third", 4: "fourth", [-1]: "last" };
@@ -235,7 +236,9 @@ export function countLeft(ends: RepeatEnds) {
 }
 
 export function reachesEnd(pattern: RepeatPattern) {
-  return !("count" in pattern.ends) || lastOccurrence(pattern) !== null;
+  if (!("count" in pattern.ends)) return true;
+  const last = lastOccurrence(pattern);
+  return last !== null && last < LAST_END;
 }
 
 const lastDays = new Map<string, string | null>();
@@ -269,6 +272,24 @@ export function occurrenceAfter(pattern: RepeatPattern, day: string): string | n
 
 export function isOccurrenceDay(pattern: RepeatPattern, day: string) {
   return occurrenceOnOrAfter(pattern, day) === day;
+}
+
+export function datesIn(pattern: RepeatPattern) {
+  const last = lastOccurrence(pattern);
+  return last ? occurrenceDays(pattern, pattern.startsOn, last, MAX_COUNT + 1).length : 0;
+}
+
+export function chainEnds(first: RepeatPattern, parts: RepeatPattern[]): RepeatEnds {
+  const last = parts.at(-1);
+  if (!last) return first.ends;
+  if (!("count" in last.ends)) return last.ends;
+  const before = [first, ...parts.slice(0, -1)].reduce((sum, part) => sum + datesIn(part), 0);
+  return { count: Math.min(MAX_COUNT, before + (countLeft(last.ends) ?? 0)) };
+}
+
+export function sameEnds(left: RepeatEnds, right: RepeatEnds) {
+  if ("count" in left || "count" in right) return "count" in left && "count" in right && left.count === right.count;
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function occurrenceDays(pattern: RepeatPattern, from: string, to: string, limit = MAX_EXPANSION) {
@@ -475,7 +496,7 @@ export function repeatSummary(pattern: RepeatPattern) {
 
 export type RepeatPreset = { id: string; label: string; rule: RepeatRule };
 
-export function repeatPresets(day: string): RepeatPreset[] {
+export function repeatPresets(day: string, series: Pick<RepeatPattern, "rule" | "startsOn"> | null = null): RepeatPreset[] {
   const name = dayName(weekdayOf(day));
   const { day: date } = dayParts(day);
   const week = monthWeekOf(day);
@@ -485,9 +506,12 @@ export function repeatPresets(day: string): RepeatPreset[] {
     { id: "weekly", label: `Every week on ${name}`, rule: { freq: "weekly", interval: 1, weekdays: [weekdayOf(day)] } },
     { id: "monthly-day", label: `Every month on the ${ordinal(date)}`, rule: { freq: "monthly", interval: 1, monthDay: date } },
   ];
-  const monthWeek: MonthWeek = isLastWeekOfMonth(day) ? { n: -1, weekday: week.weekday } : week;
+  const last = isLastWeekOfMonth(day);
+  if (last && week.n === 4) presets.push({ id: "monthly-fourth", label: `Every month on the fourth ${name}`, rule: { freq: "monthly", interval: 1, monthWeek: week } });
+  const monthWeek: MonthWeek = last ? { n: -1, weekday: week.weekday } : week;
   presets.push({ id: "monthly-week", label: `Every month on the ${ORDINAL_WORDS[monthWeek.n]} ${name}`, rule: { freq: "monthly", interval: 1, monthWeek } });
-  presets.push({ id: "yearly", label: `Every year on ${dayMonth(day)}`, rule: { freq: "yearly", interval: 1 } });
+  const yearly = anchoredRule({ freq: "yearly", interval: 1 }, series, day);
+  presets.push({ id: "yearly", label: `Every year on ${anniversary(yearly, day)}`, rule: { freq: "yearly", interval: 1 } });
   return presets;
 }
 
@@ -591,15 +615,21 @@ export type SeriesView = {
   occursOn: string | null;
   dueDay?: string | null;
   changes: OccurrenceChange[];
+  parts?: RepeatPattern[];
 };
 
 export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): TaskRepeat {
   const pattern: RepeatPattern = { startsOn: view.startsOn, at: view.at, rule: view.rule, ends: view.ends };
   const after = view.occursOn ?? view.startsOn;
+  const parts = view.stopped ? [] : (view.parts ?? []);
   let next = view.current && !view.stopped ? nextOccurrence(pattern, view.changes, after, timeZone) : null;
   for (let guard = 0; next && view.dueDay && next.day <= view.dueDay && guard < MAX_EXPANSION; guard += 1) next = nextOccurrence(pattern, view.changes, next.occursOn, timeZone);
+  if (!next && view.current && parts.length > 0) next = nextOccurrence(parts[0], [], shiftDay(parts[0].startsOn, -1), timeZone);
   const last = lastOccurrence(pattern);
   const skipped = view.changes.filter((change) => change.skip && change.occursOn > after && (last === null || change.occursOn <= last)).length;
+  const ends = chainEnds(pattern, parts);
+  const lastPart = parts.at(-1);
+  const later = parts.slice(0, -1).reduce((sum, part) => sum + datesIn(part), 0) + (lastPart && "count" in lastPart.ends ? (countLeft(lastPart.ends) ?? 0) : 0);
   return {
     seriesId: view.seriesId,
     ownerId: view.ownerId ?? null,
@@ -607,14 +637,18 @@ export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): Task
     startsOn: view.startsOn,
     at: view.at,
     rule: view.rule,
-    ends: view.ends,
+    ends,
     current: view.current,
     ended: view.stopped || (view.current && !next),
     next: next ? { occursOn: next.occursOn, dueAt: next.dueAt, dueHasTime: next.dueHasTime } : null,
     text: repeatChip(pattern),
     phrase: repeatPhrase(pattern),
     short: repeatShort(pattern),
-    end: view.stopped ? "" : "count" in view.ends && view.current ? `${Math.max(0, (remainingCount(pattern, after) ?? 0) - skipped)} more` : endWords(pattern, view.current ? after : null),
+    end: view.stopped
+      ? ""
+      : "count" in ends && view.current
+        ? `${Math.max(0, (remainingCount(pattern, after) ?? 0) - skipped) + later} more`
+        : endWords({ ...pattern, ends }, view.current ? after : null),
     rrule: toRrule(pattern, timeZone),
     changedDates: view.changes.filter((change) => change.occursOn > after && !change.skip && change.dueAt).length,
     skippedDates: view.changes.filter((change) => change.occursOn > after && change.skip).map((change) => change.occursOn),

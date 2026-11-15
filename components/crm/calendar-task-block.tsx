@@ -42,10 +42,11 @@ function tone(block: TaskBlock) {
 }
 
 export function taskBlockLabel(block: TaskBlock) {
+  const allDay = !block.task.dueHasTime;
   return [
     block.title,
-    block.upcoming && !block.task.dueHasTime ? null : `${formatTime(block.startsAt)} to ${formatTime(block.endsAt)}`,
-    block.upcoming ? (block.task.dueHasTime ? "upcoming, repeats" : "all day, upcoming, repeats") : block.proposed ? "proposed by Plan" : "task",
+    allDay ? null : `${formatTime(block.startsAt)} to ${formatTime(block.endsAt)}`,
+    block.upcoming ? (allDay ? "all day, upcoming, repeats" : "upcoming, repeats") : block.proposed ? "proposed by Plan" : allDay ? "all day, task, repeats" : "task",
     block.done ? "done" : null,
     block.overdue ? "overdue" : null,
     block.clash ? `clashes with ${block.clash}` : null,
@@ -98,7 +99,7 @@ function Detail({ block }: { block: TaskBlock }) {
   const parts: ReactNode[] = clashing(block)
     ? [<span key="clash" className="text-(--tag-amber-text)">Clashes with {block.clash}</span>]
     : [block.overdue ? <span key="overdue" className="text-danger font-medium">Overdue</span> : null, block.person, block.workspaceName];
-  parts.push(<span key="duration" className="tabular-nums">{durationLabel(block.durationMinutes)}</span>);
+  if (block.task.dueHasTime) parts.push(<span key="duration" className="tabular-nums">{durationLabel(block.durationMinutes)}</span>);
   return (
     <>
       {parts.filter(Boolean).map((part, index) => (
@@ -188,7 +189,7 @@ export function GridTaskBlock({
         title={taskBlockLabel(block)}
         onClick={(event) => onOpen(block, event.currentTarget)}
         className={cn(
-          "focus-visible:ring-ring/60 absolute inset-0 flex min-w-0 overflow-hidden rounded-md pr-1.5 text-left outline-none focus-visible:ring-2",
+          "focus-visible:ring-ring/60 @container absolute inset-0 flex min-w-0 overflow-hidden rounded-md pr-1.5 text-left outline-none focus-visible:ring-2",
           movable ? "cursor-grab" : "cursor-pointer",
           movable && resizable && "[@media(pointer:coarse)]:pr-5",
           edged ? "pl-[24px]" : "pl-[21px]",
@@ -209,9 +210,9 @@ export function GridTaskBlock({
             <Detail block={block} />
           </span>
         ) : block.overdue ? (
-          <span className="text-danger shrink-0 text-[11px] leading-[18px] font-medium">Overdue</span>
+          <span className="text-danger shrink-0 text-[11px] leading-[18px] font-medium @max-[6rem]:hidden">Overdue</span>
         ) : (
-          <span className={cn("shrink-0 text-[11px] leading-[18px] tabular-nums", block.done ? "text-faint" : block.suggested ? "text-violet" : "text-soft")}>{durationLabel(block.durationMinutes)}</span>
+          <span className={cn("shrink-0 text-[11px] leading-[18px] tabular-nums @max-[6rem]:hidden", block.done ? "text-faint" : block.suggested ? "text-violet" : "text-soft")}>{durationLabel(block.durationMinutes)}</span>
         )}
       </button>
       <span className={cn("pointer-events-none absolute inset-y-0 left-0 z-[1] flex justify-center", edged ? "w-6 pl-[3px]" : "w-5", two ? "items-start pt-1" : "items-center")}>
@@ -230,7 +231,8 @@ export function GridTaskBlock({
           onPointerDown={(event) => drag.onResize(event, block)}
           onClick={(event) => onOpen(block, event.currentTarget.parentElement?.querySelector<HTMLElement>("button[data-task-id]") ?? null)}
           className={cn(
-            "absolute right-0 bottom-0 z-[2] flex h-1.5 cursor-ns-resize items-end justify-center pb-0.5",
+            "absolute right-0 bottom-0 z-[2] flex cursor-ns-resize items-end justify-center pb-0.5",
+            two ? "h-1.5" : "h-1 pb-0",
             edged ? "left-6" : "left-5",
             "[@media(pointer:coarse)]:left-auto [@media(pointer:coarse)]:h-full [@media(pointer:coarse)]:max-h-4 [@media(pointer:coarse)]:w-8 [@media(pointer:coarse)]:justify-end [@media(pointer:coarse)]:rounded-br-md [@media(pointer:coarse)]:pr-1 [@media(pointer:coarse)]:pb-[3px]",
           )}
@@ -261,7 +263,7 @@ export function AgendaTaskBlock({ block, past, onOpen, onComplete }: TaskBlockHa
         onClick={(event) => onOpen(block, event.currentTarget)}
         className="focus-visible:ring-ring/60 flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md text-left outline-none focus-visible:ring-2"
       >
-        <span className="caption-style text-soft w-[76px] shrink-0 tabular-nums">{block.upcoming && !block.task.dueHasTime ? "All day" : formatTime(block.startsAt)}</span>
+        <span className="caption-style text-soft w-[76px] shrink-0 tabular-nums">{block.task.dueHasTime ? formatTime(block.startsAt) : "All day"}</span>
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className={cn("truncate text-[14px] leading-5", block.done && "text-subtle decoration-white/25 line-through", block.upcoming && "text-foreground/70")}>{block.title}</span>
           <span className="caption-style text-subtle truncate">

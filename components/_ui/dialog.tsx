@@ -5,6 +5,7 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import Button from "@/components/_ui/button";
+import { onToast } from "@/components/_ui/sheet";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 function Dialog(props: ComponentProps<typeof DialogPrimitive.Root>) {
@@ -39,6 +40,7 @@ function DialogContent({
   className,
   children,
   closeButton = true,
+  onInteractOutside,
   ...props
 }: ComponentProps<typeof DialogPrimitive.Content> & { closeButton?: boolean }) {
   return (
@@ -50,6 +52,10 @@ function DialogContent({
           "border-line-strong bg-popover text-popover-foreground data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:ease-power3-out fixed top-1/2 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border shadow-overlay duration-250 data-[state=closed]:duration-200 outline-none",
           className,
         )}
+        onInteractOutside={(event) => {
+          onInteractOutside?.(event);
+          if (onToast(event.target)) event.preventDefault();
+        }}
         {...props}
       >
         <ScrollArea viewportClassName="max-h-[calc(100dvh-2rem)]">

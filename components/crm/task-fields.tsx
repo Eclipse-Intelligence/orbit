@@ -235,7 +235,10 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     const ticket = timed ? timing.start() : 0;
     const fields = fieldsOf(write);
     setNotice(null);
-    if (!ask && waitsForScope(task, viewerId, write)) return false;
+    if (!ask && waitsForScope(task, viewerId, write)) {
+      setErrors((current) => failFields(current, fields, saveFailedMessage(fields)));
+      return false;
+    }
     const change = ask && ownsRepeat(task, viewerId) ? scopeChange(task, write) : null;
     let scope: RepeatScope | undefined = task.repeat?.current && !task.completedAt ? "this" : undefined;
     if (change) {
@@ -302,7 +305,11 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     void save(field === "title" ? { title: next } : { description: next || null }, ask).then((ok) => {
       if (!ok && sent.current[field] === next) sent.current[field] = previous;
       const declinedNow = !ok && declined.current[field] === next;
-      if (declinedNow) setErrors((current) => clearFields(current, [field]));
+      if (declinedNow) {
+        setErrors((current) => clearFields(current, [field]));
+        if (field === "title") setTitle((shown) => (shown.trim() === next ? sent.current.title : shown));
+        else setText((shown) => (shown.trim() === next ? sent.current.text : shown));
+      }
       if (draftAfterSave(ok, declinedNow) === "drop") drafts.drop(self, task.id, field, ok ? next : sent.current[field]);
       else drafts.keep(self, task.id, field, next, sent.current[field]);
     });
@@ -950,6 +957,7 @@ export default function TaskFields({
   extra,
   tagging,
   done = false,
+  onDeleted,
 }: {
   details: TaskDetailsState;
   viewer: Pick<Viewer, "id">;
@@ -959,6 +967,7 @@ export default function TaskFields({
   extra?: ReactNode;
   tagging?: TaskTagging;
   done?: boolean;
+  onDeleted?: () => void;
 }) {
   const task = details.task;
   const editLinks = details.canChange && !done;
@@ -972,7 +981,7 @@ export default function TaskFields({
       <div className="flex flex-col gap-3 [@media(pointer:coarse)]:gap-4">
         <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
-          {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="row" />}
+          {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="row" onDeleted={onDeleted} />}
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}
           {details.canChange && !done && (
             <>
@@ -1007,7 +1016,7 @@ export default function TaskFields({
         </Field>
         {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && (
           <Field label="Repeat">
-            <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="panel" />
+            <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="panel" onDeleted={onDeleted} />
             {skipsBesideRepeat(task, viewer.id, details.canChange && !done) && <SkipButton task={task} className="max-md:hidden" />}
           </Field>
         )}

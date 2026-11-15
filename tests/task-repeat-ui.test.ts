@@ -4,15 +4,20 @@ import { describe, it } from "node:test";
 import type { Task, TaskRepeat } from "@/lib/crm/types";
 import { dayStartIso } from "@/lib/crm/task-time";
 import { TASK_PAGE_PATHS } from "@/lib/revalidate";
-import { repeatInputOf, type RepeatRule } from "@/lib/task-repeat";
+import { checkEnds, checkRule, repeatInputOf, type RepeatRule } from "@/lib/task-repeat";
 import {
   countLeft,
   draftOf,
+  endsOf,
+  endsOnFirst,
   menuFocus,
   monthlyLabel,
   nextDetail,
   nextLabel,
+  patternInputOf,
   ruleOf,
+  sameEnds,
+  sameRepeat,
   scopeChange,
   scopeTexts,
   skippedMessage,
@@ -128,7 +133,7 @@ describe("repeat menu and fields", () => {
   it("keeps a series panel open until the server has saved it", () => {
     const file = source("components/crm/task-repeat.tsx");
     assert.doesNotMatch(file, /close\(\);\s*void actions\.(set|end|stop|remove)\(/);
-    assert.match(file, /if \(await work\(\)\) close\(\);/);
+    assert.match(file, /if \(\(await work\(\)\) && shownAt\.current === shown\) close\(\);/);
   });
 
   it("never saves a change that needs a scope when the panel goes away", () => {
@@ -139,7 +144,7 @@ describe("repeat menu and fields", () => {
     const file = source("components/crm/task-repeat.tsx");
     assert.doesNotMatch(file, /kind === "title" \|\| pending\.change\.kind === "description" \? "this"/);
     assert.match(file, /resolve\(SCOPE_LATER\)/);
-    assert.match(source("components/crm/task-fields.tsx"), /if \(!ask && waitsForScope\(task, viewerId, write\)\) return false;/);
+    assert.match(source("components/crm/task-fields.tsx"), /if \(!ask && waitsForScope\(task, viewerId, write\)\) \{\s*setErrors\(\(current\) => failFields\(current, fields, saveFailedMessage\(fields\)\)\);\s*return false;/);
   });
 
   it("refreshes the same pages as other task actions", () => {
@@ -190,5 +195,26 @@ describe("repeat menu and fields", () => {
     const file = source("components/crm/task-repeat.tsx");
     assert.match(file, /tabIndex=\{active \? 0 : -1\}/);
     assert.match(file, /item\.tabIndex = -1;/);
+  });
+
+  it("saves nothing for an unchanged Custom repeat and leaves the end to the server for a new pattern", () => {
+    const weekly: RepeatRule = { freq: "weekly", interval: 1, weekdays: ["mo"] };
+    assert.equal(sameRepeat(weekly, ruleOf(draftOf({ rule: weekly, ends: { never: true } }, "2026-11-16"), "2026-11-16")), true);
+    assert.equal(sameEnds({ count: 10 }, endsOf(draftOf({ rule: weekly, ends: { count: 10 } }, "2026-11-16"))), true);
+    assert.equal(sameEnds({ until: "2027-03-15" }, { until: "2027-03-22" }), false);
+    assert.equal("ends" in patternInputOf({ freq: "daily", interval: 1 }), false);
+    assert.equal(sameRepeat({ freq: "weekly", interval: 1, weekdays: ["mo", "tu", "we", "th", "fr", "sa", "su"] }, { freq: "daily", interval: 1 }), true);
+  });
+
+  it("refuses typed numbers it would otherwise rewrite, and an end on the first date", () => {
+    const draft = draftOf(null, "2026-11-16");
+    for (const typed of ["-3", "1.5", "1000", "1e2", ""]) {
+      assert.ok(checkRule(ruleOf({ ...draft, interval: typed }, "2026-11-16")), typed);
+      assert.ok(checkEnds(endsOf({ ...draft, ends: "count", count: typed }), "2026-11-16", "2026-11-16"), typed);
+    }
+    assert.equal(ruleOf({ ...draft, interval: "3" }, "2026-11-16").interval, 3);
+    assert.equal(endsOnFirst({ count: 1 }, "2026-11-16"), true);
+    assert.equal(endsOnFirst({ until: "2026-11-16" }, "2026-11-16"), true);
+    assert.equal(endsOnFirst({ until: "2026-11-17" }, "2026-11-16"), false);
   });
 });

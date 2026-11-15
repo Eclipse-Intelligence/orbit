@@ -197,7 +197,7 @@ function readWeekdays(text: string, spans: Span[]): WeekdayWord[] {
 
 const START_TIME_WORD = /^\s*(?:the\s+)?(?:afternoon|evening|morning|midnight|midday|noon|night|weekend|tonight|today|tomorrow|tmrw|tmr|eod|eow|end)\b/i;
 const FREE_WORDS = "about|re|regarding|with|for|and|to|at|in|via|on|by|then|if|please|remind|reminder";
-const FREE_AFTER = new RegExp(`^\\s*(?:$|[,.;:!?)]|(?:${FREE_WORDS})\\b)`, "i");
+const FREE_AFTER = new RegExp(`^\\s*(?:$|[,;:!?)]|\\.(?![a-z0-9])|(?:${FREE_WORDS})\\b)`, "i");
 const NOUN_AFTER = new RegExp(`^\\s+(?!(?:${FREE_WORDS})\\b)[a-z]`, "i");
 const NAMED_TIME = /\b(?:Today|Tonight|Tomorrow|Noon|Midday|Midnight|Morning|Afternoon|Evening|Night|Day|After|Weekend|Week|Month|End|Eod)\b/;
 
@@ -218,8 +218,8 @@ const LEFTOVER = new RegExp(
   "i",
 );
 const DANGLING_BEFORE =
-  /(?:\b(?:before|from|at|the|to|last|every|by|on|until|till|of|end|start|early|mid|late|after|since|around|about|re|or|between|than|next|in|off|w\/c|dated|starting|not|approx|approximately|around|circa|~)|['’]s|[-–/:+&@(["'“”‘’[])\s*$/i;
-const DANGLING_AFTER = /^\s*(?:at\s+the\s+latest\b|latest\b|['’]s\b|[-–/:+&@)\]"'“”‘’]|\.\d|to\b|or\b|ish\b|o['’]?clock\b|am\b|pm\b|\d)/i;
+  /(?:\b(?:before|from|at|the|to|last|every|by|on|until|till|of|end|start|early|mid|late|after|since|around|about|re|or|between|than|next|in|off|w\/c|dated|starting|not|approx|approximately|around|circa|~)|['’]s|[-–/:+&@(["'“”‘’[#|])\s*$/i;
+const DANGLING_AFTER = /^\s*(?:at\s+the\s+latest\b|latest\b|['’]s\b|[-–/:+&@)\]"'“”‘’|]|\.\d|to\b|or\b|ish\b|o['’]?clock\b|am\b|pm\b|\d)/i;
 
 function debris(text: string, spans: Span[], strict = false) {
   const sorted = [...spans].sort((a, b) => a.start - b.start);
@@ -245,7 +245,7 @@ function debris(text: string, spans: Span[], strict = false) {
 
 const GLUE = String.raw`(?:[,;:]|[-–—](?=\s|$)|\band\b)`;
 const GLUE_GAP = new RegExp(String.raw`^(?:\s|${GLUE})*$`, "i");
-const GLUE_BEFORE = new RegExp(String.raw`(?:\s*${GLUE})+\s*$`, "i");
+const GLUE_BEFORE = new RegExp(String.raw`(?<!\s)(?:\s*${GLUE})+\s*$`, "i");
 const ONLY_GLUE = new RegExp(String.raw`^\s*(?:${GLUE}\s*)*$`, "i");
 const ENDING = new RegExp(String.raw`^(?:\s|[,;:.!…]|[-–—]|\band\b)*$`, "i");
 const SEPARATOR_AFTER = /^\s*(?:[,;:]|[-–—](?=\s))/;
@@ -386,7 +386,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   };
 
   take(
-    /[,;]?\s*(?:\band\s+)?\bremind(?:er)?(?:\s+me)?\s+(?:(\d+|an?|one|two|three|four|five|six|ten|fifteen|thirty)\s*(mins?|minutes?|m|hrs?|hours?|h|days?|d|weeks?|w)\s*(?:before|early|earlier|beforehand|ahead)?|(?:at|on)\s+the\s+(?:due\s+)?time|on\s+time)\b/i,
+    /(?:[,;]|(?<!\s))\s*(?:\band\s+)?\bremind(?:er)?(?:\s+me)?\s+(?:(\d+|an?|one|two|three|four|five|six|ten|fifteen|thirty)\s*(mins?|minutes?|m|hrs?|hours?|h|days?|d|weeks?|w)\s*(?:before|early|earlier|beforehand|ahead)?|(?:at|on)\s+the\s+(?:due\s+)?time|on\s+time)\b/i,
     (match) => {
       found.remind = match[1] ? nearestReminder(amount(match[1]) * unitMinutes(match[2])) : 0;
     },
@@ -414,7 +414,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
       evening = true;
     }
   });
-  take(/(?<=\b(?:tonight|night|evening)\s+)(?:at\s+)?(\d{1,2})(?:[:.]([0-5]\d))?(?:\s*(am|pm))?\b(?![:.]?\d)/i, (match) => {
+  take(/(?=at\s|\d)(?<=\b(?:tonight|night|evening)\s+)(?:at\s+)?(\d{1,2})(?:[:.]([0-5]\d))?(?:\s*(am|pm))?\b(?![:.]?\d)/i, (match) => {
     const hour = Number(match[1]);
     if (match[3]?.toLowerCase() === "am" || hour === 0 || hour === 12 || hour > 23) {
       doubt = true;
@@ -485,7 +485,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   });
   take(
     new RegExp(
-      `(?:\\bat\\s+|(?<=\\b${DAY_WORD}\\s+))${NOT_MONEY}(\\d{1,2})\\.(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}|\\b${NOT_MONEY}(\\d{1,2})\\.(\\d{2})\\s*(am|pm)\\b`,
+      `(?:\\bat\\s+|(?=\\d)(?<=\\b${DAY_WORD}\\s+))${NOT_MONEY}(\\d{1,2})\\.(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}|\\b${NOT_MONEY}(\\d{1,2})\\.(\\d{2})\\s*(am|pm)\\b`,
       "i",
     ),
     (match) => {
@@ -501,7 +501,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     explicitTime = true;
   });
   take(
-    new RegExp(`(?:(?<=\\b${DAY_WORD}\\s+)(?:at\\s+)?|\\bat\\s+)${NOT_MONEY}(\\d{1,2})(?=\\s*(?:$|[,;!?]|\\.(?!\\d)|and\\b|remind|(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b))`, "i"),
+    new RegExp(`(?:(?=at\\s|\\d)(?<=\\b${DAY_WORD}\\s+)(?:at\\s+)?|\\bat\\s+)${NOT_MONEY}(\\d{1,2})(?=\\s*(?:$|[,;!?]|\\.(?!\\d)|and\\b|remind|(?:on\\s+|this\\s+|next\\s+)?${DAY_WORD}\\b))`, "i"),
     (match) => {
       if (found.time && !evening) return false;
       const parsed = bareHour(match[1]);
@@ -549,7 +549,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     found.time = { hour: 12, minute: 30 };
     ambiguous = true;
   });
-  take(new RegExp(`(?<=\\b${DAY_WORD}\\s+)night\\b`, "i"), () => {
+  take(new RegExp(`(?=night\\b)(?<=\\b${DAY_WORD}\\s+)night\\b`, "i"), () => {
     if (found.time && !eveningClock) return false;
     found.time = found.time ?? { hour: 19, minute: 0 };
     slot = true;
@@ -693,6 +693,7 @@ const REPEAT_LABEL = /^\s*:/;
 const REPEAT_MANNER_BEFORE = /(?:\b\w+ing|\bpaid|\bbilled|\bcharged|\binvoiced)\s+$/i;
 const REPEAT_TIMES_BEFORE = /\b(?:(?:\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten)\s+times?|\d{1,3}\s*x|x\s*\d{1,3}|once|twice|thrice)\s*,?\s*(?:a\s+|per\s+)?$/i;
 const REPEAT_ON_THE = /^\s*,?\s*on\s+the\b/i;
+const REPEAT_UNKNOWN_END = /\bfor\s+(?:\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|few|couple)\s+(?!(?:mins?|minutes?|hours?|hrs?|h|m)\b)[a-z]/i;
 const REPEAT_TITLE_WORDS = /\b(?:daily|weekly|monthly|yearly|annually)\b/gi;
 const REPEAT_DUE_BEFORE = /\bdue\s+$/i;
 const REPEAT_EXCEPT_AFTER = /^\s*,?\s*(?:except|excluding|but|unless|apart|other\s+than|besides|bar|or|when|whenever|while|whilst|once|as|so|if|not|instead|rather|only|until|till|til|through|thru|between)\b/i;
@@ -700,8 +701,10 @@ const REPEAT_CLAUSE_BEFORE = /\b(?:who|whom|whose|which|that|where|when|whenever
 const REPEAT_NEGATION_BEFORE =
   /\b(?:not|never|no\s+(?:longer|more)|cannot|without|instead\s+of|rather\s+than|stop(?:s|ped|ping)?|cancel(?:s|led|ed|ling|ing)?|quit(?:s|ting)?|unsubscribe|pause|halt|cease|suspend|discontinue|terminate|skip|avoid|(?:do|does|did|is|are|was|were|has|have|had|wo|ca|could|should|would|must|need|might)n['’]t|dont|doesnt|didnt|isnt|arent|wasnt|werent|hasnt|havent|hadnt|wont|cant|couldnt|shouldnt|wouldnt|mustnt|neednt)(?![\w'’])/i;
 const REPEAT_VERBS_BEFORE = new Set(
-  "is are was were be been being am do does did has have had will would shall should can could may might must gets got it's that's there's he's she's they're we're it’s that’s there’s he’s she’s they’re we’re".split(" "),
+  "is are was were be been being am do does did has have had will would shall should can could may might must gets got it's that's there's he's she's they're we're it’s that’s there’s he’s she’s they’re we’re i'm i’m i've i’ve i'll i’ll i'd i’d you're you’re you've you’ve we've we’ve they've they’ve".split(" "),
 );
+const REPEAT_IMPERATIVES = new Set("do have be will may can".split(" "));
+const REPEAT_SUBJECTS = new Set("i we they he she".split(" "));
 const REPEAT_EVENTS_BEFORE = new Set(
   "run runs ran come comes came go goes went happen happens happened occur occurs occurred meet meets met arrive arrives arrived recur recurs repeat repeats renew renews renewed expire expires sync syncs synced reset resets rotate rotates close closes open opens start starts started land lands works post posts published posted held scheduled generated issued done made sent collected updated reviewed delivered emptied serviced".split(" "),
 );
@@ -712,7 +715,7 @@ const CUE_ORDINAL =
   "(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|\\d{1,2}(?:st|nd|rd|th))";
 const REPEAT_CUES = new RegExp(
   [
-    `\\b(?:every|each)\\s+(?:(?:other|alternate|few|couple(?:\\s+of)?|single|working|business|last|${CUE_ORDINAL}|${CUE_NUMBER})\\s+){0,2}(?:days?|nights?|mornings?|afternoons?|evenings?|weeks?|weekdays?|weekends?|fortnights?|months?|quarters?|years?|hours?|hrs?|minutes?|mins?|${REPEAT_DAY}s?|${REPEAT_MONTH}|${CUE_ORDINAL})(?![\\w-])`,
+    `\\b(?:every|each|evry|evrey|evey|eveyr|eveery|everey|ervery|eevry|everry|evvery|evety)\\s+(?:(?:other|alternate|few|couple(?:\\s+of)?|single|working|business|last|${CUE_ORDINAL}|${CUE_NUMBER})\\s+){0,2}(?:days?|nights?|mornings?|afternoons?|evenings?|weeks?|weekdays?|weekends?|fortnights?|months?|quarters?|years?|hours?|hrs?|minutes?|mins?|${REPEAT_DAY}s?|${REPEAT_MONTH}|${CUE_ORDINAL})(?![\\w-])`,
     `\\b(?:once|twice|thrice|${CUE_NUMBER}\\s*(?:x|times?))\\s+(?:a|an|per|each|every)\\s+(?:day|night|week|fortnight|month|quarter|year)\\b`,
     "\\b(?:(?:mon|tues|wednes|thurs|fri|satur|sun)days|weekdays|weekends)\\b",
   ].join("|"),
@@ -755,7 +758,16 @@ function doubtfulRepeat(text: string, start: number, end: number) {
   const words = wordsBefore(before);
   const last = words.at(-1)?.toLowerCase() ?? "";
   if (REPEAT_CLAUSE_BEFORE.test(before) || REPEAT_NEGATION_BEFORE.test(before)) return true;
-  if (words.slice(1).some((word) => REPEAT_VERBS_BEFORE.has(word))) return true;
+  const shouting = text === text.toUpperCase();
+  const clause = (word: string, index: number) => {
+    const key = word.toLowerCase();
+    if (index > 0 && REPEAT_SUBJECTS.has(key) && (word === "I" || word === key || shouting)) return true;
+    if (!REPEAT_VERBS_BEFORE.has(key)) return false;
+    if (index === 0) return !REPEAT_IMPERATIVES.has(key);
+    if (key === "am" && /^\d/.test(words[index - 1])) return false;
+    return word === key || shouting || /^i['’]/i.test(word);
+  };
+  if (words.some(clause)) return true;
   if (words.length > 1 && REPEAT_EVENTS_BEFORE.has(last) && !REPEAT_DETERMINERS.has(words[words.length - 2].toLowerCase())) return true;
   if (REPEAT_PREPOSITIONS_BEFORE.has(last)) return true;
   if (words.length > 1 && /^[A-Z]/.test(text.slice(start, end)) && /^[A-Z]/.test(words[words.length - 1]) && text !== text.toUpperCase()) return true;
@@ -795,6 +807,10 @@ function readDayMonth(words: string, todayKey: string, reach = 4) {
     if (valid({ year: candidate, month, day }) && dayKey(candidate, month, day) >= todayKey) return dayKey(candidate, month, day);
   }
   return null;
+}
+
+function endRolledOver(words: string, until: string, todayKey: string) {
+  return !/\b\d{4}\b/.test(words) && `${todayKey.slice(0, 4)}${until.slice(4)}` < todayKey;
 }
 
 type FoundRepeat = {
@@ -846,14 +862,15 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
     ended = true;
     if (end[1]) {
       const until = readDayMonth(end[1], todayKey, 1);
-      if (!until) return "unsure";
+      if (!until || (endRolledOver(end[1], until, todayKey) && until > shiftDay(todayKey, 92))) return "unsure";
       ends.until = until;
     } else if (end[2]) ends.span = { amount: repeatNumber(end[2]), unit: end[3].toLowerCase().replace(/s$/, "") };
     else ends.count = Number(end[4]);
     spans.push({ start: cursor + (end[0].length - end[0].trimStart().length), end: cursor + end[0].length, kind: "when" });
     cursor += end[0].length;
   }
-  if (REPEAT_ON_THE.test(text.slice(cursor))) return "unsure";
+  if (REPEAT_ON_THE.test(text.slice(cursor)) || REPEAT_UNKNOWN_END.test(text.slice(cursor))) return "unsure";
+  if (/^(?:daily|weekly|monthly|yearly|annually)$/i.test(text.slice(hit.start, hit.end)) && cursor === hit.end && /^[\s.!]*$/.test(text.slice(cursor)) && wordsBefore(text.slice(0, hit.start)).length === 1) return "unsure";
   const started = REPEAT_START.exec(text.slice(cursor));
   if (started) spans.push({ start: cursor + (started[0].length - started[0].trimStart().length), end: cursor + started[0].length, kind: "when" });
   else if (REPEAT_EXCEPT_AFTER.test(text.slice(cursor)) || !FREE_AFTER.test(text.slice(cursor))) return "unsure";
@@ -976,6 +993,7 @@ function parseRepeatText(text: string, now: Date): PadParse | null {
     last = mark.end;
   }
   markless += text.slice(last);
+  if (!found.fixed && (rule.freq === "monthly" || rule.freq === "yearly") && uncued.some((mark) => new RegExp(`\\b${REPEAT_DAY}\\b`, "i").test(text.slice(mark.start, mark.end)))) return unsureRepeat(text);
   if (uncued.some((mark) => found.fixed || !/^[\s,]*$/.test(mark.end <= repeatStart ? markless.slice(mark.end, repeatStart) : markless.slice(repeatEnd, mark.start)))) return unsureRepeat(text);
   if (inner.marks.some((mark) => new RegExp(`\\b(?:${NAME_TOKEN}|${ORDINAL_TOKEN})\\b`, "i").test(text.slice(mark.start, mark.end)) && /(?:[,&]|\band)\s*$/i.test(text.slice(0, mark.start)))) return unsureRepeat(text);
   if ("never" in ends && RANGE_WORDS.test(inner.marks.map((mark) => text.slice(mark.start, mark.end)).join(" "))) return unsureRepeat(text);
@@ -1012,18 +1030,23 @@ const AI_REPEAT_WORD = new RegExp(
   "i",
 );
 
+function aiWeekday(day: string): Weekday | null {
+  const key = day.trim().toLowerCase();
+  return TASK_WEEKDAYS.find((name) => name === key) ?? (new RegExp(`^${REPEAT_DAY}$`, "i").test(key) ? repeatWeekday(key) : null);
+}
+
 function aiRepeatRule(input: PadAiRepeat, start: string): RepeatRule | null {
   const interval = input.interval ?? 1;
   if (input.every === "day") return { freq: "daily", interval };
   if (input.every === "weekday") return { freq: "weekly", interval, weekdays: [...WORKWEEK] };
   if (input.every === "week") {
-    const days = (input.days ?? []).map((day) => TASK_WEEKDAYS.find((name) => name === day.trim().toLowerCase().slice(0, 2)) ?? null);
+    const days = (input.days ?? []).map(aiWeekday);
     if (days.some((day) => day === null)) return null;
     return { freq: "weekly", interval, weekdays: days.length > 0 ? (days as Weekday[]) : [weekdayOf(start)] };
   }
   if (input.every === "month") {
     if (input.monthWeek) {
-      const weekday = TASK_WEEKDAYS.find((name) => name === input.monthWeek!.weekday.trim().toLowerCase().slice(0, 2));
+      const weekday = aiWeekday(input.monthWeek.weekday);
       return weekday ? { freq: "monthly", interval, monthWeek: { n: input.monthWeek.n as MonthWeek["n"], weekday } } : null;
     }
     return { freq: "monthly", interval, monthDay: input.monthDay ?? Number(start.slice(8, 10)) };
@@ -1105,6 +1128,7 @@ function acceptAiRepeat(text: string, input: PadAiRepeat, due: string, now: Date
   if ([...text.matchAll(DOC_REFERENCE)].some((doc) => start < doc.index + doc[0].length && end > doc.index)) return null;
   if (REPEAT_BARE.test(phrase) && REPEAT_MANNER_BEFORE.test(text.slice(0, start))) return null;
   if (doubtfulRepeat(text, start, end) || REPEAT_EXCEPT_AFTER.test(text.slice(end)) || AI_ORDINAL_WEEKDAY.test(phrase)) return null;
+  if (/^\.[\p{L}\p{N}]/u.test(text.slice(end)) || REPEAT_UNKNOWN_END.test(text.slice(end))) return null;
   if (AI_REPEAT_LISTED_AFTER.test(text.slice(end)) || AI_REPEAT_LISTED_BEFORE.test(text.slice(0, start))) return null;
   if (AI_REPEAT_END_WORDS.test(`${text.slice(0, start)} ${text.slice(end)}`)) return null;
   const wall = londonParts(now);
@@ -1118,6 +1142,8 @@ function acceptAiRepeat(text: string, input: PadAiRepeat, due: string, now: Date
   const repeat = { rule: normalRule(rule), ends };
   if (padRepeatDue(repeat, at ? `${anchor}T${at}` : anchor, now) !== due) return null;
   if (checkEnds(ends, due.slice(0, 10), todayKey)) return null;
+  if ("until" in ends && endRolledOver(phrase, ends.until, todayKey) && `${todayKey.slice(0, 4)}${ends.until.slice(4)}` >= shiftDay(todayKey, -61)) return null;
+  if ((repeat.rule.freq === "monthly" || repeat.rule.freq === "yearly") && !repeat.rule.monthWeek && new RegExp(`\\b${REPEAT_DAY}\\b`, "i").test(said) && !/\b(?:from|starting|beginning|commencing)\b/i.test(text)) return null;
   if (!aiRepeatAgrees(phrase, repeat.rule, ends, due.slice(0, 10), anchor)) return null;
   return { span: { start, end, kind: "when" }, repeat };
 }
@@ -1245,7 +1271,7 @@ function hourFits(hour: number, said: string) {
   return true;
 }
 
-function dueAgrees(said: string, day: Day, time: { hour: number; minute: number } | null, wall: ReturnType<typeof londonParts>, duration: number | null) {
+function dueAgrees(said: string, day: Day, time: { hour: number; minute: number } | null, wall: ReturnType<typeof londonParts>, duration: number | null, typed: string) {
   const today: Day = { year: wall.year, month: wall.month, day: wall.day };
   const ahead = Math.round((Date.UTC(day.year, day.month - 1, day.day) - Date.UTC(today.year, today.month - 1, today.day)) / 86_400_000);
   const dated = new RegExp(`${AI_DAY_MONTH}|${AI_NUMERIC_DATE}|${AI_IN_UNITS}|\\bweek\\b`, "i").test(said);
@@ -1308,6 +1334,7 @@ function dueAgrees(said: string, day: Day, time: { hour: number; minute: number 
       const hour = Number(found[4] ?? found[6] ?? found[8]);
       const minute = Number(found[5] ?? found[7] ?? 0);
       if (time.minute !== minute || (time.hour !== hour && time.hour !== hour + 12) || hour > 23) return false;
+      if (time.hour === hour + 12 && hour > 6 && !/\b(?:evening|tonight|night|dinner|supper|drinks)\b/i.test(typed)) return false;
     }
   }
   if (/\bnoon\b|\bmidday\b/i.test(said) && (!time || time.hour !== 12 || time.minute !== 0)) return false;
@@ -1361,7 +1388,7 @@ export function acceptAiReading(typed: string, answer: PadAiAnswer, now = new Da
     statesLength && answer.durationMinutes !== null && Number.isInteger(answer.durationMinutes) && answer.durationMinutes > 0 && answer.durationMinutes <= MAX_TASK_DURATION
       ? answer.durationMinutes
       : null;
-  if (!dueAgrees(said, day, time, wall, duration)) return kept;
+  if (!dueAgrees(said, day, time, wall, duration, text)) return kept;
   const repeated = answer.repeat ? acceptAiRepeat(text, answer.repeat, answer.due, now, said) : null;
   if (answer.repeat && (!repeated || spans.some((other) => repeated.span.start < other.end && repeated.span.end > other.start))) return kept;
   if (repeated) spans.push(repeated.span);
@@ -1453,6 +1480,13 @@ export function padReading(
   const key = readingKey(text, reading.marks);
   if (keptAsText.includes(key)) return { title: typedTitle(text), due: null, remindMinutes: null, durationMinutes: null, marks: [], phrase: "", key: "" };
   return { ...reading, phrase, key };
+}
+
+export function chipOverrides(shown: Pick<PadReading, "key" | "due" | "repeat">, dueSet: boolean, picked: PadRepeat | null, pickedOver: string) {
+  if (!shown.key) return false;
+  if (dueSet && !shown.repeat) return true;
+  if (!picked) return false;
+  return shown.repeat ? shown.key !== pickedOver : padRepeatDue(picked, shown.due) !== shown.due;
 }
 
 export const AI_SETTLE_MS = 300;

@@ -90,7 +90,7 @@ export default function CalendarAgenda({
                 <li key={row.block.id}>
                   <AgendaTaskBlock
                     block={row.block}
-                    past={date < today || new Date(row.block.endsAt).getTime() <= now}
+                    past={date < today || (row.block.task.dueHasTime && new Date(row.block.endsAt).getTime() <= now)}
                     onOpen={taskHandlers!.onOpen}
                     onComplete={taskHandlers!.onComplete}
                   />

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { repeatAnchorDay, type RepeatAnchorTask } from "@/lib/assistant/repeat-anchor";
+import { dueDayOfInput, repeatAnchorDay, type RepeatAnchorTask } from "@/lib/assistant/repeat-anchor";
 import { after } from "next/server";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
@@ -136,9 +136,10 @@ import { isRelationshipLabel, RELATIONSHIP_LABELS, RELATIONSHIP_META } from "@/l
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
-import { archiveTask, listTasks } from "@/lib/crm/tasks";
-import { readRepeat, readSeriesTitle, REPEAT_SCOPES, seriesRightsRefusal, updateTaskFromApi } from "@/lib/crm/task-series";
-import { endWords, ruleWords, shortDay } from "@/lib/task-repeat";
+import { archiveTask, listTasks, readTaskInDb } from "@/lib/crm/tasks";
+import { dayKeyAt } from "@/lib/crm/working-days";
+import { firstDay, readRepeat, readSeriesTitle, REPEAT_SCOPES, seriesRightsRefusal, updateTaskFromApi } from "@/lib/crm/task-series";
+import { endWords, occurrenceTiming, ruleWords, shortDay } from "@/lib/task-repeat";
 import { emailThreadKey } from "@/lib/crm/task-mail";
 import { directTaskSql } from "@/lib/crm/task-access";
 import { logActivity } from "@/lib/crm/activities";
@@ -320,6 +321,8 @@ function echoesDay(args: Args, current: CurrentTask | null) {
   return reading.ok && reading.date.getTime() === Date.parse(current.dueAt);
 }
 
+const DAY_ONLY_LINE = "Date only: only the owner sets a time";
+
 function taskTimingLines(args: Args, name: Names, current: CurrentTask | null, creating = false) {
   const self = detail(name, TASK_SELF_KEY);
   const owner = args.ownerId === null ? null : (optionalStr(args.ownerId) ?? current?.ownerId ?? null);
@@ -341,7 +344,7 @@ function taskTimingLines(args: Args, name: Names, current: CurrentTask | null, c
   return [
     day ? `Due: ${formatDateLabel(day)}` : "",
     ...fieldLines(args, { durationMinutes: "Duration" }),
-    "Date only: only the owner sets a time",
+    DAY_ONLY_LINE,
   ];
 }
 
@@ -659,8 +662,11 @@ export async function taskTimingRefusalFor(actor: UserActor, name: string, args:
 
 export const DOCS_NOT_YOURS = "Only the task's assignee or creator can change its docs. Leave docIds out.";
 
+const SKIP_NEEDS_DAY = "Send occursOn with skip: the date to skip, the task's own occursOn for the open one.";
+
 export async function taskRepeatRefusalFor(actor: UserActor, name: string, args: Args) {
   if (name !== "update_task") return null;
+  if (args.skip === true && optionalStr(args.occursOn) === undefined) return { error: SKIP_NEEDS_DAY, field: "occursOn" };
   const seriesWide = args.repeat !== undefined || args.repeatScope === "all" || args.repeatScope === "following";
   const datePicked = optionalStr(args.occursOn) !== undefined;
   if (!seriesWide && !datePicked) return null;
@@ -748,16 +754,19 @@ const REPEATING_KEY = "repeating";
 async function repeatingTaskDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
   const ids = [...new Set(strings(value))].filter(isUuid);
   if (ids.length === 0) return {};
-  const rows = await withActor(actor, (db) =>
-    db.query<{ id: string; occurs_on: string }>(
-      `select t.id, t.occurs_on::text as occurs_on
-       from crm.tasks t join crm.task_series s on s.id = t.series_id and s.current_task_id = t.id
-       where t.id = any($1::uuid[]) and t.workspace_id = $2 and t.completed_at is null and t.archived_at is null
-         and s.ended_at is null and s.archived_at is null and t.occurs_on is not null`,
-      [ids, actor.workspaceId],
+  const tasks = await withActor(actor, async (db) => {
+    const found: Task[] = [];
+    for (const id of ids) {
+      const task = await readTaskInDb(db, actor, id);
+      if (task) found.push(task);
+    }
+    return found;
+  });
+  return Object.fromEntries(
+    tasks.flatMap((task) =>
+      task.workspaceId === actor.workspaceId && !task.completedAt && !task.archivedAt && task.occursOn && task.repeat?.current && task.repeat.next ? [[`${task.id}:${REPEATING_KEY}`, task.occursOn]] : [],
     ),
   );
-  return Object.fromEntries(rows.rows.map((row) => [`${row.id}:${REPEATING_KEY}`, row.occurs_on]));
 }
 
 async function taskOwnerDetails(actor: UserActor, value: unknown): Promise<Record<string, string>> {
@@ -1313,6 +1322,12 @@ const REPEAT_PARAM = {
 const REPEAT_KEY = "repeat:title";
 const REPEAT_OBJECT = "Send repeat as an object, such as { \"every\": \"week\" }.";
 
+const REPEAT_END_KEY = "repeatEnd";
+
+function endsKept(value: unknown) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && !("ends" in value));
+}
+
 function repeatWordsOf(value: unknown, anchor: string) {
   if (!value || typeof value !== "object") return null;
   try {
@@ -1325,16 +1340,41 @@ function repeatWordsOf(value: unknown, anchor: string) {
   }
 }
 
-function repeatLines(args: Record<string, unknown>, task: RepeatAnchorTask | null = null) {
+function repeatLines(args: Record<string, unknown>, task: RepeatAnchorTask | null = null, keptEnd = "") {
   const lines: string[] = [];
   if (args.repeat === null) lines.push("Stop repeating. This one stays.");
-  else if (args.repeat !== undefined) lines.push(`Repeats: ${repeatWordsOf(args.repeat, repeatAnchorDay(task, args)) ?? "a pattern Orbit can't read"}`);
+  else if (args.repeat !== undefined) {
+    const words = repeatWordsOf(args.repeat, repeatAnchorDay(task, args));
+    lines.push(`Repeats: ${words ?? "a pattern Orbit can't read"}${words && words !== "a pattern Orbit can't read" && keptEnd && endsKept(args.repeat) ? `, ${keptEnd}` : ""}`);
+  }
   const day = typeof args.occursOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.occursOn) ? shortDay(args.occursOn) : null;
   if (args.skip === true) lines.push(day ? `Skip ${day} only` : "Skip this one");
   if (args.repeatScope === "this") lines.push(day ? `Only ${day}` : "This one only");
   if (args.repeatScope === "following") lines.push(day ? `${day} and every later one` : "This and every later one");
   if (args.repeatScope === "all") lines.push("The open one and every later one");
   return lines;
+}
+
+function firstRepeatDay(args: Args, now = Date.now()) {
+  if (!args.repeat || typeof args.repeat !== "object") return null;
+  const dueDay = dueDayOfInput(args.dueAt) ?? dueDayOfInput(args.dueDate);
+  const start = dueDay ?? dayKeyAt(new Date(now));
+  const reading = typeof args.dueAt === "string" ? readDateTime(args.dueAt) : null;
+  const at = reading?.ok && !reading.dateOnly ? clockLabel(reading.date.toISOString()) : null;
+  try {
+    const first = firstDay(readRepeat(args.repeat, start, now).rule, at, start, now);
+    return first && first !== start ? { day: first, at } : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstDueLines(lines: string[], args: Args) {
+  const first = firstRepeatDay(args);
+  if (!first) return lines;
+  const timed = first.at !== null && !lines.includes(DAY_ONLY_LINE);
+  const due = `Due: ${timed ? formatDateTimeLabel(dateTimeInputValue(occurrenceTiming(first.at, first.day).dueAt)) : formatDateLabel(first.day)}`;
+  return lines.some((line) => line.startsWith("Due: ")) ? lines.map((line) => (line.startsWith("Due: ") ? due : line)) : [due, ...lines];
 }
 
 function repeatArg(value: unknown) {
@@ -3718,7 +3758,7 @@ const TOOL_LIST: AssistantTool[] = [
       title: `Create task: ${str(args.title)}`,
       lines: [
         ...fieldLines(args, { companyId: "Company", contactId: "Contact", opportunityId: "Opportunity", ownerId: "Owner" }, name),
-        ...taskTimingLines(args, name, null, true),
+        ...firstDueLines(taskTimingLines(args, name, null, true), args),
         ...fieldLines(args, { description: "Detail", priority: "Priority" }),
         ...(Object.keys(taskLinkArgs(args)).length === 0 ? ["Linked by name when created"] : []),
         ...taskEmailLines(args),
@@ -3773,7 +3813,7 @@ const TOOL_LIST: AssistantTool[] = [
           description:
             "Required when the task repeats and you change its time, title, detail, priority, assignee, duration or reminder. Links on the open one apply to every later one without it; this keeps them to this one. this: only this date. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope. Ask the user which they mean when it isn't clear.",
         },
-        skip: { type: "boolean", description: "True skips this date of a repeating task: the open one moves to its next date, or the upcoming date in occursOn is left out. Send it on its own. Each approved call skips once, so never send it again to skip a second date: say the dates to skip in occursOn." },
+        skip: { type: "boolean", description: "True skips one date of a repeating task: send it with occursOn set to that date (the task's own occursOn for the open one, which then moves to its next date) and nothing else. Each approved call skips once, so never send it again to skip a second date." },
         occursOn: { type: "string", description: "An upcoming date of a repeating task (YYYY-MM-DD, from its repeat.next or the pattern), to change or skip just that date. Send with taskId or seriesId." },
         seriesId: { type: "string", description: "The repeating task's seriesId, with occursOn, instead of taskId." },
         schedule: {
@@ -3796,6 +3836,11 @@ const TOOL_LIST: AssistantTool[] = [
     details: async (actor, args) => {
       if (args.schedule !== undefined && args.schedule !== null) return scheduleDetails(actor, args.schedule);
       const details = await taskOwnerDetails(actor, args.taskId);
+      const taskId = str(args.taskId);
+      if (endsKept(args.repeat) && isUuid(taskId)) {
+        const repeat = await withActor(actor, async (db) => (await readTaskInDb(db, actor, taskId))?.repeat ?? null).catch(() => null);
+        if (repeat?.end) details[`${taskId}:${REPEAT_END_KEY}`] = repeat.end;
+      }
       if (!optionalStr(args.taskId) && optionalStr(args.seriesId)) {
         const title = await readSeriesTitle(actor, str(args.seriesId)).catch(() => null);
         if (title) details[REPEAT_KEY] = title;
@@ -3827,7 +3872,7 @@ const TOOL_LIST: AssistantTool[] = [
           losesChange ? "You'll stay tagged but can't change it." : "",
           ...taskRelinkLines(args, name),
           ...taskEmailLines(args),
-          ...repeatLines(args, anchorTask),
+          ...repeatLines(args, anchorTask, detail(name, `${id}:${REPEAT_END_KEY}`)),
           ...taskDocLines(args, name, id),
         ],
       };
@@ -4477,13 +4522,13 @@ const TOOL_LIST: AssistantTool[] = [
         lines: [
           ...groups.map((group) => nameList(group.ids, name, group.noun)),
           skips.length > 0 ? nameList(skips, name, "Repeats, so skips this one") : "",
-          skips.length > 0 ? `${skips.length === 1 ? "It moves" : "They move"} to the next date and keep repeating.` : "",
+          skips.length > 0 ? (skips.length === 1 ? "It moves to its next date and keeps repeating." : "They move to their next dates and keep repeating.") : "",
           total > 0 ? "Nothing is deleted." : "",
           groups.some((group) => group.noun === "Tasks") ? "ClickUp isn't changed." : "",
         ],
       };
     },
-    run: async (actor, args) => {
+    run: async (actor, args, context) => {
       const options = { provenance: { operation: "archive_records", ...provenanceSource() } };
       const groups = [
         { ids: strings(args.companyIds), scope: "companies:write" as const, archive: (id: string) => archiveCompany(actor, id, options) },
@@ -4494,7 +4539,7 @@ const TOOL_LIST: AssistantTool[] = [
       if (groups.length === 0) return { error: "Say which records, using their ids." };
       const skipped: { taskId: string; title: string; skipped: string; next: { dueAt: string | null; dueHasTime: boolean } }[] = [];
       async function archiveOrSkipTask(id: string) {
-        const outcome = await archiveTask(actor, id, options);
+        const outcome = await archiveTask(actor, id, { ...options, ...(context.callId ? { idempotencyKey: keyFor(`${context.callId}:${id}`) } : {}) });
         const body = outcome.body as { task: Task; skipped?: string };
         if (body.skipped) skipped.push({ taskId: id, title: body.task.title, skipped: body.skipped, next: { dueAt: body.task.dueAt, dueHasTime: body.task.dueHasTime } });
       }

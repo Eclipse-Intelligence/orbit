@@ -3,7 +3,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { repeatAnchorDay } from "@/lib/assistant/repeat-anchor";
-import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
+import { describeAction, recordNames, runTool, taskRepeatRefusalFor } from "@/lib/assistant/tools";
 import { SCOPES } from "@/lib/crm/scopes";
 import { createRepeatingTask } from "@/lib/crm/task-series";
 import { createTask, getTask } from "@/lib/crm/tasks";
@@ -95,6 +95,37 @@ describe("assistant repeat cards", () => {
     const again = (await runTool(mark, "update_task", { taskId: task.id, skip: true }, { callId: "call-skip-1" })) as { task: Task };
     assert.equal(again.task.occursOn, "2027-03-09");
     assert.equal((await getTask(mark, task.id)).occursOn, "2027-03-09");
+  });
+});
+
+describe("assistant repeat review fixes", () => {
+  it("refuses a skip with no date before the card, and a skip approved after the task moved on", async () => {
+    const task = await weekly("Gym");
+    const refused = await taskRepeatRefusalFor(mark, "update_task", { taskId: task.id, skip: true });
+    assert.equal(refused?.field, "occursOn");
+    const shown = await card("update_task", { taskId: task.id, skip: true, occursOn: "2027-03-02" });
+    assert.ok(shown.lines.some((line) => /^Skip .*2 Mar only$/.test(line)), shown.lines.join(" | "));
+    await runTool(mark, "update_task", { taskId: task.id, skip: true, occursOn: "2027-03-02" }, { callId: "call-skip-dated-1" });
+    const late = (await runTool(mark, "update_task", { taskId: task.id, skip: true, occursOn: "2027-03-02" }, { callId: "call-skip-dated-2" })) as { error?: string };
+    assert.ok(late.error, "a skip approved after the date moved on is refused");
+    assert.equal((await getTask(mark, task.id)).occursOn, "2027-03-09");
+  });
+
+  it("says archive_records archives the last one, and skips once when the same call runs again", async () => {
+    const last = (await createRepeatingTask(mark, { title: "Last one", dueAt: "2027-03-02T14:00:00.000Z" }, { every: "week", ends: { after: 1 } })).body.task;
+    assert.equal((await card("archive_records", { taskIds: [last.id] })).title, "Archive 1 record");
+    const task = await weekly("Retried archive");
+    await runTool(mark, "archive_records", { taskIds: [task.id] }, { callId: "call-archive-1" });
+    await runTool(mark, "archive_records", { taskIds: [task.id] }, { callId: "call-archive-1" });
+    assert.equal((await getTask(mark, task.id)).occursOn, "2027-03-09");
+  });
+
+  it("shows the first date on create_task and the kept end on a pattern change", async () => {
+    const created = await card("create_task", { title: "Gym", dueDate: "2027-03-05", repeat: { every: "week", days: ["mo"] } });
+    assert.ok(created.lines.some((line) => /^Due: .*8 Mar/.test(line)), created.lines.join(" | "));
+    const ending = (await createRepeatingTask(mark, { title: "Ends", dueAt: "2027-03-02T14:00:00.000Z" }, { every: "week", ends: { on: "2027-06-01" } })).body.task;
+    const changed = await card("update_task", { taskId: ending.id, repeat: { every: "day" } });
+    assert.ok(changed.lines.some((line) => /^Repeats: Every day, until /.test(line)), changed.lines.join(" | "));
   });
 });
 

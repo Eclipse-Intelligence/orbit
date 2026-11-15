@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { after } from "next/server";
 import { announceRemoval, roomsLostOnLeaving } from "@/lib/crm/chat";
 import { announceShareRemoval, sharesLostOnLeaving } from "@/lib/mail/shares";
 import { scheduleWebhooks, withActor } from "@/lib/crm/context";
@@ -8,6 +9,7 @@ import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
+import type { SeriesOutlookRemoval } from "@/lib/crm/series-outlook";
 
 type InviteRole = "member" | "admin";
 
@@ -149,10 +151,11 @@ export async function removeMember(actor: UserActor, userId: string, provenance:
         return [];
       })
     : [];
-  if (isUuid(userId)) {
+  let outlook: SeriesOutlookRemoval | null = null;
+  if (isUuid(userId) && canManageTeam(actor) && userId !== actor.userId) {
     try {
-      const { removeSeriesOutlookFor } = await import("@/lib/crm/series-outlook");
-      await removeSeriesOutlookFor(userId, actor.workspaceId, { fetchImpl: options.fetchImpl });
+      const { prepareSeriesOutlookRemoval } = await import("@/lib/crm/series-outlook");
+      outlook = await prepareSeriesOutlookRemoval(userId, actor.workspaceId, { fetchImpl: options.fetchImpl });
     } catch (error) {
       console.error("Couldn't take their repeating tasks out of Outlook", error);
     }
@@ -168,7 +171,16 @@ export async function removeMember(actor: UserActor, userId: string, provenance:
     ]);
     if ((handed.rowCount ?? 0) > 0) scheduleWebhooks();
   } catch (error) {
+    await outlook?.release();
     teamError(error);
+  }
+  if (outlook) {
+    const removal = outlook;
+    try {
+      after(() => removal.run());
+    } catch {
+      await removal.run();
+    }
   }
   await announceRemoval(userId, rooms);
   await announceShareRemoval(shares);

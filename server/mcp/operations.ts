@@ -196,13 +196,18 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     {
       description:
         "Archive a task without marking it complete. The open one of a repeating task isn't archived: that date is skipped and the task moves to its next one, and the answer gives skipped (the date skipped) with the task at its next date. Stop it repeating with update_next_action repeat null first to archive it.",
-      inputSchema: { id: z.uuid(), idempotency_key: IDEMPOTENCY_KEY, ...provenanceFields },
+      inputSchema: {
+        id: z.uuid(),
+        occurs_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "occurs_on takes a day, such as 2027-03-04.").optional().describe("For a repeating task, the open one's occursOn you saw. If it has moved on since, nothing is skipped and the call is refused, so a retry never skips a second date."),
+        idempotency_key: IDEMPOTENCY_KEY,
+        ...provenanceFields,
+      },
     },
     async (args) =>
       run(async () =>
         (
           await withTaskWorkspaceHint(actor, args.id, () =>
-            archiveTask(actor, args.id, { provenance: provenance(args, "archive_task"), idempotencyKey: mcpIdempotencyKey(args.idempotency_key) }),
+            archiveTask(actor, args.id, { provenance: provenance(args, "archive_task"), idempotencyKey: mcpIdempotencyKey(args.idempotency_key), ...(args.occurs_on ? { expect: args.occurs_on } : {}) }),
           )
         ).body,
       ),

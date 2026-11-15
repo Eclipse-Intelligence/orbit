@@ -60,13 +60,17 @@ function optionalId(value: string) {
 
 function pushLater(user: Parameters<typeof pushClickUpTask>[0], id: string) {
   if (!clickupToken()) return;
-  after(async () => {
-    try {
-      await pushClickUpTask(user, id);
-    } catch (error) {
-      console.error("ClickUp push failed", error);
-    }
-  });
+  try {
+    after(async () => {
+      try {
+        await pushClickUpTask(user, id);
+      } catch (error) {
+        console.error("ClickUp push failed", error);
+      }
+    });
+  } catch (error) {
+    console.error("ClickUp push failed", error);
+  }
 }
 
 function refresh() {
@@ -77,6 +81,7 @@ function refresh() {
   revalidatePath("/boards", "layout");
   revalidatePath(SETTINGS_PATHS.activity);
   revalidatePath(TASKS_PATH);
+  revalidatePath("/calendar");
 }
 
 export async function patchContactAction(id: string, patch: ContactWrite): Promise<{ contact?: Contact; error?: string }> {

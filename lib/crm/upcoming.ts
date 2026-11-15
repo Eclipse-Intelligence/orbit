@@ -10,7 +10,6 @@ import { dayKeyAt } from "@/lib/crm/working-days";
 import { PAST_DAY, type UpcomingSeries } from "@/lib/task-blocks";
 import { upcomingAfter, type OccurrenceChange, type RepeatEnds, type RepeatRule, type SeriesTiming } from "@/lib/task-repeat";
 
-
 type ChangeJson = Omit<OccurrenceChange, "dueAt"> & { dueAt: string | null };
 
 type OwnSeriesRow = {
@@ -27,6 +26,8 @@ type OwnSeriesRow = {
   split_from_id: string | null;
   current_occurs_on: string | null;
   current_due_at: Date | string | null;
+  parent_task_id: string | null;
+  parent_due_at: Date | string | null;
   changes: ChangeJson[] | null;
 };
 
@@ -46,9 +47,12 @@ export async function listOwnSeriesInDb(db: Db, actor: UserActor, workspaceIds: 
     `select s.id, s.workspace_id, s.title, s.description, s.duration_minutes, s.starts_on::text as starts_on,
        to_char(s.at, 'HH24:MI') as at, s.rule, s.ends, s.current_task_id,
        s.split_from_id,
-       t.occurs_on::text as current_occurs_on, t.due_at as current_due_at, rc.rows as changes
+       t.occurs_on::text as current_occurs_on, t.due_at as current_due_at,
+       pt.id as parent_task_id, pt.due_at as parent_due_at, rc.rows as changes
      from crm.task_series s
      left join crm.tasks t on t.id = s.current_task_id
+     left join crm.task_series p on s.current_task_id is null and p.id = s.split_from_id and p.archived_at is null
+     left join crm.tasks pt on pt.id = p.current_task_id and pt.archived_at is null
      left join lateral (
        select coalesce(jsonb_agg(jsonb_build_object(
          'occursOn', c.occurs_on::text, 'skip', c.skip, 'dueAt', c.due_at, 'dueHasTime', c.due_has_time,
@@ -64,12 +68,16 @@ export async function listOwnSeriesInDb(db: Db, actor: UserActor, workspaceIds: 
      order by s.created_at, s.id`,
     [actor.userId, ids],
   );
-  const anchors = new Map<string, string | null>();
+  const anchors = new Map<string, { id: string; dueAt: string | null } | null>();
   for (const row of result.rows) {
     if (row.current_task_id || !row.split_from_id) continue;
+    if (row.parent_task_id) {
+      anchors.set(row.id, { id: row.parent_task_id, dueAt: isoOrNull(row.parent_due_at) });
+      continue;
+    }
     const anchor = await unstartedAnchor(db, { id: row.id, split_from_id: row.split_from_id, current_task_id: null });
-    const readable = anchor ? await db.query("select 1 from crm.tasks where id = $1 and archived_at is null", [anchor]) : null;
-    anchors.set(row.id, readable && readable.rows.length > 0 ? anchor : null);
+    const readable = anchor ? await db.query<{ due_at: Date | string | null }>("select due_at from crm.tasks where id = $1 and archived_at is null", [anchor]) : null;
+    anchors.set(row.id, anchor && readable && readable.rows.length > 0 ? { id: anchor, dueAt: isoOrNull(readable.rows[0].due_at) } : null);
   }
   return result.rows.map((row) => ({
     id: row.id,
@@ -82,8 +90,8 @@ export async function listOwnSeriesInDb(db: Db, actor: UserActor, workspaceIds: 
     rule: row.rule,
     ends: row.ends,
     currentTaskId: row.current_task_id,
-    anchorTaskId: row.current_task_id ?? anchors.get(row.id) ?? null,
-    after: upcomingAfter(row.current_occurs_on, isoOrNull(row.current_due_at)),
+    anchorTaskId: row.current_task_id ?? anchors.get(row.id)?.id ?? null,
+    after: row.current_task_id ? upcomingAfter(row.current_occurs_on, isoOrNull(row.current_due_at)) : upcomingAfter(null, anchors.get(row.id)?.dueAt ?? null),
     afterOccurs: row.current_occurs_on,
     changes: changesOf(row.changes),
   }));
