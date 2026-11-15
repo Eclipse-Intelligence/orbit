@@ -588,15 +588,15 @@ describe("final review", () => {
     assert.deepEqual(next, { company_id: other, opportunity_id: deal });
   });
 
-  it("keeps the opportunity on the next one after its contact moves company", async () => {
+  it("lets the next one follow its contact to the new company, dropping the old company's opportunity", async () => {
     const other = (await createCompany(mark, { name: "Contact moved", domain: "contact-moved-review.test" })).body.company.id;
     const contact = (await createContact(mark, { firstName: "Kept", lastName: "Deal", email: "kept-deal@review.test", companyId })).body.contact.id;
     const deal = (await createOpportunity(mark, { companyId, name: "Staying deal" })).body.opportunity.id;
     const task = (await createRepeatingTask(mark, { title: "Both kept", dueDate: "2027-03-02", contactId: contact, opportunityId: deal }, { every: "week" })).body.task;
     await updateContact(mark, contact, { companyId: other });
     await completeTask(mark, task.id);
-    const [next] = await sql<{ contact_id: string | null; opportunity_id: string | null }>("select contact_id, opportunity_id from crm.tasks where series_id = $1 and completed_at is null", [task.seriesId]);
-    assert.deepEqual(next, { contact_id: contact, opportunity_id: deal });
+    const [next] = await sql<{ company_id: string | null; contact_id: string | null; opportunity_id: string | null }>("select company_id, contact_id, opportunity_id from crm.tasks where series_id = $1 and completed_at is null", [task.seriesId]);
+    assert.deepEqual(next, { company_id: other, contact_id: contact, opportunity_id: null });
   });
 
   it("puts a skipped last one back in its own part when the Skip is undone", async () => {

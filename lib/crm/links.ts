@@ -25,9 +25,12 @@ export async function currentLinksInDb(db: Db, workspaceId: string, links: LinkR
   const opportunity = links.opportunityId
     ? (await db.query<{ company_id: string }>("select company_id from crm.opportunities where id = $1 and workspace_id = $2", [links.opportunityId, workspaceId])).rows[0]
     : undefined;
-  const wanted = new Set([contact?.company_id, opportunity?.company_id].filter((company): company is string => Boolean(company)));
-  if (wanted.size === 0 || (wanted.size === 1 && wanted.has(links.companyId))) return links;
-  return { ...links, companyId: wanted.size === 1 ? [...wanted][0] : null };
+  if (contact?.company_id) {
+    if (contact.company_id === links.companyId) return links;
+    return { companyId: contact.company_id, contactId: links.contactId, opportunityId: opportunity?.company_id === contact.company_id ? links.opportunityId : null };
+  }
+  if (opportunity?.company_id && opportunity.company_id !== links.companyId) return { ...links, companyId: opportunity.company_id };
+  return links;
 }
 
 export async function resolveLinks(

@@ -711,7 +711,7 @@ function ReminderChip({ details, id }: { details: TaskDetailsState; id: string }
   if (!details.due) return null;
   if (!timed && details.ownerSetsTime) return <span className="caption-style text-subtle">{ownerTimeLine(details.task.ownerName)}</span>;
   if (!timed) {
-    return <ReminderTimePrompt title={details.task.title} day={details.due.slice(0, 10)} onSave={(time) => details.remindAt(time)} className={cn(TASK_CHIP, TOUCH, "text-subtle")} />;
+    return <ReminderTimePrompt title={details.task.title} day={details.due.slice(0, 10)} repeats={Boolean(details.task.seriesId)} onSave={(time) => details.remindAt(time)} className={cn(TASK_CHIP, TOUCH, "text-subtle")} />;
   }
   return (
     <ReminderSelect

@@ -465,15 +465,16 @@ type PromptProps = {
   title: string;
   day: string;
   lead?: number;
+  repeats?: boolean;
   onSave: (time: string) => void;
   onRemove?: () => void;
 };
 
-function ReminderForm({ title, day, lead = 0, onSave, onRemove, onClose }: PromptProps & { onClose: () => void }) {
+function ReminderForm({ title, day, lead = 0, repeats = false, onSave, onRemove, onClose }: PromptProps & { onClose: () => void }) {
   const id = useId();
   const [now] = useState(() => Date.now());
-  const [time, setTime] = useState(() => reminderTimeFor(day, lead, now) ?? "");
-  const block = reminderBlock(day, lead, now);
+  const [time, setTime] = useState(() => reminderTimeFor(day, lead, now) ?? (repeats ? "09:00" : ""));
+  const block = repeats ? null : reminderBlock(day, lead, now);
   const ready = /^\d{2}:\d{2}$/.test(time) && !block;
   const dismiss = onRemove ? (
     <Button
@@ -528,7 +529,7 @@ function ReminderForm({ title, day, lead = 0, onSave, onRemove, onClose }: Promp
             variant="ghost"
             size="none"
             aria-pressed={time === quick}
-            disabled={isPastTime(day, quick, now, undefined, lead)}
+            disabled={!repeats && isPastTime(day, quick, now, undefined, lead)}
             onClick={() => setTime(quick)}
             className={cn(
               PILL,
