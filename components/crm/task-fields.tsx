@@ -13,10 +13,10 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
 import TaskLinkChips from "@/components/crm/task-link-chips";
-import { useDocMention } from "@/components/crm/task-doc-mention";
+import { useDocMention, type ReferenceRemoval } from "@/components/crm/task-doc-mention";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
 import LinkedText from "@/components/_ui/linked-text";
-import { descriptionParts, partsSourceOffset, showsDescriptionLinks, type DescriptionPart } from "@/lib/task-doc-picks";
+import { descriptionParts, partsSourceOffset, showsDescriptionLinks, withoutReferenceNear, type DescriptionPart } from "@/lib/task-doc-picks";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction } from "@/app/(crm)/records";
 import TaskTitle, { ColleagueLink } from "@/components/crm/task-title";
@@ -361,6 +361,21 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     void save({ remindMinutes: minutes });
   }
 
+  function referenceRemoved(result: ReferenceRemoval, reference: string, at: number) {
+    setText((current) => withoutReferenceNear(current, reference, at));
+    if (result.error) {
+      const message = result.error;
+      setErrors((current) => failFields(current, ["text"], message));
+      if (!visible.current) composer.showToast({ message, tone: "alert" });
+      return;
+    }
+    const stored = result.description?.trim() ?? "";
+    sent.current.text = stored;
+    drafts.drop(self, task.id, "text", stored);
+    setErrors((current) => clearFields(current, ["text"]));
+    router.refresh();
+  }
+
   async function assign(ownerId: string) {
     setBusy(true);
     setError(null);
@@ -397,6 +412,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     changeDuration,
     changeReminder,
     assign,
+    referenceRemoved,
   };
 }
 
@@ -780,6 +796,11 @@ function Description({ details, layout, warn }: { details: TaskDetailsState; lay
     mode: "description",
     value: details.text,
     onChange: details.setText,
+    onReferenceGone: (result, reference, at) => latestDetails.current.referenceRemoved(result, reference, at),
+  });
+  const latestDetails = useRef(details);
+  useEffect(() => {
+    latestDetails.current = details;
   });
   const attachMention = mention.attach;
   const attach = useCallback(

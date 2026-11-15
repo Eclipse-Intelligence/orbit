@@ -19,3 +19,7 @@ export function undoLinkChange(now = Date.now()) {
   current.run();
   return true;
 }
+
+export function linkUndoOffered(run: () => void, now = Date.now()) {
+  return offered?.run === run && now <= offered.until;
+}

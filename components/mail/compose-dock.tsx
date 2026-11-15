@@ -28,7 +28,7 @@ const TOAST_MS = 5_000;
 type Toast = {
   message: string;
   tone?: "status" | "alert";
-  action?: { label: string; run: () => void };
+  action?: { label: string; run: () => void; shortcut?: () => boolean };
   extra?: { label: string; short?: string; run: () => void };
   duration?: number;
   onDismiss?: () => void;
@@ -410,7 +410,12 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const showToast = useCallback(
     (toast: Toast) => {
       const repeat = toast.action ? undefined : shownMessages.current.get(toast.message);
-      if (repeat !== undefined) return repeat;
+      if (repeat !== undefined) {
+        const added = toast.onDismiss;
+        const earlier = toastEnds.current.get(repeat);
+        if (added) toastEnds.current.set(repeat, earlier ? () => (earlier(), added()) : added);
+        return repeat;
+      }
       const id = ++toastCounter.current;
       if (!toast.action) shownMessages.current.set(toast.message, id);
       if (toast.onDismiss) toastEnds.current.set(id, toast.onDismiss);
@@ -675,7 +680,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
                     toast.action!.run();
                     dismiss(toast.id);
                   }}
-                  title={toast.action.label === "Undo" ? "Undo (Z)" : undefined}
+                  title={toast.action.label === "Undo" && (toast.action.shortcut?.() ?? true) ? "Undo (Z)" : undefined}
                 >
                   {toast.action.label}
                 </Button>

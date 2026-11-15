@@ -81,8 +81,16 @@ export function withoutReferenceNear(text: string, reference: string, at: number
   if (best < 0) return text;
   let before = text.slice(0, best);
   let after = text.slice(best + reference.length);
-  if (/^[.,;:!?)]/.test(after) || !after || /^\n/.test(after)) before = before.replace(/[ \t]+$/, "");
-  else if (!before || /\n$/.test(before) || SPACE_END.test(before)) after = after.replace(/^[ \t]+/, "");
+  const lineStart = !before || /\n[ \t]*$/.test(before);
+  if (lineStart && (!after || /^[ \t]*\n/.test(after))) {
+    before = before.replace(/[ \t]*$/, "");
+    after = after.replace(/^[ \t]*\n?/, "");
+    if (!before) return after;
+    return after ? before + after : before.replace(/\n$/, "");
+  }
+  if (/^[,;]/.test(after) && (lineStart || /[:,;(][ \t]*$/.test(before))) after = after.slice(1);
+  if (!after || /^[.,;:!?)]|^[ \t]*\n/.test(after)) return before.replace(/[ \t]+$/, "") + after.replace(/^[ \t]+(?=\n)/, "");
+  if (lineStart || SPACE_END.test(before)) after = after.replace(/^[ \t]+/, "");
   return before + after;
 }
 

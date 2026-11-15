@@ -3,13 +3,17 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { DocPickHeader, DocPickNotice, DocPickOptions, useDocPicks } from "@/components/crm/task-doc-picker";
 import { useDocChange } from "@/components/crm/task-docs";
-import { saveTaskDetailsAction } from "@/app/(crm)/discussions";
+import { removeTaskDocReferenceAction } from "@/app/(crm)/task-docs";
 import type { Task } from "@/lib/crm/types";
 import type { DocPick } from "@/lib/docs/client-types";
 import { caretAfterEdit, insideClosedReference, pickIntoDescription, textEdit, withoutReferenceNear } from "@/lib/task-doc-picks";
 import { docQueryAt, withoutDocQuery, type DocQuery } from "@/lib/task-pad";
 
 type Mode = "title" | "description";
+
+export type ReferenceRemoval = { description?: string | null; error?: string };
+
+const SAVE_FAILED = "Couldn't save. Try again.";
 
 export function useDocMention({
   task,
@@ -18,6 +22,7 @@ export function useDocMention({
   mode,
   value,
   onChange,
+  onReferenceGone,
 }: {
   task: Pick<Task, "id" | "docIds">;
   enabled: boolean;
@@ -25,11 +30,13 @@ export function useDocMention({
   mode: Mode;
   value: string;
   onChange: (value: string) => void;
+  onReferenceGone?: (result: ReferenceRemoval, reference: string, at: number) => void;
 }) {
   const id = useId();
   const listId = `${id}-docs-list`;
   const field = useRef<HTMLTextAreaElement | null>(null);
   const latest = useRef(value);
+  const gone = useRef<(result: ReferenceRemoval, reference: string, at: number) => void>(() => undefined);
   const mounted = useRef(false);
   const muted = useRef<number | null>(null);
   const closing = useRef<number | null>(null);
@@ -44,6 +51,9 @@ export function useDocMention({
   useEffect(() => {
     latest.current = value;
   }, [value]);
+  useEffect(() => {
+    gone.current = onReferenceGone ?? (() => undefined);
+  });
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -106,19 +116,15 @@ export function useDocMention({
     setNote(next.note);
     if (task.docIds.includes(doc.id)) return;
     const reference = next.reference;
-    void change.link(doc).then((linked) => {
+    void change.link(doc).then(async (linked) => {
       if (linked || !reference) return;
       setNote(null);
       const current = latest.current;
-      const cleaned = withoutReferenceNear(current, reference, at);
-      if (cleaned === current) return;
       const element = field.current;
       const focused = Boolean(element && document.activeElement === element);
-      const caret = element?.selectionStart ?? current.length;
-      const edit = textEdit(current, cleaned);
-      const kept = caretAfterEdit(edit, caret);
-      if (mounted.current) onChange(cleaned);
-      if (mode === "description") void saveTaskDetailsAction(task.id, { description: cleaned.trim() || null }).catch(() => null);
+      const kept = caretAfterEdit(textEdit(current, withoutReferenceNear(current, reference, at)), element?.selectionStart ?? current.length);
+      const result = await removeTaskDocReferenceAction(task.id, reference, at).catch(() => ({ error: SAVE_FAILED }));
+      gone.current(result, reference, at);
       if (focused) {
         window.requestAnimationFrame(() => {
           const target = field.current;

@@ -12,6 +12,7 @@ import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import { undoAuditEvent } from "@/lib/crm/undo";
+import { withoutReferenceNear } from "@/lib/task-doc-picks";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
 import type { LookupState } from "@/lib/enrichment/contacts";
 
@@ -300,6 +301,23 @@ export async function relinkTaskUndoable(actor: UserActor, taskId: string, chang
 
 export async function relinkTask(actor: UserActor, taskId: string, change: LinkChange, provenance: Provenance) {
   return (await relinkTaskUndoable(actor, taskId, change, provenance)).task;
+}
+
+const DOC_REFERENCE_SHAPE = /^\[\[[^[\]\n]{1,200}\]\]$/;
+
+export async function removeTaskDocReference(actor: UserActor, taskId: string, reference: string, at: number, provenance: Provenance) {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(taskId)) throw notFound("task");
+  if (typeof reference !== "string" || !DOC_REFERENCE_SHAPE.test(reference)) throw new CrmError("invalid_input", "Couldn't save. Try again.", 400, { field: "description" });
+  const near = Number.isFinite(at) ? Math.max(0, Math.trunc(at)) : 0;
+  return withActor(actor, async (db) => {
+    const task = await lockedTask(db, actor, taskId);
+    const stored = task.description ?? "";
+    if (!stored.includes(reference)) return { task, changed: false };
+    const cleaned = withoutReferenceNear(stored, reference, near).trim();
+    const updated = await updateTaskInDb(db, actor, taskId, { description: cleaned || null }, provenance);
+    return { task: updated.task, changed: true };
+  });
 }
 
 export async function undoTaskLinkChange(actor: UserActor, taskId: string, eventId: string) {

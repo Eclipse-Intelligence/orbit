@@ -288,6 +288,7 @@ export function useTaskDone(tasks: Task[]) {
 
   const reopen = useCallback(
     (task: Task) => {
+      clearLinkUndo();
       if (entries.current.has(task.id)) return undo(task.id);
       if (reopening.current.has(task.id)) return false;
       reopening.current.add(task.id);

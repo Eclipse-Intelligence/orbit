@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { changeTaskDoc } from "@/lib/crm/task-doc-links";
+import { removeTaskDocReference } from "@/lib/crm/task-act";
 import { canChangeTask } from "@/lib/crm/task-rights";
 import { addTaskParticipants, createTask, getTask, listPlannerTasks, updateTask } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -23,10 +24,11 @@ import {
   showsDescriptionLinks,
 } from "@/lib/task-doc-picks";
 import { docQueryAt, parseTaskText, withoutDocQuery } from "@/lib/task-pad";
-import { clearLinkUndo, forgetLinkUndo, offerLinkUndo, undoLinkChange } from "@/lib/task-link-undo";
+import { clearLinkUndo, forgetLinkUndo, linkUndoOffered, offerLinkUndo, undoLinkChange } from "@/lib/task-link-undo";
 import { createUser, resetDatabase } from "./helpers";
 
 const WEB = { operation: "link_task_doc", source: "web" } as const;
+const EDIT = { operation: "update_task", source: "web" } as const;
 
 describe("[[ in a task's title and description", () => {
   it("removes the [[query from the title, as the Add task card does", () => {
@@ -146,6 +148,14 @@ describe("[[ in a task's title and description", () => {
     assert.equal(withoutReferenceNear("[[P]] then more", "[[P]]", 0), "then more");
     assert.equal(withoutReferenceNear("Line one\n[[P]] two", "[[P]]", 9), "Line one\ntwo");
     assert.equal(withoutReferenceNear("Ask [[P]]\nnext", "[[P]]", 4), "Ask\nnext");
+    assert.equal(withoutReferenceNear("a\n[[P]]\nb", "[[P]]", 2), "a\nb", "a reference on its own line leaves no blank line");
+    assert.equal(withoutReferenceNear("Ask [[P]] \nnext", "[[P]]", 4), "Ask\nnext", "no trailing space before a line break");
+    assert.equal(withoutReferenceNear("x: [[P]], y", "[[P]]", 3), "x: y");
+    assert.equal(withoutReferenceNear("see [[P]], y", "[[P]]", 4), "see, y");
+    assert.equal(withoutReferenceNear("(see [[P]])", "[[P]]", 5), "(see)");
+    assert.equal(withoutReferenceNear("only [[P]]", "[[P]]", 5), "only");
+    assert.equal(withoutReferenceNear("[[P]]", "[[P]]", 0), "");
+    assert.equal(withoutReferenceNear("a\n[[P]]", "[[P]]", 2), "a");
     assert.deepEqual(textEdit("Check [[pri now", "Check [[Pricing notes]] now"), { start: 8, end: 11, insert: "Pricing notes]]" });
     assert.deepEqual(textEdit("Ask [[my d about", "Ask about"), { start: 4, end: 11, insert: "" });
     const removal = textEdit("See [[Plan]] and more", "See and more");
@@ -181,6 +191,10 @@ describe("Z after removing an email", () => {
     offerLinkUndo(link, 8000, 1000);
     forgetLinkUndo(link);
     assert.equal(undoLinkChange(2000), false, "a toast that has gone clears the offer");
+    offerLinkUndo(link, 8000, 1000);
+    assert.equal(linkUndoOffered(link, 2000), true, "the toast shows Z while its offer stands");
+    offerLinkUndo(() => undefined, 8000, 1500);
+    assert.equal(linkUndoOffered(link, 2000), false, "an older toast stops showing Z once a newer one replaces it");
     offerLinkUndo(link, 8000, 1000);
     assert.equal(undoLinkChange(9001), false, "an expired offer does nothing");
   });
@@ -239,6 +253,39 @@ describe("chips and doc links on an existing task", () => {
       ["My draft terms"],
       "a shared doc that is no longer linked shows as written",
     );
+  });
+
+  it("takes a failed link's reference out of the stored description on the server, keeping any newer edit", async () => {
+    const task = (await createTask(mark, { title: "Plan the renewal", ownerId: mark.userId, description: "Use [[Renewal plan]] today." })).body.task;
+    await updateTask(mark, task.id, { description: "Use [[Renewal plan]] today. Also ring Jane first." });
+    const removed = await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 4, EDIT);
+    assert.equal(removed.changed, true);
+    assert.equal(removed.task.description, "Use today. Also ring Jane first.");
+    const [event] = (
+      await getAdminPool().query<{ operation: string; changes: { fields?: string[] } }>(
+        "select operation, changes from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at desc limit 1",
+        [task.id],
+      )
+    ).rows;
+    assert.equal(event.operation, "update_task");
+    assert.deepEqual(event.changes.fields, ["description"]);
+
+    const again = await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 4, EDIT);
+    assert.equal(again.changed, false, "nothing happens when the reference is already gone");
+    assert.equal((await getTask(mark, task.id)).description, "Use today. Also ring Jane first.");
+
+    await updateTask(mark, task.id, { description: "Rewritten without the reference." });
+    assert.equal((await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 4, EDIT)).changed, false);
+    assert.equal((await getTask(mark, task.id)).description, "Rewritten without the reference.");
+
+    await updateTask(mark, task.id, { description: "[[Renewal plan]]" });
+    assert.equal((await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 0, EDIT)).task.description, null);
+
+    await addTaskParticipants(mark, task.id, [priya.userId]);
+    await updateTask(mark, task.id, { description: "See [[Renewal plan]]." });
+    await assert.rejects(() => removeTaskDocReference(priya, task.id, "[[Renewal plan]]", 4, EDIT), /Only the assignee/);
+    await assert.rejects(() => removeTaskDocReference(mark, task.id, "Renewal plan", 4, EDIT), /Couldn't save/);
+    assert.equal((await getTask(mark, task.id)).description, "See [[Renewal plan]].");
   });
 
   it("only lets the assignee or creator change links, and a tagged teammate can't link a doc", async () => {
