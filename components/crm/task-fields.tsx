@@ -926,7 +926,7 @@ function Description({ details, layout, warn }: { details: TaskDetailsState; lay
             className={cn(
               "relative cursor-text break-words whitespace-pre-wrap",
               layout === "panel"
-                ? "border-line-strong bg-secondary text-foreground min-h-16 rounded-lg border px-3 py-2 text-[14px] leading-5"
+                ? "border-line-strong bg-surface-panel text-foreground min-h-16 rounded-lg border px-3 py-2 text-[14px] leading-5"
                 : "-mx-2 rounded-lg px-2 py-1.5 text-[13.5px] leading-[1.5] hover:bg-white/[0.04]",
             )}
           >
