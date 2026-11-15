@@ -215,9 +215,9 @@ type Draft = {
   until: string;
 };
 
-function draftOf(task: Task, anchor: string): Draft {
-  const rule = task.repeat?.rule;
-  const ends = task.repeat?.ends;
+function draftOf(repeat: { rule: RepeatRule; ends: RepeatEnds } | null | undefined, anchor: string): Draft {
+  const rule = repeat?.rule;
+  const ends = repeat?.ends;
   return {
     interval: String(rule?.interval ?? 1),
     freq: rule?.freq ?? "weekly",
@@ -250,18 +250,20 @@ function endsOf(draft: Draft): RepeatEnds {
   return { never: true };
 }
 
-function CustomRepeat({ task, anchor, onCancel, onSave }: { task: Task; anchor: string; onCancel: () => void; onSave: (rule: RepeatRule, ends: RepeatEnds) => void }) {
+type CustomFrom = { start: { rule: RepeatRule; ends: RepeatEnds } | null | undefined; kept: RepeatRule | null; at: string | null };
+
+function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; anchor: string; onCancel: () => void; onSave: (rule: RepeatRule, ends: RepeatEnds) => void }) {
   const id = useId();
-  const [draft, setDraft] = useState(() => draftOf(task, anchor));
+  const [draft, setDraft] = useState(() => draftOf(from.start, anchor));
   const [shown, setShown] = useState<string | null>(null);
   const update = (change: Partial<Draft>) => {
     setShown(null);
     setDraft((current) => ({ ...current, ...change }));
   };
-  const rule = ruleOf(draft, anchor, task.repeat && !task.repeat.ended ? task.repeat.rule : null);
+  const rule = ruleOf(draft, anchor, from.kept);
   const ends = endsOf(draft);
   const problem = checkRule(rule) ?? (draft.ends === "until" && !draft.until ? "Choose an end date." : checkEnds(ends, anchor, dayKeyAt(new Date())));
-  const pattern: RepeatPattern = { startsOn: anchor, at: atOf(task), rule: normalRule({ ...rule, interval: Math.max(1, rule.interval || 1) }), ends: problem ? { never: true } : ends };
+  const pattern: RepeatPattern = { startsOn: anchor, at: from.at, rule: normalRule({ ...rule, interval: Math.max(1, rule.interval || 1) }), ends: problem ? { never: true } : ends };
   const interval = Math.max(1, Number(draft.interval) || 1);
   const name = DAY_NAMES[WEEKDAYS.indexOf(weekdayOf(anchor))];
   const week = monthWeekOf(anchor);
@@ -449,6 +451,109 @@ function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
   items[next]?.focus();
 }
 
+function RepeatChoices({
+  presets,
+  current,
+  repeating,
+  onDontRepeat,
+  onPick,
+  onCustom,
+  children,
+}: {
+  presets: ReturnType<typeof repeatPresets>;
+  current: RepeatRule | null;
+  repeating: boolean;
+  onDontRepeat: () => void;
+  onPick: (rule: RepeatRule) => void;
+  onCustom: () => void;
+  children?: ReactNode;
+}) {
+  const matched = current ? presets.find((preset) => sameRule(preset.rule, current)) : null;
+  return (
+    <div role="menu" aria-label="Repeat" onKeyDown={moveFocus} className="flex flex-col p-1">
+      <MenuOption checked={!repeating} onSelect={onDontRepeat}>
+        Don&apos;t repeat
+      </MenuOption>
+      {presets.map((preset) => (
+        <MenuOption key={preset.id} checked={matched?.id === preset.id} onSelect={() => onPick(preset.rule)}>
+          {preset.label}
+        </MenuOption>
+      ))}
+      <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
+      <MenuOption checked={Boolean(current && !matched)} onSelect={onCustom} detail={null} icon={current && !matched ? <CheckIcon aria-hidden className="size-3.5" /> : null}>
+        <span className="flex items-center justify-between gap-2">
+          Custom
+          <ChevronRightIcon aria-hidden className="text-subtle size-3" />
+        </span>
+      </MenuOption>
+      {children}
+    </div>
+  );
+}
+
+export type RepeatDraft = { rule: RepeatRule; ends: RepeatEnds };
+
+export function RepeatPicker({
+  anchor,
+  at,
+  value,
+  onChange,
+  trigger,
+  align = "start",
+  onClosed,
+}: {
+  anchor: string;
+  at: string | null;
+  value: RepeatDraft | null;
+  onChange: (value: RepeatDraft | null) => void;
+  trigger: ReactNode;
+  align?: "start" | "end";
+  onClosed?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState<"menu" | "custom">("menu");
+  const close = () => {
+    setOpen(false);
+    setView("menu");
+  };
+  const choose = (next: RepeatDraft | null) => {
+    close();
+    onChange(next);
+  };
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setView("menu");
+      }}
+    >
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent
+        align={align}
+        className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain"
+        onCloseAutoFocus={(event) => {
+          if (!onClosed) return;
+          event.preventDefault();
+          onClosed();
+        }}
+      >
+        {view === "menu" && (
+          <RepeatChoices
+            presets={repeatPresets(anchor)}
+            current={value?.rule ?? null}
+            repeating={Boolean(value)}
+            onDontRepeat={() => choose(null)}
+            onPick={(rule) => choose({ rule, ends: value?.ends ?? { never: true } })}
+            onCustom={() => setView("custom")}
+          />
+        )}
+        {view === "custom" && <CustomRepeat from={{ start: value, kept: value?.rule ?? null, at }} anchor={anchor} onCancel={close} onSave={(rule, ends) => choose({ rule, ends })} />}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; trigger: ReactNode; align?: "start" | "end" }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("menu");
@@ -468,7 +573,6 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
     if (current && sameRule(current, rule)) return;
     void actions.set(rule, keptEnds);
   };
-  const matched = current ? presets.find((preset) => sameRule(preset.rule, current)) : null;
   return (
     <Popover
       open={open}
@@ -480,22 +584,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent align={align} className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain">
         {view === "menu" && (
-          <div role="menu" aria-label="Repeat" onKeyDown={moveFocus} className="flex flex-col p-1">
-            <MenuOption checked={!repeating} onSelect={() => (repeating ? setView("stop") : close())}>
-              Don&apos;t repeat
-            </MenuOption>
-            {presets.map((preset) => (
-              <MenuOption key={preset.id} checked={matched?.id === preset.id} onSelect={() => pick(preset.rule)}>
-                {preset.label}
-              </MenuOption>
-            ))}
-            <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
-            <MenuOption checked={Boolean(current && !matched)} onSelect={() => setView("custom")} detail={null} icon={current && !matched ? <CheckIcon aria-hidden className="size-3.5" /> : null}>
-              <span className="flex items-center justify-between gap-2">
-                Custom
-                <ChevronRightIcon aria-hidden className="text-subtle size-3" />
-              </span>
-            </MenuOption>
+          <RepeatChoices presets={presets} current={current} repeating={repeating} onDontRepeat={() => (repeating ? setView("stop") : close())} onPick={pick} onCustom={() => setView("custom")}>
             {repeating && series && (
               <>
                 <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
@@ -520,11 +609,11 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
                 </MenuOption>
               </>
             )}
-          </div>
+          </RepeatChoices>
         )}
         {view === "custom" && (
           <CustomRepeat
-            task={task}
+            from={{ start: task.repeat, kept: task.repeat && !task.repeat.ended ? task.repeat.rule : null, at: atOf(task) }}
             anchor={anchor}
             onCancel={close}
             onSave={(rule, ends) => {

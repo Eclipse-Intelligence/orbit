@@ -10,6 +10,7 @@ import { detectTaskRecordsInDb, folded, memberNames, mentionsName, quotesFoldedS
 import type { UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
+import { REPEAT_EVERY } from "@/lib/task-repeat";
 import { acceptAiReading, londonParts, namePattern, parseTaskText, type PadAiParse } from "@/lib/task-pad";
 
 export type PadRecord = { id: string; name: string };
@@ -253,13 +254,25 @@ const AI_SCHEMA = z.object({
   due: z.string().nullable(),
   remindMinutes: z.number().nullable(),
   durationMinutes: z.number().nullable().optional(),
+  repeat: z
+    .object({
+      phrase: z.string(),
+      every: z.enum(REPEAT_EVERY),
+      interval: z.number().nullable().optional(),
+      days: z.array(z.string()).nullable().optional(),
+      monthDay: z.number().nullable().optional(),
+      monthWeek: z.object({ n: z.number(), weekday: z.string() }).nullable().optional(),
+      ends: z.object({ after: z.number().nullable().optional(), on: z.string().nullable().optional() }).nullable().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export type { PadAiParse };
 
 const PAD_AI_RULES = [
   "You read when a short to-do written in UK English is due. You never rewrite the to-do. Reply with JSON only:",
-  '{"phrases": [string], "due": "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" or null, "remindMinutes": number or null, "durationMinutes": number or null}.',
+  '{"phrases": [string], "due": "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" or null, "remindMinutes": number or null, "durationMinutes": number or null, "repeat": object or null}.',
   "phrases lists the exact pieces of the to-do that say when or ask for a reminder, in the order they appear, each copied character for character as an unbroken piece of the text (keep case and spacing; include a leading on, by, at or due that belongs to it). Use an empty list when nothing says when. Never add, fix or reorder words.",
   "due is Europe/London local time. If nothing says when, or you are not sure, due is null and phrases is empty.",
   "Give a time only when the text gives one. A day with no time is the day alone as YYYY-MM-DD.",
@@ -272,6 +285,9 @@ const PAD_AI_RULES = [
   `remindMinutes is how many minutes before the due time to remind, only when a reminder is asked for, and must be one of ${REMINDER_MINUTES.join(", ")}. Otherwise null.`,
   `durationMinutes is how long the task takes when the text says so (for 30 mins, 2-3pm), at most ${MAX_TASK_DURATION}, otherwise null.`,
   "Each phrase must appear exactly once in the text and contain only date, time and reminder words; an answer with a phrase that is repeated, reworded or holds other words is thrown away.",
+  'repeat is null unless the to-do says it happens again and again (every Monday, fortnightly, each month, the last Friday of every month). Then repeat is {"phrase": string, "every": "day" or "weekday" or "week" or "month" or "year", "interval": number or null, "days": ["mo", "tu", "we", "th", "fr", "sa", "su"] or null, "monthDay": number or null, "monthWeek": {"n": 1 to 4 or -1 for last, "weekday": "mo" to "su"} or null, "ends": {"after": number} or {"on": "YYYY-MM-DD"} or null}.',
+  "repeat.phrase is the exact piece that says how it repeats and when it stops (until 18 Dec, for 6 weeks, 10 times), copied character for character, without the time or a start date; those go in phrases. fortnightly and every other week are every week with interval 2. every weekday is Monday to Friday. A word like every or each that is not followed by a pattern (every client, every time) is not a repeat.",
+  "When it repeats, due is the first time it happens from now, with the time if one is given, and phrases holds only the time, a start date and a reminder (it may be empty).",
 ];
 
 export async function parsePadWithAi(text: string, now = new Date(), options: { fetchImpl?: typeof fetch } = {}): Promise<PadAiParse | null> {
@@ -295,6 +311,7 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
       due: result.data.due,
       remindMinutes: result.data.remindMinutes,
       durationMinutes: result.data.durationMinutes ?? null,
+      repeat: result.data.repeat ?? null,
     },
     now,
   );

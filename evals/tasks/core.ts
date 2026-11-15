@@ -229,6 +229,46 @@ export const CORE_TASKS: EvalTask[] = [
     checks: [card("create_task", arg.all(arg.is("contactId", "contact:Ansel Pike"), dueOn("dueAt", { weekday: 2 }), (args) => typeof args.remindMinutes === "number"))],
   }),
   task({
+    id: "write-repeating-task-fortnightly",
+    suite: "core",
+    category: "propose_write",
+    origin: "Recurring tasks: wording the Add task rules leave to the AI reader, a fortnightly weekday.",
+    message: "Set me a task to run payroll fortnightly on Thursdays.",
+    checks: [
+      card("create_task", (args) => {
+        const repeat = args.repeat as { every?: string; interval?: number; days?: string[] } | undefined;
+        return repeat?.every === "week" && repeat.interval === 2 && JSON.stringify(repeat.days ?? []).toLowerCase().includes("th");
+      }),
+    ],
+  }),
+  task({
+    id: "write-repeating-task-each-two-days",
+    suite: "core",
+    category: "propose_write",
+    origin: "Recurring tasks: wording the Add task rules leave to the AI reader, each of two weekdays with a time.",
+    message: "Each Monday and Thursday at 9 I need to check the ad spend. Add that as a task.",
+    checks: [
+      card("create_task", (args) => {
+        const repeat = args.repeat as { every?: string; days?: string[] } | undefined;
+        const days = JSON.stringify(repeat?.days ?? []).toLowerCase();
+        return repeat?.every === "week" && days.includes("mo") && days.includes("th") && /T09:00/.test(String(args.dueAt ?? ""));
+      }),
+    ],
+  }),
+  task({
+    id: "write-repeating-task-monthly-until",
+    suite: "core",
+    category: "propose_write",
+    origin: "Recurring tasks: wording the Add task rules leave to the AI reader, a monthly date with an end month.",
+    message: "Put in a task to chase unpaid invoices on the 1st of each month until March.",
+    checks: [
+      card("create_task", (args) => {
+        const repeat = args.repeat as { every?: string; monthDay?: number; ends?: { on?: string } } | undefined;
+        return repeat?.every === "month" && repeat.monthDay === 1 && /^\d{4}-03-/.test(String(repeat.ends?.on ?? ""));
+      }),
+    ],
+  }),
+  task({
     id: "write-task-for-tagged-teammate",
     suite: "core",
     category: "propose_write",
