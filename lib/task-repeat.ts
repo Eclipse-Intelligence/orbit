@@ -455,10 +455,10 @@ export function remainingCount(pattern: RepeatPattern, afterDay: string) {
   return occurrenceDays(pattern, shiftDay(afterDay, 1), last, MAX_COUNT + 1).length;
 }
 
-export function endWords(pattern: RepeatPattern, afterDay: string | null = null) {
+export function endWords(pattern: RepeatPattern, afterDay: string | null = null, today = dayKeyAt(new Date())) {
   const ends = pattern.ends;
   if ("never" in ends) return "";
-  if ("until" in ends) return `until ${dayMonth(ends.until)}`;
+  if ("until" in ends) return `until ${ends.until.slice(0, 4) === today.slice(0, 4) ? dayMonth(ends.until) : longDay(ends.until)}`;
   if (afterDay) return `${remainingCount(pattern, afterDay)} more`;
   const count = countLeft(ends)!;
   return `${count} time${count === 1 ? "" : "s"}`;
