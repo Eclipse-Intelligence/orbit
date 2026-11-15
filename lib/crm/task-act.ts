@@ -12,7 +12,8 @@ import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import { undoAuditEvent } from "@/lib/crm/undo";
-import { withoutReferenceNear } from "@/lib/task-doc-picks";
+import { docReferenceTitle, referenceToRemove, withoutReferenceNear } from "@/lib/task-doc-picks";
+import { withTaskDocsInDb } from "@/lib/crm/task-docs";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
 import type { LookupState } from "@/lib/enrichment/contacts";
 
@@ -314,7 +315,12 @@ export async function removeTaskDocReference(actor: UserActor, taskId: string, r
     const task = await lockedTask(db, actor, taskId);
     const stored = task.description ?? "";
     if (!stored.includes(reference)) return { task, changed: false };
-    const cleaned = withoutReferenceNear(stored, reference, near).trim();
+    const [withDocs] = await withTaskDocsInDb(db, actor, [task]);
+    const title = docReferenceTitle(reference.slice(2, -2)).toLowerCase();
+    if (withDocs.docs.some((doc) => doc.readable && docReferenceTitle(doc.title).toLowerCase() === title)) return { task, changed: false };
+    const at = referenceToRemove(stored, reference, near);
+    if (at === null) return { task, changed: false };
+    const cleaned = withoutReferenceNear(stored, reference, at).trim();
     const updated = await updateTaskInDb(db, actor, taskId, { description: cleaned || null }, provenance);
     return { task: updated.task, changed: true };
   });

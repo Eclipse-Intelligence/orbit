@@ -15,6 +15,7 @@ import {
   insertDocReference,
   insideClosedReference,
   caretAfterEdit,
+  referenceToRemove,
   textEdit,
   withoutReferenceNear,
   partsSourceOffset,
@@ -164,6 +165,15 @@ describe("[[ in a task's title and description", () => {
     assert.equal(caretAfterEdit(removal, 8), 4, "a caret inside it lands where it was");
   });
 
+  it("only picks a reference to take out when its position is unambiguous", () => {
+    assert.equal(referenceToRemove("See [[P]] now", "[[P]]", 99), 4, "a single copy is always the one");
+    assert.equal(referenceToRemove("a [[P]]\nb [[P]]", "[[P]]", 9), 10);
+    assert.equal(referenceToRemove("a [[P]]\nb [[P]]", "[[P]]", 0), 2);
+    assert.equal(referenceToRemove("[[P]] and [[P]]", "[[P]]", 3), null);
+    assert.equal(referenceToRemove("a [[P]]\nb [[P]]\nc", "[[P]]", 17), null);
+    assert.equal(referenceToRemove("nothing", "[[P]]", 0), null);
+  });
+
   it("links duplicate titles to the first linked doc the viewer can open", () => {
     const parts = descriptionParts("[[Plan]]", [
       { id: "hidden", title: null, readable: false },
@@ -286,6 +296,24 @@ describe("chips and doc links on an existing task", () => {
     await assert.rejects(() => removeTaskDocReference(priya, task.id, "[[Renewal plan]]", 4, EDIT), /Only the assignee/);
     await assert.rejects(() => removeTaskDocReference(mark, task.id, "Renewal plan", 4, EDIT), /Couldn't save/);
     assert.equal((await getTask(mark, task.id)).description, "See [[Renewal plan]].");
+  });
+
+  it("leaves a reference that is still valid or whose copy can't be told apart", async () => {
+    const linked = (await createTask(mark, { title: "Plan with the doc", ownerId: mark.userId, description: "Use [[Renewal plan]] today.", docIds: [shared] })).body.task;
+    const kept = await removeTaskDocReference(mark, linked.id, "[[Renewal plan]]", 4, EDIT);
+    assert.equal(kept.changed, false, "a doc with that title is linked, so the reference is right");
+    assert.equal((await getTask(mark, linked.id)).description, "Use [[Renewal plan]] today.");
+
+    const lines = (await createTask(mark, { title: "Plan two lines", ownerId: mark.userId, description: "First [[Renewal plan]]\nSecond [[Renewal plan]] too" })).body.task;
+    const second = await removeTaskDocReference(mark, lines.id, "[[Renewal plan]]", 30, EDIT);
+    assert.equal(second.changed, true);
+    assert.equal(second.task.description, "First [[Renewal plan]]\nSecond too");
+
+    const same = (await createTask(mark, { title: "Plan one line", ownerId: mark.userId, description: "[[Renewal plan]] and [[Renewal plan]]" })).body.task;
+    assert.equal((await removeTaskDocReference(mark, same.id, "[[Renewal plan]]", 18, EDIT)).changed, false, "two copies on one line are ambiguous");
+    const elsewhere = (await createTask(mark, { title: "Plan elsewhere", ownerId: mark.userId, description: "A [[Renewal plan]]\nB [[Renewal plan]]\nC nothing here" })).body.task;
+    assert.equal((await removeTaskDocReference(mark, elsewhere.id, "[[Renewal plan]]", 40, EDIT)).changed, false, "a stale position on a line without a copy changes nothing");
+    assert.equal((await getTask(mark, elsewhere.id)).description, "A [[Renewal plan]]\nB [[Renewal plan]]\nC nothing here");
   });
 
   it("only lets the assignee or creator change links, and a tagged teammate can't link a doc", async () => {

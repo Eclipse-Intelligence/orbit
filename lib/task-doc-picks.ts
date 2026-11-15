@@ -94,6 +94,19 @@ export function withoutReferenceNear(text: string, reference: string, at: number
   return before + after;
 }
 
+export function referenceToRemove(text: string, reference: string, at: number) {
+  const found: number[] = [];
+  for (let index = text.indexOf(reference); index >= 0; index = text.indexOf(reference, index + 1)) found.push(index);
+  if (found.length === 0) return null;
+  if (found.length === 1) return found[0];
+  const near = Math.min(Math.max(0, at), text.length);
+  const lineStart = text.lastIndexOf("\n", near - 1) + 1;
+  const lineEnd = text.indexOf("\n", near);
+  const end = lineEnd < 0 ? text.length : lineEnd;
+  const onLine = found.filter((index) => index >= lineStart && index + reference.length <= end);
+  return onLine.length === 1 ? onLine[0] : null;
+}
+
 export function textEdit(before: string, after: string) {
   let start = 0;
   while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
