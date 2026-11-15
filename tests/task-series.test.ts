@@ -1239,7 +1239,7 @@ describe("repeating task review round 10", () => {
     const deleted = (await deleteSeries(mark, task.id)).body;
     const restored = await withActor(priya, (db) => unarchiveTaskInDb(db, priya, task.id, { operation: "unarchive_task" }));
     assert.deepEqual([restored.task.archivedAt, restored.task.seriesId], [null, null]);
-    await assert.rejects(undoTaskEvents(mark, task.id, deleted.undo, { operation: "undo_change" }), /open task has left/);
+    await assert.rejects(undoTaskEvents(mark, task.id, deleted.undo, { operation: "undo_change" }), /open task has left|how it repeats has changed since/);
     assert.ok((await seriesRow(task.seriesId!)).archived_at);
   });
 
@@ -1502,12 +1502,48 @@ describe("repeating task undo, one change at a time", () => {
     }
   });
 
-  it("asks for an All change to be undone from its toast, not from the assistant", async () => {
+  it("undoes an All change and making an undated task repeat from the assistant, like their toasts", async () => {
+    const { updateTaskFromApi } = await import("@/lib/crm/task-series");
     const { listRecentChanges } = await import("@/lib/crm/undo");
+    const newestFor = async (id: string) => (await listRecentChanges(mark, { entityType: "task", limit: 20 })).filter((change) => change.entityId === id)[0];
     const task = await weekly("All from assistant", "2033-09-06");
+    const before = await picture(task.seriesId!);
     await updateOccurrence(mark, { taskId: task.id }, { title: "All from assistant renamed" }, "all");
-    const newest = (await listRecentChanges(mark, { entityType: "task", limit: 20 })).filter((change) => change.entityId === task.id)[0];
-    assert.deepEqual([newest.canUndo, newest.reason], [false, "Can't undo this in one step. Undo each change on its own."]);
+    const all = await newestFor(task.id);
+    assert.equal(all.canUndo, true, all.reason);
+    await undoAuditEvent(mark, all.id, { operation: "undo_change" });
+    assert.equal(await picture(task.seriesId!), before);
+
+    const undated = (await createTask(mark, { title: "Undated from assistant" })).body.task;
+    await updateTaskFromApi(mark, { taskId: undated.id }, { repeat: { every: "week" } });
+    const made = await newestFor(undated.id);
+    assert.equal(made.canUndo, true, made.reason);
+    await undoAuditEvent(mark, made.id, { operation: "undo_change" });
+    const back = await getTask(mark, undated.id);
+    assert.deepEqual([back.seriesId, back.dueAt], [null, null]);
+  });
+
+  it("refuses the whole of an All change once its task half has changed since", async () => {
+    const { listRecentChanges } = await import("@/lib/crm/undo");
+    const task = await weekly("Stale half", "2033-10-04");
+    const all = (await updateOccurrence(mark, { taskId: task.id }, { title: "Stale half all" }, "all")).body;
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Stale half this" }, "this");
+    const listed = (await listRecentChanges(mark, { entityType: "task", limit: 20 })).find((change) => all.undo.includes(change.id))!;
+    assert.equal(listed.canUndo, false);
+    await assert.rejects(undoAuditEvent(mark, listed.id, { operation: "undo_change" }), /changed since/);
+    await assert.rejects(undoTaskEvents(mark, task.id, all.undo, { operation: "undo_change" }), /changed since/);
+    assert.equal((await seriesRow(task.seriesId!)).title, "Stale half all", "the series half stays too");
+  });
+
+  it("won't undo an older change to how it repeats over a newer one", async () => {
+    const task = await weekly("Older pattern", "2033-11-01");
+    const daily = (await setTaskRepeat(mark, task.id, { every: "day" })).body;
+    await endSeriesOn(mark, task.id, "2034-06-30");
+    await assert.rejects(undoTaskEvents(mark, task.id, daily.undo, { operation: "undo_change" }), /how it repeats has changed since/);
+    const seriesEvent = (await sql<{ id: string }>("select id from crm.audit_events where id = any($1::uuid[]) and event_type like 'task_series.%'", [daily.undo]))[0];
+    await assert.rejects(undoAuditEvent(mark, seriesEvent.id, { operation: "undo_change" }), /how it repeats has changed since/);
+    const [series] = await sql<{ ends: unknown }>("select ends from crm.task_series where id = $1", [task.seriesId]);
+    assert.deepEqual(series.ends, { until: "2034-06-30" });
   });
 
   it("leaves a later part that once had a task, and anything behind it, where they are when the series moves", async () => {

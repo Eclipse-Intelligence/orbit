@@ -145,6 +145,11 @@ function snapshotOf(row: SeriesRow): SeriesSnapshot {
   };
 }
 
+export async function readSeriesSnapshot(db: Db, seriesId: string) {
+  const row = isUuid(seriesId) ? await readSeries(db, seriesId) : null;
+  return row ? snapshotOf(row) : null;
+}
+
 function stopped(row: Pick<SeriesRow, "ended_at" | "archived_at">) {
   return Boolean(row.ended_at || row.archived_at);
 }

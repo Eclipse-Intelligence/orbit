@@ -23,7 +23,7 @@ import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { linkableDocIdsInDb } from "@/lib/crm/task-docs";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
-import { restoreOccurrenceInDb, restoreSeriesInDb, restoreSeriesLinksInDb } from "@/lib/crm/task-series";
+import { readSeriesSnapshot, restoreOccurrenceInDb, restoreSeriesInDb, restoreSeriesLinksInDb } from "@/lib/crm/task-series";
 import type { SeriesRights } from "@/lib/crm/task-rights";
 
 type TaskValues = { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null; seriesId?: string | null; completedAt?: string | null };
@@ -540,6 +540,9 @@ async function describeEvent(
     if (undone) return refuse(summary, "This change has already been undone.");
     if (!current) return refuse(summary, notFoundMessage(noun));
     if (!hasScope(actor.scopes, SCOPES.task)) return refuse(summary, `You don't have permission to change this ${noun}.`);
+    const after = record(record(seriesChanges.series)?.after);
+    const now = after && typeof record(seriesChanges.series)?.id === "string" ? await readSeriesSnapshot(db, String(record(seriesChanges.series)?.id)) : null;
+    if (after && now && !same({ ...now, currentTaskId: null }, { ...after, currentTaskId: null })) return refuse(summary, "Can't undo: how it repeats has changed since.");
     return { entityName, summary, plan: { ok: true, restores, run: () => restoreSeriesInDb(db, actor, seriesChanges, provenance) } };
   }
 
@@ -698,25 +701,33 @@ async function lockUndo(db: Db, actor: Actor, entity: EntityType | null, entityI
   for (const id of [...ids].sort()) await lockNamespace(db, actor.workspaceId, `undo:${id}`);
 }
 
-async function undoableInAction(db: Db, actor: Actor, eventId: string, provenance: Provenance) {
+async function actionIds(db: Db, actor: Actor, eventId: string) {
   const found = await db.query<{ id: string }>(
     `select e.id from crm.audit_events e join crm.audit_events t on t.id = $1 and t.workspace_id = $2 and t.entity_type = 'task'
      where e.workspace_id = t.workspace_id and e.entity_type = 'task' and e.entity_id = t.entity_id and e.created_at = t.created_at
        and e.actor_user_id is not distinct from t.actor_user_id and e.actor_agent_id is not distinct from t.actor_agent_id
        and e.event_type not like '%.undone' and e.event_type not like 'task.participant_%' and not coalesce((e.changes ->> 'followsChange')::boolean, false)
-       and not (e.event_type = 'task.archived' and exists (select 1 from crm.audit_events d where d.entity_id = e.entity_id and d.created_at = e.created_at and d.event_type = 'task_series.deleted'))`,
+       and not (e.event_type = 'task.archived' and exists (select 1 from crm.audit_events d where d.entity_id = e.entity_id and d.created_at = e.created_at and d.event_type = 'task_series.deleted'))
+       and not (e.event_type = 'task.created' and e.changes -> 'after' ->> 'seriesId' is not null)`,
     [eventId, actor.workspaceId],
   );
-  const described = await Promise.all(found.rows.map((row) => describeById(db, actor, row.id, provenance)));
-  return described.filter((one) => one.described.plan.ok);
+  return found.rows.map((row) => row.id);
 }
 
-async function describeAction(db: Db, actor: Actor, eventId: string, provenance: Provenance, pick = false) {
+async function describeAction(db: Db, actor: Actor, eventId: string, provenance: Provenance, pick = false): Promise<{ event: AuditRow; described: Described; ids: string[] }> {
   const one = await describeById(db, actor, eventId, provenance);
-  if (one.event.entity_type !== "task") return one;
-  const undoable = await undoableInAction(db, actor, one.event.id, provenance);
-  if (undoable.length > 1) return { event: one.event, described: { ...one.described, plan: { ok: false as const, reason: ONE_AT_A_TIME } } };
-  return pick && undoable.length === 1 ? undoable[0] : one;
+  const ids = one.event.entity_type === "task" ? await actionIds(db, actor, one.event.id) : [one.event.id];
+  if (!ids.includes(one.event.id)) return pick && ids.length === 1 ? { ...(await describeById(db, actor, ids[0], provenance)), ids } : { ...one, ids: [one.event.id] };
+  if (ids.length < 2) return { ...one, ids };
+  const parts = await Promise.all(ids.map((id) => describeById(db, actor, id, provenance)));
+  const series = parts.filter((part) => part.event.event_type.startsWith("task_series."));
+  const refuse = (reason: string) => ({ event: one.event, ids, described: { ...one.described, plan: { ok: false as const, reason } } });
+  if (ids.length > 2 || series.length !== 1) return refuse(ONE_AT_A_TIME);
+  const stuck = parts.find((part) => !part.described.plan.ok && !ALREADY.test(part.described.plan.reason)) ?? parts.find((part) => !part.described.plan.ok && parts.every((other) => !other.described.plan.ok));
+  if (stuck && !stuck.described.plan.ok) return refuse(stuck.described.plan.reason);
+  const live = parts.flatMap((part) => (part.described.plan.ok ? [part.described] : []));
+  const run = async () => void (await undoTaskEventsInDb(db, actor, one.event.entity_id, ids, provenance));
+  return { event: series[0].event, ids, described: { entityName: one.described.entityName, summary: live.map((part) => part.summary).join("; "), plan: { ok: true, restores: live.map((part) => (part.plan.ok ? part.plan.restores : "")).join(" "), run } } };
 }
 
 async function undoTaskEventsInDb(db: Db, actor: Actor, taskId: string, eventIds: string[], provenance: Provenance) {
@@ -724,7 +735,7 @@ async function undoTaskEventsInDb(db: Db, actor: Actor, taskId: string, eventIds
   const found = await db.query<AuditRow>(`${AUDIT_SQL} where e.id = any($1::uuid[]) and e.workspace_id = $2 and e.entity_type = 'task' and e.entity_id = $3`, [ids, actor.workspaceId, taskId]);
   if (found.rows.length === 0 || found.rows.length !== ids.length) throw new CrmError("cannot_undo", "Couldn't undo. Try again.", 409);
   await lockUndo(db, actor, "task", taskId, ids);
-  for (const id of ids) if ((await undoableInAction(db, actor, id, provenance)).some((one) => !ids.includes(one.event.id))) throw new CrmError("cannot_undo", ONE_AT_A_TIME, 409);
+  for (const id of ids) if ((await actionIds(db, actor, id)).some((other) => !ids.includes(other))) throw new CrmError("cannot_undo", ONE_AT_A_TIME, 409);
   const ordered = [...found.rows].sort((left, right) => Number(right.event_type.startsWith("task_series.")) - Number(left.event_type.startsWith("task_series.")));
   let undone = 0;
   for (const event of ordered) {
@@ -748,9 +759,10 @@ export async function undoAuditEvent(actor: Actor, auditEventId: string, provena
   return withActor(actor, async (db) => {
     const target = isUuid(auditEventId) ? await readEvent(db, actor.workspaceId, auditEventId) : null;
     await lockUndo(db, actor, target && isEntity(target.entity_type) ? target.entity_type : null, target?.entity_id ?? null, [auditEventId]);
-    const { event, described } = await describeAction(db, actor, auditEventId, provenance);
+    const { event, described, ids } = await describeAction(db, actor, auditEventId, provenance);
     if (!described.plan.ok) throw new CrmError("cannot_undo", described.plan.reason, 409);
     await described.plan.run();
+    if (ids.length > 1) return { undone: event.id, entityType: event.entity_type, entityId: event.entity_id, summary: described.summary, restored: described.plan.restores };
     await recordAudit(db, actor, `${event.entity_type}.undone`, event.entity_type, event.entity_id, provenance, { undoes: event.id, undoneEventType: event.event_type, restored: described.plan.restores });
     return { undone: event.id, entityType: event.entity_type, entityId: event.entity_id, summary: described.summary, restored: described.plan.restores };
   });
