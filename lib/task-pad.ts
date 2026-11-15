@@ -701,7 +701,7 @@ const REPEAT_DUE_BEFORE = /\bdue\s+$/i;
 const REPEAT_EXCEPT_AFTER = /^\s*,?\s*(?:except|excluding|but|unless|apart|other\s+than|besides|bar|or|when|whenever|while|whilst|once|as|so|if|not|instead|rather|only|until|till|til|through|thru|between)\b/i;
 const REPEAT_CLAUSE_BEFORE = /\b(?:who|whom|whose|which|that|where|when|whenever|if|whether|because|cause|since|unless|while|whilst|though|although|how|what|why)\b/i;
 const REPEAT_NEGATION_BEFORE =
-  /\b(?:not|never|no(?![\w'’-])|almost|nearly|hardly|barely|rarely|seldom|no\s+(?:longer|more)|cannot|without|instead\s+of|rather\s+than|stop(?:s|ped|ping)?|cancel(?:s|led|ed|ling|ing)?|quit(?:s|ting)?|unsubscribe|pause|halt|cease|suspend|discontinue|terminate|skip|avoid|(?:do|does|did|is|are|was|were|has|have|had|wo|ca|could|should|would|must|need|might)n['’]t|dont|doesnt|didnt|isnt|arent|wasnt|werent|hasnt|havent|hadnt|wont|cant|couldnt|shouldnt|wouldnt|mustnt|neednt)(?![\w'’])/i;
+  /\b(?:not|never|(?<=^\s*)no(?![\w'’-])|almost|nearly|hardly|barely|rarely|seldom|no\s+(?:longer|more)|cannot|without|instead\s+of|rather\s+than|stop(?:s|ped|ping)?|cancel(?:s|led|ed|ling|ing)?|quit(?:s|ting)?|unsubscribe|pause|halt|cease|suspend|discontinue|terminate|skip|avoid|(?:do|does|did|is|are|was|were|has|have|had|wo|ca|could|should|would|must|need|might)n['’]t|dont|doesnt|didnt|isnt|arent|wasnt|werent|hasnt|havent|hadnt|wont|cant|couldnt|shouldnt|wouldnt|mustnt|neednt)(?![\w'’])/i;
 const REPEAT_VERBS_BEFORE = new Set(
   "is are was were be been being am do does did has have had will would shall should can could may might must gets got it's that's there's he's she's they're we're it’s that’s there’s he’s she’s they’re we’re i'm i’m i've i’ve i'll i’ll i'd i’d you're you’re you've you’ve we've we’ve they've they’ve".split(" "),
 );
@@ -733,9 +733,28 @@ function adjectiveUse(text: string, start: number, end: number) {
   return NOUN_AFTER.test(after) && !REPEAT_EXCEPT_AFTER.test(after);
 }
 
+const WEEKDAY_WORDS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const PLAIN_DAY_WORDS = new Set(["day", "weekday"]);
+
+function editDistance(left: string, right: string) {
+  let row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const next = [i];
+    for (let j = 1; j <= right.length; j += 1) next.push(Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (left[i - 1] === right[j - 1] ? 0 : 1)));
+    row = next;
+  }
+  return row[right.length];
+}
+
+function dayWordCue(cue: string) {
+  const word = cue.toLowerCase().match(/([a-z]+day)s?$/)?.[1];
+  if (!word || PLAIN_DAY_WORDS.has(word)) return true;
+  return WEEKDAY_WORDS.some((name) => editDistance(word, name) <= 2);
+}
+
 function repeatCues(text: string) {
   const docs = [...text.matchAll(DOC_REFERENCE)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
-  const cues = [...text.matchAll(REPEAT_CUES)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
+  const cues = [...text.matchAll(REPEAT_CUES)].filter((match) => dayWordCue(match[0])).map((match) => ({ start: match.index, end: match.index + match[0].length }));
   for (const match of text.matchAll(BARE_CUES)) {
     const start = match.index;
     const end = start + match[0].length;
@@ -901,7 +920,7 @@ function findRepeat(text: string, todayKey: string): FoundRepeat | "unsure" | nu
     return { freq: "yearly", interval };
   };
   const fixed = hit.kind !== "daily" && (hit.kind !== "weekly" || named.length > 0) && (hit.kind !== "monthly" || Boolean(nth || ord || ordWord)) && (hit.kind !== "yearly" || fixedDay !== null);
-  if (bareCount && !fixed) return "unsure";
+  if (bareCount && hit.kind === "daily") return "unsure";
   return { spans, startCue: started ? cursor + started[0].length : null, rule, fixedDay, fixed, ends };
 }
 
@@ -992,7 +1011,8 @@ function parseRepeatText(text: string, now: Date): PadParse | null {
   const uncued = inner.marks.filter((mark) => mark.kind === "when" && DATE_MARK.test(text.slice(mark.start, mark.end)) && !(found.startCue !== null && /^\s*$/.test(text.slice(found.startCue, mark.start))));
   const repeatStart = found.spans[0].start;
   const repeatEnd = found.spans[found.spans.length - 1].end;
-  if (uncued.some((mark) => /^\W*(?:by|before)\b/i.test(text.slice(mark.start, mark.end)) || (mark.end <= repeatStart && /\b(?:today|tonight|tomorrow|tmrw|tmr)\b/i.test(text.slice(mark.start, mark.end))))) return unsureRepeat(text);
+  const dailyRepeat = !found.fixed && found.rule(todayKey).freq === "daily";
+  if (uncued.some((mark) => /^\W*(?:by|before)\s+(?!(?:on\s+)?(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\b)/i.test(text.slice(mark.start, mark.end)) || (dailyRepeat && mark.end <= repeatStart && /\b(?:today|tonight|tomorrow|tmrw|tmr)\b/i.test(text.slice(mark.start, mark.end))))) return unsureRepeat(text);
   let markless = "";
   let last = 0;
   for (const mark of [...inner.marks].sort((a, b) => a.start - b.start)) {

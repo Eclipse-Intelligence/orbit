@@ -323,6 +323,10 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     return done;
   }
 
+  function unsaved(field: DraftField) {
+    return draftCommit(field, field === "title" ? title : text, sent.current[field]).save;
+  }
+
   function waiting(field: DraftField) {
     const commit = draftCommit(field, field === "title" ? title : text, sent.current[field]);
     return commit.save && waitsForScope(task, viewerId, draftWrite(field, commit.value));
@@ -339,7 +343,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
       if (running && !(await running.done)) return false;
     }
     for (const field of DRAFT_FIELDS) {
-      if (!waiting(field)) continue;
+      if (!unsaved(field)) continue;
       if (!(await saveDraft(field, true))) return false;
     }
     return true;

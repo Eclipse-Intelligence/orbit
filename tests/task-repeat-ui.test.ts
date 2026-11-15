@@ -27,6 +27,7 @@ import {
   skippedMessage,
   skipsBesideRepeat,
   waitsForScope,
+  changeWarning,
 } from "@/lib/task-repeat-menu";
 
 const MARK = "11111111-1111-4111-8111-111111111111";
@@ -52,6 +53,8 @@ function repeat(overrides: Partial<TaskRepeat> = {}): TaskRepeat {
     changedDates: 0,
     skippedDates: [],
     changeDays: [],
+    movedDays: [],
+    laterFrom: null,
     ...overrides,
   };
 }
@@ -237,7 +240,7 @@ describe("repeat menu and fields", () => {
   it("changes the end only when a count is typed or chosen, never on focus", () => {
     const file = source("components/crm/task-repeat.tsx");
     assert.doesNotMatch(file, /onFocus=\{\(\) => update\(\{ ends/);
-    assert.equal((file.match(/onFocus=\{\(event\) => event\.currentTarget\.select\(\)\}/g) ?? []).length, 2);
+    assert.equal((file.match(/onFocus=\{\(event\) => pickAll\(event\.currentTarget\)\}\s*onMouseUp=\{keepPicked\}/g) ?? []).length, 2);
   });
 
   it("counts the changed dates a new pattern resets before saving, and says so after", () => {
@@ -249,7 +252,16 @@ describe("repeat menu and fields", () => {
     assert.equal(resetsLine(0), null);
     assert.equal(repeatSavedMessage(changed, changed, 2), "Saved. Reset 2 changed dates.");
     assert.equal(repeatSavedMessage(changed, changed, 0), "Saved");
-    assert.match(source("components/crm/task-repeat.tsx"), /resetsLine\(resets\(pattern\.rule\)\)/);
+    assert.match(source("components/crm/task-repeat.tsx"), /resets\(pattern\.rule\)/);
+  });
+
+  it("counts a moved date as reset by a pattern change, and warns before replacing a later part", () => {
+    const moved = task({ repeat: repeat({ changeDays: ["2026-11-23", "2026-11-30"], movedDays: ["2026-11-23"] }) });
+    assert.equal(lostOnChange(moved, { freq: "daily", interval: 1 }), 1);
+    const split = task({ repeat: repeat({ laterFrom: "2026-12-07" }) });
+    assert.equal(changeWarning(split, { freq: "weekly", interval: 1, weekdays: ["mo", "th"] }), "Replaces the changes from Mon 7 Dec on.");
+    assert.equal(changeWarning(split, { freq: "weekly", interval: 1, weekdays: ["mo"] }), null);
+    assert.equal(repeatSavedMessage(split, split, 0, "2026-12-07"), "Saved. Replaced the changes from Mon 7 Dec on.");
   });
 
   it("says where an overdue task moved when it starts repeating", () => {

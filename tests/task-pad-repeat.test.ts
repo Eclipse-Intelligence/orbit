@@ -193,8 +193,8 @@ describe("typed repeats", () => {
     }
   });
 
-  it("goes unsure on a bare count after a repeat with no set day, which can mean times a day", () => {
-    for (const typed of ["Take tablets every day 3 times", "Take tablets daily 3 times", "Post every week 3 times"]) assert.equal(parse(typed).unsure, true, typed);
+  it("goes unsure on a bare count after a daily repeat, which can mean times a day", () => {
+    for (const typed of ["Take tablets every day 3 times", "Take tablets daily 3 times"]) assert.equal(parse(typed).unsure, true, typed);
     assert.deepEqual(parse("Take tablets every day for 3 times").repeat?.ends, { count: 3 });
     assert.deepEqual(parse("Review proposals every Wednesday 5 times").repeat?.ends, { count: 5 });
   });
@@ -213,6 +213,19 @@ describe("typed repeats", () => {
       assert.deepEqual({ unsure: read.unsure, repeat: read.repeat }, { unsure: true, repeat: undefined }, typed);
     }
     assert.equal(parse("Gym every day from tomorrow").due, "2026-11-15");
+  });
+
+  it("still reads clear repeats and keeps ordinary titles with every or each dated", () => {
+    for (const typed of ["Gym tomorrow every week", "Send report every week by Friday", "Call Bob every week 4 times", "Check the no show list every Friday"]) {
+      const read = parse(typed);
+      assert.equal(read.unsure, false, typed);
+      assert.ok(read.repeat, typed);
+    }
+    for (const typed of ["Approve each holiday request tomorrow 9am", "Review every holiday request Friday"]) {
+      const read = parse(typed);
+      assert.equal(read.unsure, false, typed);
+      assert.ok(read.due, typed);
+    }
   });
 
   it("goes unsure on numbers out of range and counts it can't place", () => {

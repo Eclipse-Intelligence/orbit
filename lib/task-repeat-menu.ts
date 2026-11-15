@@ -43,15 +43,27 @@ export function resetsLine(count: number) {
 export function lostOnChange(task: Task, rule: RepeatRule) {
   const repeat = task.repeat;
   if (!repeat || repeat.ended || !repeat.current || task.completedAt) return 0;
-  return lostChangeDays(repeat.changeDays ?? [], { startsOn: anchorOf(task), at: repeat.at, rule, ends: repeat.ends }).length;
+  return lostChangeDays(repeat.changeDays ?? [], { startsOn: anchorOf(task), at: repeat.at, rule, ends: repeat.ends }, repeat.movedDays ?? []).length;
 }
 
-export function repeatSavedMessage(before: Pick<Task, "dueAt">, after: Pick<Task, "dueAt" | "dueHasTime" | "occursOn"> | null | undefined, lost: number) {
+export function laterReplaced(task: Task, rule: RepeatRule) {
+  const repeat = task.repeat;
+  if (!repeat?.laterFrom || repeat.ended || !repeat.current || task.completedAt || sameRepeat(repeat.rule, rule)) return null;
+  return repeat.laterFrom;
+}
+
+export function changeWarning(task: Task, rule: RepeatRule) {
+  const later = laterReplaced(task, rule);
+  return [resetsLine(lostOnChange(task, rule)), later ? `Replaces the changes from ${shortDay(later)} on.` : null].filter(Boolean).join(" ") || null;
+}
+
+export function repeatSavedMessage(before: Pick<Task, "dueAt">, after: Pick<Task, "dueAt" | "dueHasTime" | "occursOn"> | null | undefined, lost: number, later: string | null = null) {
   const parts: string[] = [];
   if (after?.dueAt && before.dueAt && Date.parse(after.dueAt) !== Date.parse(before.dueAt)) {
     parts.push(`Moved to ${nextLabel({ dueAt: after.dueAt, dueHasTime: after.dueHasTime, occursOn: after.occursOn ?? "" })}.`);
   }
   if (lost > 0) parts.push(`Reset ${lost} changed date${lost === 1 ? "" : "s"}.`);
+  if (later) parts.push(`Replaced the changes from ${shortDay(later)} on.`);
   return parts.length > 0 ? `Saved. ${parts.join(" ")}` : "Saved";
 }
 

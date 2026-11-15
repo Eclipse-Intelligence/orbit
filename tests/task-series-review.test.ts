@@ -153,6 +153,31 @@ describe("split series", () => {
     assert.equal(owner.owner_id, sam.userId);
   });
 
+  it("resets a moved date on a pattern change, and tells the open task when a later part follows", async () => {
+    const task = await weekly("Moved then daily", {}, null);
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2027-03-09" }, { dueDate: "2027-03-11" }, "this");
+    await splitAt(task, "2027-03-23", "Later title");
+    const seen = (await getTask(mark, task.id)).repeat!;
+    assert.deepEqual(seen.movedDays, ["2027-03-09"]);
+    assert.equal(seen.laterFrom, "2027-03-23");
+    await setTaskRepeat(mark, task.id, { every: "day" });
+    assert.equal((await sql("select 1 from crm.task_occurrence_changes where series_id = $1 and occurs_on = '2027-03-09'", [task.seriesId])).length, 0);
+  });
+
+  it("lets a handed-on assignee mark Done a task they postponed by weeks", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Postponed handed", dueDate: "2027-03-02" }, { every: "week" })).body.task;
+    await updateOccurrence(mark, { taskId: task.id }, { ownerId: sam.userId }, "this");
+    await updateTask(sam, task.id, { dueDate: "2027-04-08" });
+    await completeTask(sam, task.id);
+    assert.equal((await openTasks([task.seriesId!])).length, 1);
+  });
+
+  it("drops the reminder with the time when a timed repeat is made for a colleague", async () => {
+    const task = (await createRepeatingTask(mark, { title: "For Sam with reminder", dueAt: at("2027-03-02", "14:00"), remindMinutes: 15, ownerId: sam.userId }, { every: "week" })).body.task;
+    assert.equal(task.dueHasTime, false);
+    assert.equal(task.remindMinutes, null);
+  });
+
   it("leaves a later part not started when Done on the last one before it is undone, so Done again starts it", async () => {
     const task = await weekly("Undo keeps part");
     const part = await splitAt(task, "2027-03-09", "Part kept");

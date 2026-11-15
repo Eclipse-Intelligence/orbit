@@ -202,7 +202,7 @@ function ActionTask({
   const details = useTaskDetails(task, canChange, expanded, viewer.id);
   const finish = complete
     ? () => {
-        if (expanded && details.holding()) {
+        if (expanded) {
           void details.settle().then((ok) => ok && complete());
           return;
         }

@@ -293,8 +293,8 @@ export function sameEnds(left: RepeatEnds, right: RepeatEnds) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function lostChangeDays(changeDays: string[], pattern: RepeatPattern): string[] {
-  return changeDays.filter((day) => day <= pattern.startsOn || !isOccurrenceDay(pattern, day));
+export function lostChangeDays(changeDays: string[], pattern: RepeatPattern, movedDays: string[] = []): string[] {
+  return changeDays.filter((day) => day <= pattern.startsOn || !isOccurrenceDay(pattern, day) || movedDays.includes(day));
 }
 
 export function occurrenceDays(pattern: RepeatPattern, from: string, to: string, limit = MAX_EXPANSION) {
@@ -658,6 +658,8 @@ export function describeRepeat(view: SeriesView, timeZone = appTimeZone()): Task
     changedDates: view.changes.filter((change) => change.occursOn > after && !change.skip && change.dueAt).length,
     skippedDates: view.changes.filter((change) => change.occursOn > after && change.skip).map((change) => change.occursOn),
     changeDays: view.changes.filter((change) => change.occursOn > after).map((change) => change.occursOn),
+    movedDays: view.changes.filter((change) => change.occursOn > after && change.dueAt && dayKeyAt(new Date(change.dueAt), timeZone) !== change.occursOn).map((change) => change.occursOn),
+    laterFrom: parts[0]?.startsOn ?? null,
   };
 }
 

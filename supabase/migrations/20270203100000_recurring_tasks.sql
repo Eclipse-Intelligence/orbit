@@ -260,7 +260,7 @@ as $$
                   (select m.user_id from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id),
                   c.owner_id
                 )
-                and p_occurs <= private.series_next_bound(s, c.occurs_on)
+                and p_occurs <= private.series_next_bound(s, greatest(c.occurs_on, (c.due_at at time zone 'Europe/London')::date))
             )
           )
         )
@@ -277,7 +277,7 @@ as $$
                   (select m.user_id from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id),
                   c.owner_id
                 )
-                and p_occurs <= private.series_next_bound(s, c.occurs_on)
+                and p_occurs <= private.series_next_bound(s, greatest(c.occurs_on, (c.due_at at time zone 'Europe/London')::date))
             )
           )
         )

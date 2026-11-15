@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { DatePicker } from "@/components/_ui/date-picker";
@@ -52,10 +52,11 @@ import {
   nextLabel,
   ownsRepeat,
   patternInputOf,
+  changeWarning,
+  laterReplaced,
   lostOnChange,
   REPEAT_SAVE_FAILED,
   repeatSavedMessage,
-  resetsLine,
   ruleOf,
   SCOPE_LATER,
   runsSeries,
@@ -189,7 +190,8 @@ export function useRepeatActions(task: Task, onDeleted?: () => void) {
       ),
     set: (rule: RepeatRule, ends?: RepeatEnds) => {
       const lost = lostOnChange(task, rule);
-      return act((key) => setRepeatAction(task.id, ends ? repeatInputOf(rule, ends) : patternInputOf(rule), key), (result) => repeatSavedMessage(task, result.task, lost), REPEAT_SAVE_FAILED);
+      const later = laterReplaced(task, rule);
+      return act((key) => setRepeatAction(task.id, ends ? repeatInputOf(rule, ends) : patternInputOf(rule), key), (result) => repeatSavedMessage(task, result.task, lost, later), REPEAT_SAVE_FAILED);
     },
   };
 }
@@ -261,6 +263,17 @@ function Panel({ title, onClose, onEnter, children, footer }: { title: string; o
 
 type CustomFrom = { start: { rule: RepeatRule; ends: RepeatEnds } | null | undefined; kept: RepeatRule | null; at: string | null; left?: { ends: RepeatEnds; end: string } | null };
 
+function pickAll(field: HTMLInputElement) {
+  field.select();
+  field.dataset.picked = "";
+}
+
+function keepPicked(event: MouseEvent<HTMLInputElement>) {
+  if (event.currentTarget.dataset.picked === undefined) return;
+  delete event.currentTarget.dataset.picked;
+  event.preventDefault();
+}
+
 function CustomRepeat({
   from,
   anchor,
@@ -274,7 +287,7 @@ function CustomRepeat({
   onCancel: () => void;
   onSave: (rule: RepeatRule, ends: RepeatEnds) => void;
   busy?: boolean;
-  resets?: (rule: RepeatRule) => number;
+  resets?: (rule: RepeatRule) => string | null;
 }) {
   const id = useId();
   const [draft, setDraft] = useState(() => draftOf(from.start, anchor));
@@ -327,7 +340,8 @@ function CustomRepeat({
             aria-label="Repeat every"
             inputMode="numeric"
             value={draft.interval}
-            onFocus={(event) => event.currentTarget.select()}
+            onFocus={(event) => pickAll(event.currentTarget)}
+            onMouseUp={keepPicked}
             onChange={(event) => update({ interval: event.target.value })}
             className="w-14 tabular-nums"
           />
@@ -404,7 +418,8 @@ function CustomRepeat({
             aria-label="Times"
             inputMode="numeric"
             value={draft.count}
-            onFocus={(event) => event.currentTarget.select()}
+            onFocus={(event) => pickAll(event.currentTarget)}
+            onMouseUp={keepPicked}
             onChange={(event) => update({ ends: "count", count: event.target.value })}
             className="w-16 tabular-nums"
           />
@@ -422,7 +437,7 @@ function CustomRepeat({
       {!ruleProblem && (
         <p className="caption-style text-soft flex items-start gap-2 rounded-lg bg-white/[0.04] px-2.5 py-2">
           <RepeatIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-purple-text)" />
-          <span>{[repeatSummary(pattern), resets ? resetsLine(resets(pattern.rule)) : null].filter(Boolean).join(" ")}</span>
+          <span>{[repeatSummary(pattern), resets ? resets(pattern.rule) : null].filter(Boolean).join(" ")}</span>
         </p>
       )}
       {shown && (
@@ -630,7 +645,7 @@ export function RepeatMenu({ task, trigger, align = "start", onDeleted }: { task
       close();
       return;
     }
-    if (lostOnChange(task, rule) > 0) {
+    if (changeWarning(task, rule)) {
       setPicked({ rule, label: presets.find((preset) => sameRepeat(preset.rule, rule))?.label ?? "Repeat" });
       show("resets");
       return;
@@ -699,7 +714,7 @@ export function RepeatMenu({ task, trigger, align = "start", onDeleted }: { task
             busy={actions.busy}
             onCancel={close}
             onSave={saveCustom}
-            resets={(rule) => lostOnChange(task, rule)}
+            resets={(rule) => changeWarning(task, rule)}
           />
         )}
         {view === "resets" && picked && (
@@ -717,7 +732,7 @@ export function RepeatMenu({ task, trigger, align = "start", onDeleted }: { task
               </>
             }
           >
-            <p className="ui-style text-soft">{resetsLine(lostOnChange(task, picked.rule))}</p>
+            <p className="ui-style text-soft">{changeWarning(task, picked.rule)}</p>
           </Panel>
         )}
         {view === "stop" && (

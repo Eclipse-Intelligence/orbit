@@ -450,6 +450,8 @@ export type TaskRepeat = {
   changedDates: number;
   skippedDates: string[];
   changeDays: string[];
+  movedDays: string[];
+  laterFrom: string | null;
 };
 
 export type TaskMailThread = { subject: string | null; readable: boolean };

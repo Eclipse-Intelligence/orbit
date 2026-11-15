@@ -498,14 +498,16 @@ export async function createRepeatingTaskInDb(db: Db, actor: Actor, input: TaskW
   await assertRoom(db, actor, keeper);
   const probe = createTaskProbe(input);
   const asked = startOf(probe, now);
-  const start = colleagueTime(actor, ownerId, { created_by_agent_id: actor.type === "agent" ? actor.agentId : null }) ? { ...asked, at: null } : asked;
+  const forColleague = colleagueTime(actor, ownerId, { created_by_agent_id: actor.type === "agent" ? actor.agentId : null });
+  const start = forColleague ? { ...asked, at: null } : asked;
   const read = readRepeat(repeat, start.day, now);
   const ends = read.ends;
   const first = firstDay(read.rule, start.at, start.day, now);
   if (!first || ("until" in ends && ends.until < first)) throw new CrmError("invalid_input", END_BEFORE_THIS, 400, { field: "repeat.ends" });
   const rule = anchoredRule(read.rule, { rule: read.rule, startsOn: start.day }, first);
   checkReachesEnd({ startsOn: first, at: start.at, rule, ends });
-  checkReminderRoom(rule, start.at, input.remindMinutes, input.durationMinutes);
+  const remindMinutes = forColleague ? undefined : input.remindMinutes;
+  checkReminderRoom(rule, start.at, remindMinutes, input.durationMinutes);
   const timing = occurrenceTiming(start.at, first);
   const inserted = await db.query<{ id: string }>(
     `insert into crm.task_series (
@@ -531,6 +533,7 @@ export async function createRepeatingTaskInDb(db: Db, actor: Actor, input: TaskW
   );
   const seriesId = inserted.rows[0].id;
   const write: TaskWrite = { ...input };
+  if (forColleague) delete write.remindMinutes;
   delete write.dueDate;
   write.dueAt = timing.dueAt;
   write.dueHasTime = timing.dueHasTime;
@@ -1913,8 +1916,10 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
   checkReachesEnd({ startsOn: startDay, at: live.at, rule, ends: kept });
   checkReminderRoom(rule, live.at, live.remind_minutes, live.duration_minutes);
   const stoppedParts = await stopLaterParts(db, actor, live.id);
-  const lost = new Set(lostChangeDays((await changesOf(db, live.id)).map((change) => change.occursOn), { startsOn: startDay, at: live.at, rule, ends: kept }));
-  const dropped = (await changesOf(db, live.id)).filter((change) => lost.has(change.occursOn));
+  const existing = await changesOf(db, live.id);
+  const movedDays = existing.filter((change) => change.dueAt && taskDueDay(change.dueAt) !== change.occursOn).map((change) => change.occursOn);
+  const lost = new Set(lostChangeDays(existing.map((change) => change.occursOn), { startsOn: startDay, at: live.at, rule, ends: kept }, movedDays));
+  const dropped = existing.filter((change) => lost.has(change.occursOn));
   await db.query("delete from crm.task_occurrence_changes where series_id = $1 and occurs_on = any($2::date[])", [live.id, [...lost]]);
   await db.query("update crm.task_series set rule = $2::jsonb, ends = $3::jsonb, starts_on = $4 where id = $1", [live.id, JSON.stringify(rule), JSON.stringify(kept), startDay]);
   await db.query("update crm.tasks set occurs_on = $2 where id = $1", [task.id, startDay]);

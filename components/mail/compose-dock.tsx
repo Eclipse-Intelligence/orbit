@@ -642,7 +642,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         </div>
       )}
       <LaterPicker request={later} onClose={() => setLater(null)} />
-      <div data-toast-layer="" aria-live="off" className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-[55] flex flex-col items-center gap-2 px-4 max-md:[body:has([data-compose-fab])_&]:bottom-[calc(env(safe-area-inset-bottom)+8.25rem)] max-md:[body:has([data-compose-tray])_&]:bottom-[calc(env(safe-area-inset-bottom)+11rem)] max-md:[body:has([data-task-actions])_&]:top-[calc(env(safe-area-inset-top)+4rem)] max-md:[body:has([data-task-actions])_&]:bottom-auto">
+      <div data-toast-layer="" aria-live="off" className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-[55] flex flex-col items-center gap-2 px-4 max-md:[body:has([data-compose-fab])_&]:bottom-[calc(env(safe-area-inset-bottom)+8.25rem)] max-md:[body:has([data-compose-tray])_&]:bottom-[calc(env(safe-area-inset-bottom)+11rem)] max-md:[body:has([data-task-actions])_&]:bottom-[calc(env(safe-area-inset-bottom)+9rem)]">
         {notice && (
           <p role="status" className="bg-popover border-line-strong shadow-overlay animate-rise-in rounded-full border px-4 py-2 text-[13px]">
             {notice}

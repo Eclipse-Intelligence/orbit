@@ -162,11 +162,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
 
   function complete() {
     if (done || !canChange) return;
-    if (settling.current || details.holding()) {
-      afterSaving(() => onComplete(task));
-      return;
-    }
-    onComplete(task);
+    afterSaving(() => onComplete(task));
   }
 
   async function untag(person: string) {
