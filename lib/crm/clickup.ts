@@ -1367,7 +1367,7 @@ export async function createTaskWithClickUp(
   actor: UserActor,
   input: TaskWrite & { repeat?: unknown },
   clickupListId: string | null,
-  options: ClickUpOptions & { provenance?: Provenance } = {},
+  options: ClickUpOptions & { provenance?: Provenance; idempotencyKey?: string | null } = {},
 ): Promise<{ task: Task; clickupError: string | null }> {
   let listId: string | null = null;
   if (clickupListId && clickupToken()) {
@@ -1382,9 +1382,10 @@ export async function createTaskWithClickUp(
   }
   const created = await createTaskFromApi(actor, input, {
     provenance: options.provenance ?? { operation: "create_task", source: "web" },
+    idempotencyKey: options.idempotencyKey,
   });
   const task = created.body.task;
-  if (!listId) return { task, clickupError: null };
+  if (!listId || created.replayed) return { task, clickupError: null };
   const clickupError = await sendTaskToClickUpList(actor, task.id, listId, options);
   return { task: { ...task, clickupListId: listId }, clickupError };
 }

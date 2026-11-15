@@ -6,6 +6,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import { dayKey, dayKeyAt } from "@/lib/crm/task-due";
 import { clockLabel, dayStartIso } from "@/lib/crm/task-time";
 import { getTask, updateTask } from "@/lib/crm/tasks";
+import { setTaskRepeat } from "@/lib/crm/task-series";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { deferralHint, deferralOptions, resolveDeferral } from "@/lib/mail/deferral-dates";
@@ -264,6 +265,20 @@ describe("not now replies", () => {
     assert.ok((await getTask(owner, reminder.task_id)).archivedAt);
     assert.equal((await getThread(owner, thread)).deferral, null);
     await assert.rejects(cancelDeferral(owner, reminder.id), /has gone/);
+  });
+
+  it("Cancel leaves a follow-up that now repeats alone", async () => {
+    const reminder = (await getAdminPool().query<{ id: string; task_id: string }>("select id, task_id from crm.mail_reminders where user_id = $1 and deferred_message_id is not null", [owner.userId])).rows[0];
+    await getAdminPool().query("update crm.tasks set archived_at = null where id = $1", [reminder.task_id]);
+    await getAdminPool().query("update crm.mail_reminders set state = 'waiting' where id = $1", [reminder.id]);
+    await setTaskRepeat(owner, reminder.task_id, { every: "week" });
+    const before = await getTask(owner, reminder.task_id);
+    const result = await cancelDeferral(owner, reminder.id);
+    assert.equal(result.taskArchived, false);
+    const after = await getTask(owner, reminder.task_id);
+    assert.equal(after.archivedAt, null);
+    assert.equal(after.occursOn, before.occursOn, "the repeating task isn't skipped either");
+    await setTaskRepeat(owner, reminder.task_id, null);
   });
 
   it("reads the deferral from the prepared reply call when replies are on", async () => {

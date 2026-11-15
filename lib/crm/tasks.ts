@@ -266,7 +266,7 @@ function blank(value: string | null | undefined) {
   return value === null || (typeof value === "string" && value.trim() === "");
 }
 
-function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean; wallTime?: boolean } | undefined {
+export function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean; wallTime?: boolean } | undefined {
   const input = { ...given };
   if (input.dueAt !== undefined && input.dueDate !== undefined) {
     if (blank(input.dueAt)) input.dueAt = undefined;
@@ -293,6 +293,10 @@ function readDue(given: TaskWrite): { dueAt: string | null; dueHasTime: boolean;
     return { dueAt: day ? dayStartIso(day) : reading.date.toISOString(), dueHasTime: false };
   }
   return { dueAt: reading.date.toISOString(), dueHasTime: true, wallTime: input.dueHasTime === true };
+}
+
+export function checkTaskWrite(input: TaskWrite) {
+  prepareTask(input, "patch");
 }
 
 function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
@@ -640,7 +644,7 @@ async function applyTask(
     write.ownerId = await workspaceOwner(db, actor.workspaceId);
   }
   await assertAssignee(db, actor.workspaceId, write.ownerId);
-  const restoresTime = Boolean(options.restoring && write.dueAt !== undefined && write.ownerId !== undefined);
+  const restoresTime = Boolean((options.restoring && write.dueAt !== undefined && write.ownerId !== undefined) || options.seriesMove);
   const echoesDay = write.dueAt !== undefined && Boolean(write.dueHasTime) && !current.due_has_time && !options.claimSchedule && !write.wallTime && sameDue(write, current);
   if (echoesDay && write.remindMinutes !== undefined && write.remindMinutes !== null) {
     throw new CrmError("invalid_input", NO_TIME_FOR_REMINDER, 400, { field: "dueHasTime" });
@@ -790,7 +794,15 @@ async function applyTask(
   return { task: (await withViewerLinksInDb(db, actor, [settledTask]))[0], changed: true };
 }
 
-export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown>; series?: SeriesRights; beforeAudit?: (task: Task, fields: string[]) => Promise<Record<string, unknown> | null> };
+export type TaskApplyOptions = {
+  restoring?: boolean;
+  undoing?: string | null;
+  claimSchedule?: boolean;
+  seriesMove?: boolean;
+  auditExtra?: Record<string, unknown>;
+  series?: SeriesRights;
+  beforeAudit?: (task: Task, fields: string[]) => Promise<Record<string, unknown> | null>;
+};
 
 export async function updateTaskInDb(
   db: Db,
@@ -798,7 +810,7 @@ export async function updateTaskInDb(
   id: string,
   input: TaskWrite,
   provenance?: Provenance,
-  options: Pick<TaskApplyOptions, "auditExtra" | "restoring" | "series" | "beforeAudit"> = {},
+  options: Pick<TaskApplyOptions, "auditExtra" | "restoring" | "series" | "beforeAudit" | "seriesMove"> = {},
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
@@ -1098,7 +1110,7 @@ export async function archiveTask(
   actor: Actor,
   id: string,
   options: MutationOptions = {},
-): Promise<MutationOutcome<{ task: Task }>> {
+): Promise<MutationOutcome<{ task: Task; skipped?: string }>> {
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(id)) throw notFound("task");
   const provenance = options.provenance ?? { operation: "archive_task" };
@@ -1108,14 +1120,20 @@ export async function archiveTask(
   );
 }
 
-export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean; keepSeries?: boolean; series?: SeriesRights } = {}) {
+export async function archiveTaskInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  provenance: Provenance,
+  options: { goneFromClickUp?: boolean; keepSeries?: boolean; noSkip?: boolean; series?: SeriesRights } = {},
+): Promise<{ task: Task; skipped?: string }> {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
   if (!canChangeTask(actor, taskRights(current), options.series)) throw cannotChange();
-  if (current.series_id && !options.keepSeries && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
+  if (current.series_id && !options.keepSeries && !options.noSkip && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
     const skipped = await archiveAsSkipInDb(db, actor, mapTask(current), provenance);
-    if (skipped) return { task: skipped };
+    if (skipped) return { task: skipped, skipped: current.occurs_on ?? undefined };
   }
   const keeper = await ownerForAgent(db, actor, current);
   const archived = await db.query(

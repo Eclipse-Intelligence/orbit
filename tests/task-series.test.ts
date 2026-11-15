@@ -78,6 +78,10 @@ async function events(taskId: string) {
   );
 }
 
+function taskDay(dueAt: string | null) {
+  return dueAt ? dayKeyAt(new Date(dueAt)) : null;
+}
+
 function at(day: string, time: string) {
   return new Date(`${day}T${time}:00Z`).toISOString();
 }
@@ -347,13 +351,15 @@ describe("repeating tasks", () => {
   it("makes an existing task repeat and changes the pattern for all", async () => {
     const plain = (await createTask(mark, { title: "Pay the cleaner", dueDate: "2027-03-06" })).body.task;
     const made = (await setTaskRepeat(mark, plain.id, { every: "week", days: ["fr"] })).body.task;
-    assert.equal(made.occursOn, "2027-03-06");
-    assert.equal(made.repeat?.next?.occursOn, "2027-03-12");
-    const changed = (await setTaskRepeat(mark, plain.id, { every: "month", monthDay: 6 })).body.task;
-    assert.equal(changed.repeat?.next?.occursOn, "2027-04-06");
+    assert.equal(made.occursOn, "2027-03-12");
+    assert.equal(taskDay(made.dueAt), "2027-03-12");
+    assert.equal(made.repeat?.next?.occursOn, "2027-03-19");
+    const changed = (await setTaskRepeat(mark, plain.id, { every: "month", monthDay: 12 })).body.task;
+    assert.equal(changed.occursOn, "2027-03-12");
+    assert.equal(changed.repeat?.next?.occursOn, "2027-04-12");
     const updated = (await events(plain.id)).filter((event) => event.event_type === "task_series.updated").pop()!;
     await undoAuditEvent(mark, updated.id, { operation: "undo_change" });
-    assert.equal((await getTask(mark, plain.id)).repeat?.next?.occursOn, "2027-03-12");
+    assert.equal((await getTask(mark, plain.id)).repeat?.next?.occursOn, "2027-03-19");
   });
 
   it("refuses a 201st repeating task", async () => {
@@ -436,12 +442,17 @@ describe("repeating tasks over the API, MCP and the assistant", () => {
 });
 
 describe("repeating task review fixes", () => {
-  it("keeps a daily task daily with reminders up to a week before", async () => {
+  it("keeps a daily task daily with reminders that fit between its dates, and refuses ones that can't fire", async () => {
     for (const remind of [1440, 2880, 10080]) {
+      await assert.rejects(createRepeatingTask(mark, { title: `Daily ${remind}`, dueAt: at("2027-05-03", "14:00"), remindMinutes: remind }, { every: "day" }), /shorter than the time between its dates/);
+    }
+    for (const remind of [60, 120]) {
       const task = (await createRepeatingTask(mark, { title: `Daily ${remind}`, dueAt: at("2027-05-03", "14:00"), remindMinutes: remind }, { every: "day" })).body.task;
       await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T14:16:00Z") });
+      assert.equal((await getTask(mark, task.id)).occursOn, "2027-05-03", `${remind} waits for the next day`);
+      await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T23:01:00Z") });
       assert.equal((await getTask(mark, task.id)).occursOn, "2027-05-04", `${remind}`);
-      await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T14:30:00Z") });
+      await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2027-05-03T23:30:00Z") });
       assert.equal((await getTask(mark, task.id)).occursOn, "2027-05-04", `${remind} stays on the next day`);
       await completeTask(mark, task.id);
       const next = (await occurrences(task.seriesId!)).find((row) => !row.completed)!;

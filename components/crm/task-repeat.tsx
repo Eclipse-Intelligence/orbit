@@ -12,7 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popove
 import { Radio } from "@/components/_ui/radio";
 import { useComposer } from "@/components/mail/compose-dock";
 import { deleteSeriesAction, endSeriesAction, repeatHistoryAction, setRepeatAction, skipOccurrenceAction, undoRepeatAction, type RepeatActionResult } from "@/app/(crm)/repeats";
-import { clockLabel, taskDueDay } from "@/lib/crm/task-time";
+import { clockLabel } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import {
@@ -27,14 +27,34 @@ import {
   repeatSummary,
   sameRule,
   shortDay,
-  weekdayOf,
   WEEKDAYS,
   type RepeatEnds,
   type RepeatFreq,
   type RepeatPattern,
   type RepeatRule,
-  type Weekday,
 } from "@/lib/task-repeat";
+import {
+  anchorOf,
+  countLeft,
+  draftOf,
+  endsOf,
+  isRepeating,
+  menuFocus,
+  monthlyLabel,
+  newActionKey,
+  nextDetail,
+  nextLabel,
+  ownsRepeat,
+  REPEAT_SAVE_FAILED,
+  ruleOf,
+  SCOPE_LATER,
+  runsSeries,
+  scopeTexts,
+  skippedMessage,
+  type Draft,
+  type ScopeAnswer,
+  type ScopeChange,
+} from "@/lib/task-repeat-menu";
 import { cn } from "@/lib/utils";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
@@ -44,13 +64,12 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 export { RepeatIcon };
 
-export type RepeatScope = "this" | "all";
+export { isRepeating, nextLabel, ownsRepeat, REPEAT_SAVE_FAILED, runsSeries, SCOPE_LATER, type ScopeAnswer, type ScopeChange };
 
-export const REPEAT_SAVE_FAILED = "Couldn't save the repeat. Try again.";
+export type RepeatScope = "this" | "all";
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
-const ORDINAL_WORDS: Record<number, string> = { 1: "first", 2: "second", 3: "third", 4: "fourth", [-1]: "last" };
 const UNITS: { freq: RepeatFreq; one: string; many: string }[] = [
   { freq: "daily", one: "day", many: "days" },
   { freq: "weekly", one: "week", many: "weeks" },
@@ -58,37 +77,13 @@ const UNITS: { freq: RepeatFreq; one: string; many: string }[] = [
   { freq: "yearly", one: "year", many: "years" },
 ];
 
-export function nextLabel(next: { dueAt: string; dueHasTime: boolean; occursOn: string } | null | undefined) {
-  if (!next) return null;
-  const day = taskDueDay(next.dueAt) ?? next.occursOn;
-  return next.dueHasTime ? `${shortDay(day)}, ${clockLabel(next.dueAt)}` : shortDay(day);
-}
-
 export function doneMessage(task: Task) {
   const next = task.repeat?.current ? nextLabel(task.repeat.next) : null;
   return next ? `Done. Next: ${next}` : "Task done.";
 }
 
-function anchorOf(task: Task) {
-  if (task.repeat?.current && !task.completedAt && task.occursOn) return task.occursOn;
-  return task.dueDate ?? taskDueDay(task.dueAt) ?? dayKeyAt(new Date());
-}
-
 function atOf(task: Task) {
   return task.dueHasTime && task.dueAt ? clockLabel(task.dueAt) : null;
-}
-
-export function isRepeating(task: Task) {
-  return Boolean(task.repeat && task.repeat.current && !task.completedAt && !task.repeat.ended);
-}
-
-export function runsSeries(task: Task, viewerId: string | null | undefined) {
-  return isRepeating(task) && !task.archivedAt && Boolean(viewerId) && (task.repeat?.ownerId === viewerId || task.repeat?.creatorId === viewerId);
-}
-
-export function ownsRepeat(task: Task, viewerId: string | null | undefined) {
-  if (!task.repeat || task.repeat.ended) return true;
-  return Boolean(viewerId) && (task.repeat.ownerId === viewerId || task.repeat.creatorId === viewerId);
 }
 
 function plural(count: number, one: string, many: string) {
@@ -140,9 +135,10 @@ export function useRepeatActions(task: Task) {
   const toast = useUndoToast();
   const [busy, setBusy] = useState(false);
   const act = useCallback(
-    async (work: () => Promise<RepeatActionResult>, message: (result: RepeatActionResult) => string) => {
+    async (work: (key: string) => Promise<RepeatActionResult>, message: (result: RepeatActionResult) => string) => {
       setBusy(true);
-      const result = await work().catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }));
+      const key = newActionKey();
+      const result = await work(key).catch((): RepeatActionResult => ({ error: REPEAT_SAVE_FAILED }));
       setBusy(false);
       if (result.error) {
         composer.showToast({ message: result.error, tone: "alert" });
@@ -156,22 +152,39 @@ export function useRepeatActions(task: Task) {
   );
   return {
     busy,
-    skip: () => act(() => skipOccurrenceAction(task.id, task.occursOn), (result) => `Skipped. Next: ${nextLabel(result.task ? { dueAt: result.task.dueAt ?? "", dueHasTime: result.task.dueHasTime, occursOn: result.task.occursOn ?? "" } : null) ?? "none"}`),
-    stop: () => act(() => setRepeatAction(task.id, null), () => "Stopped repeating."),
-    end: (until: string) => act(() => endSeriesAction(task.id, until), () => "Saved."),
-    remove: () => act(() => deleteSeriesAction(task.id), () => "Deleted the series."),
-    set: (rule: RepeatRule, ends: RepeatEnds) => act(() => setRepeatAction(task.id, repeatInputOf(rule, ends)), () => "Saved."),
+    skip: () => act((key) => skipOccurrenceAction(task.id, task.occursOn, key), (result) => skippedMessage(result.task)),
+    stop: () => act((key) => setRepeatAction(task.id, null, key), () => "Stopped repeating."),
+    end: (until: string) => act((key) => endSeriesAction(task.id, until, key), () => "Saved."),
+    remove: () => act((key) => deleteSeriesAction(task.id, key), () => "Deleted the series."),
+    set: (rule: RepeatRule, ends: RepeatEnds) => act((key) => setRepeatAction(task.id, repeatInputOf(rule, ends), key), () => "Saved."),
   };
 }
 
 type View = "menu" | "custom" | "stop" | "end" | "delete";
 
-function MenuOption({ checked, onSelect, children, detail, danger, icon }: { checked?: boolean; onSelect: () => void; children: ReactNode; detail?: string | null; danger?: boolean; icon?: ReactNode }) {
+function MenuOption({
+  checked,
+  onSelect,
+  children,
+  detail,
+  danger,
+  icon,
+  active = false,
+}: {
+  checked?: boolean;
+  onSelect: () => void;
+  children: ReactNode;
+  detail?: string | null;
+  danger?: boolean;
+  icon?: ReactNode;
+  active?: boolean;
+}) {
   return (
     <button
       type="button"
       role={checked === undefined ? "menuitem" : "menuitemradio"}
       aria-checked={checked}
+      tabIndex={active ? 0 : -1}
       onClick={onSelect}
       className={cn(
         "ui-style hit flex min-h-8 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none hover:bg-white/[0.06] focus-visible:bg-white/[0.06] [@media(pointer:coarse)]:min-h-11",
@@ -205,54 +218,9 @@ function Panel({ title, onClose, children, footer }: { title: string; onClose: (
   );
 }
 
-type Draft = {
-  interval: string;
-  freq: RepeatFreq;
-  weekdays: Weekday[];
-  monthly: "day" | "week" | "last";
-  ends: "never" | "count" | "until";
-  count: string;
-  until: string;
-};
+type CustomFrom = { start: { rule: RepeatRule; ends: RepeatEnds } | null | undefined; kept: RepeatRule | null; at: string | null; left?: { ends: RepeatEnds; end: string } | null };
 
-function draftOf(repeat: { rule: RepeatRule; ends: RepeatEnds } | null | undefined, anchor: string): Draft {
-  const rule = repeat?.rule;
-  const ends = repeat?.ends;
-  return {
-    interval: String(rule?.interval ?? 1),
-    freq: rule?.freq ?? "weekly",
-    weekdays: rule?.weekdays?.length ? [...rule.weekdays] : [weekdayOf(anchor)],
-    monthly: rule?.monthWeek ? (rule.monthWeek.n === -1 ? "last" : "week") : "day",
-    ends: ends && "count" in ends ? "count" : ends && "until" in ends ? "until" : "never",
-    count: ends && "count" in ends ? String(ends.count) : "10",
-    until: ends && "until" in ends ? ends.until : "",
-  };
-}
-
-function ruleOf(draft: Draft, anchor: string, original: RepeatRule | null = null): RepeatRule {
-  const interval = Number(draft.interval);
-  const base: RepeatRule = { freq: draft.freq, interval: Number.isInteger(interval) ? interval : 0 };
-  if (draft.freq === "weekly") base.weekdays = draft.weekdays;
-  const kept = original?.freq === "monthly" ? (original.monthWeek ? (original.monthWeek.n === -1 ? "last" : "week") : "day") : null;
-  if (draft.freq === "monthly" && kept === draft.monthly) {
-    if (original?.monthWeek) base.monthWeek = original.monthWeek;
-    else base.monthDay = original?.monthDay ?? Number(anchor.slice(8, 10));
-  } else if (draft.freq === "monthly") {
-    if (draft.monthly === "day") base.monthDay = Number(anchor.slice(8, 10));
-    else base.monthWeek = draft.monthly === "last" ? { n: -1, weekday: weekdayOf(anchor) } : monthWeekOf(anchor).n === -1 ? { n: 4, weekday: weekdayOf(anchor) } : monthWeekOf(anchor);
-  }
-  return base;
-}
-
-function endsOf(draft: Draft): RepeatEnds {
-  if (draft.ends === "count") return { count: Number(draft.count) };
-  if (draft.ends === "until") return { until: draft.until };
-  return { never: true };
-}
-
-type CustomFrom = { start: { rule: RepeatRule; ends: RepeatEnds } | null | undefined; kept: RepeatRule | null; at: string | null };
-
-function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; anchor: string; onCancel: () => void; onSave: (rule: RepeatRule, ends: RepeatEnds) => void }) {
+function CustomRepeat({ from, anchor, onCancel, onSave, busy = false }: { from: CustomFrom; anchor: string; onCancel: () => void; onSave: (rule: RepeatRule, ends: RepeatEnds) => void; busy?: boolean }) {
   const id = useId();
   const [draft, setDraft] = useState(() => draftOf(from.start, anchor));
   const [shown, setShown] = useState<string | null>(null);
@@ -265,8 +233,8 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
   const problem = checkRule(rule) ?? (draft.ends === "until" && !draft.until ? "Choose an end date." : checkEnds(ends, anchor, dayKeyAt(new Date())));
   const pattern: RepeatPattern = { startsOn: anchor, at: from.at, rule: normalRule({ ...rule, interval: Math.max(1, rule.interval || 1) }), ends: problem ? { never: true } : ends };
   const interval = Math.max(1, Number(draft.interval) || 1);
-  const name = DAY_NAMES[WEEKDAYS.indexOf(weekdayOf(anchor))];
   const week = monthWeekOf(anchor);
+  const left = draft.ends === "count" ? countLeft(from.left, draft.count) : null;
   const save = () => {
     if (problem) {
       setShown(problem);
@@ -283,7 +251,7 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
           <Button variant="secondary" size="sm" onClick={onCancel} className="hit">
             Cancel
           </Button>
-          <Button variant="primary" size="sm" onClick={save} className="hit">
+          <Button variant="primary" size="sm" disabled={busy} onClick={save} className="hit">
             Save
           </Button>
         </>
@@ -341,18 +309,18 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
           <legend className="caption-style text-subtle mb-1.5">Monthly on</legend>
           <label className="ui-style flex items-center gap-2">
             <Radio name={`${id}-monthly`} checked={draft.monthly === "day"} onChange={() => update({ monthly: "day" })} />
-            Day {Number(anchor.slice(8, 10))}
+            {monthlyLabel("day", anchor, from.kept)}
           </label>
           {week.n !== -1 && (
             <label className="ui-style flex items-center gap-2">
               <Radio name={`${id}-monthly`} checked={draft.monthly === "week"} onChange={() => update({ monthly: "week" })} />
-              The {ORDINAL_WORDS[week.n]} {name}
+              {monthlyLabel("week", anchor, from.kept)}
             </label>
           )}
           {isLastWeekOfMonth(anchor) && (
             <label className="ui-style flex items-center gap-2">
               <Radio name={`${id}-monthly`} checked={draft.monthly === "last"} onChange={() => update({ monthly: "last" })} />
-              The last {name}
+              {monthlyLabel("last", anchor, from.kept)}
             </label>
           )}
         </fieldset>
@@ -375,6 +343,7 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
             className="w-16 tabular-nums"
           />
           <span>times</span>
+          {left !== null && <span className="caption-style text-subtle">{left} more</span>}
         </div>
         <div className="ui-style flex min-h-8 items-center gap-2">
           <Radio id={`${id}-until`} name={`${id}-ends`} checked={draft.ends === "until"} onChange={() => update({ ends: "until" })} />
@@ -395,7 +364,7 @@ function CustomRepeat({ from, anchor, onCancel, onSave }: { from: CustomFrom; an
   );
 }
 
-function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => void; onSave: (until: string) => void }) {
+function EndOnDate({ task, onCancel, onSave, busy = false }: { task: Task; onCancel: () => void; onSave: (until: string) => void; busy?: boolean }) {
   const id = useId();
   const repeat = task.repeat!;
   const [until, setUntil] = useState(() => ("until" in repeat.ends ? repeat.ends.until : ""));
@@ -414,7 +383,7 @@ function EndOnDate({ task, onCancel, onSave }: { task: Task; onCancel: () => voi
           <Button variant="secondary" size="sm" onClick={onCancel} className="hit">
             Cancel
           </Button>
-          <Button variant="primary" size="sm" disabled={!until || Boolean(problem)} onClick={() => onSave(until)} className="hit">
+          <Button variant="primary" size="sm" disabled={busy || !until || Boolean(problem)} onClick={() => onSave(until)} className="hit">
             Save
           </Button>
         </>
@@ -448,7 +417,9 @@ function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
   event.preventDefault();
   const at = items.indexOf(document.activeElement as HTMLElement);
   const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : event.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
-  items[next]?.focus();
+  for (const item of items) item.tabIndex = -1;
+  items[next].tabIndex = 0;
+  items[next].focus();
 }
 
 function RepeatChoices({
@@ -469,18 +440,20 @@ function RepeatChoices({
   children?: ReactNode;
 }) {
   const matched = current ? presets.find((preset) => sameRule(preset.rule, current)) : null;
+  const custom = Boolean(current && !matched);
+  const active = menuFocus(repeating, matched?.id ?? null, custom);
   return (
     <div role="menu" aria-label="Repeat" onKeyDown={moveFocus} className="flex flex-col p-1">
-      <MenuOption checked={!repeating} onSelect={onDontRepeat}>
+      <MenuOption checked={!repeating} active={active === "none"} onSelect={onDontRepeat}>
         Don&apos;t repeat
       </MenuOption>
       {presets.map((preset) => (
-        <MenuOption key={preset.id} checked={matched?.id === preset.id} onSelect={() => onPick(preset.rule)}>
+        <MenuOption key={preset.id} checked={matched?.id === preset.id} active={active === preset.id} onSelect={() => onPick(preset.rule)}>
           {preset.label}
         </MenuOption>
       ))}
       <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
-      <MenuOption checked={Boolean(current && !matched)} onSelect={onCustom} detail={null} icon={current && !matched ? <CheckIcon aria-hidden className="size-3.5" /> : null}>
+      <MenuOption checked={custom} active={active === "custom"} onSelect={onCustom} detail={null} icon={custom ? <CheckIcon aria-hidden className="size-3.5" /> : null}>
         <span className="flex items-center justify-between gap-2">
           Custom
           <ChevronRightIcon aria-hidden className="text-subtle size-3" />
@@ -531,7 +504,7 @@ export function RepeatPicker({
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         align={align}
-        className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain"
+        className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain [@media(pointer:coarse)]:w-[min(22rem,calc(100vw-2rem))]"
         onCloseAutoFocus={(event) => {
           if (!onClosed) return;
           event.preventDefault();
@@ -568,6 +541,9 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
     setOpen(false);
     setView("menu");
   };
+  const settle = async (work: () => Promise<boolean>) => {
+    if (await work()) close();
+  };
   const pick = (rule: RepeatRule) => {
     close();
     if (current && sameRule(current, rule)) return;
@@ -582,7 +558,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
       }}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align={align} className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain">
+      <PopoverContent align={align} className="max-h-[min(var(--radix-popover-content-available-height),36rem)] w-[min(19rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain [@media(pointer:coarse)]:w-[min(22rem,calc(100vw-2rem))]">
         {view === "menu" && (
           <RepeatChoices presets={presets} current={current} repeating={repeating} onDontRepeat={() => (repeating ? setView("stop") : close())} onPick={pick} onCustom={() => setView("custom")}>
             {repeating && series && (
@@ -590,7 +566,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
                 <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
                 <MenuOption
                   icon={<RepeatIcon aria-hidden className="text-subtle size-3.5" />}
-                  detail={task.repeat?.next ? `Next: ${shortDay(task.repeat.next.occursOn)}` : null}
+                  detail={nextDetail(task.repeat?.next)}
                   onSelect={() => {
                     close();
                     void actions.skip();
@@ -613,13 +589,11 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
         )}
         {view === "custom" && (
           <CustomRepeat
-            from={{ start: task.repeat, kept: task.repeat && !task.repeat.ended ? task.repeat.rule : null, at: atOf(task) }}
+            from={{ start: task.repeat, kept: task.repeat && !task.repeat.ended ? task.repeat.rule : null, at: atOf(task), left: task.repeat && !task.repeat.ended ? task.repeat : null }}
             anchor={anchor}
+            busy={actions.busy}
             onCancel={close}
-            onSave={(rule, ends) => {
-              close();
-              void actions.set(rule, ends);
-            }}
+            onSave={(rule, ends) => void settle(() => actions.set(rule, ends))}
           />
         )}
         {view === "stop" && (
@@ -631,15 +605,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
                 <Button variant="secondary" size="sm" onClick={close} className="hit">
                   Cancel
                 </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => {
-                    close();
-                    void actions.stop();
-                  }}
-                  className="hit"
-                >
+                <Button variant="primary" size="sm" disabled={actions.busy} onClick={() => void settle(actions.stop)} className="hit">
                   Stop repeating
                 </Button>
               </>
@@ -649,14 +615,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
           </Panel>
         )}
         {view === "end" && task.repeat && (
-          <EndOnDate
-            task={task}
-            onCancel={close}
-            onSave={(until) => {
-              close();
-              void actions.end(until);
-            }}
-          />
+          <EndOnDate task={task} busy={actions.busy} onCancel={close} onSave={(until) => void settle(() => actions.end(until))} />
         )}
         {view === "delete" && (
           <Panel
@@ -667,12 +626,7 @@ export function RepeatMenu({ task, trigger, align = "start" }: { task: Task; tri
                 <Button variant="secondary" size="sm" onClick={close} className="hit">
                   Cancel
                 </Button>
-                <HoldButton
-                  onConfirm={() => {
-                    close();
-                    void actions.remove();
-                  }}
-                >
+                <HoldButton onConfirm={() => void settle(actions.remove)}>
                   Hold to delete
                 </HoldButton>
               </>
@@ -714,7 +668,7 @@ export function RepeatField({ task, canChange, layout }: { task: Task; canChange
   return (
     <>
       <RepeatMenu task={task} trigger={trigger} />
-      {next && <span className="caption-style text-subtle">Next: {shortDay(repeat!.next!.occursOn)}</span>}
+      {next && <span className="caption-style text-subtle">Next: {next}</span>}
       {stopped && <span className="caption-style text-subtle">{halted || "never" in repeat!.ends ? "Stopped. This is the last one." : "This is the last one."}</span>}
     </>
   );
@@ -769,54 +723,29 @@ export function RepeatEarlier({ task, section }: { task: Task; section: (childre
   );
 }
 
-export type ScopeChange = { kind: "time" | "title" | "description" | "assignee" | "duration" | "reminder"; to?: string };
-
-const CHANGE_LINES: Record<ScopeChange["kind"], string> = {
-  time: "Moving",
-  title: "Renaming.",
-  description: "Changing the description.",
-  assignee: "Reassigning.",
-  duration: "Changing the length.",
-  reminder: "Changing the reminder.",
-};
-
-function scopeTexts(task: Task, change: ScopeChange) {
-  const today = dayKeyAt(new Date());
-  const day = taskDueDay(task.dueAt) ?? task.occursOn ?? anchorOf(task);
-  const own = day === today ? "today's" : shortDay(day);
-  const ownCapital = day === today ? "Today" : shortDay(day);
-  const next = task.repeat?.next?.occursOn;
-  const nextName = next ? (next === shiftDay(today, 1) ? "Tomorrow" : shortDay(next)) : null;
-  const time = change.kind === "time";
-  const resets = time && task.repeat && task.repeat.changedDates > 0 ? ` Resets ${task.repeat.changedDates} changed date${task.repeat.changedDates === 1 ? "" : "s"}.` : "";
-  return {
-    line: time ? `Moving ${own} to ${change.to}.` : CHANGE_LINES[change.kind],
-    one: time ? `Only ${own} moves.${nextName && task.repeat?.at ? ` ${nextName} is back at ${task.repeat.at}.` : ""}` : `Only ${own} changes.`,
-    all: time ? `${ownCapital} and every later one move to ${change.to}.${resets}` : `${ownCapital} and every later one change.`,
-  };
-}
-
 export function useRepeatScope(task: Task) {
-  const [asking, setAsking] = useState<{ change: ScopeChange; resolve: (scope: RepeatScope | null) => void } | null>(null);
+  const [asking, setAsking] = useState<{ change: ScopeChange; resolve: (scope: ScopeAnswer<RepeatScope>) => void } | null>(null);
   const [choice, setChoice] = useState<RepeatScope>("this");
   const latest = useRef(asking);
-  useEffect(() => {
-    latest.current = asking;
-  });
   useEffect(
     () => () => {
-      const pending = latest.current;
-      if (pending) pending.resolve(pending.change.kind === "title" || pending.change.kind === "description" ? "this" : null);
+      latest.current?.resolve(SCOPE_LATER);
+      latest.current = null;
     },
     [],
   );
   const ask = useCallback((change: ScopeChange) => {
     latest.current?.resolve(null);
     setChoice("this");
-    return new Promise<RepeatScope | null>((resolve) => setAsking({ change, resolve }));
+    return new Promise<ScopeAnswer<RepeatScope>>((resolve) => {
+      const pending = { change, resolve };
+      latest.current = pending;
+      setAsking(pending);
+    });
   }, []);
   const finish = (scope: RepeatScope | null) => {
     asking?.resolve(scope);
+    if (latest.current === asking) latest.current = null;
     setAsking(null);
   };
   const texts = asking ? scopeTexts(task, asking.change) : null;
@@ -831,6 +760,12 @@ export function useRepeatScope(task: Task) {
           </DialogTitle>
           <DialogDescription>{texts?.line}</DialogDescription>
         </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            finish(choice);
+          }}
+        >
         <fieldset className="flex flex-col gap-1 px-3 pb-2">
           <legend className="sr-only">Apply to</legend>
           {(["this", "all"] as const).map((scope) => (
@@ -849,10 +784,11 @@ export function useRepeatScope(task: Task) {
               Cancel
             </Button>
           </DialogClose>
-          <Button variant="primary" size="md" onClick={() => finish(choice)} className="hit">
+          <Button type="submit" variant="primary" size="md" className="hit">
             Save
           </Button>
         </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
