@@ -28,13 +28,24 @@ if (!env.DEV_USER_EMAIL || !env.DEV_USER_PASSWORD) {
 fs.mkdirSync(out, { recursive: true });
 const api = (route, init = {}) =>
   fetch(`${base}/api/v1${route}`, { ...init, headers: { authorization: `Bearer ${env.CRM_AGENT_TOKEN}`, "content-type": "application/json", ...init.headers } }).catch(() => null);
+function londonDay(offset) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + offset * 86_400_000));
+}
+
+function sweepDue(hoursAhead) {
+  const at = new Date(Date.now() + hoursAhead * 3_600_000);
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+  const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", hourCycle: "h23" }).format(at));
+  return day === londonDay(0) && hour < 21 ? at.toISOString() : `${londonDay(0)}T21:00`;
+}
+
 let sweepTask = null;
 if (env.CRM_AGENT_TOKEN) {
   const listed = await api("/companies?limit=1");
   const company = listed?.ok ? ((await listed.json()).data ?? [])[0] : null;
   const seeded = await api("/tasks", {
     method: "POST",
-    body: JSON.stringify({ title: "Sweep check task", dueAt: new Date(Date.now() + 2 * 3_600_000).toISOString(), companyId: company?.id ?? null, contactId: null, opportunityId: null }),
+    body: JSON.stringify({ title: "Sweep check task", dueAt: sweepDue(2), companyId: company?.id ?? null, contactId: null, opportunityId: null }),
   });
   if (seeded?.ok) sweepTask = { id: (await seeded.json()).task.id, companyId: company?.id ?? null };
   else console.log(`could not add a task to check (${seeded?.status ?? "no answer"})`);
@@ -57,15 +68,11 @@ async function seedCallTask(label, verb = "Call") {
   const contactId = (await contact.json()).contact.id;
   sweepContacts.push(contactId);
   const title = `${verb} Sweep Caller ${stamp}`;
-  const task = await api("/tasks", { method: "POST", body: JSON.stringify({ title, contactId, dueAt: new Date(Date.now() + 3_600_000).toISOString() }) });
+  const task = await api("/tasks", { method: "POST", body: JSON.stringify({ title, contactId, dueAt: sweepDue(1) }) });
   if (!task?.ok) return null;
   const id = (await task.json()).task.id;
   sweepCallTasks.push(id);
   return { id, title };
-}
-
-function londonDay(offset) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + offset * 86_400_000));
 }
 
 async function seedBlock(device) {
@@ -522,6 +529,42 @@ for (const [device, viewport] of [
     await shot("task-pad-reminder-time");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
+    await pad.fill("");
+    await page.waitForTimeout(300);
+
+    const saved = await localAdmin("check what Add task saved: an agent only sees tasks it created");
+    const savedTask = async (stamp) =>
+      saved ? ((await saved.query("select title, due_at from crm.tasks where title like $1 order by created_at desc limit 1", [`%${stamp}%`]).catch(() => null))?.rows[0] ?? null) : null;
+    const letters = (value) => value.toString(36).replace(/\d/g, (digit) => "qrstuvwxyz"[Number(digit)]);
+    const keepStamp = `zq${letters(Date.now())}`;
+    const keepText = `${keepStamp} keep tomorrow 3pm`;
+    await pad.tap();
+    await pad.fill(keepText);
+    await page.waitForTimeout(700);
+    const lit = await page.evaluate(() => [...document.querySelectorAll('mark[class*="tag-blue"]')].map((mark) => mark.textContent).join(" "));
+    check(`${device} Add task lights up the words it read as the date`, lit === "tomorrow 3pm", lit);
+    const keep = page.getByRole("button", { name: "Keep as text: tomorrow 3pm" });
+    check(`${device} Add task offers Keep as text`, await visible(keep));
+    await shot("task-pad-highlight");
+    if (await visible(keep)) {
+      await keep.tap();
+      await page.waitForTimeout(400);
+      const status = await page.locator('[role="status"]').filter({ hasText: "Kept as text. No date." }).count();
+      check(`${device} Keep as text drops the highlight and the date`, (await page.evaluate(() => document.querySelectorAll('mark[class*="tag-blue"]').length)) === 0 && status > 0);
+      await pad.focus();
+      await pad.press("Enter");
+      await page.waitForTimeout(2500);
+      const kept = await savedTask(keepStamp);
+      check(`${device} Keep as text saves the words with no date`, Boolean(saved) && kept?.title === keepText && kept?.due_at === null, saved ? JSON.stringify(kept) : "set DATABASE_ADMIN_URL to a local database");
+    }
+    const pendingStamp = `zp${letters(Date.now())}`;
+    const pendingText = `${pendingStamp} pending at 3`;
+    await pad.fill(pendingText);
+    await pad.press("Enter");
+    await page.waitForTimeout(2500);
+    const pending = await savedTask(pendingStamp);
+    check(`${device} Enter on an unconfirmed reading saves the text as typed`, Boolean(saved) && pending?.title === pendingText && pending?.due_at === null, saved ? JSON.stringify(pending) : "set DATABASE_ADMIN_URL to a local database");
+    if (saved) await saved.query("update crm.tasks set archived_at = now() where title like $1 or title like $2", [`%${keepStamp}%`, `%${pendingStamp}%`]).catch(() => null);
     await pad.fill("");
     await page.waitForTimeout(300);
   } else console.log(`skip ${device} Add task card (not found)`);
@@ -1078,10 +1121,10 @@ for (const [device, viewport] of [
           await page.getByRole("dialog", { name: "Task" }).getByRole("button", { name: "Close" }).tap();
           await page.waitForTimeout(600);
         }
-        const scrolled = await page.evaluate(async () => {
+        const scrolled = await page.evaluate(async (blockId) => {
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
           const scroller = [...document.querySelectorAll("[data-calendar-scroller]")].find((node) => node.getBoundingClientRect().width > 0);
-          const element = [...document.querySelectorAll("[data-task-block] button[data-task-id]")].find((node) => node.getBoundingClientRect().width > 0);
+          const element = [...document.querySelectorAll(`[data-task-block="${blockId}"] button[data-task-id]`)].find((node) => node.getBoundingClientRect().width > 0);
           if (!scroller || !element) return null;
           const area = scroller.getBoundingClientRect();
           const box = element.getBoundingClientRect();
@@ -1116,7 +1159,7 @@ for (const [device, viewport] of [
           await sleep(100);
           fire("touchend", x, area.top - 40);
           return { before, after, edge };
-        });
+        }, block.id);
         check(synthetic("dragging to the grid's bottom edge scrolls it"), Boolean(scrolled && scrolled.after > scrolled.before && scrolled.edge), JSON.stringify(scrolled));
       }
       if (device === "ipad") {

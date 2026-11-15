@@ -21,7 +21,8 @@ import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
 import { followSeriesLinks, REPEAT_SCOPES, updateOccurrence, type RepeatScope } from "@/lib/crm/task-series";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
+import { actorForTask, TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
+import { missingOrFailed } from "@/lib/task-done";
 
 import { completeTask, getTask, listDueReminders, placeTask, reopenTask, TASK_PLACE_FAILED, type DueReminder, type TaskPlacement } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
@@ -312,14 +313,18 @@ export async function reopenTaskAction(id: string): Promise<RecordActionState> {
   }
 }
 
+const OPEN_CHECK_FAILED = "Couldn't check the tasks. Try again.";
+
 export async function openTaskIdsAction(ids: string[]): Promise<{ open?: string[]; error?: string }> {
   const user = await requireUser();
   const wanted = [...new Set((Array.isArray(ids) ? ids : []).filter((id): id is string => typeof id === "string" && isUuid(id)))].slice(0, 50);
   const open: string[] = [];
   for (const id of wanted) {
-    const resolved = await taskActorOrError(user, id);
-    if (!resolved.actor) continue;
-    const task = await getTask(resolved.actor, id).catch(() => null);
+    const actor = await actorForTask(user, id).catch(missingOrFailed);
+    if (actor === undefined) return { error: OPEN_CHECK_FAILED };
+    if (actor === null) continue;
+    const task = await getTask(actor, id).catch(missingOrFailed);
+    if (task === undefined) return { error: OPEN_CHECK_FAILED };
     if (task && !task.completedAt && !task.archivedAt) open.push(id);
   }
   return { open };

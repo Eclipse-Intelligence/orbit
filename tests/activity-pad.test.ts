@@ -56,6 +56,14 @@ describe("activity pad parser", () => {
     assert.deepEqual(parseActivityText("Emailed Sam, chase next week", FRIDAY_2PM).followUp, { due: "2026-10-19" });
     assert.deepEqual(parseActivityText("Met Tom, follow up in 2 days", FRIDAY_2PM).followUp, { due: "2026-10-18" });
     assert.equal(parseActivityText("Met Tom by the river", FRIDAY_2PM).followUp, null);
+    assert.deepEqual(parseActivityText("Met Tom, follow up Tuesday week", FRIDAY_2PM).followUp, { due: "2026-10-27" });
+    assert.deepEqual(parseActivityText("Met Tom, follow up Friday", FRIDAY_2PM).followUp, { due: "2026-10-23" });
+    assert.equal(parseActivityText("Met Tom, follow up 1 Oct", FRIDAY_2PM).followUp, null);
+    assert.deepEqual(parseActivityText("Called Jane, she wants pricing by 20 Mar", FRIDAY_2PM).followUp, { due: "2027-03-20" });
+    const november = new Date("2026-11-14T10:30:00Z");
+    assert.equal(parseActivityText("Called Sam, chase 1 October", november).followUp, null);
+    assert.deepEqual(parseActivityText("Called Sam, follow up 3 March", november).followUp, { due: "2027-03-03" });
+    assert.equal(parseActivityText("Met Tom, follow up eod", new Date("2026-10-16T17:30:00Z")).followUp, null);
   });
 
   it("makes a short headline", () => {

@@ -48,6 +48,7 @@ import { durationLabel, taskDueDay } from "@/lib/crm/task-time";
 import type { Task } from "@/lib/crm/types";
 import { LONG_PRESS_MS } from "@/lib/pointer-gesture";
 import { taskBlocks, type TaskBlock } from "@/lib/task-blocks";
+import { panelTaskFor } from "@/lib/task-done";
 import { placedTask, placementLanded, slotDateLabel, type DropPlacement } from "@/lib/task-drag";
 import {
   applyPayload,
@@ -474,8 +475,14 @@ export default function CalendarScreen({
   const [keptTask, setKeptTask] = useState<Task | null>(null);
   const listedTask = openTaskId ? (tasks.find((task) => task.id === openTaskId) ?? null) : null;
   if (listedTask && listedTask !== keptTask) setKeptTask(listedTask);
-  const panelTask = listedTask ?? (keptTask && keptTask.id === openTaskId && done.has(keptTask.id) ? keptTask : null);
+  const [reopenedId, setReopenedId] = useState<string | null>(null);
+  const panelTask = panelTaskFor(openTaskId, listedTask, keptTask, (id) => done.has(id) || id === reopenedId);
   if (openTaskId && !panelTask) setOpenTaskId(null);
+  if (reopenedId && (reopenedId !== openTaskId || listedTask)) setReopenedId(null);
+  const reopenInPanel = (task: Task) => {
+    setReopenedId(task.id);
+    return reopen(task);
+  };
   const shownTask = panelTask ?? keptTask;
   const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
   const proposedIds = new Set(preview?.entries.map((entry) => entry.taskId) ?? []);
@@ -791,7 +798,7 @@ export default function CalendarScreen({
           tagged={shownTask ? (planner.tagged[shownTask.id] ?? []) : []}
           completed={shownTask ? done.has(shownTask.id) : false}
           onComplete={markDone}
-          onReopen={reopen}
+          onReopen={reopenInPanel}
           returnTo={opener}
           recordNotes={!shownTask || shownTask.workspaceId === viewer.workspaceId}
         />

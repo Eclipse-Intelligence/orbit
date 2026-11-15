@@ -42,18 +42,19 @@ describe("task pad parser", () => {
       { title: call.title, due: call.due, remindMinutes: call.remindMinutes, unsure: call.unsure },
       { title: "Call Jane at Acme", due: "2026-10-19T15:00", remindMinutes: 60, unsure: false },
     );
-    assert.equal(parse("Ship it Friday morning, remind 30 mins").remindMinutes, 30);
+    assert.equal(parse("Ship it Monday morning, remind 30 mins").remindMinutes, 30);
     assert.equal(parse("Check in with Bob in 3 days remind me a day before").remindMinutes, 1440);
     assert.equal(parse("Ping Sam tomorrow, remind me 45 minutes before").remindMinutes, 30);
   });
 
   it("keeps the time when a reminder follows it", () => {
-    const result = parse("Speak to Toby Sutton OBE tomorrow at 12:15 and remind me 30 mins before");
+    const result = parse("Speak to Toby Sutton OBE tomorrow at 12:15pm and remind me 30 mins before");
     assert.equal(result.due, "2026-10-17T12:15");
     assert.equal(result.remindMinutes, 30);
     assert.equal(result.title, "Speak to Toby Sutton OBE");
-    assert.equal(parse("at 12:15 remind me 30 mins").due, "2026-10-16T12:15");
-    assert.equal(parse("Lunch 1.30pm tomorrow").due, "2026-10-17T13:30");
+    const bare = parse("at 12:15 remind me 30 mins");
+    assert.deepEqual({ title: bare.title, due: bare.due, unsure: bare.unsure }, { title: "at 12:15 remind me 30 mins", due: null, unsure: true });
+    assert.equal(parse("Meet 1.30pm tomorrow").due, "2026-10-17T13:30");
   });
 
   it("understands common ways of saying when", () => {
@@ -66,9 +67,9 @@ describe("task pad parser", () => {
       ["Book flights next week", "2026-10-19"],
       ["Email Sam tonight", "2026-10-16T19:00"],
       ["Quarterly review December 3rd 2026", "2026-12-03"],
-      ["Renew domain 1 Feb", "2027-02-01"],
+      ["Renew domain 1 Feb", null],
       ["Finish report by end of day", "2026-10-16T17:00"],
-      ["Lunch with Tom at noon", "2026-10-16T12:00"],
+      ["Meet Tom at noon", "2026-10-16T12:00"],
       ["Call mum 9am", "2026-10-17T09:00"],
       ["Plan Wed 2pm", "2026-10-21T14:00"],
       ["Wrap up end of week", "2026-10-16T17:00"],
@@ -89,12 +90,19 @@ describe("task pad parser", () => {
     assert.equal(padDueHasTime(null), false);
   });
 
-  it("reads the AI fallback's date-only due and keeps the reminder it asks for", async () => {
+  it("keeps the typed words and takes only a checked date from the AI fallback", async () => {
     const answers = [
-      { title: "Call Jane", due: "2026-10-19", remindMinutes: 15 },
-      { title: "Call Jane", due: "2026-10-19T11:15", remindMinutes: 45 },
-      { title: "Call Jane", due: null, remindMinutes: 15 },
-      { title: "Call Jane", due: "next Monday", remindMinutes: null },
+      { phrases: ["after the weekend", "remind me 15 mins before"], due: "2026-10-19", remindMinutes: 15, durationMinutes: null },
+      { phrases: ["monday 11:15", "remind me 30 mins before"], due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null },
+      { phrases: [], due: null, remindMinutes: 15, durationMinutes: null },
+      { phrases: ["next monday"], due: "next Monday", remindMinutes: null, durationMinutes: null },
+      { phrases: ["Ring Jane"], due: "2026-10-19", remindMinutes: null, durationMinutes: null },
+      { phrases: ["tomorrow"], due: "2026-02-30", remindMinutes: null, durationMinutes: null },
+      { phrases: ["tomorrow"], due: "2026-10-15", remindMinutes: null, durationMinutes: null },
+      { phrases: ["at 8"], due: "2026-10-16T08:00", remindMinutes: null, durationMinutes: null },
+      { phrases: ["in 2029"], due: "2029-01-01", remindMinutes: null, durationMinutes: null },
+      { phrases: ["tomorrow at 10", "remind me 7 mins before", "for 900 mins"], due: "2026-10-17T10:00", remindMinutes: 7, durationMinutes: 900 },
+      { phrases: ["tomorrow 10am", "for 30 mins"], due: "2026-10-17T10:00", remindMinutes: null, durationMinutes: 30 },
     ];
     const prompts: string[] = [];
     const fetchImpl: typeof fetch = async (_input, init) => {
@@ -105,29 +113,38 @@ describe("task pad parser", () => {
     };
     const previous = process.env.LLM_API_KEY;
     process.env.LLM_API_KEY = "llm-test";
+    const ask = async (text: string) => {
+      const reading = await parsePadWithAi(text, FRIDAY_10AM, { fetchImpl });
+      return reading && { title: reading.title, due: reading.due, remindMinutes: reading.remindMinutes, durationMinutes: reading.durationMinutes };
+    };
+    const nothing = (title: string) => ({ title, due: null, remindMinutes: null, durationMinutes: null });
     try {
-      assert.deepEqual(await parsePadWithAi("ring jane after the weekend, nudge me 15 mins before", FRIDAY_10AM, { fetchImpl }), {
-        title: "Call Jane",
-        due: "2026-10-19",
-        remindMinutes: 15,
-      });
-      assert.deepEqual(await parsePadWithAi("ring jane monday 11.15, nudge me 45 mins before", FRIDAY_10AM, { fetchImpl }), {
-        title: "Call Jane",
-        due: "2026-10-19T11:15",
-        remindMinutes: 30,
-      });
-      assert.deepEqual(await parsePadWithAi("ring jane, nudge me", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
-      assert.deepEqual(await parsePadWithAi("ring jane next monday", FRIDAY_10AM, { fetchImpl }), { title: "Call Jane", due: null, remindMinutes: null });
+      assert.deepEqual(await ask("ring jane after the weekend, remind me 15 mins before"), { title: "ring jane", due: "2026-10-19", remindMinutes: 15, durationMinutes: null });
+      assert.deepEqual(await ask("ring jane monday 11:15, remind me 30 mins before"), { title: "ring jane", due: "2026-10-19T11:15", remindMinutes: 30, durationMinutes: null });
+      assert.deepEqual(await ask("ring jane, nudge me"), nothing("ring jane, nudge me"));
+      assert.deepEqual(await ask("ring jane next monday"), nothing("ring jane next monday"), "a due that is not a date");
+      assert.deepEqual(await ask("ring jane at some point"), nothing("ring jane at some point"), "a phrase that is not in the text");
+      assert.deepEqual(await ask("ring jane tomorrow"), nothing("ring jane tomorrow"), "a date that does not exist");
+      assert.deepEqual(await ask("ring jane tomorrow"), nothing("ring jane tomorrow"), "a date in the past");
+      assert.deepEqual(await ask("ring jane at 8"), nothing("ring jane at 8"), "a time already gone today");
+      assert.deepEqual(await ask("ring jane in 2029"), nothing("ring jane in 2029"), "more than two years out");
+      assert.deepEqual(await ask("ring jane tomorrow at 10, remind me 7 mins before for 900 mins"), { title: "ring jane", due: "2026-10-17T10:00", remindMinutes: 5, durationMinutes: null }, "a reminder snaps to an option and a duration past the cap is dropped");
+      assert.deepEqual(await ask("ring jane tomorrow 10am for 30 mins"), { title: "ring jane", due: "2026-10-17T10:00", remindMinutes: null, durationMinutes: 30 });
     } finally {
       if (previous === undefined) delete process.env.LLM_API_KEY;
       else process.env.LLM_API_KEY = previous;
     }
     assert.match(prompts[0], /the day alone as YYYY-MM-DD/);
-    assert.doesNotMatch(prompts[0], /09:00/);
+    assert.match(prompts[0], /never rewrite/i);
+    assert.match(prompts[0], /next week is the Monday of next week/);
+    assert.match(prompts[0], /at most 480/);
+    assert.match(prompts[0], /repeated/);
   });
 
   it("doesn't mistake names and words for dates", () => {
-    for (const text of ["Send Monica the deck", "I sat down with Sunil", "Call Jane", "Fix the deck"]) {
+    const sat = parse("I sat down with Sunil");
+    assert.deepEqual({ title: sat.title, due: sat.due, marks: sat.marks }, { title: "I sat down with Sunil", due: null, marks: [] });
+    for (const text of ["Send Monica the deck", "Call Jane", "Fix the deck"]) {
       const result = parse(text);
       assert.equal(result.due, null, text);
       assert.deepEqual(result.marks, [], text);
@@ -137,8 +154,8 @@ describe("task pad parser", () => {
   });
 
   it("leaves prices in the title instead of reading them as times", () => {
-    const invoice = parse("Invoice £12.50 by Friday");
-    assert.deepEqual({ title: invoice.title, due: invoice.due }, { title: "Invoice £12.50", due: "2026-10-23" });
+    const invoice = parse("Invoice £12.50 by Monday");
+    assert.deepEqual({ title: invoice.title, due: invoice.due }, { title: "Invoice £12.50", due: "2026-10-19" });
     for (const [text, title] of [
       ["Pay $9.15", "Pay $9.15"],
       ["Refund € 7.45 tomorrow", "Refund € 7.45"],
@@ -156,9 +173,9 @@ describe("task pad parser", () => {
 
   it("still reads every time form it read before", () => {
     const cases: [string, string, string][] = [
-      ["Call at 12.50", "Call", "2026-10-16T12:50"],
-      ["Call 12:50", "Call", "2026-10-16T12:50"],
-      ["Call at 12:50", "Call", "2026-10-16T12:50"],
+      ["Call at 13.50", "Call", "2026-10-16T13:50"],
+      ["Call 13:50", "Call", "2026-10-16T13:50"],
+      ["Call at 13.50", "Call", "2026-10-16T13:50"],
       ["Call 12.50pm", "Call", "2026-10-16T12:50"],
       ["Call 1.30pm tomorrow", "Call", "2026-10-17T13:30"],
       ["Call at 3pm", "Call", "2026-10-16T15:00"],
@@ -178,9 +195,9 @@ describe("task pad parser", () => {
       marks.map((mark) => [mark.kind, text.slice(mark.start, mark.end)]),
       [
         ["record", "Toby Sutton OBE"],
-        ["when", "3pm"],
-        ["when", "Wednesday"],
-        ["reminder", "remind me 15 mins"],
+        ["when", "at 3pm"],
+        ["when", "on Wednesday"],
+        ["reminder", "and remind me 15 mins"],
       ],
     );
     assert.deepEqual(nameMarks("Visit Acme and acme again", ["Acme"]).length, 2);
@@ -195,6 +212,7 @@ describe("task pad parser", () => {
     };
     const plain = (title: string, unsure = false) => ({ title, due: null, remindMinutes: null, durationMinutes: null, unsure });
     const at = (title: string, due: string, durationMinutes: number | null = null, unsure = false) => ({ title, due, remindMinutes: null, durationMinutes, unsure });
+    const asked = (text: string, due: string | null = null, durationMinutes: number | null = null) => ({ title: text, due, remindMinutes: null, durationMinutes, unsure: true });
     assert.deepEqual(read("Review 24/7 support plan"), plain("Review 24/7 support plan"));
     assert.deepEqual(read("Read version 2.10 notes"), plain("Read version 2.10 notes"));
     assert.deepEqual(read("Call Sam 2.30"), plain("Call Sam 2.30", true));
@@ -202,45 +220,45 @@ describe("task pad parser", () => {
     assert.deepEqual(read("Call Sam sat 3pm"), at("Call Sam", "2026-11-21T15:00"));
     assert.deepEqual(read("Call Sam 3pm sat"), at("Call Sam", "2026-11-21T15:00"));
     assert.deepEqual(read("Call Sam on sat"), at("Call Sam", "2026-11-21"));
-    assert.deepEqual(read("Call Sam next sun"), at("Call Sam", "2026-11-22"));
+    assert.deepEqual(read("Call Sam next sun"), asked("Call Sam next sun"));
     assert.deepEqual(read("Call Sam weds"), at("Call Sam", "2026-11-18"));
-    assert.deepEqual(read("I sat down with Sunil"), plain("I sat down with Sunil"));
-    assert.deepEqual(read("Call Sam tomorrow 9"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam tomorrow at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam 9 tomorrow"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam Reid 9 tomorrow"), at("Call Sam Reid", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Catch up with Jane Doe 3 friday"), at("Catch up with Jane Doe", "2026-11-20T15:00", null, true));
+    assert.deepEqual(read("I sat down with Sunil"), plain("I sat down with Sunil", true));
+    assert.deepEqual(read("Call Sam tomorrow 9"), asked("Call Sam tomorrow 9", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam tomorrow at 9"), asked("Call Sam tomorrow at 9", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam 9 tomorrow"), asked("Call Sam 9 tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam Reid 9 tomorrow"), asked("Call Sam Reid 9 tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Catch up with Jane Doe 3 friday"), asked("Catch up with Jane Doe 3 friday", "2026-11-20T15:00"));
     assert.deepEqual(read("Call 7 tonight"), at("Call", "2026-11-16T19:00"));
     assert.deepEqual(read("Call Sam tonight at 8"), at("Call Sam", "2026-11-16T20:00"));
-    assert.deepEqual(read("Call 9 tomorrow"), at("Call", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam 9 o'clock tomorrow"), at("Call Sam", "2026-11-17T09:00", null, true));
-    assert.deepEqual(read("Call Sam at 9"), at("Call Sam", "2026-11-17T09:00", null, true));
+    assert.deepEqual(read("Call 9 tomorrow"), asked("Call 9 tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam 9 o'clock tomorrow"), asked("Call Sam 9 o'clock tomorrow", "2026-11-17T09:00"));
+    assert.deepEqual(read("Call Sam at 9"), asked("Call Sam at 9", "2026-11-17T09:00"));
     assert.deepEqual(read("Call Sam at 17"), at("Call Sam", "2026-11-16T17:00"));
-    assert.deepEqual(read("Call Sam tomorrow 2.30"), at("Call Sam", "2026-11-17T14:30", null, true));
-    assert.deepEqual(read("Call Sam tomorrow 3"), at("Call Sam", "2026-11-17T15:00", null, true));
-    assert.deepEqual(read("Call Sam at 3"), at("Call Sam", "2026-11-16T15:00", null, true));
-    assert.deepEqual(read("Call Sam 1:30"), at("Call Sam", "2026-11-16T13:30", null, true));
-    assert.deepEqual(read("Call Sam at 3 sat"), at("Call Sam", "2026-11-21T15:00", null, true));
-    assert.deepEqual(read("Lunch with Sam 1 friday"), at("Lunch with Sam", "2026-11-20T13:00", null, true));
-    assert.deepEqual(read("Meet 3 friday"), at("Meet", "2026-11-20T15:00", null, true));
-    assert.deepEqual(read("Meet in Room 12 Monday"), at("Meet in Room 12", "2026-11-23"));
-    assert.deepEqual(read("Look at Room 12 Monday"), at("Look at Room 12", "2026-11-23"));
+    assert.deepEqual(read("Call Sam tomorrow 2.30"), asked("Call Sam tomorrow 2.30", "2026-11-17T14:30"));
+    assert.deepEqual(read("Call Sam tomorrow 3"), asked("Call Sam tomorrow 3", "2026-11-17T15:00"));
+    assert.deepEqual(read("Call Sam at 3"), asked("Call Sam at 3", "2026-11-16T15:00"));
+    assert.deepEqual(read("Call Sam 1:30"), asked("Call Sam 1:30", "2026-11-16T13:30"));
+    assert.deepEqual(read("Call Sam at 3 sat"), asked("Call Sam at 3 sat", "2026-11-21T15:00"));
+    assert.deepEqual(read("Lunch with Sam 1 friday"), asked("Lunch with Sam 1 friday"));
+    assert.deepEqual(read("Meet 3 friday"), asked("Meet 3 friday", "2026-11-20T15:00"));
+    assert.deepEqual(read("Meet in Room 12 Tuesday"), at("Meet in Room 12", "2026-11-17"));
+    assert.deepEqual(read("Meet in Room 12 Monday"), asked("Meet in Room 12 Monday"));
     assert.deepEqual(read("Book meeting room 4 tomorrow"), at("Book meeting room 4", "2026-11-17"));
     assert.deepEqual(read("Call top 5 Friday"), at("Call top 5", "2026-11-20"));
-    assert.deepEqual(read("Coffee with 2 Monday prospects"), at("Coffee with 2 prospects", "2026-11-23", null, true));
+    assert.deepEqual(read("Coffee with 2 Monday prospects"), asked("Coffee with 2 Monday prospects"));
     assert.deepEqual(read("Review top 10 today"), at("Review top 10", "2026-11-16"));
-    assert.deepEqual(read("Order 10 monday"), at("Order 10", "2026-11-23"));
+    assert.deepEqual(read("Order 10 tuesday"), asked("Order 10 tuesday"));
     assert.deepEqual(read("Room 12 friday"), at("Room 12", "2026-11-20"));
     assert.deepEqual(read("Chapter 7 tomorrow"), at("Chapter 7", "2026-11-17"));
-    assert.deepEqual(read("Meet at 10 Downing Street"), plain("Meet at 10 Downing Street"));
-    assert.deepEqual(read("Call Sam 8am-6pm"), at("Call Sam", "2026-11-17T08:00"));
+    assert.deepEqual(read("Meet at 10 Downing Street"), plain("Meet at 10 Downing Street", true));
+    assert.deepEqual(read("Call Sam 8am-6pm"), asked("Call Sam 8am-6pm", "2026-11-17T08:00"));
     assert.deepEqual(read("Call 020 7946 0-5pm"), plain("Call 020 7946 0-5pm", true));
-    assert.deepEqual(read("Call Sam 3-4pm"), at("Call Sam", "2026-11-16T15:00", 60));
-    assert.deepEqual(read("Call Sam 11-1pm"), at("Call Sam", "2026-11-16T11:00", 120));
+    assert.deepEqual(read("Call Sam 3-4pm"), asked("Call Sam 3-4pm", "2026-11-16T15:00", 60));
+    assert.deepEqual(read("Call Sam 11-1pm"), asked("Call Sam 11-1pm", "2026-11-16T11:00", 120));
     assert.deepEqual(read("Call Sam remind me 15 mins before"), plain("Call Sam remind me 15 mins before", true));
-    assert.deepEqual(read("Follow up 22/11"), at("Follow up", "2026-11-22", null, true));
-    assert.deepEqual(read("Follow up 3/4"), at("Follow up", "2027-04-03", null, true));
-    assert.deepEqual(read("Follow up on 3/4"), at("Follow up", "2027-04-03"));
+    assert.deepEqual(read("Follow up 22/11"), asked("Follow up 22/11", "2026-11-22"));
+    assert.deepEqual(read("Follow up 3/4"), asked("Follow up 3/4"));
+    assert.deepEqual(read("Follow up on 3/4"), asked("Follow up on 3/4"));
     assert.deepEqual(read("Call Sam on 3/4/27"), at("Call Sam", "2027-04-03"));
   });
 
