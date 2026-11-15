@@ -545,13 +545,9 @@ async function untouched(db: Db, taskId: string) {
   return (result.rows[0]?.total ?? 0) === 0;
 }
 
-async function predecessorOf(db: Db, seriesId: string, occursOn: string | null) {
-  if (!occursOn) return null;
-  const found = await db.query<{ id: string }>(
-    `select id from crm.tasks where series_id = $1 and occurs_on < $2::date and archived_at is null order by occurs_on desc limit 1`,
-    [seriesId, occursOn],
-  );
-  return found.rows[0]?.id ?? null;
+async function neighboursOf(db: Db, taskId: string) {
+  const found = await db.query<{ before_open: string | null; last: string | null }>("select before_open, last from crm.series_reopen_neighbours($1)", [taskId]);
+  return { beforeOpen: found.rows[0]?.before_open ?? null, last: found.rows[0]?.last ?? null };
 }
 
 export async function seriesBeforeReopen(db: Db, actor: Actor, task: Task, provenance: Provenance | undefined) {
@@ -569,8 +565,9 @@ export async function seriesBeforeReopen(db: Db, actor: Actor, task: Task, prove
   }
   if (row.current_task_id === task.id) return;
   const current = await readTask(db, actor, row.current_task_id);
+  const near = await neighboursOf(db, task.id);
   const later = current && !current.completedAt && !current.archivedAt && (current.occursOn ?? "") > (task.occursOn ?? "");
-  const predecessor = current ? (await predecessorOf(db, row.id, current.occursOn)) === task.id : false;
+  const predecessor = current ? near.beforeOpen === task.id : false;
   if (later && predecessor && (await untouched(db, current.id))) {
     await archiveTaskInDb(db, actor, current.id, { operation: "undo_repeat", source: provenance?.source ?? null }, { keepSeries: true });
     if (current.clickupTaskId || current.clickupListId) {
@@ -579,7 +576,7 @@ export async function seriesBeforeReopen(db: Db, actor: Actor, task: Task, prove
     await db.query("update crm.task_series set current_task_id = $2 where id = $1", [row.id, task.id]);
     return;
   }
-  if ((!current || current.archivedAt || current.completedAt) && (await predecessorOf(db, row.id, "9999-12-31")) === task.id) {
+  if ((!current || current.archivedAt || current.completedAt) && near.last === task.id) {
     await db.query("update crm.task_series set current_task_id = $2 where id = $1", [row.id, task.id]);
     return;
   }
@@ -1114,6 +1111,30 @@ export async function updateOccurrenceInDb(db: Db, actor: Actor, target: Occurre
   return editAll(db, actor, row, task, input, found.future, provenance);
 }
 
+async function stopLaterParts(db: Db, actor: Actor, seriesId: string) {
+  const parts = await db.query<SeriesRow>(
+    `with recursive chain as (
+       select id from crm.task_series where split_from_id = $1
+       union
+       select s.id from crm.task_series s join chain c on s.split_from_id = c.id
+     )
+     ${SERIES_SQL} where s.id in (select id from chain) and s.current_task_id is null and s.ended_at is null and s.archived_at is null for update`,
+    [seriesId],
+  );
+  const mine = parts.rows.filter((part) => ownsSeries(actor, part)).map((part) => part.id);
+  if (mine.length) await db.query("update crm.task_series set ended_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null where id = any($1::uuid[])", [mine]);
+  return mine;
+}
+
+async function restartLaterParts(db: Db, actor: Actor, ids: unknown) {
+  if (!Array.isArray(ids)) return;
+  const wanted = ids.filter((id): id is string => typeof id === "string" && isUuid(id));
+  if (!wanted.length) return;
+  const parts = await db.query<SeriesRow>(`${SERIES_SQL} where s.id = any($1::uuid[]) and s.archived_at is null for update`, [wanted]);
+  const mine = parts.rows.filter((part) => ownsSeries(actor, part)).map((part) => part.id);
+  if (mine.length) await db.query("update crm.task_series set ended_at = null where id = any($1::uuid[])", [mine]);
+}
+
 export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat: unknown, provenance: Provenance, now = Date.now()) {
   if (!isUuid(taskId)) throw notFound("task");
   const found = await resolveTarget(db, actor, { taskId });
@@ -1125,10 +1146,11 @@ export async function setRepeatInDb(db: Db, actor: Actor, taskId: string, repeat
   if (repeat === null) {
     if (!row || stopped(row)) return task;
     await db.query("update crm.task_series set ended_at = now(), roll_at = null, roll_pending = false, roll_retry_at = null where id = $1", [row.id]);
+    const stoppedParts = await stopLaterParts(db, actor, row.id);
     const dropped = await changesOf(db, row.id, task.occursOn);
     await db.query("delete from crm.task_occurrence_changes where series_id = $1", [row.id]);
     const after = await readSeries(db, row.id);
-    await recordAudit(db, actor, "task_series.ended", "task", task.id, provenance, auditSeries(row, after, { droppedChanges: dropped }));
+    await recordAudit(db, actor, "task_series.ended", "task", task.id, provenance, auditSeries(row, after, { droppedChanges: dropped, ...(stoppedParts.length ? { stoppedParts } : {}) }));
     return (await readTaskInDb(db, actor, task.id))!;
   }
   if (task.completedAt) throw new CrmError("invalid_input", "This task is done. Reopen it first.", 400, { field: "repeat" });
@@ -1365,6 +1387,7 @@ export async function restoreSeriesInDb(db: Db, actor: Actor, changes: Record<st
       before.archivedAt,
     ],
   );
+  await restartLaterParts(db, actor, changes.stoppedParts);
   if (!before.archivedAt && row.archived_at && row.current_task_id) {
     const current = await readTaskInDb(db, actor, row.current_task_id);
     if (current?.archivedAt) await unarchiveTaskInDb(db, actor, current.id, provenance, { series: seriesRights(row) });

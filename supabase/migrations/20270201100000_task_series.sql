@@ -425,7 +425,6 @@ as $$
   select c.id, null::uuid, w.id, w.name, m.user_id, m.role, p.email, p.full_name, true, null::timestamptz
   from crm.task_series c
   join crm.task_series parent on parent.id = c.split_from_id
-  left join crm.tasks pt on pt.id = parent.current_task_id
   join crm.workspaces w on w.id = c.workspace_id
   join lateral (
     select candidate.user_id, candidate.role
@@ -441,13 +440,56 @@ as $$
     and (c.roll_retry_at is null or c.roll_retry_at <= p_now)
     and parent.ended_at is not null
     and parent.archived_at is null
-    and (pt.id is null or pt.completed_at is not null or pt.archived_at is not null)
   ) due (series_id, task_id, workspace_id, workspace_name, user_id, role, email, full_name, pending, due_at)
   order by due.pending desc, due.due_at
   limit greatest(1, least(coalesce(p_limit, 50), 200))
 $$;
 
 revoke all on function private.series_due_to_roll(timestamptz, integer) from public;
+
+create or replace function crm.series_reopen_neighbours(p_task uuid)
+returns table (before_open uuid, last uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with mine as (
+    select t.id, t.series_id
+    from crm.tasks t
+    where t.id = p_task
+      and t.series_id is not null
+      and (
+        (
+          current_setting('role') = 'authenticated'
+          and t.workspace_id in (select private.user_workspace_ids())
+          and (
+            t.owner_id = (select private.session_user_id())
+            or t.created_by_user_id = (select private.session_user_id())
+            or exists (select 1 from crm.task_participants tp where tp.task_id = t.id and tp.user_id = (select private.session_user_id()))
+          )
+        )
+        or (
+          current_setting('role') = 'crm_agent'
+          and t.workspace_id = (select private.request_workspace_id())
+          and t.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+        )
+      )
+  ),
+  series as (
+    select s.id, s.current_task_id, o.occurs_on as open_on
+    from mine
+    join crm.task_series s on s.id = mine.series_id
+    left join crm.tasks o on o.id = s.current_task_id and o.series_id = s.id
+  )
+  select
+    (select p.id from crm.tasks p where p.series_id = series.id and p.occurs_on < series.open_on and p.archived_at is null order by p.occurs_on desc limit 1),
+    (select p.id from crm.tasks p where p.series_id = series.id and p.archived_at is null order by p.occurs_on desc limit 1)
+  from series
+$$;
+
+revoke all on function crm.series_reopen_neighbours(uuid) from public;
+grant execute on function crm.series_reopen_neighbours(uuid) to authenticated, crm_agent;
 grant execute on function private.series_due_to_roll(timestamptz, integer) to crm_app;
 
 create or replace function private.task_series_follow_move(p_source uuid, p_target uuid)

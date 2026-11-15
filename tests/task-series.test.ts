@@ -1106,13 +1106,58 @@ describe("repeating task review round 10", () => {
     assert.equal((await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-03-07T09:01:00Z") })).due, 0);
   });
 
-  it("doesn't start a split's later part when the earlier part was stopped by hand", async () => {
+  it("starts someone else's later part once the earlier part is stopped, with its last task still open", async () => {
     const task = (await createRepeatingTask(mark, { title: "Split stopped", dueDate: "2029-05-01", ownerId: priya.userId }, { every: "week" })).body.task;
     await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2029-05-15" }, { title: "Split stopped later" }, "following");
     await setTaskRepeat(mark, task.id, null);
-    const run = await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-05-02T09:00:00Z") });
+    assert.equal((await getTask(priya, task.id)).completedAt, null);
+    await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-05-02T09:00:00Z") });
     const [child] = await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where split_from_id = $1", [task.seriesId]);
-    assert.equal(child.current_task_id, null, JSON.stringify(run));
+    assert.ok(child.current_task_id);
+    assert.equal((await getTask(priya, child.current_task_id!)).occursOn, "2029-05-15");
+  });
+
+  it("stops your own later parts with the earlier part, and finishing its last task never starts them", async () => {
+    const task = await weekly("Own split stopped", "2029-06-05");
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2029-06-19" }, { title: "Own split later" }, "following");
+    const stopped = (await setTaskRepeat(mark, task.id, null)).body;
+    const [child] = await sql<{ id: string; ended_at: Date | null; current_task_id: string | null }>("select id, ended_at, current_task_id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    assert.ok(child.ended_at);
+    await completeTask(mark, task.id);
+    await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-06-20T09:00:00Z") });
+    assert.equal((await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where id = $1", [child.id]))[0].current_task_id, null);
+    await reopenTask(mark, task.id);
+    await undoTaskEvents(mark, task.id, stopped.undo, { operation: "undo_change" });
+    assert.equal((await sql<{ ended_at: Date | null }>("select ended_at from crm.task_series where id = $1", [child.id]))[0].ended_at, null, "undoing the stop restarts the later part too");
+  });
+
+  it("never starts a later part of a deleted series", async () => {
+    const task = (await createRepeatingTask(mark, { title: "Split deleted", dueDate: "2029-07-03", ownerId: priya.userId }, { every: "week" })).body.task;
+    await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2029-07-17" }, { title: "Split deleted later" }, "following");
+    await deleteSeries(mark, task.id);
+    await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-07-20T09:00:00Z") });
+    const [child] = await sql<{ current_task_id: string | null }>("select current_task_id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    assert.equal(child.current_task_id, null);
+  });
+
+  it("doesn't make your reopened task the open one past an occurrence you can't see", async () => {
+    const olly = await join(await createUser("olly11@series.test", "Olly Vale"), "member");
+    const first = (await createRepeatingTask(mark, { title: "Hidden middle", dueDate: "2029-08-06", ownerId: priya.userId }, { every: "week" })).body.task;
+    await completeTask(priya, first.id);
+    const second = (await occurrences(first.seriesId!)).find((row) => !row.completed)!;
+    await updateOccurrence(mark, { taskId: second.id }, { ownerId: olly.userId }, "this");
+    await sql("delete from crm.task_participants where task_id = $1 and user_id = $2", [second.id, priya.userId]);
+    await assert.rejects(getTask(priya, second.id), /not found/i);
+    await completeTask(olly, second.id);
+    const third = (await occurrences(first.seriesId!)).find((row) => !row.completed)!;
+    assert.equal((await getTask(priya, third.id)).ownerId, priya.userId);
+    await reopenTask(priya, first.id);
+    const series = await seriesRow(first.seriesId!);
+    assert.equal(series.current_task_id, third.id, "the open one stays the open one");
+    const open = await getTask(priya, third.id);
+    assert.deepEqual([open.archivedAt, open.completedAt], [null, null]);
+    const reopened = await getTask(priya, first.id);
+    assert.deepEqual([reopened.completedAt, reopened.seriesId], [null, null]);
   });
 });
 
