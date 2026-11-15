@@ -782,7 +782,7 @@ async function applyTask(
       ),
       ...(taggedAssigner ? { taggedAssigner: true } : {}),
       ...options.auditExtra,
-      ...((options.beforeAudit ? await options.beforeAudit(task) : null) ?? {}),
+      ...((options.beforeAudit ? await options.beforeAudit(task, change.fields) : null) ?? {}),
     },
   );
   taskAlerts(db, actor, before, task, provenance);
@@ -790,7 +790,7 @@ async function applyTask(
   return { task: (await withViewerLinksInDb(db, actor, [settledTask]))[0], changed: true };
 }
 
-export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown>; series?: SeriesRights; beforeAudit?: (task: Task) => Promise<Record<string, unknown> | null> };
+export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown>; series?: SeriesRights; beforeAudit?: (task: Task, fields: string[]) => Promise<Record<string, unknown> | null> };
 
 export async function updateTaskInDb(
   db: Db,

@@ -1103,7 +1103,7 @@ export async function updateOccurrenceInDb(db: Db, actor: Actor, target: Occurre
   const relinks = LINK_FIELDS.some((field) => input[field] !== undefined);
   if ((!touches && !(relinks && (scope === "all" || scope === "following"))) || scope === "this") {
     if (!found.future) {
-      const follows = !scope && LINK_FIELDS.some((field) => input[field] !== undefined);
+      const follows = !scope;
       const saved = (await updateTaskInDb(db, actor, task.id, input, provenance, { series: seriesRights(row), ...(follows ? { beforeAudit: followSeriesLinksOnSave(db, actor, provenance) } : {}) })).task;
       if (input.ownerId !== undefined && actor.type === "user" && row.owner_id && row.owner_id !== (input.ownerId || null) && (await memberOrNull(db, row.workspace_id, row.owner_id))) {
         await addTaskParticipantsInDb(db, actor, task.id, [row.owner_id], provenance, { alert: false });
@@ -1517,23 +1517,28 @@ function seriesLinksOf(row: SeriesRow): SeriesLinks {
   return { companyId: row.company_id, contactId: row.contact_id, opportunityId: row.opportunity_id };
 }
 
-async function syncSeriesLinksInDb(db: Db, actor: Actor, taskId: string, provenance: Provenance) {
-  const task = await readTaskInDb(db, actor, taskId);
-  if (!task?.seriesId || task.completedAt) return null;
+const SERIES_LINK_FIELDS = ["companyId", "contactId", "opportunityId"] as const;
+
+async function syncSeriesLinksInDb(db: Db, actor: Actor, task: Task, changed: string[], provenance: Provenance) {
+  const fields = SERIES_LINK_FIELDS.filter((field) => changed.includes(field));
+  if (!fields.length || !task.seriesId || task.completedAt) return null;
   const row = await lockSeries(db, task.seriesId);
   if (!row || row.current_task_id !== task.id || stopped(row) || !ownsSeries(actor, row)) return null;
-  if (row.company_id === task.companyId && row.contact_id === task.contactId && row.opportunity_id === task.opportunityId) return null;
-  await db.query("update crm.task_series set company_id = $2, contact_id = $3, opportunity_id = $4 where id = $1", [row.id, task.companyId, task.contactId, task.opportunityId]);
-  const after = await readSeries(db, row.id);
-  await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, after, { scope: "all" }));
-  return { seriesLinks: { seriesId: row.id, before: seriesLinksOf(row), after: { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId } } };
+  const before = seriesLinksOf(row);
+  const after: SeriesLinks = { ...before };
+  for (const field of fields) after[field] = task[field] ?? null;
+  if (SERIES_LINK_FIELDS.every((field) => before[field] === after[field])) return null;
+  await db.query("update crm.task_series set company_id = $2, contact_id = $3, opportunity_id = $4 where id = $1", [row.id, after.companyId, after.contactId, after.opportunityId]);
+  const changedRow = await readSeries(db, row.id);
+  await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, changedRow, { scope: "all", followsChange: true }));
+  return { seriesLinks: { seriesId: row.id, before, after } };
 }
 
 export function followSeriesLinksOnSave(db: Db, actor: Actor, provenance: Provenance) {
-  return (task: Task) => syncSeriesLinksInDb(db, actor, task.id, provenance);
+  return (task: Task, changed: string[]) => syncSeriesLinksInDb(db, actor, task, changed, provenance);
 }
 
-export async function restoreSeriesLinksInDb(db: Db, actor: Actor, record: Record<string, unknown>, provenance: Provenance) {
+export async function restoreSeriesLinksInDb(db: Db, actor: Actor, record: Record<string, unknown>) {
   const seriesId = typeof record.seriesId === "string" && isUuid(record.seriesId) ? record.seriesId : null;
   const before = record.before as Partial<SeriesLinks> | undefined;
   const after = record.after as Partial<SeriesLinks> | undefined;
@@ -1545,8 +1550,6 @@ export async function restoreSeriesLinksInDb(db: Db, actor: Actor, record: Recor
   if (!same) return;
   const back = await linksStillThere(db, row.workspace_id, before);
   await db.query("update crm.task_series set company_id = $2, contact_id = $3, opportunity_id = $4 where id = $1", [row.id, back.companyId, back.contactId, back.opportunityId]);
-  const changed = await readSeries(db, row.id);
-  if (row.current_task_id) await recordAudit(db, actor, "task_series.updated", "task", row.current_task_id, provenance, auditSeries(row, changed, { scope: "all" }));
 }
 
 async function linksStillThere(db: Db, workspaceId: string, links: Partial<SeriesLinks>): Promise<SeriesLinks> {

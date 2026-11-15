@@ -476,14 +476,14 @@ as $$
       )
   ),
   series as (
-    select s.id, s.current_task_id, o.occurs_on as open_on
+    select s.id, s.workspace_id, s.current_task_id, o.occurs_on as open_on
     from mine
     join crm.task_series s on s.id = mine.series_id
-    left join crm.tasks o on o.id = s.current_task_id and o.series_id = s.id
+    left join crm.tasks o on o.id = s.current_task_id and o.series_id = s.id and o.workspace_id = s.workspace_id
   )
   select
-    (select p.id from crm.tasks p where p.series_id = series.id and p.occurs_on < series.open_on and p.archived_at is null order by p.occurs_on desc limit 1),
-    (select p.id from crm.tasks p where p.series_id = series.id and p.archived_at is null order by p.occurs_on desc limit 1)
+    (select p.id from crm.tasks p where p.series_id = series.id and p.workspace_id = series.workspace_id and p.occurs_on < series.open_on and p.archived_at is null order by p.occurs_on desc limit 1),
+    (select p.id from crm.tasks p where p.series_id = series.id and p.workspace_id = series.workspace_id and p.archived_at is null order by p.occurs_on desc limit 1)
   from series
 $$;
 
@@ -498,7 +498,7 @@ security definer
 set search_path = ''
 as $$
   with recursive mine as (
-    select s.id
+    select s.id, s.workspace_id
     from crm.task_series s
     where s.id = p_series
       and (
@@ -515,9 +515,9 @@ as $$
       )
   ),
   chain as (
-    select later.id, 1 as depth from crm.task_series later join mine on later.split_from_id = mine.id
+    select later.id, later.workspace_id, 1 as depth from crm.task_series later join mine on later.split_from_id = mine.id and later.workspace_id = mine.workspace_id
     union all
-    select later.id, chain.depth + 1 from crm.task_series later join chain on later.split_from_id = chain.id where chain.depth < 100
+    select later.id, later.workspace_id, chain.depth + 1 from crm.task_series later join chain on later.split_from_id = chain.id and later.workspace_id = chain.workspace_id where chain.depth < 100
   )
   select chain.id from chain
 $$;
@@ -534,7 +534,7 @@ set search_path = ''
 as $$
   select p.id, p.owner_id, p.clickup_list_id
   from crm.task_series s
-  join crm.tasks p on p.series_id = s.split_from_id
+  join crm.tasks p on p.series_id = s.split_from_id and p.workspace_id = s.workspace_id
   where s.id = p_series
     and (
       (

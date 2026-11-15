@@ -1320,6 +1320,73 @@ describe("repeating task review round 14", () => {
   });
 });
 
+describe("repeating task review round 16", () => {
+  const seriesLinks = async (seriesId: string) => (await sql<{ company_id: string | null; contact_id: string | null }>("select company_id, contact_id from crm.task_series where id = $1", [seriesId]))[0];
+
+  it("keeps a This one link change off the series when a later save changes no link", async () => {
+    const { relinkTaskUndoable } = await import("@/lib/crm/task-act");
+    const contact = (await createContact(mark, { firstName: "Kept", lastName: "Here", email: "kept.here@series.test" })).body.contact;
+    const task = await weekly("No link save", "2031-01-07");
+    await updateOccurrence(mark, { taskId: task.id }, { contactId: contact.id }, "this");
+    await sql("update crm.tasks set mail_thread_key = $2 where id = $1", [task.id, `${mark.userId}|thread-r16`]);
+    await relinkTaskUndoable(mark, task.id, { mailThreadKey: null }, { operation: "link_task", source: "web" });
+    assert.deepEqual(await seriesLinks(task.seriesId!), { company_id: companyId, contact_id: null });
+    await updateOccurrence(mark, { taskId: task.id }, { companyId }, undefined);
+    assert.deepEqual(await seriesLinks(task.seriesId!), { company_id: companyId, contact_id: null });
+    assert.equal((await getTask(mark, task.id)).contactId, contact.id);
+  });
+
+  it("follows only the link that changed", async () => {
+    const { relinkTaskUndoable } = await import("@/lib/crm/task-act");
+    const contact = (await createContact(mark, { firstName: "Only", lastName: "This", email: "only.this@series.test" })).body.contact;
+    const other = (await createCompany(mark, { name: "Followed Co", domain: "followed-co.test" })).body.company;
+    const task = await weekly("One field follows", "2031-01-08");
+    await updateOccurrence(mark, { taskId: task.id }, { contactId: contact.id }, "this");
+    await relinkTaskUndoable(mark, task.id, { companyId: other.id }, { operation: "link_task", source: "web" });
+    assert.deepEqual(await seriesLinks(task.seriesId!), { company_id: other.id, contact_id: null });
+  });
+
+  it("lists a followed link change as one undoable change, and undoes all of it", async () => {
+    const { relinkTaskUndoable } = await import("@/lib/crm/task-act");
+    const { listRecentChanges } = await import("@/lib/crm/undo");
+    const contact = (await createContact(mark, { firstName: "One", lastName: "Change", email: "one.change@series.test" })).body.contact;
+    const task = await weekly("One change", "2031-01-09");
+    await relinkTaskUndoable(mark, task.id, { contactId: contact.id }, { operation: "link_task", source: "web" });
+    const recent = (await listRecentChanges(mark, { entityType: "task", limit: 10 })).filter((change) => change.entityId === task.id);
+    const newest = recent[0];
+    assert.equal(recent.filter((change) => change.at === newest.at).length, 1);
+    assert.deepEqual([newest.type, newest.canUndo], ["task.updated", true]);
+    await undoAuditEvent(mark, newest.id, { operation: "undo_change" });
+    assert.equal((await getTask(mark, task.id)).contactId, null);
+    assert.deepEqual(await seriesLinks(task.seriesId!), { company_id: companyId, contact_id: null });
+  });
+
+  it("undoes both halves of an All change from the newest change", async () => {
+    const { listRecentChanges } = await import("@/lib/crm/undo");
+    const task = await weekly("Both halves", "2031-01-10");
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Both halves renamed" }, "all");
+    const recent = (await listRecentChanges(mark, { entityType: "task", limit: 10 })).filter((change) => change.entityId === task.id);
+    assert.equal(recent.filter((change) => change.at === recent[0].at).length, 1);
+    await undoAuditEvent(mark, recent[0].id, { operation: "undo_change" });
+    assert.equal((await getTask(mark, task.id)).title, "Both halves");
+    assert.equal((await seriesRow(task.seriesId!)).title, "Both halves");
+  });
+
+  it("never reads a task from another workspace for a later part", async () => {
+    const { queryAsUser } = await import("./helpers");
+    const task = (await createRepeatingTask(mark, { title: "Moved previous", dueDate: "2031-02-04", ownerId: priya.userId }, { every: "week" })).body.task;
+    await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2031-02-18" }, { title: "Moved previous later" }, "following");
+    const [later] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    assert.equal((await queryAsUser(priya.userId, "select id from crm.series_split_previous($1)", [later.id])).length, 1);
+    const elsewhere = await createWorkspace(mark, { name: "Elsewhere 16" });
+    await sql("update crm.tasks set workspace_id = $2, owner_id = $3 where id = $1", [task.id, elsewhere.id, mark.userId]);
+    assert.equal((await queryAsUser(priya.userId, "select id from crm.series_split_previous($1)", [later.id])).length, 0);
+    assert.equal((await queryAsUser(mark.userId, "select id from crm.series_later_parts($1)", [task.seriesId])).length, 1);
+    await sql("update crm.task_series set workspace_id = $2, owner_id = $3 where id = $1", [later.id, elsewhere.id, mark.userId]);
+    assert.equal((await queryAsUser(mark.userId, "select id from crm.series_later_parts($1)", [task.seriesId])).length, 0);
+  });
+});
+
 describe("repeating tasks and docs", () => {
   it("carries the open one's doc links to the next one", async () => {
     const doc = (await createDoc(mark, { title: "Weekly agenda", content: "Points to cover." })).id;
