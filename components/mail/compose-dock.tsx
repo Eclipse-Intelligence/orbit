@@ -284,6 +284,10 @@ const ComposeCard = memo(function ComposeCard({
   );
 });
 
+function showUndoHint(button: HTMLElement, action: Toast["action"]) {
+  button.title = action?.label === "Undo" && (action.shortcut?.() ?? true) ? "Undo (Z)" : "";
+}
+
 export function ComposerProvider({ children }: { children: ReactNode }) {
   const [cards, setCards] = useState<Card[]>([]);
   const [accounts, setAccounts] = useState<ComposeAccount[] | null>(null);
@@ -675,9 +679,9 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
                     toast.action!.run();
                     dismiss(toast.id);
                   }}
-                  onPointerEnter={(event) => {
-                    event.currentTarget.title = toast.action?.label === "Undo" && (toast.action.shortcut?.() ?? true) ? "Undo (Z)" : "";
-                  }}
+                  onPointerEnter={(event) => showUndoHint(event.currentTarget, toast.action)}
+                  onPointerMove={(event) => showUndoHint(event.currentTarget, toast.action)}
+                  onFocus={(event) => showUndoHint(event.currentTarget, toast.action)}
                 >
                   {toast.action.label}
                 </Button>
