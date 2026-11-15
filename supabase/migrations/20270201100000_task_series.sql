@@ -490,6 +490,41 @@ $$;
 
 revoke all on function crm.series_reopen_neighbours(uuid) from public;
 grant execute on function crm.series_reopen_neighbours(uuid) to authenticated, crm_agent;
+
+create or replace function crm.series_later_parts(p_series uuid)
+returns table (id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with recursive mine as (
+    select s.id
+    from crm.task_series s
+    where s.id = p_series
+      and (
+        (
+          current_setting('role') = 'authenticated'
+          and s.workspace_id in (select private.user_workspace_ids())
+          and (s.owner_id = (select private.session_user_id()) or s.created_by_user_id = (select private.session_user_id()))
+        )
+        or (
+          current_setting('role') = 'crm_agent'
+          and s.workspace_id = (select private.request_workspace_id())
+          and s.created_by_agent_id = nullif(current_setting('app.agent_id', true), '')::uuid
+        )
+      )
+  ),
+  chain as (
+    select later.id, 1 as depth from crm.task_series later join mine on later.split_from_id = mine.id
+    union all
+    select later.id, chain.depth + 1 from crm.task_series later join chain on later.split_from_id = chain.id where chain.depth < 100
+  )
+  select chain.id from chain
+$$;
+
+revoke all on function crm.series_later_parts(uuid) from public;
+grant execute on function crm.series_later_parts(uuid) to authenticated, crm_agent;
 grant execute on function private.series_due_to_roll(timestamptz, integer) to crm_app;
 
 create or replace function private.task_series_follow_move(p_source uuid, p_target uuid)

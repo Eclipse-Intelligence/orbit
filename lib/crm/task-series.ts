@@ -1113,12 +1113,7 @@ export async function updateOccurrenceInDb(db: Db, actor: Actor, target: Occurre
 
 async function stopLaterParts(db: Db, actor: Actor, seriesId: string) {
   const parts = await db.query<SeriesRow>(
-    `with recursive chain as (
-       select id from crm.task_series where split_from_id = $1
-       union
-       select s.id from crm.task_series s join chain c on s.split_from_id = c.id
-     )
-     ${SERIES_SQL} where s.id in (select id from chain) and s.current_task_id is null and s.ended_at is null and s.archived_at is null for update`,
+    `${SERIES_SQL} where s.id in (select id from crm.series_later_parts($1)) and s.current_task_id is null and s.ended_at is null and s.archived_at is null for update`,
     [seriesId],
   );
   const mine = parts.rows.filter((part) => ownsSeries(actor, part)).map((part) => part.id);

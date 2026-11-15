@@ -1131,6 +1131,33 @@ describe("repeating task review round 10", () => {
     assert.equal((await sql<{ ended_at: Date | null }>("select ended_at from crm.task_series where id = $1", [child.id]))[0].ended_at, null, "undoing the stop restarts the later part too");
   });
 
+  it("stops your own later part behind a colleague's middle part", async () => {
+    const task = await weekly("Chain first", "2029-09-03");
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: "2029-09-17" }, { title: "Chain middle" }, "following");
+    const [middle] = await sql<{ id: string }>("select id from crm.task_series where split_from_id = $1", [task.seriesId]);
+    await sql("update crm.task_series set owner_id = $2, created_by_user_id = $2 where id = $1", [middle.id, priya.userId]);
+    const [later] = await sql<{ id: string }>(
+      `insert into crm.task_series (workspace_id, owner_id, created_by_user_id, title, starts_on, rule, ends, split_from_id)
+       select workspace_id, $2, $2, 'Chain later', starts_on + 14, rule, ends, id from crm.task_series where id = $1 returning id`,
+      [middle.id, mark.userId],
+    );
+    const { queryAsUser } = await import("./helpers");
+    assert.equal((await queryAsUser(mark.userId, "select 1 from crm.task_series where id = $1", [middle.id])).length, 0, "Mark can't see Priya's middle part");
+    assert.deepEqual((await queryAsUser(priya.userId, "select id from crm.series_later_parts($1)", [task.seriesId])).length, 0, "only someone who can change the series gets its later parts");
+    const stopped = (await setTaskRepeat(mark, task.id, null)).body;
+    const ended = async (id: string) => (await sql<{ ended_at: Date | null; current_task_id: string | null }>("select ended_at, current_task_id from crm.task_series where id = $1", [id]))[0];
+    assert.ok((await ended(later.id)).ended_at, "Mark's later part stops with his first part");
+    assert.equal((await ended(middle.id)).ended_at, null, "Priya's middle part is hers");
+    await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-09-04T09:00:00Z") });
+    const started = (await ended(middle.id)).current_task_id;
+    assert.ok(started, "Priya's part starts once Mark's first part has ended");
+    await setTaskRepeat(priya, started!, null);
+    await rollDueSeries({ deadline: Date.now() + 10_000, now: Date.parse("2029-10-02T09:00:00Z") });
+    assert.equal((await ended(later.id)).current_task_id, null, "Mark's later part never starts");
+    await undoTaskEvents(mark, task.id, stopped.undo, { operation: "undo_change" });
+    assert.equal((await ended(later.id)).ended_at, null, "undoing the stop restarts it");
+  });
+
   it("never starts a later part of a deleted series", async () => {
     const task = (await createRepeatingTask(mark, { title: "Split deleted", dueDate: "2029-07-03", ownerId: priya.userId }, { every: "week" })).body.task;
     await updateOccurrence(priya, { seriesId: task.seriesId!, occursOn: "2029-07-17" }, { title: "Split deleted later" }, "following");
