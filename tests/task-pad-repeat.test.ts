@@ -94,6 +94,23 @@ const NEGATIVES = [
   "Pay rent on the first every month",
   "Gym every Monday and Friday at 6pm, and Sunday",
   "Call Jane every week on the phone in March",
+  "Pay rent every month on the 5",
+  "Pay rent every month on day 5",
+  "Call every day next week",
+  "Call daily in 2 weeks",
+  "Plan Saturday every Friday",
+  "Call every Monday on Tuesday",
+  "Gym every Monday then Wednesday",
+  "Gym every weekday and Saturday",
+  "Call Bob Wednesday every Monday",
+  "Call Bob every day with Sam on Friday",
+  "Send report tomorrow every 20 Nov",
+  "Pay rent every month on payday",
+  "Call every day until 20 Dec, 5 times",
+  "Report each and every day",
+  "Stretch 3x daily",
+  "Switch to paying monthly",
+  "Move Acme to billing monthly",
 ];
 
 describe("typed repeats", () => {
@@ -163,7 +180,7 @@ describe("typed repeats", () => {
   });
 
   it("reads a word ordinal as the day of the month and never falls back to today", () => {
-    for (const typed of ["Pay rent every month on the first", "Pay rent monthly on the first", "Pay rent the first of every month", "Pay rent on the first of the month"]) {
+    for (const typed of ["Pay rent every month on the first", "Pay rent monthly on the first", "Pay rent the first of every month", "Pay rent on the first of every month"]) {
       const read = parse(typed);
       assert.equal(read.title, "Pay rent", typed);
       assert.equal(read.due, "2026-12-01", typed);
@@ -187,6 +204,28 @@ describe("typed repeats", () => {
     const monthly = parse("Monthly: send invoices tomorrow");
     assert.deepEqual({ title: monthly.title, due: monthly.due, unsure: monthly.unsure, repeat: monthly.repeat }, { title: "Monthly: send invoices", due: "2026-11-15", unsure: false, repeat: undefined });
     assert.ok(!parse("Weekly: team update Monday 10am").repeat);
+  });
+
+  it("lights ordinary titles that only mention a date word away from the repeat", () => {
+    const cases: [string, string][] = [
+      ["First call every Monday", "First call"],
+      ["Pay the first instalment every month", "Pay the first instalment"],
+      ["Send the second draft every Friday", "Send the second draft"],
+      ["Review first drafts every Friday at 3pm", "Review first drafts"],
+      ["Chase last invoice weekly", "Chase last invoice"],
+      ["Ask if Sam may join every Monday", "Ask if Sam may join"],
+      ["Send the May report every month", "Send the May report"],
+      ["Review pipeline every Monday and send notes", "Review pipeline and send notes"],
+      ["Call Bob every Monday at 10am and email Sam", "Call Bob and email Sam"],
+      ["Stand-up every day, then coffee", "Stand-up, then coffee"],
+      ["Call Jane every Monday, urgent", "Call Jane, urgent"],
+    ];
+    for (const [typed, title] of cases) {
+      const read = parse(typed);
+      assert.equal(read.unsure, false, typed);
+      assert.equal(read.title, title, typed);
+      assert.ok(read.repeat, typed);
+    }
   });
 
   it("Keep as text keeps the repeat words and saves no repeat", () => {
@@ -276,6 +315,26 @@ describe("AI read repeats", () => {
     assert.deepEqual((await ask(phone, { ...base, phrases: [], due: "2026-11-14", repeat: { phrase: "every week", every: "week" } }))?.repeat?.rule, { freq: "weekly", interval: 1, weekdays: ["sa"] });
     assert.deepEqual(await ask("Gym every 2 weeks", { ...base, phrases: [], due: "2026-11-19", repeat: { phrase: "every 2 weeks", every: "week", interval: 2, days: ["th"] } }), nothing("Gym every 2 weeks"), "an invented Thursday");
     assert.deepEqual(await ask("Gym monthly", { ...base, phrases: [], due: "2026-11-27", repeat: { phrase: "monthly", every: "month", monthWeek: { n: -1, weekday: "fr" } } }), nothing("Gym monthly"), "an invented last Friday");
+  });
+
+  it("rejects an AI repeat whose words hold more dates than it encodes", async () => {
+    const reject = async (text: string, due: string, repeat: PadAiAnswer["repeat"], phrases: string[] = []) => assert.deepEqual(await ask(text, { ...base, phrases, due, repeat }), nothing(text), text);
+    await reject("Pay rent every month on the first and third Monday", "2026-12-07", { phrase: "every month on the first and third Monday", every: "month", monthWeek: { n: 1, weekday: "mo" } });
+    await reject("Pay rent every month on the 1st and 15th", "2026-12-01", { phrase: "every month on the 1st and 15th", every: "month", monthDay: 1 });
+    await reject("Report every year on 1 Jan and 1 Jul", "2027-01-01", { phrase: "every year on 1 Jan and 1 Jul", every: "year" });
+    await reject("Call every Monday and the first Friday", "2026-11-16", { phrase: "every Monday and the first Friday", every: "week", days: ["mo", "fr"] });
+    await reject("Call every other Monday and every Friday", "2026-11-16", { phrase: "every other Monday and every Friday", every: "week", interval: 2, days: ["mo", "fr"] });
+    await reject("Pay rent every month on the 5", "2026-11-14", { phrase: "every month", every: "month" });
+    await reject("Pay rent every month on 1", "2026-11-14", { phrase: "every month", every: "month" });
+    await reject("Gym every week on day 2", "2026-11-14", { phrase: "every week", every: "week" });
+    await reject("Call every day next week", "2026-11-16", { phrase: "every day", every: "day" }, ["next week"]);
+    await reject("Switch to paying monthly", "2026-11-14", { phrase: "monthly", every: "month" });
+    for (const [text, due, repeat] of [
+      ["Review Monday report every Friday", "2026-11-20", { phrase: "every Friday", every: "week", days: ["fr"] }],
+      ["Call Jan every Monday", "2026-11-16", { phrase: "every Monday", every: "week", days: ["mo"] }],
+    ] as const) {
+      assert.ok((await ask(text, { ...base, phrases: [], due, repeat: { ...repeat, days: [...repeat.days] } }))?.repeat, text);
+    }
   });
 
   it("takes only the first occurrence from now and keeps a stated end", async () => {
