@@ -28,6 +28,7 @@ import {
   padNeedsConfirm,
   padRelease,
   padDueHasTime,
+  padRepeatDue,
   padSaveIds,
   ownerSetsTime,
   dayOnlyHint,
@@ -42,6 +43,9 @@ import {
   type KeptReading,
   type PadMark,
 } from "@/lib/task-pad";
+import { RepeatIcon, RepeatPicker, type RepeatDraft } from "@/components/crm/task-repeat";
+import { dayKey } from "@/lib/crm/working-days";
+import { endWords, repeatInputOf, repeatPhrase } from "@/lib/task-repeat";
 import { DocPickHeader, DocPickNotice, DocPickOptions, DocPickPopover, useDocPicks } from "@/components/crm/task-doc-picker";
 import type { DocPick } from "@/lib/docs/client-types";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
@@ -524,6 +528,7 @@ export default function TaskPad({
   const [due, setDue] = useState<Override<string | null>>(unset);
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
   const [chosenDuration, setDuration] = useState<number | null>(null);
+  const [repeatPick, setRepeatPick] = useState<Override<RepeatDraft | null>>(unset);
   const [askingTime, setAskingTime] = useState(false);
   const [addedTime, setAddedTime] = useState<{ date: string; time: string } | null>(null);
   const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
@@ -627,7 +632,10 @@ export default function TaskPad({
     const chosenReminder = chosenDue ? (reminder.set ? reminder.value : autoReminder) : null;
     const finalDue = forTeammate && chosenDue ? chosenDue.slice(0, 10) : chosenDue;
     const finalReminder = forTeammate ? null : chosenReminder;
+    const typedRepeat = confirmed.repeat ?? null;
     return {
+      typedRepeat,
+      repeat: repeatPick.set ? repeatPick.value : typedRepeat,
       title: confirmed.title,
       dateMarks: confirmed.marks,
       phrase: confirmed.phrase,
@@ -864,6 +872,7 @@ export default function TaskPad({
     setDue(unset());
     setReminder(unset());
     setDuration(null);
+    setRepeatPick(unset());
     setAskingTime(false);
     setAddedTime(null);
     setCompany(startCompany());
@@ -927,9 +936,11 @@ export default function TaskPad({
       focusAt();
       return;
     }
+    const savingDue = saving.repeat ? (padRepeatDue(saving.repeat, saving.finalDue) ?? saving.finalDue) : saving.finalDue;
     const result = await addPadTaskAction({
       title: saving.title,
-      dueAt: saving.finalDue && padDueHasTime(saving.finalDue) ? localInstant(saving.finalDue) : saving.finalDue,
+      dueAt: savingDue && padDueHasTime(savingDue) ? localInstant(savingDue) : savingDue,
+      ...(saving.repeat ? { repeat: repeatInputOf(saving.repeat.rule, saving.repeat.ends) } : {}),
       remindMinutes: saving.finalReminder,
       durationMinutes: saving.duration,
       ...padSaveIds(links, { fixedCompany, contact, company, opportunity }),
@@ -1069,21 +1080,55 @@ export default function TaskPad({
     <SearchChip key="person" kind="contact" icon={UserIcon} label="Person" value={finalContact} companyId={anchor?.id ?? null} allow={allowed} variant={variant} onPick={linkContact} onClosed={() => focusAt()} />
   );
 
+  const wallToday = londonParts(new Date());
+  const repeatDue = read.repeat ? (padRepeatDue(read.repeat, finalDue) ?? finalDue) : finalDue;
+  const repeatAnchor = repeatDue ? repeatDue.slice(0, 10) : dayKey(wallToday.year, wallToday.month, wallToday.day);
+  const repeatAt = repeatDue && padDueHasTime(repeatDue) ? repeatDue.slice(11, 16) : null;
+  const repeatPattern = read.repeat ? { startsOn: repeatAnchor, at: repeatAt, rule: read.repeat.rule, ends: read.repeat.ends } : null;
+  const repeatWords = repeatPattern ? `${repeatPhrase(repeatPattern)}${"never" in repeatPattern.ends ? "" : `, ${endWords(repeatPattern)}`}` : null;
+
+  function pickRepeat(value: RepeatDraft | null) {
+    if (!value) {
+      setRepeatPick(unset());
+      if (read.typedRepeat) keepAsText();
+      focusAt();
+      return;
+    }
+    setRepeatPick({ set: true, value });
+  }
+
+  const repeatTrigger = (
+    <button type="button" aria-label={repeatWords ? `${repeatWords}. Change` : "Repeat"} className={repeatWords ? "inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/60" : chipClass("empty", variant)}>
+      <RepeatIcon aria-hidden className={cn(repeatWords && "text-(--tag-purple-text)")} />
+      {repeatWords && <span className="truncate">{repeatWords}</span>}
+    </button>
+  );
+
   const chips: ReactNode[] = [
     <DueDatePicker
       key="due"
       id={`${id}-due`}
-      aria-label={finalDue ? `Due ${padDueHasTime(finalDue) ? formatDateTimeLabel(finalDue) : formatDateLabel(finalDue)}. Change` : "Due date"}
+      aria-label={repeatDue ? `Due ${padDueHasTime(repeatDue) ? formatDateTimeLabel(repeatDue) : formatDateLabel(repeatDue)}. Change` : "Due date"}
       placeholder="Due"
-      value={finalDue ?? ""}
+      value={repeatDue ?? ""}
       onChange={(value) => setDue({ set: true, value: value || null })}
       className={cn(
-        chipClass(finalDue ? "on" : "empty", variant),
+        chipClass(repeatDue ? "on" : "empty", variant),
         "w-auto border-0 bg-transparent",
-        finalDue && "bg-white/[0.07]",
+        repeatDue && "bg-white/[0.07]",
         "[&>span]:text-inherit",
       )}
     />,
+    repeatWords ? (
+      <span key="repeat" className={cn(chipClass("on", variant), "max-w-[22rem] cursor-default gap-1 pr-1 max-md:pr-1 [@media(pointer:coarse)]:mr-1.5 md:[@media(pointer:coarse)]:my-1.5")}>
+        <RepeatPicker anchor={repeatAnchor} at={repeatAt} value={read.repeat} onChange={pickRepeat} onClosed={() => focusAt()} trigger={repeatTrigger} />
+        <button type="button" aria-label="Don't repeat" onClick={() => pickRepeat(null)} className="hit text-subtle hover:text-foreground flex size-5 shrink-0 [@media(pointer:coarse)]:size-6 cursor-pointer items-center justify-center rounded-full outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring/60 [@media(pointer:coarse)]:ml-3">
+          <XIcon aria-hidden />
+        </button>
+      </span>
+    ) : (
+      <RepeatPicker key="repeat" anchor={repeatAnchor} at={repeatAt} value={null} onChange={pickRepeat} onClosed={() => focusAt()} trigger={repeatTrigger} />
+    ),
     phrase && !due.set ? (
       <button
         key="keep"
@@ -1220,7 +1265,7 @@ export default function TaskPad({
           </div>
         </div>
         <p role="status" className="sr-only">
-          {phrase && !due.set ? `Due date read from “${phrase}”.` : justKept ? "Kept as text. No date." : ""}
+          {phrase && !due.set ? (read.typedRepeat ? `Repeat read from “${phrase}”.` : `Due date read from “${phrase}”.`) : justKept ? "Kept as text. No date." : ""}
         </p>
         <textarea
           id={`${id}-text`}
