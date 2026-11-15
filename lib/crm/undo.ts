@@ -23,7 +23,7 @@ import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { linkableDocIdsInDb } from "@/lib/crm/task-docs";
 import { archiveTaskInDb, canChangeTask, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
-import { restoreOccurrenceInDb, restoreSeriesInDb, syncSeriesLinksInDb } from "@/lib/crm/task-series";
+import { restoreOccurrenceInDb, restoreSeriesInDb, restoreSeriesLinksInDb } from "@/lib/crm/task-series";
 import type { SeriesRights } from "@/lib/crm/task-rights";
 
 type TaskValues = { ownerId: string | null; createdByUserId: string | null; createdByAgentId?: string | null; seriesId?: string | null; completedAt?: string | null };
@@ -398,6 +398,7 @@ function restoreFields(
   undoing: string | null = null,
   repeat: Record<string, unknown> | null = null,
   series?: SeriesRights,
+  seriesLinks: Record<string, unknown> | null = null,
 ) {
   const plain = fields.filter((field) => !RELATIONSHIP_FIELDS.has(field) && field !== "completedAt");
   const write = Object.fromEntries(plain.map((field) => [field, before[field] ?? null]));
@@ -411,7 +412,7 @@ function restoreFields(
       const completedAt = fields.includes("completedAt") ? ((before.completedAt as string | null) ?? null) : undefined;
       await restoreTaskInDb(db, actor, id, write as TaskWrite, completedAt, provenance, undoing, series);
       if (repeat) await restoreOccurrenceInDb(db, actor, id, repeat);
-      if (fields.some((field) => field === "companyId" || field === "contactId" || field === "opportunityId")) await syncSeriesLinksInDb(db, actor, id, provenance);
+      if (seriesLinks) await restoreSeriesLinksInDb(db, actor, seriesLinks, provenance);
     }
     if ((entity === "company" || entity === "contact") && fields.some((field) => RELATIONSHIP_FIELDS.has(field))) {
       const label = before.relationshipOverride;
@@ -602,6 +603,7 @@ async function describeEvent(
       changes?.taggedAssigner === true ? event.id : null,
       updateEntity === "task" ? record(changes?.repeat) : null,
       series,
+      updateEntity === "task" ? record(changes?.seriesLinks) : null,
     );
   } else if (updateEntity) {
     return refuse(`Changed ${noun} ${entityName}`, "This change can't be undone.");

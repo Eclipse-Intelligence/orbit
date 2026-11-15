@@ -5,6 +5,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import { detectedIds, detectTaskRecordsInDb, folded, memberNames, mentionsName, MIN_NAME, quotesFoldedSql, TEXT_LIMIT, type DetectedLinkIds, type LinkedRecord } from "@/lib/crm/task-detect";
 import { straightQuotes } from "@/lib/task-pad";
 import { canChangeTask, updateTaskInDb } from "@/lib/crm/tasks";
+import { followSeriesLinksOnSave } from "@/lib/crm/task-series";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 
 export type LinkCandidate = {
@@ -116,7 +117,7 @@ export async function linkTask(actor: Actor, taskId: string, link: { contactId?:
       throw new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
     }
     if (row.linked) throw new CrmError("conflict", "This task is already linked.", 409);
-    const updated = await updateTaskInDb(db, actor, taskId, contactId ? { contactId } : { companyId }, provenance);
+    const updated = await updateTaskInDb(db, actor, taskId, contactId ? { contactId } : { companyId }, provenance, { beforeAudit: followSeriesLinksOnSave(db, actor, provenance) });
     return updated.task;
   });
 }

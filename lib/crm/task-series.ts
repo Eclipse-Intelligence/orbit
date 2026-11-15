@@ -1103,15 +1103,12 @@ export async function updateOccurrenceInDb(db: Db, actor: Actor, target: Occurre
   const relinks = LINK_FIELDS.some((field) => input[field] !== undefined);
   if ((!touches && !(relinks && (scope === "all" || scope === "following"))) || scope === "this") {
     if (!found.future) {
-      const saved = (await updateTaskInDb(db, actor, task.id, input, provenance, { series: seriesRights(row) })).task;
+      const follows = !scope && LINK_FIELDS.some((field) => input[field] !== undefined);
+      const saved = (await updateTaskInDb(db, actor, task.id, input, provenance, { series: seriesRights(row), ...(follows ? { beforeAudit: followSeriesLinksOnSave(db, actor, provenance) } : {}) })).task;
       if (input.ownerId !== undefined && actor.type === "user" && row.owner_id && row.owner_id !== (input.ownerId || null) && (await memberOrNull(db, row.workspace_id, row.owner_id))) {
         await addTaskParticipantsInDb(db, actor, task.id, [row.owner_id], provenance, { alert: false });
       }
-      if (!scope && LINK_FIELDS.some((field) => input[field] !== undefined)) {
-        await syncSeriesLinksInDb(db, actor, task.id, provenance);
-        return (await readTaskInDb(db, actor, task.id))!;
-      }
-      return saved;
+      return follows ? (await readTaskInDb(db, actor, task.id))! : saved;
     }
     assertSeriesChange(actor, row);
     await writeChangeRow(db, actor, row, task, found.occursOn!, input, provenance);
@@ -1514,20 +1511,54 @@ export async function updateTaskFromApi(
   );
 }
 
-export async function syncSeriesLinksInDb(db: Db, actor: Actor, taskId: string, provenance: Provenance) {
+type SeriesLinks = { companyId: string | null; contactId: string | null; opportunityId: string | null };
+
+function seriesLinksOf(row: SeriesRow): SeriesLinks {
+  return { companyId: row.company_id, contactId: row.contact_id, opportunityId: row.opportunity_id };
+}
+
+async function syncSeriesLinksInDb(db: Db, actor: Actor, taskId: string, provenance: Provenance) {
   const task = await readTaskInDb(db, actor, taskId);
-  if (!task?.seriesId || task.completedAt) return;
+  if (!task?.seriesId || task.completedAt) return null;
   const row = await lockSeries(db, task.seriesId);
-  if (!row || row.current_task_id !== task.id || stopped(row) || !ownsSeries(actor, row)) return;
-  if (row.company_id === task.companyId && row.contact_id === task.contactId && row.opportunity_id === task.opportunityId) return;
+  if (!row || row.current_task_id !== task.id || stopped(row) || !ownsSeries(actor, row)) return null;
+  if (row.company_id === task.companyId && row.contact_id === task.contactId && row.opportunity_id === task.opportunityId) return null;
   await db.query("update crm.task_series set company_id = $2, contact_id = $3, opportunity_id = $4 where id = $1", [row.id, task.companyId, task.contactId, task.opportunityId]);
   const after = await readSeries(db, row.id);
   await recordAudit(db, actor, "task_series.updated", "task", task.id, provenance, auditSeries(row, after, { scope: "all" }));
+  return { seriesLinks: { seriesId: row.id, before: seriesLinksOf(row), after: { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId } } };
 }
 
-export async function followSeriesLinks(actor: Actor, taskId: string, provenance: Provenance = { operation: "link_task" }) {
-  if (!isUuid(taskId)) return;
-  await withActor(actor, (db) => syncSeriesLinksInDb(db, actor, taskId, provenance));
+export function followSeriesLinksOnSave(db: Db, actor: Actor, provenance: Provenance) {
+  return (task: Task) => syncSeriesLinksInDb(db, actor, task.id, provenance);
+}
+
+export async function restoreSeriesLinksInDb(db: Db, actor: Actor, record: Record<string, unknown>, provenance: Provenance) {
+  const seriesId = typeof record.seriesId === "string" && isUuid(record.seriesId) ? record.seriesId : null;
+  const before = record.before as Partial<SeriesLinks> | undefined;
+  const after = record.after as Partial<SeriesLinks> | undefined;
+  if (!seriesId || !before || !after) return;
+  const row = await lockSeries(db, seriesId);
+  if (!row || stopped(row) || !ownsSeries(actor, row)) return;
+  const now = seriesLinksOf(row);
+  const same = (["companyId", "contactId", "opportunityId"] as const).every((field) => (now[field] ?? null) === (after[field] ?? null));
+  if (!same) return;
+  const back = await linksStillThere(db, row.workspace_id, before);
+  await db.query("update crm.task_series set company_id = $2, contact_id = $3, opportunity_id = $4 where id = $1", [row.id, back.companyId, back.contactId, back.opportunityId]);
+  const changed = await readSeries(db, row.id);
+  if (row.current_task_id) await recordAudit(db, actor, "task_series.updated", "task", row.current_task_id, provenance, auditSeries(row, changed, { scope: "all" }));
+}
+
+async function linksStillThere(db: Db, workspaceId: string, links: Partial<SeriesLinks>): Promise<SeriesLinks> {
+  const found = await db.query<{ company_id: string | null; contact_id: string | null; opportunity_id: string | null }>(
+    `select
+       (select id from crm.companies where id = $2 and workspace_id = $1 and archived_at is null) as company_id,
+       (select id from crm.contacts where id = $3 and workspace_id = $1 and archived_at is null) as contact_id,
+       (select id from crm.opportunities where id = $4 and workspace_id = $1 and archived_at is null) as opportunity_id`,
+    [workspaceId, links.companyId ?? null, links.contactId ?? null, links.opportunityId ?? null],
+  );
+  const row = found.rows[0];
+  return { companyId: row?.company_id ?? null, contactId: row?.contact_id ?? null, opportunityId: row?.opportunity_id ?? null };
 }
 
 export async function readSeriesTitle(actor: Actor, seriesId: string) {

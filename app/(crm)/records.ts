@@ -19,7 +19,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
-import { followSeriesLinks, REPEAT_SCOPES, updateOccurrence, type RepeatScope } from "@/lib/crm/task-series";
+import { REPEAT_SCOPES, updateOccurrence, type RepeatScope } from "@/lib/crm/task-series";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { actorForTask, TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 import { missingOrFailed } from "@/lib/task-done";
@@ -406,7 +406,6 @@ export async function linkTaskAction(id: string, link: { contactId?: string; com
   if (!isUuid(id)) return { error: "Couldn't link the task. Try again." };
   try {
     await linkTask(user, id, { contactId: link?.contactId, companyId: link?.companyId }, { operation: "link_task", source: "web" });
-    await followSeriesLinks(user, id, { operation: "link_task", source: "web" });
     pushLater(user, id);
     refresh();
     return { ok: true };

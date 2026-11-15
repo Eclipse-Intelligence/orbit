@@ -12,7 +12,7 @@ import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import { undoAuditEvent } from "@/lib/crm/undo";
-import { syncSeriesLinksInDb } from "@/lib/crm/task-series";
+import { followSeriesLinksOnSave } from "@/lib/crm/task-series";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
 import type { LookupState } from "@/lib/enrichment/contacts";
 
@@ -288,14 +288,13 @@ export async function relinkTaskUndoable(actor: UserActor, taskId: string, chang
     const task = await lockedTask(db, actor, taskId);
     const same = (Object.keys(write) as (keyof typeof write)[]).every((key) => write[key] === undefined || write[key] === (task[key]?.toLowerCase() ?? null));
     if (same) return { task, undo: null };
-    const updated = await updateTaskInDb(db, actor, taskId, write, provenance);
+    const updated = await updateTaskInDb(db, actor, taskId, write, provenance, { beforeAudit: followSeriesLinksOnSave(db, actor, provenance) });
     const event = await db.query<{ id: string }>(
       `select id from crm.audit_events
        where workspace_id = $1 and entity_type = 'task' and entity_id = $2 and event_type = 'task.updated' and created_at = now()
        order by id desc limit 1`,
       [actor.workspaceId, taskId],
     );
-    await syncSeriesLinksInDb(db, actor, taskId, provenance);
     return { task: updated.task, undo: event.rows[0]?.id ?? null };
   });
 }

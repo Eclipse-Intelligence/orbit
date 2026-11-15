@@ -782,6 +782,7 @@ async function applyTask(
       ),
       ...(taggedAssigner ? { taggedAssigner: true } : {}),
       ...options.auditExtra,
+      ...((options.beforeAudit ? await options.beforeAudit(task) : null) ?? {}),
     },
   );
   taskAlerts(db, actor, before, task, provenance);
@@ -789,7 +790,7 @@ async function applyTask(
   return { task: (await withViewerLinksInDb(db, actor, [settledTask]))[0], changed: true };
 }
 
-export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown>; series?: SeriesRights };
+export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown>; series?: SeriesRights; beforeAudit?: (task: Task) => Promise<Record<string, unknown> | null> };
 
 export async function updateTaskInDb(
   db: Db,
@@ -797,7 +798,7 @@ export async function updateTaskInDb(
   id: string,
   input: TaskWrite,
   provenance?: Provenance,
-  options: Pick<TaskApplyOptions, "auditExtra" | "restoring" | "series"> = {},
+  options: Pick<TaskApplyOptions, "auditExtra" | "restoring" | "series" | "beforeAudit"> = {},
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");

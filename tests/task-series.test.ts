@@ -1280,6 +1280,32 @@ describe("repeating task review round 14", () => {
     assert.equal((await getTask(mark, next.id)).contactId, null, "the next date has the original link");
   });
 
+  it("leaves the series alone when a This one link change is undone", async () => {
+    const contact = (await createContact(mark, { firstName: "This", lastName: "Only", email: "this.only@series.test" })).body.contact;
+    const other = (await createCompany(mark, { name: "This Only Co", domain: "this-only.test" })).body.company;
+    const task = await weekly("This link undo", "2030-11-07");
+    const before = (await sql<{ company_id: string | null; contact_id: string | null }>("select company_id, contact_id from crm.task_series where id = $1", [task.seriesId]))[0];
+    await updateOccurrence(mark, { taskId: task.id }, { contactId: contact.id }, "this");
+    const second = (await updateOccurrence(mark, { taskId: task.id }, { companyId: other.id }, "this")).body;
+    await undoTaskEvents(mark, task.id, second.undo, { operation: "undo_change" });
+    const after = (await sql<{ company_id: string | null; contact_id: string | null }>("select company_id, contact_id from crm.task_series where id = $1", [task.seriesId]))[0];
+    assert.deepEqual(after, before);
+    assert.equal((await getTask(mark, task.id)).contactId, contact.id, "the occurrence keeps its own earlier change");
+  });
+
+  it("lets a later series link change win over undoing an earlier followed one", async () => {
+    const { relinkTaskUndoable, undoTaskLinkChange } = await import("@/lib/crm/task-act");
+    const contact = (await createContact(mark, { firstName: "Later", lastName: "Wins", email: "later.wins@series.test" })).body.contact;
+    const other = (await createCompany(mark, { name: "Later Wins Co", domain: "later-wins.test" })).body.company;
+    const task = await weekly("Later wins", "2030-11-08");
+    const linked = await relinkTaskUndoable(mark, task.id, { contactId: contact.id }, { operation: "link_task", source: "web" });
+    await updateOccurrence(mark, { taskId: task.id }, { companyId: other.id }, "all");
+    await undoTaskLinkChange(mark, task.id, linked.undo!);
+    const series = (await sql<{ company_id: string | null; contact_id: string | null }>("select company_id, contact_id from crm.task_series where id = $1", [task.seriesId]))[0];
+    assert.deepEqual(series, { company_id: other.id, contact_id: contact.id });
+    assert.equal((await getTask(mark, task.id)).contactId, null);
+  });
+
   it("keeps a colleague's link change and its undo to their occurrence", async () => {
     const { relinkTaskUndoable, undoTaskLinkChange } = await import("@/lib/crm/task-act");
     const contact = (await createContact(mark, { firstName: "Theirs", lastName: "Only", email: "theirs.only@series.test" })).body.contact;
