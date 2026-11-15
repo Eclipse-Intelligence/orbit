@@ -9,10 +9,11 @@ import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { moveRecordsToWorkspace, previewMoveToWorkspace } from "@/lib/crm/move-workspace";
 import { archiveOpportunity, listOpportunities } from "@/lib/crm/opportunities";
 import { savePipelineStages } from "@/lib/crm/pipeline";
-import { archiveTask, updateTask } from "@/lib/crm/tasks";
+import { archiveTask } from "@/lib/crm/tasks";
+import { updateTaskFromApi } from "@/lib/crm/task-series";
 import { WEBHOOK_EVENTS, createWebhook, listWebhookDeliveries } from "@/lib/crm/webhooks";
 import { OPPORTUNITY_STATUSES, TASK_PRIORITIES, type Actor } from "@/lib/crm/types";
-import { agentSource } from "@/lib/crm/validation";
+import { agentSource, repeatSchema } from "@/lib/crm/validation";
 import { withTaskWorkspaceHint } from "@/lib/crm/workspaces";
 
 function toolResult(value: unknown) {
@@ -143,6 +144,10 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
         contactId: z.uuid().nullable().optional(),
         opportunityId: z.uuid().nullable().optional(),
         mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
+        repeat: repeatSchema.nullable().optional().describe("Changes how it repeats, for this and every later one, as on create_next_action. null stops it repeating: this one stays and nothing comes after it."),
+        repeatScope: z.enum(["this", "following", "all"]).optional().describe("Required when the task repeats and you change its time, title, description, priority, assignee, duration or reminder. Links on the open one apply to every later one without it; this keeps them to this one. this: only this one. following: this date and later (an upcoming date only). all: the open one and every later one. Moving the open one to another day needs no scope."),
+        skip: z.boolean().optional().describe("true skips this date of a repeating task: the open one moves to its next date, or an upcoming date (occursOn) is left out. Send it on its own."),
+        occursOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "occursOn takes a day, such as 2027-03-04.").optional().describe("An upcoming date of this repeating task, YYYY-MM-DD, to change or skip just that date instead of the open one."),
         docIds: z.array(z.uuid()).max(20).nullable().optional().describe("Docs linked to the task: the whole list of doc ids from search_docs or list_docs, in this workspace. [] or null takes them all off. You can only link docs you can read; agent tokens only see shared docs. Docs can also mention a task with @[Title](task:id)."),
         ...provenanceFields,
       },
@@ -150,10 +155,13 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     async (args) =>
       run(async () =>
         (
-          await withTaskWorkspaceHint(actor, args.id, () => updateTask(
+          await withTaskWorkspaceHint(actor, args.id, () => updateTaskFromApi(
             actor,
-            args.id,
+            { taskId: args.id, occursOn: args.occursOn },
             {
+              repeat: args.repeat,
+              repeatScope: args.repeatScope,
+              skip: args.skip,
               title: args.title,
               description: args.description,
               dueAt: args.dueAt,

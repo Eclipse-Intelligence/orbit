@@ -41,9 +41,11 @@ import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, 
 import { queueTaskBlock } from "@/lib/crm/task-block-queue";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { assertOwnThreadInDb, readMailThreadKey } from "@/lib/crm/task-mail";
-import { canChangeTask } from "@/lib/crm/task-rights";
+import { canChangeTask, type SeriesRights } from "@/lib/crm/task-rights";
 import { planTaskDocsInDb, readDocIds, TASK_DOC_IDS_SQL, withoutViewerLinks, withViewerLinksInDb, writeTaskDocsInDb } from "@/lib/crm/task-docs";
 import { dayWindow, readDateTime } from "@/lib/time";
+import { describeRepeat, type OccurrenceChange, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
+import { archiveAsSkipInDb, seriesAfterArchive, seriesAfterTaskChange, seriesAfterUnarchive, seriesBeforeReopen, seriesBeforeUnarchive } from "@/lib/crm/task-series";
 
 const TASK_SQL = `
   select
@@ -86,6 +88,17 @@ const TASK_SQL = `
     t.clickup_error,
     t.calendar_event_ref,
     t.mail_thread_key,
+    t.series_id,
+    t.occurs_on::text as occurs_on,
+    rs.starts_on::text as series_starts_on,
+    to_char(rs.at, 'HH24:MI') as series_at,
+    rs.rule as series_rule,
+    rs.ends as series_ends,
+    rs.current_task_id as series_current_task_id,
+    rs.owner_id as series_owner_id,
+    rs.created_by_user_id as series_creator_id,
+    (rs.ended_at is not null or rs.archived_at is not null) as series_stopped,
+    rc.rows as series_changes,
     ${TASK_DOC_IDS_SQL} as doc_ids,
     t.created_at,
     t.updated_at
@@ -94,6 +107,19 @@ const TASK_SQL = `
   left join crm.companies co on co.id = t.company_id
   left join crm.contacts ct on ct.id = t.contact_id
   left join crm.opportunities op on op.id = t.opportunity_id
+  left join crm.task_series rs on rs.id = t.series_id
+  left join lateral (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'occursOn', c.occurs_on::text, 'skip', c.skip, 'dueAt', c.due_at, 'dueHasTime', c.due_has_time,
+      'durationMinutes', c.duration_minutes, 'title', c.title, 'description', c.description
+    ) order by c.occurs_on), '[]'::jsonb) as rows
+    from (
+      select * from crm.task_occurrence_changes c
+      where c.series_id = rs.id and c.occurs_on > t.occurs_on
+      order by c.occurs_on
+      limit 200
+    ) c
+  ) rc on rs.id is not null
 `;
 
 type TaskRow = {
@@ -132,10 +158,39 @@ type TaskRow = {
   clickup_error: string | null;
   calendar_event_ref: string | null;
   mail_thread_key: string | null;
+  series_id: string | null;
+  occurs_on: string | null;
+  series_starts_on: string | null;
+  series_at: string | null;
+  series_rule: RepeatRule | null;
+  series_ends: RepeatEnds | null;
+  series_current_task_id: string | null;
+  series_owner_id: string | null;
+  series_creator_id: string | null;
+  series_stopped: boolean | null;
+  series_changes: OccurrenceChange[] | null;
   doc_ids: string[] | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
+
+function repeatOf(row: TaskRow) {
+  if (!row.series_id || !row.series_rule || !row.series_ends || !row.series_starts_on) return null;
+  return describeRepeat({
+    seriesId: row.series_id,
+    ownerId: row.series_owner_id,
+    creatorId: row.series_creator_id,
+    startsOn: row.series_starts_on,
+    at: row.series_at,
+    rule: row.series_rule,
+    ends: row.series_ends,
+    current: row.series_current_task_id === row.id,
+    stopped: Boolean(row.series_stopped),
+    occursOn: row.occurs_on,
+    dueDay: taskDueDay(iso(row.due_at)),
+    changes: (row.series_changes ?? []).map((change) => ({ ...change, dueAt: change.dueAt ? new Date(change.dueAt).toISOString() : null })),
+  });
+}
 
 type PreparedTask = {
   title?: string;
@@ -196,6 +251,9 @@ function mapTask(row: TaskRow): Task {
     inOutlook: Boolean(row.calendar_event_ref),
     mailThreadKey: row.mail_thread_key,
     mailThread: row.mail_thread_key ? { subject: null, readable: false } : null,
+    seriesId: row.series_id,
+    occursOn: row.occurs_on,
+    repeat: repeatOf(row),
     docIds: row.doc_ids ?? [],
     docs: [],
     canLinkDocs: false,
@@ -469,7 +527,7 @@ export async function createTaskInDb(
   actor: Actor,
   input: TaskWrite,
   provenance?: Provenance,
-  options: { detectedLinks?: DetectedLinkIds; detection?: DetectedTaskLinks; ownThread?: boolean } = {},
+  options: { detectedLinks?: DetectedLinkIds; detection?: DetectedTaskLinks; ownThread?: boolean; series?: { id: string; occursOn: string } } = {},
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
@@ -504,9 +562,9 @@ export async function createTaskInDb(
       `insert into crm.tasks (
         workspace_id, title, description, due_at, completed_at, priority, owner_id,
         company_id, contact_id, opportunity_id, created_by_user_id, created_by_agent_id, remind_minutes,
-        due_has_time, scheduled_by, duration_minutes, mail_thread_key
+        due_has_time, scheduled_by, duration_minutes, mail_thread_key, series_id, occurs_on
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
       ) returning id`,
       [
         actor.workspaceId,
@@ -526,6 +584,8 @@ export async function createTaskInDb(
         write.scheduledBy ?? null,
         write.durationMinutes ?? DEFAULT_TASK_DURATION,
         write.mailThreadKey ?? null,
+        options.series?.id ?? null,
+        options.series?.occursOn ?? null,
       ],
     );
     const docs = await planTaskDocsInDb(db, actor, actor.workspaceId, [], write.docIds);
@@ -546,6 +606,10 @@ export async function createTaskInDb(
   }
 }
 
+function taskRights(row: TaskRow) {
+  return { ownerId: row.owner_id, createdByUserId: row.created_by_user_id, createdByAgentId: row.created_by_agent_id, seriesId: row.series_id, completedAt: iso(row.completed_at) };
+}
+
 function cannotChange(write: PreparedTask = {}) {
   const reassigning = write.ownerId !== undefined;
   return new CrmError(
@@ -562,9 +626,12 @@ async function applyTask(
   current: TaskRow,
   write: PreparedTask,
   provenance: Provenance | undefined,
-  options: { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean } = {},
+  options: TaskApplyOptions = {},
 ) {
   if (current.archived_at && !options.restoring) throw notFound("task");
+  const ownTask = canChangeTask(actor, taskRights(current));
+  const may = ownTask || canChangeTask(actor, taskRights(current), options.series);
+  if (!may) throw cannotChange(write);
   if (
     actor.type === "agent" &&
     (write.ownerId === null || (write.ownerId === undefined && !current.owner_id)) &&
@@ -607,7 +674,6 @@ async function applyTask(
     },
   );
   const settled = write.completedAt === undefined && write.completed !== undefined && Boolean(current.completed_at) === write.completed;
-  if (settled && !canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange(write);
   const completedAt =
     write.completedAt !== undefined
       ? write.completedAt !== null && current.completed_at
@@ -649,15 +715,18 @@ async function applyTask(
   }
   const before = mapTask(current);
   if (change.sets.length === 0) {
-    if (!canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) throw cannotChange(write);
     return { task: (await withViewerLinksInDb(db, actor, [before]))[0], changed: false };
   }
+  if (!ownTask && (docs || change.fields.some((field) => field === "mailThreadKey" || field === "completedAt"))) throw cannotChange(write);
   if (docs) await writeTaskDocsInDb(db, actor, { id: current.id, workspaceId: current.workspace_id }, docs);
   const nextOwner = write.ownerId === undefined ? undefined : (write.ownerId ?? null);
-  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id });
+  const reassigning = nextOwner !== undefined && nextOwner !== current.owner_id && may;
   let taggedAssigner = false;
   if (reassigning && !options.restoring && !silent(provenance)) {
     taggedAssigner = await keepAssignerTagged(db, actor, { id: current.id, title: current.title, createdByUserId: current.created_by_user_id }, current.owner_id, nextOwner, provenance);
+  }
+  if (current.series_id && current.completed_at && completedAt === null && may) {
+    await seriesBeforeReopen(db, actor, mapTask(current), provenance);
   }
   change.values.push(current.id);
   let updated = 0;
@@ -712,11 +781,16 @@ async function applyTask(
         change.fields,
       ),
       ...(taggedAssigner ? { taggedAssigner: true } : {}),
+      ...options.auditExtra,
+      ...((options.beforeAudit ? await options.beforeAudit(task, change.fields) : null) ?? {}),
     },
   );
   taskAlerts(db, actor, before, task, provenance);
-  return { task: (await withViewerLinksInDb(db, actor, [task]))[0], changed: true };
+  const settledTask = task.seriesId ? ((await seriesAfterTaskChange(db, actor, before, task, provenance)) ?? task) : task;
+  return { task: (await withViewerLinksInDb(db, actor, [settledTask]))[0], changed: true };
 }
+
+export type TaskApplyOptions = { restoring?: boolean; undoing?: string | null; claimSchedule?: boolean; auditExtra?: Record<string, unknown>; series?: SeriesRights; beforeAudit?: (task: Task, fields: string[]) => Promise<Record<string, unknown> | null> };
 
 export async function updateTaskInDb(
   db: Db,
@@ -724,10 +798,11 @@ export async function updateTaskInDb(
   id: string,
   input: TaskWrite,
   provenance?: Provenance,
+  options: Pick<TaskApplyOptions, "auditExtra" | "restoring" | "series" | "beforeAudit"> = {},
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
-  return applyTask(db, actor, current, preparedUpdate(current, input), provenance);
+  return applyTask(db, actor, current, preparedUpdate(current, input), provenance, options);
 }
 
 function preparedUpdate(current: TaskRow, input: TaskWrite) {
@@ -1033,10 +1108,15 @@ export async function archiveTask(
   );
 }
 
-export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean } = {}) {
+export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { goneFromClickUp?: boolean; keepSeries?: boolean; series?: SeriesRights } = {}) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
+  if (!canChangeTask(actor, taskRights(current), options.series)) throw cannotChange();
+  if (current.series_id && !options.keepSeries && !current.completed_at && canChangeTask(actor, { ownerId: current.owner_id, createdByUserId: current.created_by_user_id, createdByAgentId: current.created_by_agent_id })) {
+    const skipped = await archiveAsSkipInDb(db, actor, mapTask(current), provenance);
+    if (skipped) return { task: skipped };
+  }
   const keeper = await ownerForAgent(db, actor, current);
   const archived = await db.query(
     `update crm.tasks set archived_at = now(), owner_id = coalesce(owner_id, $3::uuid),
@@ -1053,13 +1133,16 @@ export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenan
     before: { archivedAt: null, ...(keeper ? { ownerId: null } : {}) },
     after: { archivedAt: task.archivedAt, ...(keeper ? { ownerId: task.ownerId } : {}) },
   });
+  if (task.seriesId && !options.keepSeries) await seriesAfterArchive(db, actor, task);
   return { task: (await withViewerLinksInDb(db, actor, [task]))[0] };
 }
 
-export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance, options: { series?: SeriesRights } = {}) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   if (!current.archived_at) return { task: (await withViewerLinksInDb(db, actor, [mapTask(current)]))[0] };
+  if (!canChangeTask(actor, taskRights(current), options.series)) throw cannotChange();
+  if (current.series_id) await seriesBeforeUnarchive(db, mapTask(current));
   const keeper = await ownerForAgent(db, actor, current);
   const restored = await db.query(
     `update crm.tasks set archived_at = null, owner_id = coalesce(owner_id, $2::uuid),
@@ -1067,7 +1150,7 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
        clickup_list_id = case when clickup_sync ? 'goneFromClickUp' then null else clickup_list_id end,
        clickup_url = case when clickup_sync ? 'goneFromClickUp' then null else clickup_url end,
        clickup_error = case when clickup_sync ? 'goneFromClickUp' then null else clickup_error end,
-       clickup_sync = case when clickup_sync ? 'goneFromClickUp' then '{}'::jsonb else clickup_sync end
+       clickup_sync = case when clickup_sync ? 'goneFromClickUp' then '{}'::jsonb else clickup_sync - 'deleteRemote' end
      where id = $1 and archived_at is not null`,
     [id, keeper],
   );
@@ -1083,7 +1166,9 @@ export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, proven
     after: { archivedAt: null, ...(keeper ? { ownerId: task.ownerId } : {}) },
     ...(unlinked ? { clickupUnlinked: { clickupTaskId: current.clickup_task_id, clickupListId: current.clickup_list_id, clickupUrl: current.clickup_url } } : {}),
   });
-  return { task: (await withViewerLinksInDb(db, actor, [task]))[0] };
+  if (task.seriesId) await seriesAfterUnarchive(db, actor, task);
+  const fresh = task.seriesId ? ((await readTask(db, actor, id)) ?? saved) : saved;
+  return { task: (await withViewerLinksInDb(db, actor, [mapTask(fresh)]))[0] };
 }
 
 export async function readTaskInDb(db: Db, actor: Actor, id: string) {
@@ -1099,12 +1184,13 @@ export async function restoreTaskInDb(
   completedAt: string | null | undefined,
   provenance: Provenance,
   undoing: string | null = null,
+  series?: SeriesRights,
 ) {
   const current = await readTaskForWrite(db, actor, id);
   if (!current) throw notFound("task");
   const write = prepareTask(input, "patch");
   if (completedAt !== undefined) write.completedAt = completedAt;
-  return applyTask(db, actor, current, write, provenance, { restoring: true, undoing });
+  return applyTask(db, actor, current, write, provenance, { restoring: true, undoing, series });
 }
 
 export type DueReminder = {

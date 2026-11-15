@@ -20,7 +20,8 @@ import { contactHref, companyHref } from "@/lib/crm/hrefs";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
-import { archiveTaskInDb, createTask, createTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
+import { archiveTaskInDb, canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
+import { createTaskFromApi, skipDeletedOccurrenceInDb } from "@/lib/crm/task-series";
 import type { Provenance, Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
@@ -637,11 +638,14 @@ async function archiveDeleted(s: Session, row: SyncRow, gone = true) {
     return "unchanged" as const;
   }
   assertScope(s.actor.scopes, "tasks:write");
-  await withActor(s.actor, async (db) => {
-    await archiveTaskInDb(db, s.actor, row.id, { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true }, { goneFromClickUp: gone });
+  const provenance = { operation: "clickup_deleted", source: "clickup", sourceUrl: row.clickup_url, synced: true };
+  const skipped = await withActor(s.actor, async (db) => {
+    if ((await skipDeletedOccurrenceInDb(db, s.actor, row.id, provenance))) return true;
+    await archiveTaskInDb(db, s.actor, row.id, provenance, { goneFromClickUp: gone });
     await db.query("update crm.tasks set clickup_error = null, clickup_synced_at = now() where id = $1", [row.id]);
+    return false;
   });
-  return "archived" as const;
+  return skipped ? ("unchanged" as const) : ("archived" as const);
 }
 
 async function createRemote(s: Session, taskId: string) {
@@ -1009,6 +1013,11 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
         new Date(row.updated_at).getTime(),
         changedAt,
       );
+      if ((write.dueAt === null || write.dueDate === null) && (await db.query("select 1 from crm.tasks where id = $1 and series_id is not null", [row.id])).rowCount) {
+        delete write.dueAt;
+        delete write.dueDate;
+        delete write.dueHasTime;
+      }
       const changed = Object.keys(write).length > 0;
       if (changed) {
         const saved = await updateTaskInDb(db, s.actor, row.id, write, { ...PROVENANCE, sourceUrl: clip(task.url, 2000) });
@@ -1100,6 +1109,20 @@ async function withKeepers(actor: UserActor, ids: string[]) {
 async function pushQueue(actor: UserActor) {
   const result = await query<{ id: string }>("select id from private.clickup_push_queue($1, $2) as id", [actor.workspaceId, PUSH_BATCH]);
   return withKeepers(actor, result.rows.map((row) => row.id));
+}
+
+async function remoteDeletes(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; clickup_task_id: string }>(
+      `select t.id, t.clickup_task_id from crm.tasks t
+       where t.workspace_id = $1 and t.archived_at is not null and t.clickup_task_id is not null
+         and t.clickup_sync ? 'deleteRemote' and ${directTaskSql("t")}
+       order by t.archived_at
+       limit $2`,
+      [actor.workspaceId, PUSH_BATCH],
+    );
+    return result.rows;
+  });
 }
 
 async function staleLinks(actor: UserActor) {
@@ -1226,6 +1249,23 @@ export async function syncClickUp(
         fail(error, "Couldn't update ClickUp.");
       }
     }
+    for (const row of await remoteDeletes(actor)) {
+      if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
+      try {
+        await s.api.deleteTask(row.clickup_task_id);
+        await withActor(actor, (db) =>
+          db.query(
+            `update crm.tasks set clickup_task_id = null, clickup_url = null, clickup_error = null, clickup_synced_at = now(),
+               clickup_sync = clickup_sync - 'deleteRemote'
+             where id = $1 and archived_at is not null`,
+            [row.id],
+          ),
+        );
+        result.archived += 1;
+      } catch (error) {
+        fail(error, "Couldn't remove a task from ClickUp.");
+      }
+    }
     for (const { row, actor: keeper } of await staleLinks(actor)) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
       try {
@@ -1302,12 +1342,13 @@ export async function sendTaskToDefaultList(
   const state = await getClickUpState(actor);
   if (!state?.teamId || !state.defaultListId) return "unchanged" as const;
   if (!state.lists.some((list) => list.id === state.defaultListId)) return "unchanged" as const;
-  await withActor(actor, (db) =>
-    db.query(
+  await withActor(actor, async (db) => {
+    await assertCanSend(db, actor, taskId);
+    await db.query(
       "update crm.tasks set clickup_list_id = $2 where id = $1 and workspace_id = $3 and clickup_list_id is null",
       [taskId, state.defaultListId, actor.workspaceId],
-    ),
-  );
+    );
+  });
   return pushClickUpTask(actor, taskId, options);
 }
 
@@ -1324,7 +1365,7 @@ export async function getClickUpPicker(actor: UserActor): Promise<ClickUpPicker 
 
 export async function createTaskWithClickUp(
   actor: UserActor,
-  input: TaskWrite,
+  input: TaskWrite & { repeat?: unknown },
   clickupListId: string | null,
   options: ClickUpOptions & { provenance?: Provenance } = {},
 ): Promise<{ task: Task; clickupError: string | null }> {
@@ -1339,7 +1380,7 @@ export async function createTaskWithClickUp(
     }
     listId = clickupListId;
   }
-  const created = await createTask(actor, input, {
+  const created = await createTaskFromApi(actor, input, {
     provenance: options.provenance ?? { operation: "create_task", source: "web" },
   });
   const task = created.body.task;
@@ -1348,8 +1389,15 @@ export async function createTaskWithClickUp(
   return { task: { ...task, clickupListId: listId }, clickupError };
 }
 
+async function assertCanSend(db: Db, actor: UserActor, taskId: string) {
+  const task = await readTaskInDb(db, actor, taskId);
+  if (!task) throw new CrmError("not_found", "Task not found.", 404);
+  if (!canChangeTask(actor, task)) throw new CrmError("forbidden", "Only the assignee or the task's creator can change it.", 403);
+}
+
 export async function sendTaskToClickUpList(actor: UserActor, taskId: string, listId: string, options: ClickUpOptions & { fallback?: string } = {}) {
   await withActor(actor, async (db) => {
+    await assertCanSend(db, actor, taskId);
     await db.query("update crm.tasks set clickup_list_id = $2 where id = $1 and clickup_task_id is null", [taskId, listId]);
     await db.query(
       `update crm.integration_state set last_used_list_id = $2

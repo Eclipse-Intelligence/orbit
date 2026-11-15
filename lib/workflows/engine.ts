@@ -330,6 +330,9 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
       opportunityId: task.opportunityId,
       opportunityName: task.opportunityName,
       openTasks: await openTasksBeside(actor, task),
+      seriesId: task.seriesId,
+      repeats: Boolean(task.repeat && !task.repeat.ended),
+      repeat: task.repeat && !task.repeat.ended ? task.repeat.text : null,
     };
     companyId = task.companyId;
     contactId = task.contactId;
@@ -449,6 +452,14 @@ function restoreOuter(frame: LoopFrame, vars: Vars) {
 
 function loopVars(frame: LoopFrame | undefined) {
   return frame ? { item: frame.items[frame.index], index: frame.index + 1, total: frame.items.length } : undefined;
+}
+
+export function followsUpRepeat(definition: WorkflowDefinition, vars: Vars) {
+  if (definition.trigger.type !== "task_completed") return false;
+  const task = vars.task as { repeats?: boolean } | undefined;
+  if (!task?.repeats) return false;
+  if (/task\.(seriesId|repeats?)\b/.test(JSON.stringify(definition))) return false;
+  return definition.nodes.some((node) => node.type === "create_task" && /\{\{\s*steps\./.test(String((node.config as { title?: unknown }).title ?? "")));
 }
 
 function follow(definition: WorkflowDefinition, source: string, handle: string, state: RunState, vars: Vars): string | null {
@@ -1348,6 +1359,7 @@ export async function executeRun(
   }
   if (!state.started) {
     const built = await buildContext(actor, definition.trigger, run.event);
+    if (built.matches && followsUpRepeat(definition, built.vars)) built.matches = false;
     if (!built.matches && !run.test) {
       await withActor(actor, (db) => db.query("delete from crm.workflow_runs where id = $1", [run.id]));
       return "skipped" as const;

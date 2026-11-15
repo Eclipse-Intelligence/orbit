@@ -544,6 +544,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
       }
       const linksBefore = await docLinksIn(db, source.workspaceId);
       plan = await runPlan(db, source, target, input, false);
+      if (input.copy !== true) await db.query("select private.task_series_follow_move($1, $2)", [source.workspaceId, target.workspaceId]);
       dropped = linksBefore.size > 0 ? await droppedDocLinks(db, linksBefore, await docLinksIn(db, source.workspaceId), target.workspaceId) : [];
     },
     async (db) => {

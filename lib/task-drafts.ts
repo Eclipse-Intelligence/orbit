@@ -36,6 +36,10 @@ export function taskDrafts() {
   };
 }
 
+export function draftAfterSave(saved: boolean, declined: boolean): "drop" | "keep" {
+  return saved || declined ? "drop" : "keep";
+}
+
 export function draftCommit(field: DraftField, typed: string, saved: string) {
   const next = typed.trim();
   if (field === "title" && !next) return { save: false, value: saved };

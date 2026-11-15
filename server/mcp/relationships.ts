@@ -11,7 +11,8 @@ import {
 } from "@/lib/crm/opportunities";
 import { findStaleRelationships, getCompanyContext, getDueActions } from "@/lib/crm/relationships";
 import { taskDetail } from "@/lib/crm/task-detail";
-import { completeTask, createTask } from "@/lib/crm/tasks";
+import { completeTask } from "@/lib/crm/tasks";
+import { createTaskFromApi } from "@/lib/crm/task-series";
 import {
   ACTIVITY_TYPES,
   OPPORTUNITY_STATUSES,
@@ -21,7 +22,7 @@ import {
   type CompanyWrite,
   type ContactWrite,
 } from "@/lib/crm/types";
-import { agentSource } from "@/lib/crm/validation";
+import { agentSource, repeatSchema } from "@/lib/crm/validation";
 import { withTaskWorkspaceHint } from "@/lib/crm/workspaces";
 
 function toolResult(value: unknown) {
@@ -398,6 +399,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         contactId: z.uuid().nullable().optional(),
         opportunityId: z.uuid().nullable().optional(),
         mailThreadKey: z.string().max(500).nullable().optional().describe("Pins the task to an email thread: a thread key from mail_search, in your own mailbox. null unpins it. Agent tokens have no mailbox."),
+        repeat: repeatSchema.optional().describe("Makes the task repeat on a fixed schedule from its due day (today when it has none). every: day, weekday (Monday to Friday), week, month or year; interval for every 2 weeks and so on; days for weekly (mo, tu, we, th, fr, sa, su); monthDay (1 to 31, the last day in shorter months) or monthWeek ({ n: 1 to 4 or -1 for last, weekday }) for monthly; ends { after: N } or { on: YYYY-MM-DD }. Only the open one is a task; the next is made when it is done, and a missed one moves to the latest date."),
         docIds: z.array(z.uuid()).max(20).nullable().optional().describe("Docs linked to the task: the whole list of doc ids from search_docs or list_docs, in this workspace. [] or null takes them all off. You can only link docs you can read; agent tokens only see shared docs. Docs can also mention a task with @[Title](task:id)."),
         idempotency_key: z
           .string()
@@ -409,9 +411,10 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     },
     async (args) =>
       run(async () => {
-        const result = await createTask(
+        const result = await createTaskFromApi(
           actor,
           {
+            repeat: args.repeat,
             title: args.title,
             description: args.description,
             dueAt: args.dueAt,

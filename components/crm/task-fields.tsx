@@ -12,6 +12,7 @@ import { Monogram } from "@/components/beautifui/record-marks";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import ReminderSelect from "@/components/crm/reminder-select";
 import { DurationMenu, ReminderTimePrompt, ScheduleMenu } from "@/components/crm/task-timing";
+import { isRepeating, ownsRepeat, RepeatField, runsSeries, SkipButton, useRepeatScope, type RepeatScope, type ScopeChange } from "@/components/crm/task-repeat";
 import TaskLinkChips from "@/components/crm/task-link-chips";
 import { useDocMention } from "@/components/crm/task-doc-mention";
 import { othersSeeTask, TaskDocChips } from "@/components/crm/task-docs";
@@ -30,11 +31,11 @@ import type { Task } from "@/lib/crm/types";
 import { pageHref, recordHref } from "@/lib/docs/routes";
 import { threadHref } from "@/lib/mail/view";
 import { timingSaves, type TimingValues } from "@/lib/timing-saves";
-import { draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
+import { draftAfterSave, draftCommit, taskDrafts, type DraftChange, type DraftField } from "@/lib/task-drafts";
 import { applyDraftNews, clearFields, draftFields, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { dayOnlyNote, ownerSetsTime, ownerTimeLine, padDueHasTime } from "@/lib/task-pad";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
-import { durationLabel, localInstant } from "@/lib/crm/task-time";
+import { clockLabel, durationLabel, localInstant, taskDueDay } from "@/lib/crm/task-time";
 import { taskDueLabel } from "@/lib/crm/task-views";
 import { appTimeZone, dateTimeInputValue, toIsoInstant } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -145,6 +146,19 @@ function touchesTiming(write: TaskDetails) {
   return write.dueAt !== undefined || write.dueDate !== undefined || write.remindMinutes !== undefined || write.durationMinutes !== undefined;
 }
 
+function scopeChange(task: Task, write: TaskDetails): ScopeChange | null {
+  if (!isRepeating(task)) return null;
+  if (write.title !== undefined) return { kind: "title" };
+  if (write.description !== undefined) return { kind: "description" };
+  if (write.dueAt) {
+    const sameDay = taskDueDay(write.dueAt) === (task.dueDate ?? taskDueDay(task.dueAt));
+    if (sameDay && (!task.dueHasTime || !task.dueAt || clockLabel(write.dueAt) !== clockLabel(task.dueAt))) return { kind: "time", to: clockLabel(write.dueAt) };
+  }
+  if (write.durationMinutes !== undefined) return { kind: "duration" };
+  if (write.remindMinutes !== undefined && write.dueAt === undefined && write.dueDate === undefined) return { kind: "reminder" };
+  return null;
+}
+
 function sourceOf(task: Task): Source {
   return {
     title: task.title,
@@ -189,6 +203,8 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   const [notice, setNotice] = useState<string | null>(null);
   const sent = useRef({ title: source.title, text: source.text });
   const [timing] = useState(() => timingSaves({ due: source.due, reminder: source.reminder, duration: source.duration }));
+  const repeatScope = useRepeatScope(task);
+  const declined = useRef<{ title?: string; text?: string }>({});
   const visible = useRef(shown);
   useEffect(() => {
     visible.current = shown;
@@ -226,14 +242,27 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     setDuration(values.duration);
   }
 
-  async function save(write: TaskDetails) {
+  async function save(write: TaskDetails, ask = true) {
     const timed = touchesTiming(write);
     const ticket = timed ? timing.start() : 0;
     const fields = fieldsOf(write);
     setNotice(null);
+    const change = ask && ownsRepeat(task, viewerId) ? scopeChange(task, write) : null;
+    let scope: RepeatScope | undefined = task.repeat?.current && !task.completedAt ? "this" : undefined;
+    if (change) {
+      const picked = await repeatScope.ask(change);
+      if (!picked) {
+        const restore = timed ? timing.fail(ticket) : null;
+        if (restore) show(restore);
+        if (write.title !== undefined) declined.current.title = write.title;
+        if (write.description !== undefined) declined.current.text = write.description ?? "";
+        return false;
+      }
+      scope = picked;
+    }
     let result: Awaited<ReturnType<typeof saveTaskDetailsAction>>;
     try {
-      result = await saveTaskDetailsAction(task.id, write);
+      result = await saveTaskDetailsAction(task.id, write, scope);
     } catch {
       result = { error: saveFailedMessage(fields) };
     }
@@ -262,10 +291,12 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     return true;
   }
 
-  function saveDraft(field: DraftField) {
+  function saveDraft(field: DraftField, ask = true) {
     if (!canChange) return;
     const previous = sent.current[field];
     const commit = draftCommit(field, field === "title" ? title : text, previous);
+    if (!ask && declined.current[field] === commit.value) return;
+    if (ask) delete declined.current[field];
     if (!commit.save) {
       if (field === "title" && commit.value !== title) setTitle(commit.value);
       setErrors((current) => clearFields(current, [field]));
@@ -274,27 +305,26 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     }
     const next = commit.value;
     sent.current[field] = next;
-    void save(field === "title" ? { title: next } : { description: next || null }).then((ok) => {
-      if (ok) {
-        drafts.drop(self, task.id, field, next);
-        return;
-      }
-      if (sent.current[field] === next) sent.current[field] = previous;
-      drafts.keep(self, task.id, field, next, sent.current[field]);
+    void save(field === "title" ? { title: next } : { description: next || null }, ask).then((ok) => {
+      if (!ok && sent.current[field] === next) sent.current[field] = previous;
+      const declinedNow = !ok && declined.current[field] === next;
+      if (declinedNow) setErrors((current) => clearFields(current, [field]));
+      if (draftAfterSave(ok, declinedNow) === "drop") drafts.drop(self, task.id, field, ok ? next : sent.current[field]);
+      else drafts.keep(self, task.id, field, next, sent.current[field]);
     });
   }
 
-  function saveTitle() {
-    saveDraft("title");
+  function saveTitle(ask = true) {
+    saveDraft("title", ask);
   }
 
-  function saveText() {
-    saveDraft("text");
+  function saveText(ask = true) {
+    saveDraft("text", ask);
   }
 
   function flush() {
-    saveTitle();
-    saveText();
+    saveTitle(false);
+    saveText(false);
   }
 
   const textToSave = useRef(false);
@@ -382,9 +412,11 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
   }
 
   async function assign(ownerId: string) {
+    const scope = isRepeating(task) && ownsRepeat(task, viewerId) ? await repeatScope.ask({ kind: "assignee" }) : undefined;
+    if (scope === null) return;
     setBusy(true);
     setError(null);
-    const result = await assignTaskAction(task.id, ownerId).catch(() => ({ error: "Couldn't assign the task. Try again." }));
+    const result = await assignTaskAction(task.id, ownerId, scope).catch(() => ({ error: "Couldn't assign the task. Try again." }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -417,6 +449,7 @@ export function useTaskDetails(task: Task, canChange: boolean, shown = true, vie
     changeDuration,
     changeReminder,
     assign,
+    scopeDialog: repeatScope.dialog,
     writeText,
   };
 }
@@ -938,19 +971,23 @@ export default function TaskFields({
   const warn = othersSeeTask(task, viewer.id, tagged);
   const people = tagged.filter((person) => person !== task.ownerId);
   const team = members.length > 1;
+  const seriesOnly = !details.canChange && !done && runsSeries(task, viewer.id);
 
   if (layout === "row") {
     return (
       <div className="flex flex-col gap-3 [@media(pointer:coarse)]:gap-4">
         <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-y-4">
           <DueChips details={details} layout="row" />
+          {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="row" />}
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}
           {details.canChange && !done && (
             <>
               <span aria-hidden className="bg-line-strong mx-1 h-4 w-px" />
               <QuickDates details={details} />
+              <SkipButton task={task} />
             </>
           )}
+          {seriesOnly && <SkipButton task={task} />}
         </div>
         {editLinks ? <TaskLinkChips task={task} warn={warn} /> : taskIsLinked(task) && <LinkedReadOnly task={task} label />}
         <Description details={details} layout="row" warn={warn} />
@@ -974,6 +1011,11 @@ export default function TaskFields({
         <Field label="Due">
           <DueChips details={details} layout="panel" />
         </Field>
+        {!done && (details.canChange || (task.repeat?.current && !task.repeat.ended)) && (
+          <Field label="Repeat">
+            <RepeatField task={task} canChange={(details.canChange || seriesOnly) && ownsRepeat(task, viewer.id)} layout="panel" />
+          </Field>
+        )}
         {details.canChange && (
           <Field label="Duration">
             <DurationMenu value={details.duration} onChange={details.changeDuration} className={cn(TASK_CHIP, TOUCH)} />

@@ -14,16 +14,17 @@ import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
 import { createContact, findContactsToLink, getContact, updateContact } from "@/lib/crm/contacts";
 import { mergeContacts } from "@/lib/crm/merge";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { linkTask, taskLinkCandidates, type LinkCandidates } from "@/lib/crm/task-links";
+import { REPEAT_SCOPES, updateOccurrence, type RepeatScope } from "@/lib/crm/task-series";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { actorForTask, TASK_LOOKUP_FAILED, taskActorOrError } from "@/lib/crm/workspaces";
 import { missingOrFailed } from "@/lib/task-done";
 
-import { completeTask, getTask, listDueReminders, placeTask, reopenTask, TASK_PLACE_FAILED, updateTask, type DueReminder, type TaskPlacement } from "@/lib/crm/tasks";
+import { completeTask, getTask, listDueReminders, placeTask, reopenTask, TASK_PLACE_FAILED, type DueReminder, type TaskPlacement } from "@/lib/crm/tasks";
 import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -307,6 +308,7 @@ export async function reopenTaskAction(id: string): Promise<RecordActionState> {
     refresh();
     return { ok: true };
   } catch (error) {
+    if (isPgError(error) && error.code === "40P01") return { error: "Couldn't undo. Try again." };
     return actionError(error);
   }
 }
@@ -360,12 +362,13 @@ export async function placeTaskAction(id: string, placement: TaskPlacement): Pro
   }
 }
 
-export async function assignTaskAction(id: string, ownerId: string): Promise<RecordActionState> {
+export async function assignTaskAction(id: string, ownerId: string, scope?: RepeatScope): Promise<RecordActionState> {
   const user = await taskUser(id);
   if (!user) return { error: TASK_LOOKUP_FAILED };
   if (!isUuid(id) || !isUuid(ownerId)) return { error: "Couldn't assign the task. Try again." };
   try {
-    await updateTask(user, id, { ownerId }, { provenance: { operation: "assign_task", source: "web" } });
+    const options = { provenance: { operation: "assign_task", source: "web" } };
+    await updateOccurrence(user, { taskId: id }, { ownerId }, scope && REPEAT_SCOPES.includes(scope) ? scope : "this", options);
     pushLater(user, id);
     refresh();
     return { ok: true };

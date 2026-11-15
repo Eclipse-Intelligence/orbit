@@ -226,6 +226,9 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
       { path: "task.dueDate", label: "Due day", group: "Task" },
       { path: "task.dueHasTime", label: "Has a due time", group: "Task" },
       { path: "task.durationMinutes", label: "Duration", group: "Task" },
+      { path: "task.repeats", label: "Repeats", group: "Task" },
+      { path: "task.repeat", label: "How it repeats", group: "Task" },
+      { path: "task.seriesId", label: "Repeating task", group: "Task" },
     );
   }
   const upstream = definition && nodeId ? ancestors(definition, nodeId) : null;

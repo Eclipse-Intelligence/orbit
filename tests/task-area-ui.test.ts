@@ -6,7 +6,7 @@ import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { CrmError } from "@/lib/crm/errors";
 import { missingOrFailed, panelTaskFor, stillOpenIds } from "@/lib/task-done";
 import { alertRenderKey, keyboardUp, restingView, shownAlert, typingInto } from "@/lib/reminder-alerts";
-import { draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
+import { draftAfterSave, draftCommit, taskDrafts, type DraftChange } from "@/lib/task-drafts";
 import { applyDraftNews, clearFields, draftFields, draftReaction, failFields, fieldError, fieldsOf, saveFailedMessage, unsavedDraftError, type FieldErrors } from "@/lib/task-field-errors";
 import { acceptAiReading as acceptWithMarks, AI_SETTLE_MS, backspaceKeeps, confirmedReading, keptAfterTyping, keptReading, padReading, parseTaskText, readingToSave, type KeptReading, type PadAiParse, type PadMark, type PadReading } from "@/lib/task-pad";
 
@@ -193,6 +193,17 @@ describe("task area UI", () => {
     stopPanel();
     store.keep(row, "t1", "text", "Notes", "");
     assert.equal(views.get("panel")!.heard, 0);
+  });
+
+  it("drops a field's draft when it saves or the This one or All question is cancelled, and keeps it only when saving failed", () => {
+    assert.equal(draftAfterSave(true, false), "drop");
+    assert.equal(draftAfterSave(false, true), "drop");
+    assert.equal(draftAfterSave(false, false), "keep");
+    const store = taskDrafts();
+    const panel = {};
+    store.keep(panel, "t1", "title", "Old failed title", "Call Jane");
+    if (draftAfterSave(false, true) === "drop") store.drop(panel, "t1", "title", "Call Jane");
+    assert.equal(store.get("t1"), undefined);
   });
 
   it("puts the saved title back when the title is emptied, and saves only real changes", () => {

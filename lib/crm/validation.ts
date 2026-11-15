@@ -325,6 +325,34 @@ export const taskMutationSchema = taskWriteSchema
   .extend({ provenance: provenanceSchema.optional() })
   .strict();
 
+export const repeatSchema = z
+  .object({
+    every: z.enum(["day", "weekday", "week", "month", "year"], { message: "Choose how it repeats: day, weekday, week, month or year." }),
+    interval: z.number().int().min(1, "Repeat every 1 to 99.").max(99, "Repeat every 1 to 99.").optional(),
+    days: z.array(z.string()).min(1, "Choose at least one day.").max(7).optional(),
+    monthDay: z.number().int().min(1, "Choose a day from 1 to 31.").max(31, "Choose a day from 1 to 31.").optional(),
+    monthWeek: z.object({ n: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(-1)], { message: "Choose which week of the month." }), weekday: z.string() }).strict().optional(),
+    ends: z
+      .union([
+        z.object({ after: z.number().int().min(1, "End after 1 to 999 times.").max(999, "End after 1 to 999 times.") }).strict(),
+        z.object({ on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose an end date.") }).strict(),
+      ], { message: "Choose when it ends: { after: N } or { on: YYYY-MM-DD }." })
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export const taskCreateSchema = taskMutationSchema.extend({ repeat: repeatSchema.optional() }).strict();
+
+export const taskUpdateSchema = taskMutationSchema
+  .extend({
+    repeat: repeatSchema.nullable().optional(),
+    repeatScope: z.enum(["this", "following", "all"]).optional(),
+    skip: z.boolean().optional(),
+    occursOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  .strict();
+
 export const leadSchema = z
   .object({
     company: companyWriteSchema.optional(),
