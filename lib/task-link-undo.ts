@@ -1,34 +1,20 @@
-let offered: { run: () => void; until: number; timer: ReturnType<typeof setTimeout> | null } | null = null;
-let version = 0;
-const listeners = new Set<() => void>();
-
-function changed() {
-  version += 1;
-  for (const listener of listeners) listener();
-}
-
-function set(next: typeof offered) {
-  if (offered?.timer) clearTimeout(offered.timer);
-  offered = next;
-  changed();
-}
+let offered: { run: () => void; until: number } | null = null;
 
 export function offerLinkUndo(run: () => void, ms: number, now = Date.now()) {
-  const timer = typeof window === "undefined" ? null : setTimeout(() => forgetLinkUndo(run), ms);
-  set({ run, until: now + ms, timer });
+  offered = { run, until: now + ms };
 }
 
 export function forgetLinkUndo(run: () => void) {
-  if (offered?.run === run) set(null);
+  if (offered?.run === run) offered = null;
 }
 
 export function clearLinkUndo() {
-  if (offered) set(null);
+  offered = null;
 }
 
 export function undoLinkChange(now = Date.now()) {
   const current = offered;
-  if (current) set(null);
+  offered = null;
   if (!current || now > current.until) return false;
   current.run();
   return true;
@@ -42,38 +28,13 @@ export function linkUndoPending(now = Date.now()) {
   return Boolean(offered && now <= offered.until);
 }
 
-export function watchLinkUndo(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-export function linkUndoVersion() {
-  return version;
-}
-
 const claims = new Set<{ blocked: () => boolean }>();
-
-function focusMoved() {
-  changed();
-}
 
 export function claimUndoKey(blocked: () => boolean = () => false) {
   const claim = { blocked };
   claims.add(claim);
-  if (claims.size === 1 && typeof document !== "undefined") {
-    document.addEventListener("focusin", focusMoved);
-    document.addEventListener("focusout", focusMoved);
-  }
-  changed();
   return () => {
     claims.delete(claim);
-    if (claims.size === 0 && typeof document !== "undefined") {
-      document.removeEventListener("focusin", focusMoved);
-      document.removeEventListener("focusout", focusMoved);
-    }
-    changed();
   };
 }
 

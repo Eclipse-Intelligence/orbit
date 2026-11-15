@@ -14,7 +14,6 @@ import { emailRecipientAction } from "@/app/(crm)/quick-add";
 import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
-import { linkUndoVersion, watchLinkUndo } from "@/lib/task-link-undo";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 import CloseIcon from "@/public/assets/images/mail/close.svg";
 import MinimiseIcon from "@/public/assets/images/mail/minimise.svg";
@@ -297,7 +296,6 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const shownMessages = useRef(new Map<string, number>());
   const toastTimers = useRef(new Map<number, number>());
   const toastEnds = useRef(new Map<number, () => void>());
-  useSyncExternalStore(watchLinkUndo, linkUndoVersion, linkUndoVersion);
   const outgoing = useRef(new Map<number, Outgoing>());
   const [viewport, setViewport] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
   const cardsRef = useRef<Card[]>([]);
@@ -677,7 +675,9 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
                     toast.action!.run();
                     dismiss(toast.id);
                   }}
-                  title={toast.action.label === "Undo" && (toast.action.shortcut?.() ?? true) ? "Undo (Z)" : undefined}
+                  onPointerEnter={(event) => {
+                    event.currentTarget.title = toast.action?.label === "Undo" && (toast.action.shortcut?.() ?? true) ? "Undo (Z)" : "";
+                  }}
                 >
                   {toast.action.label}
                 </Button>

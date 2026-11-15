@@ -1,4 +1,5 @@
 import type { DocPick } from "@/lib/docs/client-types";
+import { docQueryAt } from "@/lib/task-pad";
 
 export function privateDocWarning(doc: Pick<DocPick, "folderPath">) {
   const folder = doc.folderPath?.split(" › ").pop() ?? "Top level";
@@ -80,8 +81,8 @@ function pastWord(text: string, at: number) {
 export function insertionPoint(text: string, caret: number) {
   const given = Math.min(Math.max(0, caret), text.length);
   const typed = text[given - 1] === "[" && text[given] === "[" ? given - 1 : given;
-  const open = /\[\[[^[\]\n]*$/.exec(text.slice(0, typed));
-  if (open && !/^[^[\]\n]*\]\]/.test(text.slice(typed))) return open.index;
+  const live = docQueryAt(text, typed);
+  if (live && !text.startsWith("]]", live.end)) return live.start;
   let at = pastClosedReference(text, typed);
   for (let moved = true; moved; ) {
     const next = pastClosedReference(text, pastWord(text, at));

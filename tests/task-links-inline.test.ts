@@ -91,6 +91,7 @@ describe("[[ in a task's title and description", () => {
       ["abc[[my query", 3],
       ["a..[[", 4],
       ["a..[[my q", 4],
+      ["aa[[a[ ", 6],
     ] as const) {
       const open = text.indexOf("[[");
       const result = insertReferenceAt(text, caret, "Doc").text;
