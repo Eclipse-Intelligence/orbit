@@ -41,7 +41,7 @@ export async function readPlanner(actor: UserActor, now = Date.now()): Promise<P
   const seriesTasks = (
     await Promise.all(
       read.map(({ target }) => {
-        const ids = series.filter((item) => item.workspaceId === target.workspaceId && item.currentTaskId && !listed.has(item.currentTaskId)).map((item) => item.currentTaskId!);
+        const ids = series.filter((item) => item.workspaceId === target.workspaceId && item.anchorTaskId && !listed.has(item.anchorTaskId)).map((item) => item.anchorTaskId!);
         if (ids.length === 0) return [];
         return withActor(target, async (db) => {
           const found: Task[] = [];

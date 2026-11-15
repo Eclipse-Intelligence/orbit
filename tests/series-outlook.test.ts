@@ -81,7 +81,10 @@ class FakeGraph {
   deleted = new Set<string>();
   calls: { method: string; url: string; body: Record<string, unknown> | null }[] = [];
   refuseInstancePatch = false;
+  keepExceptions = false;
+  throttleDeletes = false;
   created = 0;
+  everCreated = new Map<string, string>();
 
   instancesOf(id: string) {
     const master = this.masters.get(id)!;
@@ -121,8 +124,8 @@ class FakeGraph {
     const property = (value: Record<string, unknown> | null) =>
       ((value?.singleValueExtendedProperties as { value: string }[] | undefined) ?? [])[0]?.value ?? null;
     if (method === "POST" && parsed.pathname === "/v1.0/me/events") {
-      const same = [...this.masters, ...this.plains].find(([, item]) => item.transactionId === body!.transactionId);
-      if (same) return json({ id: same[0] }, 201);
+      const same = this.everCreated.get(String(body!.transactionId));
+      if (same) return json({ id: same }, 201);
       this.created += 1;
       if (body!.recurrence) {
         const id = `master-${this.created}`;
@@ -130,16 +133,18 @@ class FakeGraph {
         const end = fromGraph(body!.end);
         const minutes = (Date.parse(end) - Date.parse(fromGraph(body!.start))) / 60_000;
         this.masters.set(id, { subject: String(body!.subject), at: start.dateTime.slice(11, 16), minutes, recurrence: body!.recurrence as Recurrence, transactionId: String(body!.transactionId), key: property(body), body: String((body!.body as { content: string }).content) });
+        this.everCreated.set(String(body!.transactionId), id);
         return json({ id }, 201);
       }
       const id = `single-${this.created}`;
       this.plains.set(id, { subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end), transactionId: String(body!.transactionId), key: property(body) });
+      this.everCreated.set(String(body!.transactionId), id);
       return json({ id }, 201);
     }
     if (method === "GET" && parsed.pathname === "/v1.0/me/events") {
       const filter = parsed.searchParams.get("$filter") ?? "";
       const value = /ep\/value eq '([^']+)'/.exec(filter)?.[1];
-      const found = [...this.masters].filter(([, master]) => master.key === value).map(([id]) => ({ id }));
+      const found = [...this.masters, ...this.plains].filter(([, item]) => item.key === value).map(([id]) => ({ id }));
       return json({ value: found });
     }
     const instances = /^\/v1\.0\/me\/events\/([^/]+)\/instances$/.exec(parsed.pathname);
@@ -154,6 +159,7 @@ class FakeGraph {
     if (one) {
       const id = decodeURIComponent(one[1]);
       if (method === "DELETE") {
+        if (this.throttleDeletes) return new Response(JSON.stringify({ error: { code: "TooManyRequests", message: "Slow down" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "1" } });
         if (this.masters.delete(id)) return json(null, 204);
         if (this.plains.delete(id)) return json(null, 204);
         if (id.includes("::") && this.masters.has(id.split("::")[0]) && !this.deleted.has(id)) {
@@ -169,8 +175,10 @@ class FakeGraph {
           const recurrence = (body!.recurrence as Recurrence | undefined) ?? master.recurrence;
           const minutes = body!.start && body!.end ? (Date.parse(fromGraph(body!.end)) - Date.parse(fromGraph(body!.start))) / 60_000 : master.minutes;
           this.masters.set(id, { ...master, subject: String(body!.subject ?? master.subject), at: startWall ? startWall.dateTime.slice(11, 16) : master.at, minutes, recurrence });
-          for (const key of [...this.overrides.keys()]) if (key.startsWith(`${id}::`)) this.overrides.delete(key);
-          for (const key of [...this.deleted]) if (key.startsWith(`${id}::`)) this.deleted.delete(key);
+          if (!this.keepExceptions) {
+            for (const key of [...this.overrides.keys()]) if (key.startsWith(`${id}::`)) this.overrides.delete(key);
+            for (const key of [...this.deleted]) if (key.startsWith(`${id}::`)) this.deleted.delete(key);
+          }
           return json({ id });
         }
         const plain = this.plains.get(id);
@@ -459,4 +467,102 @@ describe("repeating tasks in Outlook", () => {
     await syncSeriesOutlook({ fetchImpl: graph.fetch });
     assert.equal(graph.masters.size, 0);
   });
+
+  it("keeps the Outlook series while the mailbox can't be reached, and catches up once it can", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating("Kept", tuesday, "12:00", { every: "week" });
+    await sync();
+    const masterId = [...graph.masters.keys()][0];
+    await admin().query("update crm.mailbox_connections set status = 'disconnected' where user_id = $1", [mark.userId]);
+    await updateOccurrence(mark, { taskId: task.id }, { dueAt: london(tuesday, "13:00") }, "all");
+    await sync();
+    assert.equal(graph.masters.get(masterId)!.at, "12:00");
+    let row = (await admin().query<{ master_id: string | null; version: string; settled_version: string }>("select master_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(row.master_id, masterId);
+    assert.ok(Number(row.version) > Number(row.settled_version));
+    await setTaskRepeat(mark, task.id, null);
+    await admin().query("update crm.task_series_outlook set retry_at = null where series_id = $1", [task.seriesId]);
+    await sync();
+    assert.ok(graph.masters.has(masterId));
+    row = (await admin().query<{ master_id: string | null; version: string; settled_version: string }>("select master_id, version, settled_version from crm.task_series_outlook where series_id = $1", [task.seriesId])).rows[0];
+    assert.equal(row.master_id, masterId);
+    await admin().query("update crm.mailbox_connections set status = 'connected' where user_id = $1", [mark.userId]);
+    await admin().query("select private.queue_series_outlook($1)", [mark.userId]);
+    await sync();
+    assert.equal(graph.masters.size, 0);
+  });
+
+  it("writes a timed This one on a date-only series as its own event", async () => {
+    const wednesday = nextWeekday(3);
+    const task = await repeating("Plan the week", wednesday, null, { every: "week" });
+    const later = shiftDay(wednesday, 7);
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(later, "09:30") }, "this", { provenance: DRAG });
+    await sync();
+    assert.equal(graph.masters.size, 0);
+    assert.deepEqual(graph.onDay(later).map((item) => item.start), [london(later, "09:30")]);
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: later });
+    await sync();
+    assert.equal(graph.onDay(later).length, 0);
+  });
+
+  it("creates each plain event with a fresh key, so skip, undo, skip, undo always ends with one event", async () => {
+    const thursday = nextWeekday(4);
+    const task = await repeating("Again", thursday, "11:00", { every: "week" });
+    await sync();
+    const later = shiftDay(thursday, 7);
+    for (let round = 0; round < 2; round += 1) {
+      const skipped = await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: later });
+      await sync();
+      assert.equal(graph.onDay(later).length, 0);
+      await undoTaskEvents(mark, task.id, skipped.body.undo, { operation: "undo_change", source: "web" });
+      await sync();
+      assert.deepEqual(graph.onDay(later).map((item) => item.start), [london(later, "11:00")]);
+    }
+  });
+
+  it("patches a kept exception by its stored id after the series changes, so it never doubles", async () => {
+    graph.keepExceptions = true;
+    const monday = nextWeekday(1);
+    const task = await repeating("Kept exception", monday, "10:00", { every: "week" });
+    await sync();
+    const later = shiftDay(monday, 7);
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: later }, { dueAt: london(shiftDay(later, 1), "15:00"), dueHasTime: true }, "this", [], DRAG);
+    await sync();
+    assert.deepEqual(graph.onDay(shiftDay(later, 1)).map((item) => item.start), [london(shiftDay(later, 1), "15:00")]);
+    await updateOccurrence(mark, { taskId: task.id }, { title: "Kept exception, renamed" }, "all");
+    await sync();
+    assert.equal(graph.onDay(later).length, 0);
+    assert.equal(graph.onDay(shiftDay(later, 1)).length, 1);
+    assert.equal([...graph.plains.values()].filter((plain) => plain.key?.startsWith("series:")).length, 0);
+  });
+
+  it("counts Graph writes against the run's budget and picks up the rest next run", async () => {
+    const friday = nextWeekday(5);
+    const task = await repeating("Budget", friday, "08:00", { every: "week" });
+    for (const week of [1, 2, 3]) await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: shiftDay(friday, week * 7) });
+    await syncTaskBlocks({ fetchImpl: graph.fetch, userId: mark.userId });
+    graph.calls = [];
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId, limit: 2 });
+    assert.ok(graph.calls.filter((call) => call.method !== "GET").length <= 2);
+    const pending = (await version(task.seriesId!))!;
+    assert.ok(pending.version > pending.settled);
+    for (let run = 0; run < 5; run += 1) await syncSeriesOutlook({ fetchImpl: graph.fetch, userId: mark.userId, limit: 2 });
+    for (const week of [1, 2, 3]) assert.equal(graph.onDay(shiftDay(friday, week * 7)).length, 0);
+    assert.deepEqual(graph.onDay(shiftDay(friday, 28)).map((item) => item.start), [london(shiftDay(friday, 28), "08:00")]);
+  });
+
+  it("throttles the person whose mailbox answered 429, not the new owner", async () => {
+    const sam = await createUser(`sam-throttle${seq}@series-outlook.test`, "Sam Okafor");
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, sam.userId]);
+    const tuesday = nextWeekday(2);
+    const task = await repeating("Moving", tuesday, "16:00", { every: "week" });
+    await sync();
+    await admin().query("update crm.task_series set owner_id = $2 where id = $1", [task.seriesId, sam.userId]);
+    graph.throttleDeletes = true;
+    const throttled = new Set<string>();
+    await syncSeriesOutlook({ fetchImpl: graph.fetch, throttled });
+    assert.ok(throttled.has(mark.userId));
+    assert.equal(throttled.has(sam.userId), false);
+  });
 });
+

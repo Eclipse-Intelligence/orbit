@@ -785,6 +785,11 @@ async function resolveTarget(db: Db, actor: Actor, target: OccurrenceTarget) {
   if (!row) throw notFound("task");
   if (row.current_task_id !== (current?.id ?? peek.current_task_id)) current = row.current_task_id ? await lockOpenTask(db, actor, row.current_task_id) : null;
   if (current && current.occursOn === target.occursOn) return { task: current, row, occursOn: current.occursOn, future: false };
+  if (!current && !row.current_task_id && row.split_from_id && !stopped(row) && target.occursOn >= row.starts_on) {
+    const previous = await splitPrevious(db, row.id);
+    const anchor = previous ? await lockOpenTask(db, actor, previous.id) : null;
+    if (anchor && occurrenceOnOrAfter(patternOf(row), target.occursOn) === target.occursOn) return { task: anchor, row, occursOn: target.occursOn, future: true };
+  }
   if (!current || !current.occursOn || target.occursOn <= current.occursOn || stopped(row)) {
     throw new CrmError("invalid_input", "That date isn't an upcoming one. Change the open task instead.", 400, { field: "occursOn" });
   }
@@ -1011,7 +1016,32 @@ function currentWrite(task: Task, input: TaskWrite, future: boolean): TaskWrite 
   return write;
 }
 
+async function editUnstarted(db: Db, actor: Actor, row: SeriesRow, anchor: Task, input: TaskWrite, provenance: Provenance) {
+  if (input.ownerId !== undefined && (input.ownerId || null) !== row.owner_id) await assertRoom(db, actor.workspaceId, input.ownerId || null);
+  const probe = input.dueAt !== undefined || input.dueDate !== undefined ? await createTaskProbe(input) : null;
+  const at = probe ? (probe.dueHasTime && probe.dueAt ? clockLabel(probe.dueAt) : null) : row.at;
+  checkLengths(input);
+  const values = {
+    title: input.title?.trim().slice(0, 200) || row.title,
+    description: input.description !== undefined ? input.description : row.description,
+    priority: input.priority ?? row.priority,
+    owner_id: input.ownerId !== undefined ? input.ownerId || null : row.owner_id,
+    company_id: input.companyId !== undefined ? input.companyId || null : row.company_id,
+    contact_id: input.contactId !== undefined ? input.contactId || null : row.contact_id,
+    opportunity_id: input.opportunityId !== undefined ? input.opportunityId || null : row.opportunity_id,
+    duration_minutes: input.durationMinutes ?? row.duration_minutes,
+    at,
+    remind_minutes: at ? (input.remindMinutes !== undefined ? input.remindMinutes : row.remind_minutes) : null,
+  };
+  const reset = values.at !== row.at ? await resetTimedChanges(db, row.id, shiftDay(row.starts_on, -1)) : [];
+  await writeSeries(db, row.id, values);
+  const after = await readSeries(db, row.id);
+  await recordAudit(db, actor, "task_series.updated", "task", anchor.id, provenance, auditSeries(row, after, { scope: "all", resetChanges: reset }));
+  return (await readTaskInDb(db, actor, anchor.id))!;
+}
+
 async function editAll(db: Db, actor: Actor, row: SeriesRow, task: Task, input: TaskWrite, future: boolean, provenance: Provenance) {
+  if (task.seriesId !== row.id) return editUnstarted(db, actor, row, task, input, provenance);
   const write = currentWrite(task, input, future);
   if (write.ownerId !== undefined && (write.ownerId || null) !== row.owner_id) await assertRoom(db, actor.workspaceId, write.ownerId || null);
   const timeTouched = write.dueAt !== undefined || write.dueDate !== undefined;
@@ -1083,7 +1113,7 @@ async function editFollowing(db: Db, actor: Actor, row: SeriesRow, task: Task, o
   await db.query(`update crm.task_series set ends = jsonb_build_object('until', $2::text) where id = $1`, [row.id, until]);
   const parent = (await readSeries(db, row.id))!;
   const parentNext = task.completedAt ? null : nextOccurrence(patternOf(parent), await changesOf(db, row.id, task.occursOn), task.occursOn ?? until);
-  if (!parentNext && (task.completedAt || row.current_task_id !== task.id)) await finishSeries(db, actor, parent, task, provenance);
+  if (task.seriesId === row.id && !parentNext && (task.completedAt || row.current_task_id !== task.id)) await finishSeries(db, actor, parent, task, provenance);
   await refreshRoll(db, actor, row.id);
   const after = await readSeries(db, row.id);
   const splitRow = await readSeries(db, newId);

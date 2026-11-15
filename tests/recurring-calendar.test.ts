@@ -8,15 +8,17 @@ import { buildPlan, scheduleTasks } from "@/lib/crm/plan-schedule";
 import { packPlan } from "@/lib/crm/plan-tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { readPlanner } from "@/lib/crm/task-blocks";
-import { createRepeatingTask, skipOccurrence } from "@/lib/crm/task-series";
+import { createRepeatingTask, skipOccurrence, updateOccurrence } from "@/lib/crm/task-series";
 import { createTask, getTask } from "@/lib/crm/tasks";
 import type { Task, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { undoTaskEvents } from "@/lib/crm/undo";
-import { moveUpcoming } from "@/lib/crm/upcoming";
+import { moveUpcoming, PAST_DAY } from "@/lib/crm/upcoming";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import { upcomingBlocks } from "@/lib/task-blocks";
+import { upcomingBetween } from "@/lib/task-repeat";
+import { planSeriesOutlook, type SeriesOutlookRow } from "@/lib/crm/series-outlook";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
 let mark: UserActor;
@@ -184,6 +186,53 @@ describe("moving an upcoming date", () => {
     assert.equal(row.due_at, null);
   });
 
+  it("skips, moves and opens later dates of a part split off by This and following, before it starts", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating(mark, "Split me", tuesday, "14:00", { every: "week" });
+    const from = shiftDay(tuesday, 14);
+    await updateOccurrence(mark, { seriesId: task.seriesId!, occursOn: from }, { dueAt: london(from, "15:00") }, "following", { provenance: { operation: "update_task", source: "web" } });
+    const planner = await readPlanner(mark);
+    const split = planner.series.find((item) => item.id !== task.seriesId && item.startsOn === from)!;
+    assert.equal(split.currentTaskId, null);
+    assert.equal(split.anchorTaskId, task.id);
+    const blocks = upcomingBlocks([split], { viewerId: mark.userId, from, to: shiftDay(from, 14), today });
+    assert.deepEqual(blocks.map((block) => block.upcoming?.occursOn), [from, shiftDay(from, 7), shiftDay(from, 14)]);
+    assert.ok(blocks.every((block) => block.upcoming?.currentTaskId === task.id));
+    const skipped = await skipOccurrence(mark, { seriesId: split.id, occursOn: shiftDay(from, 7) });
+    assert.deepEqual((await changeRows(split.id)).map((row) => [row.occurs_on, row.skip]), [[shiftDay(from, 7), true]]);
+    await undoTaskEvents(mark, task.id, skipped.body.undo, { operation: "undo_change", source: "web" });
+    assert.deepEqual(await changeRows(split.id), []);
+    const moved = await moveUpcoming(mark, { seriesId: split.id, occursOn: shiftDay(from, 14) }, { dueAt: london(shiftDay(from, 14), "17:00"), dueHasTime: true }, "this", [], { operation: "drag_task", source: "web" });
+    assert.equal(moved.task.id, task.id);
+    const all = await moveUpcoming(mark, { seriesId: split.id, occursOn: shiftDay(from, 14) }, { dueAt: london(shiftDay(from, 14), "17:00"), dueHasTime: true }, "all", moved.undo, { operation: "drag_task", source: "web" });
+    assert.equal((await seriesRow(split.id)).at, "17:00");
+    assert.equal((await seriesRow(task.seriesId!)).at, "14:00");
+    assert.equal((await getTask(mark, task.id)).dueAt, london(tuesday, "14:00"));
+    await undoTaskEvents(mark, task.id, all.undo, { operation: "undo_change", source: "web" });
+    assert.equal((await seriesRow(split.id)).at, "15:00");
+  });
+
+  it("refuses a later date dropped on a past day", async () => {
+    const tuesday = nextWeekday(2);
+    const task = await repeating(mark, "No past", tuesday, "14:00", { every: "week" });
+    const yesterday = shiftDay(today, -1);
+    await assert.rejects(
+      () => moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: shiftDay(tuesday, 7) }, { dueAt: london(yesterday, "14:00"), dueHasTime: true }, "this", [], { operation: "drag_task", source: "web" }),
+      (error: Error) => error.message === PAST_DAY,
+    );
+  });
+
+  it("counts the changed dates All would reset", async () => {
+    const wednesday = nextWeekday(3);
+    const task = await repeating(mark, "Count", wednesday, "09:00", { every: "week" });
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: shiftDay(wednesday, 7) }, { dueAt: london(shiftDay(wednesday, 7), "10:00"), dueHasTime: true }, "this", [], { operation: "drag_task", source: "web" });
+    await moveUpcoming(mark, { seriesId: task.seriesId!, occursOn: shiftDay(wednesday, 14) }, { durationMinutes: 45 }, "this", [], { operation: "drag_task", source: "web" });
+    await skipOccurrence(mark, { seriesId: task.seriesId!, occursOn: shiftDay(wednesday, 21) });
+    const series = (await readPlanner(mark)).series.filter((item) => item.id === task.seriesId);
+    const [block] = upcomingBlocks(series, { viewerId: mark.userId, from: shiftDay(wednesday, 28), to: shiftDay(wednesday, 28), today });
+    assert.equal(block.upcoming?.changedDates, 1);
+  });
+
   it("refuses a teammate moving the creator's upcoming date", async () => {
     const friday = nextWeekday(5);
     const task = await repeating(mark, "Mine", friday, "10:00", { every: "week" });
@@ -207,6 +256,15 @@ describe("Plan and booking pages", () => {
     assert.equal(plan.placed.some((entry) => entry.taskId === report.id), false);
     assert.ok(plan.unplaced.some((entry) => entry.taskId === report.id));
     assert.equal(plan.placed.some((entry) => entry.title === "Deep work"), false);
+  });
+
+  it("lets an overdue repeating task move onto its own next date", async () => {
+    const task = await repeating(mark, "Stand-up", nextWeekday(1), "10:00", { every: "day" }, { durationMinutes: 30 });
+    const yesterday = shiftDay(today, -1);
+    await sql("update crm.tasks set due_at = $2, occurs_on = $3 where id = $1", [task.id, london(yesterday, "10:00"), yesterday]);
+    const monday = nextWeekday(1);
+    const [moved] = await scheduleTasks(mark, [{ taskId: task.id, at: london(monday, "10:00"), durationMinutes: 30, moveDay: monday }], { mode: "agent", provenance: { operation: "schedule_tasks", source: "mcp" } });
+    assert.equal(moved.task.dueAt, london(monday, "10:00"));
   });
 
   it("refuses an agent schedule over an upcoming date", async () => {
@@ -280,5 +338,54 @@ describe("Plan and booking pages", () => {
     assert.equal((await getPool().query("select * from private.booking_series($1, $2::date, $3::date)", [mark.userId, tuesday, shiftDay(tuesday, 50)])).rows.length, 0);
     const denied = await getAdminPool().query("select has_function_privilege('authenticated', 'private.booking_series(uuid, date, date)', 'execute') as granted");
     assert.equal(denied.rows[0].granted, false);
+  });
+});
+
+describe("dates moved past the open one", () => {
+  it("still show where they fall, on the Calendar, in booking and in Outlook", () => {
+    const series = {
+      startsOn: "2027-01-04",
+      at: "09:00",
+      rule: { freq: "daily" as const, interval: 1 },
+      ends: { never: true as const },
+      durationMinutes: 30,
+      afterOccurs: "2027-01-04",
+      after: "2027-01-06",
+      changes: [{ occursOn: "2027-01-05", dueAt: "2027-01-09T15:00:00.000Z", dueHasTime: true }],
+    };
+    const shown = upcomingBetween(series, "2027-01-04", "2027-01-10", "2027-01-04", "Europe/London");
+    assert.deepEqual(shown.map((item) => [item.occursOn, item.day]), [["2027-01-07", "2027-01-07"], ["2027-01-08", "2027-01-08"], ["2027-01-09", "2027-01-09"], ["2027-01-05", "2027-01-09"], ["2027-01-10", "2027-01-10"]]);
+    const row = {
+      series_id: "00000000-0000-4000-8000-000000000001",
+      workspace_id: "00000000-0000-4000-8000-000000000002",
+      owner_id: "00000000-0000-4000-8000-000000000003",
+      owner_member: true,
+      title: "Daily",
+      starts_on: "2027-01-04",
+      at: "09:00",
+      duration_minutes: 30,
+      rule: series.rule,
+      ends: series.ends,
+      ended: false,
+      current_task_id: "00000000-0000-4000-8000-000000000004",
+      current_occurs_on: "2027-01-04",
+      current_due_at: "2027-01-06T09:00:00.000Z",
+      changes: series.changes,
+      user_id: null,
+      master_id: null,
+      create_key: null,
+      create_user_id: null,
+      create_sent_at: null,
+      written: null,
+      dates: {},
+      version: 1,
+      attempts: 0,
+    } as SeriesOutlookRow;
+    const plan = planSeriesOutlook(row, Date.parse("2027-01-04T08:00:00Z"), "Europe/London");
+    assert.equal(plan.kind, "write");
+    if (plan.kind === "write") {
+      assert.equal(plan.master?.startDay, "2027-01-07");
+      assert.deepEqual(plan.dates["2027-01-05"], { start: "2027-01-09T15:00:00.000Z", end: "2027-01-09T15:30:00.000Z", title: "Daily" });
+    }
   });
 });

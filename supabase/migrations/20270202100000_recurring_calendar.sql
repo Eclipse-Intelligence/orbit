@@ -95,7 +95,11 @@ as $$
   insert into crm.task_series_outlook as o (series_id)
   select s.id from crm.task_series s
   where s.id = p_series
-    and (s.at is not null or exists (select 1 from crm.task_series_outlook x where x.series_id = s.id))
+    and (
+      s.at is not null
+      or exists (select 1 from crm.task_series_outlook x where x.series_id = s.id)
+      or exists (select 1 from crm.task_occurrence_changes c where c.series_id = s.id and c.due_has_time)
+    )
   on conflict (series_id) do update set version = o.version + 1, retry_at = null, updated_at = now();
 $$;
 
@@ -138,6 +142,7 @@ create trigger tasks_series_outlook_enqueue
   when (new.series_id is not null or old.series_id is not null)
   execute function private.task_series_outlook_enqueue();
 
+drop function if exists private.claim_series_outlook(uuid[], uuid, integer);
 create or replace function private.claim_series_outlook(p_task_ids uuid[], p_user_id uuid, p_limit integer)
 returns table (
   series_id uuid,
@@ -145,14 +150,14 @@ returns table (
   owner_id uuid,
   owner_member boolean,
   title text,
-  starts_on date,
+  starts_on text,
   at text,
   duration_minutes integer,
   rule jsonb,
   ends jsonb,
   ended boolean,
   current_task_id uuid,
-  current_occurs_on date,
+  current_occurs_on text,
   current_due_at timestamptz,
   changes jsonb,
   user_id uuid,
@@ -190,9 +195,9 @@ as $$
   )
   select s.id, s.workspace_id, s.owner_id,
     exists (select 1 from crm.workspace_members m where m.workspace_id = s.workspace_id and m.user_id = s.owner_id),
-    s.title, s.starts_on, to_char(s.at, 'HH24:MI'), s.duration_minutes, s.rule, s.ends,
+    s.title, s.starts_on::text, to_char(s.at, 'HH24:MI'), s.duration_minutes, s.rule, s.ends,
     (s.ended_at is not null or s.archived_at is not null),
-    s.current_task_id, t.occurs_on, t.due_at,
+    s.current_task_id, t.occurs_on::text, t.due_at,
     coalesce((
       select jsonb_agg(jsonb_build_object(
         'occursOn', ch.occurs_on::text, 'skip', ch.skip, 'dueAt', ch.due_at, 'dueHasTime', ch.due_has_time,
@@ -287,8 +292,13 @@ as $$
   with touched as (
     insert into crm.task_series_outlook as o (series_id)
     select s.id from crm.task_series s
-    where s.owner_id = p_user_id and s.at is not null and s.ended_at is null and s.archived_at is null
-    on conflict (series_id) do update set version = o.version + 1, retry_at = null, updated_at = now()
+    where (
+        s.owner_id = p_user_id
+        and s.ended_at is null and s.archived_at is null
+        and (s.at is not null or exists (select 1 from crm.task_occurrence_changes c where c.series_id = s.id and c.due_has_time))
+      )
+      or exists (select 1 from crm.task_series_outlook x where x.series_id = s.id and (x.user_id = p_user_id or x.create_user_id = p_user_id))
+    on conflict (series_id) do update set version = o.version + 1, retry_at = null, attempts = 0, updated_at = now()
     returning 1
   )
   select count(*)::integer from touched;
@@ -297,6 +307,7 @@ $$;
 revoke all on function private.queue_series_outlook(uuid) from public;
 grant execute on function private.queue_series_outlook(uuid) to crm_app;
 revoke all on function private.series_outlook_touch(uuid) from public;
+revoke all on function private.task_series_outlook_enqueue() from public;
 revoke all on function private.claim_series_outlook(uuid[], uuid, integer) from public;
 revoke all on function private.begin_series_outlook_create(uuid, uuid) from public;
 revoke all on function private.save_series_outlook(uuid, uuid, text, jsonb, jsonb, boolean) from public;

@@ -56,7 +56,7 @@ export type PlanContext = {
   tasks: Task[];
   hours: WorkingHours;
   meetings: PlanMeeting[];
-  upcoming: { title: string; startsAt: string; endsAt: string }[];
+  upcoming: { seriesId: string; title: string; startsAt: string; endsAt: string }[];
   preferences: PlanPreferences;
 };
 
@@ -100,6 +100,7 @@ export async function readPlanContextInDb(
     upcomingBetween(item, today, lastDay, today)
       .filter((occurrence) => occurrence.dueHasTime)
       .map((occurrence) => ({
+        seriesId: item.id,
         title: occurrence.title ?? item.title,
         startsAt: occurrence.dueAt,
         endsAt: new Date(Date.parse(occurrence.dueAt) + occurrence.durationMinutes * 60_000).toISOString(),
@@ -277,7 +278,14 @@ export async function scheduleTasks(
             now,
             mode: options.mode,
             hours: context?.hours,
-            meetings: context ? [...context.meetings, ...context.upcoming.map((item) => ({ subject: item.title, startsAt: item.startsAt, endsAt: item.endsAt, isAllDay: false, showAs: "busy" }))] : undefined,
+            meetings: context
+              ? [
+                  ...context.meetings,
+                  ...context.upcoming
+                    .filter((item) => item.seriesId !== task.seriesId)
+                    .map((item) => ({ subject: item.title, startsAt: item.startsAt, endsAt: item.endsAt, isAllDay: false, showAs: "busy" })),
+                ]
+              : undefined,
             others: context?.tasks,
             batch,
           });

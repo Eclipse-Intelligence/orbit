@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { actingActor, graphFailure, openOutlook, taskBlockLink, type Access, type Outlook } from "@/lib/crm/task-outlook";
+import { createHash, randomUUID } from "node:crypto";
+import { actingActor, graphFailure, openOutlook, taskBlockLink, type Access, type Failure, type Outlook } from "@/lib/crm/task-outlook";
 import { clockLabel, dayStartIso, wallInstant } from "@/lib/crm/task-time";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { query } from "@/lib/db/pool";
@@ -34,6 +34,7 @@ const RUN_LIMIT = 50;
 const RESERVE_MS = 4_000;
 const CREATE_GRACE_MS = 2 * MINUTE_MS;
 const RETRY_MS = 5 * MINUTE_MS;
+const LEASE_MS = 2 * MINUTE_MS - 15_000;
 
 const GRAPH_DAYS: Record<string, string> = {
   mo: "monday",
@@ -53,14 +54,14 @@ export type SeriesOutlookRow = {
   owner_id: string | null;
   owner_member: boolean;
   title: string;
-  starts_on: string | Date;
+  starts_on: string;
   at: string | null;
   duration_minutes: number;
   rule: RepeatRule;
   ends: RepeatEnds;
   ended: boolean;
   current_task_id: string | null;
-  current_occurs_on: string | Date | null;
+  current_occurs_on: string | null;
   current_due_at: Date | string | null;
   changes: (OccurrenceChange & { dueAt: string | null })[] | null;
   user_id: string | null;
@@ -89,18 +90,18 @@ export type DateRecord = {
   instance?: "patched" | "deleted";
   instanceId?: string;
   single?: string;
+  createKey?: string;
   written?: { start: string; end: string; title: string } | null;
 };
 
 export type SeriesPlan =
   | { kind: "remove" }
-  | { kind: "write"; userId: string; master: MasterSpec; dates: Record<string, DateWant | null> };
+  | { kind: "write"; userId: string; master: MasterSpec | null; link: string | null; dates: Record<string, DateWant | null> };
 
 export type SeriesRun = { written: number; removed: number; unchanged: number; deferred: number; throttled: number; orbitOnly: number };
 
-function day(value: string | Date | null) {
-  if (!value) return null;
-  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+function day(value: string | null) {
+  return value ? String(value).slice(0, 10) : null;
 }
 
 function iso(value: Date | string | null | undefined) {
@@ -143,45 +144,45 @@ function changesOf(row: SeriesOutlookRow): OccurrenceChange[] {
   return (row.changes ?? []).map((change) => ({ ...change, dueAt: iso(change.dueAt) }));
 }
 
-export function firstOutlookDay(row: SeriesOutlookRow, now: number, timeZone = appTimeZone()) {
-  const pattern = patternOf(row);
+function afterDays(row: SeriesOutlookRow, timeZone: string) {
   const occurs = day(row.current_occurs_on);
   const due = row.current_due_at ? dayKeyAt(new Date(row.current_due_at), timeZone) : null;
-  const after = occurs && due ? (due > occurs ? due : occurs) : (occurs ?? due);
+  return { occurs, after: occurs && due ? (due > occurs ? due : occurs) : (occurs ?? due) };
+}
+
+export function firstOutlookDay(row: SeriesOutlookRow, now: number, timeZone = appTimeZone()) {
+  const pattern = patternOf(row);
+  const { after } = afterDays(row, timeZone);
   const today = dayKeyAt(new Date(now), timeZone);
   const from = after ? shiftDay(after, 1) : pattern.startsOn;
   return occurrenceOnOrAfter(pattern, from > today ? from : today);
 }
 
-export function defaultWant(row: SeriesOutlookRow, occursOn: string, timeZone = appTimeZone()): DateWant {
+export function defaultWant(row: SeriesOutlookRow, occursOn: string, timeZone = appTimeZone()): Extract<DateWant, { start: string }> {
   const timing = occurrenceTiming(row.at, occursOn, timeZone);
   return { start: timing.dueAt, end: new Date(Date.parse(timing.dueAt) + row.duration_minutes * MINUTE_MS).toISOString(), title: row.title };
 }
 
 export function planSeriesOutlook(row: SeriesOutlookRow, now: number, timeZone = appTimeZone()): SeriesPlan {
-  if (!row.owner_id || !row.owner_member || !row.at || row.ended) return { kind: "remove" };
+  if (!row.owner_id || !row.owner_member || row.ended) return { kind: "remove" };
   const pattern = patternOf(row);
-  const startDay = firstOutlookDay(row, now, timeZone);
-  if (!startDay) return { kind: "remove" };
+  const { occurs, after } = afterDays(row, timeZone);
+  const today = dayKeyAt(new Date(now), timeZone);
+  const startDay = row.at ? firstOutlookDay(row, now, timeZone) : null;
   const lastDay = lastOccurrence(pattern);
-  const master: MasterSpec = {
-    startDay,
-    at: row.at,
-    durationMinutes: row.duration_minutes,
-    title: row.title,
-    link: row.current_task_id ? taskBlockLink(row.current_task_id, row.workspace_id) : null,
-    recurrence: seriesRecurrence(pattern, startDay, lastDay, timeZone),
-  };
+  const link = row.current_task_id ? taskBlockLink(row.current_task_id, row.workspace_id) : null;
+  const master: MasterSpec | null =
+    row.at && startDay
+      ? { startDay, at: row.at, durationMinutes: row.duration_minutes, title: row.title, link, recurrence: seriesRecurrence(pattern, startDay, lastDay, timeZone) }
+      : null;
+  const hasInstance = (occursOn: string) => Boolean(master && startDay && occursOn >= startDay && (!lastDay || occursOn <= lastDay));
   const dates: Record<string, DateWant | null> = {};
   for (const change of changesOf(row)) {
-    if (change.occursOn < startDay || (lastDay && change.occursOn > lastDay)) continue;
-    if (change.skip) {
-      dates[change.occursOn] = { skip: true };
-      continue;
-    }
+    if ((occurs && change.occursOn <= occurs) || (lastDay && change.occursOn > lastDay)) continue;
     const occurrence = occurrenceFor(pattern, change.occursOn, change, timeZone);
-    if (!occurrence.dueHasTime) {
-      dates[change.occursOn] = { skip: true };
+    const shows = !change.skip && occurrence.dueHasTime && (!after || occurrence.day > after) && occurrence.day >= today;
+    if (!shows) {
+      if (hasInstance(change.occursOn)) dates[change.occursOn] = { skip: true };
       continue;
     }
     const start = occurrence.dueAt;
@@ -189,9 +190,11 @@ export function planSeriesOutlook(row: SeriesOutlookRow, now: number, timeZone =
     dates[change.occursOn] = { start, end: new Date(Date.parse(start) + minutes * MINUTE_MS).toISOString(), title: occurrence.title ?? row.title };
   }
   for (const occursOn of Object.keys(row.dates ?? {})) {
-    if (!(occursOn in dates)) dates[occursOn] = occursOn >= startDay && (!lastDay || occursOn <= lastDay) ? defaultWant(row, occursOn, timeZone) : null;
+    if (!(occursOn in dates)) dates[occursOn] = hasInstance(occursOn) ? defaultWant(row, occursOn, timeZone) : null;
   }
-  return { kind: "write", userId: row.owner_id, master, dates };
+  const timedDates = Object.values(dates).some((want) => want !== null && !want.skip);
+  if (!master && !timedDates && !holds(row)) return { kind: "remove" };
+  return { kind: "write", userId: row.owner_id, master, link, dates };
 }
 
 export function seriesTransactionId(seriesId: string, key: string) {
@@ -240,22 +243,29 @@ function masterPatch(spec: MasterSpec, timeZone = appTimeZone()): Partial<Series
   };
 }
 
-function singleDraft(seriesId: string, occursOn: string, want: Extract<DateWant, { start: string }>, link: string | null, timeZone = appTimeZone()) {
-  const key = `series:${seriesId}:${occursOn}:${want.start}`;
+export function singleKey(seriesId: string, createKey: string) {
+  return `series:${seriesId}:single:${createKey}`;
+}
+
+function singleDraft(seriesId: string, createKey: string, want: Extract<DateWant, { start: string }>, link: string | null, timeZone: string) {
   return taskBlockDraft({
     title: want.title,
     start: new Date(want.start),
     end: new Date(want.end),
     timeZone,
     link,
-    transactionId: seriesTransactionId(seriesId, `${occursOn}|${want.start}`),
-    key,
+    transactionId: seriesTransactionId(seriesId, `single|${createKey}`),
+    key: singleKey(seriesId, createKey),
   });
 }
 
-function timesPatch(want: Extract<DateWant, { start: string }>, link: string | null, timeZone = appTimeZone()) {
+function timesPatch(want: Extract<DateWant, { start: string }>, link: string | null, timeZone: string) {
   const draft = taskBlockDraft({ title: want.title, start: new Date(want.start), end: new Date(want.end), timeZone, link, transactionId: "", key: "" });
   return { subject: draft.subject, body: { contentType: "HTML" as const, content: taskBlockBodyHtml(link) }, start: draft.start, end: draft.end, showAs: "busy", sensitivity: "private", isReminderOn: false };
+}
+
+function written(want: Extract<DateWant, { start: string }>) {
+  return { start: want.start, end: want.end, title: want.title };
 }
 
 function sameWritten(left: DateRecord["written"], right: Extract<DateWant, { start: string }>) {
@@ -278,18 +288,60 @@ function sameMaster(left: MasterSpec | null, right: MasterSpec) {
   return stable(left) === stable(right);
 }
 
-class Throttled extends Error {}
-class Retry extends Error {}
-
-function rethrow(error: unknown): never {
-  const failure = graphFailure(error);
-  if (failure === "throttled") throw new Throttled();
-  throw error instanceof Retry ? error : new Retry(failure);
+class Throttled extends Error {
+  constructor(readonly userId: string) {
+    super("throttled");
+  }
 }
 
-type Context = { fetchImpl: typeof fetch; timeZone: string };
+class GraphFail extends Error {
+  constructor(readonly failure: Failure) {
+    super(failure);
+  }
+}
 
-async function save(row: SeriesOutlookRow, state: { userId: string | null; masterId: string | null; written: MasterSpec | null; dates: Record<string, DateRecord> }, clearKey = false) {
+class Retry extends Error {}
+class OutOfTime extends Error {}
+
+type Context = { fetchImpl: typeof fetch; timeZone: string; budget: { left: number }; stopAt: number };
+
+function checkTime(context: Context) {
+  if (Date.now() >= context.stopAt) throw new OutOfTime();
+}
+
+function failureOf(error: unknown, outlook: Outlook) {
+  if (error instanceof OutOfTime || error instanceof Throttled || error instanceof GraphFail) return error;
+  const failure = graphFailure(error);
+  return failure === "throttled" ? new Throttled(outlook.actor.userId) : new GraphFail(failure);
+}
+
+async function graphWrite<T>(context: Context, outlook: Outlook, run: () => Promise<T>): Promise<T> {
+  checkTime(context);
+  if (context.budget.left <= 0) throw new OutOfTime();
+  context.budget.left -= 1;
+  try {
+    return await run();
+  } catch (error) {
+    throw failureOf(error, outlook);
+  }
+}
+
+async function graphRead<T>(context: Context, outlook: Outlook, run: () => Promise<T>): Promise<T> {
+  checkTime(context);
+  try {
+    return await run();
+  } catch (error) {
+    throw failureOf(error, outlook);
+  }
+}
+
+function failed(error: unknown, ...kinds: Failure[]) {
+  return error instanceof GraphFail && kinds.includes(error.failure);
+}
+
+type State = { userId: string | null; masterId: string | null; written: MasterSpec | null; dates: Record<string, DateRecord> };
+
+async function save(row: SeriesOutlookRow, state: State, clearKey = false) {
   await query("select private.save_series_outlook($1, $2, $3, $4, $5, $6)", [
     row.series_id,
     state.userId,
@@ -300,18 +352,25 @@ async function save(row: SeriesOutlookRow, state: { userId: string | null; maste
   ]);
 }
 
+function holds(row: SeriesOutlookRow) {
+  return Boolean(row.master_id) || Object.values(row.dates ?? {}).some((record) => record.single || record.createKey);
+}
+
 async function removeAll(outlook: Outlook, row: SeriesOutlookRow, context: Context) {
-  for (const record of Object.values(row.dates ?? {})) {
-    if (record.single) await deleteGraphEvent(outlook.token.accessToken, record.single, context.fetchImpl).catch(rethrow);
+  const dates = { ...(row.dates ?? {}) };
+  for (const [occursOn, record] of Object.entries(dates)) {
+    if (record.single) await graphWrite(context, outlook, () => deleteGraphEvent(outlook.token.accessToken, record.single!, context.fetchImpl));
+    delete dates[occursOn];
+    await save(row, { userId: row.user_id, masterId: row.master_id, written: row.written, dates });
   }
-  if (row.master_id) await deleteGraphEvent(outlook.token.accessToken, row.master_id, context.fetchImpl).catch(rethrow);
+  if (row.master_id) await graphWrite(context, outlook, () => deleteGraphEvent(outlook.token.accessToken, row.master_id!, context.fetchImpl));
   await save(row, { userId: null, masterId: null, written: null, dates: {} }, true);
 }
 
 async function findInstance(outlook: Outlook, masterId: string, occursOn: string, context: Context) {
   const start = new Date(dayStartIso(occursOn, context.timeZone));
   const end = new Date(dayStartIso(shiftDay(occursOn, 1), context.timeZone));
-  const found = await listSeriesInstances(outlook.token.accessToken, masterId, start, end, context.fetchImpl).catch(rethrow);
+  const found = await graphRead(context, outlook, () => listSeriesInstances(outlook.token.accessToken, masterId, start, end, context.fetchImpl));
   const match = found.find((event) => {
     const at = graphInstant(event.start);
     return at !== null && dayKeyAt(new Date(at), context.timeZone) === occursOn;
@@ -320,20 +379,21 @@ async function findInstance(outlook: Outlook, masterId: string, occursOn: string
 }
 
 async function ensureMaster(outlook: Outlook, row: SeriesOutlookRow, master: MasterSpec, context: Context, now: number) {
+  const token = outlook.token.accessToken;
   if (row.master_id) {
-    if (sameMaster(row.written, master)) return { masterId: row.master_id, rewritten: false };
+    if (sameMaster(row.written, master)) return { masterId: row.master_id, rewritten: false, created: false };
     try {
-      await patchGraphEvent(outlook.token.accessToken, row.master_id, masterPatch(master, context.timeZone), context.fetchImpl);
-      return { masterId: row.master_id, rewritten: true };
+      await graphWrite(context, outlook, () => patchGraphEvent(token, row.master_id!, masterPatch(master, context.timeZone), context.fetchImpl));
+      return { masterId: row.master_id, rewritten: true, created: false };
     } catch (error) {
-      if (graphFailure(error) !== "gone") rethrow(error);
+      if (!failed(error, "gone")) throw error;
     }
   }
   if (row.create_key && row.create_user_id === outlook.actor.userId) {
-    const found = await findTaskBlockEvents(outlook.token.accessToken, `series:${row.series_id}:${row.create_key}`, context.fetchImpl).catch(rethrow);
+    const found = await graphRead(context, outlook, () => findTaskBlockEvents(token, `series:${row.series_id}:${row.create_key}`, context.fetchImpl));
     if (found[0]?.id) {
-      await patchGraphEvent(outlook.token.accessToken, found[0].id, masterPatch(master, context.timeZone), context.fetchImpl).catch(rethrow);
-      for (const extra of found.slice(1)) if (extra.id) await deleteGraphEvent(outlook.token.accessToken, extra.id, context.fetchImpl).catch(rethrow);
+      await graphWrite(context, outlook, () => patchGraphEvent(token, found[0].id!, masterPatch(master, context.timeZone), context.fetchImpl));
+      for (const extra of found.slice(1)) if (extra.id) await graphWrite(context, outlook, () => deleteGraphEvent(token, extra.id!, context.fetchImpl));
       return { masterId: found[0].id, rewritten: true, created: true };
     }
     const sent = row.create_sent_at ? new Date(row.create_sent_at).getTime() : 0;
@@ -342,103 +402,162 @@ async function ensureMaster(outlook: Outlook, row: SeriesOutlookRow, master: Mas
   const begun = await query<{ key: string }>("select private.begin_series_outlook_create($1, $2) as key", [row.series_id, outlook.actor.userId]);
   const key = begun.rows[0]?.key;
   if (!key) throw new Retry("gone");
-  const created = await createGraphEvent(outlook.token.accessToken, masterDraft(row.series_id, master, key, context.timeZone), { fetchImpl: context.fetchImpl }).catch(rethrow);
+  const created = await graphWrite(context, outlook, () => createGraphEvent(token, masterDraft(row.series_id, master, key, context.timeZone), { fetchImpl: context.fetchImpl }));
   if (!created.id) throw new Retry("no id");
   return { masterId: created.id, rewritten: true, created: true };
 }
 
-async function reconcileDate(
-  outlook: Outlook,
-  seriesId: string,
-  masterId: string,
-  occursOn: string,
-  want: DateWant | null,
-  record: DateRecord | undefined,
-  rewritten: boolean,
-  link: string | null,
-  context: Context,
-): Promise<DateRecord | null> {
+type DateJob = {
+  outlook: Outlook;
+  seriesId: string;
+  record: DateRecord;
+  masterId: string | null;
+  occursOn: string;
+  want: DateWant | null;
+  rewritten: boolean;
+  link: string | null;
+  context: Context;
+  persist: (record: DateRecord) => Promise<void>;
+};
+
+async function dropInstances(job: DateJob, record: DateRecord) {
+  const { outlook, context, masterId, occursOn } = job;
+  if (!masterId) return;
+  if (record.instance === "deleted" && !job.rewritten) return;
   const token = outlook.token.accessToken;
-  const current: DateRecord = { ...(record ?? {}) };
-  if (rewritten && current.instance) {
-    delete current.instance;
-    delete current.instanceId;
+  if (record.instanceId) await graphWrite(context, outlook, () => deleteGraphEvent(token, record.instanceId!, context.fetchImpl));
+  const found = await findInstance(outlook, masterId, occursOn, context);
+  if (found) await graphWrite(context, outlook, () => deleteGraphEvent(token, found, context.fetchImpl));
+  record.instance = "deleted";
+  delete record.instanceId;
+}
+
+async function writeSingle(job: DateJob, record: DateRecord, want: Extract<DateWant, { start: string }>) {
+  const { outlook, context, seriesId, link } = job;
+  const token = outlook.token.accessToken;
+  if (record.single) {
+    if (sameWritten(record.written, want)) return;
+    try {
+      await graphWrite(context, outlook, () => patchGraphEvent(token, record.single!, timesPatch(want, link, context.timeZone), context.fetchImpl));
+      record.written = written(want);
+      return;
+    } catch (error) {
+      if (!failed(error, "gone")) throw error;
+      delete record.single;
+    }
   }
+  if (record.createKey) {
+    const found = await graphRead(context, outlook, () => findTaskBlockEvents(token, singleKey(seriesId, record.createKey!), context.fetchImpl));
+    if (found[0]?.id) {
+      await graphWrite(context, outlook, () => patchGraphEvent(token, found[0].id!, timesPatch(want, link, context.timeZone), context.fetchImpl));
+      for (const extra of found.slice(1)) if (extra.id) await graphWrite(context, outlook, () => deleteGraphEvent(token, extra.id!, context.fetchImpl));
+      record.single = found[0].id;
+      delete record.createKey;
+      record.written = written(want);
+      return;
+    }
+  } else {
+    record.createKey = randomUUID();
+    await job.persist(record);
+  }
+  const created = await graphWrite(context, outlook, () => createGraphEvent(token, singleDraft(seriesId, record.createKey!, want, link, context.timeZone), { fetchImpl: context.fetchImpl }));
+  if (!created.id) throw new Retry("no id");
+  record.single = created.id;
+  delete record.createKey;
+  record.written = written(want);
+}
+
+async function reconcileDate(job: DateJob): Promise<DateRecord | null> {
+  const { outlook, context, masterId, occursOn, want, link } = job;
+  const token = outlook.token.accessToken;
+  const record: DateRecord = { ...job.record };
+  if (job.rewritten && record.instance === "patched") delete record.instance;
   if (want === null) {
-    if (current.single) await deleteGraphEvent(token, current.single, context.fetchImpl).catch(rethrow);
+    if (record.single) await graphWrite(context, outlook, () => deleteGraphEvent(token, record.single!, context.fetchImpl));
     return null;
   }
-  const dropInstance = async () => {
-    if (current.instance === "deleted") return;
-    const id = current.instanceId ?? (await findInstance(outlook, masterId, occursOn, context));
-    if (id) await deleteGraphEvent(token, id, context.fetchImpl).catch(rethrow);
-    current.instance = "deleted";
-    delete current.instanceId;
-  };
   if (want.skip) {
-    if (current.single) await deleteGraphEvent(token, current.single, context.fetchImpl).catch(rethrow);
-    delete current.single;
-    current.written = null;
-    await dropInstance();
-    return current;
+    if (record.single) await graphWrite(context, outlook, () => deleteGraphEvent(token, record.single!, context.fetchImpl));
+    delete record.single;
+    delete record.createKey;
+    record.written = null;
+    await dropInstances(job, record);
+    return record;
   }
-  if (current.single) {
-    await dropInstance();
-    if (!sameWritten(current.written, want)) {
-      try {
-        await patchGraphEvent(token, current.single, timesPatch(want, link, context.timeZone), context.fetchImpl);
-      } catch (error) {
-        if (graphFailure(error) !== "gone") rethrow(error);
-        const created = await createGraphEvent(token, singleDraft(seriesId, occursOn, want, link, context.timeZone), { fetchImpl: context.fetchImpl }).catch(rethrow);
-        current.single = created.id ?? undefined;
+  if (record.single || record.createKey || !masterId || (record.instance === "deleted" && !job.rewritten)) {
+    await dropInstances(job, record);
+    await writeSingle(job, record, want);
+    return record;
+  }
+  if (record.instance === "patched" && sameWritten(record.written, want)) return record;
+  let id = record.instanceId ?? null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!id) id = await findInstance(outlook, masterId, occursOn, context);
+    if (!id) break;
+    const target = id;
+    try {
+      await graphWrite(context, outlook, () => patchGraphEvent(token, target, timesPatch(want, link, context.timeZone), context.fetchImpl));
+      return { instance: "patched", instanceId: target, written: written(want) };
+    } catch (error) {
+      if (failed(error, "gone") && record.instanceId === target) {
+        delete record.instanceId;
+        id = null;
+        continue;
       }
+      if (!failed(error, "refused", "denied", "gone")) throw error;
+      if (!failed(error, "gone")) await graphWrite(context, outlook, () => deleteGraphEvent(token, target, context.fetchImpl));
+      break;
     }
-    current.written = { start: want.start, end: want.end, title: want.title };
-    return current;
   }
-  if (current.instance !== "deleted") {
-    const id = current.instanceId ?? (await findInstance(outlook, masterId, occursOn, context));
-    if (id) {
-      if (current.instance === "patched" && sameWritten(current.written, want)) return current;
-      try {
-        await patchGraphEvent(token, id, timesPatch(want, link, context.timeZone), context.fetchImpl);
-        return { instance: "patched", instanceId: id, written: { start: want.start, end: want.end, title: want.title } };
-      } catch (error) {
-        const failure = graphFailure(error);
-        if (failure === "throttled" || failure === "retry" || failure === "orbit_only") rethrow(error);
-        if (failure !== "gone") await deleteGraphEvent(token, id, context.fetchImpl).catch(rethrow);
-      }
-    }
-    current.instance = "deleted";
-    delete current.instanceId;
-  }
-  const created = await createGraphEvent(token, singleDraft(seriesId, occursOn, want, link, context.timeZone), { fetchImpl: context.fetchImpl }).catch(rethrow);
-  if (!created.id) throw new Retry("no id");
-  return { instance: "deleted", single: created.id, written: { start: want.start, end: want.end, title: want.title } };
+  record.instance = "deleted";
+  delete record.instanceId;
+  await writeSingle(job, record, want);
+  return record;
 }
 
 export function isDefaultRecord(row: SeriesOutlookRow, occursOn: string, record: DateRecord | null, timeZone = appTimeZone()) {
-  if (!record || record.single || record.instance === "deleted") return false;
-  const base = defaultWant(row, occursOn, timeZone);
-  return "start" in base && sameWritten(record.written, base);
+  if (!record || record.single || record.createKey || record.instance === "deleted") return false;
+  return sameWritten(record.written, defaultWant(row, occursOn, timeZone));
 }
 
 async function writeSeries(outlook: Outlook, row: SeriesOutlookRow, plan: Extract<SeriesPlan, { kind: "write" }>, context: Context, now: number) {
-  const ensured = await ensureMaster(outlook, row, plan.master, context, now);
   const dates: Record<string, DateRecord> = { ...(row.dates ?? {}) };
-  await save(row, { userId: outlook.actor.userId, masterId: ensured.masterId, written: plan.master, dates }, Boolean(ensured.created) || ensured.masterId !== row.master_id);
-  const masterRewritten = ensured.rewritten;
+  let masterId: string | null = row.master_id;
+  let rewritten = false;
+  if (plan.master) {
+    const ensured = await ensureMaster(outlook, row, plan.master, context, now);
+    masterId = ensured.masterId;
+    rewritten = ensured.rewritten;
+    await save(row, { userId: outlook.actor.userId, masterId, written: plan.master, dates }, ensured.created || masterId !== row.master_id);
+  } else if (row.master_id) {
+    await graphWrite(context, outlook, () => deleteGraphEvent(outlook.token.accessToken, row.master_id!, context.fetchImpl));
+    masterId = null;
+    for (const [key, record] of Object.entries(dates)) {
+      const rest = { ...record };
+      delete rest.instance;
+      delete rest.instanceId;
+      dates[key] = rest;
+    }
+    await save(row, { userId: outlook.actor.userId, masterId: null, written: null, dates }, true);
+  }
+  const state = () => ({ userId: outlook.actor.userId, masterId, written: plan.master, dates });
   const keys = [...new Set([...Object.keys(plan.dates), ...Object.keys(dates)])].sort();
+  let wrote = rewritten;
   for (const occursOn of keys) {
     const want = occursOn in plan.dates ? plan.dates[occursOn] : null;
-    const before = dates[occursOn];
-    if (!masterRewritten && before === undefined && want && !want.skip && sameWritten(defaultWant(row, occursOn, context.timeZone) as DateRecord["written"], want)) continue;
-    const next = await reconcileDate(outlook, row.series_id, ensured.masterId, occursOn, want, before, masterRewritten, plan.master.link, context);
-    if (next && !isDefaultRecord(row, occursOn, next, context.timeZone)) dates[occursOn] = next;
+    if (want === null && dates[occursOn] === undefined) continue;
+    if (!rewritten && dates[occursOn] === undefined && want && !want.skip && plan.master && sameWritten(defaultWant(row, occursOn, context.timeZone), want)) continue;
+    const persist = async (record: DateRecord) => {
+      dates[occursOn] = record;
+      await save(row, state());
+    };
+    const next = await reconcileDate({ outlook, seriesId: row.series_id, record: dates[occursOn] ?? {}, masterId, occursOn, want, rewritten, link: plan.link, context, persist });
+    wrote = true;
+    if (next && (!plan.master || !isDefaultRecord(row, occursOn, next, context.timeZone))) dates[occursOn] = next;
     else delete dates[occursOn];
-    await save(row, { userId: outlook.actor.userId, masterId: ensured.masterId, written: plan.master, dates });
+    await save(row, state());
   }
-  return masterRewritten || keys.length > 0;
+  return wrote;
 }
 
 function emptyRun(): SeriesRun {
@@ -466,15 +585,14 @@ async function access(userId: string, workspaceId: string, context: Context): Pr
 async function runRow(row: SeriesOutlookRow, context: Context, now: number, throttled: Set<string>, run: SeriesRun) {
   const plan = planSeriesOutlook(row, now, context.timeZone);
   const holder = row.user_id ?? (row.create_key ? row.create_user_id : null);
-  const moving = holder && (plan.kind === "remove" || holder !== plan.userId);
-  if (moving) {
+  if (holder && (plan.kind === "remove" || holder !== plan.userId)) {
     if (throttled.has(holder)) {
       await defer(row);
       run.throttled += 1;
       return;
     }
     const held = await access(holder, row.workspace_id, context);
-    if (held === "retry") {
+    if (held === "retry" || (held === "orbit_only" && holds(row))) {
       await defer(row);
       run.deferred += 1;
       return;
@@ -499,7 +617,7 @@ async function runRow(row: SeriesOutlookRow, context: Context, now: number, thro
     return;
   }
   const outlook = await access(plan.userId, row.workspace_id, context);
-  if (outlook === "retry") {
+  if (outlook === "retry" || (outlook === "orbit_only" && holds(row))) {
     await defer(row);
     run.deferred += 1;
     return;
@@ -523,14 +641,15 @@ export async function syncSeriesOutlook(
   if (limit <= 0 || (options.taskIds && options.taskIds.length === 0)) return run;
   const deadline = options.deadline ?? Date.now() + 20_000;
   const throttled = options.throttled ?? new Set<string>();
-  const context: Context = { fetchImpl: options.fetchImpl ?? fetch, timeZone: appTimeZone() };
+  const budget = { left: limit };
   const claimed = await query<SeriesOutlookRow>("select * from private.claim_series_outlook($1::uuid[], $2::uuid, $3)", [
     options.taskIds ?? null,
     options.userId ?? null,
     limit,
   ]);
+  const context: Context = { fetchImpl: options.fetchImpl ?? fetch, timeZone: appTimeZone(), budget, stopAt: Math.min(deadline - RESERVE_MS, Date.now() + LEASE_MS) };
   for (const row of claimed.rows) {
-    if (deadline - Date.now() < RESERVE_MS) {
+    if (Date.now() >= context.stopAt || budget.left <= 0) {
       await settle(row, true);
       continue;
     }
@@ -538,12 +657,15 @@ export async function syncSeriesOutlook(
     try {
       await runRow(row, context, now, throttled, run);
     } catch (error) {
+      if (error instanceof OutOfTime) {
+        await settle(row, true);
+        continue;
+      }
       if (error instanceof Throttled) {
-        const user = row.owner_id ?? row.user_id;
-        if (user) throttled.add(user);
+        throttled.add(error.userId);
         run.throttled += 1;
       } else {
-        if (!(error instanceof Retry)) console.error("Outlook repeating task failed", error);
+        if (!(error instanceof Retry) && !(error instanceof GraphFail)) console.error("Outlook repeating task failed", error);
         run.deferred += 1;
       }
       await defer(row);

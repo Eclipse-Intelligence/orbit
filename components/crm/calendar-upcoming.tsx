@@ -63,12 +63,19 @@ export function useUpcomingMove() {
           }
           router.refresh();
           const undo = result.undo ?? [];
+          const resets = move.dueAt ? block.upcoming!.changedDates : 0;
+          const confirmAll = () =>
+            composer.showToast({
+              message: `Resets ${resets} changed date${resets === 1 ? "" : "s"}.`,
+              duration: 10_000,
+              action: { label: "Move all", run: () => rescope("all", undo, "Moved every one.") },
+            });
           composer.showToast({
             message: `Moved ${day} only.`,
             duration: 10_000,
             choices: [
               { label: "This and following", run: () => rescope("following", undo, `Moved ${day} and later.`) },
-              { label: "All", run: () => rescope("all", undo, "Moved every one.") },
+              { label: "All", run: () => (resets > 0 ? confirmAll() : rescope("all", undo, "Moved every one.")) },
             ],
             ...(undo.length > 0
               ? {

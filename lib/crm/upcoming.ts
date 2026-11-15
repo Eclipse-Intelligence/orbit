@@ -3,9 +3,10 @@ import { query } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { assertScope } from "@/lib/crm/scopes";
-import { readSeriesSnapshot, updateOccurrenceInDb, type RepeatScope } from "@/lib/crm/task-series";
+import { updateOccurrenceInDb, type RepeatScope } from "@/lib/crm/task-series";
 import type { Provenance, Task, TaskWrite, UserActor } from "@/lib/crm/types";
 import { undoTaskEventsInDb } from "@/lib/crm/undo";
+import { dayKeyAt } from "@/lib/crm/working-days";
 import type { UpcomingSeries } from "@/lib/task-blocks";
 import { upcomingAfter, type OccurrenceChange, type RepeatEnds, type RepeatRule, type SeriesTiming } from "@/lib/task-repeat";
 
@@ -24,6 +25,7 @@ type OwnSeriesRow = {
   rule: RepeatRule;
   ends: RepeatEnds;
   current_task_id: string | null;
+  previous_task_id: string | null;
   current_occurs_on: string | null;
   current_due_at: Date | string | null;
   changes: ChangeJson[] | null;
@@ -44,6 +46,7 @@ export async function listOwnSeriesInDb(db: Db, actor: UserActor, workspaceIds: 
   const result = await db.query<OwnSeriesRow>(
     `select s.id, s.workspace_id, s.title, s.description, s.duration_minutes, s.starts_on::text as starts_on,
        to_char(s.at, 'HH24:MI') as at, s.rule, s.ends, s.current_task_id,
+       case when s.current_task_id is null and s.split_from_id is not null then (select p.id from crm.series_split_previous(s.id) p) end as previous_task_id,
        t.occurs_on::text as current_occurs_on, t.due_at as current_due_at, rc.rows as changes
      from crm.task_series s
      left join crm.tasks t on t.id = s.current_task_id
@@ -75,7 +78,9 @@ export async function listOwnSeriesInDb(db: Db, actor: UserActor, workspaceIds: 
     rule: row.rule,
     ends: row.ends,
     currentTaskId: row.current_task_id,
+    anchorTaskId: row.current_task_id ?? row.previous_task_id,
     after: upcomingAfter(row.current_occurs_on, isoOrNull(row.current_due_at)),
+    afterOccurs: row.current_occurs_on,
     changes: changesOf(row.changes),
   }));
 }
@@ -107,11 +112,13 @@ export async function loadBookingSeries(userId: string, from: string, to: string
     ends: row.ends,
     durationMinutes: row.duration_minutes,
     after: upcomingAfter(row.current_occurs_on, isoOrNull(row.current_due_at)),
+    afterOccurs: row.current_occurs_on,
     changes: changesOf(row.changes),
   }));
 }
 
 export const RESCOPE_FAILED = "Couldn't change the other dates. Try again.";
+export const PAST_DAY = "Choose today or a later day.";
 
 async function freshEvents(db: Db, taskId: string) {
   const result = await db.query<{ id: string }>(
@@ -130,11 +137,16 @@ export async function moveUpcoming(
   provenance: Provenance,
 ): Promise<{ task: Task; undo: string[] }> {
   assertScope(actor.scopes, "tasks:write");
+  if (input.dueAt && dayKeyAt(new Date(input.dueAt)) < dayKeyAt(new Date())) throw new CrmError("invalid_input", PAST_DAY, 400, { field: "dueAt" });
   return withActor(actor, async (db) => {
     if (replaces.length > 0) {
-      const series = await readSeriesSnapshot(db, target.seriesId);
-      if (!series?.currentTaskId) throw new CrmError("cannot_undo", RESCOPE_FAILED, 409);
-      await undoTaskEventsInDb(db, actor, series.currentTaskId, replaces, { operation: "undo_change", source: provenance.source });
+      const event = await db.query<{ entity_id: string }>(
+        "select entity_id from crm.audit_events where id = $1 and workspace_id = $2 and entity_type = 'task'",
+        [replaces[0], actor.workspaceId],
+      );
+      const taskId = event.rows[0]?.entity_id;
+      if (!taskId) throw new CrmError("cannot_undo", RESCOPE_FAILED, 409);
+      await undoTaskEventsInDb(db, actor, taskId, replaces, { operation: "undo_change", source: provenance.source });
     }
     const task = await updateOccurrenceInDb(db, actor, target, input, scope, provenance);
     return { task, undo: await freshEvents(db, task.id) };

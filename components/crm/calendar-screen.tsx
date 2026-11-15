@@ -36,6 +36,7 @@ import { applyPlanAction, planAction } from "@/app/(crm)/calendar/plan-actions";
 import PlanPanel, { type PlanPanelHandlers } from "@/components/crm/calendar-plan";
 import { placeTaskAction } from "@/app/(crm)/records";
 import {
+  dateKey,
   mergeDuplicateEvents,
   rangeDays,
   shiftDateKey,
@@ -78,6 +79,7 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 
 const MOVE_FAILED = "Couldn't move the task. Try again.";
+const PAST_DAY = "Choose today or a later day.";
 const PLAN_FAILED = "Couldn't plan your tasks. Try again.";
 const APPLY_FAILED = "Couldn't put the tasks on your calendar. Try again.";
 
@@ -438,6 +440,10 @@ export default function CalendarScreen({
     if (isUpcomingTaskId(task.id)) {
       const block = upcoming.find((item) => item.task.id === task.id);
       if (!block || placement.dateOnly === true) return;
+      if (dateKey(placement.at) < today) {
+        setError(PAST_DAY);
+        return;
+      }
       setError(null);
       const startsAt = new Date(placement.at).toISOString();
       const endsAt = new Date(Date.parse(placement.at) + placement.durationMinutes * 60_000).toISOString();
@@ -484,7 +490,15 @@ export default function CalendarScreen({
   const { drag, press, pickUpFromList, pickUpBlock, resizeBlock } = useTaskDrag({
     onPlace: place,
     onCarry: () => setDrawerOpen(false),
-    onOpen: (task, from) => openTask(task, from),
+    onOpen: (task, from) => {
+      const block = isUpcomingTaskId(task.id) ? upcoming.find((item) => item.task.id === task.id) : null;
+      if (block) {
+        setOpener(from);
+        setUpcomingOpen(block);
+        return;
+      }
+      openTask(task, from);
+    },
   });
   const blockDrag: TaskBlockDrag | undefined = gridDrag && !planning ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const proposalDrag: TaskBlockDrag | undefined = gridDrag && !planLoading && !applying ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;

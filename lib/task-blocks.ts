@@ -41,9 +41,10 @@ export type UpcomingSeries = SeriesTiming & {
   title: string;
   description: string | null;
   currentTaskId: string | null;
+  anchorTaskId: string | null;
 };
 
-export type UpcomingRef = { seriesId: string; occursOn: string; currentTaskId: string | null; workspaceId: string };
+export type UpcomingRef = { seriesId: string; occursOn: string; currentTaskId: string | null; workspaceId: string; changedDates: number };
 
 export type TaskListGroupKind = "overdue" | "today" | "week" | "later" | "none";
 
@@ -233,7 +234,13 @@ export function upcomingBlocks(
           done: false,
           overdue: false,
           clash: occurrence.dueHasTime ? clashWith(start, end, meetings) : null,
-          upcoming: { seriesId: item.id, occursOn: occurrence.occursOn, currentTaskId: item.currentTaskId, workspaceId: item.workspaceId },
+          upcoming: {
+            seriesId: item.id,
+            occursOn: occurrence.occursOn,
+            currentTaskId: item.anchorTaskId,
+            workspaceId: item.workspaceId,
+            changedDates: item.changes.filter((change) => !change.skip && change.dueAt && (!item.afterOccurs || change.occursOn > item.afterOccurs)).length,
+          },
         };
       }),
     )
