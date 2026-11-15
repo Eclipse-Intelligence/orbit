@@ -992,7 +992,7 @@ export function docQueryAt(text: string, caret: number): DocQuery | null {
   const closed = /^[^[\]\n]*(?=\]\])/.exec(text.slice(caret))?.[0];
   const rest = closed ?? /^[^\s\]]*/.exec(text.slice(caret))?.[0] ?? "";
   const query = before.slice(open + 2) + rest;
-  if (/[\]\n]/.test(query) || query.length > 80) return null;
+  if (/[\]\n]/.test(query) || query.length > 300) return null;
   return { start: open, end: caret + rest.length, query };
 }
 

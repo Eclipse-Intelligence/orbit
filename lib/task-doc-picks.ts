@@ -62,49 +62,21 @@ export function removeDocQuery(text: string, found: DocQuerySpan) {
   return { text: before + rest, caret: before.length };
 }
 
-export function insertDocReference(text: string, found: DocQuerySpan, title: string | null | undefined) {
-  const { before, after } = around(text, found);
+export function insertReferenceAt(text: string, caret: number, title: string | null | undefined) {
+  let at = Math.min(Math.max(0, caret), text.length);
+  const inside = /\[\[[^[\]\n]*$/.exec(text.slice(0, at));
+  const closing = inside ? /^[^[\]\n]*\]\]/.exec(text.slice(at)) : null;
+  if (closing) at += closing[0].length;
+  const before = text.slice(0, at);
+  const after = text.slice(at);
   const reference = `[[${docReferenceTitle(title)}]]`;
-  const spacer = /^[\s.,;:!?)]/.test(after) ? "" : " ";
-  return { text: before + reference + spacer + after, caret: before.length + reference.length + spacer.length };
+  const lead = before && !/[\s(]$/.test(before) ? " " : "";
+  const trail = /^[\s.,;:!?)]/.test(after) ? "" : " ";
+  return { text: before + lead + reference + trail + after, caret: before.length + lead.length + reference.length + trail.length };
 }
 
 export function insideClosedReference(text: string, found: DocQuerySpan) {
   return text.startsWith("]]", found.end);
-}
-
-export function withoutReferenceNear(text: string, reference: string, at: number) {
-  let best = -1;
-  for (let index = text.indexOf(reference); index >= 0; index = text.indexOf(reference, index + 1)) {
-    if (best < 0 || Math.abs(index - at) < Math.abs(best - at)) best = index;
-  }
-  if (best < 0) return text;
-  let before = text.slice(0, best);
-  let after = text.slice(best + reference.length);
-  const lineStart = !before || /\n[ \t]*$/.test(before);
-  if (lineStart && (!after || /^[ \t]*\n/.test(after))) {
-    before = before.replace(/[ \t]*$/, "");
-    after = after.replace(/^[ \t]*\n?/, "");
-    if (!before) return after;
-    return after ? before + after : before.replace(/\n$/, "");
-  }
-  if (/^[,;]/.test(after) && (lineStart || /[:,;(][ \t]*$/.test(before))) after = after.slice(1);
-  if (!after || /^[.,;:!?)]|^[ \t]*\n/.test(after)) return before.replace(/[ \t]+$/, "") + after.replace(/^[ \t]+(?=\n)/, "");
-  if (lineStart || SPACE_END.test(before)) after = after.replace(/^[ \t]+/, "");
-  return before + after;
-}
-
-export function referenceToRemove(text: string, reference: string, at: number) {
-  const found: number[] = [];
-  for (let index = text.indexOf(reference); index >= 0; index = text.indexOf(reference, index + 1)) found.push(index);
-  if (found.length === 0) return null;
-  if (found.length === 1) return found[0];
-  const near = Math.min(Math.max(0, at), text.length);
-  const lineStart = text.lastIndexOf("\n", near - 1) + 1;
-  const lineEnd = text.indexOf("\n", near);
-  const end = lineEnd < 0 ? text.length : lineEnd;
-  const onLine = found.filter((index) => index >= lineStart && index + reference.length <= end);
-  return onLine.length === 1 ? onLine[0] : null;
 }
 
 export function textEdit(before: string, after: string) {
@@ -113,16 +85,6 @@ export function textEdit(before: string, after: string) {
   let tail = 0;
   while (tail < before.length - start && tail < after.length - start && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail += 1;
   return { start, end: before.length - tail, insert: after.slice(start, after.length - tail) };
-}
-
-export function caretAfterEdit(edit: { start: number; end: number; insert: string }, caret: number) {
-  if (edit.end <= caret) return caret - (edit.end - edit.start) + edit.insert.length;
-  return Math.min(caret, edit.start);
-}
-
-export function pickIntoDescription(text: string, found: DocQuerySpan, doc: { title: string | null; shared: boolean }) {
-  if (doc.shared) return { ...insertDocReference(text, found, doc.title), note: null, reference: `[[${docReferenceTitle(doc.title)}]]` };
-  return { ...removeDocQuery(text, found), note: PRIVATE_DOC_NOTE, reference: null };
 }
 
 export type DescriptionPart = { kind: "text"; text: string; start: number } | { kind: "doc"; id: string; label: string; start: number };

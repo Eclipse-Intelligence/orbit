@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { changeTaskDoc } from "@/lib/crm/task-doc-links";
-import { removeTaskDocReference } from "@/lib/crm/task-act";
 import { canChangeTask } from "@/lib/crm/task-rights";
 import { addTaskParticipants, createTask, getTask, listPlannerTasks, updateTask } from "@/lib/crm/tasks";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -12,24 +11,19 @@ import {
   descriptionParts,
   docReferenceTitle,
   hasDocReference,
-  insertDocReference,
+  insertReferenceAt,
   insideClosedReference,
-  caretAfterEdit,
-  referenceToRemove,
   textEdit,
-  withoutReferenceNear,
   partsSourceOffset,
-  pickIntoDescription,
   PRIVATE_DOC_NOTE,
   removeDocQuery,
   showsDescriptionLinks,
 } from "@/lib/task-doc-picks";
 import { docQueryAt, parseTaskText, withoutDocQuery } from "@/lib/task-pad";
-import { clearLinkUndo, forgetLinkUndo, linkUndoOffered, offerLinkUndo, undoLinkChange } from "@/lib/task-link-undo";
+import { clearLinkUndo, forgetLinkUndo, linkUndoOffered, linkUndoPending, offerLinkUndo, undoLinkChange } from "@/lib/task-link-undo";
 import { createUser, resetDatabase } from "./helpers";
 
 const WEB = { operation: "link_task_doc", source: "web" } as const;
-const EDIT = { operation: "update_task", source: "web" } as const;
 
 describe("[[ in a task's title and description", () => {
   it("removes the [[query from the title, as the Add task card does", () => {
@@ -39,38 +33,53 @@ describe("[[ in a task's title and description", () => {
     assert.deepEqual(withoutDocQuery(title, found!), { text: "Send Acme the renewal terms ", caret: 28 });
   });
 
-  it("writes a shared doc as [[Title]] at the caret", () => {
+  it("writes a shared doc as [[Title]] at the caret once it is linked, wherever the caret is by then", () => {
     const text = "Use the numbers in [[Renewal plan]] and check [[pri";
     const found = docQueryAt(text, text.length)!;
-    const shared = pickIntoDescription(text, found, { title: "Pricing notes", shared: true });
-    assert.equal(shared.text, "Use the numbers in [[Renewal plan]] and check [[Pricing notes]] ");
-    assert.equal(shared.caret, shared.text.length);
-    assert.equal(shared.note, null);
+    const cleared = removeDocQuery(text, found);
+    assert.deepEqual(cleared, { text: "Use the numbers in [[Renewal plan]] and check ", caret: 46 });
+    assert.deepEqual(insertReferenceAt(cleared.text, cleared.caret, "Pricing notes"), {
+      text: "Use the numbers in [[Renewal plan]] and check [[Pricing notes]] ",
+      caret: 64,
+    });
 
-    const middle = "Check [[pri before sending.";
-    const inside = docQueryAt(middle, 11)!;
-    assert.deepEqual(inside, { start: 6, end: 11, query: "pri" });
-    assert.deepEqual(insertDocReference(middle, inside, "Pricing notes"), { text: "Check [[Pricing notes]] before sending.", caret: 23 });
-    assert.equal(insertDocReference("See [[pri]].", { start: 4, end: 9 }, "Pricing notes").text, "See [[Pricing notes]].");
-    assert.equal(insertDocReference("[[q", { start: 0, end: 3 }, "Q3 [draft]\nplan").text, "[[Q3 draft plan]] ");
+    const typedMeanwhile = `${cleared.text}first`;
+    assert.equal(
+      insertReferenceAt(typedMeanwhile, typedMeanwhile.length, "Pricing notes").text,
+      "Use the numbers in [[Renewal plan]] and check first [[Pricing notes]] ",
+      "text typed while linking stays, and the reference goes where the caret is now",
+    );
+    assert.deepEqual(insertReferenceAt("Check  before sending.", 6, "Pricing notes"), { text: "Check [[Pricing notes]] before sending.", caret: 23 });
+    assert.equal(insertReferenceAt("See .", 4, "Pricing notes").text, "See [[Pricing notes]].");
+    assert.equal(insertReferenceAt("(", 1, "Pricing notes").text, "([[Pricing notes]] ");
+    assert.equal(insertReferenceAt("", 0, "Q3 [draft]\nplan").text, "[[Q3 draft plan]] ");
     assert.equal(docReferenceTitle(""), "Untitled");
+    assert.equal(docReferenceTitle("x".repeat(300)).length, 300, "long titles are kept whole");
   });
 
+  it("never touches a [[Title]] written by hand", () => {
+    const handwritten = "Read [[Board minutes]] first";
+    assert.equal(
+      insertReferenceAt(handwritten, 12, "Pricing notes").text,
+      "Read [[Board minutes]] [[Pricing notes]] first",
+      "a caret inside a reference inserts after it, leaving it whole",
+    );
+    assert.equal(insertReferenceAt(handwritten, handwritten.length, "Pricing notes").text, "Read [[Board minutes]] first [[Pricing notes]] ");
+    assert.equal(insertReferenceAt(handwritten, 0, "Pricing notes").text, "[[Pricing notes]] Read [[Board minutes]] first");
+  });
   it("only links a private doc and never writes its title into the description", () => {
     const text = "Use the numbers in [[Renewal plan]] and [[my d";
     const found = docQueryAt(text, text.length)!;
-    const picked = pickIntoDescription(text, found, { title: "My draft terms", shared: false });
-    assert.equal(picked.text, "Use the numbers in [[Renewal plan]] and ");
-    assert.equal(picked.caret, picked.text.length);
-    assert.equal(picked.note, PRIVATE_DOC_NOTE);
+    const cleared = removeDocQuery(text, found);
+    assert.equal(cleared.text, "Use the numbers in [[Renewal plan]] and ");
+    assert.equal(cleared.caret, cleared.text.length);
     assert.equal(PRIVATE_DOC_NOTE, "Linked. Private docs aren't named in the description.");
-    assert.ok(!picked.text.includes("My draft"));
+    assert.ok(!cleared.text.includes("My draft"));
 
     assert.deepEqual(removeDocQuery("First line\n[[my d\nSecond line", { start: 11, end: 17 }), { text: "First line\n\nSecond line", caret: 11 });
     assert.deepEqual(removeDocQuery("Ask [[my d about it", { start: 4, end: 10 }), { text: "Ask about it", caret: 4 });
     assert.deepEqual(removeDocQuery("Ask [[my d]] now", { start: 4, end: 10 }), { text: "Ask now", caret: 4 });
   });
-
   it("shows the read view for a description with a doc reference on rows and in the panel, until it is being edited", () => {
     assert.equal(hasDocReference("Use [[Renewal plan]]"), true);
     assert.equal(hasDocReference("Use [[Renewal plan"), false);
@@ -118,7 +127,7 @@ describe("[[ in a task's title and description", () => {
     const text = "Check [[renewal plan]] today";
     const found = docQueryAt(text, 10)!;
     assert.deepEqual(found, { start: 6, end: 20, query: "renewal plan" });
-    assert.deepEqual(insertDocReference(text, found, "Renewal plan v2"), { text: "Check [[Renewal plan v2]] today", caret: 25 });
+    assert.deepEqual(removeDocQuery(text, found), { text: "Check today", caret: 6 });
     assert.deepEqual(withoutDocQuery(text, found), { text: "Check today", caret: 6 });
     assert.deepEqual(docQueryAt("Call [[renewal now", 10), { start: 5, end: 14, query: "renewal" }, "an unclosed query still stops at the word");
     assert.equal(insideClosedReference("[[a]] b [[c", docQueryAt("[[a]] b [[c", 3)!), true);
@@ -137,41 +146,13 @@ describe("[[ in a task's title and description", () => {
     assert.equal(parseTaskText(closed, now).title, closed);
     const inside = docQueryAt(closed, 10)!;
     assert.deepEqual(inside, { start: 6, end: 25, query: "Friday review 3pm" });
-    assert.equal(insertDocReference(closed, inside, "Friday review 3pm").text, closed);
+    assert.equal(parseTaskText(withoutDocQuery(closed, inside).text, now).due, null);
     assert.equal(parseTaskText(`${closed} tomorrow`, now).due, "2026-11-13");
   });
 
-  it("takes out the inserted reference nearest where it was put when linking fails, and edits only what changed", () => {
-    assert.equal(withoutReferenceNear("See [[Plan]] then [[Plan]] here", "[[Plan]]", 18), "See [[Plan]] then here");
-    assert.equal(withoutReferenceNear("See [[Plan]] then [[Plan]] here", "[[Plan]]", 2), "See then [[Plan]] here");
-    assert.equal(withoutReferenceNear("Nothing here", "[[Plan]]", 0), "Nothing here");
-    assert.equal(withoutReferenceNear("see [[P]].", "[[P]]", 4), "see.");
-    assert.equal(withoutReferenceNear("[[P]] then more", "[[P]]", 0), "then more");
-    assert.equal(withoutReferenceNear("Line one\n[[P]] two", "[[P]]", 9), "Line one\ntwo");
-    assert.equal(withoutReferenceNear("Ask [[P]]\nnext", "[[P]]", 4), "Ask\nnext");
-    assert.equal(withoutReferenceNear("a\n[[P]]\nb", "[[P]]", 2), "a\nb", "a reference on its own line leaves no blank line");
-    assert.equal(withoutReferenceNear("Ask [[P]] \nnext", "[[P]]", 4), "Ask\nnext", "no trailing space before a line break");
-    assert.equal(withoutReferenceNear("x: [[P]], y", "[[P]]", 3), "x: y");
-    assert.equal(withoutReferenceNear("see [[P]], y", "[[P]]", 4), "see, y");
-    assert.equal(withoutReferenceNear("(see [[P]])", "[[P]]", 5), "(see)");
-    assert.equal(withoutReferenceNear("only [[P]]", "[[P]]", 5), "only");
-    assert.equal(withoutReferenceNear("[[P]]", "[[P]]", 0), "");
-    assert.equal(withoutReferenceNear("a\n[[P]]", "[[P]]", 2), "a");
+  it("edits only what changed", () => {
     assert.deepEqual(textEdit("Check [[pri now", "Check [[Pricing notes]] now"), { start: 8, end: 11, insert: "Pricing notes]]" });
     assert.deepEqual(textEdit("Ask [[my d about", "Ask about"), { start: 4, end: 11, insert: "" });
-    const removal = textEdit("See [[Plan]] and more", "See and more");
-    assert.equal(caretAfterEdit(removal, 21), 12, "a caret after the removed reference moves back with the text");
-    assert.equal(caretAfterEdit(removal, 2), 2, "a caret before it stays put");
-    assert.equal(caretAfterEdit(removal, 8), 4, "a caret inside it lands where it was");
-  });
-
-  it("only picks a reference to take out when its position is unambiguous", () => {
-    assert.equal(referenceToRemove("See [[P]] now", "[[P]]", 99), 4, "a single copy is always the one");
-    assert.equal(referenceToRemove("a [[P]]\nb [[P]]", "[[P]]", 9), 10);
-    assert.equal(referenceToRemove("a [[P]]\nb [[P]]", "[[P]]", 0), 2);
-    assert.equal(referenceToRemove("[[P]] and [[P]]", "[[P]]", 3), null);
-    assert.equal(referenceToRemove("a [[P]]\nb [[P]]\nc", "[[P]]", 17), null);
-    assert.equal(referenceToRemove("nothing", "[[P]]", 0), null);
   });
 
   it("links duplicate titles to the first linked doc the viewer can open", () => {
@@ -203,6 +184,7 @@ describe("Z after removing an email", () => {
     assert.equal(undoLinkChange(2000), false, "a toast that has gone clears the offer");
     offerLinkUndo(link, 8000, 1000);
     assert.equal(linkUndoOffered(link, 2000), true, "the toast shows Z while its offer stands");
+    assert.equal(linkUndoPending(2000), true, "a Done toast drops its Z while a newer email offer stands");
     offerLinkUndo(() => undefined, 8000, 1500);
     assert.equal(linkUndoOffered(link, 2000), false, "an older toast stops showing Z once a newer one replaces it");
     offerLinkUndo(link, 8000, 1000);
@@ -265,56 +247,7 @@ describe("chips and doc links on an existing task", () => {
     );
   });
 
-  it("takes a failed link's reference out of the stored description on the server, keeping any newer edit", async () => {
-    const task = (await createTask(mark, { title: "Plan the renewal", ownerId: mark.userId, description: "Use [[Renewal plan]] today." })).body.task;
-    await updateTask(mark, task.id, { description: "Use [[Renewal plan]] today. Also ring Jane first." });
-    const removed = await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 4, EDIT);
-    assert.equal(removed.changed, true);
-    assert.equal(removed.task.description, "Use today. Also ring Jane first.");
-    const [event] = (
-      await getAdminPool().query<{ operation: string; changes: { fields?: string[] } }>(
-        "select operation, changes from crm.audit_events where entity_id = $1 and event_type = 'task.updated' order by created_at desc limit 1",
-        [task.id],
-      )
-    ).rows;
-    assert.equal(event.operation, "update_task");
-    assert.deepEqual(event.changes.fields, ["description"]);
 
-    const again = await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 4, EDIT);
-    assert.equal(again.changed, false, "nothing happens when the reference is already gone");
-    assert.equal((await getTask(mark, task.id)).description, "Use today. Also ring Jane first.");
-
-    await updateTask(mark, task.id, { description: "Rewritten without the reference." });
-    assert.equal((await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 4, EDIT)).changed, false);
-    assert.equal((await getTask(mark, task.id)).description, "Rewritten without the reference.");
-
-    await updateTask(mark, task.id, { description: "[[Renewal plan]]" });
-    assert.equal((await removeTaskDocReference(mark, task.id, "[[Renewal plan]]", 0, EDIT)).task.description, null);
-
-    await addTaskParticipants(mark, task.id, [priya.userId]);
-    await updateTask(mark, task.id, { description: "See [[Renewal plan]]." });
-    await assert.rejects(() => removeTaskDocReference(priya, task.id, "[[Renewal plan]]", 4, EDIT), /Only the assignee/);
-    await assert.rejects(() => removeTaskDocReference(mark, task.id, "Renewal plan", 4, EDIT), /Couldn't save/);
-    assert.equal((await getTask(mark, task.id)).description, "See [[Renewal plan]].");
-  });
-
-  it("leaves a reference that is still valid or whose copy can't be told apart", async () => {
-    const linked = (await createTask(mark, { title: "Plan with the doc", ownerId: mark.userId, description: "Use [[Renewal plan]] today.", docIds: [shared] })).body.task;
-    const kept = await removeTaskDocReference(mark, linked.id, "[[Renewal plan]]", 4, EDIT);
-    assert.equal(kept.changed, false, "a doc with that title is linked, so the reference is right");
-    assert.equal((await getTask(mark, linked.id)).description, "Use [[Renewal plan]] today.");
-
-    const lines = (await createTask(mark, { title: "Plan two lines", ownerId: mark.userId, description: "First [[Renewal plan]]\nSecond [[Renewal plan]] too" })).body.task;
-    const second = await removeTaskDocReference(mark, lines.id, "[[Renewal plan]]", 30, EDIT);
-    assert.equal(second.changed, true);
-    assert.equal(second.task.description, "First [[Renewal plan]]\nSecond too");
-
-    const same = (await createTask(mark, { title: "Plan one line", ownerId: mark.userId, description: "[[Renewal plan]] and [[Renewal plan]]" })).body.task;
-    assert.equal((await removeTaskDocReference(mark, same.id, "[[Renewal plan]]", 18, EDIT)).changed, false, "two copies on one line are ambiguous");
-    const elsewhere = (await createTask(mark, { title: "Plan elsewhere", ownerId: mark.userId, description: "A [[Renewal plan]]\nB [[Renewal plan]]\nC nothing here" })).body.task;
-    assert.equal((await removeTaskDocReference(mark, elsewhere.id, "[[Renewal plan]]", 40, EDIT)).changed, false, "a stale position on a line without a copy changes nothing");
-    assert.equal((await getTask(mark, elsewhere.id)).description, "A [[Renewal plan]]\nB [[Renewal plan]]\nC nothing here");
-  });
 
   it("only lets the assignee or creator change links, and a tagged teammate can't link a doc", async () => {
     const task = (await createTask(mark, { title: "Book the Q1 review", ownerId: mark.userId })).body.task;

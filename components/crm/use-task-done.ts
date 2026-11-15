@@ -8,7 +8,7 @@ import { taskRemindChoices } from "@/lib/crm/task-snooze";
 import { TASK_BEACON_PATH } from "@/lib/crm/task-views";
 import { reconcileDone, stillOpenIds } from "@/lib/task-done";
 import { movedMessage } from "@/lib/task-pad";
-import { clearLinkUndo } from "@/lib/task-link-undo";
+import { clearLinkUndo, linkUndoPending } from "@/lib/task-link-undo";
 import type { Task } from "@/lib/crm/types";
 
 export const TASK_UNDO_MS = 8_000;
@@ -227,7 +227,7 @@ export function useTaskDone(tasks: Task[]) {
       undone.current.delete(task.id);
       setDone((current) => new Set(current).add(task.id));
       setMessage(null);
-      const toast = composer.showToast({ message: "Task done.", action: { label: "Undo", run: () => void undo(task.id) }, duration: TASK_UNDO_MS });
+      const toast = composer.showToast({ message: "Task done.", action: { label: "Undo", run: () => void undo(task.id), shortcut: () => !linkUndoPending() }, duration: TASK_UNDO_MS });
       const timer = options.hold ? 0 : window.setTimeout(() => commit(task.id), TASK_UNDO_MS);
       entries.current.set(task.id, { toast, timer, until: Date.now() + TASK_UNDO_MS, sent: false });
     },

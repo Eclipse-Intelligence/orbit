@@ -1,19 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
 import { DocPickHeader, DocPickNotice, DocPickOptions, useDocPicks } from "@/components/crm/task-doc-picker";
 import { useDocChange } from "@/components/crm/task-docs";
-import { removeTaskDocReferenceAction } from "@/app/(crm)/task-docs";
 import type { Task } from "@/lib/crm/types";
 import type { DocPick } from "@/lib/docs/client-types";
-import { caretAfterEdit, insideClosedReference, pickIntoDescription, textEdit, withoutReferenceNear } from "@/lib/task-doc-picks";
+import { insertReferenceAt, insideClosedReference, PRIVATE_DOC_NOTE, removeDocQuery, textEdit } from "@/lib/task-doc-picks";
 import { docQueryAt, withoutDocQuery, type DocQuery } from "@/lib/task-pad";
 
 type Mode = "title" | "description";
-
-export type ReferenceRemoval = { description?: string | null; error?: string };
-
-const SAVE_FAILED = "Couldn't save. Try again.";
 
 export function useDocMention({
   task,
@@ -22,22 +17,19 @@ export function useDocMention({
   mode,
   value,
   onChange,
-  onReferenceGone,
+  onWritten,
 }: {
   task: Pick<Task, "id" | "docIds">;
   enabled: boolean;
   warn: boolean;
   mode: Mode;
   value: string;
-  onChange: (value: string) => void;
-  onReferenceGone?: (result: ReferenceRemoval, reference: string, at: number) => void;
+  onChange: Dispatch<SetStateAction<string>>;
+  onWritten?: () => void;
 }) {
   const id = useId();
   const listId = `${id}-docs-list`;
   const field = useRef<HTMLTextAreaElement | null>(null);
-  const latest = useRef(value);
-  const gone = useRef<(result: ReferenceRemoval, reference: string, at: number) => void>(() => undefined);
-  const mounted = useRef(false);
   const muted = useRef<number | null>(null);
   const closing = useRef<number | null>(null);
   const [query, setQuery] = useState<DocQuery | null>(null);
@@ -48,19 +40,12 @@ export function useDocMention({
   const options = found.docs ? (mode === "title" ? found.docs.filter((doc) => !task.docIds.includes(doc.id)) : found.docs) : null;
   const active = options && options.length > 0 ? Math.min(highlight, options.length - 1) : -1;
 
-  useEffect(() => {
-    latest.current = value;
-  }, [value]);
-  useEffect(() => {
-    gone.current = onReferenceGone ?? (() => undefined);
-  });
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
+  useEffect(
+    () => () => {
       if (closing.current !== null) window.clearTimeout(closing.current);
-    };
-  }, []);
+    },
+    [],
+  );
 
   const attach = useCallback((node: HTMLTextAreaElement | null) => {
     field.current = node;
@@ -88,7 +73,7 @@ export function useDocMention({
 
   function write(next: string, caret: number) {
     const element = field.current;
-    const edit = textEdit(value, next);
+    const edit = textEdit(element?.value ?? value, next);
     if (element && document.activeElement === element) {
       element.setSelectionRange(edit.start, edit.end);
       const done = edit.insert ? document.execCommand("insertText", false, edit.insert) : edit.start === edit.end || document.execCommand("delete");
@@ -96,41 +81,46 @@ export function useDocMention({
         element.setSelectionRange(caret, caret);
         return;
       }
+      onChange(next);
+      window.requestAnimationFrame(() => field.current?.setSelectionRange(caret, caret));
+      return;
     }
     onChange(next);
-    window.requestAnimationFrame(() => {
-      const target = field.current;
-      if (!target) return;
-      target.focus();
-      target.setSelectionRange(caret, caret);
-    });
+    onWritten?.();
+  }
+
+  function name(doc: DocPick, where: { before: string; caret: number }) {
+    const element = field.current;
+    if (element) {
+      const current = element.value;
+      const next = insertReferenceAt(current, element.selectionStart ?? current.length, doc.title);
+      write(next.text, next.caret);
+      return;
+    }
+    onChange((current) => insertReferenceAt(current, current.startsWith(where.before) ? where.caret : current.length, doc.title).text);
+    onWritten?.();
   }
 
   function pick(doc: DocPick) {
     if (!query) return;
-    const next = mode === "title" ? { ...withoutDocQuery(value, query), note: null, reference: null } : pickIntoDescription(value, query, doc);
-    const at = query.start;
+    const picked = query;
     setQuery(null);
     setHighlight(0);
-    write(next.text, next.caret);
-    setNote(next.note);
-    if (task.docIds.includes(doc.id)) return;
-    const reference = next.reference;
-    void change.link(doc).then(async (linked) => {
-      if (linked || !reference) return;
-      setNote(null);
-      const current = latest.current;
-      const element = field.current;
-      const focused = Boolean(element && document.activeElement === element);
-      const kept = caretAfterEdit(textEdit(current, withoutReferenceNear(current, reference, at)), element?.selectionStart ?? current.length);
-      const result = await removeTaskDocReferenceAction(task.id, reference, at).catch(() => ({ error: SAVE_FAILED }));
-      gone.current(result, reference, at);
-      if (focused) {
-        window.requestAnimationFrame(() => {
-          const target = field.current;
-          if (target && document.activeElement === target) target.setSelectionRange(kept, kept);
-        });
-      }
+    setNote(null);
+    const cleared = mode === "title" ? withoutDocQuery(value, picked) : removeDocQuery(value, picked);
+    write(cleared.text, cleared.caret);
+    const linked = task.docIds.includes(doc.id);
+    const named = () => {
+      if (mode === "title") return;
+      if (doc.shared) name(doc, { before: cleared.text.slice(0, cleared.caret), caret: cleared.caret });
+      else setNote(PRIVATE_DOC_NOTE);
+    };
+    if (linked) {
+      named();
+      return;
+    }
+    void change.link(doc).then((ok) => {
+      if (ok) named();
     });
   }
 
@@ -195,7 +185,11 @@ export function useDocMention({
     </div>
   ) : null;
 
-  const status = change.error ? (
+  const status = change.busy ? (
+    <p role="status" className="caption-style text-subtle">
+      Saving…
+    </p>
+  ) : change.error ? (
     <p role="alert" className="caption-style text-danger">
       {change.error}
     </p>

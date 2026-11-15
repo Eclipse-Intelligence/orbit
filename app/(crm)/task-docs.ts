@@ -1,15 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { after } from "next/server";
-import { clickupToken } from "@/lib/clickup";
-import { pushClickUpTask } from "@/lib/crm/clickup";
 import { getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { changeTaskDoc, LINK_DOC_FAILED, UNLINK_DOC_FAILED } from "@/lib/crm/task-doc-links";
 import { listTaskDocs, type TaskDocEntry } from "@/lib/crm/task-docs";
-import { removeTaskDocReference } from "@/lib/crm/task-act";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { TaskDoc } from "@/lib/crm/types";
 import { taskActorOrError } from "@/lib/crm/workspaces";
@@ -67,28 +63,4 @@ export async function linkTaskDocAction(taskId: string, pageId: string) {
 
 export async function unlinkTaskDocAction(taskId: string, pageId: string) {
   return change(taskId, pageId, "unlink");
-}
-
-export async function removeTaskDocReferenceAction(taskId: string, reference: string, at: number): Promise<{ description?: string | null; error?: string }> {
-  const found = await actorFor(taskId);
-  if (!found.actor) return { error: found.error };
-  try {
-    const result = await removeTaskDocReference(found.actor, taskId, reference, at, { operation: "update_task", source: "web" });
-    if (result.changed) {
-      if (clickupToken()) {
-        after(async () => {
-          try {
-            await pushClickUpTask(found.actor, taskId);
-          } catch (error) {
-            console.error("ClickUp push failed", error);
-          }
-        });
-      }
-      revalidatePath(TASKS_PATH);
-      revalidateRecordPages();
-    }
-    return { description: result.task.description ?? null };
-  } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Couldn't save. Try again." };
-  }
 }
