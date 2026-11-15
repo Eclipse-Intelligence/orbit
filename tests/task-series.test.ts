@@ -128,9 +128,9 @@ describe("repeating tasks", () => {
     assert.equal(monday.occursOn, "2027-03-08");
     assert.equal(monday.dueAt, "2027-03-08T10:00:00.000Z");
     const today = dayKeyAt(new Date());
-    const passed = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const walk = (await createRepeatingTask(mark, { title: "Walk the dog", dueAt: passed }, { every: "day" })).body.task;
-    assert.equal(walk.occursOn, shiftDay(today, 1));
+    const passed = new Date(Date.now() - 60 * 1000);
+    const walk = (await createRepeatingTask(mark, { title: "Walk the dog", dueAt: passed.toISOString() }, { every: "day" })).body.task;
+    assert.equal(walk.occursOn, dayKeyAt(passed) === today ? shiftDay(today, 1) : today);
     const undated = (await createRepeatingTask(mark, { title: "Invoice" }, { every: "month", monthDay: 1 })).body.task;
     assert.equal(undated.dueHasTime, false);
     assert.equal(undated.occursOn?.slice(8), "01");
@@ -890,6 +890,15 @@ describe("repeating task review round 6", () => {
     assert.equal((await queryAsUser(mark.userId, "update crm.tasks set title = 'Raw' where id = $1 returning id", [task.id])).length, 0);
     const done = await getTask(priya, task.id);
     assert.deepEqual([done.title, done.ownerId, Boolean(done.completedAt), done.archivedAt], ["Done stays", priya.userId, true, null]);
+  });
+
+  it("doesn't let a series owner complete an occurrence by raw SQL", async () => {
+    const { queryAsUser } = await import("./helpers");
+    const task = await handedSeries("Raw complete", "2027-11-11");
+    await assert.rejects(queryAsUser(mark.userId, "update crm.tasks set completed_at = now() where id = $1 returning id", [task.id]), /can complete or reopen it/);
+    assert.equal((await getTask(priya, task.id)).completedAt, null);
+    await completeTask(priya, task.id);
+    assert.ok((await getTask(priya, task.id)).completedAt);
   });
 
   it("lets a series owner undo their own This one and All edits", async () => {

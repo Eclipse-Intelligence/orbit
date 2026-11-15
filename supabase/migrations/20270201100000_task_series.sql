@@ -547,6 +547,35 @@ create trigger tasks_bind_series
   for each row
   execute function private.tasks_bind_series();
 
+create or replace function private.tasks_keep_completion()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_user uuid := (nullif(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub')::uuid;
+  v_agent uuid := nullif(current_setting('app.agent_id', true), '')::uuid;
+begin
+  if current_user = 'authenticated' and v_user is not null and (old.owner_id is not distinct from v_user or old.created_by_user_id is not distinct from v_user) then
+    return new;
+  end if;
+  if current_user = 'crm_agent' and v_agent is not null and old.created_by_agent_id is not distinct from v_agent then
+    return new;
+  end if;
+  if current_user in ('authenticated', 'crm_agent') then
+    raise exception 'Only the assignee or the task''s creator can complete or reopen it.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists tasks_keep_completion on crm.tasks;
+create trigger tasks_keep_completion
+  before update of completed_at on crm.tasks
+  for each row
+  when (old.completed_at is distinct from new.completed_at)
+  execute function private.tasks_keep_completion();
+
 create or replace function private.task_series_bind_current()
 returns trigger
 language plpgsql
@@ -687,6 +716,7 @@ create policy tasks_update_series_member on crm.tasks
   )
   with check (
     series_id is not null
+    and completed_at is null
     and workspace_id in (select private.user_workspace_ids())
     and private.session_owns_series(series_id, workspace_id)
   );
@@ -702,6 +732,7 @@ create policy tasks_update_series_agent on crm.tasks
   )
   with check (
     series_id is not null
+    and completed_at is null
     and workspace_id = (select private.request_workspace_id())
     and private.agent_owns_series(series_id, workspace_id)
   );

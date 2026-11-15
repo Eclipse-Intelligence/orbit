@@ -1277,10 +1277,13 @@ const REPEAT_PARAM = {
     monthWeek: {
       type: "object",
       description: "For month: a weekday such as the last Friday ({ n: -1, weekday: fr }) or the first Monday ({ n: 1, weekday: mo }).",
-      properties: { n: { type: "integer", enum: [1, 2, 3, 4, -1] }, weekday: { type: "string", enum: ["mo", "tu", "we", "th", "fr", "sa", "su"] } },
+      properties: {
+        n: { type: "integer", enum: [1, 2, 3, 4, -1], description: "Which one in the month: 1 to 4, or -1 for the last." },
+        weekday: { type: "string", enum: ["mo", "tu", "we", "th", "fr", "sa", "su"], description: "The weekday." },
+      },
       required: ["n", "weekday"],
     },
-    ends: { type: "object", description: "{ after: N } times, or { on: YYYY-MM-DD }. Leave out to repeat for ever.", properties: { after: { type: "integer", minimum: 1, maximum: 999 }, on: { type: "string" } } },
+    ends: { type: "object", description: "{ after: N } times, or { on: YYYY-MM-DD }. Leave out to repeat for ever.", properties: { after: { type: "integer", minimum: 1, maximum: 999, description: "Stops after this many times, counted from the first." }, on: { type: "string", description: "The last day it can fall on, YYYY-MM-DD." } } },
   },
   required: ["every"],
 };
