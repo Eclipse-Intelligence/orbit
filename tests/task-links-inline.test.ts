@@ -87,6 +87,16 @@ describe("[[ in a task's title and description", () => {
     const typed = insertReferenceAt("call [[Bo", 7, "Plan");
     assert.deepEqual(typed, { text: "call [[Plan]] [[Bo", caret: 16 }, "an open [[ query being typed stays whole and the caret stays in it");
     for (const [text, caret] of [
+      ["abc[[my query", 2],
+      ["abc[[my query", 3],
+      ["a..[[", 4],
+      ["a..[[my q", 4],
+    ] as const) {
+      const open = text.indexOf("[[");
+      const result = insertReferenceAt(text, caret, "Doc").text;
+      assert.ok(result.endsWith(text.slice(open)), `${text} at ${caret}: an open [[ query is never split (${result})`);
+    }
+    for (const [text, caret] of [
       ["and then call Bob", 6],
       ["see [[foo]] now", 5],
       ["see [[foo]] now", 10],
@@ -241,6 +251,15 @@ describe("the Z hint", () => {
       assert.equal(zUndoes({ kind: "done", id: "b" }, "b", 2000), true);
     } finally {
       release();
+    }
+    let focusBlocks = true;
+    const releaseBlocked = claimUndoKey(() => focusBlocks);
+    try {
+      assert.equal(zUndoes({ kind: "done", id: "a" }, "a", 1000), false, "no Z hint while focus is where Z does nothing");
+      focusBlocks = false;
+      assert.equal(zUndoes({ kind: "done", id: "a" }, "a", 1000), true);
+    } finally {
+      releaseBlocked();
     }
   });
 });

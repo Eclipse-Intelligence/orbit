@@ -492,7 +492,7 @@ export default function ActionsScreen({
     };
     window.requestAnimationFrame(retry);
   });
-  useEffect(() => claimUndoKey(), []);
+  useEffect(() => claimUndoKey(() => inPanel() || inField()), []);
   useShortcut("task-undo", () => {
     if (inPanel() || inField()) return false;
     return undoLinkChange() || undoLast();

@@ -109,15 +109,17 @@ export function useDocMention({
     setHighlight(0);
     setNote(null);
     const cleared = mode === "title" ? withoutDocQuery(value, picked) : removeDocQuery(value, picked);
-    write(cleared.text, cleared.caret);
     const linked = task.docIds.includes(doc.id);
+    const nameNow = linked && mode === "description" && doc.shared;
+    const first = nameNow ? insertReferenceAt(cleared.text, cleared.caret, doc.title) : cleared;
+    write(first.text, first.caret);
     const named = () => {
       if (mode === "title") return;
       if (doc.shared) name(doc, { before: cleared.text.slice(0, cleared.caret), caret: cleared.caret });
       else setNote(PRIVATE_DOC_NOTE);
     };
     if (linked) {
-      named();
+      if (mode === "description" && !doc.shared) setNote(PRIVATE_DOC_NOTE);
       return;
     }
     void change.link(doc).then((ok) => {

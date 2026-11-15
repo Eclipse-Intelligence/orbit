@@ -73,12 +73,13 @@ function pastClosedReference(text: string, at: number) {
 
 function pastWord(text: string, at: number) {
   let next = at;
-  if (next > 0 && /\S/.test(text[next - 1] ?? "")) while (next < text.length && /\S/.test(text[next])) next += 1;
+  if (next > 0 && /\S/.test(text[next - 1] ?? "")) while (next < text.length && /\S/.test(text[next]) && !text.startsWith("[[", next)) next += 1;
   return next;
 }
 
 export function insertionPoint(text: string, caret: number) {
-  const typed = Math.min(Math.max(0, caret), text.length);
+  const given = Math.min(Math.max(0, caret), text.length);
+  const typed = text[given - 1] === "[" && text[given] === "[" ? given - 1 : given;
   const open = /\[\[[^[\]\n]*$/.exec(text.slice(0, typed));
   if (open && !/^[^[\]\n]*\]\]/.test(text.slice(typed))) return open.index;
   let at = pastClosedReference(text, typed);

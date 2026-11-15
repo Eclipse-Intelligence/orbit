@@ -53,21 +53,39 @@ export function linkUndoVersion() {
   return version;
 }
 
-let undoKeys = 0;
+const claims = new Set<{ blocked: () => boolean }>();
 
-export function claimUndoKey() {
-  undoKeys += 1;
+function focusMoved() {
+  changed();
+}
+
+export function claimUndoKey(blocked: () => boolean = () => false) {
+  const claim = { blocked };
+  claims.add(claim);
+  if (claims.size === 1 && typeof document !== "undefined") {
+    document.addEventListener("focusin", focusMoved);
+    document.addEventListener("focusout", focusMoved);
+  }
   changed();
   return () => {
-    undoKeys -= 1;
+    claims.delete(claim);
+    if (claims.size === 0 && typeof document !== "undefined") {
+      document.removeEventListener("focusin", focusMoved);
+      document.removeEventListener("focusout", focusMoved);
+    }
     changed();
   };
+}
+
+function zListening() {
+  for (const claim of claims) if (!claim.blocked()) return true;
+  return false;
 }
 
 export type UndoToast = { kind: "link"; run: () => void } | { kind: "done"; id: string } | { kind: "reopen" };
 
 export function zUndoes(toast: UndoToast, newestDone: string | null, now = Date.now()) {
-  if (undoKeys === 0 || toast.kind === "reopen") return false;
+  if (toast.kind === "reopen" || !zListening()) return false;
   if (toast.kind === "link") return linkUndoOffered(toast.run, now);
   return !linkUndoPending(now) && newestDone === toast.id;
 }
