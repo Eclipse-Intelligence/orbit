@@ -30,7 +30,7 @@ const PHRASES: { phrase: string; rule: RepeatRule; first: string }[] = [
   { phrase: "every 3 days", rule: { freq: "daily", interval: 3 }, first: "2026-11-14" },
   { phrase: "every month on the 1st", rule: { freq: "monthly", interval: 1, monthDay: 1 }, first: "2026-12-01" },
   { phrase: "the last Friday of every month", rule: { freq: "monthly", interval: 1, monthWeek: { n: -1, weekday: "fr" } }, first: "2026-11-27" },
-  { phrase: "first Monday of the month", rule: { freq: "monthly", interval: 1, monthWeek: { n: 1, weekday: "mo" } }, first: "2026-12-07" },
+  { phrase: "first Monday of each month", rule: { freq: "monthly", interval: 1, monthWeek: { n: 1, weekday: "mo" } }, first: "2026-12-07" },
   { phrase: "every 14 Nov", rule: { freq: "yearly", interval: 1 }, first: "2026-11-14" },
 ];
 
@@ -213,7 +213,6 @@ describe("typed repeats", () => {
       ["Send the second draft every Friday", "Send the second draft"],
       ["Review first drafts every Friday at 3pm", "Review first drafts"],
       ["Chase last invoice weekly", "Chase last invoice"],
-      ["Ask if Sam may join every Monday", "Ask if Sam may join"],
       ["Send the May report every month", "Send the May report"],
       ["Review pipeline every Monday and send notes", "Review pipeline and send notes"],
       ["Call Bob every Monday at 10am and email Sam", "Call Bob and email Sam"],
@@ -349,6 +348,32 @@ describe("AI read repeats", () => {
     assert.deepEqual(await ask("Team call every Monday", { ...base, phrases: ["every Monday"], due: "2026-11-16" }), nothing("Team call every Monday"));
     assert.deepEqual(await ask("Team call every Monday", { ...base, phrases: ["Monday"], due: "2026-11-16" }), nothing("Team call every Monday"));
     assert.deepEqual(await ask("Payroll fortnightly on Thursdays", { ...base, phrases: ["on Thursdays"], due: "2026-11-19" }), nothing("Payroll fortnightly on Thursdays"));
+    for (const [text, phrase, due] of [
+      ["Review every third Thursday", "Thursday", "2026-11-19"],
+      ["Call Mum on Sundays", "on Sundays", "2026-11-15"],
+      ["Tidy every weekday except Friday", "Friday", "2026-11-20"],
+      ["Review leads twice a week from Monday", "from Monday", "2026-11-16"],
+    ]) {
+      assert.deepEqual(await ask(text, { ...base, phrases: [phrase], due }), nothing(text), text);
+    }
+  });
+
+  it("rejects an AI repeat in a clause, after a negation or for, in a name, before an exception or on an ordinal weekday", async () => {
+    const cases: [string, string, NonNullable<PadAiAnswer["repeat"]>][] = [
+      ["Cancel the cleaner who comes every Friday", "2026-11-20", { phrase: "every Friday", every: "week", days: ["fr"] }],
+      ["Stop paying for Netflix every month", "2026-11-14", { phrase: "every month", every: "month" }],
+      ["Ask if the standup is daily", "2026-11-14", { phrase: "daily", every: "day" }],
+      ["Confirm backups run daily", "2026-11-14", { phrase: "daily", every: "day" }],
+      ["Quote Acme for monthly", "2026-11-14", { phrase: "monthly", every: "month" }],
+      ["Email Computer Weekly", "2026-11-14", { phrase: "Weekly", every: "week" }],
+      ["Don't tidy every day", "2026-11-14", { phrase: "every day", every: "day" }],
+      ["Tidy every weekday except Friday", "2026-11-16", { phrase: "every weekday", every: "weekday" }],
+      ["Review every third Thursday", "2026-11-19", { phrase: "every third Thursday", every: "week", interval: 3, days: ["th"] }],
+      ["Check the reports that run every Monday", "2026-11-16", { phrase: "every Monday", every: "week", days: ["mo"] }],
+      ["Gym every Monday, not in December", "2026-11-16", { phrase: "every Monday", every: "week", days: ["mo"] }],
+    ];
+    for (const [text, due, repeat] of cases) assert.deepEqual(await ask(text, { ...base, phrases: [], due, repeat }), nothing(text), text);
+    assert.equal((await ask("Gym every Monday", { ...base, phrases: [], due: "2026-11-16", repeat: { phrase: "every Monday", every: "week", days: ["mo"] } }))?.title, "Gym");
   });
 });
 
@@ -365,7 +390,7 @@ describe("saving a typed repeat", () => {
   });
 
   it("creates the series on the first occurrence the card showed", async () => {
-    for (const typed of ["Walk the dog every day at 11pm", "Review every other Friday", "Invoice every month on the 1st", "Board pack first Monday of the month", "Birthday card every 14 Nov", "Stand-up every weekday at 08:00 until 18 Dec", "Gym every 3 days for 6 weeks"]) {
+    for (const typed of ["Walk the dog every day at 11pm", "Review every other Friday", "Invoice every month on the 1st", "Board pack first Monday of every month", "Birthday card every 14 Nov", "Stand-up every weekday at 08:00 until 18 Dec", "Gym every 3 days for 6 weeks"]) {
       const read = parseTaskText(typed);
       assert.ok(read.repeat && read.due, typed);
       const { task } = await createTaskWithClickUp(mark, { title: read.title, ...(read.due.includes("T") ? { dueAt: localInstant(read.due) } : { dueDate: read.due }), repeat: repeatInputOf(read.repeat.rule, read.repeat.ends) }, null);

@@ -326,7 +326,7 @@ describe("repeating tasks", () => {
 
     const end = await weekly("End me", "2027-03-02");
     const ended = (await endSeriesOn(mark, end.id, "2027-03-16")).body.task;
-    assert.equal(ended.repeat?.end, "until 16 Mar");
+    assert.match(ended.repeat?.end ?? "", /^until 16 Mar(?: 2027)?$/);
     assert.deepEqual(ended.repeat?.ends, { until: "2027-03-16" });
     await assert.rejects(endSeriesOn(mark, end.id, "2027-03-01"), /before the first one/);
 

@@ -106,7 +106,8 @@ describe("repeat ends", () => {
     const until = pattern({ freq: "weekly", interval: 1, weekdays: ["tu"] }, "2026-11-17", { ends: { until: "2026-12-15" } });
     assert.deepEqual(occurrenceDays(until, "2026-11-01", "2027-12-31"), ["2026-11-17", "2026-11-24", "2026-12-01", "2026-12-08", "2026-12-15"]);
     assert.equal(remainingCount(until, "2026-11-17"), 4);
-    assert.equal(endWords(until), "until 15 Dec");
+    assert.equal(endWords(until, null, "2026-11-14"), "until 15 Dec");
+    assert.equal(endWords(until, null, "2025-11-14"), "until 15 Dec 2026");
   });
 
   it("checks rules and ends with messages people can act on", () => {
