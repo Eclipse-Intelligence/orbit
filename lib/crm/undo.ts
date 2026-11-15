@@ -542,7 +542,7 @@ async function describeEvent(
     if (!hasScope(actor.scopes, SCOPES.task)) return refuse(summary, `You don't have permission to change this ${noun}.`);
     const after = record(record(seriesChanges.series)?.after);
     const now = after && typeof record(seriesChanges.series)?.id === "string" ? await readSeriesSnapshot(db, String(record(seriesChanges.series)?.id)) : null;
-    if (after && now && !same({ ...now, currentTaskId: null }, { ...after, currentTaskId: null })) return refuse(summary, "Can't undo: how it repeats has changed since.");
+    if (after && now && !same(now, after)) return refuse(summary, "Can't undo: how it repeats has changed since.");
     return { entityName, summary, plan: { ok: true, restores, run: () => restoreSeriesInDb(db, actor, seriesChanges, provenance) } };
   }
 
@@ -694,7 +694,7 @@ async function lockEntity(db: Db, workspaceId: string, entity: EntityType, id: s
 
 const ALREADY = /already been undone/i;
 
-const ONE_AT_A_TIME = "Can't undo this in one step. Undo each change on its own.";
+const ONE_AT_A_TIME = "Can't undo: this changed several things at once.";
 
 async function lockUndo(db: Db, actor: Actor, entity: EntityType | null, entityId: string | null, ids: string[]) {
   if (entity && entityId && isUuid(entityId)) await lockEntity(db, actor.workspaceId, entity, entityId);

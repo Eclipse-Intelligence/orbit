@@ -1422,7 +1422,7 @@ describe("repeating task review round 17", () => {
 });
 
 describe("repeating task undo, one change at a time", () => {
-  const ONE_AT_A_TIME = /Can't undo this in one step\. Undo each change on its own\./;
+  const ONE_AT_A_TIME = /Can't undo: this changed several things at once\./;
   const picture = async (seriesId: string) => {
     const [series] = await sql("select title, description, priority, owner_id, company_id, contact_id, starts_on::text, to_char(at, 'HH24:MI') as at, rule, ends, current_task_id, ended_at, archived_at from crm.task_series where id = $1", [seriesId]);
     const tasks = await sql("select id, title, owner_id, due_at, occurs_on::text, completed_at is not null as done, contact_id from crm.tasks where (series_id = $1 or id = $2) and archived_at is null order by id", [seriesId, series.current_task_id]);
@@ -1439,7 +1439,7 @@ describe("repeating task undo, one change at a time", () => {
     const ids = (await sql<{ id: string }>("select id from crm.audit_events where entity_id = $1 and created_at = (select max(created_at) from crm.audit_events where entity_id = $1)", [task.id])).map((row) => row.id);
     assert.ok(ids.length > 1);
     const newest = (await listRecentChanges(mark, { entityType: "task", limit: 20 })).filter((change) => change.entityId === task.id)[0];
-    assert.deepEqual([newest.canUndo, newest.reason], [false, "Can't undo this in one step. Undo each change on its own."]);
+    assert.deepEqual([newest.canUndo, newest.reason], [false, "Can't undo: this changed several things at once."]);
     const card = await describeUndo(mark, newest.id);
     assert.equal(card.canUndo, false);
     await assert.rejects(undoAuditEvent(mark, ids[0], { operation: "undo_change" }), ONE_AT_A_TIME);
@@ -1533,6 +1533,18 @@ describe("repeating task undo, one change at a time", () => {
     await assert.rejects(undoAuditEvent(mark, listed.id, { operation: "undo_change" }), /changed since/);
     await assert.rejects(undoTaskEvents(mark, task.id, all.undo, { operation: "undo_change" }), /changed since/);
     assert.equal((await seriesRow(task.seriesId!)).title, "Stale half all", "the series half stays too");
+  });
+
+  it("won't undo an All change after the series has moved on to its next date", async () => {
+    const { listRecentChanges } = await import("@/lib/crm/undo");
+    const task = await weekly("Rolled on", "2033-10-11");
+    const all = (await updateOccurrence(mark, { taskId: task.id }, { title: "Rolled on all" }, "all")).body;
+    await completeTask(mark, task.id);
+    const listed = (await listRecentChanges(mark, { entityType: "task", limit: 20 })).find((change) => all.undo.includes(change.id))!;
+    assert.equal(listed.canUndo, false);
+    await assert.rejects(undoAuditEvent(mark, listed.id, { operation: "undo_change" }), /how it repeats has changed since/);
+    await assert.rejects(undoTaskEvents(mark, task.id, all.undo, { operation: "undo_change" }), /how it repeats has changed since/);
+    assert.equal((await seriesRow(task.seriesId!)).title, "Rolled on all");
   });
 
   it("won't undo an older change to how it repeats over a newer one", async () => {
