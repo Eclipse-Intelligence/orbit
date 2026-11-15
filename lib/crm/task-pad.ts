@@ -286,7 +286,7 @@ const PAD_AI_RULES = [
   `durationMinutes is how long the task takes when the text says so (for 30 mins, 2-3pm), at most ${MAX_TASK_DURATION}, otherwise null.`,
   "Each phrase must appear exactly once in the text and contain only date, time and reminder words; an answer with a phrase that is repeated, reworded or holds other words is thrown away.",
   'repeat is null unless the to-do says it happens again and again (every Monday, fortnightly, each month, the last Friday of every month). Then repeat is {"phrase": string, "every": "day" or "weekday" or "week" or "month" or "year", "interval": number or null, "days": ["mo", "tu", "we", "th", "fr", "sa", "su"] or null, "monthDay": number or null, "monthWeek": {"n": 1 to 4 or -1 for last, "weekday": "mo" to "su"} or null, "ends": {"after": number} or {"on": "YYYY-MM-DD"} or null}.',
-  "repeat.phrase is the exact piece that says how it repeats and when it stops (until 18 Dec, for 6 weeks, 10 times), copied character for character, without the time or a start date; those go in phrases. fortnightly and every other week are every week with interval 2. every weekday is Monday to Friday. A word like every or each that is not followed by a pattern (every client, every time) is not a repeat.",
+  "repeat.phrase is the exact piece that says how it repeats and when it stops (until 18 Dec, for 6 weeks, 10 times), copied character for character from anywhere in the to-do, without the time or a start date; those go in phrases. fortnightly and every other week are every week with interval 2. every weekday is Monday to Friday. When it says how many times a week without days (twice a week, 3 times a week), choose that many days spread evenly from the first one, starting today. A word like every or each that is not followed by a pattern (every client, every time) is not a repeat.",
   "When it repeats, due is the first time it happens from now, with the time if one is given, and phrases holds only the time, a start date and a reminder (it may be empty).",
 ];
 
@@ -300,6 +300,7 @@ export async function parsePadWithAi(text: string, now = new Date(), options: { 
     system: `${PAD_AI_RULES.join(" ")} Now is ${today} in London.`,
     user: clean,
     schema: AI_SCHEMA,
+    model: "claude-haiku-5-5",
     maxTokens: 300,
     timeoutMs: 12_000,
     fetchImpl: options.fetchImpl,
