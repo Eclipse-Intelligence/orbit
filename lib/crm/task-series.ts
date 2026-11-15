@@ -1514,7 +1514,7 @@ export async function updateTaskFromApi(
   );
 }
 
-async function syncSeriesLinksInDb(db: Db, actor: Actor, taskId: string, provenance: Provenance) {
+export async function syncSeriesLinksInDb(db: Db, actor: Actor, taskId: string, provenance: Provenance) {
   const task = await readTaskInDb(db, actor, taskId);
   if (!task?.seriesId || task.completedAt) return;
   const row = await lockSeries(db, task.seriesId);

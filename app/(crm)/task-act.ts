@@ -1,6 +1,5 @@
 "use server";
 
-import { followSeriesLinks } from "@/lib/crm/task-series";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
@@ -80,7 +79,6 @@ export async function relinkTaskAction(id: string, change: LinkChange): Promise<
       { companyId: change.companyId, contactId: change.contactId, opportunityId: change.opportunityId, ...(change.mailThreadKey === null ? { mailThreadKey: null } : {}) },
       { operation: "link_task", source: "web" },
     );
-    await followSeriesLinks(user, id, { operation: "link_task", source: "web" });
     pushLater(user, [id]);
     refresh();
     return { ok: true, undo: result.undo };

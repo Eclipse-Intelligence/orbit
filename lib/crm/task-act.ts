@@ -12,6 +12,7 @@ import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb } from "@/lib/crm/task-preparation-store";
 import { canChangeTask, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import { undoAuditEvent } from "@/lib/crm/undo";
+import { syncSeriesLinksInDb } from "@/lib/crm/task-series";
 import type { ActivityType, Provenance, Task, UserActor } from "@/lib/crm/types";
 import type { LookupState } from "@/lib/enrichment/contacts";
 
@@ -294,6 +295,7 @@ export async function relinkTaskUndoable(actor: UserActor, taskId: string, chang
        order by id desc limit 1`,
       [actor.workspaceId, taskId],
     );
+    await syncSeriesLinksInDb(db, actor, taskId, provenance);
     return { task: updated.task, undo: event.rows[0]?.id ?? null };
   });
 }
