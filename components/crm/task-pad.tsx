@@ -585,6 +585,7 @@ export default function TaskPad({
   }
   const fromAi = aiValue !== null && key !== "";
   const aiShown = useRef<{ id: string; at: number } | null>(null);
+  const saveKey = useRef<{ request: string; key: string } | null>(null);
   const aiShownId = fromAi ? `${text}\u0000${key}` : null;
   useEffect(() => {
     if (aiShownId === null) aiShown.current = null;
@@ -955,7 +956,7 @@ export default function TaskPad({
       return;
     }
     const savingDue = saving.finalDue;
-    const result = await addPadTaskAction({
+    const request = {
       title: saving.title,
       dueAt: savingDue && padDueHasTime(savingDue) ? localInstant(savingDue) : savingDue,
       ...(saving.repeat ? { repeat: repeatInputOf(saving.repeat.rule, saving.repeat.ends) } : {}),
@@ -966,12 +967,16 @@ export default function TaskPad({
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
       ...(docs.length > 0 ? { docIds: docs.map((doc) => doc.id) } : {}),
-    }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined }));
+    };
+    const sent = JSON.stringify(request);
+    if (saveKey.current?.request !== sent) saveKey.current = { request: sent, key: crypto.randomUUID() };
+    const result = await addPadTaskAction({ ...request, key: saveKey.current.key }).catch(() => ({ error: "Couldn't add the task. Try again.", warning: undefined }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
       return;
     }
+    saveKey.current = null;
     const notes = result.warning ?? undefined;
     reset();
     router.refresh();
