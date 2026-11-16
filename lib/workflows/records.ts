@@ -1,5 +1,5 @@
 import { upsertCompany } from "@/lib/crm/companies";
-import { upsertContact } from "@/lib/crm/contacts";
+import { createContact, upsertContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -172,6 +172,34 @@ async function findContact(actor: UserActor, email: string) {
   });
 }
 
+async function findContactByName(actor: UserActor, firstName: string, lastName: string, companyId: string | null) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string | null }>(
+      `select id, nullif(trim(concat_ws(' ', first_name, last_name)), '') as name from crm.contacts
+       where workspace_id = $1 and archived_at is null
+         and lower(trim(coalesce(first_name, ''))) = lower($2) and lower(trim(coalesce(last_name, ''))) = lower($3)
+         and company_id is not distinct from $4::uuid
+       order by created_at limit 1`,
+      [actor.workspaceId, firstName, lastName, companyId],
+    );
+    return result.rows[0] ?? null;
+  });
+}
+
+async function contactWithoutEmail(actor: UserActor, input: UpsertInput, provenance: Provenance) {
+  if (!input.firstName && !input.lastName) throw new CrmError("invalid_input", "Give the contact an email address or a name.", 400);
+  const companyId = isUuid(input.companyId) ? input.companyId : null;
+  const existing = await findContactByName(actor, input.firstName, input.lastName, companyId);
+  if (existing) return { id: existing.id, name: existing.name, found: true, created: false };
+  if (!input.create) return { id: null, name: null, found: false, created: false };
+  const outcome = await createContact(
+    actor,
+    { firstName: input.firstName || null, lastName: input.lastName || null, jobTitle: input.jobTitle || null, companyId },
+    { provenance },
+  );
+  return { id: outcome.body.contact.id, name: outcome.body.contact.name, found: false, created: true };
+}
+
 export async function upsertRecord(actor: UserActor, input: UpsertInput, provenance: Provenance) {
   if (input.object === "company") {
     const domain = input.domain ? canonicalDomain(input.domain) : input.website ? canonicalDomain(input.website) : null;
@@ -187,7 +215,8 @@ export async function upsertRecord(actor: UserActor, input: UpsertInput, provena
     return { id: outcome.body.company.id, name: outcome.body.company.name, found: !outcome.body.created, created: outcome.body.created };
   }
   const email = canonicalEmail(input.email);
-  if (!email) throw new CrmError("invalid_input", "Give the contact a valid email address.", 400);
+  if (!email && input.email) throw new CrmError("invalid_input", "Give the contact a valid email address.", 400);
+  if (!email) return contactWithoutEmail(actor, input, provenance);
   const existing = await findContact(actor, email);
   if (existing) return { id: existing.id, name: existing.name ?? email, found: true, created: false };
   if (!input.create) return { id: null, name: null, found: false, created: false };
