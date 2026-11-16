@@ -72,6 +72,8 @@ export type RunState = {
   decisions?: Record<string, { approved: boolean; note: string | null; by: string | null }>;
   approval?: { stepId: string; title: string; details: string } | null;
   effect?: Effect | null;
+  needsTime?: boolean;
+  skipped?: { name: string; error: string }[];
 };
 
 type Effect = { key: string; at: number; logged?: boolean };
@@ -115,7 +117,7 @@ type Ctx = {
   deadline: number;
 };
 
-type TickOptions = { budgetMs?: number; fetchImpl?: typeof fetch; limit?: number; push?: PushSender };
+type TickOptions = { budgetMs?: number; fetchImpl?: typeof fetch; limit?: number; push?: PushSender; long?: boolean };
 
 const DEFAULT_BUDGET_MS = 45_000;
 const STEP_RESERVE_MS = 8_000;
@@ -465,6 +467,10 @@ export function followsUpRepeat(definition: WorkflowDefinition, vars: Vars) {
 function follow(definition: WorkflowDefinition, source: string, handle: string, state: RunState, vars: Vars): string | null {
   const target = nextNode(definition, source, handle);
   if (target) return target;
+  return nextLoopItem(definition, state, vars);
+}
+
+function nextLoopItem(definition: WorkflowDefinition, state: RunState, vars: Vars): string | null {
   const frames = state.frames ?? [];
   const frame = frames[frames.length - 1];
   if (!frame) return null;
@@ -565,6 +571,7 @@ async function aiStep(ctx: Ctx, step: Step): Promise<StepResult> {
     fetchImpl: ctx.fetchImpl,
     deadline: ctx.deadline,
     webSearch,
+    ...(webSearch ? { timeoutMs: LONG_AI_MS, attempts: 1 } : {}),
   });
   const data = result.data as Record<string, unknown>;
   if (webSearch) {
@@ -586,6 +593,26 @@ const MAX_ABOUT_CHARS = 4000;
 const DECIDE_TIMEOUT_MS = 20_000;
 const UNKNOWN_OPTION = "unknown";
 const RETRY_DELAY_MS = 60_000;
+const LONG_AI_MS = 180_000;
+export const LONG_TICK_MS = 280_000;
+
+function needsLongTime(step: Step) {
+  return step.type === "ai" && step.config.webSearch === true;
+}
+
+function retryable(error: unknown) {
+  return (error instanceof CrmError && error.details?.retry === true) || (error instanceof LlmError && error.retryable);
+}
+
+function loopItemName(vars: Vars) {
+  const loop = vars.loop as { item?: { name?: unknown }; index?: number } | undefined;
+  const name = typeof loop?.item?.name === "string" ? loop.item.name.trim() : "";
+  return name || `Item ${(loop?.index ?? 0) + 1}`;
+}
+
+function skippedNote(skipped: { name: string; error: string }[]) {
+  return `Skipped ${skipped.length}: ${skipped.map((item) => `${item.name} (${item.error})`).join("; ")}`.slice(0, 2000);
+}
 
 function parallelBusy(error: ParallelError) {
   return error.status === 0 || error.status === 429 || (error.status ?? 0) >= 500;
@@ -1379,7 +1406,17 @@ export async function executeRun(
   const nodes = new Map(definition.nodes.map((node) => [node.id, node]));
   let at: string | null = state.at !== undefined ? state.at : follow(definition, TRIGGER_NODE, "out", state, vars);
   const finish = async (status: "succeeded" | "cancelled", error: string | null = null) => {
-    await saveRun(actor, run.id, { state: { ...state, at: null, vars }, status, error, finished_at: new Date().toISOString() });
+    const skipped = state.skipped ?? [];
+    const note = error ?? (skipped.length ? skippedNote(skipped) : null);
+    await saveRun(actor, run.id, { state: { ...state, at: null, vars }, status, error: note, finished_at: new Date().toISOString() });
+    if (status === "succeeded" && skipped.length && !run.test) {
+      await notify(actor, actor.userId, {
+        title: `${await workflowName(actor, run.workflow_id)} finished with ${skipped.length} skipped`,
+        body: skippedNote(skipped),
+        href: `/workflows/${run.workflow_id}?run=${run.id}`,
+        source: "workflow",
+      }).catch(() => undefined);
+    }
     return status;
   };
 
@@ -1397,6 +1434,11 @@ export async function executeRun(
     if (!step) {
       at = follow(definition, at, "missing", state, vars);
       continue;
+    }
+    if (state.waitingStep !== step.id && needsLongTime(step) && options.deadline - Date.now() < LONG_AI_MS + STEP_RESERVE_MS) {
+      state.needsTime = true;
+      await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "queued" });
+      return "paused" as const;
     }
     const started = new Date();
     if (state.waitingStep === step.id) {
@@ -1432,7 +1474,7 @@ export async function executeRun(
     } catch (error) {
       state.effect = null;
       const message = errorText(error);
-      if (error instanceof CrmError && error.details?.retry === true && !run.test && state.retried !== step.id) {
+      if (retryable(error) && !run.test && state.retried !== step.id) {
         state.retried = step.id;
         const until = new Date(Date.now() + RETRY_DELAY_MS).toISOString();
         await logStep(ctx, step, "waiting", input, { until, retrying: message }, null, started);
@@ -1440,6 +1482,14 @@ export async function executeRun(
         return "waiting" as const;
       }
       await logStep(ctx, step, "failed", input, null, message, started);
+      if (step.type === "ai" && (state.frames?.length ?? 0) > 0) {
+        state.retried = null;
+        state.skipped = [...(state.skipped ?? []), { name: loopItemName(vars), error: message }];
+        (vars.steps as Record<string, unknown>)[step.id] = null;
+        at = nextLoopItem(definition, state, vars);
+        checkpoint = true;
+        continue;
+      }
       await saveRun(actor, run.id, {
         state: { ...state, at, vars },
         status: "failed",
@@ -1538,8 +1588,10 @@ export async function runWorkflowTick(options: TickOptions = {}) {
   const { dispatched, scheduled } = await queueWorkflowWork();
   let processed = 0;
   while (Date.now() < deadline - STEP_RESERVE_MS) {
-    const claimed = await query<{ run_id: string; workspace_id: string; owner_id: string }>("select * from private.claim_workflow_runs($1)", [
+    const roomForLong = options.long === true && deadline - Date.now() >= LONG_AI_MS + STEP_RESERVE_MS;
+    const claimed = await query<{ run_id: string; workspace_id: string; owner_id: string }>("select * from private.claim_workflow_runs($1, $2)", [
       options.limit ?? 10,
+      roomForLong,
     ]);
     if (claimed.rows.length === 0) break;
     for (const row of claimed.rows) {
