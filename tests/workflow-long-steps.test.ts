@@ -5,6 +5,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import type { WorkflowDefinition } from "@/lib/workflows/definition";
 import { LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
+import { upsertRecord } from "@/lib/workflows/records";
 import { createWorkflow, saveWorkflow, setWorkflowStatus } from "@/lib/workflows/store";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -120,5 +121,17 @@ describe("workflow steps that need more time", () => {
       [owner.userId],
     );
     assert.equal(notes.rows.length, 1);
+  });
+
+  it("adds a contact with no published email by name, and finds them again next time", async () => {
+    const company = (await createCompany(owner, { name: "Delta Agency", lifecycle: "lead" })).body.company.id;
+    const input = { object: "contact" as const, name: "", domain: "", website: "", email: "", firstName: "Jo", lastName: "Bloggs", jobTitle: "Founder", companyId: company, create: true };
+    const provenance = { operation: "workflow_upsert_record", source: "workflow" as const };
+    const first = await upsertRecord(owner, input, provenance);
+    assert.equal(first.created, true);
+    const again = await upsertRecord(owner, { ...input, firstName: "jo" }, provenance);
+    assert.deepEqual([again.id, again.found, again.created], [first.id, true, false]);
+    await assert.rejects(upsertRecord(owner, { ...input, firstName: "", lastName: "" }, provenance), /an email address or a name/);
+    await assert.rejects(upsertRecord(owner, { ...input, email: "not an email" }, provenance), /valid email address/);
   });
 });
