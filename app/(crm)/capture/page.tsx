@@ -101,7 +101,6 @@ export default async function CapturePage() {
         reminders: here.reminders,
         calls: followUps,
         replies: here.replies,
-        tasks: here.tasks,
         emails: unknown.emails,
         notShown: unknown.notShown,
         unfiled: items.unfiled,

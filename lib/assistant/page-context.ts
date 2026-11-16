@@ -499,7 +499,7 @@ async function pageLines(db: Db, actor: UserActor, input: PageInput): Promise<Li
     const view = word(params.get("view"));
     lines.push(`Page: Calendar${view ? `, ${view} view` : ""}${date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? ` around ${date}` : ""}.`);
   } else if (first === "capture") {
-    lines.push("Page: Capture (what's waiting on the user: approvals, follow-ups, replies, tasks and things to file).");
+    lines.push("Page: Capture (what's waiting on the user: approvals, follow-ups, replies and things to file).");
   } else if (first === "proposals" && second && isUuid(second)) {
     lines.push("Page: a proposal.", opened("proposal", await proposal(db, actor, second)));
   } else if (first === "workflows" && second && isUuid(second)) {

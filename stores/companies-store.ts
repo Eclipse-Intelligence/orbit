@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { ChatSidebar } from "@/lib/chat/types";
 
-export const CAPTURE_SECTIONS = ["approvals", "followUps", "replies", "tasks", "toFile"] as const;
+export const CAPTURE_SECTIONS = ["approvals", "followUps", "replies", "toFile"] as const;
 
 export type CaptureSectionId = (typeof CAPTURE_SECTIONS)[number];
 
@@ -9,7 +9,7 @@ export type CaptureCounts = Record<CaptureSectionId, number>;
 
 export type CaptureBadge = { waiting: number; fresh: number; newestAt: string | null; sections: CaptureCounts };
 
-export const NO_CAPTURE_COUNTS: CaptureCounts = { approvals: 0, followUps: 0, replies: 0, tasks: 0, toFile: 0 };
+export const NO_CAPTURE_COUNTS: CaptureCounts = { approvals: 0, followUps: 0, replies: 0, toFile: 0 };
 
 type CompaniesState = {
   profileOpen: boolean;

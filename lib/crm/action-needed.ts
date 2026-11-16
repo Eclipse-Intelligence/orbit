@@ -10,14 +10,11 @@ import { atKeepingKind } from "@/lib/crm/task-time";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { waitingMail, type WaitingNudge, type WaitingReminder, type WaitingReply } from "@/lib/mail/waiting";
-import { appTimeZone, startOfDay } from "@/lib/time";
 import { approvalEmail } from "@/lib/workflows/store";
 import type { RunState } from "@/lib/workflows/engine";
-import { directTaskSql } from "@/lib/crm/task-access";
 
 export type { SnoozeChoice } from "@/lib/crm/task-snooze";
 
-const TASK_LIMIT = 100;
 const SNOOZE_MIN_MS = 60_000;
 const SNOOZE_MAX_MS = 366 * 86_400_000;
 
@@ -36,31 +33,15 @@ export type WaitingApproval = {
   arrivedAt: string;
 };
 
-export type WaitingTask = {
-  kind: "task";
-  id: string;
-  workspaceId: string;
-  title: string;
-  dueAt: string;
-  dueHasTime: boolean;
-  overdue: boolean;
-  companyId: string | null;
-  companyName: string | null;
-  contactId: string | null;
-  contactName: string | null;
-  arrivedAt: string;
-};
-
 export type Waiting = {
   approvals: WaitingApproval[];
   nudges: WaitingNudge[];
   reminders: WaitingReminder[];
   replies: WaitingReply[];
-  tasks: WaitingTask[];
   failed: CaptureSection[];
 };
 
-export const EMPTY_WAITING: Waiting = { approvals: [], nudges: [], reminders: [], replies: [], tasks: [], failed: [] };
+export const EMPTY_WAITING: Waiting = { approvals: [], nudges: [], reminders: [], replies: [], failed: [] };
 
 type ApprovalRow = {
   id: string;
@@ -102,57 +83,6 @@ async function approvalsInDb(db: Db, actor: UserActor, workspaceIds: string[]): 
   });
 }
 
-type TaskRow = {
-  id: string;
-  workspace_id: string;
-  title: string;
-  due_at: Date;
-  due_has_time: boolean;
-  created_at: Date;
-  company_id: string | null;
-  company_name: string | null;
-  contact_id: string | null;
-  contact_name: string | null;
-};
-
-async function tasksInDb(db: Db, actor: UserActor, workspaceIds: string[], now: Date): Promise<WaitingTask[]> {
-  const start = startOfDay(now);
-  const result = await db.query<TaskRow>(
-    `select t.id, t.workspace_id, t.title, t.due_at, t.due_has_time, t.created_at, t.company_id, co.name as company_name, t.contact_id,
-       coalesce(nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''), ct.email) as contact_name
-     from (
-       select t.*, row_number() over (partition by t.workspace_id order by t.due_at asc, t.created_at asc, t.id asc) as place
-       from crm.tasks t
-       where (t.owner_id = $1 or (t.owner_id is null and ${directTaskSql("t")})) and t.workspace_id = any($2::uuid[]) and t.archived_at is null and t.completed_at is null
-         and t.due_at is not null and t.due_at < $3
-     ) t
-     left join crm.companies co on co.id = t.company_id
-     left join crm.contacts ct on ct.id = t.contact_id
-     where t.place <= ${TASK_LIMIT}
-     order by t.due_at asc, t.created_at asc, t.id asc`,
-    [actor.userId, workspaceIds, startOfDay(now, appTimeZone(), 1)],
-  );
-  return result.rows.map((row) => {
-    const due = new Date(row.due_at);
-    const dayStart = startOfDay(due);
-    const created = new Date(row.created_at);
-    return {
-      kind: "task",
-      id: row.id,
-      workspaceId: row.workspace_id,
-      title: row.title,
-      dueAt: due.toISOString(),
-      dueHasTime: Boolean(row.due_has_time),
-      overdue: due.getTime() < start.getTime(),
-      companyId: row.company_id,
-      companyName: row.company_name,
-      contactId: row.contact_id,
-      contactName: row.contact_name,
-      arrivedAt: (created > dayStart ? created : dayStart).toISOString(),
-    };
-  });
-}
-
 async function attempt<T>(db: Db, label: string, run: () => Promise<T>): Promise<T | null> {
   await db.query("savepoint capture_section");
   try {
@@ -172,10 +102,9 @@ export async function waitingFor(actor: UserActor, actors: UserActor[], now = ne
   const [records, mail] = await Promise.all([
     withActor(actor, async (db) => ({
       approvals: await attempt(db, "Reading approvals waiting on you failed", () => approvalsInDb(db, actor, workspaceIds)),
-      tasks: await attempt(db, "Reading tasks waiting on you failed", () => tasksInDb(db, actor, workspaceIds, now)),
     })).catch((error) => {
-      console.error("Reading approvals and tasks failed", error instanceof Error ? error.message : error);
-      return { approvals: null, tasks: null };
+      console.error("Reading approvals failed", error instanceof Error ? error.message : error);
+      return { approvals: null };
     }),
     waitingMail(actor, actors.length ? actors : [actor], now).catch((error) => {
       console.error("Reading mail waiting on you failed", error instanceof Error ? error.message : error);
@@ -186,10 +115,8 @@ export async function waitingFor(actor: UserActor, actors: UserActor[], now = ne
   if (records.approvals === null) failed.push("approvals");
   if (mail.failed.followUps) failed.push("followUps");
   if (mail.failed.replies) failed.push("replies");
-  if (records.tasks === null) failed.push("tasks");
   return {
     approvals: records.approvals ?? [],
-    tasks: records.tasks ?? [],
     replies: mail.replies,
     nudges: mail.nudges,
     reminders: mail.reminders,
@@ -217,7 +144,6 @@ export function waitingIn(waiting: Waiting, workspaceId: string, toFile: Iterabl
     nudges: waiting.nudges.filter((item) => item.workspaceId === workspaceId),
     reminders: waiting.reminders.filter((item) => item.workspaceId === workspaceId),
     replies: waiting.replies.filter((item) => item.workspaceId === workspaceId && !filing.has(item.key)),
-    tasks: waiting.tasks.filter((item) => item.workspaceId === workspaceId),
     failed: waiting.failed,
   };
 }
