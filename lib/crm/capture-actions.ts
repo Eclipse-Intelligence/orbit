@@ -1,4 +1,3 @@
-import { snoozeTask } from "@/lib/crm/action-needed";
 import { createContactFromMeeting, hideAttendee } from "@/lib/crm/calendar";
 import { moveImport } from "@/lib/crm/call-routing";
 import { createContactAndFile, fileImport, ignoreImport, restoreImport } from "@/lib/crm/conversations";
@@ -6,7 +5,6 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { isUuid } from "@/lib/crm/mutate";
-import { completeTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { applyMailAction } from "@/lib/mail/actions";
 import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail, neverAskUnknownMail, showUnknownMail } from "@/lib/mail/filing";
@@ -25,8 +23,6 @@ export type CaptureAction =
   | { kind: "reply-done"; thread: string }
   | { kind: "reply-snooze"; thread: string; until: string }
   | { kind: "reply-dismiss"; thread: string; at: string }
-  | { kind: "task-done"; id: string }
-  | { kind: "task-snooze"; id: string; until: string }
   | { kind: "email-create"; key: string }
   | { kind: "email-file"; key: string; contactId: string }
   | { kind: "email-move"; key: string; workspaceId: string }
@@ -42,7 +38,7 @@ export type CaptureAction =
   | { kind: "person-create"; email: string }
   | { kind: "person-hide"; email: string };
 
-export type CaptureOutcome = { ok: true; contactId?: string; contactName?: string | null; taskId?: string; importId?: string; relink?: boolean };
+export type CaptureOutcome = { ok: true; contactId?: string; contactName?: string | null; importId?: string; relink?: boolean };
 
 function text(value: unknown, max = 500) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -74,7 +70,6 @@ export function readCaptureAction(body: unknown): CaptureAction {
     case "nudge-dismiss":
     case "call-dismiss":
     case "reminder-done":
-    case "task-done":
     case "import-ignore":
     case "import-restore":
       return { kind: input.kind, id: id(input.id) };
@@ -84,8 +79,6 @@ export function readCaptureAction(body: unknown): CaptureAction {
       return { kind: "reply-snooze", thread: required(input.thread), until: required(input.until, 40) };
     case "reply-dismiss":
       return { kind: "reply-dismiss", thread: required(input.thread), at: required(input.at, 40) };
-    case "task-snooze":
-      return { kind: "task-snooze", id: id(input.id), until: required(input.until, 40) };
     case "email-create":
     case "email-ignore":
     case "email-never":
@@ -153,12 +146,6 @@ export async function runCaptureAction(actor: UserActor, action: CaptureAction, 
     case "reply-dismiss":
       await dismissReply(actor, action.thread, action.at);
       return { ok: true };
-    case "task-done":
-      await completeTask(actor, action.id, { provenance: { operation: "complete_task", source: "web" } });
-      return { ok: true, taskId: action.id };
-    case "task-snooze":
-      await snoozeTask(actor, action.id, action.until);
-      return { ok: true, taskId: action.id };
     case "email-create": {
       const filed = await createAndFileUnknown(actor, action.key);
       return { ok: true, contactId: filed.contactId, contactName: filed.contactName };

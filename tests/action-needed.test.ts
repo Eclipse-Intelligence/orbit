@@ -222,7 +222,7 @@ describe("working days for Capture", () => {
     assert.equal(dueLabel("2026-11-05T09:00:00Z", now), "Yesterday");
     assert.equal(dueLabel("2026-11-06T14:00:00Z", now), "Today 14:00");
     assert.equal(dueLabel("2026-11-06T00:00:00Z", now), "Today");
-    assert.equal(captureSummary({ approvals: 3, followUps: 1, replies: 0, tasks: 4, toFile: 5 }), "3 approvals, 1 follow-up, 4 tasks, 5 to file");
+    assert.equal(captureSummary({ approvals: 3, followUps: 1, replies: 0, toFile: 5 }), "3 approvals, 1 follow-up, 5 to file");
   });
 });
 
@@ -366,7 +366,7 @@ describe("Follow-ups across workspaces", () => {
   });
 });
 
-describe("Tasks, approvals and To file", () => {
+describe("Approvals and To file", () => {
   let mark: UserActor;
   let james: UserActor;
 
@@ -375,53 +375,26 @@ describe("Tasks, approvals and To file", () => {
     james = await teammate(mark, "james@eclipse-tasks.test", "James Carter");
   });
 
-  it("lists your overdue tasks and unowned ones, then today's, and never a colleague's", async () => {
+  it("leaves tasks out of Capture, and Remind me still moves a task to a working day", async () => {
     const today = startOfDay(new Date());
-    const due = (offset: number) => new Date(today.getTime() + offset).toISOString();
-    const make = async (actor: UserActor, title: string, dueAt: string, ownerId: string | null = actor.userId) =>
-      (await createTask(actor, { title, dueAt, ownerId })).body.task.id;
-    const later = await make(mark, "Review Q4 pipeline", due(60_000));
-    const overdue = await make(mark, "Send revised SOW", due(-2 * DAY_MS));
-    await make(mark, "Next week thing", due(3 * DAY_MS));
-    const unowned = await make(mark, "Nobody's job", due(-DAY_MS), null);
-    await make(james, "James's task", due(-DAY_MS));
+    const overdue = (await createTask(mark, { title: "Send revised SOW", dueAt: new Date(today.getTime() - 2 * DAY_MS).toISOString(), ownerId: mark.userId })).body.task.id;
+    const waiting = await waitingFor(mark, [mark]);
+    assert.equal("tasks" in waiting, false);
+    const status = await captureStatus(mark);
+    assert.equal("tasks" in status.sections, false);
+    assert.equal(status.waiting, 0, "an overdue task doesn't count in Capture");
+    assert.throws(() => readCaptureAction({ kind: "task-done", id: overdue }), /didn't understand/);
 
-    const tasks = (await waitingFor(mark, [mark])).tasks;
-    assert.deepEqual(
-      tasks.map((task) => [task.title, task.overdue]),
-      [
-        ["Send revised SOW", true],
-        ["Nobody's job", true],
-        ["Review Q4 pipeline", false],
-      ],
-    );
-    assert.deepEqual(
-      (await waitingFor(james, [james])).tasks.map((task) => task.title),
-      ["James's task"],
-      "members don't see tasks nobody owns that they didn't create",
-    );
-
-    const choice = taskSnoozeChoices(tasks[0].dueAt, new Date()).find((item) => item.id === "tomorrow")!;
-    await runCaptureAction(mark, { kind: "task-snooze", id: overdue, until: choice.at });
-    assert.equal((await getTask(mark, overdue)).dueAt, choice.at);
-    await assert.rejects(snoozeTask(mark, later, new Date(Date.now() - 60_000).toISOString()), /at least a minute from now/);
-    await runCaptureAction(mark, { kind: "task-done", id: later });
-    assert.ok((await getTask(mark, later)).completedAt);
-    assert.deepEqual(
-      (await waitingFor(mark, [mark])).tasks.map((task) => task.title),
-      ["Nobody's job"],
-    );
+    await assert.rejects(snoozeTask(mark, overdue, new Date(Date.now() - 60_000).toISOString()), /at least a minute from now/);
     let saturday = dayKeyAt(new Date(Date.now() + 2 * DAY_MS));
     while (weekday(saturday) !== 6) saturday = shiftDay(saturday, 1);
-    await runCaptureAction(mark, { kind: "task-snooze", id: overdue, until: new Date(wallClockAt(saturday, 10, 0)).toISOString() });
+    await snoozeTask(mark, overdue, new Date(wallClockAt(saturday, 10, 0)).toISOString());
     assert.equal(
       (await getTask(mark, overdue)).dueAt,
       new Date(wallClockAt(nextWorkingDay(saturday), 10, 0)).toISOString(),
       "a custom Saturday moves to the next working day",
     );
-    await runCaptureAction(mark, { kind: "task-done", id: overdue });
-    await runCaptureAction(mark, { kind: "task-done", id: unowned });
-    assert.deepEqual((await waitingFor(mark, [mark])).tasks, []);
+    await getAdminPool().query("delete from crm.tasks where id = $1", [overdue]);
   });
 
   it("shows approvals waiting on you, and never a colleague's", async () => {
@@ -473,7 +446,7 @@ describe("Tasks, approvals and To file", () => {
 
   it("counts every section and shows the dot only for what arrived since you last looked", async () => {
     const status = await captureStatus(mark);
-    assert.deepEqual(status.sections, { approvals: 0, followUps: 0, replies: 0, tasks: 0, toFile: 1 });
+    assert.deepEqual(status.sections, { approvals: 0, followUps: 0, replies: 0, toFile: 1 });
     assert.equal(status.waiting, 1);
 
     await markCaptureSeen(mark, new Date(Date.now() + 1000));
@@ -518,7 +491,7 @@ describe("Tasks, approvals and To file", () => {
 
   it("refuses changes it doesn't understand", () => {
     assert.throws(() => readCaptureAction({ kind: "delete-everything" }), /didn't understand/);
-    assert.throws(() => readCaptureAction({ kind: "task-done", id: "not-an-id" }), /didn't understand/);
+    assert.throws(() => readCaptureAction({ kind: "reminder-done", id: "not-an-id" }), /didn't understand/);
     assert.deepEqual(readCaptureAction({ kind: "reply-snooze", thread: " a|b ", until: "2026-11-09T08:00:00Z" }), {
       kind: "reply-snooze",
       thread: "a|b",
@@ -713,30 +686,6 @@ describe("Capture after review", () => {
     assert.deepEqual((await waitingFor(mark, [mark])).failed, []);
   });
 
-  it("applies the task limit to each workspace", async () => {
-    const admin = getAdminPool();
-    const overdue = new Date(Date.now() - 3 * DAY_MS);
-    await admin.query(
-      "insert into crm.tasks (workspace_id, title, due_at, owner_id, created_by_user_id) select $1, 'Home ' || g, $2, $3, $3 from generate_series(1, 105) g",
-      [mark.workspaceId, overdue, mark.userId],
-    );
-    await admin.query("insert into crm.tasks (workspace_id, title, due_at, owner_id, created_by_user_id) values ($1, 'Personal one', $2, $3, $3), ($1, 'Personal two', $2, $3, $3)", [
-      personal.workspaceId,
-      new Date(overdue.getTime() + 60_000),
-      mark.userId,
-    ]);
-    const tasks = (await waitingFor(mark, await workspaceActors(mark))).tasks;
-    assert.equal(tasks.filter((item) => item.workspaceId === mark.workspaceId).length, 100);
-    assert.deepEqual(
-      tasks
-        .filter((item) => item.workspaceId === personal.workspaceId)
-        .map((item) => item.title)
-        .sort(),
-      ["Personal one", "Personal two"],
-    );
-    await admin.query("delete from crm.tasks where workspace_id = any($1::uuid[])", [[mark.workspaceId, personal.workspaceId]]);
-  });
-
   it("makes a change in the workspace it came from, and refuses one you're no longer in", async () => {
     const stranger = await createUser("someone@else-review.test", "Someone Else");
     assert.equal((await captureActor(mark, undefined)).workspaceId, mark.workspaceId);
@@ -758,7 +707,7 @@ describe("Capture after review", () => {
       Object.keys(result)
         .filter((key) => key !== "notice")
         .sort(),
-      ["approvals", "followUps", "replies", "tasks", "toFile", "unreadSections"],
+      ["approvals", "followUps", "replies", "toFile", "unreadSections"],
     );
     assert.deepEqual(Object.keys(result.followUps).sort(), ["calls", "emails", "noReplyYet"]);
     assert.deepEqual(Object.keys(result.toFile).sort(), ["conversations", "emails", "notShown", "peopleMet", "personalOrCollectionsEmails"]);

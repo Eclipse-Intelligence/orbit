@@ -12,7 +12,6 @@ import {
   PersonItem,
   ReminderItem,
   ReplyItem,
-  TaskItem,
   ClearContext,
   type ClearInstead,
 } from "@/components/capture/capture-items";
@@ -27,7 +26,7 @@ import { useComposer } from "@/components/mail/compose-dock";
 import KeyboardList, { activateRow } from "@/components/shortcuts/keyboard-list";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { closeFollowUpAction } from "@/app/(crm)/capture/actions";
-import type { WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
+import type { WaitingApproval } from "@/lib/crm/action-needed";
 import type { MetPerson } from "@/lib/crm/calendar";
 import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
 import type { DismissedImport, UnfiledImport } from "@/lib/crm/conversations";
@@ -52,7 +51,6 @@ const LABELS: Record<CaptureSectionId, string> = {
   approvals: "Approvals",
   followUps: "Follow-ups",
   replies: "Replies",
-  tasks: "Tasks",
   toFile: "To file",
 };
 
@@ -64,7 +62,6 @@ export type CaptureData = {
   reminders: WaitingReminder[];
   calls: FollowUpSuggestion[];
   replies: WaitingReply[];
-  tasks: WaitingTask[];
   emails: UnknownEmail[];
   notShown: SkippedEmail[];
   unfiled: UnfiledImport[];
@@ -221,11 +218,6 @@ export default function CaptureScreen({
       section: "replies" as const,
       node: <ReplyItem key={item.key} item={item} now={now} clearId={`reply:${item.key}`} />,
     })),
-    ...data.tasks.map((item) => ({
-      id: `task:${item.id}`,
-      section: "tasks" as const,
-      node: <TaskItem key={item.id} item={item} now={now} clearId={`task:${item.id}`} />,
-    })),
     ...data.emails.map((item) => ({
       id: `email:${item.key}`,
       section: "toFile" as const,
@@ -287,8 +279,8 @@ export default function CaptureScreen({
   const view: Filter = filter !== "all" && counts[filter] === 0 && !unread.has(filter) ? "all" : filter;
 
   useEffect(() => {
-    const [approvals, followUps, replies, tasks, toFile] = clearedKey.split(",").map(Number);
-    setCaptureCleared({ approvals, followUps, replies, tasks, toFile });
+    const [approvals, followUps, replies, toFile] = clearedKey.split(",").map(Number);
+    setCaptureCleared({ approvals, followUps, replies, toFile });
   }, [clearedKey, setCaptureCleared]);
 
   useEffect(() => {

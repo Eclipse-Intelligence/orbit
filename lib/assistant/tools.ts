@@ -2694,7 +2694,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "get_capture",
     label: "Checking Capture",
     description:
-      "Everything waiting on the user in Capture for this workspace, in its sections: approvals (workflow steps waiting on them), follow-ups (Orbit's ready follow-up emails for sent mail nobody answered, sent mail whose follow-up reminder is due with no draft yet, and calls that ended with no next step, each with the draft), replies (emails from people waiting two or more working days for their reply), tasks (theirs, overdue then due today) and to file (email from people not in Orbit who might do business with this workspace, unfiled Teams and Granola conversations, and people met who aren't contacts). toFile.notShown counts email from new people that Capture filtered out as not business, lists the ones that aren't Personal or Collections (Supplier, Service, Spam, Newsletter, Never ask), and only counts Personal and Collections email (personalOrCollections, and personalOrCollectionsEmails for emails to file that were themselves judged Personal or Collections with low confidence); mention the counts when they help, and leave Personal and Collections email alone. Opening Capture this way may first sort a few new emails with Jev or the AI gateway. unreadSections lists any section Orbit couldn't read this time. For the mailbox itself use search_email.",
+      "Everything waiting on the user in Capture for this workspace, in its sections: approvals (workflow steps waiting on them), follow-ups (Orbit's ready follow-up emails for sent mail nobody answered, sent mail whose follow-up reminder is due with no draft yet, and calls that ended with no next step, each with the draft), replies (emails from people waiting two or more working days for their reply) and to file (email from people not in Orbit who might do business with this workspace, unfiled Teams and Granola conversations, and people met who aren't contacts). toFile.notShown counts email from new people that Capture filtered out as not business, lists the ones that aren't Personal or Collections (Supplier, Service, Spam, Newsletter, Never ask), and only counts Personal and Collections email (personalOrCollections, and personalOrCollectionsEmails for emails to file that were themselves judged Personal or Collections with low confidence); mention the counts when they help, and leave Personal and Collections email alone. Opening Capture this way may first sort a few new emails with Jev or the AI gateway. unreadSections lists any section Orbit couldn't read this time. For the mailbox itself use search_email.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
       const now = Date.now();
@@ -2752,7 +2752,6 @@ const TOOL_LIST: AssistantTool[] = [
           workingDaysWaiting: item.waitingDays,
           replyReady: item.ready,
         })),
-        tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, dueDate: taskDueDay(item.dueAt), dueHasTime: item.dueHasTime, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
         toFile: {
           emails: unknown.emails
             .filter((item) => !sensitiveCategory(item.stored))

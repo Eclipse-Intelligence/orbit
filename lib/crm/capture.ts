@@ -154,7 +154,7 @@ async function unknownFor(actor: UserActor, now: number, actors: UserActor[], in
 async function waitingFor(actor: UserActor, actors: UserActor[], now: number) {
   return waitingOnce(actor, actors, new Date(now)).catch((error) => {
     console.error("Reading what is waiting on you failed", error instanceof Error ? error.message : error);
-    return { ...EMPTY_WAITING, failed: ["approvals", "followUps", "replies", "tasks"] as CaptureSection[] };
+    return { ...EMPTY_WAITING, failed: ["approvals", "followUps", "replies"] as CaptureSection[] };
   });
 }
 
@@ -221,16 +221,15 @@ export async function captureStatus(actor: UserActor, now = Date.now(), known?: 
     ).rows[0];
     const freshEmails = emails.filter((item) => !seenAt || item.at > seenAt).length;
     const newestEmail = emails.reduce<string | null>((latest, item) => (!latest || item.at > latest ? item.at : latest), null);
-    const waiting = arrivals([...here.approvals, ...here.nudges, ...here.reminders, ...here.replies, ...here.tasks], now, seenAt);
+    const waiting = arrivals([...here.approvals, ...here.nudges, ...here.reminders, ...here.replies], now, seenAt);
     const sections: CaptureSectionCounts = {
       approvals: here.approvals.length,
       followUps: followUps.waiting + here.nudges.length + here.reminders.length,
       replies: here.replies.length,
-      tasks: here.tasks.length,
       toFile: unfiled.waiting + people.waiting + emails.length,
     };
     return {
-      waiting: sections.approvals + sections.followUps + sections.replies + sections.tasks + sections.toFile,
+      waiting: sections.approvals + sections.followUps + sections.replies + sections.toFile,
       fresh: unfiled.fresh + people.fresh + followUps.fresh + freshEmails + waiting.fresh,
       newestAt: later(later(later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)), newestEmail), waiting.newest),
       seenAt,

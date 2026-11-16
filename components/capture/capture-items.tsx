@@ -7,22 +7,20 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import Tag from "@/components/_ui/tag";
 import { Textarea } from "@/components/_ui/textarea";
-import { EntityChip, Monogram, tagBase } from "@/components/beautifui/record-marks";
+import { Monogram, tagBase } from "@/components/beautifui/record-marks";
 import CaptureRow, { type MenuItem, type RowAction } from "@/components/capture/capture-row";
 import { FilePicker } from "@/components/capture/file-picker";
 import { useComposer } from "@/components/mail/compose-dock";
 import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import { formatMeetingWhen } from "@/lib/companies";
-import type { WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
+import type { WaitingApproval } from "@/lib/crm/action-needed";
 import type { MetPerson } from "@/lib/crm/calendar";
-import { agoLabel, dayLabel, dueLabel, REPLY_AMBER_WORKING_DAYS, sinceLabel } from "@/lib/crm/capture-format";
+import { agoLabel, dayLabel, REPLY_AMBER_WORKING_DAYS, sinceLabel } from "@/lib/crm/capture-format";
 import type { CaptureAction } from "@/lib/crm/capture-actions";
 import type { ContactSuggestion } from "@/lib/crm/call-names";
 import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
-import { companyHref, contactHref } from "@/lib/crm/hrefs";
-import { onWorkingDay, taskSnoozeChoices, type SnoozeChoice } from "@/lib/crm/task-snooze";
-import { tasksHref } from "@/lib/crm/task-views";
+import { type SnoozeChoice } from "@/lib/crm/task-snooze";
 import type { UnknownEmail } from "@/lib/mail/filing";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { threadHref, type WorkspaceChoiceRef } from "@/lib/mail/view";
@@ -31,8 +29,6 @@ import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import MicIcon from "@/public/assets/images/_common/mic.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
-import CheckIcon from "@/public/assets/images/assistant/check.svg";
-import CrossIcon from "@/public/assets/images/companies/detail/x.svg";
 import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 import FollowUpIcon from "@/public/assets/images/mail/follow-up.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
@@ -354,87 +350,6 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
       swipe={{
         left: { label: "Done", run: done },
         right: () => pick(replyChoices(), "Orbit moves the conversation out of your inbox and brings it back to the top at this time.", snooze),
-      }}
-    />
-  );
-}
-
-function DoneCircle({ overdue, title, onClick }: { overdue: boolean; title: string; onClick: () => void }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      onClick={onClick}
-      aria-label={`Mark “${title}” done`}
-      title="Mark done (E)"
-      className={cn(
-        "group/done hover:bg-success mt-px text-white hover:text-white",
-        overdue ? "bg-danger" : "bg-secondary text-subtle",
-      )}
-    >
-      <CheckIcon aria-hidden className="hidden size-3 group-hover/done:block" />
-      <span aria-hidden className="flex group-hover/done:hidden">
-        {overdue ? <CrossIcon className="size-3.5" /> : <span className="block size-1.5 rounded-full bg-current" />}
-      </span>
-    </Button>
-  );
-}
-
-function taskChoices(item: WaitingTask) {
-  return taskSnoozeChoices(item, new Date());
-}
-
-export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: number; clearId: string }) {
-  const onClear = useClear(clearId);
-  const router = useRouter();
-  const pick = useSnoozePicker();
-  const href = item.companyId ? companyHref(item.companyId) : item.contactId ? contactHref(item.contactId) : tasksHref(item.overdue ? "overdue" : "today");
-  const done = () => onClear("Task done", { kind: "task-done", id: item.id });
-  const snooze = (choice: SnoozeChoice) =>
-    onClear(`Due ${choice.detail}`, {
-      kind: "task-snooze",
-      id: item.id,
-      until: choice.at,
-    });
-  const record = item.companyName ?? item.contactName;
-  return (
-    <CaptureRow
-      rowId={clearId}
-      mark={<DoneCircle overdue={item.overdue} title={item.title} onClick={done} />}
-      title={item.title}
-      chips={
-        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <Tag size="sm" tone={item.overdue ? "red" : "amber"} className="text-[12px]">
-            {dueLabel(item.dueAt, now, undefined, item.dueHasTime)}
-          </Tag>
-          {record && (
-            <EntityChip name={record} href={item.companyId ? companyHref(item.companyId) : item.contactId ? contactHref(item.contactId) : undefined} />
-          )}
-        </span>
-      }
-      actions={[
-        { id: "done", label: "Done", variant: "secondary", key: "e", hint: "E", run: done },
-        {
-          id: "snooze",
-          label: "Remind me",
-          variant: "ghost",
-          key: "h",
-          hint: "H",
-          snooze: { choices: () => taskChoices(item), pick: snooze },
-        },
-        {
-          id: "open",
-          label: "Open",
-          variant: "ghost",
-          opens: true,
-          hint: "↵",
-          phoneMore: true,
-          run: () => router.push(href),
-        },
-      ]}
-      swipe={{
-        left: { label: "Done", run: done },
-        right: () => pick(taskChoices(item), "Moves the due date.", snooze, onWorkingDay),
       }}
     />
   );
