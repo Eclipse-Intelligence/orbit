@@ -11,7 +11,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { syncMail } from "@/lib/mail/sync";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { nextScheduleRun, type WorkflowDefinition } from "@/lib/workflows/definition";
-import { runWorkflowTick } from "@/lib/workflows/engine";
+import { LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
 import { classifyEmail, failedRecipient } from "@/lib/workflows/mail-events";
 import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import { createProduct, createTemplate, updateTemplate } from "@/lib/proposals/catalogue";
@@ -138,7 +138,7 @@ describe("workflow capabilities", () => {
       pushed.push(JSON.parse(payload));
     };
     const llm = fakes([MOVED]);
-    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000, push });
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: LONG_TICK_MS, long: true, push });
     assert.equal(llm.seen.ai.length, 1);
     assert.equal(pushed.length, 1);
     assert.equal(pushed[0].title, "Approval needed: Andrew Sanaghan seems to have moved to Secro");
@@ -167,7 +167,7 @@ describe("workflow capabilities", () => {
 
     await getAdminPool().query("update crm.workflows set next_run_at = now() - interval '1 minute' where id = $1", [workflow.id]);
     const again = fakes([MOVED]);
-    await runWorkflowTick({ fetchImpl: again.fetchImpl, budgetMs: 30_000 });
+    await runWorkflowTick({ fetchImpl: again.fetchImpl, budgetMs: LONG_TICK_MS, long: true });
     assert.equal(again.seen.ai.length, 0);
   });
 
@@ -196,7 +196,7 @@ describe("workflow capabilities", () => {
     const llm = fakes([{ stillThere: "yes", newCompany: "", newDomain: "", newTitle: "", confidence: 90, summary: "Still at Pulse." }], [bounce]);
     const report = await syncMail(owner, { budgetMs: 30_000, fetchImpl: llm.fetchImpl });
     assert.equal(report.workflowEvents, 1);
-    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: LONG_TICK_MS, long: true });
     assert.equal(llm.seen.ai.length, 1);
     assert.match(llm.seen.ai[0].user, /Beth Jones \(CFO\) still works at Pulse/);
     const runs = await listRuns(owner, workflow.id);
