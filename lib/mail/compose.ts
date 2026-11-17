@@ -1221,6 +1221,7 @@ export async function scheduleMailDraft(
     if (version !== undefined) await touchShare(db, actor, row.id, false);
     const result = await db.query<DraftRow>(
       `update crm.mail_drafts set send_at = $2, remind_hours = $3, signature = $4, follow_up_days = $5, follow_up_body = $6, send_error = null,
+         scheduled_at = now(), updated_at = now(),
          sending_at = case when $7::boolean and ${DRAFT_SHARE} is not null then null else sending_at end
        where id = $1 returning ${DRAFT_COLUMNS}`,
       [
@@ -1277,7 +1278,7 @@ export async function listScheduledDrafts(actor: UserActor): Promise<MailDraft[]
   });
 }
 
-type DueDraft = DraftRow & { signature: boolean };
+type DueDraft = DraftRow & { signature: boolean; scheduled_at?: Date | string | null; workspace_id?: string };
 
 async function sharedDraftText(actor: UserActor, id: string) {
   if (!isUuid(id)) return null;
@@ -1410,7 +1411,7 @@ export async function claimDueDrafts(actor: UserActor, limit = 5): Promise<DueDr
        )
        update crm.mail_drafts d set send_at = null, sending_at = now()
        from picked where d.id = picked.id
-       returning ${draftColumns("d")}, d.signature`,
+       returning ${draftColumns("d")}, d.signature, d.scheduled_at, d.workspace_id`,
       [actor.userId, limit],
     );
     return result.rows;

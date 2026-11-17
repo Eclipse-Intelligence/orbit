@@ -4,13 +4,13 @@ import type { Db } from "@/lib/db/pool";
 
 export type SuppressionReason = "unsubscribed" | "bounced" | "manual";
 
-export type SuppressionPolicy = "refuse" | "warn" | { refuseSince: Date | string };
+export type SuppressionPolicy = "refuse" | "warn" | { refuseSince: Date | string | null; workspaceId: string };
 
 export type SuppressedAddress = { address: string; reason: SuppressionReason; name: string | null };
 
 export type Recipient = { address: string; name?: string | null };
 
-const SUPPRESSED_SQL = `with wanted as (
+export const SUPPRESSED_SQL = `with wanted as (
     select distinct a as address from unnest($2::text[]) a where a <> ''
   )
   select w.address, hit.reason, (
@@ -26,12 +26,12 @@ const SUPPRESSED_SQL = `with wanted as (
     union all
     select s.reason from crm.contacts c
     join crm.suppressions s on s.workspace_id = c.workspace_id and s.contact_id = c.id
-    where c.workspace_id = $1 and c.normalized_email = w.address and s.reason <> 'bounced'
+    where c.workspace_id = $1 and c.normalized_email = w.address and c.archived_at is null and s.reason <> 'bounced'
       and ($3::timestamptz is null or s.created_at > $3::timestamptz)
     union all
     select s.reason from crm.contacts c
     join crm.suppressions s on s.workspace_id = c.workspace_id and s.kind = 'linkedin' and s.value = c.normalized_linkedin
-    where c.workspace_id = $1 and c.normalized_email = w.address and s.reason <> 'bounced'
+    where c.workspace_id = $1 and c.normalized_email = w.address and c.archived_at is null and s.reason <> 'bounced'
       and ($3::timestamptz is null or s.created_at > $3::timestamptz)
     limit 1
   ) hit`;
@@ -77,7 +77,8 @@ export function isSuppressedRefusal(error: unknown): error is CrmError {
 
 export async function checkSuppressed(db: Db, workspaceId: string, recipients: Recipient[], policy: SuppressionPolicy) {
   const since = typeof policy === "object" ? policy.refuseSince : null;
-  const names = suppressedNames(recipients, await suppressedAddresses(db, workspaceId, recipients.map((item) => item.address), since));
+  const workspace = typeof policy === "object" ? policy.workspaceId : workspaceId;
+  const names = suppressedNames(recipients, await suppressedAddresses(db, workspace, recipients.map((item) => item.address), since));
   if (names.length > 0 && policy !== "warn") throw suppressedRefusal(names);
   return names;
 }

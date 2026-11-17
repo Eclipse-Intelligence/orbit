@@ -16,9 +16,9 @@ function recipientsOf(value: unknown): Recipient[] {
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as { recipients?: unknown };
-  const recipients = recipientsOf(body.recipients);
   return mailResponse(async (actor) => {
+    const body = (await request.json().catch(() => ({}))) as { recipients?: unknown };
+    const recipients = recipientsOf(body.recipients);
     if (recipients.length === 0) return { line: null };
     const names = await withActor(actor, (db) => checkSuppressed(db, actor.workspaceId, recipients, "warn"));
     return { line: suppressedLine(names) };

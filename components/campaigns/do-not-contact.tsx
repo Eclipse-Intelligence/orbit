@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import ConfirmDialog from "@/components/_ui/confirm-dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import Tag from "@/components/_ui/tag";
 import { liftDoNotContactAction, setDoNotContactAction } from "@/app/(crm)/campaigns/actions";
 import type { DoNotContact, DoNotContactTarget } from "@/lib/campaigns/suppression";
@@ -19,8 +19,8 @@ export function DoNotContactStatus({ status, target, canLift }: { status: DoNotC
     setBusy(true);
     setError(null);
     const outcome = await liftDoNotContactAction(target).catch(() => ({ error: "Couldn't lift. Try again." }));
-    setBusy(false);
     if (outcome.error) {
+      setBusy(false);
       setError(outcome.error);
       return;
     }
@@ -34,8 +34,8 @@ export function DoNotContactStatus({ status, target, canLift }: { status: DoNotC
           Do not contact
         </Tag>
         {canLift && (
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void lift()} className="hit">
-            Lift
+          <Button variant="ghost" size="sm" disabled={busy} aria-busy={busy} onClick={() => void lift()} className="hit">
+            {busy ? "Lifting…" : "Lift"}
           </Button>
         )}
       </div>
@@ -54,35 +54,59 @@ export function DoNotContactDialog({
   onOpenChange,
   name,
   target,
-  onError,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   name: string;
   target: DoNotContactTarget;
-  onError: (error: string | null) => void;
 }) {
   const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function confirm() {
-    onError(null);
+    setBusy(true);
+    setError(null);
     const outcome = await setDoNotContactAction(target).catch(() => ({ error: "Couldn't save. Try again." }));
+    setBusy(false);
     if (outcome.error) {
-      onError(outcome.error);
+      setError(outcome.error);
       return;
     }
+    onOpenChange(false);
     router.refresh();
   }
 
   return (
-    <ConfirmDialog
+    <Dialog
       open={open}
-      onOpenChange={onOpenChange}
-      title={`Do not contact ${name}?`}
-      description={DO_NOT_CONTACT_DETAIL}
-      confirmLabel="Do not contact"
-      tone="neutral"
-      onConfirm={() => void confirm()}
-    />
+      onOpenChange={(next) => {
+        if (busy) return;
+        if (!next) setError(null);
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <DialogHeader className="pr-12">
+          <DialogTitle>Do not contact {name}?</DialogTitle>
+          <DialogDescription>{DO_NOT_CONTACT_DETAIL}</DialogDescription>
+        </DialogHeader>
+        {error && (
+          <p role="alert" className="caption-style text-danger px-6">
+            {error}
+          </p>
+        )}
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="md" disabled={busy}>
+              Cancel
+            </Button>
+          </DialogClose>
+          <Button variant="primary" size="md" disabled={busy} aria-busy={busy} onClick={() => void confirm()}>
+            {busy ? "Saving…" : "Do not contact"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

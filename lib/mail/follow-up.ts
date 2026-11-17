@@ -20,6 +20,7 @@ type Recipients = { to: MailAddress[]; cc: MailAddress[]; bcc: MailAddress[] };
 
 export type SendFollowUpRow = {
   id: string;
+  workspace_id: string;
   source_id: string;
   thread_key: string;
   subject: string | null;
@@ -46,7 +47,7 @@ type Outcome =
   | { kind: "gone" }
   | { kind: "failed"; reason: string; conflict: boolean; body: string | null; messageId: string | null };
 
-export const FOLLOW_UP_ROW_COLUMNS = "id, source_id, thread_key, subject, follow_up_body, recipients, identity_id, used_identity, original_internet_id, created_at";
+export const FOLLOW_UP_ROW_COLUMNS = "id, workspace_id, source_id, thread_key, subject, follow_up_body, recipients, identity_id, used_identity, original_internet_id, created_at";
 
 const ORIGINAL_SLACK_MS = 5 * 60_000;
 const STUCK_MINUTES = 10;
@@ -164,9 +165,9 @@ function followUpRecipients(row: SendFollowUpRow, latest: Latest): Recipients {
     : { to: latest.to_recipients ?? [], cc: latest.cc_recipients ?? [], bcc: [] };
 }
 
-async function suppressedProblem(actor: UserActor, recipients: Recipients) {
+async function suppressedProblem(actor: UserActor, workspaceId: string, recipients: Recipients) {
   try {
-    await withActor(actor, (db) => checkSuppressed(db, actor.workspaceId, [...recipients.to, ...recipients.cc, ...recipients.bcc], "refuse"));
+    await withActor(actor, (db) => checkSuppressed(db, workspaceId, [...recipients.to, ...recipients.cc, ...recipients.bcc], "refuse"));
     return null;
   } catch (error) {
     if (isSuppressedRefusal(error)) return error.message;
@@ -186,7 +187,7 @@ async function deliverFollowUp(
   }
   const blocked = blocker(row, state.latest);
   if (blocked) return failed(blocked, true, null, state.latest?.own ? state.latest.id : null);
-  const suppressed = await suppressedProblem(actor, followUpRecipients(row, state.latest!));
+  const suppressed = options.from === "due" ? await suppressedProblem(actor, row.workspace_id, followUpRecipients(row, state.latest!)) : null;
   if (suppressed) return failed(suppressed, true, null, state.latest?.own ? state.latest.id : null);
   let body = readFollowUpBody(row.follow_up_body);
   if (!body) {
@@ -239,7 +240,7 @@ async function deliverFollowUp(
         }),
         attachments: [],
       },
-      { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep", suppression: "refuse" },
+      { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep", suppression: options.from === "due" ? { refuseSince: null, workspaceId: row.workspace_id } : "warn" },
     );
   } catch (error) {
     await moveState(actor, row.id, "sending", options.from);

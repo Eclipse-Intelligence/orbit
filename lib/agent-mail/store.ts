@@ -155,7 +155,11 @@ function addresses(values: string[]) {
 }
 
 async function refuseSuppressedMail(actor: UserActor, recipients: string[]) {
-  await withActor(actor, (db) => checkSuppressed(db, actor.workspaceId, recipients.map((address) => ({ address })), "refuse"));
+  const parsed = recipients.flatMap((value) => {
+    const address = bareAddress(value);
+    return address ? [{ address }] : [];
+  });
+  await withActor(actor, (db) => checkSuppressed(db, actor.workspaceId, parsed, "refuse"));
 }
 
 export async function sendFromAgentMailbox(

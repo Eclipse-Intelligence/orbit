@@ -5,20 +5,21 @@ import { saveCampaignConnection } from "@/lib/campaigns/connections";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { contactSuppression, doNotContactFor, liftDoNotContact, ONLY_A_PERSON_LIFTS, setDoNotContact } from "@/lib/campaigns/suppression";
 import { syncCampaigns } from "@/lib/campaigns/sync";
-import { getProspectThread } from "@/lib/campaigns/threads";
+import { contactCampaignLines, getProspectThread } from "@/lib/campaigns/threads";
 import { withActor } from "@/lib/crm/context";
 import { createContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { saveMailbox, sendContactEmail } from "@/lib/crm/inbox";
 import { mergeContacts } from "@/lib/crm/merge";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { checkSuppressed, suppressedAddresses } from "@/lib/crm/suppressions";
+import { checkSuppressed, SUPPRESSED_SQL, suppressedAddresses } from "@/lib/crm/suppressions";
 import type { UserActor } from "@/lib/crm/types";
 import { WEBHOOK_EVENTS } from "@/lib/crm/webhooks";
 import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { latestEmailCheck } from "@/lib/enrichment/email-check";
-import { readDraftInput, scheduleMailDraft, sendForAgent, sendMailDraft, sendMailOnce } from "@/lib/mail/compose";
+import { changeScheduledDraft, readDraftInput, saveMailDraft, scheduleMailDraft, sendForAgent, sendMailDraft, sendMailOnce } from "@/lib/mail/compose";
+import { sendFromAgentMailbox } from "@/lib/agent-mail/store";
 import { processDueMail } from "@/lib/mail/due";
 import { syncMail } from "@/lib/mail/sync";
 import { createWorkflow, getRunSteps, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
@@ -542,6 +543,185 @@ describe("suppression and Do not contact", () => {
       await assert.rejects(liftDoNotContact(outsider, { contactId: ben }), (error: unknown) => error instanceof CrmError && error.code === "not_found");
       assert.equal((await prospect("lead-b-ben")).stop_requested_at, null);
       assert.ok(!(bravo.writes ?? []).some((write) => write.path.includes("block")));
+    });
+  });
+
+  describe("review fixes", () => {
+    const later = () => new Date(Date.now() + 86_400_000).toISOString();
+    const draftTo = (address: string, name: string, subject: string) => readDraftInput({ mode: "new", sourceId: source, to: [{ address, name }], subject, body: `Hi ${name}` });
+    async function due(id: string) {
+      await sql("update crm.mail_drafts set send_at = now() - interval '1 minute' where id = $1", [id]);
+    }
+
+    it("refuses a suppressed Cc or Bcc", async () => {
+      const box = outlook();
+      await assert.rejects(sendMailOnce(owner, { to: ["tom@brightlane.test"], cc: ["ben@lumen.test"], subject: "Hello", body: "Hi" }, { origin: ORIGIN, fetchImpl: box.fetchImpl }), refused(REFUSED));
+      await assert.rejects(sendMailOnce(owner, { to: ["tom@brightlane.test"], bcc: ["ben@lumen.test"], subject: "Hello", body: "Hi" }, { origin: ORIGIN, fetchImpl: box.fetchImpl }), refused(REFUSED));
+      assert.equal(box.sends().length, 0);
+    });
+
+    it("refuses the agent mailbox, reading the address out of a display name", async () => {
+      const mailbox = await sql<{ id: string }>("insert into crm.agent_mailboxes (workspace_id, address, set_up_at) values ($1, 'agent@suppress.test', now()) returning id", [owner.workspaceId]);
+      const message = await sql<{ id: string }>(
+        "insert into crm.agent_mail_messages (workspace_id, mailbox_id, inbox_id, message_id, direction, from_address, subject) values ($1, $2, 'agent@suppress.test', 'm-ben', 'inbound', 'Ben Hart <BEN@lumen.test>', 'Question') returning id",
+        [owner.workspaceId, mailbox[0].id],
+      );
+      const never: typeof fetch = async () => {
+        throw new Error("The agent mailbox should not be called");
+      };
+      await assert.rejects(sendFromAgentMailbox(owner, { replyTo: message[0].id, to: [], cc: [], subject: null, body: "Thanks" }, never), refused(REFUSED));
+      await assert.rejects(sendFromAgentMailbox(owner, { replyTo: null, to: ["Ben Hart <ben@lumen.test>"], cc: [], subject: "Hi", body: "Hi" }, never), refused(REFUSED));
+    });
+
+    it("refuses the assistant's change_scheduled_email to a suppressed address", async () => {
+      const draft = await scheduleMailDraft(owner, { ...draftTo("tom@brightlane.test", "Tom Avery", "Changing"), sendAt: later() }, { origin: ORIGIN, fetchImpl: outlook().fetchImpl, storedFiles: "replace" });
+      await assert.rejects(changeScheduledDraft(owner, draft.id, { to: ["ben@lumen.test"] }, { origin: ORIGIN, fetchImpl: outlook().fetchImpl }), refused(REFUSED));
+      const kept = await sql<{ send_at: Date | null; to_recipients: { address: string }[] }>("select send_at, to_recipients from crm.mail_drafts where id = $1", [draft.id]);
+      assert.ok(kept[0].send_at, "the schedule stays");
+      assert.deepEqual(kept[0].to_recipients.map((item) => item.address), ["tom@brightlane.test"]);
+      await sql("delete from crm.mail_drafts where id = $1", [draft.id]);
+    });
+
+    it("checks a scheduled send against the list of the draft's workspace, not the home one", async () => {
+      await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member') on conflict do nothing", [outsider.workspaceId, owner.userId]);
+      try {
+        const there = await scheduleMailDraft(owner, { ...draftTo("zed@there.test", "Zed There", "There"), sendAt: later() }, { origin: ORIGIN, fetchImpl: outlook().fetchImpl, storedFiles: "replace" });
+        const home = await scheduleMailDraft(owner, { ...draftTo("ben@lumen.test", "Ben Hart", "Home list only"), sendAt: later() }, { origin: ORIGIN, fetchImpl: outlook().fetchImpl, storedFiles: "replace" });
+        await sql("update crm.mail_drafts set workspace_id = $2 where id = any($1::uuid[])", [[there.id, home.id], outsider.workspaceId]);
+        await sql("insert into crm.suppressions (workspace_id, kind, value, reason, source) values ($1, 'email', 'zed@there.test', 'manual', 'web')", [outsider.workspaceId]);
+        await due(there.id);
+        await due(home.id);
+        const box = outlook();
+        const report = await processDueMail(owner, { fetchImpl: box.fetchImpl, origin: ORIGIN });
+        assert.equal(report.failed, 1);
+        assert.equal(report.sent, 1);
+        const failed = await sql<{ send_error: string | null }>("select send_error from crm.mail_drafts where id = $1", [there.id]);
+        assert.equal(failed[0].send_error, "Couldn't send. Zed There is on the do not contact list.");
+        await sql("delete from crm.mail_drafts where id = $1", [there.id]);
+      } finally {
+        await sql("delete from crm.suppressions where value = 'zed@there.test'");
+        await sql("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [outsider.workspaceId, owner.userId]);
+      }
+    });
+
+    it("sends a warned Send later even when its text didn't change, and refuses after a collaborator edits it", async () => {
+      const saved = await saveMailDraft(owner, draftTo("tom@brightlane.test", "Tom Avery", "Saved first"), { origin: ORIGIN, fetchImpl: outlook().fetchImpl, storedFiles: "replace" });
+      await setDoNotContact(owner, { contactId: tom }, { fetchImpl });
+      const warned = await scheduleMailDraft(owner, { ...draftTo("tom@brightlane.test", "Tom Avery", "Saved first"), id: saved.id, sendAt: later() }, { origin: ORIGIN, fetchImpl: outlook().fetchImpl, storedFiles: "keep" });
+      const edited = await scheduleMailDraft(owner, { ...draftTo("ivy@kiln.test", "Ivy Bell", "Edited later"), sendAt: later() }, { origin: ORIGIN, fetchImpl: outlook().fetchImpl, storedFiles: "replace" });
+      await sql("update crm.mail_drafts set scheduled_at = now() - interval '1 hour' where id = $1", [edited.id]);
+      await sql("update crm.suppressions set created_at = now() - interval '30 minutes' where value = 'ivy@kiln.test'");
+      await sql("update crm.mail_drafts set updated_at = now() where id = $1", [edited.id]);
+      await due(warned.id);
+      await due(edited.id);
+      const box = outlook();
+      const report = await processDueMail(owner, { fetchImpl: box.fetchImpl, origin: ORIGIN });
+      assert.equal(report.sent, 1, "the send Mark scheduled after seeing the warning went");
+      assert.equal(report.failed, 1);
+      const failed = await sql<{ send_error: string | null }>("select send_error from crm.mail_drafts where id = $1", [edited.id]);
+      assert.equal(failed[0].send_error, "Couldn't send. Ivy Bell is on the do not contact list.");
+      await sql("delete from crm.mail_drafts where id = $1", [edited.id]);
+    });
+
+    it("clears a pending stop when lifted, so the contact no longer shows Stopping", async () => {
+      await sql(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, email, state, lead_status, pushed_at)
+         select k.workspace_id, k.id, $2, 'tom@brightlane.test', 'pushed', 'in_progress', now() from crm.campaigns k where k.workspace_id = $1 and k.external_id = '502'`,
+        [owner.workspaceId, tom],
+      );
+      await liftDoNotContact(owner, { contactId: tom });
+      await setDoNotContact(owner, { contactId: tom }, { fetchImpl });
+      const stopping = await sql<{ stop_reason: string | null; stopped_at: Date | null }>("select stop_reason, stopped_at from crm.campaign_prospects where contact_id = $1", [tom]);
+      assert.deepEqual(stopping, [{ stop_reason: "suppressed", stopped_at: null }], "Smartlead hasn't given the lead an id yet");
+      assert.ok((await contactCampaignLines(owner, tom)).some((line) => line.label.startsWith("Stopping")));
+      await liftDoNotContact(owner, { contactId: tom });
+      assert.ok(!(await contactCampaignLines(owner, tom)).some((line) => line.label.startsWith("Stopping")));
+      const cleared = await sql<{ stop_requested_at: Date | null; stop_reason: string | null }>("select stop_requested_at, stop_reason from crm.campaign_prospects where contact_id = $1", [tom]);
+      assert.deepEqual(cleared, [{ stop_requested_at: null, stop_reason: null }]);
+    });
+
+    it("never drops a bounce on lift, including one that arrived while the person was on the list", async () => {
+      await setDoNotContact(owner, { contactId: uma }, { fetchImpl });
+      assert.equal((await suppressions(owner.workspaceId)).find((row) => row.value === "uma@north.test")?.reason, "manual");
+      await liftDoNotContact(owner, { contactId: uma });
+      assert.deepEqual(
+        (await suppressions(owner.workspaceId)).filter((row) => row.value.includes("uma")).map((row) => [row.kind, row.value, row.reason]),
+        [["email", "uma@north.test", "bounced"]],
+      );
+      await setDoNotContact(owner, { contactId: vic }, { fetchImpl });
+      alpha.campaigns[1].stats.push({ lead_id: "lead-vic-2", lead_email: "vic@lane.test", lead_name: "Vic Lane", sequence_number: 2, sent_time: new Date().toISOString(), is_bounced: true });
+      assert.deepEqual((await sync(owner.workspaceId)).errors, []);
+      assert.equal((await suppressions(owner.workspaceId)).find((row) => row.value === "vic@lane.test")?.reason, "unsubscribed");
+      await liftDoNotContact(owner, { contactId: vic });
+      assert.deepEqual(
+        (await suppressions(owner.workspaceId)).filter((row) => row.contact_id === vic || row.value === "vic@lane.test").map((row) => [row.kind, row.value, row.reason]),
+        [["email", "vic@lane.test", "bounced"]],
+      );
+      await withActor(owner, async (db) => {
+        await assert.rejects(checkSuppressed(db, owner.workspaceId, [{ address: "vic@lane.test" }], "refuse"), refused(/do not contact list/));
+      });
+    });
+
+    it("never pushes an address a Smartlead unsubscribe added", async () => {
+      const pending = await sql<{ value: string }>("select value from private.suppression_block_pending($1, 100)", [owner.workspaceId]);
+      assert.ok(!pending.some((row) => row.value === "ivy@kiln.test"));
+    });
+
+    it("gives up on an address the block list keeps rejecting, without holding up the rest", async () => {
+      const failing = (url: URL) => (url.pathname.endsWith("/leads/add-domain-block-list") ? new Response(JSON.stringify({ message: "Bad address" }), { status: 400 }) : null);
+      const stuck = (await createContact(owner, { firstName: "Sal", lastName: "Stuck", email: "sal@stuck.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      alpha.fail = failing;
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt === 0) await setDoNotContact(owner, { contactId: stuck }, { fetchImpl });
+          else assert.deepEqual((await sync(owner.workspaceId)).errors, []);
+        }
+      } finally {
+        alpha.fail = undefined;
+      }
+      const row = await sql<{ blocked_at: Date | null; block_attempts: number }>("select blocked_at, block_attempts from crm.suppressions where value = 'sal@stuck.test'");
+      assert.deepEqual(row, [{ blocked_at: null, block_attempts: 3 }]);
+      const pending = await sql<{ value: string }>("select value from private.suppression_block_pending($1, 100)", [owner.workspaceId]);
+      assert.ok(!pending.some((item) => item.value === "sal@stuck.test"));
+      const fresh = (await createContact(owner, { firstName: "Fay", lastName: "Fresh", email: "fay@fresh.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      const before = (alpha.writes ?? []).length;
+      await setDoNotContact(owner, { contactId: fresh }, { fetchImpl });
+      const block = (alpha.writes ?? []).slice(before).find((write) => write.path === "/leads/add-domain-block-list");
+      assert.deepEqual(block?.body, { domain_block_list: ["fay@fresh.test"] });
+    });
+
+    it("re-points a contactless row on the merged contact's address", async () => {
+      const keep = (await createContact(owner, { firstName: "Kit", lastName: "Keep", email: "kit@keep.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      const dup = (await createContact(owner, { firstName: "Kit", lastName: "Dup", email: "kit@dup.test", linkedinUrl: "https://www.linkedin.com/in/kitdup" }, { provenance: { operation: "test" } })).body.contact.id;
+      await sql(
+        "insert into crm.suppressions (workspace_id, kind, value, reason, source) values ($1, 'email', 'kit@dup.test', 'unsubscribed', 'smartlead'), ($1, 'linkedin', 'linkedin.com/in/kitdup', 'manual', 'web')",
+        [owner.workspaceId],
+      );
+      await mergeContacts(owner, keep, dup, { operation: "test" });
+      const rows = await sql<{ value: string; contact_id: string | null }>("select value, contact_id from crm.suppressions where value in ('kit@dup.test', 'linkedin.com/in/kitdup') order by value");
+      assert.deepEqual(rows.map((row) => row.contact_id), [keep, keep]);
+      assert.ok(await doNotContactFor(owner, { contactId: keep }));
+    });
+
+    it("doesn't bring back lifted unsubscribes when the migration runs again", async () => {
+      await liftDoNotContact(owner, { contactId: ivy });
+      await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270210100000_campaign_suppression.sql", "utf8"));
+      assert.equal((await sql("select 1 from crm.suppressions where value = 'ivy@kiln.test'")).length, 0);
+    });
+
+    it("looks people up through the contacts email index", async () => {
+      const client = await getAdminPool().connect();
+      try {
+        await client.query("begin");
+        await client.query("set local enable_seqscan = off");
+        const plan = await client.query<{ "QUERY PLAN": string }>(`explain ${SUPPRESSED_SQL}`, [owner.workspaceId, ["ben@lumen.test"], null]);
+        const text = plan.rows.map((row) => row["QUERY PLAN"]).join("\n");
+        assert.match(text, /contacts_normalized_email_idx/);
+        assert.doesNotMatch(text, /Seq Scan on contacts/);
+      } finally {
+        await client.query("rollback");
+        client.release();
+      }
     });
   });
 });

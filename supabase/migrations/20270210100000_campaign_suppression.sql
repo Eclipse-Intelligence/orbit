@@ -12,12 +12,16 @@ create table if not exists crm.suppressions (
   created_by_user_id uuid references crm.profiles (id) on delete set null,
   created_by_agent_id uuid references crm.agents (id) on delete set null,
   blocked_at timestamptz,
+  block_attempts integer not null default 0,
+  bounced_at timestamptz,
   created_at timestamptz not null default now(),
   constraint suppressions_kind check (kind in ('email', 'linkedin')),
   constraint suppressions_reason check (reason in ('unsubscribed', 'bounced', 'manual')),
   constraint suppressions_value_length check (char_length(value) between 1 and 500),
   constraint suppressions_source_length check (char_length(source) between 1 and 40)
 );
+
+alter table crm.mail_drafts add column if not exists scheduled_at timestamptz;
 
 create unique index if not exists suppressions_value_uidx on crm.suppressions (workspace_id, kind, value);
 create index if not exists suppressions_contact_idx on crm.suppressions (workspace_id, contact_id) where contact_id is not null;
@@ -68,7 +72,7 @@ declare
   v_skipped integer;
 begin
   if p_reason not in ('unsubscribed', 'manual') then
-    raise exception 'Pick unsubscribed or manual.' using errcode = '22023';
+    raise exception 'The reason must be unsubscribed or manual.' using errcode = '22023';
   end if;
   if p_contact is not null then
     select c.normalized_email, c.normalized_linkedin into v_contact_email, v_contact_linkedin
@@ -101,6 +105,7 @@ begin
     union all
     select 'linkedin'::text, l from unnest(v_linkedins) l
   ) w
+  order by w.kind, w.value
   on conflict (workspace_id, kind, value) do update
   set reason = case when s.reason = 'bounced' then excluded.reason else s.reason end,
       source = case when s.reason = 'bounced' then excluded.source else s.source end,
@@ -125,7 +130,8 @@ begin
       )
       and private.campaign_prospect_active(p.state, p.stopped_at, p.lead_status, k.status)
       and p.stop_requested_at is null
-    for update of p
+    order by p.id
+    for no key update of p
   ),
   changed as (
     update crm.campaign_prospects p
@@ -159,6 +165,46 @@ begin
 end;
 $$;
 
+create or replace function private.suppression_audit(p_workspace uuid, p_audit jsonb, p_more jsonb)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_event uuid;
+  v_created timestamptz;
+  v_changes jsonb := coalesce(p_audit -> 'changes', '{}'::jsonb) || coalesce(p_more, '{}'::jsonb);
+begin
+  insert into crm.audit_events (
+    workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, actor_agent_id, credential_id, source, source_url, operation, changes
+  ) values (
+    p_workspace, p_audit ->> 'eventType', p_audit ->> 'entityType', (p_audit ->> 'entityId')::uuid, p_audit ->> 'actorType',
+    (p_audit ->> 'userId')::uuid, (p_audit ->> 'agentId')::uuid, (p_audit ->> 'credentialId')::uuid,
+    p_audit ->> 'source', p_audit ->> 'sourceUrl', coalesce(p_audit ->> 'operation', p_audit ->> 'eventType'), v_changes
+  )
+  returning id, created_at into v_event, v_created;
+  insert into crm.webhook_deliveries (workspace_id, endpoint_id, event_id, event_type, payload)
+  select p_workspace, endpoint.id, v_event, p_audit ->> 'eventType', jsonb_build_object(
+    'id', v_event,
+    'type', p_audit ->> 'eventType',
+    'createdAt', private.handover_instant(v_created),
+    'workspaceId', p_workspace,
+    'entity', jsonb_build_object('type', p_audit ->> 'entityType', 'id', p_audit ->> 'entityId'),
+    'actor', jsonb_build_object('type', p_audit ->> 'actorType', 'userId', p_audit ->> 'userId', 'agentId', p_audit ->> 'agentId'),
+    'source', p_audit ->> 'source',
+    'sourceUrl', p_audit ->> 'sourceUrl',
+    'data', v_changes
+  )
+  from crm.webhook_endpoints endpoint
+  where endpoint.workspace_id = p_workspace
+    and endpoint.archived_at is null
+    and endpoint.enabled
+    and ((p_audit ->> 'eventType') = any(endpoint.events) or '*' = any(endpoint.events));
+  return v_event;
+end;
+$$;
+
 create or replace function private.suppress_person(
   p_workspace uuid,
   p_contact uuid,
@@ -169,22 +215,32 @@ create or replace function private.suppress_person(
   p_user uuid,
   p_agent uuid,
   p_campaign uuid,
-  p_except uuid
+  p_except uuid,
+  p_audit jsonb
 )
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_result jsonb;
 begin
   if current_user not in ('crm_app', 'postgres') then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-  return private.suppress_person_rows(p_workspace, p_contact, p_emails, p_linkedins, p_reason, p_source, p_user, p_agent, p_campaign, p_except);
+  v_result := private.suppress_person_rows(p_workspace, p_contact, p_emails, p_linkedins, p_reason, p_source, p_user, p_agent, p_campaign, p_except);
+  if p_audit is not null and (v_result ->> 'changed')::boolean then
+    perform private.suppression_audit(p_workspace, p_audit, jsonb_build_object(
+      'stopped', jsonb_array_length(v_result -> 'stopping'),
+      'skipped', (v_result ->> 'skipped')::integer
+    ));
+  end if;
+  return v_result;
 end;
 $$;
 
-create or replace function private.suppression_lift(p_workspace uuid, p_contact uuid, p_emails text[], p_linkedins text[])
+create or replace function private.suppression_lift(p_workspace uuid, p_contact uuid, p_emails text[], p_linkedins text[], p_audit jsonb)
 returns jsonb
 language plpgsql
 security definer
@@ -195,6 +251,7 @@ declare
   v_contact_linkedin text;
   v_emails text[];
   v_linkedins text[];
+  v_targets uuid[];
   v_lifted jsonb;
 begin
   if current_user not in ('crm_app', 'postgres') then
@@ -206,19 +263,39 @@ begin
   end if;
   v_emails := array(select distinct nullif(btrim(x), '') from unnest(coalesce(p_emails, '{}'::text[]) || v_contact_email) x where nullif(btrim(x), '') is not null);
   v_linkedins := array(select distinct nullif(btrim(x), '') from unnest(coalesce(p_linkedins, '{}'::text[]) || v_contact_linkedin) x where nullif(btrim(x), '') is not null);
-  with gone as (
-    delete from crm.suppressions s
+  select coalesce(array_agg(t.id order by t.id), '{}'::uuid[]),
+         coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'kind', t.kind, 'value', t.value, 'reason', t.reason) order by t.kind, t.value), '[]'::jsonb)
+  into v_targets, v_lifted
+  from (
+    select s.id, s.kind, s.value, s.reason
+    from crm.suppressions s
     where s.workspace_id = p_workspace and s.reason in ('manual', 'unsubscribed')
       and (
         (p_contact is not null and s.contact_id = p_contact)
         or (s.kind = 'email' and s.value = any(v_emails))
         or (s.kind = 'linkedin' and s.value = any(v_linkedins))
       )
-    returning s.id, s.kind, s.value, s.reason
-  )
-  select coalesce(jsonb_agg(jsonb_build_object('id', g.id, 'kind', g.kind, 'value', g.value, 'reason', g.reason) order by g.kind, g.value), '[]'::jsonb)
-  into v_lifted
-  from gone g;
+    order by s.id
+    for update
+  ) t;
+  if cardinality(v_targets) = 0 then
+    return v_lifted;
+  end if;
+  delete from crm.suppressions s where s.id = any(v_targets) and s.bounced_at is null;
+  update crm.suppressions s
+  set reason = 'bounced', created_at = s.bounced_at, created_by_user_id = null, created_by_agent_id = null
+  where s.id = any(v_targets) and s.bounced_at is not null;
+  update crm.campaign_prospects p
+  set stop_requested_at = null, stop_reason = null
+  where p.workspace_id = p_workspace and p.stop_reason = 'suppressed' and p.stopped_at is null
+    and (
+      (p_contact is not null and p.contact_id = p_contact)
+      or p.email = any(v_emails)
+      or p.linkedin = any(v_linkedins)
+    );
+  if p_audit is not null then
+    perform private.suppression_audit(p_workspace, p_audit, jsonb_build_object('lifted', v_lifted));
+  end if;
   return v_lifted;
 end;
 $$;
@@ -255,10 +332,12 @@ begin
   if v_event.email is null then
     return;
   end if;
-  insert into crm.suppressions (workspace_id, contact_id, kind, value, reason, source, campaign_id, blocked_at)
+  insert into crm.suppressions as s (workspace_id, contact_id, kind, value, reason, source, campaign_id, blocked_at, bounced_at)
   values (v_event.workspace_id, v_event.live_contact, 'email', v_event.email, 'bounced', v_event.provider, v_event.campaign_id,
-    case when v_event.provider = 'smartlead' then now() end)
-  on conflict (workspace_id, kind, value) do nothing;
+    case when v_event.provider = 'smartlead' then now() end, now())
+  on conflict (workspace_id, kind, value) do update
+  set bounced_at = excluded.bounced_at
+  where s.bounced_at is null;
   if v_event.live_contact is not null and not exists (
     select 1 from crm.enrichment_lookups l
     where l.workspace_id = v_event.workspace_id and l.value = v_event.email and l.field = 'email_check'
@@ -326,8 +405,26 @@ begin
   select s.id, s.value
   from crm.suppressions s
   where s.workspace_id = p_workspace and s.kind = 'email' and s.blocked_at is null and s.reason <> 'bounced'
+    and s.source <> 'smartlead' and s.block_attempts < 3
   order by s.created_at, s.id
   limit least(greatest(p_limit, 1), 500);
+end;
+$$;
+
+create or replace function private.suppression_block_failed(p_workspace uuid, p_ids uuid[])
+returns table (id uuid, attempts integer)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  return query
+  update crm.suppressions s set block_attempts = s.block_attempts + 1
+  where s.workspace_id = p_workspace and s.id = any(p_ids) and s.blocked_at is null
+  returning s.id, s.block_attempts;
 end;
 $$;
 
@@ -489,7 +586,15 @@ begin
     'campaign_prospects', private.merge_move('campaign_prospects', 'contact_id', p_workspace, p_merge, p_keep)
   );
 
-  update crm.suppressions s set contact_id = p_keep where s.workspace_id = p_workspace and s.contact_id = p_merge;
+  update crm.suppressions s set contact_id = p_keep
+  where s.workspace_id = p_workspace
+    and (
+      s.contact_id = p_merge
+      or (
+        s.contact_id is null and s.reason <> 'bounced'
+        and ((s.kind = 'email' and s.value = merge_row.normalized_email) or (s.kind = 'linkedin' and s.value = merge_row.normalized_linkedin))
+      )
+    );
   get diagnostics suppressions_moved = row_count;
 
   delete from crm.page_links l
@@ -520,25 +625,31 @@ end;
 $$;
 
 revoke all on function private.suppress_person_rows(uuid, uuid, text[], text[], text, text, uuid, uuid, uuid, uuid) from public;
-revoke all on function private.suppress_person(uuid, uuid, text[], text[], text, text, uuid, uuid, uuid, uuid) from public;
-revoke all on function private.suppression_lift(uuid, uuid, text[], text[]) from public;
+revoke all on function private.suppress_person(uuid, uuid, text[], text[], text, text, uuid, uuid, uuid, uuid, jsonb) from public;
+revoke all on function private.suppression_lift(uuid, uuid, text[], text[], jsonb) from public;
 revoke all on function private.suppress_from_event(uuid) from public;
 revoke all on function private.campaign_event_suppress() from public;
 revoke all on function private.suppressions_follow_contact() from public;
 revoke all on function private.suppression_block_pending(uuid, integer) from public;
 revoke all on function private.suppression_blocked(uuid, uuid[]) from public;
+revoke all on function private.suppression_block_failed(uuid, uuid[]) from public;
+revoke all on function private.suppression_audit(uuid, jsonb, jsonb) from public;
 revoke all on function private.merge_contact_references(uuid, uuid, uuid, uuid, uuid) from public;
 
-grant execute on function private.suppress_person(uuid, uuid, text[], text[], text, text, uuid, uuid, uuid, uuid) to crm_app;
-grant execute on function private.suppression_lift(uuid, uuid, text[], text[]) to crm_app;
+grant execute on function private.suppress_person(uuid, uuid, text[], text[], text, text, uuid, uuid, uuid, uuid, jsonb) to crm_app;
+grant execute on function private.suppression_lift(uuid, uuid, text[], text[], jsonb) to crm_app;
 grant execute on function private.suppression_block_pending(uuid, integer) to crm_app;
 grant execute on function private.suppression_blocked(uuid, uuid[]) to crm_app;
+grant execute on function private.suppression_block_failed(uuid, uuid[]) to crm_app;
 grant execute on function private.merge_contact_references(uuid, uuid, uuid, uuid, uuid) to crm_app;
 
 do $$
 declare
   v_event uuid;
 begin
+  if exists (select 1 from crm.suppressions) then
+    return;
+  end if;
   for v_event in
     select e.id from crm.campaign_events e
     where e.kind in ('unsubscribed', 'bounced')

@@ -34,5 +34,5 @@ export function useSuppressionCaution(recipients: MailAddress[]) {
     };
   }, [key]);
 
-  return found.key === key ? found.line : null;
+  return key === "[]" ? null : found.line;
 }

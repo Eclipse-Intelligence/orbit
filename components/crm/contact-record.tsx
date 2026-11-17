@@ -115,7 +115,6 @@ export default function ContactRecord({
   const [invitingAt, setInvitingAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [blocking, setBlocking] = useState(false);
-  const [blockError, setBlockError] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
   const shown =
     fresh && fresh.id === contact.id && fresh.updatedAt > contact.updatedAt
@@ -269,11 +268,6 @@ export default function ContactRecord({
                 )}
                 <CampaignLines lines={campaignLines} />
                 {doNotContact && <DoNotContactStatus status={doNotContact} target={{ contactId: shown.id }} canLift={canSetDoNotContact} />}
-                {blockError && (
-                  <span role="alert" className="caption-style text-danger">
-                    {blockError}
-                  </span>
-                )}
                 {relationship && (
                   <span className="flex flex-col gap-1">
                     <span className="flex flex-wrap items-center gap-2">
@@ -443,7 +437,7 @@ export default function ContactRecord({
           />
         }
       />
-      <DoNotContactDialog open={blocking} onOpenChange={setBlocking} name={shown.name} target={{ contactId: shown.id }} onError={setBlockError} />
+      <DoNotContactDialog open={blocking} onOpenChange={setBlocking} name={shown.name} target={{ contactId: shown.id }} />
     </section>
   );
 }

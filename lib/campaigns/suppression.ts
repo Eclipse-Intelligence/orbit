@@ -2,9 +2,9 @@ import { connectedContext, type ProviderOptions } from "@/lib/campaigns/context"
 import type { CampaignProvider, ProviderContext } from "@/lib/campaigns/providers";
 import { stopAtProvider, type StopRow } from "@/lib/campaigns/stops";
 import type { CampaignProviderId } from "@/lib/campaigns/types";
-import { withActor } from "@/lib/crm/context";
+import { scheduleWebhooks, withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
-import { isUuid, recordAudit } from "@/lib/crm/mutate";
+import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { suppressedAddresses, suppressedLine, suppressedNames } from "@/lib/crm/suppressions";
 import type { Actor, Provenance } from "@/lib/crm/types";
@@ -23,6 +23,7 @@ export const ONLY_A_PERSON_LIFTS = "Only a person can lift Do not contact, in Or
 
 const STOP_BUDGET_MS = 10_000;
 const BLOCK_PAGE = 100;
+const BLOCK_ATTEMPTS = 3;
 
 export type DoNotContactTarget = { contactId: string } | { prospectId: string };
 
@@ -141,14 +142,21 @@ async function stopNow(workspaceId: string, rows: SuppressOutcome["stopping"], o
 
 export async function pushBlockList(workspaceId: string, provider: CampaignProvider, context: ProviderContext) {
   if (!provider.blockAddresses) return 0;
+  let pending: { id: string; value: string }[] = [];
   try {
-    const pending = await query<{ id: string; value: string }>("select * from private.suppression_block_pending($1, $2)", [workspaceId, BLOCK_PAGE]);
-    if (pending.rows.length === 0) return 0;
-    await provider.blockAddresses(context, pending.rows.map((row) => row.value));
-    await query("select private.suppression_blocked($1, $2::uuid[])", [workspaceId, pending.rows.map((row) => row.id)]);
-    return pending.rows.length;
+    pending = (await query<{ id: string; value: string }>("select * from private.suppression_block_pending($1, $2)", [workspaceId, BLOCK_PAGE])).rows;
+    if (pending.length === 0) return 0;
+    await provider.blockAddresses(context, pending.map((row) => row.value));
+    await query("select private.suppression_blocked($1, $2::uuid[])", [workspaceId, pending.map((row) => row.id)]);
+    return pending.length;
   } catch (error) {
-    if (!(error instanceof ServiceBusy)) console.error(`Couldn't add addresses to the ${provider.name} block list`, redactedError(error));
+    if (error instanceof ServiceBusy) return 0;
+    console.error(`Couldn't add addresses to the ${provider.name} block list`, redactedError(error));
+    if (pending.length === 0) return 0;
+    const failed = await query<{ id: string; attempts: number }>("select * from private.suppression_block_failed($1, $2::uuid[])", [workspaceId, pending.map((row) => row.id)]).catch(() => null);
+    for (const row of failed?.rows ?? []) {
+      if (row.attempts >= BLOCK_ATTEMPTS) console.error(`Gave up adding suppression ${row.id} to the ${provider.name} block list after ${row.attempts} tries`);
+    }
     return 0;
   }
 }
@@ -159,6 +167,22 @@ async function pushBlockListNow(workspaceId: string, options: ProviderOptions) {
   return pushBlockList(workspaceId, connected.provider, connected.context);
 }
 
+function auditOf(actor: Actor, eventType: string, person: Person, provenance: Provenance, changes: Record<string, unknown>) {
+  return {
+    eventType,
+    entityType: person.contactId ? "contact" : "campaign_prospect",
+    entityId: person.contactId ?? person.prospectId,
+    actorType: actor.type,
+    userId: actor.type === "user" ? actor.userId : null,
+    agentId: actor.type === "agent" ? actor.agentId : null,
+    credentialId: actor.type === "agent" ? actor.credentialId : null,
+    source: provenance.source ?? null,
+    sourceUrl: provenance.sourceUrl ?? null,
+    operation: provenance.operation,
+    changes: { contactId: person.contactId, prospectId: person.prospectId, name: person.name, ...changes },
+  };
+}
+
 export async function setDoNotContact(actor: Actor, target: DoNotContactTarget, options: ProviderOptions & { provenance?: Provenance } = {}) {
   assertScope(actor.scopes, "campaigns:write");
   const person = await withActor(actor, (db) => personOf(db, actor, target));
@@ -166,7 +190,7 @@ export async function setDoNotContact(actor: Actor, target: DoNotContactTarget, 
     throw new CrmError("invalid_input", "Add an email address or LinkedIn profile first.", 400);
   }
   const provenance = web("set_do_not_contact", options.provenance);
-  const saved = await query<{ result: SuppressOutcome }>("select private.suppress_person($1, $2, $3::text[], $4::text[], 'manual', $5, $6, $7, null, null) as result", [
+  const saved = await query<{ result: SuppressOutcome }>("select private.suppress_person($1, $2, $3::text[], $4::text[], 'manual', $5, $6, $7, null, null, $8::jsonb) as result", [
     actor.workspaceId,
     person.contactId,
     person.emails,
@@ -174,21 +198,10 @@ export async function setDoNotContact(actor: Actor, target: DoNotContactTarget, 
     (provenance.source ?? (actor.type === "agent" ? "agent" : "web")).slice(0, 40),
     actor.type === "user" ? actor.userId : null,
     actor.type === "agent" ? actor.agentId : null,
+    JSON.stringify(auditOf(actor, SUPPRESSION_AUDIT_EVENTS.set, person, provenance, { emails: person.emails, linkedins: person.linkedins })),
   ]);
   const outcome = saved.rows[0].result;
-  if (outcome.changed) {
-    await withActor(actor, (db) =>
-      recordAudit(db, actor, SUPPRESSION_AUDIT_EVENTS.set, person.contactId ? "contact" : "campaign_prospect", (person.contactId ?? person.prospectId)!, provenance, {
-        contactId: person.contactId,
-        prospectId: person.prospectId,
-        name: person.name,
-        emails: person.emails,
-        linkedins: person.linkedins,
-        stopped: outcome.stopping.length,
-        skipped: outcome.skipped,
-      }),
-    );
-  }
+  if (outcome.changed) scheduleWebhooks();
   const stopped = await stopNow(actor.workspaceId, outcome.stopping, options);
   await pushBlockListNow(actor.workspaceId, options).catch(() => 0);
   return { changed: outcome.changed, stopping: outcome.stopping.length, stopped, skipped: outcome.skipped };
@@ -198,21 +211,15 @@ export async function liftDoNotContact(actor: Actor, target: DoNotContactTarget,
   if (actor.type === "agent") throw new CrmError("forbidden", ONLY_A_PERSON_LIFTS, 403);
   assertScope(actor.scopes, "campaigns:write");
   const person = await withActor(actor, (db) => personOf(db, actor, target));
-  const gone = await query<{ lifted: { id: string; kind: string; value: string; reason: string }[] }>("select private.suppression_lift($1, $2, $3::text[], $4::text[]) as lifted", [
+  const gone = await query<{ lifted: { id: string; kind: string; value: string; reason: string }[] }>("select private.suppression_lift($1, $2, $3::text[], $4::text[], $5::jsonb) as lifted", [
     actor.workspaceId,
     person.contactId,
     person.emails,
     person.linkedins,
+    JSON.stringify(auditOf(actor, SUPPRESSION_AUDIT_EVENTS.lifted, person, web("lift_do_not_contact", options.provenance), {})),
   ]);
   const lifted = gone.rows[0]?.lifted ?? [];
   if (lifted.length === 0) return { lifted: 0 };
-  await withActor(actor, (db) =>
-    recordAudit(db, actor, SUPPRESSION_AUDIT_EVENTS.lifted, person.contactId ? "contact" : "campaign_prospect", (person.contactId ?? person.prospectId)!, web("lift_do_not_contact", options.provenance), {
-      contactId: person.contactId,
-      prospectId: person.prospectId,
-      name: person.name,
-      lifted: lifted.map((row) => ({ kind: row.kind, value: row.value, reason: row.reason })),
-    }),
-  );
+  scheduleWebhooks();
   return { lifted: lifted.length };
 }

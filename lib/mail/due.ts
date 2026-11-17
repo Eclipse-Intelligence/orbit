@@ -125,7 +125,7 @@ export async function processDueMail(
     const [draft] = await claimDueDrafts(actor, 1);
     if (!draft) break;
     try {
-      await sendMailDraft(actor, dueDraftInput(draft), { origin, fetchImpl, storedFiles: "keep", claimed: true, suppression: { refuseSince: draft.updated_at } });
+      await sendMailDraft(actor, dueDraftInput(draft), { origin, fetchImpl, storedFiles: "keep", claimed: true, suppression: { refuseSince: draft.scheduled_at ?? draft.updated_at, workspaceId: draft.workspace_id ?? actor.workspaceId } });
       report.sent += 1;
     } catch (error) {
       report.failed += 1;

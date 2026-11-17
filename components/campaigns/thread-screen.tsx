@@ -614,7 +614,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
           if (removing) void act({ kind: "remove", campaign: removing });
         }}
       />
-      <DoNotContactDialog open={blocking} onOpenChange={setBlocking} name={thread.person.name} target={{ prospectId: thread.prospectId }} onError={setProblem} />
+      <DoNotContactDialog open={blocking} onOpenChange={setBlocking} name={thread.person.name} target={{ prospectId: thread.prospectId }} />
     </section>
   );
 }

@@ -315,6 +315,31 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     }
   });
 
+  it("checks the reminder's own workspace, and a person's Send now only warns", async () => {
+    const other = await admin().query<{ id: string }>("insert into crm.workspaces (name, slug) values ('Ridgeon', 'ridgeon-follow-ups') returning id");
+    const elsewhere = other.rows[0].id;
+    await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [elsewhere, owner.userId]);
+    await startThread("conv-other-list", { followUpDays: 1, followUpBody: "Hi Jane, checking in.\n\nMark" });
+    await admin().query("update crm.mail_reminders set workspace_id = $2 where thread_key = $1", ["conv-other-list", elsewhere]);
+    await admin().query("insert into crm.suppressions (workspace_id, kind, value, reason, source) values ($1, 'email', 'jane@acme.test', 'manual', 'web')", [elsewhere]);
+    try {
+      await makeDue("conv-other-list");
+      const run = outlook();
+      const report = await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
+      assert.equal(report.followUpsSent, 0);
+      assert.equal(sends(run.calls).length, 0);
+
+      await startThread("conv-send-now", { followUpDays: 3, followUpBody: "Hi Jane, one more thing.\n\nMark" });
+      await admin().query("update crm.mail_reminders set workspace_id = $2 where thread_key = $1", ["conv-send-now", elsewhere]);
+      const now = outlook();
+      const sent = await sendFollowUpNow(owner, (await reminder("conv-send-now")).id, { origin: ORIGIN, fetchImpl: now.fetchImpl });
+      assert.equal(sent.sent, true);
+      assert.equal(sends(now.calls).length, 1);
+    } finally {
+      await admin().query("delete from crm.suppressions where workspace_id = $1", [elsewhere]);
+    }
+  });
+
   it("doesn't send when the latest email in the thread isn't the user's", async () => {
     await startThread("conv-theirs", { followUpDays: 1, followUpBody: "Any news?", syncSent: false });
     await makeDue("conv-theirs");
