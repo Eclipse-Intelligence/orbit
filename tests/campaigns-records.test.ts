@@ -3,8 +3,8 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { keyFingerprint, saveCampaignConnection } from "@/lib/campaigns/connections";
 import { linkCampaignSender, listCampaignSenders } from "@/lib/campaigns/senders";
 import { syncActor, syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
-import { campaignSyncLine } from "@/lib/campaigns/format";
-import { getCampaign, importCampaignProspects } from "@/lib/crm/campaigns";
+import { campaignSyncLine, prospectLine } from "@/lib/campaigns/format";
+import { getCampaign, importCampaignProspects, lastingImportFailure, listCampaignProspects } from "@/lib/crm/campaigns";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -762,6 +762,38 @@ describe("review 391 gaps", () => {
     assert.equal(stored[0].import_error, first.reasons[0]);
     assert.equal((await getCampaign(alice, campaignId)).unlinked, 0);
     assert.deepEqual(await importCampaignProspects(alice, campaignId, { deadline: Date.now() + 30_000 }), { imported: 0, linked: 0, failed: 0, left: 0, reasons: [] });
+    await gapSql("delete from crm.campaign_prospects where id = $1", [bad]);
+  });
+
+  it("keeps a passing failure out of import_error, so the row is tried again", () => {
+    assert.equal(lastingImportFailure(new CrmError("invalid_input", "Enter a LinkedIn profile URL.", 400)), true);
+    assert.equal(lastingImportFailure(Object.assign(new Error("value too long"), { code: "22001" })), true);
+    assert.equal(lastingImportFailure(Object.assign(new Error("duplicate"), { code: "23505" })), true);
+    assert.equal(lastingImportFailure(Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" })), false);
+    assert.equal(lastingImportFailure(Object.assign(new Error("deadlock detected"), { code: "40P01" })), false);
+    assert.equal(lastingImportFailure(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })), false);
+    assert.equal(lastingImportFailure(new CrmError("rate_limited", "Busy.", 429)), false);
+  });
+
+  it("shows a stored import reason on the row, and clears it when the provider's lead changes", async () => {
+    const campaignId = (await gapSql<{ id: string }>("select id from crm.campaigns where workspace_id = $1 and provider = 'smartlead'", [alice.workspaceId]))[0].id;
+    const bad = (
+      await gapSql<{ id: string }>(
+        "insert into crm.campaign_prospects (workspace_id, campaign_id, linkedin, external_lead_id, lead, state) values ($1, $2, 'linkedin.com/company/fixme', 'fixme-1', '{\"firstName\": \"Fix\"}'::jsonb, 'pushed') returning id",
+        [alice.workspaceId, campaignId],
+      )
+    )[0].id;
+    const result = await importCampaignProspects(alice, campaignId, { deadline: Date.now() + 30_000 });
+    assert.equal(result.failed, 1);
+    const listed = await listCampaignProspects(alice, campaignId, { search: "fixme" });
+    assert.equal(listed.rows[0].importError, result.reasons[0]);
+    assert.equal(prospectLine(listed.rows[0]), result.reasons[0]);
+    const sync = (lead: Record<string, unknown>) =>
+      gapSql("select private.campaign_sync_prospects($1, $2::jsonb)", [campaignId, JSON.stringify([{ external_id: "fixme-1", lead }])]);
+    await sync({ firstName: "Fix" });
+    assert.ok((await gapSql<{ import_error: string | null }>("select import_error from crm.campaign_prospects where id = $1", [bad]))[0].import_error);
+    await sync({ firstName: "Fixed" });
+    assert.equal((await gapSql<{ import_error: string | null }>("select import_error from crm.campaign_prospects where id = $1", [bad]))[0].import_error, null);
     await gapSql("delete from crm.campaign_prospects where id = $1", [bad]);
   });
 

@@ -131,6 +131,7 @@ export type ProspectRow = {
   lastEvent: { kind: CampaignEventKind; step: number | null; at: string } | null;
   stage: LinkedinStage | null;
   sender: string | null;
+  importError: string | null;
 };
 
 export type LinkedinStage = "invited" | "accepted";

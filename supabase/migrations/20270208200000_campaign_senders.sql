@@ -218,7 +218,14 @@ begin
       returning id into v_id;
     else
       update crm.campaign_prospects p
-      set external_lead_id = coalesce(p.external_lead_id, v_lead.external_id),
+      set import_error = case
+            when (v_lead.email is not null and v_lead.email is distinct from p.email)
+              or (v_lead.linkedin is not null and v_lead.linkedin is distinct from p.linkedin)
+              or (p.lead || v_lead.lead) is distinct from p.lead
+            then null
+            else p.import_error
+          end,
+          external_lead_id = coalesce(p.external_lead_id, v_lead.external_id),
           email = coalesce(p.email, v_lead.email),
           linkedin = coalesce(p.linkedin, v_lead.linkedin),
           lead = p.lead || v_lead.lead,

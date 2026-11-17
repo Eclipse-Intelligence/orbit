@@ -85,6 +85,7 @@ function when(iso: string, now: number) {
 
 export function prospectLine(row: ProspectRow, now = Date.now()) {
   if (row.state === "skipped" || row.state === "failed") return row.skipReason ?? (row.state === "failed" ? "Failed" : "Skipped");
+  if (row.importError) return row.importError;
   if (row.repliedAt) return `Replied ${when(row.repliedAt, now)}`;
   const event = row.lastEvent;
   const word = event ? EVENT_WORDS[event.kind] : undefined;

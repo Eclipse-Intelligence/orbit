@@ -219,6 +219,7 @@ type ProspectSqlRow = {
   last_at: Date | null;
   stage: LinkedinStage | null;
   sender: string | null;
+  import_error: string | null;
 };
 
 const FILTER_SQL: Record<ProspectFilter, string> = {
@@ -255,7 +256,7 @@ export async function listCampaignProspects(
                 ) as name,
                 coalesce(co.name, nullif(p.lead->>'companyName', '')) as company_name,
                 coalesce(c.email, p.email) as email,
-                p.state, p.skip_reason, p.lead_status, p.category, p.replied_at, p.stop_requested_at, p.stopped_at,
+                p.state, p.skip_reason, p.lead_status, p.category, p.replied_at, p.stop_requested_at, p.stopped_at, p.import_error,
                 last.kind as last_kind, last.step as last_step, last.occurred_at as last_at,
                 case
                   when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_accepted') then 'accepted'
@@ -300,6 +301,7 @@ export async function listCampaignProspects(
         lastEvent: row.last_kind && row.last_at ? { kind: row.last_kind, step: row.last_step, at: row.last_at.toISOString() } : null,
         stage: row.stage,
         sender: row.sender,
+        importError: row.contact_id ? null : row.import_error,
       })),
       total: total.rows[0]?.count ?? 0,
       page,
@@ -359,6 +361,11 @@ async function companyFor(db: Db, workspaceId: string, lead: ImportRow["lead"]) 
 function clean(value: string | null | undefined, max: number) {
   const trimmed = value?.trim();
   return trimmed ? trimmed.slice(0, max) : undefined;
+}
+
+export function lastingImportFailure(error: unknown) {
+  if (error instanceof CrmError) return error.status < 500 && error.status !== 429;
+  return isPgError(error) && /^2[23]/.test(error.code);
 }
 
 async function linkProspect(db: Db, workspaceId: string, prospectId: string, contactId: string, companyId: string | null) {
@@ -433,8 +440,9 @@ export async function importCampaignProspects(
         if (outcome.linked) result.linked += 1;
       } catch (error) {
         if (!(error instanceof CrmError) && !isPgError(error)) throw error;
-        const reason = error instanceof CrmError ? error.message : "Couldn't add this person.";
-        await query("select private.campaign_prospect_import_failed($1, $2, $3)", [actor.workspaceId, row.id, reason]);
+        const lasting = lastingImportFailure(error);
+        const reason = error instanceof CrmError ? error.message : lasting ? "Couldn't add this person." : "Couldn't add this person. Try again.";
+        if (lasting) await query("select private.campaign_prospect_import_failed($1, $2, $3)", [actor.workspaceId, row.id, reason]);
         result.failed += 1;
         if (!result.reasons.includes(reason)) result.reasons.push(reason);
       }
