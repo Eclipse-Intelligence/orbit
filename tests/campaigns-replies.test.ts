@@ -426,6 +426,15 @@ describe("campaign events and replies", () => {
       alpha.fail = undefined;
       const state = await sql<{ send_state: string }>("select send_state from crm.campaign_messages where client_key = 'email-2'");
       assert.equal(state[0].send_state, "failed");
+      const failedFor = async (viewer: UserActor) =>
+        (await getProspectThread(viewer, priya)).items.find((item) => item.type === "message" && item.direction === "outbound" && item.sendState === "failed");
+      const own = await failedFor(ann);
+      assert.ok(own && own.type === "message");
+      assert.equal(own.clientKey, "email-2");
+      assert.ok(own.sendError);
+      const theirs = await failedFor(owner);
+      assert.ok(theirs && theirs.type === "message");
+      assert.equal(theirs.clientKey, null);
       const sent = await replyToProspect(ann, priya, { text: "Following up on times.", clientKey: "email-2" }, { fetchImpl });
       assert.deepEqual([sent.sendState, sent.repeated], ["sent", false]);
       const writes = (alpha.writes ?? []).filter((write) => write.path === "/campaigns/801/reply-email-thread");

@@ -29,6 +29,8 @@ export type ThreadMessage = {
   address: string | null;
   sentByUserId: string | null;
   sendState: "sending" | "sent" | "unknown" | "failed" | null;
+  sendError: string | null;
+  clientKey: string | null;
   automatic: boolean;
 };
 
@@ -180,6 +182,8 @@ type MessageRow = {
   sent_by: string | null;
   sender_name: string | null;
   send_state: ThreadMessage["sendState"];
+  send_error: string | null;
+  client_key: string | null;
   automatic: boolean;
   conversation_id: string | null;
   sender_id: string | null;
@@ -213,7 +217,7 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
     const byId = new Map(rows.map((row) => [row.id, row]));
     const messages = await db.query<MessageRow>(
       `select m.id, m.prospect_id, m.campaign_id, m.channel, m.direction, m.subject, m.body, m.sent_at, m.from_address, m.sent_by_user_id,
-              coalesce(nullif(btrim(pr.full_name), ''), pr.email) as sent_by, s.name as sender_name, m.send_state, m.automatic,
+              coalesce(nullif(btrim(pr.full_name), ''), pr.email) as sent_by, s.name as sender_name, m.send_state, m.send_error, m.client_key, m.automatic,
               m.conversation_id, m.sender_id, m.stats_id, m.provider_message_id
        from crm.campaign_messages m
        left join crm.profiles pr on pr.id = m.sent_by_user_id
@@ -249,6 +253,8 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
         address: message.channel === "email" ? message.from_address : null,
         sentByUserId: message.sent_by_user_id,
         sendState: message.send_state,
+        sendError: message.send_state === "failed" || message.send_state === "unknown" ? message.send_error : null,
+        clientKey: actor.type === "user" && message.sent_by_user_id === actor.userId ? message.client_key : null,
         automatic: message.automatic,
       });
     }

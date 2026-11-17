@@ -49,6 +49,8 @@ import type {
   Task,
 } from "@/lib/crm/types";
 import { teamsCallUrl } from "@/lib/phone";
+import CampaignLines from "@/components/campaigns/campaign-lines";
+import type { CampaignLine, CampaignTimelineRow } from "@/lib/campaigns/threads";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 
@@ -61,6 +63,8 @@ export default function ContactRecord({
   activities,
   insights,
   reads = {},
+  campaignLines = [],
+  campaignRows = [],
   meetings,
   tasks,
   tags,
@@ -79,6 +83,8 @@ export default function ContactRecord({
   activities: Activity[];
   insights: Record<string, CallInsight>;
   reads?: Record<string, EmailRead>;
+  campaignLines?: CampaignLine[];
+  campaignRows?: CampaignTimelineRow[];
   meetings: MeetingsSummary | null;
   tasks: Task[];
   tags: TagCount[];
@@ -235,6 +241,7 @@ export default function ContactRecord({
                     )}
                   </div>
                 )}
+                <CampaignLines lines={campaignLines} />
                 {relationship && (
                   <span className="flex flex-col gap-1">
                     <span className="flex flex-wrap items-center gap-2">
@@ -397,6 +404,7 @@ export default function ContactRecord({
             viewerId={viewer.id}
             viewerRole={viewer.role}
             activities={activities}
+            campaignRows={campaignRows}
             insights={insights}
             reads={reads}
           />

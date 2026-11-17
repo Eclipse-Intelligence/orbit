@@ -11,8 +11,8 @@ import ChannelIcon from "@/components/campaigns/channel-icon";
 import { QuietTabs } from "@/components/crm/contact-activities";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
-import { importCampaignProspectsAction } from "@/app/(crm)/campaigns/actions";
-import { campaignRates, number, prospectLine, prospectTag, STATUS_LABELS } from "@/lib/campaigns/format";
+import { importCampaignProspectsAction, setCampaignPausedAction } from "@/app/(crm)/campaigns/actions";
+import { campaignRates, campaignThreadPath, number, prospectLine, prospectTag, STATUS_LABELS } from "@/lib/campaigns/format";
 import {
   PROVIDER_NAMES,
   type CampaignChannel,
@@ -24,7 +24,6 @@ import {
   type SequenceStep,
   type StepStats,
 } from "@/lib/campaigns/types";
-import { contactHref } from "@/lib/crm/hrefs";
 import { cn, GENERIC_ERROR } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ExternalIcon from "@/public/assets/images/campaigns/external.svg";
@@ -228,13 +227,9 @@ function ProspectsList({ prospects, linkedin }: { prospects: ProspectPage; linke
             <span className="flex min-w-0 items-center gap-2.5">
               <Monogram name={row.name} />
               <span className="flex min-w-0 flex-col gap-0.5">
-                {row.contactId ? (
-                  <Link href={contactHref(row.contactId)} className="truncate text-[14px] leading-5 after:absolute after:inset-0">
-                    {row.name}
-                  </Link>
-                ) : (
-                  <span className="truncate text-[14px] leading-5">{row.name}</span>
-                )}
+                <Link href={campaignThreadPath(row.id)} className="truncate text-[14px] leading-5 after:absolute after:inset-0">
+                  {row.name}
+                </Link>
                 <span className="caption-style text-subtle truncate md:hidden">{line}</span>
                 {row.companyName && <span className="caption-style text-subtle hidden truncate md:block">{row.companyName}</span>}
               </span>
@@ -312,6 +307,30 @@ function ImportLine({ campaignId, unlinked }: { campaignId: string; unlinked: nu
   );
 }
 
+function PauseButton({ campaignId, paused, onError }: { campaignId: string; paused: boolean; onError: (error: string | null) => void }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+
+  async function toggle() {
+    const want = !paused;
+    setPending(true);
+    onError(null);
+    const outcome = await setCampaignPausedAction(campaignId, want).catch(() => ({ error: want ? "Couldn't pause the campaign. Try again." : "Couldn't resume the campaign. Try again." }));
+    setPending(false);
+    if (outcome.error) {
+      onError(outcome.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <Button variant="secondary" size="sm" disabled={pending} onClick={() => void toggle()} className="hit">
+      {pending ? (paused ? "Resuming…" : "Pausing…") : paused ? "Resume" : "Pause"}
+    </Button>
+  );
+}
+
 export default function CampaignScreen({
   viewer,
   campaign,
@@ -319,6 +338,7 @@ export default function CampaignScreen({
   filter,
   search,
   canImport,
+  canAct,
   mailboxes,
   syncLine,
 }: {
@@ -328,6 +348,7 @@ export default function CampaignScreen({
   filter: ProspectFilter;
   search: string;
   canImport: boolean;
+  canAct: boolean;
   mailboxes: ReactNode;
   syncLine: string;
 }) {
@@ -335,6 +356,8 @@ export default function CampaignScreen({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [draft, setDraft] = useState(search);
+  const [pauseError, setPauseError] = useState<string | null>(null);
+  const pausable = canAct && (campaign.status === "active" || campaign.status === "paused");
   const rates = campaignRates(campaign);
   const linkedin = campaign.channel === "linkedin";
   const custom = campaign.variables.filter((name) => !campaign.standardVariables.includes(name));
@@ -380,25 +403,35 @@ export default function CampaignScreen({
           </span>
         }
         action={
-          campaign.url ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              href={campaign.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Open in ${PROVIDER_NAMES[campaign.provider]}`}
-              title={`Open in ${PROVIDER_NAMES[campaign.provider]}`}
-              className="hit"
-            >
-              <ExternalIcon aria-hidden className="size-3.5" />
-            </Button>
+          pausable || campaign.url ? (
+            <span className="flex items-center gap-2">
+              {pausable && <PauseButton campaignId={campaign.id} paused={campaign.status === "paused"} onError={setPauseError} />}
+              {campaign.url && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  href={campaign.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Open in ${PROVIDER_NAMES[campaign.provider]}`}
+                  title={`Open in ${PROVIDER_NAMES[campaign.provider]}`}
+                  className="hit"
+                >
+                  <ExternalIcon aria-hidden className="size-3.5" />
+                </Button>
+              )}
+            </span>
           ) : undefined
         }
       />
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="mx-auto flex w-full max-w-[60em] flex-col pb-20">
           <Section>
+            {pauseError && (
+              <p role="alert" className="caption-style text-danger">
+                {pauseError}
+              </p>
+            )}
             {linkedin ? (
               <div className="flex flex-wrap gap-x-8 gap-y-3">
                 <Stat value={number(campaign.prospects)} label="Prospects" className="max-sm:hidden" />
