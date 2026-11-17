@@ -470,7 +470,7 @@ async function askBatch(actor: UserActor, batch: Candidate[], options: { deadlin
     });
   } catch (error) {
     console.error("Deferral check failed", error instanceof Error ? error.message : error);
-    return askEach(actor, batch, options);
+    return askEach(actor, batch, options, batch.length === 1);
   }
   const found = new Map<number, FoundDeferral>();
   for (const entry of result.data.deferrals) {
@@ -498,12 +498,12 @@ async function askBatch(actor: UserActor, batch: Candidate[], options: { deadlin
       await noteFailures(actor, [item.id]);
     }
   }
-  return recorded + (unclear.length > 0 ? await askEach(actor, unclear, options) : 0);
+  return recorded + (unclear.length > 0 ? await askEach(actor, unclear, options, batch.length === 1) : 0);
 }
 
-async function askEach(actor: UserActor, batch: Candidate[], options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
-  if (batch.length === 1) {
-    await noteFailures(actor, [batch[0].id]);
+async function askEach(actor: UserActor, batch: Candidate[], options: { deadline: number; fetchImpl?: typeof fetch; now?: number }, askedAlone: boolean) {
+  if (askedAlone) {
+    await noteFailures(actor, batch.map((item) => item.id));
     return 0;
   }
   let recorded = 0;
