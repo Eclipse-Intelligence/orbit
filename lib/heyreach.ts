@@ -277,6 +277,7 @@ export type HeyReachLead = {
   acceptedAt: string | null;
   messagesSent: number;
   lastMessageAt: string | null;
+  tags: string[];
 };
 
 function connection(value: unknown) {
@@ -330,10 +331,150 @@ export async function listHeyReachLeads(
       acceptedAt: connected === "accepted" ? (time(row.connectionAcceptedTime) ?? lastAction) : null,
       messagesSent: anyMessage,
       lastMessageAt: anyMessage > 0 ? (time(row.lastMessageSentTime) ?? lastAction) : null,
+      tags: tagsOf(row.leadTags ?? row.tags),
     };
   });
   const total = count(body.totalCount);
   const seen = offset + rows.length;
   const more = rows.length === HEYREACH_PAGE_SIZE && (total === undefined || seen < total);
   return { leads, next: more ? seen : null };
+}
+
+function campaignNumber(campaignId: string) {
+  return Number.isFinite(Number(campaignId)) ? Number(campaignId) : campaignId;
+}
+
+export type HeyReachMessage = {
+  at: string;
+  body: string;
+  fromThem: boolean;
+  automatic: boolean;
+};
+
+export type HeyReachConversation = {
+  id: string;
+  accountId: string | null;
+  profileUrl: string | null;
+  leadId: string | null;
+  lastMessageAt: string | null;
+  messages: HeyReachMessage[] | null;
+  tags: string[];
+};
+
+function fromThem(value: unknown, row: Json) {
+  if (typeof row.isReply === "boolean") return row.isReply;
+  if (typeof row.fromCorrespondent === "boolean") return row.fromCorrespondent;
+  const sender = (text(value) ?? text(row.direction) ?? "").toUpperCase();
+  return sender === "CORRESPONDENT" || sender === "THEM" || sender === "LEAD" || sender === "INBOUND" || sender === "RECEIVED";
+}
+
+function messagesOf(row: Json): HeyReachMessage[] | null {
+  if (!Array.isArray(row.messages)) return null;
+  return row.messages.map(record).flatMap((message): HeyReachMessage[] => {
+    const at = time(message.createdAt) ?? time(message.sentAt) ?? time(message.timestamp);
+    if (!at) return [];
+    return [
+      {
+        at,
+        body: text(message.body) ?? text(message.message) ?? text(message.text) ?? "",
+        fromThem: fromThem(message.sender, message),
+        automatic: message.isAutomatic === true || message.automatic === true,
+      },
+    ];
+  });
+}
+
+function tagsOf(value: unknown) {
+  return list(value)
+    .map((tag) => text(tag) ?? text(record(tag).name) ?? text(record(tag).displayName))
+    .filter((tag): tag is string => Boolean(tag));
+}
+
+function conversationOf(row: Json): HeyReachConversation | null {
+  const id = text(row.id) ?? text(row.conversationId);
+  if (!id) return null;
+  const profile = record(row.correspondentProfile ?? row.correspondent ?? row.lead);
+  return {
+    id,
+    accountId: text(row.linkedInAccountId) ?? text(record(row.linkedInAccount).id),
+    profileUrl: text(profile.profileUrl) ?? text(row.leadProfileUrl),
+    leadId: text(row.leadId) ?? text(profile.id),
+    lastMessageAt: time(row.lastMessageAt),
+    messages: messagesOf(row),
+    tags: tagsOf(row.leadTags ?? row.tags),
+  };
+}
+
+export async function listHeyReachConversations(
+  key: string,
+  filter: { campaignId: string; profileUrl?: string | null },
+  offset: number,
+  options: HeyReachOptions = {},
+): Promise<{ conversations: HeyReachConversation[]; next: number | null }> {
+  const body = record(
+    await call(key, "/inbox/GetConversationsV2", {
+      ...options,
+      body: {
+        filters: { campaignIds: [campaignNumber(filter.campaignId)], ...(filter.profileUrl ? { leadProfileUrl: filter.profileUrl } : {}) },
+        offset,
+        limit: HEYREACH_PAGE_SIZE,
+      },
+    }),
+  );
+  const rows = itemsOf(body);
+  const conversations = rows.map(conversationOf).filter((item): item is HeyReachConversation => Boolean(item));
+  const total = count(body.totalCount);
+  const seen = offset + rows.length;
+  const more = rows.length === HEYREACH_PAGE_SIZE && (total === undefined || seen < total);
+  return { conversations, next: more ? seen : null };
+}
+
+export async function readHeyReachChatroom(key: string, accountId: string, conversationId: string, options: HeyReachOptions = {}) {
+  const body = record(await call(key, `/inbox/GetChatroom/${encodeURIComponent(accountId)}/${encodeURIComponent(conversationId)}`, options));
+  return conversationOf({ id: conversationId, linkedInAccountId: accountId, ...body });
+}
+
+export async function sendHeyReachMessage(key: string, input: { conversationId: string; accountId: string; text: string }, options: HeyReachOptions = {}) {
+  await call(key, "/inbox/SendMessage", {
+    ...options,
+    body: { message: input.text, subject: "", conversationId: input.conversationId, linkedInAccountId: Number.isFinite(Number(input.accountId)) ? Number(input.accountId) : input.accountId },
+  });
+}
+
+export async function setHeyReachCampaignStatus(key: string, campaignId: string, status: "paused" | "active", options: HeyReachOptions = {}) {
+  await call(key, status === "paused" ? "/campaign/Pause" : "/campaign/Resume", { ...options, method: "POST", query: { campaignId } });
+}
+
+export async function stopHeyReachLead(key: string, campaignId: string, lead: { leadId: string | null; profileUrl: string | null }, options: HeyReachOptions = {}) {
+  await call(key, "/campaign/StopLeadInCampaign", {
+    ...options,
+    body: { campaignId: campaignNumber(campaignId), ...(lead.leadId ? { leadMemberId: lead.leadId } : {}), ...(lead.profileUrl ? { leadUrl: lead.profileUrl } : {}) },
+  });
+}
+
+export const HEYREACH_REPLY_EVENT = "EVERY_MESSAGE_REPLY_RECEIVED";
+
+export async function createHeyReachWebhook(key: string, campaignId: string, url: string, options: HeyReachOptions = {}) {
+  const body = record(
+    await call(key, "/webhooks/CreateWebhook", {
+      ...options,
+      body: { webhookName: "Orbit replies", webhookUrl: url, eventType: HEYREACH_REPLY_EVENT, campaignIds: [campaignNumber(campaignId)] },
+    }),
+  );
+  return text(body.id) ?? "registered";
+}
+
+export function heyReachWebhookHint(payload: unknown) {
+  const row = record(payload);
+  const lead = record(row.lead ?? row.correspondent ?? row.correspondentProfile);
+  const campaign = record(row.campaign);
+  const campaignId = text(campaign.id) ?? text(row.campaignId) ?? text(row.campaign_id);
+  const leadId = text(lead.id) ?? text(row.leadId) ?? text(row.lead_id);
+  const profileUrl = text(lead.profile_url) ?? text(lead.profileUrl) ?? text(lead.linkedin_url) ?? text(row.leadProfileUrl);
+  if (!leadId && !profileUrl) return null;
+  const messages = list(row.recent_messages ?? row.messages).map(record);
+  const last = messages[messages.length - 1] ?? {};
+  const at = text(last.creation_time) ?? text(last.createdAt) ?? text(row.timestamp) ?? text(row.event_time) ?? "";
+  const conversation = text(row.conversation_id) ?? text(row.conversationId) ?? "";
+  return { campaignId, leadId, profileUrl, receiptKey: ["heyreach", text(row.event_type) ?? text(row.eventType) ?? "", campaignId ?? "", leadId ?? profileUrl ?? "", conversation, at].join("|") };
 }

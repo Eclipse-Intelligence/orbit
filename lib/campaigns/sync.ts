@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { saveThread, threadFetched } from "@/lib/campaigns/messages";
 import { campaignProvider, type CampaignProvider, type ProviderCampaign, type ProviderContext, type ProviderEvent, type ProviderLead } from "@/lib/campaigns/providers";
+import { processStops } from "@/lib/campaigns/stops";
+import { campaignWebhookUrl, ensureWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { saveProviderSenders } from "@/lib/campaigns/senders";
 import type { CampaignProviderId, CampaignStatus } from "@/lib/campaigns/types";
 import { memberActor, timeLeft } from "@/lib/crm/conversations";
@@ -17,6 +20,9 @@ const IDLE_EVERY_MS = 24 * 60 * 60_000;
 const EVENT_OVERLAP_MS = 10 * 60_000;
 const LOCK_SECONDS = 330;
 const HAND_OVER_BATCH = 500;
+const REPLY_PAGES = 20;
+const REQUESTED_BATCH = 25;
+const WEBHOOK_RETRY_MS = 24 * 60 * 60_000;
 
 export type SyncState = {
   sequenceAt?: string;
@@ -28,17 +34,25 @@ export type SyncState = {
   eventsOffset?: number | null;
   eventsSince?: string | null;
   eventsStartedAt?: string | null;
+  repliesSince?: string | null;
+  repliesAt?: string;
+  strayConversations?: number;
+  webhookId?: string | null;
+  webhookFailedAt?: string | null;
 };
 
 export type SyncedEvent = { eventId: string; prospectId: string; contactId: string | null; kind: string; occurredAt: string };
 
 export type SyncedCampaign = { id: string; workspaceId: string; provider: CampaignProviderId; externalId: string; name: string };
 
+export type EventHandler = (campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor, context: ProviderContext) => Promise<void>;
+
 export type CampaignSyncOptions = {
   deadline: number;
   fetchImpl?: typeof fetch;
   workspaceId?: string;
-  onEvents?: (campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor) => Promise<void>;
+  provider?: CampaignProviderId;
+  onEvents?: EventHandler;
 };
 
 export type CampaignSyncReport = {
@@ -49,6 +63,8 @@ export type CampaignSyncReport = {
   backfilled: number;
   busy: string[];
   errors: string[];
+  threads: number;
+  stopped: number;
 };
 
 type Target = {
@@ -148,12 +164,114 @@ async function handOverEvents(pass: Pass, campaign: SyncedCampaign) {
   const onEvents = pass.options.onEvents;
   if (!onEvents) return;
   while (timeLeft(pass.options.deadline, STEP_RESERVE_MS)) {
-    const waiting = await query<EventRow>("select * from private.campaign_unhandled_events($1, $2)", [campaign.id, HAND_OVER_BATCH]);
+    const waiting = await query<EventRow>("select * from private.campaign_claim_events($1, $2)", [campaign.id, HAND_OVER_BATCH]);
     if (waiting.rows.length === 0) return;
-    await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor);
-    await query("select private.campaign_events_handled($1, $2::uuid[])", [campaign.id, waiting.rows.map((row) => row.event_id)]);
+    const ids = waiting.rows.map((row) => row.event_id);
+    try {
+      await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor, pass.context);
+    } catch (error) {
+      await query("select private.campaign_events_release($1, $2::uuid[])", [campaign.id, ids]).catch(() => undefined);
+      throw error;
+    }
+    await query("select private.campaign_events_handled($1, $2::uuid[])", [campaign.id, ids]);
     if (waiting.rows.length < HAND_OVER_BATCH) return;
   }
+}
+
+async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
+  const { provider, context, options } = pass;
+  if (!provider.readReplies) return;
+  const state = row.sync_state ?? {};
+  const since = state.repliesSince ? Date.parse(state.repliesSince) : null;
+  const startedAt = new Date().toISOString();
+  let stray = 0;
+  let offset: number | null = 0;
+  for (let pages = 0; offset !== null && pages < REPLY_PAGES; pages += 1) {
+    if (!timeLeft(options.deadline, STEP_RESERVE_MS)) return;
+    const page = await provider.readReplies(context, row.external_id, offset);
+    let fresh = 0;
+    for (const thread of page.items) {
+      const last = thread.lastMessageAt ? Date.parse(thread.lastMessageAt) : null;
+      if (since !== null && last !== null && last < since) continue;
+      fresh += 1;
+      const found = await query<{ id: string | null }>("select private.campaign_find_prospect($1, $2, $3) as id", [row.id, thread.leadId, thread.linkedin]);
+      const prospectId = found.rows[0]?.id;
+      if (!prospectId) {
+        stray += 1;
+        continue;
+      }
+      const saved = await saveThread(prospectId, thread.messages, { replyEvents: true, handled });
+      if (saved.length > 0) pass.report.threads += 1;
+    }
+    if (since !== null && fresh === 0) break;
+    offset = page.next;
+  }
+  await saveCampaign(row.id, {
+    syncState: { repliesSince: new Date(Date.parse(startedAt) - EVENT_OVERLAP_MS).toISOString(), repliesAt: startedAt, strayConversations: stray },
+  });
+}
+
+async function registerWebhook(pass: Pass, row: CampaignRow) {
+  const state = row.sync_state ?? {};
+  if (state.webhookId || (state.webhookFailedAt && !due(state.webhookFailedAt, WEBHOOK_RETRY_MS, Date.now()))) return;
+  const secret = await ensureWebhookSecret(pass.workspaceId, pass.provider.id);
+  const url = secret ? campaignWebhookUrl(pass.workspaceId, pass.provider.id, secret) : null;
+  if (!url) return;
+  try {
+    const id = await pass.provider.registerWebhook(pass.context, row.external_id, url);
+    await saveCampaign(row.id, { syncState: { webhookId: id, webhookFailedAt: null } });
+  } catch (error) {
+    if (error instanceof ServiceBusy) return;
+    const failure = pass.provider.failure(error);
+    if (failure?.rejectedKey) throw error;
+    if (!failure) console.error(`Couldn't add the ${pass.provider.name} reply webhook`, redactedError(error));
+    await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
+  }
+}
+
+type RequestedRow = {
+  prospect_id: string;
+  campaign_id: string;
+  campaign_external_id: string;
+  sender_ids: string[];
+  external_lead_id: string | null;
+  email: string | null;
+  linkedin: string | null;
+  sender_id: string | null;
+  requested_at: Date;
+};
+
+async function syncRequested(pass: Pass, campaigns: Map<string, CampaignRow>) {
+  const touched = new Set<string>();
+  while (timeLeft(pass.options.deadline, STEP_RESERVE_MS)) {
+    const claimed = await query<RequestedRow>("select * from private.campaign_claim_requested($1, $2, $3)", [pass.workspaceId, pass.provider.id, REQUESTED_BATCH]);
+    if (claimed.rows.length === 0) break;
+    for (const row of claimed.rows) {
+      if (!timeLeft(pass.options.deadline, STEP_RESERVE_MS)) break;
+      try {
+        const messages = await pass.provider.readThread(pass.context, { externalId: row.campaign_external_id }, {
+          externalLeadId: row.external_lead_id,
+          email: row.email,
+          linkedin: row.linkedin,
+          senderId: row.sender_id,
+        });
+        const campaign = campaigns.get(row.campaign_id);
+        await saveThread(row.prospect_id, messages, { replyEvents: pass.provider.repliesFromThreads, handled: !campaign?.backfilled_at || !pass.options.onEvents });
+        await threadFetched(row.prospect_id, row.requested_at);
+        pass.report.threads += 1;
+        touched.add(row.campaign_id);
+      } catch (error) {
+        if (error instanceof ServiceBusy) {
+          pass.report.busy.push(`${pass.provider.name}: ${error.message}`);
+          return touched;
+        }
+        if (pass.provider.failure(error)?.rejectedKey) throw error;
+        console.error(`Couldn't read a ${pass.provider.name} thread`, redactedError(error));
+      }
+    }
+    if (claimed.rows.length < REQUESTED_BATCH) break;
+  }
+  return touched;
 }
 
 type Pass = {
@@ -178,6 +296,7 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   const senderIds = pass.listed.get(row.external_id)?.senderIds;
   if (senderIds) await saveCampaign(row.id, { senderIds });
   if (!backfilling) await handOverEvents(pass, campaign);
+  if (live && !backfilling) await registerWebhook(pass, row);
 
   if ((backfilling && !state.sequenceAt) || due(state.sequenceAt, live ? SEQUENCE_EVERY_MS : IDLE_EVERY_MS, now)) {
     if (!room()) return;
@@ -238,6 +357,26 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
       offset = page.next;
       await saveCampaign(row.id, { syncState: { eventsOffset: offset, eventsStartedAt: startedAt } });
     }
+  }
+
+  if (provider.channel === "email" && room()) {
+    const engaged = await query<{ count: number }>("select private.campaign_mark_engaged($1, $2, $3) as count", [
+      row.id,
+      backfilling ? null : (state.eventsSince ?? null),
+      backfilling || !options.onEvents,
+    ]);
+    if (!backfilling && (engaged.rows[0]?.count ?? 0) > 0) await handOverEvents(pass, campaign);
+  }
+
+  if (provider.readReplies && (backfilling || live || due(state.repliesAt, IDLE_EVERY_MS, now)) && room()) {
+    try {
+      await syncReplies(pass, row, backfilling || !options.onEvents);
+    } catch (error) {
+      const failure = provider.failure(error);
+      if (error instanceof ServiceBusy || !failure || failure.rejectedKey || pass.context.signal?.aborted) throw error;
+      report.errors.push(`Couldn't read replies from ${provider.name}. ${failure.message}`);
+    }
+    if (!backfilling) await handOverEvents(pass, campaign);
   }
 
   if (backfilling && leadsComplete && eventsComplete) {
@@ -308,6 +447,15 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
       if (!pass.listed.has(row.external_id)) continue;
       await syncCampaignSafely(pass, row);
     }
+    const byId = new Map(rows.rows.map((row) => [row.id, row]));
+    const touched = await syncRequested(pass, byId);
+    for (const id of touched) {
+      const row = byId.get(id);
+      if (row?.backfilled_at && timeLeft(options.deadline, STEP_RESERVE_MS)) {
+        await handOverEvents(pass, { id: row.id, workspaceId: target.workspace_id, provider: provider.id, externalId: row.external_id, name: row.name });
+      }
+    }
+    if (timeLeft(options.deadline, STEP_RESERVE_MS)) report.stopped += await processStops(target.workspace_id, provider, context, options.deadline);
     await finish(target, null, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
   } catch (error) {
     if (error instanceof ServiceBusy) {
@@ -326,9 +474,10 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
 }
 
 export async function syncCampaigns(options: CampaignSyncOptions): Promise<CampaignSyncReport> {
-  const report: CampaignSyncReport = { connections: 0, campaigns: 0, prospects: 0, events: 0, backfilled: 0, busy: [], errors: [] };
+  const report: CampaignSyncReport = { connections: 0, campaigns: 0, prospects: 0, events: 0, backfilled: 0, busy: [], errors: [], threads: 0, stopped: 0 };
   const targets = await query<Target>("select * from private.campaign_connection_targets($1)", [options.workspaceId ?? null]);
   for (const target of targets.rows) {
+    if (options.provider && target.provider !== options.provider) continue;
     if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
     await syncConnection(target, options, report);
   }

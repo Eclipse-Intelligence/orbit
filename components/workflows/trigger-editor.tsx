@@ -4,7 +4,23 @@ import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
 import { matchLifecycleOption, type BuilderOptions } from "@/components/workflows/step-config";
-import { EMAIL_KIND_LABELS, EMAIL_KINDS, FIELD_OPTIONS, PROPOSAL_EVENT_LABELS, PROPOSAL_EVENTS, TRIGGER_LABELS, TRIGGER_TYPES, type EmailKind, type ProposalEvent, type Trigger, type TriggerType } from "@/lib/workflows/definition";
+import {
+  CAMPAIGN_EVENT_HINTS,
+  CAMPAIGN_EVENT_LABELS,
+  CAMPAIGN_EVENTS,
+  EMAIL_KIND_LABELS,
+  EMAIL_KINDS,
+  FIELD_OPTIONS,
+  PROPOSAL_EVENT_LABELS,
+  PROPOSAL_EVENTS,
+  TRIGGER_LABELS,
+  TRIGGER_TYPES,
+  type CampaignEvent,
+  type EmailKind,
+  type ProposalEvent,
+  type Trigger,
+  type TriggerType,
+} from "@/lib/workflows/definition";
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -28,6 +44,8 @@ function blank(type: TriggerType, options: BuilderOptions): Trigger {
       return { type, kind: "any", fromContactsOnly: true };
     case "proposal_event":
       return { type, event: "signed", kind: null };
+    case "campaign_event":
+      return { type, event: "replied", channel: null };
     default:
       return { type } as Trigger;
   }
@@ -318,11 +336,45 @@ export default function TriggerEditor({
         </div>
       )}
 
+      {trigger.type === "campaign_event" && (
+        <div className="flex flex-col gap-1.5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Labelled id="trigger-campaign-event" label="When">
+              <select
+                id="trigger-campaign-event"
+                value={trigger.event}
+                onChange={(event) => onChange({ ...trigger, event: event.target.value as CampaignEvent })}
+                className={recordSelectClass}
+              >
+                {CAMPAIGN_EVENTS.map((item) => (
+                  <option key={item} value={item}>
+                    {CAMPAIGN_EVENT_LABELS[item]}
+                  </option>
+                ))}
+              </select>
+            </Labelled>
+            <Labelled id="trigger-campaign-channel" label="Channel">
+              <select
+                id="trigger-campaign-channel"
+                value={trigger.channel ?? ""}
+                onChange={(event) => onChange({ ...trigger, channel: (event.target.value || null) as "email" | "linkedin" | null })}
+                className={recordSelectClass}
+              >
+                <option value="">Email and LinkedIn</option>
+                <option value="email">Email</option>
+                <option value="linkedin">LinkedIn</option>
+              </select>
+            </Labelled>
+          </div>
+          {CAMPAIGN_EVENT_HINTS[trigger.event] && <p className="caption-style text-subtle">{CAMPAIGN_EVENT_HINTS[trigger.event]}</p>}
+        </div>
+      )}
+
       {trigger.type === "manual" && (
         <p className="caption-style text-subtle">Run it from a {trigger.object === "company" ? "company" : "contact"} page.</p>
       )}
 
-      {trigger.type !== "manual" && trigger.type !== "schedule" && trigger.type !== "email_received" && trigger.type !== "proposal_event" && (
+      {trigger.type !== "manual" && trigger.type !== "schedule" && trigger.type !== "email_received" && trigger.type !== "proposal_event" && trigger.type !== "campaign_event" && (
         <label className="caption-style text-subtle flex items-center gap-2">
           <Checkbox checked={Boolean(trigger.mine)} onCheckedChange={(value) => onChange({ ...trigger, mine: value === true })} />
           Only when it&apos;s mine

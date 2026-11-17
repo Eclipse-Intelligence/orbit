@@ -1,4 +1,5 @@
 import type { CampaignStats, CampaignStatus, LeadStatus, Mailbox, SequenceStep } from "@/lib/campaigns/types";
+import { htmlToText } from "@/lib/mail/text";
 import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 import { withService, type Service } from "@/lib/workflows/limits";
 
@@ -65,7 +66,7 @@ function yes(value: unknown) {
 async function call(
   key: string,
   path: string,
-  options: SmartleadOptions & { query?: Record<string, string | number | null | undefined>; services?: Service[] },
+  options: SmartleadOptions & { query?: Record<string, string | number | null | undefined>; services?: Service[]; method?: "GET" | "POST" | "DELETE"; body?: Json },
 ): Promise<unknown> {
   const services = options.services ?? ["smartlead"];
   const run = async () => {
@@ -78,7 +79,13 @@ async function call(
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     let response: Response;
     try {
-      response = await (options.fetchImpl ?? fetch)(url, { headers: { accept: "application/json" }, signal });
+      const method = options.method ?? (options.body ? "POST" : "GET");
+      response = await (options.fetchImpl ?? fetch)(url, {
+        method,
+        headers: { accept: "application/json", ...(options.body ? { "content-type": "application/json" } : {}) },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal,
+      });
     } catch (error) {
       logUpstream("Smartlead", null, error, [key]);
       throw new SmartleadError(unreachable("Smartlead"), null);
@@ -88,9 +95,12 @@ async function call(
       logUpstream("Smartlead", response.status, body, [key]);
       throw new SmartleadError(upstreamMessage("Smartlead", response.status), response.status, response.headers.get("retry-after"));
     }
+    const raw = await response.text().catch(() => "");
+    if (!raw.trim()) return null;
     try {
-      return await response.json();
+      return JSON.parse(raw);
     } catch (error) {
+      if ((options.method ?? (options.body ? "POST" : "GET")) !== "GET") return raw;
       logUpstream("Smartlead", response.status, error, [key]);
       throw new SmartleadError("Smartlead sent a reply Orbit couldn't read.", response.status);
     }
@@ -321,4 +331,144 @@ export async function readSmartleadMailboxes(key: string, campaignId: string, op
             : null;
     return [{ address, dailyLimit: count(row.message_per_day) ?? count(row.max_email_per_day) ?? null, problem }];
   });
+}
+
+export type SmartleadMessage = {
+  id: string;
+  direction: "inbound" | "outbound";
+  statsId: string | null;
+  messageId: string | null;
+  subject: string | null;
+  body: string;
+  html: string;
+  sentAt: string;
+  step: number | null;
+  from: string | null;
+  automatic: boolean;
+};
+
+const AUTOMATIC_REPLY = /out of (the )?office|auto(matic)?[- ]?reply|autoreply|auto-response|away from (the )?office/i;
+
+export function automaticReply(...values: (string | null | undefined)[]) {
+  return values.some((value) => Boolean(value && AUTOMATIC_REPLY.test(value)));
+}
+
+export async function readSmartleadThread(key: string, campaignId: string, leadId: string, options: SmartleadOptions = {}): Promise<SmartleadMessage[]> {
+  const body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/message-history`, options);
+  const rows = (Array.isArray(body) ? body : list(record(body).history ?? record(body).data)).map(record);
+  return rows.flatMap((row): SmartleadMessage[] => {
+    const sentAt = time(row.time) ?? time(row.sent_time) ?? time(row.created_at);
+    if (!sentAt) return [];
+    const type = (text(row.type) ?? "").toUpperCase();
+    const direction = type === "REPLY" || type === "RECEIVED" || type === "INBOUND" ? "inbound" : "outbound";
+    const statsId = text(row.stats_id) ?? text(row.email_stats_id);
+    const messageId = text(row.message_id);
+    const html = text(row.email_body) ?? text(row.body) ?? "";
+    const subject = text(row.subject);
+    return [
+      {
+        id: messageId ?? `${statsId ?? "message"}:${direction}:${sentAt}`,
+        direction,
+        statsId,
+        messageId,
+        subject,
+        body: htmlToText(html, 100_000),
+        html,
+        sentAt,
+        step: count(row.email_seq_number) ?? count(row.seq_number) ?? count(row.sequence_number) ?? null,
+        from: text(row.from) ?? text(row.from_email),
+        automatic: direction === "inbound" && (yes(row.is_auto_reply) || yes(row.auto_reply) || automaticReply(text(row.reply_type), text(row.category), subject)),
+      },
+    ];
+  });
+}
+
+function htmlBody(value: string) {
+  return value
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"))
+    .join("<br>");
+}
+
+export type SmartleadReply = { statsId: string; replyTo: { messageId: string | null; sentAt: string; body: string } | null; text: string };
+
+export async function sendSmartleadReply(key: string, campaignId: string, reply: SmartleadReply, options: SmartleadOptions = {}) {
+  const body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}/reply-email-thread`, {
+    ...options,
+    body: {
+      email_stats_id: reply.statsId,
+      email_body: htmlBody(reply.text),
+      reply_message_id: reply.replyTo?.messageId ?? undefined,
+      reply_email_time: reply.replyTo?.sentAt ?? undefined,
+      reply_email_body: reply.replyTo ? htmlBody(reply.replyTo.body) : undefined,
+      add_signature: true,
+    },
+  });
+  const row = record(body);
+  return { messageId: text(row.message_id) ?? text(record(row.data).message_id) };
+}
+
+export async function setSmartleadCampaignStatus(key: string, campaignId: string, status: "PAUSED" | "START", options: SmartleadOptions = {}) {
+  await call(key, `/campaigns/${encodeURIComponent(campaignId)}/status`, { ...options, body: { status } });
+}
+
+export async function pauseSmartleadLead(key: string, campaignId: string, leadId: string, options: SmartleadOptions = {}) {
+  await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/pause`, { ...options, method: "POST" });
+}
+
+export async function resumeSmartleadLead(key: string, campaignId: string, leadId: string, options: SmartleadOptions = {}) {
+  await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/resume`, { ...options, body: { resume_lead_with_delay_days: 0 } });
+}
+
+export async function removeSmartleadLead(key: string, campaignId: string, leadId: string, options: SmartleadOptions = {}) {
+  await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}`, { ...options, method: "DELETE" });
+}
+
+export async function listSmartleadCategories(key: string, options: SmartleadOptions = {}) {
+  const body = await call(key, "/leads/fetch-categories", options);
+  const rows = (Array.isArray(body) ? body : list(record(body).data)).map(record);
+  return rows.flatMap((row) => {
+    const id = text(row.id);
+    const name = text(row.name);
+    return id && name ? [{ id, name }] : [];
+  });
+}
+
+export async function setSmartleadCategory(key: string, campaignId: string, leadId: string, categoryId: string, options: SmartleadOptions = {}) {
+  await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/category`, {
+    ...options,
+    body: { category_id: Number.isFinite(Number(categoryId)) ? Number(categoryId) : categoryId, pause_lead: false },
+  });
+}
+
+export const SMARTLEAD_WEBHOOK_EVENTS = ["EMAIL_REPLY", "LEAD_CATEGORY_UPDATED"] as const;
+
+export async function createSmartleadWebhook(key: string, campaignId: string, url: string, options: SmartleadOptions = {}) {
+  const body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}/webhooks`, {
+    ...options,
+    body: { id: null, name: "Orbit replies", webhook_url: url, event_types: [...SMARTLEAD_WEBHOOK_EVENTS], categories: [] },
+  });
+  const row = record(body);
+  return text(row.id) ?? text(record(row.data).id) ?? "registered";
+}
+
+export type WebhookHint = {
+  campaignId: string | null;
+  leadId: string | null;
+  email: string | null;
+  linkedin: string | null;
+  receiptKey: string;
+};
+
+export function smartleadWebhookHint(payload: unknown, requestId: string | null): WebhookHint | null {
+  const row = record(payload);
+  const lead = record(row.lead ?? row.lead_data);
+  const campaignId = text(row.campaign_id) ?? text(record(row.campaign).id);
+  const leadId = text(row.sl_email_lead_id) ?? text(row.lead_id) ?? text(lead.id);
+  const email = text(row.sl_lead_email) ?? text(row.lead_email) ?? text(lead.email) ?? (text(row.event_type) === "EMAIL_REPLY" ? text(row.from_email) : null);
+  if (!leadId && !email) return null;
+  const at = text(row.event_timestamp) ?? text(record(row.reply_message).time) ?? text(row.time) ?? "";
+  const receiptKey =
+    requestId?.trim() || ["smartlead", text(row.event_type) ?? "", campaignId ?? "", leadId ?? email ?? "", text(row.sequence_number) ?? text(row.stats_id) ?? "", at].join("|");
+  return { campaignId, leadId, email, linkedin: null, receiptKey };
 }

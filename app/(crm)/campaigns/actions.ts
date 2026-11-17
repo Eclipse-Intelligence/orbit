@@ -5,8 +5,13 @@ import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
+import { handleCampaignEvents } from "@/lib/campaigns/events";
+import { campaignThreadPath } from "@/lib/campaigns/format";
+import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused, type RemoveResult } from "@/lib/campaigns/manage";
+import { replyToProspect, type ReplyResult } from "@/lib/campaigns/replies";
 import { linkCampaignSender } from "@/lib/campaigns/senders";
 import { syncCampaigns } from "@/lib/campaigns/sync";
+import { refreshProspectThread } from "@/lib/campaigns/threads";
 import { importCampaignProspects, type ImportResult } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
@@ -24,7 +29,7 @@ function syncSoon(workspaceId: string) {
   try {
     after(async () => {
       try {
-        await syncCampaigns({ workspaceId, deadline: Date.now() + FIRST_SYNC_MS });
+        await syncCampaigns({ workspaceId, deadline: Date.now() + FIRST_SYNC_MS, onEvents: handleCampaignEvents });
       } catch (error) {
         console.error("Campaign sync after connecting failed", error);
       }
@@ -67,6 +72,82 @@ export async function importCampaignProspectsAction(campaignId: string): Promise
     return { result };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't import. Try again." };
+  }
+}
+
+function revalidateCampaign(campaignId?: string | null, prospectId?: string | null) {
+  revalidatePath("/campaigns");
+  if (campaignId) revalidatePath(`/campaigns/${campaignId}`);
+  if (prospectId) revalidatePath(campaignThreadPath(prospectId));
+}
+
+function errorText(error: unknown, fallback: string) {
+  return error instanceof CrmError ? error.message : fallback;
+}
+
+export async function replyToProspectAction(prospectId: string, text: string, clientKey: string): Promise<{ error?: string; result?: ReplyResult }> {
+  const user = await requireUser();
+  try {
+    const result = await replyToProspect(user, prospectId, { text, clientKey });
+    revalidateCampaign(null, prospectId);
+    return { result };
+  } catch (error) {
+    return { error: errorText(error, "Couldn't send. Try again.") };
+  }
+}
+
+export async function refreshProspectThreadAction(prospectId: string): Promise<{ error?: string; saved?: number }> {
+  const user = await requireUser();
+  try {
+    const { saved } = await refreshProspectThread(user, prospectId);
+    if (saved > 0) revalidateCampaign(null, prospectId);
+    return { saved };
+  } catch (error) {
+    return { error: errorText(error, "Couldn't read the conversation. Try again.") };
+  }
+}
+
+export async function setCampaignPausedAction(campaignId: string, paused: boolean): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await setCampaignPaused(user, campaignId, paused);
+    revalidateCampaign(campaignId);
+    return {};
+  } catch (error) {
+    return { error: errorText(error, paused ? "Couldn't pause the campaign. Try again." : "Couldn't resume the campaign. Try again.") };
+  }
+}
+
+export async function setProspectPausedAction(prospectId: string, paused: boolean): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await setProspectPaused(user, prospectId, paused);
+    revalidateCampaign(null, prospectId);
+    return {};
+  } catch (error) {
+    return { error: errorText(error, paused ? "Couldn't pause. Try again." : "Couldn't resume. Try again.") };
+  }
+}
+
+export async function removeProspectAction(prospectId: string): Promise<{ error?: string; result?: RemoveResult }> {
+  const user = await requireUser();
+  try {
+    const result = await removeProspect(user, prospectId);
+    revalidateCampaign(null, prospectId);
+    return { result };
+  } catch (error) {
+    return { error: errorText(error, "Couldn't remove. Try again.") };
+  }
+}
+
+export async function setProspectCategoryAction(prospectId: string, category: string | null): Promise<{ error?: string; category?: string | null }> {
+  const user = await requireUser();
+  try {
+    const result = await setProspectCategory(user, prospectId, category);
+    revalidateCampaign(null, prospectId);
+    return { category: result.category };
+  } catch (error) {
+    return { error: errorText(error, "Couldn't save. Try again.") };
   }
 }
 

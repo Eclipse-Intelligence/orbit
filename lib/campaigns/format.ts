@@ -54,6 +54,16 @@ export function categoryTone(category: string): TagTone {
   return POSITIVE.test(category) && !NEGATIVE.test(category) ? "green" : "neutral";
 }
 
+export function positiveCategory(category: string | null | undefined) {
+  return Boolean(category) && categoryTone(category!) === "green";
+}
+
+export const CAMPAIGN_CATEGORIES = ["Interested", "Meeting request", "Meeting booked", "Information request", "Not interested", "Out of office", "Wrong person"] as const;
+
+export function campaignThreadPath(prospectId: string) {
+  return `/campaigns/threads/${prospectId}`;
+}
+
 export function prospectTag(row: ProspectRow): { label: string; tone: TagTone } | null {
   if (row.stopRequestedAt && !row.stoppedAt) return { label: "Stopping", tone: "amber" };
   if (row.state === "skipped") return { label: "Skipped", tone: "neutral" };

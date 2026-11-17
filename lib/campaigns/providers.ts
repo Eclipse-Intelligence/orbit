@@ -12,27 +12,46 @@ import type {
 } from "@/lib/campaigns/types";
 import {
   checkHeyReachKey,
+  createHeyReachWebhook,
   HEYREACH_APP,
   HeyReachError,
+  heyReachWebhookHint,
   listHeyReachAccounts,
   listHeyReachCampaigns,
+  listHeyReachConversations,
   listHeyReachLeads,
+  readHeyReachChatroom,
   readHeyReachSequence,
   readHeyReachStats,
+  sendHeyReachMessage,
+  setHeyReachCampaignStatus,
+  stopHeyReachLead,
   variablesIn as heyReachVariables,
+  type HeyReachConversation,
   type HeyReachLead,
 } from "@/lib/heyreach";
 import {
+  createSmartleadWebhook,
   listSmartleadCampaigns,
+  listSmartleadCategories,
   listSmartleadLeads,
+  pauseSmartleadLead,
   readSmartleadClient,
   readSmartleadMailboxes,
   readSmartleadSequence,
   readSmartleadStatistics,
   readSmartleadStats,
+  readSmartleadThread,
+  removeSmartleadLead,
+  resumeSmartleadLead,
+  sendSmartleadReply,
+  setSmartleadCampaignStatus,
+  setSmartleadCategory,
   SMARTLEAD_APP,
   SmartleadError,
+  smartleadWebhookHint,
   type SmartleadStatRow,
+  type WebhookHint,
   variablesIn,
 } from "@/lib/smartlead";
 
@@ -94,12 +113,50 @@ export type ProviderPage<T> = { items: T[]; next: number | null };
 
 export type ConnectionCheck = { details: Record<string, unknown>; campaigns: number; senders?: ProviderSender[] };
 
+export type LeadRef = { externalLeadId: string | null; email: string | null; linkedin: string | null; senderId: string | null };
+
+export type ProviderMessage = {
+  externalId: string;
+  direction: "inbound" | "outbound";
+  step: number | null;
+  subject: string | null;
+  body: string;
+  sentAt: string;
+  conversationId: string | null;
+  senderId: string | null;
+  statsId: string | null;
+  providerMessageId: string | null;
+  fromAddress: string | null;
+  automatic: boolean;
+  replyKey: string | null;
+};
+
+export type ProviderThread = {
+  leadId: string | null;
+  linkedin: string | null;
+  lastMessageAt: string | null;
+  messages: ProviderMessage[];
+  tags: string[];
+};
+
+export type ReplyTarget = {
+  lead: LeadRef;
+  conversationId: string | null;
+  senderId: string | null;
+  statsId: string | null;
+  replyTo: { messageId: string | null; sentAt: string; body: string } | null;
+};
+
+export type ProviderFailure = { message: string; rejectedKey: boolean; missing: boolean; status: number | null };
+
+export type { WebhookHint };
+
 export type CampaignProvider = {
   id: CampaignProviderId;
   channel: CampaignChannel;
   name: string;
   standardVariables: readonly string[];
-  failure(error: unknown): { message: string; rejectedKey: boolean; missing: boolean } | null;
+  failure(error: unknown): ProviderFailure | null;
   checkKey(context: ProviderContext): Promise<ConnectionCheck>;
   connectedLine(details: Record<string, unknown>, campaigns: number): string;
   listCampaigns(context: ProviderContext): Promise<ProviderCampaign[]>;
@@ -111,7 +168,39 @@ export type CampaignProvider = {
   readMailboxes?(context: ProviderContext, externalId: string): Promise<Mailbox[]>;
   listSenders?(context: ProviderContext): Promise<ProviderSender[]>;
   campaignUrl(externalId: string): string | null;
+  repliesFromThreads: boolean;
+  readThread(context: ProviderContext, campaign: { externalId: string }, lead: LeadRef): Promise<ProviderMessage[]>;
+  readReplies?(context: ProviderContext, externalId: string, offset: number): Promise<ProviderPage<ProviderThread>>;
+  sendReply(context: ProviderContext, campaignExternalId: string, target: ReplyTarget, text: string): Promise<{ providerMessageId: string | null }>;
+  setCampaignStatus(context: ProviderContext, externalId: string, status: "paused" | "active"): Promise<void>;
+  pauseLead?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
+  resumeLead?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
+  stopLead(context: ProviderContext, campaignExternalId: string, lead: LeadRef, reason: "replied" | "removed"): Promise<LeadStatus>;
+  setCategory?(context: ProviderContext, campaignExternalId: string, lead: LeadRef, category: string): Promise<void>;
+  categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
+  registerWebhook(context: ProviderContext, campaignExternalId: string, url: string): Promise<string>;
+  webhookHint(payload: unknown, headers: Headers): WebhookHint | null;
 };
+
+export class LeadNotReady extends Error {
+  constructor() {
+    super("The provider hasn't given this lead an id yet.");
+    this.name = "LeadNotReady";
+  }
+}
+
+function leadIdOf(lead: LeadRef) {
+  if (!lead.externalLeadId) throw new LeadNotReady();
+  return lead.externalLeadId;
+}
+
+function categoryPart(category: string) {
+  return category.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 100);
+}
+
+function profileUrl(linkedin: string | null) {
+  return linkedin ? `https://www.${linkedin}` : null;
+}
 
 function campaignsLine(campaigns: number) {
   return campaigns === 1 ? "1 campaign" : `${campaigns.toLocaleString("en-GB")} campaigns`;
@@ -119,6 +208,10 @@ function campaignsLine(campaigns: number) {
 
 function accountsLine(accounts: number) {
   return accounts === 1 ? "1 LinkedIn account" : `${accounts.toLocaleString("en-GB")} LinkedIn accounts`;
+}
+
+export function smartleadCategoryKey(campaignId: string, lead: string, category: string) {
+  return `smartlead:${campaignId}:${lead}:category:${categoryPart(category)}`;
 }
 
 export function smartleadEvents(campaignId: string, rows: SmartleadStatRow[]): ProviderEvent[] {
@@ -148,6 +241,10 @@ export function smartleadEvents(campaignId: string, rows: SmartleadStatRow[]): P
     add("replied", row.repliedAt, true);
     if (row.bounced) add("bounced", row.sentAt, false);
     if (row.unsubscribed) add("unsubscribed", row.repliedAt ?? row.sentAt, false);
+    const categoryAt = row.repliedAt ?? row.sentAt;
+    if (row.category && categoryAt) {
+      events.push({ ...shared, kind: "category", occurredAt: categoryAt, dedupeKey: smartleadCategoryKey(campaignId, lead, row.category), payload: { category: row.category } });
+    }
   }
   return events;
 }
@@ -169,7 +266,7 @@ export const smartleadProvider: CampaignProvider = {
     "sl_time_of_day",
     "sl_day_of_week",
   ],
-  failure: (error) => (error instanceof SmartleadError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404 } : null),
+  failure: (error) => (error instanceof SmartleadError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404, status: error.status } : null),
   async checkKey(context) {
     const campaigns = await listSmartleadCampaigns(context.key, context);
     const clientIds = [...new Set(campaigns.map((item) => item.clientId).filter((id): id is string => Boolean(id)))];
@@ -217,6 +314,52 @@ export const smartleadProvider: CampaignProvider = {
   },
   readMailboxes: (context, externalId) => readSmartleadMailboxes(context.key, externalId, context),
   campaignUrl: (externalId) => `${SMARTLEAD_APP}/${encodeURIComponent(externalId)}/analytics`,
+  repliesFromThreads: false,
+  async readThread(context, campaign, lead) {
+    if (!lead.externalLeadId) return [];
+    const messages = await readSmartleadThread(context.key, campaign.externalId, lead.externalLeadId, context);
+    return messages.map((message) => ({
+      externalId: message.id,
+      direction: message.direction,
+      step: message.step,
+      subject: message.subject,
+      body: message.body,
+      sentAt: message.sentAt,
+      conversationId: null,
+      senderId: null,
+      statsId: message.statsId,
+      providerMessageId: message.messageId,
+      fromAddress: message.from,
+      automatic: message.automatic,
+      replyKey: null,
+    }));
+  },
+  async sendReply(context, campaignExternalId, target, text) {
+    if (!target.statsId) throw new SmartleadError("Smartlead hasn't sent this person anything yet.", 400);
+    const sent = await sendSmartleadReply(context.key, campaignExternalId, { statsId: target.statsId, replyTo: target.replyTo, text }, context);
+    return { providerMessageId: sent.messageId };
+  },
+  setCampaignStatus: (context, externalId, status) => setSmartleadCampaignStatus(context.key, externalId, status === "paused" ? "PAUSED" : "START", context),
+  pauseLead: (context, campaignExternalId, lead) => pauseSmartleadLead(context.key, campaignExternalId, leadIdOf(lead), context),
+  resumeLead: (context, campaignExternalId, lead) => resumeSmartleadLead(context.key, campaignExternalId, leadIdOf(lead), context),
+  async stopLead(context, campaignExternalId, lead, reason) {
+    if (reason === "removed") {
+      await removeSmartleadLead(context.key, campaignExternalId, leadIdOf(lead), context);
+      return "stopped";
+    }
+    await pauseSmartleadLead(context.key, campaignExternalId, leadIdOf(lead), context);
+    return "stopped";
+  },
+  async setCategory(context, campaignExternalId, lead, category) {
+    const categories = await listSmartleadCategories(context.key, context);
+    const wanted = categoryPart(category);
+    const match = categories.find((item) => categoryPart(item.name) === wanted);
+    if (!match) throw new SmartleadError(`Smartlead has no category called ${category}.`, 400);
+    await setSmartleadCategory(context.key, campaignExternalId, leadIdOf(lead), match.id, context);
+  },
+  categoryKey: (campaignExternalId, lead, category) => smartleadCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.email ?? "", category),
+  registerWebhook: (context, campaignExternalId, url) => createSmartleadWebhook(context.key, campaignExternalId, url, context),
+  webhookHint: (payload, headers) => smartleadWebhookHint(payload, headers.get("x-request-id")),
 };
 
 function heyReachProfile(lead: HeyReachLead): LeadProfile {
@@ -225,6 +368,43 @@ function heyReachProfile(lead: HeyReachLead): LeadProfile {
 
 function heyReachLeadKey(lead: HeyReachLead) {
   return lead.id ?? prospectLinkedin(lead.profileUrl);
+}
+
+export function heyReachCategoryKey(campaignId: string, lead: string, category: string) {
+  return `heyreach:${campaignId}:${lead}:category:${categoryPart(category)}`;
+}
+
+function heyReachMessages(campaignId: string, conversation: HeyReachConversation): ProviderMessage[] {
+  return (conversation.messages ?? []).map((message) => {
+    const direction = message.fromThem ? "inbound" : "outbound";
+    return {
+      externalId: `${conversation.id}:${message.at}:${direction}`,
+      direction,
+      step: null,
+      subject: null,
+      body: message.body,
+      sentAt: message.at,
+      conversationId: conversation.id,
+      senderId: conversation.accountId,
+      statsId: null,
+      providerMessageId: null,
+      fromAddress: null,
+      automatic: message.automatic,
+      replyKey: direction === "inbound" ? `heyreach:${campaignId}:${conversation.id}:replied:${message.at}` : null,
+    };
+  });
+}
+
+async function conversationThread(context: ProviderContext, campaignId: string, conversation: HeyReachConversation): Promise<ProviderThread> {
+  const full = conversation.messages === null && conversation.accountId ? await readHeyReachChatroom(context.key, conversation.accountId, conversation.id, context) : null;
+  const read = full ? { ...conversation, messages: full.messages ?? [] } : conversation;
+  return {
+    leadId: conversation.leadId,
+    linkedin: prospectLinkedin(conversation.profileUrl),
+    lastMessageAt: conversation.lastMessageAt,
+    messages: heyReachMessages(campaignId, read),
+    tags: conversation.tags,
+  };
 }
 
 export function heyReachEvents(campaignId: string, leads: HeyReachLead[]): ProviderEvent[] {
@@ -241,6 +421,11 @@ export function heyReachEvents(campaignId: string, leads: HeyReachLead[]): Provi
     add("invite_sent", lead.invitedAt, null);
     add("invite_accepted", lead.acceptedAt, null);
     for (let message = 1; message <= Math.min(lead.messagesSent, 50); message += 1) add("message_sent", lead.lastMessageAt, message, `:${message}`);
+    const tag = lead.tags[0];
+    const taggedAt = lead.acceptedAt ?? lead.lastMessageAt ?? lead.invitedAt ?? lead.addedAt;
+    if (tag && taggedAt) {
+      events.push({ ...shared, category: tag, kind: "category", step: null, occurredAt: taggedAt, dedupeKey: heyReachCategoryKey(campaignId, key, tag), payload: { category: tag } });
+    }
   }
   return events;
 }
@@ -250,7 +435,7 @@ export const heyReachProvider: CampaignProvider = {
   channel: "linkedin",
   name: "HeyReach",
   standardVariables: ["first_name", "last_name", "company_name", "position", "location"],
-  failure: (error) => (error instanceof HeyReachError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404 } : null),
+  failure: (error) => (error instanceof HeyReachError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404, status: error.status } : null),
   async checkKey(context) {
     await checkHeyReachKey(context.key, context);
     const [campaigns, senders] = await Promise.all([listHeyReachCampaigns(context.key, context), heyReachProvider.listSenders!(context)]);
@@ -303,6 +488,45 @@ export const heyReachProvider: CampaignProvider = {
     }));
   },
   campaignUrl: (externalId) => `${HEYREACH_APP}/${encodeURIComponent(externalId)}`,
+  repliesFromThreads: true,
+  async readThread(context, campaign, lead) {
+    const url = profileUrl(lead.linkedin);
+    if (!url) return [];
+    const messages: ProviderMessage[] = [];
+    for (let offset: number | null = 0, pages = 0; offset !== null && pages < 5; pages += 1) {
+      const page = await listHeyReachConversations(context.key, { campaignId: campaign.externalId, profileUrl: url }, offset, context);
+      for (const conversation of page.conversations) {
+        if (lead.externalLeadId && conversation.leadId && conversation.leadId !== lead.externalLeadId) continue;
+        if (conversation.profileUrl && prospectLinkedin(conversation.profileUrl) !== lead.linkedin) continue;
+        messages.push(...(await conversationThread(context, campaign.externalId, conversation)).messages);
+      }
+      offset = page.next;
+    }
+    return messages;
+  },
+  async readReplies(context, externalId, offset) {
+    const page = await listHeyReachConversations(context.key, { campaignId: externalId }, offset, context);
+    const items: ProviderThread[] = [];
+    for (const conversation of page.conversations) items.push(await conversationThread(context, externalId, conversation));
+    return { items, next: page.next };
+  },
+  async sendReply(context, _campaignExternalId, target, text) {
+    if (!target.conversationId || !target.senderId) throw new HeyReachError("There's no LinkedIn conversation with this person yet.", 400);
+    await sendHeyReachMessage(context.key, { conversationId: target.conversationId, accountId: target.senderId, text }, context);
+    return { providerMessageId: null };
+  },
+  setCampaignStatus: (context, externalId, status) => setHeyReachCampaignStatus(context.key, externalId, status, context),
+  async stopLead(context, campaignExternalId, lead) {
+    if (!lead.externalLeadId && !lead.linkedin) throw new LeadNotReady();
+    await stopHeyReachLead(context.key, campaignExternalId, { leadId: lead.externalLeadId, profileUrl: profileUrl(lead.linkedin) }, context);
+    return "stopped";
+  },
+  categoryKey: (campaignExternalId, lead, category) => heyReachCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.linkedin ?? "", category),
+  registerWebhook: (context, campaignExternalId, url) => createHeyReachWebhook(context.key, campaignExternalId, url, context),
+  webhookHint(payload) {
+    const hint = heyReachWebhookHint(payload);
+    return hint ? { campaignId: hint.campaignId, leadId: hint.leadId, email: null, linkedin: prospectLinkedin(hint.profileUrl), receiptKey: hint.receiptKey } : null;
+  },
 };
 
 export const CAMPAIGN_PROVIDER_CLIENTS: Partial<Record<CampaignProviderId, CampaignProvider>> = {

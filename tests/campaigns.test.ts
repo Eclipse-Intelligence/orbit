@@ -288,7 +288,7 @@ describe("campaigns", () => {
       assert.equal(prospects.filter((row) => row.contact_id).length, 1);
 
       const events = await sql<{ kind: string; step: number }>("select kind, step from crm.campaign_events where campaign_id = $1 order by occurred_at, kind", [agencyId]);
-      assert.deepEqual(events.map((row) => `${row.kind}:${row.step}`), ["sent:1", "bounced:1", "sent:1", "sent:1", "opened:1", "replied:1", "sent:2"]);
+      assert.deepEqual(events.map((row) => `${row.kind}:${row.step}`), ["sent:1", "bounced:1", "sent:1", "sent:1", "opened:1", "category:1", "replied:1", "sent:2"]);
 
       const afterCounts = await counts(owner.workspaceId);
       assert.equal(afterCounts.events, before.events);

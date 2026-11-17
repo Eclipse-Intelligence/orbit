@@ -12,6 +12,7 @@ export const TRIGGER_TYPES = [
   "schedule",
   "email_received",
   "proposal_event",
+  "campaign_event",
 ] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
@@ -73,6 +74,25 @@ export const PROPOSAL_EVENT_LABELS: Record<ProposalEvent, string> = {
   signed: "Is signed by the client",
   completed: "Is fully signed",
   declined: "Is declined",
+};
+
+export const CAMPAIGN_EVENTS = ["added", "replied", "positive", "engaged", "bounced", "unsubscribed", "invite_accepted"] as const;
+export type CampaignEvent = (typeof CAMPAIGN_EVENTS)[number];
+
+export const CAMPAIGN_EVENT_LABELS: Record<CampaignEvent, string> = {
+  added: "Added to a campaign",
+  replied: "Replied",
+  positive: "Positive reply",
+  engaged: "Engaged",
+  bounced: "Bounced",
+  unsubscribed: "Unsubscribed",
+  invite_accepted: "Invite accepted",
+};
+
+export const CAMPAIGN_EVENT_HINTS: Partial<Record<CampaignEvent, string>> = {
+  engaged: "Opened twice, or clicked more than a minute after sending.",
+  positive: "Interested, a meeting, or another positive category.",
+  invite_accepted: "LinkedIn only.",
 };
 
 export const AI_OUTPUT_TYPES = ["text", "number", "boolean", "list", "choice"] as const;
@@ -150,6 +170,11 @@ const triggerSchema = z.discriminatedUnion("type", [
     type: z.literal("email_received"),
     kind: z.enum(EMAIL_KINDS),
     fromContactsOnly: z.boolean().optional(),
+  }),
+  z.object({
+    type: z.literal("campaign_event"),
+    event: z.enum(CAMPAIGN_EVENTS),
+    channel: z.enum(["email", "linkedin"]).nullable().optional(),
   }),
 ]);
 export type Trigger = z.infer<typeof triggerSchema>;
@@ -422,6 +447,7 @@ export const TRIGGER_LABELS: Record<TriggerType, string> = {
   schedule: "On a schedule",
   email_received: "An email arrives",
   proposal_event: "A proposal or NDA changes",
+  campaign_event: "Campaign event",
 };
 
 export const STEP_LABELS: Record<StepType, string> = {
