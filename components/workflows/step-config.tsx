@@ -505,7 +505,7 @@ export default function StepConfig({
       return (
         <div className="flex flex-col gap-3">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Select id={`${step.id}-object`} label="Record" value={object} onChange={(value) => update({ ...c, object: value, field: FIELD_OPTIONS[value as "company"][0].key })}>
+            <Select id={`${step.id}-object`} label="Record" value={object} onChange={(value) => update({ ...c, object: value, field: FIELD_OPTIONS[value as "company"][0].key, ...(c.field === "tags" ? { value: "" } : {}) })}>
               <option value="company">Company</option>
               <option value="contact">Contact</option>
             </Select>
@@ -537,7 +537,7 @@ export default function StepConfig({
               <option value="at_risk">At risk</option>
             </Select>
           ) : str(c.field) === "tags" ? (
-            <div className="grid gap-3 sm:grid-cols-[9rem_1fr]">
+            <div className="grid items-end gap-3 sm:grid-cols-[9rem_1fr]">
               <Select id={`${step.id}-tag-action`} label="Change" value={str(c.tagAction) === "remove" ? "remove" : "add"} onChange={(value) => update({ ...c, tagAction: value })}>
                 <option value="add">Add</option>
                 <option value="remove">Remove</option>
@@ -777,7 +777,7 @@ export default function StepConfig({
       );
     }
     case "find_email":
-      return <p className="caption-style text-subtle leading-[1.4]">Ends the item when no valid email is found.</p>;
+      return <p className="caption-style text-subtle leading-[1.4]">Stops here when no valid email is found.</p>;
     case "webhook":
       return (
         <div className="flex flex-col gap-3">

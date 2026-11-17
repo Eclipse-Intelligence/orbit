@@ -51,6 +51,7 @@ export type ContactLookups = Record<string, Partial<Record<ContactField, LookupS
 
 export type FindProgress = {
   attempts: Attempt[];
+  email: { value: string; provider: ProviderId; verifiedBy: ProviderId } | null;
   linkedin: { value: string; provider: ProviderId } | null;
   pending: { provider: ProviderId; finding: Finding; checks: VerifyAttempt[] } | null;
 };
@@ -61,7 +62,7 @@ type Options = {
   pollMs?: number;
   workflowLimits?: ProviderGate;
   resume?: FindProgress | null;
-  onProgress?: (progress: FindProgress) => void;
+  onProgress?: (progress: FindProgress) => void | Promise<void>;
 };
 
 function emailDomain(email: string) {
@@ -139,12 +140,14 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   const attempts: Attempt[] = [...(options.resume?.attempts ?? [])];
   const tried = new Set(attempts.map((attempt) => attempt.provider));
   let pending = options.resume?.pending ?? null;
-  let email: { value: string; provider: ProviderId; verifiedBy: ProviderId } | null = null;
+  let email: { value: string; provider: ProviderId; verifiedBy: ProviderId } | null = field === "email" ? (options.resume?.email ?? null) : null;
   let linkedin: { value: string; provider: ProviderId } | null = contact.linkedinUrl ? null : (options.resume?.linkedin ?? null);
   let phone: { value: string; provider: ProviderId } | null = null;
-  const report = () => options.onProgress?.({ attempts: [...attempts], linkedin, pending });
+  const report = async () => {
+    await options.onProgress?.({ attempts: [...attempts], email, linkedin, pending });
+  };
 
-  for (const id of order) {
+  for (const id of email ? [] : order) {
     if (tried.has(id)) continue;
     if (Date.now() > deadline - 5_000) break;
     const provider = PROVIDER_BY_ID.get(id)!;
@@ -161,13 +164,13 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
       } catch (error) {
         if (!(error instanceof ProviderFailure) && options.workflowLimits) throw error;
         attempts.push({ provider: id, outcome: "failed", detail: error instanceof ProviderFailure ? error.message : "Lookup failed." });
-        report();
+        await report();
         continue;
       }
     }
     if (!finding) {
       attempts.push({ provider: id, outcome: "not_found" });
-      report();
+      await report();
       continue;
     }
 
@@ -183,7 +186,7 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
         else if (!sameCompanyDomain(candidate, [domain, finding.companyDomain])) emailNote = "Email isn't on the company's domain.";
         else {
           pending = { provider: id, finding, checks: resumed?.checks ?? [] };
-          report();
+          await report();
           const check = await verifyWith(candidate, {
             env,
             fetchImpl,
@@ -191,9 +194,9 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
             pollMs: options.pollMs,
             gate: options.workflowLimits,
             resume: pending.checks,
-            onAttempt: (checks) => {
+            onAttempt: async (checks) => {
               pending = { provider: id, finding: finding!, checks };
-              report();
+              await report();
             },
           });
           pending = null;
@@ -213,11 +216,11 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
     const target = field === "email" ? email : field === "linkedin" ? linkedin : phone;
     if (target?.provider === id) {
       attempts.push({ provider: id, outcome: "found", ...(field === "email" && email ? { verifiedBy: email.verifiedBy } : {}) });
-      report();
+      await report();
       break;
     }
     attempts.push({ provider: id, outcome: emailNote && field === "email" ? "rejected" : "not_found", ...(emailNote && field === "email" ? { detail: emailNote } : {}) });
-    report();
+    await report();
   }
 
   const write: ContactWrite = {};

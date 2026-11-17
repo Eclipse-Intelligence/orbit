@@ -43,7 +43,7 @@ export type EmailCheckOptions = {
   now?: number;
   workflowLimits?: ProviderGate;
   resume?: VerifyAttempt[];
-  onAttempt?: (attempts: VerifyAttempt[]) => void;
+  onAttempt?: (attempts: VerifyAttempt[]) => void | Promise<void>;
 };
 
 type CheckRow = {

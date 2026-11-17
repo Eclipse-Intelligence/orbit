@@ -7,7 +7,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool } from "@/lib/db/pool";
 import { verifyEmail } from "@/lib/enrichment/email-check";
 import type { WorkflowDefinition } from "@/lib/workflows/definition";
-import { runWorkflowTick, LONG_TICK_MS } from "@/lib/workflows/engine";
+import { executeRun, runWorkflowTick, LONG_TICK_MS } from "@/lib/workflows/engine";
 import { takeService } from "@/lib/workflows/limits";
 import { variableOptions } from "@/lib/workflows/variables";
 import { createWorkflow, getRunSteps, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
@@ -253,6 +253,33 @@ describe("workflow tags and Find and check email", () => {
       assert.equal((await audits(contact.id, "workflow_update_record")).length, 2);
     });
 
+    it("gives one tag per item of a list field", async () => {
+      const lister = await person("Lou", "List", "lou@acme-steps.test", ["alpha", "beta"]);
+      const definition = chain({ type: "manual", object: "contact" }, [
+        node("upsert_record_1", "upsert_record", { object: "company", name: "List Co", tags: "{{contact.tags}}, gamma" }),
+      ]);
+      const started = await start(definition, { type: "contact", id: lister.id });
+      assert.equal(started.status, "succeeded");
+      const tags = (await getAdminPool().query<{ tags: string[] }>("select tags from crm.companies where name = 'List Co'")).rows[0].tags;
+      assert.deepEqual(tags, ["alpha", "beta", "gamma"]);
+    });
+
+    it("leaves Update record and Find or create without tags as they were", async () => {
+      const plain = await person("Pat", "Plain", "pat@acme-steps.test");
+      const definition = chain({ type: "manual", object: "contact" }, [
+        node("update_record_1", "update_record", { object: "contact", field: "jobTitle", value: "CTO" }),
+        node("upsert_record_1", "upsert_record", { object: "contact", email: "plain.new@acme-steps.test", firstName: "Nell" }),
+      ]);
+      const started = await start(definition, { type: "contact", id: plain.id });
+      assert.equal(started.status, "succeeded");
+      const { steps } = await getRunSteps(owner, started.runId);
+      assert.deepEqual(steps.find((step) => step.stepId === "update_record_1")?.output, { field: "jobTitle", value: "CTO" });
+      const upserted = steps.find((step) => step.stepId === "upsert_record_1")?.output as Record<string, unknown>;
+      assert.deepEqual(Object.keys(upserted).sort(), ["created", "found", "id", "name", "url"]);
+      assert.deepEqual((await audits(plain.id, "workflow_update_record")).map((row) => row.event_type), ["contact.updated"]);
+      assert.deepEqual((await audits(String(upserted.id), "workflow_upsert_record")).map((row) => row.event_type), ["contact.created"]);
+    });
+
     it("tags a company with Update record", async () => {
       const company = (await createCompany(owner, { name: "Tagged Co" })).body.company;
       const definition = chain({ type: "manual", object: "company" }, [
@@ -377,7 +404,7 @@ describe("workflow tags and Find and check email", () => {
       await drain(fake([]).fetchImpl);
       const run = await runRow(started.runId);
       assert.equal(run.status, "succeeded");
-      assert.equal(run.skip_reason, "find_email_1: This run has no contact to find an email for.");
+      assert.equal(run.skip_reason, "Find and check email: This run has no contact to find an email for.");
     });
 
     it("only describes the step in a test run", async () => {
@@ -450,7 +477,9 @@ describe("workflow tags and Find and check email", () => {
       await wakeUp(started.runId);
       await drain(fake1.fetchImpl);
       assert.equal((await runRow(started.runId)).status, "succeeded");
-      assert.equal(fake1.hits("email-finder"), 1);
+      assert.equal(fake1.hits("email-finder"), 1, "the deferred search runs once");
+      assert.equal(fake1.hits("email-verifier"), 0, "the found email isn't checked again");
+      assert.equal(fake1.calls.length, 1);
     });
 
     it("doesn't count towards the hourly lookup limit, which app routes still apply", async () => {
@@ -474,11 +503,161 @@ describe("workflow tags and Find and check email", () => {
       await getAdminPool().query("delete from private.rate_limit_buckets where bucket_key = $1", [`enrich:${owner.userId}`]);
     });
 
+    it("keeps polling Enrow and Icypeas through a 429 instead of searching again", async () => {
+      delete process.env.HUNTER_API_KEY;
+      process.env.ENROW_API_KEY = "enr";
+      const enrowPolls = busyOnce("/email/find/single?id=");
+      const enrowFake = fake([
+        enrowPolls,
+        (call) => (call.url.endsWith("/email/find/single") && call.method === "POST" ? { body: { id: "find_1" } } : null),
+        (call) => (call.url.includes("/email/find/single?id=") ? { body: { email: "pia@acme-steps.test", qualification: "valid" } } : null),
+      ]);
+      const pia = await person("Pia", "Poll");
+      const first = await start(findEmail(), { type: "contact", id: pia.id }, enrowFake.fetchImpl);
+      await drain(enrowFake.fetchImpl);
+      assert.equal((await runRow(first.runId)).status, "succeeded");
+      assert.equal(enrowFake.calls.filter((call) => call.url.endsWith("/email/find/single") && call.method === "POST").length, 1);
+      assert.equal((await getContact(owner, pia.id)).email, "pia@acme-steps.test");
+
+      delete process.env.ENROW_API_KEY;
+      process.env.ICYPEAS_API_KEY = "icy";
+      const icyFake = fake([
+        busyOnce("/api/bulk-single-searchs/read"),
+        (call) => (call.url.endsWith("/api/email-search") ? { body: { success: true, item: { _id: "icy_1", status: "NONE" } } } : null),
+        (call) =>
+          call.url.endsWith("/api/bulk-single-searchs/read")
+            ? { body: { items: [{ _id: "icy_1", status: "DEBITED", results: { emails: [{ email: "ike@acme-steps.test", certainty: "very_sure" }] } }] } }
+            : null,
+      ]);
+      const ike = await person("Ike", "Icy");
+      const second = await start(findEmail(), { type: "contact", id: ike.id }, icyFake.fetchImpl);
+      await drain(icyFake.fetchImpl);
+      assert.equal((await runRow(second.runId)).status, "succeeded");
+      assert.equal(icyFake.hits("/api/email-search"), 1);
+      assert.equal((await getContact(owner, ike.id)).email, "ike@acme-steps.test");
+    });
+
+    it("waits inside a parallel item and carries on after the wait", async () => {
+      const tag = "busy batch";
+      const kit = await person("Kit", "Parallel", null, [tag]);
+      const fake1 = fake([busyOnce("email-finder"), hunterFinds({ Parallel: "kit@acme-steps.test" }), hunterChecks({})]);
+      const definition = chain(
+        { type: "manual", object: "company" },
+        [
+          node("find_records_1", "find_records", { object: "contact", tag, limit: 10 }),
+          node("loop_1", "loop", { items: "{{steps.find_records_1.records}}", parallel: true, atOnce: 5 }),
+          node("find_email_1", "find_email", {}),
+        ],
+        [["loop_1", "each", "find_email_1"]],
+      );
+      const started = await start(definition, { type: "company", id: acme }, fake1.fetchImpl);
+      await drain(fake1.fetchImpl);
+      const [item] = await children(started.runId);
+      assert.equal(item.status, "waiting");
+      await wakeUp(started.runId);
+      await drain(fake1.fetchImpl);
+      assert.equal((await children(started.runId))[0].status, "succeeded");
+      assert.equal((await runRow(started.runId)).status, "succeeded");
+      assert.equal(fake1.hits("email-finder"), 2);
+      assert.equal((await getContact(owner, kit.id)).email, "kit@acme-steps.test");
+    });
+
+    it("moves on to the next provider after three waits for one that stays busy", async () => {
+      process.env.CONTEXT_DEV_API_KEY = "ctx";
+      const ray = await person("Ray", "Fallback");
+      const fake1 = fake([
+        (call) => (call.url.endsWith("/v1/people/enrich") ? { status: 429, body: { message: "slow down" }, headers: { "retry-after": "1" } } : null),
+        hunterFinds({ Fallback: "ray@acme-steps.test" }),
+        hunterChecks({}),
+      ]);
+      const started = await start(findEmail(), { type: "contact", id: ray.id }, fake1.fetchImpl);
+      for (let wait = 0; wait < 3; wait += 1) {
+        await drain(fake1.fetchImpl);
+        assert.equal((await runRow(started.runId)).status, "waiting");
+        await wakeUp(started.runId);
+      }
+      await drain(fake1.fetchImpl);
+      assert.equal((await runRow(started.runId)).status, "succeeded");
+      assert.equal(fake1.hits("people/enrich"), 4);
+      assert.equal(fake1.hits("email-finder"), 1);
+      const lookups = await getAdminPool().query<{ attempts: { provider: string; outcome: string; detail?: string }[] }>(
+        "select attempts from crm.enrichment_lookups where record_id = $1 and field = 'email'",
+        [ray.id],
+      );
+      assert.deepEqual(lookups.rows[0].attempts.map((attempt) => [attempt.provider, attempt.outcome, attempt.detail ?? null]), [
+        ["context", "failed", "Busy."],
+        ["hunter", "found", null],
+      ]);
+    });
+
+    it("fails the step inside a loop when no email finder is set up", async () => {
+      delete process.env.HUNTER_API_KEY;
+      const tag = "setup batch";
+      await person("Gus", "Setup", null, [tag]);
+      const definition = chain(
+        { type: "manual", object: "company" },
+        [
+          node("find_records_1", "find_records", { object: "contact", tag, limit: 10 }),
+          node("loop_1", "loop", { items: "{{steps.find_records_1.records}}", parallel: false, limit: 10 }),
+          node("find_email_1", "find_email", {}),
+        ],
+        [["loop_1", "each", "find_email_1"]],
+      );
+      const started = await start(definition, { type: "company", id: acme });
+      await drain(fake([]).fetchImpl);
+      const run = await runRow(started.runId);
+      assert.equal(run.status, "failed");
+      assert.equal(run.error, "find_email_1: No email finder is set up.");
+    });
+
     it("lists its outputs as fields for later steps", () => {
       const definition = findEmail();
       const paths = variableOptions(definition, "add_note_1").map((option) => option.path);
       assert.ok(paths.includes("steps.find_email_1.status"));
       assert.ok(paths.includes("steps.find_email_1.address"));
+    });
+  });
+
+  describe("a reclaimed Find and check email", () => {
+    it("never calls a provider twice for one contact when its worker dies between the find and the check", async () => {
+      process.env.CONTEXT_DEV_API_KEY = "ctx";
+      const rae = await person("Rae", "Reclaim");
+      const answered: string[] = [];
+      let reached: () => void = () => undefined;
+      const atCheck = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      let died = false;
+      const fetchImpl = (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("email-verifier") && !died) {
+          died = true;
+          reached();
+          return new Promise<Response>(() => undefined);
+        }
+        answered.push(url);
+        if (url.endsWith("/v1/people/enrich")) {
+          return Response.json({ match: { status: "candidate", score: 90, person: { email: "rae@acme-steps.test", current_role: { organization: { domain: "acme-steps.test" } } } } });
+        }
+        if (url.includes("email-verifier")) return Response.json({ data: { status: "valid" } });
+        return Response.json({ message: "unexpected" }, { status: 404 });
+      }) as typeof fetch;
+      const definition = chain({ type: "manual", object: "contact" }, [
+        node("find_email_1", "find_email", {}),
+        node("add_note_1", "add_note", { title: "Reclaimed", body: "{{contact.email}}" }),
+      ]);
+      const started = await start(definition, { type: "contact", id: rae.id }, fetchImpl);
+      await getAdminPool().query("update crm.workflow_runs set status = 'running', claimed_at = now() where id = $1", [started.runId]);
+      void executeRun(started.runId, owner.userId, owner.workspaceId, { deadline: Date.now() + LONG_TICK_MS, fetchImpl }).catch(() => undefined);
+      await atCheck;
+      const outcome = await executeRun(started.runId, owner.userId, owner.workspaceId, { deadline: Date.now() + LONG_TICK_MS, fetchImpl });
+      assert.equal(outcome, "succeeded");
+      const counts = new Map<string, number>();
+      for (const url of answered) counts.set(new URL(url).pathname, (counts.get(new URL(url).pathname) ?? 0) + 1);
+      assert.deepEqual([...counts.values()].filter((count) => count > 1), [], `calls: ${JSON.stringify([...counts])}`);
+      assert.equal(counts.get("/v1/people/enrich"), 1);
+      assert.equal((await getContact(owner, rae.id)).email, "rae@acme-steps.test");
+      assert.equal((await notes(owner, "Reclaimed"))[0]?.body, "rae@acme-steps.test");
     });
   });
 

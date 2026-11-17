@@ -48,6 +48,7 @@ import {
   PARALLEL_ITEMS_MAX,
   TRIGGER_NODE,
   safeDefinition,
+  STEP_LABELS,
   WEB_QUESTION_TYPES,
   webQuestionOptions,
   webQuestionProblem,
@@ -62,6 +63,8 @@ import { addTags, removeTags } from "@/lib/crm/tags";
 import { enrichContact, type FindProgress } from "@/lib/enrichment/contacts";
 import { verifyContactEmail } from "@/lib/enrichment/email-check";
 import { ProviderFailure, type ProviderGate, type ProviderId, type VerifyAttempt } from "@/lib/enrichment/providers";
+import { enrichmentAvailability } from "@/lib/enrichment/settings";
+import { canonicalEmail } from "@/lib/crm/normalize";
 import { startWorkers } from "@/lib/workflows/workers";
 
 type LoopFrame = {
@@ -95,7 +98,14 @@ export type RunState = {
   lookup?: Lookup | null;
 };
 
-type Lookup = { key: string; find?: FindProgress | null; checks?: VerifyAttempt[] };
+type Lookup = {
+  key: string;
+  contactId: string;
+  find?: FindProgress | null;
+  checksFor?: string | null;
+  checks?: VerifyAttempt[];
+  busy?: Partial<Record<ProviderId, number>>;
+};
 
 type WaitingChildren = { key: string; loopId: string; total: number; atOnce: number; created: boolean };
 
@@ -633,7 +643,9 @@ function needsLongTime(step: Step, test: boolean) {
   return (step.type === "ai" && step.config.webSearch === true) || (step.type === "find_email" && !test);
 }
 
-const ENDS_ITEM = new Set<string>(["ai", "find_email"]);
+function stepName(step: Step) {
+  return step.label || STEP_LABELS[step.type];
+}
 
 class ItemSkipped extends Error {
   readonly output: unknown;
@@ -1116,11 +1128,23 @@ async function tagStep(ctx: Ctx, step: Step, object: "company" | "contact", id: 
 }
 
 const PROVIDER_SERVICES: Record<ProviderId, Service> = { context: "context_dev", hunter: "hunter", enrow: "enrow", icypeas: "icypeas" };
+const BUSY_WAITS_PER_PROVIDER = 3;
 
-const providerLimits: ProviderGate = (provider, run) =>
-  withService(PROVIDER_SERVICES[provider], run, {
-    statusOf: (error) => (error instanceof ProviderFailure ? { status: error.status, retryAfter: error.retryAfter } : null),
-  });
+function providerLimits(lookup: Lookup): ProviderGate {
+  return async (provider, run) => {
+    try {
+      return await withService(PROVIDER_SERVICES[provider], run, {
+        statusOf: (error) => (error instanceof ProviderFailure ? { status: error.status, retryAfter: error.retryAfter } : null),
+      });
+    } catch (error) {
+      if (!(error instanceof ServiceBusy)) throw error;
+      const waits = (lookup.busy?.[provider] ?? 0) + 1;
+      if (waits > BUSY_WAITS_PER_PROVIDER) throw new ProviderFailure("Busy.");
+      lookup.busy = { ...lookup.busy, [provider]: waits };
+      throw error;
+    }
+  };
+}
 
 async function findEarlier(ctx: Ctx, contactId: string, since: number) {
   return withActor(ctx.actor, async (db) => {
@@ -1135,37 +1159,51 @@ async function findEarlier(ctx: Ctx, contactId: string, since: number) {
   });
 }
 
+const NO_FINDER = "No email finder is set up.";
+
 async function findEmailStep(ctx: Ctx, step: Step): Promise<StepResult> {
   const contactId = (ctx.vars.contact as { id?: string } | undefined)?.id;
   if (!contactId) throw new ItemSkipped("This run has no contact to find an email for.", { status: "not_found", address: null });
   const key = effectKey(step.id, ctx.state.frames ?? []);
-  const lookup: Lookup = ctx.state.lookup?.key === key ? ctx.state.lookup : { key };
+  const kept = ctx.state.lookup;
+  const lookup: Lookup = kept?.key === key && kept.contactId === contactId ? kept : { key, contactId };
   ctx.state.lookup = lookup;
   const earlier = await startEffect(ctx, step);
+  const keep = async () => {
+    await saveRun(ctx.actor, ctx.run.id, { state: { ...ctx.state, at: step.id, vars: ctx.vars } });
+  };
   let contact = await getContact(ctx.actor, contactId);
   if (!contact.email) {
     const before = earlier ? await findEarlier(ctx, contact.id, earlier.at) : null;
     if (before === "not_found") throw new ItemSkipped(`No email found for ${contact.name}.`, { status: "not_found", address: null });
+    if (!enrichmentAvailability().email) throw new CrmError("not_configured", NO_FINDER, 400);
     const found = await enrichContact(ctx.actor, contact.id, "email", {
       fetchImpl: ctx.fetchImpl,
-      workflowLimits: providerLimits,
+      workflowLimits: providerLimits(lookup),
       resume: lookup.find,
-      onProgress: (progress) => {
+      onProgress: async (progress) => {
         lookup.find = progress;
+        await keep();
       },
     });
     if (found.status === "failed") throw new CrmError("upstream_error", found.message, 502);
     if (found.status !== "found") throw new ItemSkipped(found.message, { status: "not_found", address: null });
     contact = await getContact(ctx.actor, contact.id);
-    ctx.vars.contact = contactVars(contact);
+  }
+  ctx.vars.contact = contactVars(contact);
+  const address = contact.email ? canonicalEmail(contact.email) : null;
+  if (lookup.checksFor !== address) {
+    lookup.checksFor = address;
+    lookup.checks = [];
   }
   const check = await verifyContactEmail(ctx.actor, contact.id, {
     fetchImpl: ctx.fetchImpl,
     deadline: ctx.deadline,
-    workflowLimits: providerLimits,
+    workflowLimits: providerLimits(lookup),
     resume: lookup.checks,
-    onAttempt: (attempts) => {
+    onAttempt: async (attempts) => {
       lookup.checks = attempts;
+      await keep();
     },
   });
   const output = { status: check.verdict, address: check.email };
@@ -1916,12 +1954,13 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
         await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "delay", resume_at: until });
         return "waiting";
       }
-      const endsItem = ENDS_ITEM.has(step.type) && ((state.frames?.length ?? 0) > 0 || Boolean(run.parent_run_id));
+      const endsItem = (step.type === "ai" || Boolean(skipped)) && ((state.frames?.length ?? 0) > 0 || Boolean(run.parent_run_id));
       await logStep(ctx, step, skipped ? "skipped" : "failed", input, skipped?.output ?? null, message, started);
       if (skipped && !endsItem) {
         (vars.steps as Record<string, unknown>)[step.id] = skipped.output;
-        const reason = `${step.label || step.id}: ${message}`.slice(0, 2000);
-        await endRun(actor, run, "skipped", { state: { ...state, at: null, vars }, error: reason, skip_reason: reason });
+        const reason = `${stepName(step)}: ${message}`.slice(0, 2000);
+        const note = [reason, itemsNote(state.skipped ?? [], state.failedItems ?? [])].filter(Boolean).join(". ").slice(0, 2000);
+        await endRun(actor, run, "skipped", { state: { ...state, at: null, vars }, error: note, skip_reason: reason });
         return "succeeded";
       }
       if (endsItem && (state.frames?.length ?? 0) > 0) {
@@ -1937,7 +1976,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
         state.retried = null;
         state.busy = null;
         (vars.steps as Record<string, unknown>)[step.id] = skipped?.output ?? null;
-        await endRun(actor, run, "skipped", { state: { ...state, at: null, vars }, skip_reason: `${step.label || step.id}: ${message}`.slice(0, 2000) });
+        await endRun(actor, run, "skipped", { state: { ...state, at: null, vars }, skip_reason: `${stepName(step)}: ${message}`.slice(0, 2000) });
         return "succeeded";
       }
       return fail(`${step.label || step.id}: ${message}`);

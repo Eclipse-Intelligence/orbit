@@ -455,7 +455,7 @@ export const STEP_HINTS: Partial<Record<StepType, string>> = {
   notify: "Sends an in-app notification.",
   post_to_chat: "Posts in a Chat room as you.",
   find_records: "Lists matching records for For each item.",
-  find_email: "Ends the item when no valid email is found.",
+  find_email: "Stops here when no valid email is found.",
   webhook: "Posts the run's data to another app.",
   create_proposal: "Drafts a proposal. Nothing is sent.",
 };
