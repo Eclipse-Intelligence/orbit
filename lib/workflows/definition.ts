@@ -218,6 +218,53 @@ export function outputHandles(type: StepType | typeof TRIGGER_NODE): string[] {
 
 export const HANDLE_LABELS: Record<string, string> = { true: "Yes", false: "No", each: "Each item", done: "Done" };
 
+export const PARALLEL_ITEMS_MAX = 1000;
+export const FIND_LIMIT = 100;
+export const FIND_LIMIT_PARALLEL = 1000;
+export const LOOP_ITEMS_MAX = 100;
+export const AT_ONCE_DEFAULT = 50;
+export const AT_ONCE_MAX = 500;
+
+export function isParallelLoop(node: Pick<WorkflowNode, "type" | "config"> | undefined) {
+  return node?.type === "loop" && node.config.parallel === true;
+}
+
+export function loopAtOnce(config: Record<string, unknown>) {
+  const value = Number(config.atOnce);
+  return Number.isFinite(value) && value >= 1 ? Math.min(Math.trunc(value), AT_ONCE_MAX) : AT_ONCE_DEFAULT;
+}
+
+export function loopBody(definition: WorkflowDefinition, loopId: string) {
+  const found = new Set<string>();
+  const start = nextNode(definition, loopId, "each");
+  const queue = start ? [start] : [];
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (found.has(current)) continue;
+    found.add(current);
+    for (const edge of definition.edges) if (edge.source === current && !found.has(edge.target)) queue.push(edge.target);
+  }
+  return found;
+}
+
+export function feedsParallelLoop(definition: WorkflowDefinition, stepId: string) {
+  const pattern = new RegExp(`\\{\\{\\s*steps\\.${stepId}\\.`);
+  return definition.nodes.some((node) => isParallelLoop(node) && pattern.test(typeof node.config.items === "string" ? node.config.items : ""));
+}
+
+function parallelProblem(definition: WorkflowDefinition): string | null {
+  const types = new Map(definition.nodes.map((node) => [node.id, node]));
+  for (const node of definition.nodes) {
+    if (!isParallelLoop(node)) continue;
+    for (const id of loopBody(definition, node.id)) {
+      const inner = types.get(id);
+      if (inner?.type === "approval") return `${node.label || node.id}: items that run at the same time can't wait for approval. Move the Approval step out, or turn off Run items at the same time.`;
+      if (isParallelLoop(inner)) return `${inner!.label || inner!.id}: only the outer For each item can run items at the same time. Turn it off here.`;
+    }
+  }
+  return null;
+}
+
 export function graphProblem(definition: WorkflowDefinition): string | null {
   const ids = new Set(definition.nodes.map((node) => node.id));
   if (ids.size !== definition.nodes.length) return "Two steps share the same id.";
@@ -251,7 +298,7 @@ export function graphProblem(definition: WorkflowDefinition): string | null {
     const problem = node.type === "decide" ? webQuestionProblem(node.config.questions) : null;
     if (problem) return `${node.label || node.id}: ${problem}`;
   }
-  return null;
+  return parallelProblem(definition);
 }
 
 export const WEB_QUESTION_TYPES = ["yes_no", "choice", "score"] as const;

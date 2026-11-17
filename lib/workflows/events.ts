@@ -39,6 +39,8 @@ function kickWorkflows() {
     after(async () => {
       try {
         const { runWorkflowTick } = await import("@/lib/workflows/engine");
+        const { startWorkers } = await import("@/lib/workflows/workers");
+        await startWorkers().catch((error) => console.error("Couldn't start workflow workers", error));
         await runWorkflowTick({ budgetMs: 25_000 });
       } catch (error) {
         console.error("Workflow tick failed", error);

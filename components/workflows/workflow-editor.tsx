@@ -52,7 +52,7 @@ const DEFAULTS: Record<StepType, Record<string, unknown>> = {
   decide: { about: "", questions: [{ key: "answer", type: "yes_no", question: "" }] },
   if: { match: "all", conditions: [{ left: "", op: "is", right: "" }] },
   filter: { match: "all", conditions: [{ left: "", op: "is", right: "" }] },
-  loop: { items: "", limit: 25 },
+  loop: { items: "", limit: 25, parallel: true, atOnce: 50 },
   delay: { amount: 1, unit: "days" },
   approval: { title: "", details: "" },
   create_task: { title: "", notes: "", dueInDays: "2", assignee: "owner", link: "contact", clickup: false },

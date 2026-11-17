@@ -8,11 +8,17 @@ import { NativeSelect } from "@/components/_ui/native-select";
 import { Textarea } from "@/components/_ui/textarea";
 import { recordSelectClass } from "@/components/crm/record-form";
 import TemplateField from "@/components/workflows/template-field";
+import Switch from "@/components/_ui/switch";
 import {
   AI_MODELS,
   AI_OUTPUT_TYPES,
+  AT_ONCE_DEFAULT,
+  AT_ONCE_MAX,
   CONDITION_OPS,
   FIELD_OPTIONS,
+  FIND_LIMIT,
+  FIND_LIMIT_PARALLEL,
+  LOOP_ITEMS_MAX,
   type Step,
 } from "@/lib/workflows/definition";
 import type { Condition, VariableOption } from "@/lib/workflows/variables";
@@ -325,11 +331,13 @@ export default function StepConfig({
   update,
   variables,
   options,
+  feedsParallel = false,
 }: {
   step: Step;
   update: (config: Record<string, unknown>) => void;
   variables: VariableOption[];
   options: BuilderOptions;
+  feedsParallel?: boolean;
 }) {
   const c = step.config;
   const field = (key: string, label: string, extra: { rows?: number; placeholder?: string; hint?: string } = {}) => (
@@ -383,18 +391,52 @@ export default function StepConfig({
     case "if":
     case "filter":
       return <Conditions step={step} update={update} variables={variables} />;
-    case "loop":
+    case "loop": {
+      const parallel = c.parallel === true;
       return (
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="min-w-0 flex-1">{field("items", "List to go through", { placeholder: "{{steps.ai_1.productRequests}}" })}</div>
-          <div className="flex flex-col gap-1.5 sm:w-32">
-            <label htmlFor={`${step.id}-limit`} className="caption-style text-subtle">
-              At most
-            </label>
-            <Input id={`${step.id}-limit`} type="number" min={1} max={100} value={str(c.limit) || "25"} onChange={(event) => update({ ...c, limit: Number(event.target.value) })} />
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1">{field("items", "List to go through", { placeholder: "{{steps.ai_1.productRequests}}" })}</div>
+            {!parallel && (
+              <div className="flex flex-col gap-1.5 sm:w-32">
+                <label htmlFor={`${step.id}-limit`} className="caption-style text-subtle">
+                  At most
+                </label>
+                <Input id={`${step.id}-limit`} type="number" min={1} max={LOOP_ITEMS_MAX} value={str(c.limit) || "25"} onChange={(event) => update({ ...c, limit: Number(event.target.value) })} />
+              </div>
+            )}
           </div>
+          <div className="flex items-center justify-between gap-3">
+            <label htmlFor={`${step.id}-parallel`} className="ui-style">
+              Run items at the same time
+            </label>
+            <Switch id={`${step.id}-parallel`} checked={parallel} label="Run items at the same time" onChange={(on) => update({ ...c, parallel: on, ...(on && c.atOnce === undefined ? { atOnce: AT_ONCE_DEFAULT } : {}) })} />
+          </div>
+          {parallel && (
+            <>
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor={`${step.id}-at-once`} className="ui-style">
+                  At most
+                </label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id={`${step.id}-at-once`}
+                    type="number"
+                    min={1}
+                    max={AT_ONCE_MAX}
+                    className="w-20"
+                    value={str(c.atOnce) || String(AT_ONCE_DEFAULT)}
+                    onChange={(event) => update({ ...c, atOnce: Number(event.target.value) })}
+                  />
+                  <span className="caption-style text-subtle">at once</span>
+                </div>
+              </div>
+              <p className="caption-style text-subtle">Up to 1,000 items. No Approval step inside.</p>
+            </>
+          )}
         </div>
       );
+    }
     case "delay":
       return (
         <div className="flex gap-2">
@@ -680,7 +722,7 @@ export default function StepConfig({
               <Input id={`${step.id}-search`} value={str(c.search)} placeholder="Anything" onChange={(event) => update({ ...c, search: event.target.value })} />
             </div>
             {number("quietDays", "Quiet for (days)", "Any", 3650)}
-            {number("limit", "At most", "25", 100)}
+            {number("limit", "At most", "25", feedsParallel ? FIND_LIMIT_PARALLEL : FIND_LIMIT)}
           </div>
           {number("skipDays", "Skip if found in the last (days)", "Never skip", 365)}
           <p className="caption-style text-subtle">Loop over {`{{steps.${step.id}.records}}`} with For each item.</p>

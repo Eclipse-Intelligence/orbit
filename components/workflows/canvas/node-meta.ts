@@ -1,5 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
-import { AI_MODELS, EMAIL_KIND_LABELS, PROPOSAL_EVENT_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
+import { AI_MODELS, EMAIL_KIND_LABELS, loopAtOnce, PROPOSAL_EVENT_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
 import type { Condition } from "@/lib/workflows/variables";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import GlobeIcon from "@/public/assets/images/assistant/globe.svg";
@@ -140,8 +140,11 @@ export function nodeSummary(node: WorkflowNode) {
       const value = first.op === "is_empty" || first.op === "is_not_empty" ? "" : ` ${first.right ?? ""}`;
       return short(`${plain(first.left)} ${OPS[first.op] ?? first.op}${value}`);
     }
-    case "loop":
-      return text(c.items) ? `Each of ${plain(text(c.items))}` : "Choose a list";
+    case "loop": {
+      const each = text(c.items) ? `Each of ${plain(text(c.items))}` : "Choose a list";
+      if (c.parallel !== true) return each;
+      return short(text(c.items) ? `${loopAtOnce(c)} at once: ${plain(text(c.items))}` : `${loopAtOnce(c)} at once`);
+    }
     case "delay":
       return `${Number(c.amount) || 1} ${text(c.unit) || "hours"}`;
     case "approval":

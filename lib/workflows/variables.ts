@@ -269,6 +269,14 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
     }
     if (step.type === "loop") {
       options.push({ path: "loop.item", label: "Current item", group }, { path: "loop.index", label: "Item number", group });
+      if (step.config.parallel === true) {
+        options.push(
+          { path: `steps.${step.id}.succeeded`, label: "Items succeeded", group },
+          { path: `steps.${step.id}.skipped`, label: "Items skipped", group },
+          { path: `steps.${step.id}.failed`, label: "Items failed", group },
+          { path: `steps.${step.id}.skipReasons`, label: "Why items were skipped", group },
+        );
+      }
     }
     if (step.type === "create_task") options.push({ path: `steps.${step.id}.title`, label: "Task title", group });
     if (step.type === "linear_issue") {
