@@ -104,6 +104,8 @@ function agencyOutreach() {
       { id: "lead-uma", email: "uma@north.test", first: "Uma", last: "Reed", company: "North" },
       { id: "lead-vic", email: "vic@lane.test", first: "Vic", last: "Lane", company: "Lane" },
       { id: "lead-wes", email: "wes@gone.test", first: "Wes", last: "Gone", company: "Gone" },
+      { id: "lead-xa", email: "xa@busy.test", first: "Xa", last: "Busy", company: "Busy" },
+      { id: "lead-xb", email: "xb@busy.test", first: "Xb", last: "Busy", company: "Busy" },
     ],
     stats: [
       { lead_id: "lead-priya", lead_email: "priya@halcyon.test", lead_name: "Priya Shah", sequence_number: 1, sent_time: T0 },
@@ -113,6 +115,8 @@ function agencyOutreach() {
       { lead_id: "lead-uma", lead_email: "uma@north.test", lead_name: "Uma Reed", sequence_number: 1, sent_time: T0 },
       { lead_id: "lead-vic", lead_email: "vic@lane.test", lead_name: "Vic Lane", sequence_number: 1, sent_time: T0 },
       { lead_id: "lead-wes", lead_email: "wes@gone.test", lead_name: "Wes Gone", sequence_number: 1, sent_time: T0 },
+      { lead_id: "lead-xa", lead_email: "xa@busy.test", lead_name: "Xa Busy", sequence_number: 1, sent_time: T0 },
+      { lead_id: "lead-xb", lead_email: "xb@busy.test", lead_name: "Xb Busy", sequence_number: 1, sent_time: T0 },
     ],
     sequences: sequenceOf([{ subject: "Quick question", body: "Hi {{first_name}}" }]),
     analytics: {},
@@ -124,6 +128,8 @@ function agencyOutreach() {
       "lead-uma": [],
       "lead-vic": [],
       "lead-wes": [],
+      "lead-xa": [],
+      "lead-xb": [],
       "lead-ivy": [{ type: "SENT", stats_id: "stats-ivy", message_id: "<sent-ivy@getridgeon.test>", time: T0, subject: "Quick question", email_body: "<p>Hi Ivy</p>", email_seq_number: 1, from: "mark@getridgeon.test" }],
     } as Record<string, unknown[]>,
   };
@@ -939,6 +945,62 @@ describe("campaign events and replies", () => {
       await heyreachOnly();
       const second = await sql<{ backfilled: boolean; offset: string | null }>("select backfilled_at is not null as backfilled, sync_state->>'repliesOffset' as offset from crm.campaigns where external_id = '903'");
       assert.deepEqual(second, [{ backfilled: true, offset: null }]);
+    });
+
+    it("stores a reply that fails after it was saved as stored, and a retry never sends it again", async () => {
+      const priya = await prospectId("lead-priya");
+      const sends = () => (alpha.writes ?? []).filter((write) => write.path === "/campaigns/801/reply-email-thread").length;
+      const before = sends();
+      await sql("revoke execute on function private.campaign_reply_finish(uuid, uuid, text, text, text) from crm_app");
+      try {
+        await assert.rejects(replyToProspect(owner, priya, { text: "Sent but not recorded.", clientKey: "after-begin-1" }, { fetchImpl }), (error: unknown) => {
+          assert.ok(error instanceof CrmError);
+          assert.equal(typeof error.details?.messageId, "string");
+          return true;
+        });
+      } finally {
+        await sql("grant execute on function private.campaign_reply_finish(uuid, uuid, text, text, text) to crm_app");
+      }
+      assert.equal(sends(), before + 1);
+      const again = await replyToProspect(owner, priya, { text: "Sent but not recorded.", clientKey: "after-begin-1" }, { fetchImpl });
+      assert.equal(again.repeated, true);
+      assert.equal(sends(), before + 1);
+    });
+
+    it("stops handing replies to a provider that says it's busy, keeping the rest for later", async () => {
+      replyFrom("lead-xa", "xa@busy.test", "Xa Busy", "One.");
+      replyFrom("lead-xb", "xb@busy.test", "Xb Busy", "Two.");
+      const reads = () => alpha.calls.filter((url) => /\/leads\/lead-x[ab]\/message-history$/.test(url.pathname)).length;
+      const before = reads();
+      alpha.fail = (url) => (/\/leads\/lead-x[ab]\/message-history$/.test(url.pathname) ? new Response("{}", { status: 429, headers: { "retry-after": "60" } }) : null);
+      let report;
+      try {
+        report = await smartleadOnly(fetchImpl);
+      } finally {
+        alpha.fail = undefined;
+      }
+      assert.equal(reads() - before, 1);
+      assert.ok(report.busy.length > 0);
+      assert.deepEqual([(await replyState("lead-xa")).handled, (await replyState("lead-xb")).handled], [false, false]);
+    });
+
+    it("keeps each page of a conversation read when a later page fails", async () => {
+      const conversations = Array.from({ length: 250 }, (_, index) => ({
+        id: `c-paged-${index}`,
+        accountId: 1,
+        profileUrl: `https://www.linkedin.com/in/paged-${index}/`,
+        messages: [{ createdAt: "2026-11-13T10:00:00.000Z", body: "Hi", sender: "CORRESPONDENT" as const }],
+      }));
+      heyreach.campaigns.push({ id: 904, name: "Founders four", status: "IN_PROGRESS", accountIds: [1], sequence: [], leads: [], overall: {}, byDay: {}, conversations });
+      let reads = 0;
+      heyreach.fail = (path) => (path === "/inbox/GetConversationsV2" && ++reads === 2 ? new Response("{}", { status: 500 }) : null);
+      try {
+        await heyreachOnly();
+      } finally {
+        heyreach.fail = undefined;
+      }
+      const state = await sql<{ offset: string | null }>("select sync_state->>'repliesOffset' as offset from crm.campaigns where external_id = '904'");
+      assert.deepEqual(state, [{ offset: "100" }]);
     });
 
     it("finishes a backfill even when its conversations can't be read", async () => {

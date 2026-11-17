@@ -49,7 +49,7 @@ export type SyncedEvent = { eventId: string; prospectId: string; contactId: stri
 
 export type SyncedCampaign = { id: string; workspaceId: string; provider: CampaignProviderId; externalId: string; name: string };
 
-export type EventHandler = (campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor, context: ProviderContext) => Promise<void | { retry: string[] }>;
+export type EventHandler = (campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor, context: ProviderContext) => Promise<void | { retry: string[]; busy?: string }>;
 
 export type CampaignSyncOptions = {
   deadline: number;
@@ -173,13 +173,15 @@ async function handOverEvents(pass: Pass, campaign: SyncedCampaign) {
     const ids = waiting.rows.map((row) => row.event_id);
     let retry: string[] = [];
     try {
-      retry = (await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor, pass.context))?.retry ?? [];
+      const outcome = await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor, pass.context);
+      retry = outcome?.retry ?? [];
+      if (outcome?.busy) pass.report.busy.push(outcome.busy);
     } catch (error) {
       await query("select private.campaign_events_release($1, $2::uuid[])", [campaign.id, ids]).catch(() => undefined);
       throw error;
     }
     await query("select private.campaign_events_handled($1, $2::uuid[])", [campaign.id, ids.filter((id) => !retry.includes(id))]);
-    if (waiting.rows.length < HAND_OVER_BATCH) return;
+    if (waiting.rows.length < HAND_OVER_BATCH || retry.length > 0) return;
   }
 }
 
@@ -191,8 +193,9 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
   const startedAt = state.repliesStartedAt ?? new Date().toISOString();
   const stray = new Set(state.strayIds ?? []);
   let offset: number | null = state.repliesOffset ?? 0;
+  const progress = () => saveCampaign(row.id, { syncState: { repliesOffset: offset, repliesStartedAt: startedAt, strayConversations: stray.size, strayIds: [...stray] } });
   const pause = async () => {
-    await saveCampaign(row.id, { syncState: { repliesOffset: offset, repliesStartedAt: startedAt, strayConversations: stray.size, strayIds: [...stray] } });
+    await progress();
     return false;
   };
   for (let pages = 0; offset !== null; pages += 1) {
@@ -213,6 +216,7 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
       if (saved.length > 0) pass.report.threads += 1;
     }
     offset = since !== null && fresh === 0 ? null : page.next;
+    if (offset !== null) await progress();
   }
   await saveCampaign(row.id, {
     syncState: {

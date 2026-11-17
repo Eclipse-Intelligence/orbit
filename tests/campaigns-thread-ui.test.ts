@@ -70,6 +70,7 @@ describe("optimistic replies", () => {
     assert.equal(failedSendPlan("   ", false), "restore");
     assert.equal(failedSendPlan("New words", false), "keep");
     assert.equal(failedSendPlan("", true), "keep");
+    assert.equal(failedSendPlan("", undefined), "keep");
     assert.deepEqual(withoutReply([pending(), pending({ clientKey: "web-9" })], "web-9").map((reply) => reply.clientKey), ["web-1"]);
   });
 

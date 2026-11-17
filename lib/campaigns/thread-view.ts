@@ -51,8 +51,8 @@ export function withoutReply(pending: PendingReply[], clientKey: string) {
   return pending.filter((reply) => reply.clientKey !== clientKey);
 }
 
-export function failedSendPlan(draftText: string, stored: boolean): "restore" | "keep" {
-  return !stored && !draftText.trim() ? "restore" : "keep";
+export function failedSendPlan(draftText: string, stored: boolean | undefined): "restore" | "keep" {
+  return stored === false && !draftText.trim() ? "restore" : "keep";
 }
 
 export function restoredDraft(draft: Draft, failed: { text: string; channel: CampaignChannel }): Draft {

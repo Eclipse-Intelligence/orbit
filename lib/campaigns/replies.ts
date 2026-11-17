@@ -176,12 +176,31 @@ export async function replyToProspect(
   const row = begun.rows[0];
   if (!row) throw new CrmError("internal_error", "Couldn't send. Try again.", 500);
   if (!row.created) return { messageId: row.message_id, sendState: row.send_state, repeated: true };
+  try {
+    return await sendBegun(actor, provider, context, read.prospect, target, text, row.message_id, provenance);
+  } catch (error) {
+    if (error instanceof CrmError && typeof error.details?.messageId === "string") throw error;
+    if (!(error instanceof CrmError)) console.error("A campaign reply failed after it was stored", redactedError(error));
+    const base = error instanceof CrmError ? error : new CrmError("internal_error", "Couldn't send. Try again.", 500);
+    throw new CrmError(base.code, base.message, base.status, { ...(base.details ?? {}), messageId: row.message_id });
+  }
+}
 
+async function sendBegun(
+  actor: UserActor,
+  provider: CampaignProvider,
+  context: ProviderContext,
+  prospect: ProspectRef,
+  target: ReplyTarget,
+  text: string,
+  messageId: string,
+  provenance: Provenance,
+): Promise<ReplyResult> {
   let state: Exclude<SendState, "sending">;
   let providerMessageId: string | null = null;
   let failure: CrmError | null = null;
   try {
-    providerMessageId = (await provider.sendReply(context, read.prospect.campaign_external_id, target, text)).providerMessageId;
+    providerMessageId = (await provider.sendReply(context, prospect.campaign_external_id, target, text)).providerMessageId;
     state = "sent";
   } catch (error) {
     if (mightHaveSent(provider, error)) {
@@ -192,19 +211,19 @@ export async function replyToProspect(
       failure = error instanceof ServiceBusy ? providerError(provider, error, "") : providerError(provider, error, "Couldn't send. Try again.");
     }
   }
-  await query("select private.campaign_reply_finish($1, $2, $3, $4, $5)", [actor.workspaceId, row.message_id, state, providerMessageId, failure?.message ?? (state === "unknown" ? "May not have gone." : null)]);
-  if (failure) throw new CrmError(failure.code, failure.message, failure.status, { ...(failure.details ?? {}), messageId: row.message_id });
+  await query("select private.campaign_reply_finish($1, $2, $3, $4, $5)", [actor.workspaceId, messageId, state, providerMessageId, failure?.message ?? (state === "unknown" ? "May not have gone." : null)]);
+  if (failure) throw new CrmError(failure.code, failure.message, failure.status, { ...(failure.details ?? {}), messageId });
 
-  await fileSent(actor, row.message_id, provenance);
+  await fileSent(actor, messageId, provenance);
   await withActor(actor, (db) =>
-    recordAudit(db, actor, CAMPAIGN_AUDIT_EVENTS.replySent, "campaign_prospect", read.prospect.id, provenance, {
-      campaignId: read.prospect.campaign_id,
-      campaign: read.prospect.campaign_name,
-      contactId: read.prospect.contact_id,
-      channel: read.prospect.channel,
-      messageId: row.message_id,
+    recordAudit(db, actor, CAMPAIGN_AUDIT_EVENTS.replySent, "campaign_prospect", prospect.id, provenance, {
+      campaignId: prospect.campaign_id,
+      campaign: prospect.campaign_name,
+      contactId: prospect.contact_id,
+      channel: prospect.channel,
+      messageId,
       sendState: state,
     }),
   );
-  return { messageId: row.message_id, sendState: state, repeated: false };
+  return { messageId, sendState: state, repeated: false };
 }

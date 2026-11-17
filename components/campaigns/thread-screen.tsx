@@ -60,7 +60,7 @@ import MoreIcon from "@/public/assets/images/_common/more.svg";
 
 const CHANNEL_LABELS: Record<CampaignChannel, string> = { email: "Email", linkedin: "LinkedIn" };
 
-type SendStatus = { state: "sending" | "sent" | "failed"; error: string | null };
+type SendStatus = { state: "sending" | "sent" | "failed"; error: string | null; retryable?: boolean };
 
 function MessageBody({ message }: { message: Pick<ThreadMessage, "body" | "channel" | "direction"> }) {
   const [full, setFull] = useState(false);
@@ -112,7 +112,7 @@ function Bubble({
   );
 }
 
-function SendLine({ status, onRetry }: { status: { text: string; failed: boolean; detail?: string | null } | null; onRetry?: () => void }) {
+function SendLine({ status, onRetry }: { status: { text: string; failed: boolean; detail?: string | null; final?: boolean } | null; onRetry?: () => void }) {
   if (!status) return null;
   return (
     <p role={status.failed ? "alert" : "status"} className={cn("caption-style flex flex-wrap items-center gap-x-2", status.failed ? "text-danger" : "text-subtle")}>
@@ -409,12 +409,13 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
     setSends((current) => ({ ...current, [clientKey]: { state: "sending", error: null } }));
     const outcome = await replyToProspectAction(prospectId, text, clientKey).catch(() => ({ error: SEND_FAILED, result: undefined }));
     if (outcome.error || !outcome.result) {
-      const stored = "stored" in outcome && outcome.stored === true;
-      setSends((current) => ({ ...current, [clientKey]: { state: "failed", error: outcome.error ?? SEND_FAILED } }));
+      const stored = "stored" in outcome ? outcome.stored : undefined;
+      const retryable = !("retryable" in outcome) || outcome.retryable !== false;
+      setSends((current) => ({ ...current, [clientKey]: { state: "failed", error: outcome.error ?? SEND_FAILED, retryable } }));
       if (channel && failedSendPlan(draftNow.current.text, stored) === "restore") {
         setPending((current) => withoutReply(current, clientKey));
         setDraft(restoredDraft(draftNow.current, { text, channel }));
-        setSendError({ text: SEND_FAILED, detail: outcome.error ?? null });
+        setSendError(retryable ? { text: SEND_FAILED, detail: outcome.error ?? null } : { text: outcome.error ?? SEND_FAILED, detail: null });
       }
       if (stored) router.refresh();
       return;
@@ -480,7 +481,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
   function statusOf(clientKey: string | null, fallback: ReturnType<typeof messageStatus>, sendError: string | null = null) {
     const local = clientKey ? sends[clientKey] : undefined;
     if (local?.state === "sending") return { text: "Sending…", failed: false };
-    if (local?.state === "failed") return { text: "Couldn't send.", failed: true, detail: local.error };
+    if (local?.state === "failed") return local.retryable === false ? { text: local.error ?? SEND_FAILED, failed: true, detail: null, final: true } : { text: "Couldn't send.", failed: true, detail: local.error };
     if (local?.state === "sent" && fallback === "Sending…") return null;
     const failed = fallback === "Couldn't send.";
     return fallback ? { text: fallback, failed, detail: failed ? sendError : null } : null;
@@ -534,7 +535,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
                   return (
                     <Bubble key={item.id} author={viewer.name} channel={reply.channel} at={reply.at} inbound={false} label={`Your reply on ${CHANNEL_LABELS[reply.channel]}`}>
                       <MessageBody message={{ body: reply.text, channel: reply.channel, direction: "outbound" }} />
-                      <SendLine status={status} onRetry={status?.failed ? () => void deliver(reply.clientKey, reply.prospectId, reply.text) : undefined} />
+                      <SendLine status={status} onRetry={status?.failed && !status.final ? () => void deliver(reply.clientKey, reply.prospectId, reply.text) : undefined} />
                     </Bubble>
                   );
                 }

@@ -166,15 +166,21 @@ export async function handleCampaignEvents(campaign: SyncedCampaign, events: Syn
   if (!provider) return { retry: [] };
   const details = await eventDetails(actor, events.map((event) => event.eventId));
   const retry: string[] = [];
+  let busy: string | undefined;
   for (const event of details) {
     if (event.kind !== "replied") continue;
+    if (busy) {
+      retry.push(event.id);
+      continue;
+    }
     try {
       await handleReply(actor, provider, context, event);
     } catch (error) {
-      if (!(error instanceof ServiceBusy)) console.error("Couldn't handle a campaign reply", redactedError(error));
+      if (error instanceof ServiceBusy) busy = `${provider.name}: ${error.message}`;
+      else console.error("Couldn't handle a campaign reply", redactedError(error));
       retry.push(event.id);
     }
   }
   await fireCampaignEvents(events.map((event) => event.eventId).filter((id) => !retry.includes(id)));
-  return { retry };
+  return { retry, busy };
 }
