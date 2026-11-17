@@ -176,6 +176,9 @@ declare
   v_created timestamptz;
   v_changes jsonb := coalesce(p_audit -> 'changes', '{}'::jsonb) || coalesce(p_more, '{}'::jsonb);
 begin
+  if coalesce(p_audit ->> 'workflowStep', '') <> '' then
+    v_changes := v_changes || jsonb_build_object('workflowStep', p_audit -> 'workflowStep');
+  end if;
   insert into crm.audit_events (
     workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, actor_agent_id, credential_id, source, source_url, operation, changes
   ) values (
@@ -253,6 +256,7 @@ declare
   v_linkedins text[];
   v_targets uuid[];
   v_lifted jsonb;
+  v_replied boolean;
 begin
   if current_user not in ('crm_app', 'postgres') then
     raise exception 'forbidden' using errcode = '42501';
@@ -285,8 +289,18 @@ begin
   update crm.suppressions s
   set reason = 'bounced', created_at = s.bounced_at, created_by_user_id = null, created_by_agent_id = null
   where s.id = any(v_targets) and s.bounced_at is not null;
+  select exists (
+    select 1 from crm.campaign_prospects p
+    where p.workspace_id = p_workspace and p.replied_at is not null
+      and (
+        (p_contact is not null and p.contact_id = p_contact)
+        or p.email = any(v_emails)
+        or p.linkedin = any(v_linkedins)
+      )
+  ) into v_replied;
   update crm.campaign_prospects p
-  set stop_requested_at = null, stop_reason = null
+  set stop_requested_at = case when v_replied then p.stop_requested_at end,
+      stop_reason = case when v_replied then 'replied' end
   where p.workspace_id = p_workspace and p.stop_reason = 'suppressed' and p.stopped_at is null
     and (
       (p_contact is not null and p.contact_id = p_contact)

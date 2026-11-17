@@ -640,6 +640,69 @@ describe("suppression and Do not contact", () => {
       assert.deepEqual(cleared, [{ stop_requested_at: null, stop_reason: null }]);
     });
 
+    it("keeps the stop of someone who replied while on the list when it's lifted", async () => {
+      const rae = (await createContact(owner, { firstName: "Rae", lastName: "Reply", email: "rae@reply.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      await sql(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, email, state, lead_status, pushed_at)
+         select k.workspace_id, k.id, $2, 'rae@reply.test', 'pushed', 'in_progress', now() from crm.campaigns k where k.workspace_id = $1 and k.external_id in ('501', '502')`,
+        [owner.workspaceId, rae],
+      );
+      await setDoNotContact(owner, { contactId: rae }, { fetchImpl });
+      const pending = await sql<{ campaign: string; stop_reason: string | null; stopped_at: Date | null }>(
+        "select k.external_id as campaign, p.stop_reason, p.stopped_at from crm.campaign_prospects p join crm.campaigns k on k.id = p.campaign_id where p.contact_id = $1 order by k.external_id",
+        [rae],
+      );
+      assert.deepEqual(pending, [
+        { campaign: "501", stop_reason: "suppressed", stopped_at: null },
+        { campaign: "502", stop_reason: "suppressed", stopped_at: null },
+      ]);
+      await sql("update crm.campaign_prospects p set replied_at = now() from crm.campaigns k where k.id = p.campaign_id and p.contact_id = $1 and k.external_id = '501'", [rae]);
+      await liftDoNotContact(owner, { contactId: rae });
+      const after = await sql<{ campaign: string; stop_reason: string | null; stopping: boolean }>(
+        "select k.external_id as campaign, p.stop_reason, p.stop_requested_at is not null as stopping from crm.campaign_prospects p join crm.campaigns k on k.id = p.campaign_id where p.contact_id = $1 order by k.external_id",
+        [rae],
+      );
+      assert.deepEqual(after, [
+        { campaign: "501", stop_reason: "replied", stopping: true },
+        { campaign: "502", stop_reason: "replied", stopping: true },
+      ]);
+    });
+
+    it("records the workflow step on a Do not contact set from a workflow", async () => {
+      const wes = (await createContact(owner, { firstName: "Wes", lastName: "Step", email: "wes@step.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      await setDoNotContact(owner, { contactId: wes }, { fetchImpl, provenance: { operation: "workflow_step", source: "workflow", workflowStep: "step_1" } });
+      const audit = (await audits(owner.workspaceId, "campaign.do_not_contact_set")).find((row) => row.entity_id === wes);
+      assert.equal(audit?.changes.workflowStep, "step_1");
+    });
+
+    it("tries a rejected batch's addresses one at a time, and counts busy and server failures too", async () => {
+      const ok = (await createContact(owner, { firstName: "Olu", lastName: "Fine", email: "olu@fine.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      const bad = (await createContact(owner, { firstName: "Bea", lastName: "Bad", email: "bea@bad.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      alpha.fail = (url: URL) => (url.pathname.endsWith("/leads/add-domain-block-list") ? new Response("{}", { status: 500 }) : null);
+      try {
+        await setDoNotContact(owner, { contactId: ok }, { fetchImpl });
+        await setDoNotContact(owner, { contactId: bad }, { fetchImpl });
+      } finally {
+        alpha.fail = undefined;
+      }
+      const counted = await sql<{ value: string; block_attempts: number }>("select value, block_attempts from crm.suppressions where value in ('olu@fine.test', 'bea@bad.test') order by value");
+      assert.ok(counted.every((row) => row.block_attempts >= 1), "a 5xx counts");
+      const smartleadWrites = alpha.writes ?? [];
+      const before = smartleadWrites.length;
+      const rejectBad: typeof fetch = async (input, init) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url.includes("/leads/add-domain-block-list") && String(init?.body ?? "").includes("bea@bad.test")) return new Response("{}", { status: 400 });
+        return fetchImpl(input, init);
+      };
+      assert.deepEqual((await syncCampaigns({ workspaceId: owner.workspaceId, provider: "smartlead", deadline: Date.now() + 60_000, fetchImpl: rejectBad })).errors, []);
+      const rows = await sql<{ value: string; blocked: boolean }>("select value, blocked_at is not null as blocked from crm.suppressions where value in ('olu@fine.test', 'bea@bad.test') order by value");
+      assert.deepEqual(rows, [
+        { value: "bea@bad.test", blocked: false },
+        { value: "olu@fine.test", blocked: true },
+      ]);
+      assert.ok(smartleadWrites.slice(before).some((write) => write.path === "/leads/add-domain-block-list"));
+    });
+
     it("never drops a bounce on lift, including one that arrived while the person was on the list", async () => {
       await setDoNotContact(owner, { contactId: uma }, { fetchImpl });
       assert.equal((await suppressions(owner.workspaceId)).find((row) => row.value === "uma@north.test")?.reason, "manual");
@@ -716,7 +779,8 @@ describe("suppression and Do not contact", () => {
         await client.query("set local enable_seqscan = off");
         const plan = await client.query<{ "QUERY PLAN": string }>(`explain ${SUPPRESSED_SQL}`, [owner.workspaceId, ["ben@lumen.test"], null]);
         const text = plan.rows.map((row) => row["QUERY PLAN"]).join("\n");
-        assert.match(text, /contacts_normalized_email_idx/);
+        assert.equal(text.match(/contacts_normalized_email_idx/g)?.length, 1, text);
+        assert.doesNotMatch(text, /Index (Only )?Scan using contacts_(?!normalized_email_idx)/, text);
         assert.doesNotMatch(text, /Seq Scan on contacts/);
       } finally {
         await client.query("rollback");

@@ -140,25 +140,49 @@ async function stopNow(workspaceId: string, rows: SuppressOutcome["stopping"], o
   return stopped;
 }
 
+async function blockFailed(workspaceId: string, provider: CampaignProvider, ids: string[]) {
+  const failed = await query<{ id: string; attempts: number }>("select * from private.suppression_block_failed($1, $2::uuid[])", [workspaceId, ids]).catch(() => null);
+  for (const row of failed?.rows ?? []) {
+    if (row.attempts >= BLOCK_ATTEMPTS) console.error(`Gave up adding suppression ${row.id} to the ${provider.name} block list after ${row.attempts} tries`);
+  }
+}
+
+async function blockBatch(workspaceId: string, provider: CampaignProvider, context: ProviderContext, rows: { id: string; value: string }[]) {
+  await provider.blockAddresses!(context, rows.map((row) => row.value));
+  await query("select private.suppression_blocked($1, $2::uuid[])", [workspaceId, rows.map((row) => row.id)]);
+}
+
 export async function pushBlockList(workspaceId: string, provider: CampaignProvider, context: ProviderContext) {
   if (!provider.blockAddresses) return 0;
-  let pending: { id: string; value: string }[] = [];
+  let pending: { id: string; value: string }[];
   try {
     pending = (await query<{ id: string; value: string }>("select * from private.suppression_block_pending($1, $2)", [workspaceId, BLOCK_PAGE])).rows;
-    if (pending.length === 0) return 0;
-    await provider.blockAddresses(context, pending.map((row) => row.value));
-    await query("select private.suppression_blocked($1, $2::uuid[])", [workspaceId, pending.map((row) => row.id)]);
-    return pending.length;
   } catch (error) {
-    if (error instanceof ServiceBusy) return 0;
-    console.error(`Couldn't add addresses to the ${provider.name} block list`, redactedError(error));
-    if (pending.length === 0) return 0;
-    const failed = await query<{ id: string; attempts: number }>("select * from private.suppression_block_failed($1, $2::uuid[])", [workspaceId, pending.map((row) => row.id)]).catch(() => null);
-    for (const row of failed?.rows ?? []) {
-      if (row.attempts >= BLOCK_ATTEMPTS) console.error(`Gave up adding suppression ${row.id} to the ${provider.name} block list after ${row.attempts} tries`);
-    }
+    console.error(`Couldn't read the ${provider.name} block list queue`, redactedError(error));
     return 0;
   }
+  if (pending.length === 0) return 0;
+  try {
+    await blockBatch(workspaceId, provider, context, pending);
+    return pending.length;
+  } catch (error) {
+    console.error(`Couldn't add addresses to the ${provider.name} block list`, redactedError(error));
+    if (error instanceof ServiceBusy || pending.length === 1) {
+      await blockFailed(workspaceId, provider, pending.map((row) => row.id));
+      return 0;
+    }
+  }
+  let blocked = 0;
+  for (const row of pending) {
+    try {
+      await blockBatch(workspaceId, provider, context, [row]);
+      blocked += 1;
+    } catch (error) {
+      await blockFailed(workspaceId, provider, [row.id]);
+      if (error instanceof ServiceBusy) break;
+    }
+  }
+  return blocked;
 }
 
 async function pushBlockListNow(workspaceId: string, options: ProviderOptions) {
@@ -179,6 +203,7 @@ function auditOf(actor: Actor, eventType: string, person: Person, provenance: Pr
     source: provenance.source ?? null,
     sourceUrl: provenance.sourceUrl ?? null,
     operation: provenance.operation,
+    workflowStep: provenance.workflowStep ?? null,
     changes: { contactId: person.contactId, prospectId: person.prospectId, name: person.name, ...changes },
   };
 }

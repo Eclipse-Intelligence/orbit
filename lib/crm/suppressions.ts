@@ -12,11 +12,15 @@ export type Recipient = { address: string; name?: string | null };
 
 export const SUPPRESSED_SQL = `with wanted as (
     select distinct a as address from unnest($2::text[]) a where a <> ''
+  ),
+  people as materialized (
+    select w.address, c.id, c.normalized_linkedin, c.created_at,
+      nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), '') as name
+    from wanted w
+    join crm.contacts c on c.normalized_email = w.address and c.workspace_id = $1 and c.archived_at is null
   )
   select w.address, hit.reason, (
-    select nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), '') from crm.contacts c
-    where c.workspace_id = $1 and c.normalized_email = w.address and c.archived_at is null
-    order by c.created_at limit 1
+    select p.name from people p where p.address = w.address order by p.created_at limit 1
   ) as name
   from wanted w
   cross join lateral (
@@ -24,14 +28,14 @@ export const SUPPRESSED_SQL = `with wanted as (
     where s.workspace_id = $1 and s.kind = 'email' and s.value = w.address
       and ($3::timestamptz is null or s.created_at > $3::timestamptz)
     union all
-    select s.reason from crm.contacts c
-    join crm.suppressions s on s.workspace_id = c.workspace_id and s.contact_id = c.id
-    where c.workspace_id = $1 and c.normalized_email = w.address and c.archived_at is null and s.reason <> 'bounced'
+    select s.reason from people p
+    join crm.suppressions s on s.workspace_id = $1 and s.contact_id = p.id
+    where p.address = w.address and s.reason <> 'bounced'
       and ($3::timestamptz is null or s.created_at > $3::timestamptz)
     union all
-    select s.reason from crm.contacts c
-    join crm.suppressions s on s.workspace_id = c.workspace_id and s.kind = 'linkedin' and s.value = c.normalized_linkedin
-    where c.workspace_id = $1 and c.normalized_email = w.address and c.archived_at is null and s.reason <> 'bounced'
+    select s.reason from people p
+    join crm.suppressions s on s.workspace_id = $1 and s.kind = 'linkedin' and s.value = p.normalized_linkedin
+    where p.address = w.address and s.reason <> 'bounced'
       and ($3::timestamptz is null or s.created_at > $3::timestamptz)
     limit 1
   ) hit`;
