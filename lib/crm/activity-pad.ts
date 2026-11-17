@@ -7,7 +7,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, tooLong } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Activity, UserActor } from "@/lib/crm/types";
-import { completeJson } from "@/lib/llm";
+import { completeJson, withinWindow } from "@/lib/llm";
 import { mentionsIn, namedMentions, plainMentions } from "@/lib/mentions";
 import { londonParts } from "@/lib/task-pad";
 import { localInstant } from "@/lib/crm/task-time";
@@ -117,7 +117,7 @@ const TIDY_SCHEMA = z.object({
 });
 
 export async function tidyActivity(text: string, names: string[], now = new Date()): Promise<ActivityTidy | null> {
-  const clean = plainMentions(text).trim().slice(0, 4000);
+  const clean = withinWindow(plainMentions(text).trim());
   if (!clean) return null;
   const wall = londonParts(now);
   const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "long", timeZone: "Europe/London" }).format(now);

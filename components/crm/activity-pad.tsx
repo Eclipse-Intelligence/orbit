@@ -83,6 +83,8 @@ export default function ActivityPad({
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState("");
+  const textNow = useRef("");
+  const mentionsNow = useRef<Mention[]>([]);
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [type, setType] = useState<PadActivityType | null>(null);
   const [when, setWhen] = useState<string | null | undefined>(undefined);
@@ -107,7 +109,7 @@ export default function ActivityPad({
   const taggedCompany = [...live].reverse().find((mention) => mention.kind === "company");
   const contact: PadRecord | null = fixedContact ?? (taggedContact ? { id: taggedContact.id, name: taggedContact.name } : null);
   const company: PadRecord | null = fixedCompany ?? (taggedCompany ? { id: taggedCompany.id, name: taggedCompany.name } : null);
-  const finalType: PadActivityType = type ?? (parsed.typeFound ? parsed.type : (fresh?.type ?? parsed.type));
+  const finalType: PadActivityType = type ?? fresh?.type ?? parsed.type;
   const finalWhen = when !== undefined ? when : parsed.when;
   const followDue = parsed.followUp?.due ?? fresh?.followUpDue ?? null;
   const firstName = contact?.name.split(" ")[0] ?? company?.name ?? null;
@@ -116,8 +118,13 @@ export default function ActivityPad({
   const marks: InputMark[] = parsed.marks.map((mark) => ({ start: mark.start, end: mark.end, className: MARK_CLASSES[mark.kind] }));
 
   useEffect(() => {
+    textNow.current = text;
+    mentionsNow.current = mentions;
+  }, [text, mentions]);
+
+  useEffect(() => {
     const value = text.trim();
-    if (!value || (value.length < TIDY_LENGTH && !parsed.followUp) || dictation.listening) return;
+    if (!value || dictation.listening) return;
     if (tidy?.text === text) return;
     let live = true;
     const timer = window.setTimeout(() => {
@@ -135,7 +142,7 @@ export default function ActivityPad({
       live = false;
       window.clearTimeout(timer);
     };
-  }, [text, mentions, parsed.followUp, dictation.listening, tidy?.text]);
+  }, [text, mentions, dictation.listening, tidy?.text]);
 
   function loadStarters() {
     setFocused(true);
@@ -187,13 +194,24 @@ export default function ActivityPad({
     setBusy(true);
     setError(null);
     setNotice(null);
+    const started = text;
+    const encoded = encodeMentions(text, live);
+    const judged =
+      fresh ??
+      (type
+        ? null
+        : await tidyActivityAction(
+            encoded,
+            live.map((mention) => mention.name),
+          ).catch(() => null));
+    const savedType: PadActivityType = type ?? judged?.type ?? parsed.type;
     const result = await logPadActivityAction({
-      text: encodeMentions(text, live),
-      type: finalType,
+      text: encoded,
+      type: savedType,
       when: finalWhen ?? null,
       contactId: contact?.id ?? null,
       companyId: company?.id ?? null,
-      title: fresh && text.trim().length >= TIDY_LENGTH ? fresh.title : null,
+      title: judged && text.trim().length >= TIDY_LENGTH ? judged.title : null,
       followUp: follow && followDue ? { title: finalFollowTitle, due: followDue } : null,
       eventId,
     }).catch((): { activity?: Activity; warning?: string | null; error?: string } => ({ error: "That didn't save. Try again." }));
@@ -204,11 +222,21 @@ export default function ActivityPad({
     }
     const saved = result.activity;
     setNotice(
-      [`${TYPE_LABELS[finalType]} logged`, follow && followDue ? `task added for ${formatDateLabel(followDue.slice(0, 10))}` : null]
+      [`${TYPE_LABELS[savedType]} logged`, follow && followDue ? `task added for ${formatDateLabel(followDue.slice(0, 10))}` : null]
         .filter(Boolean)
         .join(", ") + (result.warning ? `. ${result.warning}` : "."),
     );
-    reset();
+    const typed = textNow.current;
+    const kept = mentionsNow.current;
+    if (typed === started) reset();
+    else if (typed.startsWith(started)) {
+      const rest = typed.slice(started.length).trimStart();
+      reset();
+      if (rest) {
+        setText(rest);
+        setMentions(liveMentions(rest, kept));
+      }
+    }
     if (saved) onAdded?.(saved);
     router.refresh();
     input.current?.focus();

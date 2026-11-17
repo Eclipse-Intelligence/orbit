@@ -6,7 +6,7 @@ import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { icpHashOf } from "@/lib/enrichment/settings";
-import { completeJson, LlmError } from "@/lib/llm";
+import { completeJson, LlmError, windowShare } from "@/lib/llm";
 import { normaliseWebsite } from "@/lib/personal-context-rules";
 import { readWebPage, type Lookup, type WebPage } from "@/lib/web-page";
 import { writingStyle } from "@/lib/writing-style";
@@ -219,7 +219,7 @@ export async function draftBrandFromWebsite(
     const reason = error instanceof ShownError ? errorText(error, "Try again.") : "Try again.";
     throw new CrmError("unavailable", `Couldn't read ${site}. ${reason}`, 502, { field: "website" });
   }
-  const material = pages.map((page) => `Page from the website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, 8_000)}`);
+  const material = pages.map((page) => `Page from the website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, windowShare(pages.length))}`);
   const name = actor.workspaceName;
   try {
     const result = await completeJson({

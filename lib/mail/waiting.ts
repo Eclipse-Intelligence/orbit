@@ -6,10 +6,14 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { addWorkingDays, dayKeyAt, nonWorkingReason, shiftDay, wallClockAt } from "@/lib/crm/working-days";
 import type { Db } from "@/lib/db/pool";
-import { filingDomain, NOT_AUTOMATED, parseRouteKey, routedParams, routedSql } from "@/lib/mail/routing";
-import { CALENDAR_SENDER, CALENDAR_SUBJECT, sameThread, splitCase, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+import { filingDomain, parseRouteKey, routedParams, routedSql } from "@/lib/mail/routing";
+import { automatedLooking, crmSender, crmValues, ownAddressesSql, replyableSplit, sameThread, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+
+export { ownAddressesSql };
 import { DEFERRAL_GRACE_MINUTES } from "@/lib/mail/deferral-dates";
 import { finishDeferralTask } from "@/lib/mail/deferrals";
+
+const CRM = { workspaces: "$7", free: "$8", own: "$9" };
 import type { MailAddress } from "@/lib/mail/types";
 
 export const CAPTURE_LOOKBACK_DAYS = 30;
@@ -17,18 +21,28 @@ const REPLY_AFTER_WORKING_DAYS = 2;
 const REPLY_LIMIT = 100;
 const NUDGE_LIMIT = 50;
 const REMINDER_LIMIT = 50;
-const CLOSED_ROLES = ["drafts", "outbox", "junk", "trash"];
+export const CLOSED_ROLES = ["drafts", "outbox", "junk", "trash"];
+
+export function toOwnSql(alias: string) {
+  return `exists (
+    select 1 from jsonb_array_elements(case when jsonb_typeof(${alias}.to_recipients) = 'array' then ${alias}.to_recipients else '[]'::jsonb end) r
+    where jsonb_typeof(r) = 'object' and lower(r->>'address') in (select email from own)
+  )`;
+}
+
+export function latestForReplySql(alias: string, closedParam: string) {
+  return `not exists (
+    select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+    where o.source_id = ${alias}.source_id and o.thread_key = ${alias}.thread_key and o.id <> ${alias}.id and not o.is_draft
+      and coalesce(o.received_at, o.sent_at, o.created_at) > ${alias}.at
+      and (ofo.role <> all(${closedParam}::text[]) or lower(coalesce(o.from_email, '')) in (select email from own))
+  )`;
+}
 
 export function captureCutoff(nowMs: number) {
   return new Date(nowMs - CAPTURE_LOOKBACK_DAYS * 86_400_000);
 }
 
-export function ownAddressesSql(userParam: string, emailParam: string) {
-  return `select lower(email) as email from crm.mail_sources where user_id = ${userParam}
-    union select lower(email) from crm.send_identities where user_id = ${userParam}
-    union select lower(btrim(other)) from crm.profiles p cross join lateral unnest(coalesce(p.other_emails, '{}'::text[])) as other where p.id = ${userParam}
-    union select lower(${emailParam}::text)`;
-}
 
 export type WaitingReply = {
   kind: "reply";
@@ -196,34 +210,25 @@ function repliesSql() {
         and m.received_at >= $3 and m.received_at < $4
         and nullif(m.from_email, '') is not null
         and lower(m.from_email) not in (select email from own)
-        and ${NOT_AUTOMATED("lower(m.from_email)")}
-        and coalesce(m.subject, '') !~* '${CALENDAR_SUBJECT}'
-        and lower(m.from_email) !~* '${CALENDAR_SENDER}'
-        and exists (
-          select 1 from jsonb_array_elements(case when jsonb_typeof(m.to_recipients) = 'array' then m.to_recipients else '[]'::jsonb end) r
-          where jsonb_typeof(r) = 'object' and lower(r->>'address') in (select email from own)
-        )
+        and (not ${automatedLooking("m")} or ${crmSender("m", CRM)})
+        and ${toOwnSql("m")}
     ),
     latest as (
       select n.* from candidates n
-      where not exists (
-        select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-        where o.source_id = n.source_id and o.thread_key = n.thread_key and o.id <> n.id and not o.is_draft
-          and coalesce(o.received_at, o.sent_at, o.created_at) > n.at
-          and (ofo.role <> all($5::text[]) or lower(coalesce(o.from_email, '')) in (select email from own))
-      )
+      where ${latestForReplySql("n", "$5")}
     )
-    select l.*,
+    select l.id, l.source_id, l.tk, l.subject, l.snippet, l.from_email, l.from_name, l.at, l.filed_in,
       exists (
         select 1 from crm.mail_prepared p
         where p.user_id = $1 and p.message_id = l.id and p.kind = 'reply' and p.state = 'ready' and p.body is not null
       ) as ready
     from (
-    select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at, rt.filed_in
+    select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at, rt.filed_in,
+      ${crmSender("n", CRM)} as known
     from latest n
     ${splitJoin("n", "$1")}
     left join crm.mail_thread_routes rt on rt.user_id = $1 and rt.source_id = n.source_id and rt.thread_key = n.tk
-    where ${splitCase("n")} = 'important'
+    where ${replyableSplit("n", CRM)}
       and rt.ignored_at is null
       and not exists (
         select 1 from crm.capture_dismissals d
@@ -247,13 +252,18 @@ function repliesSql() {
     order by n.at asc
     offset 0
     ) l
-    where not exists (
+    where l.known or not exists (
       select 1 from crm.mail_messages b where b.id = l.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
     )
     limit $6`;
 }
 
-async function waitingRepliesInDb(db: Db, actor: UserActor, now: Date) {
+async function waitingRepliesInDb(db: Db, actor: UserActor, actors: UserActor[], now: Date) {
+  const crm = await crmValues(
+    db,
+    actor,
+    actors.map((item) => item.workspaceId),
+  );
   const result = await db.query<ReplyRow>(repliesSql(), [
     actor.userId,
     actor.email,
@@ -261,6 +271,9 @@ async function waitingRepliesInDb(db: Db, actor: UserActor, now: Date) {
     workingDaysCutoff(now, REPLY_AFTER_WORKING_DAYS),
     CLOSED_ROLES,
     REPLY_LIMIT,
+    crm.workspaceIds,
+    crm.free,
+    crm.own,
   ]);
   return result.rows.sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime());
 }
@@ -390,7 +403,7 @@ export type WaitingMail = {
 
 export async function waitingMail(actor: UserActor, actors: UserActor[], now: Date): Promise<WaitingMail> {
   return withActor(actor, async (db) => {
-    const replyRows = await attempt(db, "Reading replies waiting on you failed", () => waitingRepliesInDb(db, actor, now));
+    const replyRows = await attempt(db, "Reading replies waiting on you failed", () => waitingRepliesInDb(db, actor, actors, now));
     const followUps = await attempt(db, "Reading follow-ups waiting on you failed", async () => ({
       nudges: await readyNudgesInDb(db, actor),
       reminders: await dueRemindersInDb(db, actor),

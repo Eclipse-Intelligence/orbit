@@ -228,7 +228,7 @@ Each conversation opens with a short summary of what it is about and where it st
 
 In any reply or compose card, `⌘ J` (or the sparkle next to Send) asks AI to write the email. Type a few words (for example "yes, Thursday works") or nothing at all, and it writes the message in your voice from the conversation, what Orbit knows about the people (job, company, lifecycle, health, recent activity) and how your recent sent emails read. With a draft already written, it polishes it. Missing details come back in [square brackets] rather than being made up, and Undo puts your text back. The signature is still added on sending.
 
-Type a question in the Mail search box (anything ending in a question mark, or starting with words like what, when or who) and press Enter, or press `⌘ Enter` or Ask: Orbit searches your mail for the answer and replies in a sentence or two, with the emails it used listed underneath to open. Plain words still search as before. All three need `LLM_API_KEY` and are limited per person to keep costs in check.
+Type in the Mail search box and press Enter (or `⌘ Enter`): the keyword results fill the list straight away, and at the same time Orbit asks AI, whose answer (a sentence or two, with the emails it used listed underneath to open) appears above the list when it arrives. Ask asks AI only. A new search, Escape or clearing the box drops a pending answer. All three need `LLM_API_KEY` and are limited per person to keep costs in check.
 
 ### Sending from other addresses
 

@@ -26,7 +26,6 @@ const MAX_ATTEMPTS = 3;
 const RETRY_MINUTES = 60;
 const STEP_MS = 20_000;
 const BODY_MAX = 6_000;
-const SUMMARY_CHARS = 4_000;
 const CAPTURE_HREF = "/capture";
 
 type FollowUpSource = "teams" | "granola";
@@ -261,7 +260,7 @@ async function draftFollowUp(actor: UserActor, row: Candidate, person: Person, o
     `Writing to: ${person.name ?? them} <${person.email}>.`,
     `First name to greet them with: ${them}.`,
     row.deal_name ? `Open deal: ${row.deal_name}${row.deal_stage ? `, stage ${row.deal_stage}` : ""}.` : "",
-    row.summary ? `Summary of the ${kind}:\n${row.summary.slice(0, SUMMARY_CHARS)}` : "",
+    row.summary ? `Summary of the ${kind}:\n${row.summary}` : "",
     textList(row.key_points).length ? `Key points:\n${textList(row.key_points).slice(0, 8).join("\n")}` : "",
     actionLines(row.action_items).length ? `Action items mentioned:\n${actionLines(row.action_items).slice(0, 8).join("\n")}` : "",
     voice.length ? `Examples of how ${first} writes:\n${voice.map((sample) => `"""\n${sample}\n"""`).join("\n")}` : "",

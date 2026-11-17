@@ -3,7 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, ShownError, errorText, tooLong } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { completeJson, LlmError } from "@/lib/llm";
+import { completeJson, LlmError, windowShare } from "@/lib/llm";
 import { MindcaseError, mindcaseConfigured } from "@/lib/mindcase";
 import { normaliseLinkedIn, normaliseWebsite, PERSONAL_LIMITS, type AboutYouInput, type YouInput } from "@/lib/personal-context-rules";
 import { socialLookup } from "@/lib/social-lookup";
@@ -157,8 +157,8 @@ export function aboutWriterNote(context: PersonalContext | null, name: string) {
   if (!context) return "";
   const parts = [
     context.jobTitle ? `${name}'s role: ${context.jobTitle}.` : "",
-    context.about ? `About ${name}: ${context.about.slice(0, 800)}${otherBusinessRule(context)}` : "",
-    context.writing ? `How ${name} writes: ${context.writing.slice(0, 600)}` : "",
+    context.about ? `About ${name}: ${context.about}${otherBusinessRule(context)}` : "",
+    context.writing ? `How ${name} writes: ${context.writing}` : "",
   ].filter(Boolean);
   return parts.length ? `What ${name} has told Orbit about themselves:\n${parts.join("\n")}` : "";
 }
@@ -205,8 +205,9 @@ export async function draftPersonalContext(
 
   if (website) {
     try {
-      for (const page of await readSite(website, { fetchImpl: options.fetchImpl, lookup: options.lookup, render: options.render })) {
-        material.push(`Page from the website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, 8_000)}`);
+      const pages = await readSite(website, { fetchImpl: options.fetchImpl, lookup: options.lookup, render: options.render });
+      for (const page of pages) {
+        material.push(`Page from the website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, windowShare(pages.length + 1))}`);
         sources.push(page.url);
       }
     } catch (error) {

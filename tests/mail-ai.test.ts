@@ -6,7 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
 import { askMail, draftWithAi, stripQuoted, summariseThread } from "@/lib/mail/ai";
 import { syncMail } from "@/lib/mail/sync";
-import { listThreads } from "@/lib/mail/threads";
+import { getThread, listThreads } from "@/lib/mail/threads";
 import { createUser, resetDatabase } from "./helpers";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -81,6 +81,14 @@ describe("mail AI", () => {
         inbox: [
           message("m-1"),
           message("m-2", { conversationId: "conv-hi", subject: "Hi", body: { contentType: "text", content: "Thanks!" }, receivedDateTime: "2026-09-01T09:00:00Z" }),
+          message("m-4", { conversationId: "conv-empty", subject: "Nothing much", receivedDateTime: "2026-09-01T11:00:00Z" }),
+          message("m-3", {
+            conversationId: "conv-stranger",
+            subject: "Hello there",
+            from: { emailAddress: { name: "Stranger", address: "someone@unknown-sender.test" } },
+            body: { contentType: "text", content: "Thanks!" },
+            receivedDateTime: "2026-09-01T10:00:00Z",
+          }),
         ],
         sent: [
           message("s-2", {
@@ -139,12 +147,31 @@ describe("mail AI", () => {
     assert.equal(again.prompts.length, 0);
   });
 
-  it("skips summaries for a single short email", async () => {
+  it("summarises a short email from someone in the CRM, and skips a short one from a stranger", async () => {
     const inbox = await listThreads(owner, { view: { role: "inbox" } });
     const short = inbox.threads.find((thread) => thread.subject === "Hi")!.key;
-    const fake = model([]);
-    assert.equal(await summariseThread(owner, short, { fetchImpl: fake.fetchImpl }), null);
-    assert.equal(fake.prompts.length, 0);
+    const stranger = inbox.threads.find((thread) => thread.subject === "Hello there")!.key;
+    assert.equal((await getThread(owner, short, { reader: true })).cachedSummary, null);
+    assert.equal((await getThread(owner, stranger, { reader: true })).cachedSummary?.summary, null);
+    const fake = model([{ summary: "Jane says thanks.", todo: null }]);
+    assert.deepEqual(await summariseThread(owner, short, { fetchImpl: fake.fetchImpl }), { summary: "Jane says thanks.", todo: null });
+    assert.equal(fake.prompts.length, 1);
+    assert.match(fake.prompts[0].user, /Thanks!/);
+    const skipped = model([]);
+    assert.equal(await summariseThread(owner, stranger, { fetchImpl: skipped.fetchImpl }), null);
+    assert.equal(skipped.prompts.length, 0);
+  });
+
+  it("remembers when the model had nothing to summarise, so opening the thread again doesn't ask", async () => {
+    const inbox = await listThreads(owner, { view: { role: "inbox" } });
+    const key = inbox.threads.find((thread) => thread.subject === "Nothing much")!.key;
+    const first = model([{ summary: "", todo: "Something" }]);
+    assert.equal(await summariseThread(owner, key, { fetchImpl: first.fetchImpl }), null);
+    assert.equal(first.prompts.length, 1);
+    const again = model([]);
+    assert.equal(await summariseThread(owner, key, { fetchImpl: again.fetchImpl }), null);
+    assert.equal(again.prompts.length, 0);
+    assert.deepEqual((await getThread(owner, key, { reader: true })).cachedSummary?.summary, null);
   });
 
   it("drafts a reply with the thread, what the CRM knows and the user's own voice", async () => {

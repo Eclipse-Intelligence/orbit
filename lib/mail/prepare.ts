@@ -10,7 +10,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { emailWritingNotes } from "@/lib/learning/memories";
-import { completeJson } from "@/lib/llm";
+import { completeJson, windowShare } from "@/lib/llm";
 import { clean, formatThread, recipientContext, threadText, today, voiceSamples } from "@/lib/mail/ai";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
 import { DEFER_SCHEMA } from "@/lib/mail/deferral-dates";
@@ -19,7 +19,8 @@ import { stripQuoted } from "@/lib/mail/format";
 import { ownMailAddresses } from "@/lib/mail/follow-up-rules";
 import { workingDaysLater } from "@/lib/mail/later";
 import { offerTimes, refreshTimes, TIMES_MARK } from "@/lib/mail/scheduling";
-import { splitCase, splitJoin } from "@/lib/mail/split";
+import { crmValues, replyableSplit, splitJoin } from "@/lib/mail/split";
+import { checkCrmReplies } from "@/lib/mail/reply-checks";
 import { markColdPitch } from "@/lib/mail/subscriptions";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailAddress } from "@/lib/mail/types";
@@ -30,6 +31,8 @@ const REPLIES_PER_RUN = 6;
 const CHECKS_PER_RUN = 12;
 const STEP_MS = 20_000;
 const BODY_MAX = 20_000;
+const REPLY_CHECK_MS = 10_000;
+const REPLY_CHECK_MAX_MS = 25_000;
 
 type PreparedKind = "reply" | "nudge";
 
@@ -44,7 +47,6 @@ type PrepareReport = { prepared: number; skipped: number; reminders: number; che
 
 const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), pitch: z.boolean().optional(), body: z.string().nullable(), defer: DEFER_SCHEMA });
 const PITCH_SCHEMA = z.object({ pitches: z.array(z.number()) });
-const PITCH_BODY = 1_200;
 const PITCH_MAX_FAILURES = 3;
 const PITCH_RETRY_HOURS = 6;
 const NUDGE_SCHEMA = z.object({ body: z.string() });
@@ -109,7 +111,7 @@ export async function editExamples(db: Db, actor: UserActor) {
   return result.rows
     .filter((row) => row.body.trim() !== row.sent_body.trim())
     .slice(0, 3)
-    .map((row) => ({ draft: row.body.slice(0, 900), sent: stripQuoted(row.sent_body).slice(0, 900) }));
+    .map((row) => ({ draft: row.body, sent: stripQuoted(row.sent_body) }));
 }
 
 async function callNotes(db: Db, actor: UserActor, addresses: string[]) {
@@ -128,7 +130,7 @@ async function callNotes(db: Db, actor: UserActor, addresses: string[]) {
     [actor.workspaceId, addresses],
   );
   return result.rows.map(
-    (row) => `${new Date(row.occurred_at).toISOString().slice(0, 10)} ${row.title ?? "Call"}: ${(row.body ?? "").slice(0, 4_000)}`,
+    (row) => `${new Date(row.occurred_at).toISOString().slice(0, 10)} ${row.title ?? "Call"}: ${row.body ?? ""}`,
   );
 }
 
@@ -216,6 +218,7 @@ function pitchEligible(alias: string, userParam: string, workspacesParam: string
 }
 
 async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[], limit: number, pitches: { check: boolean; only?: boolean } = { check: false }) {
+  const crm = await crmValues(db, actor, workspaceIds);
   const result = await db.query<ReplyCandidate>(
     `select n.id, n.source_id, n.tk, n.provider_message_id, n.from_email, n.from_name, n.subject, n.body_text, n.snippet,
        ($6 and ${pitchEligible("n", "$1", "$2")}) as pitch
@@ -244,10 +247,10 @@ async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[],
          )
      ) n
      ${splitJoin("n", "$1")}
-     where ${splitCase("n")} = 'important' and (not $7 or ${pitchEligible("n", "$1", "$2")})
+     where ${replyableSplit("n", { workspaces: "$2", free: "$8", own: "$9" })} and (not $7 or ${pitchEligible("n", "$1", "$2")})
      order by n.at desc
      limit $5`,
-    [actor.userId, workspaceIds.length ? workspaceIds : [actor.workspaceId], LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only)],
+    [actor.userId, crm.workspaceIds, LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only), crm.free, crm.own],
   );
   return result.rows;
 }
@@ -302,7 +305,7 @@ async function checkPitches(actor: UserActor, workspaceIds: string[], mode: Cold
   const listed = candidates
     .map(
       (item, index) =>
-        `[${index + 1}] From: ${item.from_name ? `${item.from_name} <${item.from_email}>` : item.from_email}\nSubject: ${item.subject ?? "(no subject)"}\n${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, PITCH_BODY)}`,
+        `[${index + 1}] From: ${item.from_name ? `${item.from_name} <${item.from_email}>` : item.from_email}\nSubject: ${item.subject ?? "(no subject)"}\n${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, windowShare(candidates.length))}`,
     )
     .join("\n\n---\n\n");
   let result;
@@ -587,7 +590,7 @@ async function checkSentMail(actor: UserActor, days: number, deadline: number, f
       (item, index) =>
         `[${index + 1}] To: ${item.to_recipients.map((person) => person.name || person.address).join(", ")}\nSubject: ${item.subject ?? "(no subject)"}\n${
           item.replying ? "This is a reply in an existing conversation.\n" : ""
-        }${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, 6_000)}`,
+        }${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, windowShare(candidates.length))}`,
     )
     .join("\n\n---\n\n");
   const result = await completeJson({
@@ -632,6 +635,10 @@ export async function prepareMail(
 ): Promise<PrepareReport> {
   const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0, deferrals: 0 };
   if (!process.env.LLM_API_KEY?.trim()) return report;
+  const checkDeadline = Math.min(options.deadline, Date.now() + Math.min(REPLY_CHECK_MAX_MS, Math.max(REPLY_CHECK_MS, (options.deadline - Date.now()) / 3)));
+  await checkCrmReplies(actor, { deadline: checkDeadline, fetchImpl: options.fetchImpl }).catch((error) =>
+    console.error("Checking CRM mail for replies failed", error instanceof Error ? error.message : error),
+  );
   const settings = await mailHelpSettings(actor);
   if (settings.autoRemindDays && options.deadline - Date.now() > STEP_MS) {
     try {

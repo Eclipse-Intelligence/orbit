@@ -10,7 +10,8 @@ import {
   continueAfterCompanion,
   emailBody,
   forwardStart,
-  isYes,
+  approvesActions,
+  replyWords,
   processAgentMail,
   replyText,
   startAgentMailJob,
@@ -56,6 +57,8 @@ function fakeServices(options: { inboxTaken?: boolean } = {}) {
   const objects = new Map<string, Uint8Array>();
   const unexpected: string[] = [];
   const replyFailures: number[] = [];
+  const approvals: { decision: string; user: string }[] = [];
+  const decisions: string[] = [];
   let sent = 0;
   let hooks = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -76,6 +79,12 @@ function fakeServices(options: { inboxTaken?: boolean } = {}) {
       if (bucket && method === "DELETE") return Response.json([]);
       unexpected.push(`${method} ${url}`);
       return Response.json({ message: "nope" }, { status: 404 });
+    }
+    if (url.endsWith("/chat/completions")) {
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+      const decision = decisions.shift() ?? "unclear";
+      approvals.push({ decision, user: body.messages[1].content });
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ decision }) }, finish_reason: "stop" }] });
     }
     if (!url.startsWith(MACHINE_MAIL_API)) {
       unexpected.push(`${method} ${url}`);
@@ -122,7 +131,7 @@ function fakeServices(options: { inboxTaken?: boolean } = {}) {
   };
   const replies = () => requests.filter((request) => request.method === "POST" && /\/reply$/.test(request.url));
   const repliesTo = (messageId: string) => replies().filter((request) => request.url.includes(`/messages/${encodeURIComponent(messageId)}/reply`));
-  return { fetchImpl, requests, attachments, threads, replies, repliesTo, unexpected, replyFailures };
+  return { fetchImpl, requests, attachments, threads, replies, repliesTo, unexpected, replyFailures, approvals, decisions };
 }
 
 type Services = ReturnType<typeof fakeServices>;
@@ -1037,7 +1046,10 @@ describe("email jobs on Orbit Agent", () => {
     assert.ok(text.includes(CONFIRM_PROMPT));
     assert.deepEqual((await mailRow(email.messageId)).confirm_action_ids?.sort(), ["toolu_archive", "toolu_later"]);
 
+    process.env.LLM_API_KEY = "test-llm-key";
     const unsure = await deliver(services, inbox, { subject: "Re: Tidy up", text: "Hmm, what else is on Old Co?", threadId: email.threadId });
+    assert.equal(services.approvals.length, 1);
+    assert.match(services.approvals[0].user, /Hmm, what else is on Old Co\?/);
     const unsureRow = await mailRow(unsure.messageId);
     const waitingMessage = (await getConversation(owner, row.conversation_id!)).messages.filter((message) => message.role === "user").at(-1)!;
     assert.match(waitingMessage.content, /Still waiting for their yes from earlier: Archive 1 record; Create task: Check Old Co is gone/);
@@ -1047,11 +1059,17 @@ describe("email jobs on Orbit Agent", () => {
     assert.doesNotMatch(String(unsureReply[0].body?.text), /Needs your OK/);
     assert.equal(unsureRow.conversation_id, row.conversation_id);
 
+    services.decisions.push("approve");
     const yes = await deliver(services, inbox, { subject: "Re: Tidy up", text: "Yes please\n\nMark\n\nOn Tue, 4 Nov 2026, Orbit wrote:\n> I'll add the task", threadId: email.threadId });
+    const asked = services.approvals.at(-1)!.user;
+    assert.match(asked, /- Archive 1 record\n- Create task: Check Old Co is gone/);
+    assert.match(asked, /Yes please/);
+    assert.doesNotMatch(asked, /I'll add the task/);
     assert.ok((await getAdminPool().query<{ archived_at: Date | null }>("select archived_at from crm.companies where id = $1", [old.id])).rows[0].archived_at);
     assert.equal((await listTasks(owner, { query: "Check Old Co" })).data.length, 1);
     const archiveAudit = (await getAdminPool().query<{ source: string }>("select source from crm.audit_events where entity_id = $1 and operation = 'archive_records'", [old.id])).rows;
     assert.deepEqual(archiveAudit.map((entry) => entry.source), ["email"]);
+    services.decisions.push("approve");
     const second = await deliver(services, inbox, { subject: "Re: Tidy up", text: "Go ahead", threadId: email.threadId });
     assert.equal((await mailRow(yes.messageId)).status, "working");
     assert.equal((await mailRow(second.messageId)).status, "superseded");
@@ -1368,29 +1386,40 @@ describe("the email approval policy", () => {
     for (const [name, args] of auto) assert.equal(needsEmailConfirm(name, args, requester), false, `${name} ${JSON.stringify(args)}`);
   });
 
-  it("treats only a clear yes as approval", () => {
-    for (const text of [
-      "Yes",
-      "yes please",
-      "Go ahead.",
-      "OK, go ahead",
-      "Approve",
-      "do it!",
-      "ok",
-      "Yes\n\nThanks,\nMark",
-      "Go ahead. Thanks, Mark",
-      "Yes\nSent from my iPhone",
-      "Yes\n\n-- \nMark Ridgeon\nEclipse | +44 7700 900000",
-      "Yes\n\nOn Tue, 4 Nov 2026 at 09:00, Orbit <orbit@ai-mail.geteclipse.co> wrote:\n> Reply yes to go ahead",
-      "> earlier text\nYes",
-    ]) {
-      assert.equal(isYes(text, ["Mark Ridgeon"]), true, text);
+  it("lets the model decide whether a reply approves, and approves only on a clear approve", async () => {
+    const actions = ["Archive 1 record", "Create task: Check Old Co is gone"];
+    const ask = (decision: string | null) => {
+      const prompts: string[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        prompts.push((JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content);
+        if (decision === null) return Response.json({ error: "down" }, { status: 503 });
+        return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ decision }) }, finish_reason: "stop" }] });
+      };
+      return { fetchImpl, prompts };
+    };
+    process.env.LLM_API_KEY = "test-llm-key";
+    const yes = ask("approve");
+    assert.equal(await approvesActions({ text: "Yes, go for it\n\nOn Tue, Orbit wrote:\n> Reply yes to go ahead", actions }, { fetchImpl: yes.fetchImpl }), true);
+    assert.match(yes.prompts[0], /- Archive 1 record\n- Create task: Check Old Co is gone/);
+    assert.match(yes.prompts[0], /Yes, go for it/);
+    assert.doesNotMatch(yes.prompts[0], /Reply yes to go ahead/);
+    for (const decision of ["decline", "change", "unclear"]) {
+      assert.equal(await approvesActions({ text: "Yes, but don't email Bob", actions }, { fetchImpl: ask(decision).fetchImpl }), false, decision);
     }
-    for (const text of ["No", "Yes, but don't email Bob", "Yes\n\nAlso cancel the meeting", "Can you go ahead tomorrow instead?", "", "Approve the first one only", "Yes\nBob"]) {
-      assert.equal(isYes(text, ["Mark Ridgeon"]), false, text);
+    assert.equal(await approvesActions({ text: "Yes", actions }, { fetchImpl: ask(null).fetchImpl }), false);
+    const empty = ask("approve");
+    for (const text of ["", "On Tue, Orbit wrote:\n> Reply yes to go ahead", "> Yes, go ahead", "-- \nMark Ridgeon"]) {
+      assert.equal(await approvesActions({ text, actions }, { fetchImpl: empty.fetchImpl }), false, text);
     }
-    assert.equal(isYes("", ["Mark Ridgeon"], "Re: Yes"), true);
-    assert.equal(isYes("", ["Mark Ridgeon"], "Re: Tidy up"), false);
+    assert.equal(await approvesActions({ text: "Yes", actions: [] }, { fetchImpl: empty.fetchImpl }), false);
+    assert.equal(empty.prompts.length, 0);
+    delete process.env.LLM_API_KEY;
+    const unset = ask("approve");
+    assert.equal(await approvesActions({ text: "Yes", actions }, { fetchImpl: unset.fetchImpl }), false);
+    assert.equal(unset.prompts.length, 0);
+    assert.equal(replyWords(""), "");
+    assert.equal(replyWords("Go ahead\n\n-- \nMark Ridgeon"), "Go ahead");
+    assert.equal(replyWords("> earlier text\nYes"), "Yes");
   });
 
   it("finds forwarded and quoted text in Gmail, Apple Mail and Outlook formats", () => {

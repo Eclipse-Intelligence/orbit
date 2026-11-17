@@ -15,6 +15,16 @@ const UNREACHABLE = "Couldn't reach the AI. Try again.";
 const AI_ERROR = "The AI returned an error. Try again.";
 const TRANSCRIBE_FAILED = "Couldn't transcribe. Try again.";
 
+export const MODEL_WINDOW_CHARS = 150_000;
+
+export function windowShare(parts: number, budget = MODEL_WINDOW_CHARS) {
+  return Math.floor(budget / Math.max(1, parts));
+}
+
+export function withinWindow(text: string, budget = MODEL_WINDOW_CHARS) {
+  return text.length > budget ? text.slice(0, budget) : text;
+}
+
 type Viewer = { type?: string; role?: string } | null | undefined;
 
 function missingKey(viewer?: Viewer) {

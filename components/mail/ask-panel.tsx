@@ -9,7 +9,7 @@ export type AskState = { question: string; result: AskResult | null; error: stri
 
 export default function AskPanel({ ask, now, onOpen }: { ask: AskState; now: number; onOpen: (key: string) => void }) {
   return (
-    <section aria-label="Answer from your email" className="flex flex-col gap-3 px-3 pt-1 pb-6">
+    <section aria-label="Answer from your email" className="flex flex-col gap-2 px-3 pt-1 pb-3">
       <div className="rounded-xl bg-[color-mix(in_srgb,var(--primary)_9%,transparent)] px-3.5 py-3">
         <p className="caption-style text-subtle flex items-center gap-1.5 pb-1.5">
           <SparkleIcon aria-hidden className={ask.result || ask.error ? "text-primary-foreground size-3" : "text-primary-foreground size-3 animate-pulse"} />
